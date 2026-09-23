@@ -4,3 +4,5 @@
 mod common;
 #[cfg(test)]
 mod daemon;
+#[cfg(test)]
+mod terminal;

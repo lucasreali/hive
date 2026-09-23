@@ -106,6 +106,40 @@ impl Conn {
             .map(Result::unwrap)
     }
 
+    pub async fn input(&mut self, channel: u32, text: &str) {
+        self.writer
+            .send(Frame::terminal(channel, text.to_owned()))
+            .await
+            .unwrap();
+    }
+
+    /// Opens a terminal in `cwd` and waits until it is running.
+    pub async fn open_terminal(&mut self, channel: u32, cwd: &std::path::Path) {
+        let cwd = cwd.to_string_lossy().into_owned();
+        self.send(
+            channel,
+            Control::OpenTerminal {
+                cwd,
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .await;
+        assert_eq!(self.control().await, (channel, Control::TerminalOpened));
+    }
+
+    /// Collects the terminal's output until it contains `needle`, skipping control frames.
+    pub async fn output_until(&mut self, channel: u32, needle: &str) -> String {
+        let mut seen = String::new();
+        while !seen.contains(needle) {
+            let frame = self.next().await.expect("connection closed");
+            if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == channel {
+                seen.push_str(&String::from_utf8_lossy(&frame.payload));
+            }
+        }
+        seen
+    }
+
     /// Next control frame, skipping terminal output.
     pub async fn control(&mut self) -> (u32, Control) {
         loop {

@@ -1,14 +1,21 @@
 //! `hive daemon`: the service. Lives exactly as long as the app connection.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs::{File, Permissions};
 use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use futures_util::{SinkExt, StreamExt};
-use hive_protocol::{Control, Frame, FrameCodec, PROTOCOL_VERSION, Role};
-use tokio::io::{AsyncRead, AsyncWrite};
+use hive_protocol::{Control, Frame, FrameCodec, FrameType, PROTOCOL_VERSION, Role};
+use pty_process::OwnedReadPty;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::process::Child;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::codec::{FramedRead, FramedWrite};
@@ -16,6 +23,10 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use crate::VERSION;
 use crate::adapter::{Adapter, ClaudeCode};
 use crate::paths::Paths;
+use crate::terminal::{self, Input, Terminal};
+
+/// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
+const TERMINAL_QUEUE: usize = 256;
 
 pub async fn run(paths: &Paths) -> io::Result<()> {
     paths.prepare_runtime()?;
@@ -25,7 +36,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
-    let result = serve(listener).await;
+    let result = serve(listener, paths.bin_dir()).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -47,8 +58,12 @@ fn lock(paths: &Paths) -> io::Result<File> {
     Ok(file)
 }
 
-async fn serve(listener: UnixListener) -> io::Result<()> {
-    let state = Arc::new(State::default());
+async fn serve(listener: UnixListener, bin_dir: PathBuf) -> io::Result<()> {
+    let state = Arc::new(State {
+        app: Mutex::new(None),
+        terminals: Mutex::new(HashMap::new()),
+        bin_dir,
+    });
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let mut terminate = signal(SignalKind::terminate())?;
     loop {
@@ -61,12 +76,22 @@ async fn serve(listener: UnixListener) -> io::Result<()> {
             _ = terminate.recv() => break,
         }
     }
+    let sessions: Vec<i32> = state
+        .terminals
+        .lock()
+        .await
+        .values()
+        .map(|t| t.session)
+        .collect();
+    terminal::end_sessions(&sessions).await;
     Ok(())
 }
 
-#[derive(Default)]
 struct State {
     app: Mutex<Option<Outbox>>,
+    /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
+    terminals: Mutex<HashMap<u32, Terminal>>,
+    bin_dir: PathBuf,
 }
 
 /// Queue to the app connection's writer.
@@ -81,6 +106,69 @@ impl State {
             let _ = app.control.send(Frame::control(channel, message));
         }
     }
+
+    async fn input(&self, channel: u32, input: Input) {
+        if let Some(terminal) = self.terminals.lock().await.get(&channel) {
+            terminal.send(input);
+        }
+    }
+
+    async fn open(
+        self: &Arc<Self>,
+        channel: u32,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        output: mpsc::Sender<Frame>,
+    ) {
+        let opened = {
+            let mut terminals = self.terminals.lock().await;
+            match terminals.entry(channel) {
+                _ if channel == 0 => Err("terminal channels start at 1".to_owned()),
+                Entry::Occupied(_) => Err(format!("terminal {channel} is already open")),
+                Entry::Vacant(slot) => terminal::spawn(channel, cwd, cols, rows, &self.bin_dir)
+                    .map(|(terminal, pty, child)| {
+                        slot.insert(terminal);
+                        tokio::spawn(pump(self.clone(), channel, pty, child, output));
+                    }),
+            }
+        };
+        let reply = match opened {
+            Ok(()) => Control::TerminalOpened,
+            Err(message) => Control::Error { message },
+        };
+        self.to_app(channel, &reply).await;
+    }
+
+    /// Ends the terminal's processes; its exit is reported by [`pump`].
+    async fn close(&self, channel: u32) {
+        if let Some(terminal) = self.terminals.lock().await.get(&channel) {
+            let sessions = [terminal.session];
+            tokio::spawn(async move { terminal::end_sessions(&sessions).await });
+        }
+    }
+}
+
+/// Copies PTY output to the app until the PTY closes, then reports the exit.
+async fn pump(
+    state: Arc<State>,
+    channel: u32,
+    mut pty: OwnedReadPty,
+    mut child: Child,
+    output: mpsc::Sender<Frame>,
+) {
+    let mut buf = vec![0; 64 * 1024];
+    while let Ok(n @ 1..) = pty.read(&mut buf).await {
+        let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
+        if output.send(frame).await.is_err() {
+            break;
+        }
+    }
+    let code = child.wait().await.ok().and_then(|status| status.code());
+    state.terminals.lock().await.remove(&channel);
+    state
+        .to_app(channel, &Control::TerminalExited { code })
+        .await;
 }
 
 async fn connection(stream: UnixStream, state: Arc<State>, app_gone: mpsc::Sender<()>) {
@@ -161,14 +249,14 @@ async fn hook_connection<R: AsyncRead + Unpin>(
 async fn app_connection<R, W>(
     mut reader: FramedRead<R, FrameCodec>,
     mut writer: FramedWrite<W, FrameCodec>,
-    state: &State,
+    state: &Arc<State>,
 ) -> bool
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
 {
     let (control_tx, control_rx) = mpsc::unbounded_channel();
-    let (_terminal_tx, terminal_rx) = mpsc::channel(1);
+    let (terminal_tx, terminal_rx) = mpsc::channel(TERMINAL_QUEUE);
     {
         let mut app = state.app.lock().await;
         if app.is_some() {
@@ -183,10 +271,33 @@ where
         });
     }
     let writer = tokio::spawn(write_prioritized(writer, control_rx, terminal_rx));
-    while let Some(Ok(_frame)) = reader.next().await {}
+    while let Some(Ok(frame)) = reader.next().await {
+        app_frame(state, frame, &terminal_tx).await;
+    }
     writer.abort();
     *state.app.lock().await = None;
     true
+}
+
+async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame>) {
+    let channel = frame.channel;
+    let message = match frame.kind {
+        FrameType::Terminal => return state.input(channel, Input::Data(frame.payload)).await,
+        FrameType::Control => frame.to_control(),
+    };
+    match message {
+        Ok(Control::OpenTerminal { cwd, cols, rows }) => {
+            state.open(channel, &cwd, cols, rows, output.clone()).await;
+        }
+        Ok(Control::Resize { cols, rows }) => {
+            state.input(channel, Input::Resize { cols, rows }).await
+        }
+        Ok(Control::CloseTerminal) => state.close(channel).await,
+        _ => {
+            let message = "unexpected message from the app".to_owned();
+            state.to_app(channel, &Control::Error { message }).await;
+        }
+    }
 }
 
 /// Writes queued frames, always draining control frames before terminal frames.
