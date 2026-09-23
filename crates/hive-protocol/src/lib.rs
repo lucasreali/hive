@@ -178,6 +178,20 @@ pub enum Control {
     Agent(AgentEvent),
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
+    /// An agent started in this terminal (the frame channel is its `HIVE_TERMINAL_ID`). It is
+    /// placed by its own `cwd`, not the terminal's (#19): `project` and `worktree` are the ids
+    /// of the followed worktree containing `cwd`, or `None` outside every followed project.
+    AgentDetected {
+        /// The agent's session id.
+        id: String,
+        project: Option<String>,
+        worktree: Option<String>,
+        cwd: Option<String>,
+    },
+    /// The agent's session ended, or its terminal exited.
+    AgentRemoved {
+        id: String,
+    },
     /// App → service: every project with its worktrees, answered by `Projects`. Sent after
     /// the handshake and on an explicit refresh.
     ListProjects,
@@ -455,6 +469,22 @@ mod tests {
         });
         let frame = Frame::control(0, &msg);
         assert_eq!(frame.to_control().unwrap(), msg);
+    }
+
+    #[test]
+    fn agent_messages_are_tagged_json() {
+        let detected = Control::AgentDetected {
+            id: "s".into(),
+            project: Some("/r".into()),
+            worktree: None,
+            cwd: Some("/r/x".into()),
+        };
+        assert_eq!(
+            &Frame::control(1, &detected).payload[..],
+            br#"{"type":"agent_detected","id":"s","project":"/r","worktree":null,"cwd":"/r/x"}"#
+        );
+        let removed = Control::AgentRemoved { id: "s".into() };
+        assert_eq!(Frame::control(1, &removed).to_control().unwrap(), removed);
     }
 
     #[test]
