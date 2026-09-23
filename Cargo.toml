@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = ["src-tauri", "crates/hive-protocol", "crates/hive"]
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
