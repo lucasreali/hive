@@ -45,6 +45,21 @@ test("create a worktree from a project row: name check, branch filter, tree upda
   const created = tree.getByRole("button", { name: "fix-cart", exact: true });
   await expect(created).toBeVisible();
   await expect(created).toHaveAttribute("aria-current", "true");
+  // Its terminal opened as a shown tab, with the shell's first output kept.
+  await expect(page.getByRole("tab", { name: "fix-cart" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.type("hi");
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const url = "/src/terminals.ts";
+        const { terminal } = await import(/* @vite-ignore */ url);
+        return terminal(1).buffer.active.getLine(0).translateToString(true);
+      }),
+    )
+    .toBe("mock$ hi");
   await page.screenshot({ path: "target/e2e/new-worktree-created.png" });
 });
 
