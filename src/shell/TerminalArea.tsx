@@ -1,5 +1,15 @@
-import { openModal, setRightPanel, useHive } from "../store";
-import { AddFolderIcon, PanelIcon, PlusIcon } from "./icons";
+import { useEffect, useRef } from "react";
+import {
+  activateTab,
+  type HiveState,
+  openModal,
+  setRightPanel,
+  type Tab,
+  useHive,
+  useTerminal,
+} from "../store";
+import { closeTerminal, mountTerminals, openTerminal, showTerminal } from "../terminals";
+import { AddFolderIcon, CloseIcon, PanelIcon, PlusIcon, TerminalIcon } from "./icons";
 
 /** Screen 1e: shown once the service said there are no projects. */
 function EmptyState() {
@@ -23,15 +33,93 @@ function EmptyState() {
   );
 }
 
-// Tabs and xterm.js terminals arrive with 1.7; the worktree picker behind "+" with 1.9.
+/** The worktree at `path` and its project, as the service reports them. */
+function find(s: HiveState, path: string) {
+  for (const project of Object.values(s.projects ?? {})) {
+    const worktree = project.worktrees.find((w) => w.id === path);
+    if (worktree) return { worktree, project };
+  }
+  return null;
+}
+
+function TerminalTab({ tab }: { tab: Tab }) {
+  const active = useHive((s) => s.activeTab === tab.id);
+  const state = useTerminal(tab.id);
+  const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
+  // As in the prototype, the project tells apart tabs of worktrees with the same name.
+  const project = useHive((s) => find(s, tab.cwd)?.project.name);
+  const duplicate = useHive(
+    (s) => s.tabs.filter((t) => (find(s, t.cwd)?.worktree.name ?? t.cwd) === name).length > 1,
+  );
+  return (
+    <div className="tab" data-active={active} title={tab.cwd}>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        className="tab-label"
+        onClick={() => activateTab(tab)}
+      >
+        <TerminalIcon />
+        <span className="tab-name">{name}</span>
+        {duplicate && project && <span className="tab-hint">{project}</span>}
+        {state?.unhooked && (
+          <span
+            className="tab-badge warn"
+            title="Claude runs in this terminal without Hive's hooks: its state is not observed"
+          >
+            no hooks
+          </span>
+        )}
+        {state?.exited && (
+          <span className="tab-badge" title={`Exit code: ${state.code ?? "none (killed)"}`}>
+            exited
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        className="tab-close"
+        title="Close terminal"
+        aria-label={`Close terminal ${name}`}
+        onClick={() => closeTerminal(tab.id)}
+      >
+        <CloseIcon />
+      </button>
+    </div>
+  );
+}
+
+/** Where xterm.js renders; the terminal manager owns everything inside it. */
+function TerminalHost({ hidden }: { hidden: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const active = useHive((s) => s.activeTab);
+  useEffect(() => mountTerminals(ref.current as HTMLDivElement), []);
+  useEffect(() => showTerminal(active), [active]);
+  return <div className="terminal-host" ref={ref} hidden={hidden} />;
+}
+
+// The worktree picker behind Ctrl+Shift+T arrives with 1.9; "+" opens a terminal in the
+// selected worktree.
 export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
   const empty = useHive((s) => s.projects !== null && Object.keys(s.projects).length === 0);
+  const tabs = useHive((s) => s.tabs);
+  const selected = useHive((s) => s.selection);
   return (
     <section className="terminals" aria-label="Terminals">
       <div className="bar">
         <div className="tabs" role="tablist">
-          <button type="button" className="ghost" title="New terminal (Ctrl+Shift+T)" disabled>
+          {tabs.map((tab) => (
+            <TerminalTab key={tab.id} tab={tab} />
+          ))}
+          <button
+            type="button"
+            className="ghost"
+            title="New terminal (Ctrl+Shift+T)"
+            disabled={selected === null}
+            onClick={() => selected !== null && void openTerminal(selected)}
+          >
             <PlusIcon size={14} />
           </button>
         </div>
@@ -47,7 +135,10 @@ export function TerminalArea() {
           </button>
         </div>
       </div>
-      <div className="terminal-body">{empty && <EmptyState />}</div>
+      <div className="terminal-body">
+        {empty && tabs.length === 0 && <EmptyState />}
+        <TerminalHost hidden={tabs.length === 0} />
+      </div>
     </section>
   );
 }

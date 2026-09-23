@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
 import { openModal, select, useHive } from "../store";
+import { openTerminal as openTerminalIn } from "../terminals";
 import { transport } from "../transport";
 import { BranchIcon, CheckIcon, CloseIcon } from "./icons";
 
@@ -60,7 +61,7 @@ export function NewWorktreeDialog() {
   useEffect(() => {
     if (!created || handled.current === created) return;
     handled.current = created;
-    if (openTerminal) void transport.openTerminal(created.path, 80, 24, () => {});
+    if (openTerminal) void openTerminalIn(created.path);
     select(created.path);
     if (created.notes.length === 0) close();
   }, [created, openTerminal]);

@@ -132,3 +132,16 @@ export const RefreshIcon = () => (
     />
   </svg>
 );
+
+export const TerminalIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <rect x="1" y="2" width="10" height="8" rx="1.5" fill="none" stroke="currentColor" />
+    <path
+      d="M3.5 5 5 6.2 3.5 7.4M6.2 7.6h2.2"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);

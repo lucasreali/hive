@@ -5,6 +5,7 @@
 @import "@fontsource/ibm-plex-mono/400.css";
 @import "@fontsource/ibm-plex-mono/500.css";
 @import "@fontsource/ibm-plex-mono/600.css";
+@import "@xterm/xterm/css/xterm.css";
 
 /* Design tokens: docs/ui-reference.md. Dark theme only (#23). */
 :root {
@@ -241,12 +242,94 @@ button:disabled {
   min-width: 0;
   flex: 1;
   height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
 .tabs > .ghost {
   width: 34px;
   height: 100%;
+  flex: none;
   border-radius: 0;
+}
+
+.tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+  padding: 0 6px 0 12px;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-2);
+  user-select: none;
+}
+
+.tab:hover {
+  background: var(--hover);
+}
+
+.tab[data-active="true"] {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.tab-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+  color: inherit;
+}
+
+.tab-label > svg {
+  color: var(--text-3);
+}
+
+.tab-name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+.tab-hint {
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+.tab-badge {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.tab-badge.warn {
+  border-color: var(--state-permission);
+  color: var(--state-permission);
+}
+
+.tab-close {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  opacity: 0;
+}
+
+.tab:hover .tab-close,
+.tab[data-active="true"] .tab-close,
+.tab-close:focus-visible {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--selected);
+  color: var(--text);
 }
 
 .tabs-actions {
@@ -260,7 +343,23 @@ button:disabled {
 .terminal-body {
   flex: 1;
   min-height: 0;
+  position: relative;
   background: var(--bg);
+}
+
+.terminal-host {
+  position: absolute;
+  inset: 0;
+  padding: 12px 16px 14px;
+}
+
+.terminal-host[hidden],
+.terminal-pane[hidden] {
+  display: none;
+}
+
+.terminal-pane {
+  height: 100%;
 }
 
 /* Right panel */

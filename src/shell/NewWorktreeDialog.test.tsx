@@ -2,6 +2,7 @@ import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
 import { apply, initialState, openModal, useHive } from "../store";
+import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
 
@@ -176,8 +177,10 @@ test("create asks the service, opens a terminal in the new worktree and updates 
   expect(openTerminal.mock.calls[0].slice(0, 3)).toEqual([path, 80, 24]);
   expect(useHive.getState().selection).toBe(path);
   expect(screen.getByRole("button", { name: "fix-cart" })).toBeDefined();
-  // The terminal's output goes nowhere until terminals render (1.7).
-  (openTerminal.mock.calls[0][3] as (b: Uint8Array) => void)(new Uint8Array());
+  // Its tab is shown, with the worktree's name.
+  await waitFor(() => expect(screen.getByRole("tab", { name: "fix-cart" })).toBeDefined());
+  expect(useHive.getState().tabs.map((t) => t.cwd)).toEqual([path]);
+  closeTerminal(useHive.getState().tabs[0].id);
   createWorktree.mockRestore();
   openTerminal.mockRestore();
 });
