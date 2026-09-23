@@ -18,7 +18,10 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 1. **Decisions are the human's.** Never change a decision from `docs/hive.md`. If one is unclear, missing, or proven wrong, stop and ask.
 2. **English everywhere**: code, identifiers, comments, commits, repo docs, CLI output, UI text.
 3. **Packages only through the CLI.** Rust: `cargo add -p <crate> <dep>` / `cargo remove`. Frontend: **bun only** (`bun add`, `bun add -d`, `bun remove`, `bunx`, `bun create`); never npm, pnpm, yarn or npx. Never hand-edit dependency sections or lockfiles. Before adding any dependency, tell the human what it is and why.
-4. **Git:** one branch per task (`task/<id>-<slug>`, e.g. `task/0.2-protocol`), small commits. Never push, never merge into `main`, never force, never rewrite history. The human merges.
+4. **Git:** one branch per task (`task/<id>-<slug>`, e.g. `task/0.2-protocol`), created from `main`, with small commits. Never push, never force, never rewrite history.
+   - **When the task is finished** (every gate green, task ticked in `TODO.md`, report written), the agent merges its branch into `main` with `git switch main && git merge --ff-only <branch>` and deletes the branch with `git branch -d <branch>`. Everything the agent did must end up on `main`, with no task branch left behind.
+   - If the fast-forward is refused because `main` moved, stop and ask the human. Never rebase and never force.
+   - At a ⏸ checkpoint, merge the finished task first, then stop.
    - Commit messages in English, following [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/): `type(scope): description` (`feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `build`, `ci`, `perf`, `style`), `!` / `BREAKING CHANGE:` footer for breaking changes.
    - **No attribution trailers**: never add `Co-Authored-By: Claude`, "Generated with Claude Code" or any similar line to commits or PRs.
    - Commits use the human's **personal** identity, set only in this repo's `.git/config` (`git config user.name` / `user.email`, no `--global`). Never change the global git config; other repos on this machine use a work identity.
@@ -65,7 +68,7 @@ Report: what was done, branch and commits, every gate with its result, anything 
 
 ## Working notes (learned in Stage 0)
 
-- **State:** Stage 0 lives in a chain of branches; the tip `task/0.12-spike` contains all of it, including the subagent branches merged in. Until the human merges into `main`, start new task branches from the latest task branch, not from `main`.
+- **State:** Stage 0 is on `main` (merged on 2026-09-23). Every new task branch starts from `main`.
 - **Toolchain:** agent shells need `export PATH=$HOME/.cargo/bin:$PATH` (the human's shell is fish). `cargo fuzz` needs `+nightly --target x86_64-unknown-linux-gnu`.
 - **Gates:** `scripts/gates.sh` runs every Rust gate. Use `BASE=<previous task branch>` to limit mutants to your diff, and `MUTANTS=0` to skip them.
   - `/tmp` is a small tmpfs, so mutant trees go to `/var/tmp/hive-mutants`. Never put a `TMPDIR` inside this repository: git in the tests would find this repo by walking up.
