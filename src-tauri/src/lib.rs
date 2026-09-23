@@ -126,6 +126,7 @@ impl Hive {
         if link.frames.is_some() {
             if let Some(welcome) = link.welcome.clone() {
                 link.to_ui(welcome);
+                let _ = link.send(0, &Control::ListProjects);
             }
             return;
         }
@@ -235,6 +236,16 @@ impl Hive {
     pub fn close_terminal(&self, id: u32) -> Result<(), String> {
         self.link().send(id, &Control::CloseTerminal)
     }
+
+    /// Asks for every project with its worktrees; they arrive as `projects`.
+    pub fn list_projects(&self) -> Result<(), String> {
+        self.link().send(0, &Control::ListProjects)
+    }
+
+    /// The answer arrives as `project_added` or `add_project_failed`.
+    pub fn add_project(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::AddProject { path })
+    }
 }
 
 /// A piped stdio handle of the bridge; always there, since every one is requested.
@@ -270,7 +281,11 @@ async fn pump<R: AsyncRead + Unpin>(
         let mut value = serde_json::to_value(&message).unwrap_or_default();
         value["channel"] = frame.channel.into();
         match message {
-            Control::Welcome { .. } => link.welcome = Some(value.clone()),
+            Control::Welcome { .. } => {
+                link.welcome = Some(value.clone());
+                // The UI always gets the projects after the handshake.
+                let _ = link.send(0, &Control::ListProjects);
+            }
             Control::VersionMismatch { .. } => {
                 // The UI shows both sides, so it gets the app's own versions too.
                 value["app_version"] = VERSION.into();
@@ -340,6 +355,16 @@ pub mod commands {
     #[tauri::command]
     pub fn close_terminal(hive: State<'_, Hive>, id: u32) -> Result<(), String> {
         hive.close_terminal(id)
+    }
+
+    #[tauri::command]
+    pub fn list_projects(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.list_projects()
+    }
+
+    #[tauri::command]
+    pub fn add_project(hive: State<'_, Hive>, path: String) -> Result<(), String> {
+        hive.add_project(path)
     }
 }
 

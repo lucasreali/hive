@@ -107,6 +107,8 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
         next(&mut rx).await,
         json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
     );
+    // The projects are requested right after the handshake.
+    assert_eq!(service.control().await, (0, Control::ListProjects));
     (hive, service, rx)
 }
 
@@ -220,6 +222,25 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
 }
 
 #[tokio::test]
+async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    hive.list_projects().unwrap();
+    assert_eq!(service.control().await, (0, Control::ListProjects));
+    hive.add_project("/r/sub".into()).unwrap();
+    let add = Control::AddProject {
+        path: "/r/sub".into(),
+    };
+    assert_eq!(service.control().await, (0, add));
+    service
+        .send(0, Control::Projects { projects: vec![] })
+        .await;
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "projects", "projects": [], "channel": 0})
+    );
+}
+
+#[tokio::test]
 async fn big_input_is_split_into_frames_the_service_accepts() {
     let (hive, mut service, _rx) = welcomed().await;
     hive.write_terminal(3, &"a".repeat(MAX_PAYLOAD + 1))
@@ -253,6 +274,8 @@ async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
         json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
     );
     assert_eq!(service.control().await, (1, Control::CloseTerminal));
+    // The new UI gets the projects again.
+    assert_eq!(service.control().await, (0, Control::ListProjects));
     // The old terminal's exit is not reported to the new UI.
     service
         .send(1, Control::TerminalExited { code: None })
@@ -325,6 +348,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.write_terminal(1, "x"), not_connected);
     assert_eq!(hive.resize_terminal(1, 1, 1), not_connected);
     assert_eq!(hive.close_terminal(1), not_connected);
+    assert_eq!(hive.list_projects(), not_connected);
+    assert_eq!(hive.add_project("/r".into()), not_connected);
     let (channel, _bytes) = output();
     assert_eq!(
         hive.open_terminal("/".into(), 1, 1, channel),
@@ -480,7 +505,9 @@ fn commands_reach_the_managed_hive() {
             open_terminal,
             write_terminal,
             resize_terminal,
-            close_terminal
+            close_terminal,
+            list_projects,
+            add_project
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -523,4 +550,10 @@ fn commands_reach_the_managed_hive() {
     assert_eq!(invoke(&webview, "write_terminal", write), Ok(Value::Null));
     assert_eq!(invoke(&webview, "resize_terminal", resize), Ok(Value::Null));
     assert_eq!(invoke(&webview, "close_terminal", close), Ok(Value::Null));
+    assert_eq!(
+        invoke(&webview, "list_projects", json!({})),
+        Ok(Value::Null)
+    );
+    let add = json!({"path": "/r"});
+    assert_eq!(invoke(&webview, "add_project", add), Ok(Value::Null));
 }

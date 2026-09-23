@@ -16,6 +16,8 @@ fn main() {
             commands::write_terminal,
             commands::resize_terminal,
             commands::close_terminal,
+            commands::list_projects,
+            commands::add_project,
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {
