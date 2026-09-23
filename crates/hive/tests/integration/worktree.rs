@@ -323,8 +323,12 @@ fn worktreeinclude_never_writes_through_the_base_branch() {
 #[test]
 fn own_worktree_create_hook_is_warned_about() {
     let repo = Repo::new();
-    let hook =
-        json!({"hooks": {"WorktreeCreate": [{"hooks": [{"type": "command", "command": "x"}]}]}});
+    // Real settings files run to several KiB; the size limit must not skip them.
+    let hook = json!({
+        "permissions": {"allow": vec!["Bash(true)"; 1000]},
+        "hooks": {"WorktreeCreate": [{"hooks": [{"type": "command", "command": "x"}]}]},
+    });
+    assert!(hook.to_string().len() > 10 * 1024);
     repo.write(".claude/settings.json", &hook.to_string());
     repo.write(".claude/settings.local.json", "{}");
     let out = repo.hive(&["create", "warned"]);
