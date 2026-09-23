@@ -26,7 +26,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use crate::VERSION;
 use crate::adapter::{Adapter, ClaudeCode};
 use crate::paths::Paths;
-use crate::projects::Projects;
+use crate::projects::{self, Projects};
 use crate::terminal::{self, Input, Terminal};
 use crate::{procs, watch, worktree, wrapper};
 
@@ -76,6 +76,7 @@ async fn serve(
     let state = Arc::new(State {
         app: Mutex::new(None),
         terminals: Mutex::new(HashMap::new()),
+        agents: Mutex::new(HashMap::new()),
         bin_dir,
         projects,
     });
@@ -107,6 +108,9 @@ struct State {
     app: Mutex<Option<Outbox>>,
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
+    /// Detected agents (Stage 1: presence only): session id → terminal channel. Locked after
+    /// `terminals` when both are needed.
+    agents: Mutex<HashMap<String, u32>>,
     bin_dir: PathBuf,
     projects: Projects,
 }
@@ -124,14 +128,52 @@ impl State {
         }
     }
 
-    /// Notes a `SessionStart` from one of our terminals: its `claude` is hooked.
+    /// Tracks agents: a `SessionStart` from one of our terminals marks its `claude` as hooked
+    /// and detects the agent; a `SessionEnd` removes it. Subagent events are ignored (Stage 4).
     async fn saw(&self, event: &AgentEvent) {
-        if event.kind == EventKind::SessionStarted
-            && let Some(channel) = event.terminal_id.as_deref().and_then(|id| id.parse().ok())
-            && let Some(terminal) = self.terminals.lock().await.get_mut(&channel)
-        {
-            terminal.watch.hooked();
+        match event.kind {
+            EventKind::SessionStarted => {
+                if let Some(channel) = event.terminal_id.as_deref().and_then(|t| t.parse().ok()) {
+                    self.detect(channel, event).await;
+                }
+            }
+            EventKind::SessionEnded { .. } => {
+                let Some(id) = agent_id(event) else { return };
+                let mut agents = self.agents.lock().await;
+                if let Some(channel) = agents.remove(&id) {
+                    self.to_app(channel, &Control::AgentRemoved { id }).await;
+                }
+            }
+            _ => {}
         }
+    }
+
+    /// Places and announces the agent while holding the agents lock, so a `SessionEnd` or the
+    /// terminal's exit arriving while git runs waits and removes it afterwards.
+    async fn detect(&self, channel: u32, event: &AgentEvent) {
+        let mut terminals = self.terminals.lock().await;
+        let Some(terminal) = terminals.get_mut(&channel) else {
+            return;
+        };
+        terminal.watch.hooked();
+        let Some(id) = agent_id(event) else { return };
+        let mut agents = self.agents.lock().await;
+        // Other terminals keep working meanwhile.
+        drop(terminals);
+        let cwd = event.cwd.clone();
+        let place = tokio::task::block_in_place(|| {
+            let cwd = cwd.as_deref()?;
+            projects::place(&self.projects.list(), cwd)
+        });
+        let (project, worktree) = place.unzip();
+        agents.insert(id.clone(), channel);
+        let detected = Control::AgentDetected {
+            id,
+            project,
+            worktree,
+            cwd,
+        };
+        self.to_app(channel, &detected).await;
     }
 
     async fn input(&self, channel: u32, input: Input) {
@@ -186,6 +228,14 @@ impl State {
     }
 }
 
+/// The agent an event belongs to: its session id; `None` for subagent events.
+fn agent_id(event: &AgentEvent) -> Option<String> {
+    match event.subagent {
+        None => event.session_id.clone(),
+        Some(_) => None,
+    }
+}
+
 /// Warns the app about terminals running a `claude` that sends no hook events.
 async fn watch_terminals(state: Arc<State>) {
     let mut ticks = tokio::time::interval(watch::INTERVAL);
@@ -227,7 +277,14 @@ async fn pump(
         }
     }
     let code = child.wait().await.ok().and_then(|status| status.code());
-    state.terminals.lock().await.remove(&channel);
+    {
+        let mut terminals = state.terminals.lock().await;
+        terminals.remove(&channel);
+        let mut agents = state.agents.lock().await;
+        for (id, _) in agents.extract_if(|_, t| *t == channel) {
+            state.to_app(channel, &Control::AgentRemoved { id }).await;
+        }
+    }
     state
         .to_app(channel, &Control::TerminalExited { code })
         .await;
