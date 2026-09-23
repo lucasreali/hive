@@ -1,9 +1,12 @@
 import { beforeEach, expect, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import {
+  activateTab,
+  addTab,
   apply,
   initialState,
   openModal,
+  removeTab,
   type ServiceMessage,
   select,
   setRightPanel,
@@ -66,6 +69,27 @@ test("ui actions set ui state", () => {
   select("wt-1");
   const s = useHive.getState();
   expect([s.modal, s.rightPanel, s.selection]).toEqual(["new-worktree", "files", "wt-1"]);
+});
+
+test("tabs open shown, switch with the selection and close to their neighbour", () => {
+  const tabs = () => useHive.getState().tabs.map((t) => t.id);
+  const active = () => useHive.getState().activeTab;
+  expect(useHive.getState().scrollback).toBe(5000);
+  addTab(1, "/a");
+  addTab(2, "/b");
+  addTab(3, "/c");
+  expect([tabs(), active(), useHive.getState().selection]).toEqual([[1, 2, 3], 3, "/c"]);
+  activateTab({ id: 1, cwd: "/a" });
+  expect([active(), useHive.getState().selection]).toEqual([1, "/a"]);
+  removeTab(2); // not shown: the shown tab stays
+  expect([tabs(), active()]).toEqual([[1, 3], 1]);
+  removeTab(1); // shown: its right neighbour takes over
+  expect([tabs(), active()]).toEqual([[3], 3]);
+  addTab(4, "/d");
+  removeTab(4); // shown and last: the new last tab takes over
+  expect([tabs(), active()]).toEqual([[3], 3]);
+  removeTab(3);
+  expect([tabs(), active()]).toEqual([[], null]);
 });
 
 test("useAgent re-renders only when its own agent changes", () => {

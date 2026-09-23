@@ -104,6 +104,9 @@ export type WorktreeDialog = {
 // ponytail: id-only shape; fields and `apply` cases arrive with the service messages that feed it (1.8).
 export type Agent = { id: string };
 
+/** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
+export type Tab = { id: number; cwd: string };
+
 export type Modal = "new-worktree" | "add-project" | null;
 export type RightPanel = "files" | null;
 
@@ -115,6 +118,11 @@ export type HiveState = {
   selection: string | null;
   /** Collapsed tree nodes, by id. */
   collapsed: Record<string, boolean>;
+  /** Terminal tabs in the order they opened, and the one shown. */
+  tabs: Tab[];
+  activeTab: number | null;
+  /** Lines of history each new terminal keeps (#28). Not persisted yet. */
+  scrollback: number;
   // Service data
   connection: Connection;
   /** In the service's order; `null` until the service sent the list. */
@@ -134,6 +142,9 @@ export const initialState: HiveState = {
   rightPanel: null,
   selection: null,
   collapsed: {},
+  tabs: [],
+  activeTab: null,
+  scrollback: 5000,
   connection: { status: "connecting" },
   projects: null,
   addProjectError: null,
@@ -222,6 +233,20 @@ export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ righ
 export const select = (selection: string | null) => useHive.setState({ selection });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
+
+/** A terminal just opened in `cwd`: its tab is shown and its worktree selected. */
+export const addTab = (id: number, cwd: string) =>
+  useHive.setState((s) => ({ tabs: [...s.tabs, { id, cwd }], activeTab: id, selection: cwd }));
+export const activateTab = (tab: Tab) =>
+  useHive.setState({ activeTab: tab.id, selection: tab.cwd });
+/** Removes the tab; when it was shown, its right neighbour (or the new last tab) is. */
+export const removeTab = (id: number) =>
+  useHive.setState((s) => {
+    const i = s.tabs.findIndex((t) => t.id === id);
+    const tabs = s.tabs.filter((t) => t.id !== id);
+    const next = tabs[Math.min(i, tabs.length - 1)]?.id ?? null;
+    return { tabs, activeTab: s.activeTab === id ? next : s.activeTab };
+  });
 
 /** Re-renders only when this agent's entry changes. */
 export const useAgent = (id: string) => useHive((s) => s.agents[id]);
