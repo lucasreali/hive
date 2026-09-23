@@ -173,6 +173,8 @@ pub enum Control {
     },
     /// A provider event translated to the internal model.
     Agent(AgentEvent),
+    /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
+    UnhookedAgent,
     Error {
         message: String,
     },

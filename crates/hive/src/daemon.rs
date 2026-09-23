@@ -5,13 +5,16 @@ use std::collections::hash_map::Entry;
 use std::fs::{File, Permissions};
 use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
-use hive_protocol::{Control, Frame, FrameCodec, FrameType, PROTOCOL_VERSION, Role};
+use hive_protocol::{
+    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameType, PROTOCOL_VERSION, Role,
+};
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::net::{UnixListener, UnixStream};
@@ -24,6 +27,7 @@ use crate::VERSION;
 use crate::adapter::{Adapter, ClaudeCode};
 use crate::paths::Paths;
 use crate::terminal::{self, Input, Terminal};
+use crate::{procs, watch};
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
@@ -65,6 +69,7 @@ async fn serve(listener: UnixListener, bin_dir: PathBuf) -> io::Result<()> {
         bin_dir,
     });
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
+    let watcher = tokio::spawn(watch_terminals(state.clone()));
     let mut terminate = signal(SignalKind::terminate())?;
     loop {
         tokio::select! {
@@ -76,6 +81,7 @@ async fn serve(listener: UnixListener, bin_dir: PathBuf) -> io::Result<()> {
             _ = terminate.recv() => break,
         }
     }
+    watcher.abort();
     let sessions: Vec<i32> = state
         .terminals
         .lock()
@@ -104,6 +110,16 @@ impl State {
     async fn to_app(&self, channel: u32, message: &Control) {
         if let Some(app) = &*self.app.lock().await {
             let _ = app.control.send(Frame::control(channel, message));
+        }
+    }
+
+    /// Notes a `SessionStart` from one of our terminals: its `claude` is hooked.
+    async fn saw(&self, event: &AgentEvent) {
+        if event.kind == EventKind::SessionStarted
+            && let Some(channel) = event.terminal_id.as_deref().and_then(|id| id.parse().ok())
+            && let Some(terminal) = self.terminals.lock().await.get_mut(&channel)
+        {
+            terminal.watch.hooked();
         }
     }
 
@@ -145,6 +161,31 @@ impl State {
         if let Some(terminal) = self.terminals.lock().await.get(&channel) {
             let sessions = [terminal.session];
             tokio::spawn(async move { terminal::end_sessions(&sessions).await });
+        }
+    }
+}
+
+/// Warns the app about terminals running a `claude` that sends no hook events.
+async fn watch_terminals(state: Arc<State>) {
+    let mut ticks = tokio::time::interval(watch::INTERVAL);
+    loop {
+        ticks.tick().await;
+        let running = watch::claude_sessions(&procs::list(Path::new("/proc")));
+        let now = Instant::now();
+        let unhooked: Vec<u32> = state
+            .terminals
+            .lock()
+            .await
+            .iter_mut()
+            .filter_map(|(channel, t)| {
+                let session = t.session;
+                t.watch
+                    .tick(running.contains(&session), now)
+                    .then_some(*channel)
+            })
+            .collect();
+        for channel in unhooked {
+            state.to_app(channel, &Control::UnhookedAgent).await;
         }
     }
 }
@@ -241,6 +282,7 @@ async fn hook_connection<R: AsyncRead + Unpin>(
         }) = frame.to_control()
     {
         let event = ClaudeCode.translate(&event, terminal_id, payload);
+        state.saw(&event).await;
         state.to_app(0, &Control::Agent(event)).await;
     }
 }

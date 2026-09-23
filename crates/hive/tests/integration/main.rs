@@ -10,3 +10,5 @@ mod daemon;
 mod hook;
 #[cfg(test)]
 mod terminal;
+#[cfg(test)]
+mod watch;

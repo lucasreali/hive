@@ -25,14 +25,16 @@ impl Drop for Env {
         while !self.processes().is_empty() && start.elapsed() < Duration::from_secs(2) {
             std::thread::sleep(Duration::from_millis(20));
         }
-        for pid in self.processes() {
+        for proc in self.processes() {
+            let pid = nix::unistd::Pid::from_raw(proc.pid);
             let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
         }
     }
 }
 
 impl Env {
-    fn processes(&self) -> Vec<nix::unistd::Pid> {
+    /// Processes running with this environment.
+    pub fn processes(&self) -> Vec<hive::procs::Proc> {
         let marker = format!("XDG_RUNTIME_DIR={}", self.path("run").display());
         hive::procs::list(std::path::Path::new("/proc"))
             .into_iter()
@@ -43,7 +45,6 @@ impl Env {
                     .split(|b| *b == 0)
                     .any(|var| var == marker.as_bytes())
             })
-            .map(|proc| nix::unistd::Pid::from_raw(proc.pid))
             .collect()
     }
 }

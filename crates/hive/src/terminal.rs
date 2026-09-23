@@ -12,6 +12,7 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 
 use crate::procs;
+use crate::watch::Watch;
 
 /// Time a terminal's processes get to exit after SIGHUP before SIGKILL.
 const GRACE: Duration = Duration::from_secs(2);
@@ -20,6 +21,8 @@ const GRACE: Duration = Duration::from_secs(2);
 pub struct Terminal {
     /// Session id of the shell (it is the session leader, so this is also its pid).
     pub session: i32,
+    /// Unhooked-`claude` detector for this terminal.
+    pub watch: Watch,
     input: mpsc::UnboundedSender<Input>,
 }
 
@@ -63,7 +66,15 @@ pub fn spawn(
     let (output, writer) = pty.into_split();
     let (input, input_rx) = mpsc::unbounded_channel();
     tokio::spawn(feed(writer, input_rx));
-    Ok((Terminal { session, input }, output, child))
+    Ok((
+        Terminal {
+            session,
+            watch: Watch::default(),
+            input,
+        },
+        output,
+        child,
+    ))
 }
 
 /// fish command run after the user's config: puts `bin_dir` first on `PATH` for this shell only.
