@@ -25,29 +25,9 @@ SCRIPT
 done
 
 # Settings: every hook event records to records/<name>.jsonl.
-settings() { # $1 = name, $2 = include worktree hooks (yes/no)
-    out="$spike/settings-$1.json"
-    printf '{\n  "hooks": {\n' > "$out"
-    sep=""
-    for e in SessionStart UserPromptSubmit PreToolUse PostToolUse PostToolUseFailure PostToolBatch \
-             PermissionRequest PermissionDenied Notification Stop StopFailure SubagentStart SubagentStop \
-             SessionEnd PreCompact PostCompact CwdChanged; do
-        printf '%s    "%s": [{"hooks": [{"type": "command", "command": "%s", "args": ["hook", "%s", "--record", "%s"], "timeout": 5}]}]' \
-            "$sep" "$e" "$hive" "$e" "$spike/records/$1.jsonl" >> "$out"
-        sep=",
-"
-    done
-    if [ "$2" = yes ]; then
-        for e in create remove; do
-            name=$(printf '%s' "$e" | sed 's/^./\U&/')
-            printf ',\n    "Worktree%s": [{"hooks": [{"type": "command", "command": "%s", "timeout": 30}]}]' \
-                "$name" "$spike/bin/worktree-$e" >> "$out"
-        done
-    fi
-    printf '\n  }\n}\n' >> "$out"
-}
-settings observe no
-settings worktree-hooks yes
+. "$here/lib.sh"
+write_settings "$spike/settings-observe.json" "$hive" "$spike/records/observe.jsonl"
+write_settings "$spike/settings-worktree-hooks.json" "$hive" "$spike/records/worktree-hooks.jsonl" "$spike/bin"
 
 # Scratch repository with a gitignored .env, a .worktreeinclude and a worktree-isolated agent.
 repo="$spike/repo"

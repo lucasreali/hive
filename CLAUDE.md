@@ -62,3 +62,14 @@ Frontend tests use **`bun test`** with a DOM from `happy-dom`. Parts that need a
 ## After each task
 
 Report: what was done, branch and commits, every gate with its result, anything the human should decide. Then tick the task in `TODO.md`.
+
+## Working notes (learned in Stage 0)
+
+- **State:** Stage 0 lives in a chain of branches; the tip `task/0.12-spike` contains all of it, including the subagent branches merged in. Until the human merges into `main`, start new task branches from the latest task branch, not from `main`.
+- **Toolchain:** agent shells need `export PATH=$HOME/.cargo/bin:$PATH` (the human's shell is fish). `cargo fuzz` needs `+nightly --target x86_64-unknown-linux-gnu`.
+- **Gates:** `scripts/gates.sh` runs every Rust gate. Use `BASE=<previous task branch>` to limit mutants to your diff, and `MUTANTS=0` to skip them.
+  - `/tmp` is a small tmpfs, so mutant trees go to `/var/tmp/hive-mutants`. Never put a `TMPDIR` inside this repository: git in the tests would find this repo by walking up.
+- **Integration tests:** they live in one binary, `crates/hive/tests/integration/`. `common::Env` gives a temporary `HOME`/`XDG_*`; on drop it kills any process still carrying that environment.
+  - Coverage of a spawned `hive` is recorded only when it exits normally: stop daemons with `common::stop` (SIGTERM) or by dropping the app connection, never SIGKILL.
+- **Never run the real `claude`**, not even to test a launcher: `script -c` and `fish -C` load the human's shell config, which puts the real `claude` first on `PATH`. For a process named `claude`, copy `/usr/bin/dash` (coreutils here is multicall and refuses to run under another name).
+- **Background waits:** `pgrep -f <pattern>` matches the waiting shell's own command line; do not use it to wait for a process to finish.

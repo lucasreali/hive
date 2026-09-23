@@ -5,9 +5,29 @@ The model is `haiku` and `--strict-mcp-config` is on. Hooks come from `--setting
 Every hook call is recorded with `hive hook --record` in `/tmp/hive-spike/records/*.jsonl`.
 Terminal output is recorded with timing in `/tmp/hive-spike/logs/`.
 
+The spike has two parts (human decision, 2026-09-23). The report is due before checkpoint 1.
+
+## Part 1: passive recording while developing Stage 1 (Q2, Q5, event catalog)
+
+Start your normal Claude Code sessions in this repository through the launcher:
+
+```sh
+scripts/spike/dogfood.sh            # or: scripts/spike/dogfood.sh --resume
+scripts/spike/mark.sh pressed Esc   # optional, from another terminal: timestamps a moment to find later
+```
+
+- Every observation hook is recorded in `target/spike/records.jsonl`.
+- Terminal output is recorded with timing in `target/spike/logs/`.
+- Worktree hooks are **not** registered, so your real work is never at risk.
+- Records hold full hook payloads (prompts, code). They stay on this machine, under `target/`, which git ignores.
+
+## Part 2: one short provoked session in a scratch repository (Q1, Q3, Q4, Q6)
+
 ```sh
 scripts/spike/setup.sh            # build hive, create /tmp/hive-spike (wipes a previous run)
 ```
+
+Steps 1 to 3 below are optional here, because Part 1 covers Q2 and Q5.
 
 ## Session A: `scripts/spike/run.sh observe`
 
@@ -40,6 +60,6 @@ In this session Hive's worktree hooks are registered: WorktreeCreate and Worktre
 
 ## Hand-off
 
-Tell the agent the runs are done and paste anything Claude printed that looked like an error. The agent reads `/tmp/hive-spike/records`, `/tmp/hive-spike/logs` and the repository state, then writes `docs/spike/stage-0.md`.
+Tell the agent the runs are done (Part 2) and how long Part 1 has been recording and paste anything Claude printed that looked like an error. The agent reads `target/spike/`, `/tmp/hive-spike/records`, `/tmp/hive-spike/logs` and the repository state, then writes `docs/spike/stage-0.md`.
 
 To look at the pauses in terminal output (Q2): `scripts/spike/gaps.sh /tmp/hive-spike/logs/observe-*.timing`

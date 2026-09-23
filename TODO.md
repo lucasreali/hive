@@ -26,7 +26,7 @@
 - [x] **0.9 `claude` wrapper.** `task/0.9-claude-wrapper` (subagent; merged into `task/0.11-bench`) — *human-approved (2026-09-23): hook timeout 1 s; a claude started inside a hooked claude (`HIVE_WRAPPED=1`) runs without Hive's settings; empty `PATH` entries are skipped.* The daemon installs a POSIX `sh` script at `<data-dir>/hive/bin/claude`: finds the real `claude` by searching `PATH` without the hive bin dir, recursion guard `HIVE_WRAPPED=1`, then `exec` the real claude with `--settings <hive-hooks.json>`. The daemon also generates `hive-hooks.json` pointing every observation event at `hive hook <event>` by absolute path, with a short hook `timeout`. *(#21, #25, #26, #27)*
 - [x] **0.10 Unhooked-claude detection.** `task/0.10-unhooked` — *checks every 1 s for a process named `claude` in the terminal's session; warns (`unhooked_agent` on the terminal channel) after 5 s without `SessionStart`, once per run. An npm-installed claude shows up as `node` and is not detected.* If a `claude` process appears in a terminal's process tree without a `SessionStart` event from that `HIVE_TERMINAL_ID` within a few seconds, emit a warning event. *(#25)*
 - [x] **0.11 Benchmarks.** `task/0.11-bench` — *hook latency (300 runs, release): p50 3.8 ms, p99 8.3 ms, max 11.3 ms (`cargo bench -p hive --bench hook_latency`, fails above 20 ms); codec: ~14 GiB/s for 64 KiB terminal frames, ~4.7 M control frames/s (`cargo bench -p hive-protocol`).* Hook latency (process start → event received by the daemon) p99 < 20 ms; codec throughput baseline with `criterion`. *(D3)*
-- [ ] **0.12 Hooks spike.** Using `hive hook --record`, run real Claude Code sessions in a scratch repo under `/tmp` (never in this repo, never touching `~/.claude/settings.json`; use `--strict-mcp-config` and the cheapest model) and answer, with evidence:
+- [ ] ~~**0.12 Hooks spike.**~~ **Moved to 1.12** (human decision, 2026-09-23): passive recording while developing Stage 1, plus one short provoked session. Tooling ready in `task/0.12-spike` (`scripts/spike/`). Original scope, kept for reference: Using `hive hook --record`, run real Claude Code sessions in a scratch repo under `/tmp` (never in this repo, never touching `~/.claude/settings.json`; use `--strict-mcp-config` and the cheapest model) and answer, with evidence:
   1. Does a `WorktreeCreate` fired by a subagent carry `agent_id` / `agent_type`?
   2. Does Claude Code keep writing to the terminal (spinner) during a long tool call? Measure output gaps.
   3. Does the "subagent + WorktreeCreate hook → isolation error" bug reproduce?
@@ -37,7 +37,7 @@
   Write `docs/spike/stage-0.md`: answers, evidence, catalog of hook events and fields, and **proposed changes to `docs/hive.md`** (as table rows, in Portuguese) — do not apply them. *(Pontos em aberto #7)*
 - [x] **0.13 `docs/architecture.md`.** `task/0.13-architecture` — *to be updated with the spike findings (0.12).* Contracts, module map, message catalog, sequences (bridge start, handshake, terminal open/close, hook event, app disconnect), how to run and test.
 
-**⏸ Checkpoint 0** — the human reviews Stage 0 and the spike report, and updates `docs/hive.md`.
+**⏸ Checkpoint 0** — the human reviews Stage 0 and updates `docs/hive.md` (the spike report comes at 1.12, before checkpoint 1; "Pontos em aberto" #7 in `docs/hive.md` still says "spike da Etapa 0" — the human updates it).
 
 ---
 
@@ -55,6 +55,8 @@
 - [ ] **1.9 Shortcuts.** Ctrl+Shift+T (worktree picker → new terminal), Ctrl+Shift+N (new worktree), Ctrl+Shift+B (files panel), Ctrl+Shift+O (add project), F8 (next pending). Every other key goes to the terminal untouched. *(#35)*
 - [ ] **1.10 App lifetime.** Closing the app ends every terminal and agent; confirmation dialog if any agent is working, waiting for permission or waiting for you. *(#18)*
 - [ ] **1.11 Load test.** 20 terminals replaying recorded Claude Code output at the same time; the focused terminal must stay fluid. If it fails, stop and report: the planned fallback (headless terminal emulator in the service) is a human decision. *(#28)*
+
+- [ ] **1.12 Hooks spike report (moved from 0.12).** Throughout Stage 1 the human runs Claude Code in this repo through `scripts/spike/dogfood.sh` (records in `target/spike/`), and once runs the provoked session in `scripts/spike/README.md` (Part 2, `/tmp/hive-spike`). Answer the six questions of 0.12 with evidence and write `docs/spike/stage-0.md` (answers, evidence, catalog of hook events and fields, proposed changes to `docs/hive.md` as table rows in Portuguese — do not apply them). Ask the human when the recordings are ready; never run the real `claude` yourself. *(Pontos em aberto #7)*
 
 **⏸ Checkpoint 1**
 
