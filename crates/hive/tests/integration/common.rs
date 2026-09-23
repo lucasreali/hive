@@ -1,0 +1,158 @@
+//! Test harness: runs the real `hive` binary in a throwaway HOME and XDG layout.
+
+use std::path::PathBuf;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
+
+use futures_util::{SinkExt, StreamExt};
+use hive_protocol::{Control, Frame, FrameCodec, Role};
+use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio_util::codec::{FramedRead, FramedWrite};
+
+pub const TIMEOUT: Duration = Duration::from_secs(10);
+
+pub struct Env {
+    pub dir: tempfile::TempDir,
+}
+
+pub struct Conn {
+    pub reader: FramedRead<OwnedReadHalf, FrameCodec>,
+    pub writer: FramedWrite<OwnedWriteHalf, FrameCodec>,
+}
+
+impl Env {
+    pub fn new() -> Self {
+        let env = Self {
+            dir: tempfile::tempdir().unwrap(),
+        };
+        for sub in ["home", "run", "data", "config"] {
+            std::fs::create_dir(env.path(sub)).unwrap();
+        }
+        env
+    }
+
+    pub fn path(&self, sub: &str) -> PathBuf {
+        self.dir.path().join(sub)
+    }
+
+    pub fn socket(&self) -> PathBuf {
+        self.path("run/hive/hive.sock")
+    }
+
+    pub fn hive(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hive"));
+        cmd.env("HOME", self.path("home"))
+            .env("XDG_RUNTIME_DIR", self.path("run"))
+            .env("XDG_DATA_HOME", self.path("data"))
+            .env("XDG_CONFIG_HOME", self.path("config"))
+            .env_remove("HIVE_TERMINAL_ID");
+        cmd
+    }
+
+    /// Starts `hive daemon` and waits until its socket accepts connections.
+    pub fn daemon(&self) -> Daemon {
+        let child = self
+            .hive()
+            .arg("daemon")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let daemon = Daemon(child);
+        wait_until(|| std::os::unix::net::UnixStream::connect(self.socket()).is_ok());
+        daemon
+    }
+
+    pub async fn raw(&self) -> Conn {
+        let (read, write) = UnixStream::connect(self.socket())
+            .await
+            .unwrap()
+            .into_split();
+        Conn {
+            reader: FramedRead::new(read, FrameCodec),
+            writer: FramedWrite::new(write, FrameCodec),
+        }
+    }
+
+    /// Connects and completes the handshake.
+    pub async fn connect(&self, role: Role) -> Conn {
+        let mut conn = self.raw().await;
+        conn.send(0, Control::hello(role, hive::VERSION)).await;
+        assert_eq!(
+            conn.control().await,
+            (
+                0,
+                Control::Welcome {
+                    version: hive::VERSION.into()
+                }
+            )
+        );
+        conn
+    }
+}
+
+impl Conn {
+    pub async fn send(&mut self, channel: u32, message: Control) {
+        self.writer
+            .send(Frame::control(channel, &message))
+            .await
+            .unwrap();
+    }
+
+    pub async fn next(&mut self) -> Option<Frame> {
+        tokio::time::timeout(TIMEOUT, self.reader.next())
+            .await
+            .unwrap()
+            .map(Result::unwrap)
+    }
+
+    /// Next control frame, skipping terminal output.
+    pub async fn control(&mut self) -> (u32, Control) {
+        loop {
+            let frame = self.next().await.expect("connection closed");
+            if let Ok(message) = frame.to_control() {
+                return (frame.channel, message);
+            }
+        }
+    }
+}
+
+/// A running daemon; killed on drop so a failing test never leaks it.
+pub struct Daemon(pub Child);
+
+impl Daemon {
+    pub fn wait_exit(&mut self) -> ExitStatus {
+        wait_exit(&mut self.0)
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Stops a daemon with SIGTERM so it exits normally (and writes its coverage data).
+pub fn stop(mut daemon: Daemon) {
+    let pid = nix::unistd::Pid::from_raw(daemon.0.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).unwrap();
+    assert!(daemon.wait_exit().success());
+}
+
+pub fn wait_until(mut ready: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !ready() {
+        assert!(start.elapsed() < TIMEOUT, "timed out waiting");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+pub fn wait_exit(child: &mut Child) -> ExitStatus {
+    let mut status = None;
+    wait_until(|| {
+        status = child.try_wait().unwrap();
+        status.is_some()
+    });
+    status.unwrap()
+}
