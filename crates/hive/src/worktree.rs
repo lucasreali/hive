@@ -108,7 +108,18 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<PathBuf>
     ];
     args.extend(base.map(OsStr::new));
     run_git(&root, &args, &[], &[0])?;
-    copy_included(&root, &path, &included)?;
+    if let Err(err) = copy_included(&root, &path, &included) {
+        // Undo the brand-new worktree and branch: a failed create leaves nothing behind.
+        let remove = [
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            OsStr::new("--force"),
+            path.as_os_str(),
+        ];
+        let _ = run_git(&root, &remove, &[], &[0]);
+        let _ = git(&root, &["branch", "-D", &branch]);
+        return Err(err);
+    }
     Ok(path)
 }
 
@@ -120,11 +131,26 @@ pub fn remove(dir: &Path, name: &str) -> io::Result<()> {
     remove_path(&root, &root.join(WORKTREES_DIR).join(name))
 }
 
-/// `WorktreeCreate` hook: creates the worktree `name` in the repository of `cwd`.
+/// `WorktreeCreate` hook: creates the worktree `name` in the repository of `cwd`, or
+/// reuses it when it is already a Hive worktree (`claude -w <existing>` reopens it, as
+/// Claude Code does without the hook).
 pub fn hook_create(input: &mut dyn Read) -> io::Result<PathBuf> {
     let payload = read_payload(input)?;
     let name = field(&payload, "name")?;
-    create(Path::new(field(&payload, "cwd")?), name, None)
+    let cwd = Path::new(field(&payload, "cwd")?);
+    match existing(cwd, name)? {
+        Some(path) => Ok(path),
+        None => create(cwd, name, None),
+    }
+}
+
+/// The worktree `name` if it exists at `.claude/worktrees/<name>` on branch `worktree-<name>`.
+fn existing(dir: &Path, name: &str) -> io::Result<Option<PathBuf>> {
+    validate_name(name)?;
+    let path = main_root(dir)?.join(WORKTREES_DIR).join(name);
+    let branch = format!("worktree-{name}");
+    let ours = |wt: &Worktree| wt.path == path && wt.branch.as_deref() == Some(branch.as_str());
+    Ok(list(dir)?.into_iter().find(ours).map(|wt| wt.path))
 }
 
 /// `WorktreeRemove` hook: removes `worktree_path`, which must be a worktree directly under

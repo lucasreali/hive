@@ -399,15 +399,54 @@ fn hook_create_failures_print_nothing() {
     for (input, message) in cases {
         assert_fails(&repo.hook("hook-create", &input), message);
     }
-    assert!(
-        repo.hook("hook-create", payload("once").as_bytes())
-            .status
-            .success()
-    );
+    // A directory that is not a Hive worktree is never reused.
+    std::fs::create_dir_all(repo.path("plain")).unwrap();
     assert_fails(
-        &repo.hook("hook-create", payload("once").as_bytes()),
+        &repo.hook("hook-create", payload("plain").as_bytes()),
         "already exists",
     );
+}
+
+#[test]
+fn hook_create_reuses_an_existing_hive_worktree() {
+    let repo = Repo::new();
+    let input = json!({"name": "again", "cwd": repo.root}).to_string();
+    for _ in 0..2 {
+        let out = repo.hook("hook-create", input.as_bytes());
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert_eq!(stdout(&out), format!("{}\n", repo.path("again").display()));
+    }
+    // Same name on another branch: not ours, so it is refused.
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "other",
+        repo.path("mine").to_str().unwrap(),
+    ]);
+    let input = json!({"name": "mine", "cwd": repo.root}).to_string();
+    assert_fails(
+        &repo.hook("hook-create", input.as_bytes()),
+        "already exists",
+    );
+}
+
+#[test]
+fn a_failed_include_copy_leaves_nothing_behind() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = Repo::new();
+    repo.commit(".gitignore", ".env\n");
+    repo.commit(".worktreeinclude", ".env\n");
+    repo.write(".env", "SECRET=1");
+    let env = repo.root.join(".env");
+    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = repo.hive(&["create", "broken"]);
+    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_fails(&out, "Permission denied");
+    assert!(!repo.path("broken").exists());
+    assert_eq!(repo.git(&["branch", "--list", "worktree-broken"]), "");
+    assert_eq!(repo.git(&["worktree", "list"]).lines().count(), 1);
 }
 
 #[test]
