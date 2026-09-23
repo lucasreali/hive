@@ -97,7 +97,13 @@ test("hovering picks a row and a click opens it", async () => {
   );
 });
 
-test("Esc closes it", () => {
+test("Esc or a click outside closes it", () => {
+  fireEvent.click(open().querySelector(".picker-list") as Element);
+  expect(useHive.getState().modal).toBe("worktree-picker");
+  cleanup();
+  fireEvent.click(open());
+  expect(useHive.getState().modal).toBeNull();
+  cleanup();
   const dialog = open();
   act(() => dialog.dispatchEvent(new Event("close")));
   expect(useHive.getState().modal).toBeNull();

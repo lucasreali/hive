@@ -1116,3 +1116,7 @@ button.chevron:hover {
   color: var(--text-2);
   border-color: var(--border);
 }
+
+.dialog.picker::backdrop {
+  background: transparent;
+}

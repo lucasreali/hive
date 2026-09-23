@@ -99,8 +99,7 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
   return <div className="terminal-host" ref={ref} hidden={hidden} />;
 }
 
-// The worktree picker behind Ctrl+Shift+T arrives with 1.9; "+" opens a terminal in the
-// selected worktree.
+// "+" opens a terminal in the selected worktree; Ctrl+Shift+T opens the worktree picker.
 export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
   const empty = useHive((s) => s.projects !== null && Object.keys(s.projects).length === 0);

@@ -33,6 +33,15 @@ export function WorktreePicker() {
         if (dialog && !dialog.open) dialog.showModal();
       }}
       onClose={close}
+      // A click outside the picker lands on the dialog itself (its backdrop): it closes.
+      onClick={(e) => e.target === e.currentTarget && close()}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") setIndex(Math.min(items.length - 1, index + 1));
+        else if (e.key === "ArrowUp") setIndex(Math.max(0, index - 1));
+        else if (e.key === "Enter") pick(items[index]?.worktree);
+        else return;
+        e.preventDefault();
+      }}
     >
       <label className="picker-search">
         <SearchIcon />
@@ -41,13 +50,6 @@ export function WorktreePicker() {
           onChange={(e) => {
             setQuery(e.target.value);
             setIndex(0);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") setIndex(Math.min(items.length - 1, index + 1));
-            else if (e.key === "ArrowUp") setIndex(Math.max(0, index - 1));
-            else if (e.key === "Enter") pick(items[index]?.worktree);
-            else return;
-            e.preventDefault();
           }}
           placeholder="Open a terminal in worktree…"
           spellCheck={false}
