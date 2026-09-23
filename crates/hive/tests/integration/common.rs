@@ -16,6 +16,38 @@ pub struct Env {
     pub dir: tempfile::TempDir,
 }
 
+/// Kills every process still running with this environment (daemons started by a
+/// bridge, shells and their children), so a failing test never leaks processes.
+/// Processes get a moment to exit on their own first, so coverage data is written.
+impl Drop for Env {
+    fn drop(&mut self) {
+        let start = Instant::now();
+        while !self.processes().is_empty() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for pid in self.processes() {
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+        }
+    }
+}
+
+impl Env {
+    fn processes(&self) -> Vec<nix::unistd::Pid> {
+        let marker = format!("XDG_RUNTIME_DIR={}", self.path("run").display());
+        hive::procs::list(std::path::Path::new("/proc"))
+            .into_iter()
+            .filter(|proc| {
+                let environ =
+                    std::fs::read(format!("/proc/{}/environ", proc.pid)).unwrap_or_default();
+                environ
+                    .split(|b| *b == 0)
+                    .any(|var| var == marker.as_bytes())
+            })
+            .map(|proc| nix::unistd::Pid::from_raw(proc.pid))
+            .collect()
+    }
+}
+
 pub struct Conn {
     pub reader: FramedRead<OwnedReadHalf, FrameCodec>,
     pub writer: FramedWrite<OwnedWriteHalf, FrameCodec>,
