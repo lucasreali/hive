@@ -13,3 +13,10 @@ tokio-util = { version = "0.7.19", features = ["codec"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "codec"
+harness = false
