@@ -9,6 +9,7 @@ pub mod paths;
 pub mod procs;
 pub mod terminal;
 pub mod watch;
+pub mod wrapper;
 
 /// Binary version, compared with the app's in the handshake.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
