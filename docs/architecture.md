@@ -37,6 +37,7 @@ Windows                         WSL
 | `hive::hook` | `hive hook`: reads stdin (512 KiB limit), optionally records JSONL, sends with a 200 ms timeout. |
 | `hive::bridge` | Relay plus detached daemon start (`setsid --fork`, stderr to `daemon.log`). |
 | `hive::wrapper` | Installs `<data>/hive/bin/claude` (sh wrapper) and `<data>/hive/hive-hooks.json` when the daemon starts. |
+| `hive::projects` | The projects the app follows: validation, `<data>/hive/projects.json`, worktrees per project for the sidebar. |
 | `hive::worktree` | Worktrees in `.claude/worktrees/<name>` on branch `worktree-<name>`; git through the executable with separate arguments; `.worktreeinclude` copy. |
 
 ## Wire protocol
@@ -71,6 +72,11 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `hook {event, terminal_id, payload}` | `hive hook` → service | 0 | One raw hook call. The service closes the connection after it. |
 | `agent {…AgentEvent}` | service → app | 0 | A translated hook event. |
 | `unhooked_agent` | service → app | n | A `claude` runs in terminal n without sending hook events. |
+| `list_projects` | app → service | 0 | Asks for every project; answered by `projects`. |
+| `projects {projects}` | service → app | 0 | Every project with its worktrees, in the order they were added. |
+| `add_project {path}` | app → service | 0 | Follow the git repository containing `path`. |
+| `project_added {project}` | service → app | 0 | The project, with its worktrees. Also the answer when it was already followed. |
+| `add_project_failed {path, error, message}` | service → app | 0 | `path` was refused. `error` is `not_absolute`, `not_found`, `not_a_directory`, `not_a_git_repository` or `storage`; `message` is shown as is. |
 | `error {message}` | service → client | 0 or n | A refused request, e.g. channel 0, a channel already open, a bad cwd, an unexpected message, or a second app. |
 
 Between the app's Rust side and the WebView (#24), control messages travel on one Tauri `Channel` (given by the `connect` command) as the service's JSON plus a `channel` field, e.g. `{"type":"terminal_opened","channel":1}`. Terminal output travels as raw bytes on a separate `Channel` per terminal (given by `open_terminal`). No Tauri events are used. The Rust side adds `app_version` and `app_protocol` (its own values) to `version_mismatch`, so the UI can show both sides, and one message of its own:
@@ -78,6 +84,8 @@ Between the app's Rust side and the WebView (#24), control messages travel on on
 | Message | Direction | Meaning |
 |---|---|---|
 | `disconnected {reason}` | app (Rust) → UI | The bridge exited or its stdout closed. `reason` is the bridge's stderr (at most 16 KiB), a protocol error, or "the hive bridge exited". Every open terminal gets `terminal_exited {code: null}` first. Not sent after `version_mismatch`. |
+
+A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main worktree's path, `name` its folder name, and `error` (or null) says why `git worktree list` failed, e.g. for a moved folder. A worktree is `{id, name, path, branch, main, claude}`: `id` is its path, `branch` is null when detached, `main` marks the main worktree and `claude` one in `<repo>/.claude/worktrees/`. `name` is the folder name for a Claude worktree and the branch otherwise (the folder name when detached). The app never derives any of these.
 
 `AgentEvent` has these fields: `provider`, `terminal_id`, `session_id`, `subagent {id, agent_type}`, `cwd`, `kind`, and `raw` (the unchanged payload).
 `kind` is one of: `session_started`, `prompt_submitted`, `tool_started`/`tool_finished`/`tool_failed {tool}`, `permission_requested {tool}`, `notification {notification}`, `turn_finished`, `turn_failed {error}`, `subagent_started`, `subagent_stopped`, `session_ended {reason}`, or `other {event}`.
@@ -106,6 +114,14 @@ Between the app's Rust side and the WebView (#24), control messages travel on on
 2. Output bytes for that channel go only to its `onData`. Control messages for channels the UI did not open are dropped.
 3. `writeTerminal` sends terminal frames, split at `MAX_PAYLOAD`; `resizeTerminal` and `closeTerminal` send `resize` and `close_terminal`.
 4. `terminal_exited` releases the channel's `onData`.
+
+### Projects
+1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. Worktrees are not watched yet (Stage 3).
+2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare entries skipped.
+3. `add_project {path}` (the add-project dialog): the path must be absolute, an existing directory and inside a git repository with a working tree. It is normalised to the main worktree (the first entry of `git worktree list`), so a subfolder or a linked worktree adds its repository. A new project is appended to `<data>/hive/projects.json`; if that write fails the list is unchanged and the answer is `add_project_failed {error: storage}`.
+4. Project requests run on a blocking thread, off the app's frame loop, because git can be slow.
+
+The list is a JSON array of paths, written through a temporary file (mode 0600) renamed over it. A missing file is an empty list. An unreadable or corrupt one is moved to `projects.json.corrupt` with a warning on stderr (`daemon.log`), and the service starts with an empty list.
 
 ### Daemon start
 1. Prepare the runtime dir (0700, owned by the user).
@@ -164,6 +180,7 @@ A project that has its own `WorktreeCreate` hook in `.claude/settings{,.local}.j
 | `<runtime>/hive.lock` | 0600 | Single-instance lock. |
 | `<runtime>/daemon.log` | 0600 | stderr of a daemon started by the bridge. |
 | `<data>/hive/bin/claude` | 0755 | Wrapper: finds the real `claude` on `PATH` (skipping the bin dir and itself). If `HIVE_WRAPPED` is unset it exports it and adds `--settings`; otherwise it runs the real claude unchanged. |
+| `<data>/hive/projects.json` | 0600 | JSON array of the followed projects' paths. |
 | `<data>/hive/hive-hooks.json` | 0644 | One exec-form hook per observed event (12 events, no worktree events yet). |
 
 ## Run and test
@@ -187,7 +204,7 @@ Integration tests run the real `hive` binary with a temporary `HOME` and `XDG_*`
 
 ### Frontend without Tauri
 
-Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu"), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
+Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu") and `projects` (two of three fake repositories under `/home/user`; `?mock=empty` starts with none, and `add_project` accepts only the fake paths), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
 
 ### Windows app during development
 

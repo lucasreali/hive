@@ -142,6 +142,8 @@ Labels are lowercase in rows (as in the prototype), sentence case in headings an
 | subagente: | subagent: |
 | 14 min · 1 h · agora | 14 min · 1 h · now |
 | Arraste para redimensionar | Drag to resize |
+| (new) Atualizar worktrees (tooltip, not in the prototype) | Refresh worktrees |
+| (new) Recolher / Expandir \<projeto\> (chevron label) | Collapse / Expand \<project\> |
 
 ### Terminal area
 
@@ -170,6 +172,19 @@ Labels are lowercase in rows (as in the prototype), sentence case in headings an
 | Adicionar projeto · Ctrl O | Add project · Ctrl+Shift+O |
 | O projeto é uma pasta dentro do WSL, por exemplo: | A project is a folder inside WSL, for example: |
 | /home/usuario/projetos/loja | /home/user/projects/shop |
+
+### Add project dialog (new: the prototype has no screen for it; it follows the new-worktree dialog)
+
+| Portuguese | English |
+|---|---|
+| Adicionar projeto | Add project |
+| Pasta no WSL | Folder in WSL |
+| /home/usuario/projetos/loja (placeholder) | /home/user/projects/shop |
+| Um repositório git, ou qualquer pasta dentro dele: o repositório inteiro é adicionado. | A git repository, or any folder inside one: the whole repository is added. |
+| Cancelar · Esc | Cancel · Esc |
+| Adicionar projeto · Enter | Add project · Enter |
+
+Refusals are the service's `message`, shown as is (e.g. "cannot open /x: No such file or directory (os error 2)").
 
 ### Right panel: files and diff (screen 1g, Stage 3)
 
