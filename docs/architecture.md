@@ -164,3 +164,13 @@ Integration tests run the real `hive` binary with a temporary `HOME` and `XDG_*`
 - A stand-in `claude` is a renamed copy of `dash`, so the real Claude Code never runs.
 - When a test ends, every process still carrying the test's `XDG_RUNTIME_DIR` is killed, so failing tests do not leak processes.
 - `llvm-cov` records a spawned `hive` only if it exits normally, so tests stop daemons with SIGTERM or by closing the app connection.
+
+### Windows app during development
+
+The code and every build stay in WSL (TODO 1.0, human decision 2026-09-23). `scripts/win-dev.sh`:
+1. cross-compiles `hive-app` for `x86_64-pc-windows-msvc` with `cargo xwin`, with a static CRT because a stock Windows has no VC++ redistributable;
+2. copies the `.exe` to `%LOCALAPPDATA%\hive-dev`;
+3. starts Vite in WSL on port 1420. The debug build loads `devUrl`, which Windows reaches through WSL localhost forwarding, so hot reload works;
+4. opens the app through PowerShell, because launching a Windows `.exe` straight from WSL interop fails.
+
+One-time setup: `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin --locked`, `bun install`. The first build downloads the MSVC CRT and Windows SDK into `~/.cache/cargo-xwin`. Release bundles (MSI/NSIS) are not covered yet.
