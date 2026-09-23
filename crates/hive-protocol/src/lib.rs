@@ -45,13 +45,14 @@ pub enum FrameError {
 }
 
 impl Frame {
-    pub fn control(channel: u32, message: &Control) -> Result<Self, FrameError> {
-        let payload = Bytes::from(serde_json::to_vec(message)?);
-        Ok(Self {
+    pub fn control(channel: u32, message: &Control) -> Self {
+        // Cannot fail: control messages hold only strings, numbers and JSON values.
+        let payload = Bytes::from(serde_json::to_vec(message).unwrap_or_default());
+        Self {
             kind: FrameType::Control,
             channel,
             payload,
-        })
+        }
     }
 
     pub fn terminal(channel: u32, payload: impl Into<Bytes>) -> Self {
@@ -279,7 +280,7 @@ mod tests {
     #[test]
     fn control_frame_round_trips() {
         let msg = Control::hello(Role::App, "0.1.0");
-        let mut buf = encode(Frame::control(0, &msg).unwrap());
+        let mut buf = encode(Frame::control(0, &msg));
         assert_eq!(buf[0], 0);
         let frame = FrameCodec.decode(&mut buf).unwrap().unwrap();
         assert_eq!(frame.to_control().unwrap(), msg);
@@ -295,7 +296,7 @@ mod tests {
 
     #[test]
     fn control_messages_are_tagged_json() {
-        let frame = Frame::control(3, &Control::Resize { cols: 80, rows: 24 }).unwrap();
+        let frame = Frame::control(3, &Control::Resize { cols: 80, rows: 24 });
         assert_eq!(
             &frame.payload[..],
             br#"{"type":"resize","cols":80,"rows":24}"#
@@ -318,7 +319,7 @@ mod tests {
             },
             raw: serde_json::json!({"k": [1, 2]}),
         });
-        let frame = Frame::control(0, &msg).unwrap();
+        let frame = Frame::control(0, &msg);
         assert_eq!(frame.to_control().unwrap(), msg);
     }
 
