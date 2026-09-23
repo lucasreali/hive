@@ -1,8 +1,14 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// Wiring only (excluded from coverage, see COVERAGE_EXCLUSIONS.md): builder, plugins and
+// command registration. Commands and any logic live in lib.rs, which is tested.
 fn main() {
-    if let Err(error) = hive_lib::run() {
+    let result = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![hive_lib::commands::greet])
+        .run(tauri::generate_context!());
+    if let Err(error) = result {
         eprintln!("hive-app: {error}");
         std::process::exit(1);
     }

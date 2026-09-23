@@ -1,0 +1,2 @@
+# Files excluded from mutation testing; each one is listed with its reason in COVERAGE_EXCLUSIONS.md.
+exclude_globs = ["src-tauri/src/main.rs"]

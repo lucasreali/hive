@@ -1,20 +1,16 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+//! Tauri commands. `main.rs` only wires them; everything testable lives here.
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() -> tauri::Result<()> {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
-        .run(tauri::generate_context!())
+pub mod commands {
+    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+    #[tauri::command]
+    pub fn greet(name: &str) -> String {
+        format!("Hello, {}! You've been greeted from Rust!", name)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::commands::*;
 
     #[test]
     fn greet_includes_name() {
