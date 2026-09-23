@@ -121,6 +121,10 @@ Labels are lowercase in rows (as in the prototype), sentence case in headings an
 | conectado | connected |
 | (new) conectando | connecting |
 | (new) versão incompatível | version mismatch |
+| (new) desconectado | disconnected |
+| (new) As versões do app e do serviço hive diferem (block title) | The app and the hive service versions differ |
+| (new) Conexão com o serviço hive perdida (block title) | Lost the connection to the hive service |
+| (new) Reconectar | Reconnect |
 | Distribuição WSL conectada (tooltip) | WSL connection |
 | N agente ativo / N agentes ativos | 1 active agent / N active agents |
 

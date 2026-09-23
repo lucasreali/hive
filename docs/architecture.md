@@ -51,7 +51,7 @@ Every message is a frame, big-endian: `[type: u8][channel: u32][length: u32][pay
 ### Handshake
 
 The first frame from every client is `Hello { protocol, version, role }`, where `role` is `app` or `hook`.
-- If both `protocol` (`PROTOCOL_VERSION`) and `version` (the `hive` binary version) match, the service answers `Welcome { version }`.
+- If both `protocol` (`PROTOCOL_VERSION`) and `version` (the `hive` binary version) match, the service answers `Welcome { version, distro }`. `distro` is the service's `WSL_DISTRO_NAME` (null when unset), shown in the app's status bar: the service knows its distribution, so Windows never has to guess it from `wsl.exe`. It was added as an optional field (`#[serde(default)]`), which old decoders ignore and new decoders default, so `PROTOCOL_VERSION` stayed 1.
 - Otherwise it answers `VersionMismatch { protocol, version }` with its own values and closes the connection. This is a hard error: the app must block and tell the user.
 - Any other first message gets `Error` and the connection is closed.
 
@@ -60,8 +60,8 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | Message | Direction | Channel | Meaning |
 |---|---|---|---|
 | `hello` | client → service | 0 | Starts the handshake. |
-| `welcome` | service → client | 0 | Handshake accepted. |
-| `version_mismatch` | service → client | 0 | Handshake refused; the connection is closed. |
+| `welcome {version, distro}` | service → client | 0 | Handshake accepted. |
+| `version_mismatch {protocol, version}` | service → client | 0 | Handshake refused (the service's own values); the connection is closed. |
 | `open_terminal {cwd, cols, rows}` | app → service | n ≥ 1 | Start a terminal on channel n. |
 | `terminal_opened` | service → app | n | The terminal is running. |
 | terminal frame | both | n | Keystrokes (app → service) or output (service → app). |
@@ -73,7 +73,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `unhooked_agent` | service → app | n | A `claude` runs in terminal n without sending hook events. |
 | `error {message}` | service → client | 0 or n | A refused request, e.g. channel 0, a channel already open, a bad cwd, an unexpected message, or a second app. |
 
-Between the app's Rust side and the WebView (#24), control messages travel on one Tauri `Channel` (given by the `connect` command) as the service's JSON plus a `channel` field, e.g. `{"type":"terminal_opened","channel":1}`. Terminal output travels as raw bytes on a separate `Channel` per terminal (given by `open_terminal`). No Tauri events are used. The Rust side adds one message of its own:
+Between the app's Rust side and the WebView (#24), control messages travel on one Tauri `Channel` (given by the `connect` command) as the service's JSON plus a `channel` field, e.g. `{"type":"terminal_opened","channel":1}`. Terminal output travels as raw bytes on a separate `Channel` per terminal (given by `open_terminal`). No Tauri events are used. The Rust side adds `app_version` and `app_protocol` (its own values) to `version_mismatch`, so the UI can show both sides, and one message of its own:
 
 | Message | Direction | Meaning |
 |---|---|---|
@@ -97,6 +97,7 @@ Between the app's Rust side and the WebView (#24), control messages travel on on
 1. The UI calls `connect(onMessage)` once at startup (`src/main.tsx`), handing a `Channel` to Rust.
 2. Rust starts the bridge and queues `hello {role: app, version}`; `version` is the app's `CARGO_PKG_VERSION`, so `hive-app` and `hive` share one version number.
 3. `welcome` or `version_mismatch` goes to the UI. After `version_mismatch`, Rust drops the bridge and sends nothing more.
+   The UI (`src/shell/ConnectionBlock.tsx`) then blocks the workspace (`inert`, with a modal `alertdialog`; the title bar stays usable) and shows both versions and the fix: `cargo install --path crates/hive` and `pkill -f 'hive daemon'`, because a refused handshake leaves the old service running. `disconnected` blocks the same way and shows the reason. The dialog's "Reconnect" calls `connect` again, which starts a new bridge.
 4. A UI that reloads calls `connect` again: if the connection is up, Rust closes that UI's old terminals, drops their later messages, and replays `welcome`; otherwise it starts a new bridge.
 5. When the bridge's stdout closes, Rust waits up to 2 s for its stderr, sends `terminal_exited` for every open terminal and then `disconnected {reason}`. Commands then fail with "not connected to the hive service".
 
@@ -186,7 +187,7 @@ Integration tests run the real `hive` binary with a temporary `HOME` and `XDG_*`
 
 ### Frontend without Tauri
 
-Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome`, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
+Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu"), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
 
 ### Windows app during development
 
