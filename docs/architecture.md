@@ -129,9 +129,21 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 1. `openTerminal(cwd)` creates the `Terminal` first, then calls the transport at 80×24, so output that arrives before the tab renders is kept. It adds a tab to the store (`tabs`, `activeTab`, `selection` = the worktree path); the tab's title is the worktree's name from `projects` (the project's name is added when two tabs share a name; an unknown path shows as is).
 2. `TerminalArea` renders one host element (`mountTerminals`) and calls `showTerminal(activeTab)`. Only the shown terminal is opened in the DOM, fitted (`FitAddon`) and rendered with the WebGL addon; a hidden one loses its WebGL addon and keeps parsing output into its buffer. A lost WebGL context disposes the addon (xterm falls back to its DOM renderer); WebGL is tried again the next time the terminal is shown.
 3. Host size changes are debounced (50 ms) into one fit of the shown terminal; a new size sends `resizeTerminal`.
-4. Keys: `interceptKeys(handler)` sees every key event first (app shortcuts, 1.9); then Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes through the clipboard API (#35); everything else goes to xterm and, as `onData`, to `writeTerminal`. Input stops once the terminal exited.
+4. Keys: `interceptKeys(handler)` sees every key event first and keeps the app shortcuts from the terminal (see Shortcuts); then Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes through the clipboard API (#35); everything else goes to xterm and, as `onData`, to `writeTerminal`. Input stops once the terminal exited.
 5. `closeTerminal(id)` sends `close_terminal` unless the shell already exited, disposes the `Terminal` and removes the tab (the right neighbour, or the new last tab, is shown). An exited terminal keeps its tab, marked "exited", until closed; `unhooked_agent` adds a "no hooks" badge.
 6. `scrollback` (default 5000 lines) in the store is applied to each new terminal; it is not persisted yet.
+
+### Shortcuts (#35)
+`src/shortcuts.ts` has one `keydown` listener on the window. A focused terminal gives each key to `interceptKeys` first: a shortcut is kept from xterm, which leaves it unhandled, so it bubbles up to the window listener and runs once; every other key (Ctrl+Shift+C/V included) is the terminal's.
+1. Ctrl+Shift+T opens the worktree picker (every worktree of every project, filtered by worktree or project name; ↑/↓, Enter or a click opens a terminal in its path; Esc or a click outside closes). Ctrl+Shift+N opens the new worktree dialog for the selected project, the project of the selected worktree, or the first project (add project when there is none). Ctrl+Shift+B toggles the files panel. Ctrl+Shift+O opens add project. F8 (no modifiers) goes to the next pending agent: a no-op until pending states exist (2.3).
+2. Nothing runs under the connection block (`version_mismatch`, `disconnected`) or while a dialog is open; the key then goes on as usual.
+3. The tree (sidebar): ↑/↓ move between rows, ←/→ collapse and expand a project, Enter selects (rows are buttons).
+
+### Closing the app (#18)
+1. The title bar Close, Alt+F4 and the taskbar all become one Tauri close request. `guardClose` (`src/shell/window.ts`) listens to it with `onCloseRequested` and asks `confirmClose` (`src/shell/CloseAppDialog.tsx`).
+2. When `agentsAtRisk` is empty the window is destroyed at once. Otherwise the request is cancelled and the "Close Hive?" dialog opens: Cancel/Esc keeps the app, "Close Hive" (focused, Enter) calls `closeWindow`, which destroys the window without asking again. Stage 1 counts every detected agent; Stage 2 narrows `agentsAtRisk` to working, waiting for permission and waiting for you.
+3. The last window gone, Tauri emits `RunEvent::Exit`; `on_run_event` runs `Hive::shutdown`: the frame queue closes, so the bridge's stdin closes, the bridge exits and the daemon runs "App disconnect" below. Shutdown waits up to 2 s for the bridge to end, then kills it (no `wsl.exe` left behind). A crashed app closes the same pipe through the OS.
+4. Outside Tauri (browser, mock transport) only the title bar Close requests a close, and a close that goes through sets `data-closed` on `<html>` for the browser checks.
 
 ### Projects
 1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. Worktrees are not watched yet (Stage 3).

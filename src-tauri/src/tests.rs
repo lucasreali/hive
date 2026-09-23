@@ -608,3 +608,91 @@ fn commands_reach_the_managed_hive() {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }
 }
+
+#[tokio::test]
+async fn shutdown_closes_the_bridge_stdin_and_waits_for_the_bridge_to_end() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    let shutdown = hive.shutdown(WAIT);
+    let service_side = async {
+        // The app's side closed: the bridge would exit, closing its stdout.
+        let end = tokio::time::timeout(WAIT, service.reader.next()).await;
+        assert!(end.unwrap().is_none());
+        drop(service.writer);
+    };
+    tokio::join!(shutdown, service_side);
+    // The connection had fully ended before `shutdown` returned.
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        json!({"type": "disconnected", "reason": "bridge gone"})
+    );
+    assert_eq!(hive.list_projects(), Err(NOT_CONNECTED.to_owned()));
+    // Nothing is left to end.
+    tokio::time::timeout(WAIT, hive.shutdown(WAIT))
+        .await
+        .unwrap();
+}
+
+/// Whether the process is gone (or a zombie waiting to be reaped).
+fn gone(pid: &str) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat.contains(") Z "),
+        Err(_) => true,
+    }
+}
+
+#[tokio::test]
+async fn shutdown_kills_a_bridge_that_does_not_end() {
+    let pid_file = std::env::temp_dir().join(format!("hive-app-test-{}", std::process::id()));
+    let _ = std::fs::remove_file(&pid_file);
+    // Never reads its stdin, so closing it changes nothing.
+    let script = r#"echo $$ > "$0"; exec sleep 60"#;
+    let args = vec!["-c".into(), script.into(), pid_file.clone().into()];
+    let hive = Hive::new("sh".into(), args);
+    let (channel, _rx) = ui();
+    hive.connect(channel);
+    let read_pid = async {
+        loop {
+            match std::fs::read_to_string(&pid_file) {
+                Ok(pid) if pid.ends_with('\n') => return pid.trim().to_owned(),
+                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    };
+    let pid = tokio::time::timeout(WAIT, read_pid).await.unwrap();
+    std::fs::remove_file(&pid_file).unwrap();
+    assert!(!gone(&pid));
+    tokio::time::timeout(WAIT, hive.shutdown(Duration::from_millis(100)))
+        .await
+        .unwrap();
+    let killed = async {
+        while !gone(&pid) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(WAIT, killed).await.unwrap();
+}
+
+#[test]
+fn the_app_exit_ends_the_connection() {
+    let app = mock_builder()
+        .manage(sh("cat >/dev/null"))
+        .invoke_handler(tauri::generate_handler![connect, list_projects])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let connect = json!({"onMessage": "__CHANNEL__:1"});
+    assert_eq!(invoke(&webview, "connect", connect), Ok(Value::Null));
+    on_run_event(app.handle(), RunEvent::Ready);
+    assert_eq!(
+        invoke(&webview, "list_projects", json!({})),
+        Ok(Value::Null)
+    );
+    on_run_event(app.handle(), RunEvent::Exit);
+    assert_eq!(
+        invoke(&webview, "list_projects", json!({})),
+        Err(json!(NOT_CONNECTED))
+    );
+    assert!(app.state::<Hive>().link().reader.is_none());
+}

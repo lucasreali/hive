@@ -119,7 +119,7 @@ export type Agent = {
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
 
-export type Modal = "new-worktree" | "add-project" | "worktree-picker" | null;
+export type Modal = "new-worktree" | "add-project" | "worktree-picker" | "close-app" | null;
 export type RightPanel = "files" | null;
 
 export type HiveState = {

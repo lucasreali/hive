@@ -12,6 +12,7 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 | `TODO.md` | The work plan. Do the next unchecked task only; stop at every ⏸ checkpoint |
 | `docs/prototype/` | The human's prototype: look, layout, states, glossary. Read-only. Shortcuts follow `docs/hive.md` #35, not the prototype |
 | `COVERAGE_EXCLUSIONS.md` | Approved coverage exclusions (created when the first one is approved) |
+| `.claude/skills/stage/` | How to develop a whole stage: the orchestrator procedure (`SKILL.md`, `/stage <N>`) and the brief every task agent follows (`task-brief.md`) |
 
 ## Hard rules
 
@@ -19,8 +20,9 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 2. **English everywhere**: code, identifiers, comments, commits, repo docs, CLI output, UI text.
 3. **Packages only through the CLI.** Rust: `cargo add -p <crate> <dep>` / `cargo remove`. Frontend: **bun only** (`bun add`, `bun add -d`, `bun remove`, `bunx`, `bun create`); never npm, pnpm, yarn or npx. Never hand-edit dependency sections or lockfiles. Before adding any dependency, tell the human what it is and why.
 4. **Git:** one branch per task (`task/<id>-<slug>`, e.g. `task/0.2-protocol`), created from `main`, with small commits. Never push, never force, never rewrite history.
-   - **When the task is finished** (every gate green, task ticked in `TODO.md`, report written), the agent merges its branch into `main` with `git switch main && git merge --ff-only <branch>` and deletes the branch with `git branch -d <branch>`. Everything the agent did must end up on `main`, with no task branch left behind.
-   - If the fast-forward is refused because `main` moved, stop and ask the human. Never rebase and never force.
+   - **When the task is finished** (every gate green, task ticked in `TODO.md`, report written), the branch goes into `main` and is deleted (`git branch -d`). Everything must end up on `main`, with no task branch left behind.
+   - **Each agent owns its work, conflicts included.** Agents may work in parallel, each in its own git worktree; never touch another agent's worktree or branch. Before finishing, merge `main` into your task branch (`git merge main`), resolve every conflict yourself while keeping the other work intact, and run every gate again. Never rebase, never force.
+   - **Integration:** an agent working alone in the main checkout merges its own branch into `main`. Agents in worktrees cannot run git in the main checkout, so the orchestrator (`.claude/skills/stage/`) integrates their finished branches with `git merge --ff-only <branch>`; if `main` moved in the meantime, the task goes back to its agent to merge `main` again.
    - At a ⏸ checkpoint, merge the finished task first, then stop.
    - Commit messages in English, following [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/): `type(scope): description` (`feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `build`, `ci`, `perf`, `style`), `!` / `BREAKING CHANGE:` footer for breaking changes.
    - **No attribution trailers**: never add `Co-Authored-By: Claude`, "Generated with Claude Code" or any similar line to commits or PRs.

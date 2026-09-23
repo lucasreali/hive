@@ -16,8 +16,10 @@ use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{Control, Frame, FrameCodec, FrameType, Role, MAX_PAYLOAD, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
+use tauri::{AppHandle, Manager, RunEvent, Runtime};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 /// App version, compared with the `hive` binary's in the handshake (#29).
@@ -66,6 +68,8 @@ struct Link {
     /// Output channel of every open terminal, by frame channel.
     terminals: HashMap<u32, Channel<InvokeResponseBody>>,
     last_channel: u32,
+    /// Reads the service until the connection ends; it owns the bridge process.
+    reader: Option<JoinHandle<()>>,
 }
 
 impl Link {
@@ -192,7 +196,7 @@ impl Hive {
             }
         });
         let link = self.link.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let reason = match pump(&link, FramedRead::new(reader, FrameCodec)).await {
                 End::Refused => return,
                 End::Closed => exit.await,
@@ -200,6 +204,24 @@ impl Hive {
             };
             disconnected(&mut lock(&link), reason);
         });
+        self.link().reader = Some(task);
+    }
+
+    /// Ends the connection as the app exits (#18): the bridge's stdin closes, so the bridge
+    /// exits and the service ends every terminal and agent with the app connection (#14).
+    /// A bridge still running after `wait` is killed, so no `wsl.exe` outlives the app.
+    pub async fn shutdown(&self, wait: Duration) {
+        let reader = {
+            let mut link = self.link();
+            link.frames = None;
+            link.reader.take()
+        };
+        let Some(mut reader) = reader else { return };
+        if tokio::time::timeout(wait, &mut reader).await.is_err() {
+            // Dropping the task drops the bridge process, which kills it.
+            reader.abort();
+            let _ = reader.await;
+        }
     }
 
     /// Opens a terminal on a new channel; its output goes to `output`. Returns the channel.
@@ -336,6 +358,14 @@ fn disconnected(link: &mut Link, reason: String) {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
     link.to_ui(json!({"type": "disconnected", "reason": reason}));
+}
+
+/// Handles the app's run events: on exit the connection ends before the process does.
+/// Closing the window goes through the UI first, which confirms when agents are running.
+pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: RunEvent) {
+    if let RunEvent::Exit = event {
+        tauri::async_runtime::block_on(app.state::<Hive>().shutdown(EXIT_WAIT));
+    }
 }
 
 /// The commands the UI calls (in a module: Tauri cannot export `pub` commands from the crate root).

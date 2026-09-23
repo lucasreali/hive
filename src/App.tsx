@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { AddProjectDialog } from "./shell/AddProjectDialog";
+import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { RightPanel } from "./shell/RightPanel";
@@ -8,6 +9,7 @@ import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
 import { WorktreePicker } from "./shell/WorktreePicker";
+import { guardClose } from "./shell/window";
 import { installShortcuts } from "./shortcuts";
 import { useHive } from "./store";
 
@@ -19,6 +21,7 @@ export function App() {
   // Nothing works without the service: the workspace is inert under the block (#29).
   // The title bar stays usable, so the window can still be closed.
   useEffect(installShortcuts, []);
+  useEffect(() => guardClose(confirmClose), []);
   const blocked = status === "version_mismatch" || status === "disconnected";
   return (
     <div className="app">
@@ -32,6 +35,7 @@ export function App() {
         {modal === "add-project" && !blocked && <AddProjectDialog />}
         {modal === "new-worktree" && !blocked && hasProjects && <NewWorktreeDialog />}
         {modal === "worktree-picker" && !blocked && <WorktreePicker />}
+        {modal === "close-app" && <CloseAppDialog />}
         <ConnectionBlock />
       </div>
       <StatusBar />
