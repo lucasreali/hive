@@ -1,0 +1,341 @@
+/* Fonts bundled locally (no network, Tauri CSP). */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+
+/* Design tokens: docs/ui-reference.md. Dark theme only (#23). */
+:root {
+  --bg: #282c33; /* terminal / background */
+  --panel: #2f343e;
+  --bar: #3b414d; /* title bar, status bar */
+  --hover: #363c46;
+  --selected: #454a56;
+  --selected-hover: #4f5563;
+  --border: #464b57;
+  --border-subtle: #363c46;
+  --tree-line: #4a505c;
+  --focus: #47679e;
+  --accent: #74ade8; /* primary action */
+  --accent-hover: #8bbbee;
+  --on-accent: #1f2329;
+  --text: #dce0e5;
+  --text-2: #a9afbc;
+  --text-3: #878a98;
+  --text-4: #5d636f; /* separators, line numbers, kbd borders */
+  --close-hover: #c42b1c;
+
+  --state-permission: #dec184;
+  --state-error: #d07277;
+  --state-you: #e08a5a;
+  --state-working: #74ade8;
+  --state-subagents: #b477cf;
+  --state-idle: #a1c181;
+  --state-ended: #878a98;
+
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --fs-title: 15px;
+  --fs-body: 13px;
+  --fs-small: 12px;
+  --fs-mono: 12.5px;
+  --fs-meta: 11px;
+  --fs-kbd: 10.5px;
+
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  --bar-h: 34px;
+  --status-h: 24px;
+  --sidebar-w: 264px;
+  --right-w: 380px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 18px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+
+button:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Title bar */
+.titlebar {
+  height: var(--bar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  background: var(--bar);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.titlebar-brand {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.window-controls {
+  display: flex;
+  height: 100%;
+}
+
+.window-controls button {
+  width: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+}
+
+.window-controls button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.window-controls button.close:hover {
+  background: var(--close-hover);
+  color: #fff;
+}
+
+/* Main row */
+.main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.bar {
+  height: var(--bar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 24px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: var(--fs-small);
+}
+
+.ghost:hover:not(:disabled),
+.ghost[aria-pressed="true"] {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ghost[aria-pressed="true"] {
+  background: var(--selected);
+}
+
+.hint {
+  padding: 10px 12px;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+/* Sidebar */
+.sidebar {
+  width: var(--sidebar-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+.sidebar > .bar {
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 6px 0 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sidebar .ghost {
+  padding: 0 7px 0 5px;
+}
+
+.sidebar-pending {
+  padding-left: 2px;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+.sidebar-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+/* Terminal area */
+.terminals {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminals > .bar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+}
+
+.tabs > .ghost {
+  width: 34px;
+  height: 100%;
+  border-radius: 0;
+}
+
+.tabs-actions {
+  padding: 0 6px;
+}
+
+.tabs-actions .ghost {
+  width: 26px;
+}
+
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* Right panel */
+.right-panel {
+  width: var(--right-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+}
+
+.right-panel > .bar {
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-small);
+  color: var(--text-2);
+}
+
+.right-panel > .bar > span {
+  flex: 1;
+}
+
+.right-panel .ghost {
+  width: 24px;
+}
+
+.right-panel-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  text-align: center;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+/* Status bar */
+.statusbar {
+  height: var(--status-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  background: var(--bar);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-small);
+  color: var(--text-2);
+  user-select: none;
+}
+
+.connection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.connection[data-status="connected"] .connection-dot {
+  background: var(--state-idle);
+}
+
+.connection[data-status="version_mismatch"] .connection-dot {
+  background: var(--state-error);
+}
+
+.connection-state {
+  color: var(--text-3);
+}

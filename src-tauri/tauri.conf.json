@@ -12,9 +12,10 @@
   "app": {
     "windows": [
       {
-        "title": "hive",
-        "width": 800,
-        "height": 600
+        "title": "Hive",
+        "width": 1440,
+        "height": 900,
+        "decorations": false
       }
     ],
     "security": {
