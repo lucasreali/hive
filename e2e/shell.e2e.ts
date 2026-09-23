@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("app shell renders with bundled fonts and toggles the right panel", async ({ page }) => {
   const external: string[] = [];
   page.on("request", (r) => {
-    if (!r.url().startsWith("http://localhost:1420")) external.push(r.url());
+    if (new URL(r.url()).hostname !== "localhost") external.push(r.url());
   });
   await page.goto("/");
 
