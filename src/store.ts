@@ -5,8 +5,15 @@ import { create } from "zustand";
 
 /** Service → app messages the store understands. Mirrors `hive_protocol::Control`. */
 export type ServiceMessage =
-  | { type: "welcome"; version: string }
-  | { type: "version_mismatch"; protocol: number; version: string }
+  | { type: "welcome"; version: string; distro: string | null }
+  // `protocol`/`version` are the service's; `app_*` are added by the app side (Rust).
+  | {
+      type: "version_mismatch";
+      protocol: number;
+      version: string;
+      app_protocol: number;
+      app_version: string;
+    }
   | { type: "terminal_opened"; channel: number }
   | { type: "terminal_exited"; channel: number; code: number | null }
   | { type: "unhooked_agent"; channel: number }
@@ -15,8 +22,14 @@ export type ServiceMessage =
 
 export type Connection =
   | { status: "connecting" }
-  | { status: "connected"; version: string }
-  | { status: "version_mismatch"; protocol: number; version: string }
+  | { status: "connected"; version: string; distro: string | null }
+  | {
+      status: "version_mismatch";
+      protocol: number;
+      version: string;
+      app_protocol: number;
+      app_version: string;
+    }
   | { status: "disconnected"; reason: string };
 
 export type Terminal = {
@@ -70,11 +83,11 @@ function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Part
 function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
     case "welcome":
-      return { connection: { status: "connected", version: m.version } };
-    case "version_mismatch":
-      return {
-        connection: { status: "version_mismatch", protocol: m.protocol, version: m.version },
-      };
+      return { connection: { status: "connected", version: m.version, distro: m.distro } };
+    case "version_mismatch": {
+      const { type: _, ...versions } = m;
+      return { connection: { status: "version_mismatch", ...versions } };
+    }
     case "terminal_opened":
       return patchTerminal(s, m.channel, { exited: false, code: null, unhooked: false });
     case "terminal_exited":

@@ -29,7 +29,20 @@ test("welcomes the UI asynchronously", async () => {
   await transport.connect((m) => messages.push(m));
   expect(messages).toEqual([]);
   await tick();
-  expect(messages).toEqual([{ type: "welcome", version: "mock" }]);
+  expect(messages).toEqual([{ type: "welcome", version: "mock", distro: "Ubuntu" }]);
+});
+
+test("a scenario fails the connection instead", async () => {
+  for (const [scenario, type] of [
+    ["mismatch", "version_mismatch"],
+    ["disconnected", "disconnected"],
+    ["", "welcome"],
+  ]) {
+    const messages: ServiceMessage[] = [];
+    await createMockTransport(scenario).connect((m) => messages.push(m));
+    await tick();
+    expect(messages.map((m) => m.type)).toEqual([type as ServiceMessage["type"]]);
+  }
 });
 
 test("a terminal prints a prompt, echoes input and repeats the line", async () => {

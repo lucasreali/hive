@@ -7,16 +7,17 @@ const LABEL: Record<Connection["status"], string> = {
   disconnected: "disconnected",
 };
 
-// 1.4 adds the WSL distribution name and the version-mismatch message;
-// the "N active agents" count on the right arrives with agent states (2.1).
+// The "N active agents" count on the right arrives with agent states (2.1).
 export function StatusBar() {
-  const status = useHive((s) => s.connection.status);
+  const connection = useHive((s) => s.connection);
+  // The service reports its distribution in `welcome`; until then only "WSL" is known.
+  const distro = connection.status === "connected" ? connection.distro : null;
   return (
     <footer className="statusbar">
-      <div className="connection" data-status={status} title="WSL connection">
+      <div className="connection" data-status={connection.status} title="WSL connection">
         <span className="connection-dot" />
-        <span>WSL</span>
-        <span className="connection-state">{LABEL[status]}</span>
+        <span>{distro ? `WSL: ${distro}` : "WSL"}</span>
+        <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
     </footer>
   );

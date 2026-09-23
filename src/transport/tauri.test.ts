@@ -20,11 +20,12 @@ afterEach(clearMocks);
 test("connect hands a channel to Rust and delivers its messages", async () => {
   const calls = record();
   const received: ServiceMessage[] = [];
+  const welcome: ServiceMessage = { type: "welcome", version: "0.1.0", distro: "Ubuntu" };
   await tauriTransport.connect((m) => received.push(m));
   const [[cmd, args]] = calls;
   expect(cmd).toBe("connect");
-  (args.onMessage as Channel<ServiceMessage>).onmessage({ type: "welcome", version: "0.1.0" });
-  expect(received).toEqual([{ type: "welcome", version: "0.1.0" }]);
+  (args.onMessage as Channel<ServiceMessage>).onmessage(welcome);
+  expect(received).toEqual([welcome]);
 });
 
 test("each terminal gets its own byte channel", async () => {

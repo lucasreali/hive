@@ -340,3 +340,100 @@ button:disabled {
 .connection-state {
   color: var(--text-3);
 }
+
+/* Connection block (#29): covers the workspace while the service is unusable */
+.workspace {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.connection-block {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 120px;
+  background: rgba(18, 20, 24, 0.55);
+}
+
+.connection-block [role="alertdialog"] {
+  width: 520px;
+  max-width: calc(100% - 32px);
+  padding: 16px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text-2);
+}
+
+.connection-block h2 {
+  margin: 0 0 12px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.connection-block p {
+  margin: 12px 0 0;
+}
+
+.connection-block dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.connection-block dt {
+  color: var(--text-3);
+}
+
+.connection-block dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text);
+}
+
+.connection-block pre,
+.connection-block code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text);
+}
+
+.connection-block pre {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.connection-block .actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.primary {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 500;
+}
+
+.primary:hover {
+  background: var(--accent-hover);
+}

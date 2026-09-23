@@ -22,14 +22,15 @@ test("starts connecting with no data", () => {
 });
 
 test("welcome and version_mismatch set the connection", () => {
-  apply({ type: "welcome", version: "0.1.0" });
-  expect(useHive.getState().connection).toEqual({ status: "connected", version: "0.1.0" });
-  apply({ type: "version_mismatch", protocol: 2, version: "0.2.0" });
+  apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
   expect(useHive.getState().connection).toEqual({
-    status: "version_mismatch",
-    protocol: 2,
-    version: "0.2.0",
+    status: "connected",
+    version: "0.1.0",
+    distro: "Ubuntu",
   });
+  const versions = { protocol: 2, version: "0.2.0", app_protocol: 1, app_version: "0.1.0" };
+  apply({ type: "version_mismatch", ...versions });
+  expect(useHive.getState().connection).toEqual({ status: "version_mismatch", ...versions });
 });
 
 test("disconnected keeps the reason; unknown messages change nothing", () => {

@@ -9,7 +9,8 @@ test("app shell renders with bundled fonts and toggles the right panel", async (
 
   await expect(page.getByRole("banner")).toHaveText("Hive");
   // Outside Tauri the UI connects through the mock transport.
-  await expect(page.getByTitle("WSL connection")).toHaveText("WSLconnected");
+  await expect(page.getByTitle("WSL connection")).toHaveText("WSL: Ubuntuconnected");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
   // Fonts load lazily, so wait for it rather than checking once.
   await expect
     .poll(() => page.evaluate(() => document.fonts.check("13px 'IBM Plex Sans'")))

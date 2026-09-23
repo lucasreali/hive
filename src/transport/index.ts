@@ -22,9 +22,13 @@ export interface Transport {
   closeTerminal(id: number): Promise<void>;
 }
 
-/** The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`. */
+/**
+ * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
+ * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection.
+ */
 export function pickTransport(tauri = isTauri(), search = location.search): Transport {
-  return tauri && !new URLSearchParams(search).has("mock") ? tauriTransport : createMockTransport();
+  const mock = new URLSearchParams(search).get("mock");
+  return tauri && mock === null ? tauriTransport : createMockTransport(mock);
 }
 
 export const transport = pickTransport();

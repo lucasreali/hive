@@ -21,10 +21,20 @@ test("status bar follows the connection status", () => {
   render(<App />);
   const status = screen.getByTitle("WSL connection");
   expect(status.dataset.status).toBe("connecting");
-  act(() => apply({ type: "welcome", version: "0.1.0" }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" }));
   expect(status.dataset.status).toBe("connected");
+  expect(status.textContent).toBe("WSL: Ubuntuconnected");
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(status.textContent).toBe("WSLconnected");
-  act(() => apply({ type: "version_mismatch", protocol: 2, version: "0.2.0" }));
+  act(() =>
+    apply({
+      type: "version_mismatch",
+      protocol: 2,
+      version: "0.2.0",
+      app_protocol: 1,
+      app_version: "0.1.0",
+    }),
+  );
   expect(status.textContent).toBe("WSLversion mismatch");
   act(() => apply({ type: "disconnected", reason: "gone" }));
   expect(status.textContent).toBe("WSLdisconnected");

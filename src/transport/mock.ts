@@ -3,12 +3,26 @@ import type { Transport } from ".";
 
 const PROMPT = "mock$ ";
 
+/** What the fake service answers on `connect`, picked with `?mock=<scenario>`. */
+const HANDSHAKE: Record<string, ServiceMessage> = {
+  mismatch: {
+    type: "version_mismatch",
+    protocol: 1,
+    version: "0.0.0-mock",
+    app_protocol: 1,
+    app_version: "mock",
+  },
+  disconnected: { type: "disconnected", reason: "mock: the hive bridge exited" },
+};
+const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
+
 /**
  * A fake service for the browser (`bun run dev`, Playwright): it welcomes the UI, and each
  * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`.
  * Service messages arrive asynchronously, as they do from the real service.
+ * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead.
  */
-export function createMockTransport(): Transport {
+export function createMockTransport(scenario: string | null = null): Transport {
   let send: (message: ServiceMessage) => void = () => {};
   let last = 0;
   const terminals = new Map<number, { onData: (bytes: Uint8Array) => void; line: string }>();
@@ -22,7 +36,7 @@ export function createMockTransport(): Transport {
   return {
     async connect(onMessage) {
       send = onMessage;
-      later({ type: "welcome", version: "mock" });
+      later(HANDSHAKE[scenario ?? ""] ?? WELCOME);
     },
     async openTerminal(_cwd, _cols, _rows, onData) {
       const id = ++last;

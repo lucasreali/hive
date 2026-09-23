@@ -1,3 +1,4 @@
+import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { RightPanel } from "./shell/RightPanel";
 import { Sidebar } from "./shell/Sidebar";
 import { StatusBar } from "./shell/StatusBar";
@@ -7,14 +8,21 @@ import { useHive } from "./store";
 
 export function App() {
   const rightPanel = useHive((s) => s.rightPanel);
+  const status = useHive((s) => s.connection.status);
+  // Nothing works without the service: the workspace is inert under the block (#29).
+  // The title bar stays usable, so the window can still be closed.
+  const blocked = status === "version_mismatch" || status === "disconnected";
   return (
     <div className="app">
       <TitleBar />
-      <main className="main">
-        <Sidebar />
-        <TerminalArea />
-        {rightPanel === "files" && <RightPanel />}
-      </main>
+      <div className="workspace">
+        <main className="main" inert={blocked}>
+          <Sidebar />
+          <TerminalArea />
+          {rightPanel === "files" && <RightPanel />}
+        </main>
+        <ConnectionBlock />
+      </div>
       <StatusBar />
     </div>
   );
