@@ -1,0 +1,5 @@
+[test]
+# Unit tests live next to the code in src/; Playwright specs go in e2e/ and are not collected.
+root = "src"
+preload = ["./test/setup.ts"]
+coverageThreshold = { lines = 1.0 }
