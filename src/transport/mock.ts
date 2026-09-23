@@ -66,7 +66,8 @@ function nameError(project: Project, name: string): string | null {
 
 /**
  * A fake service for the browser (`bun run dev`, Playwright): it welcomes the UI, and each
- * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`.
+ * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`;
+ * `cd <dir>` moves it and `claude` detects an agent there (removed when the terminal exits).
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project.
  * Service messages arrive asynchronously, as they do from the real service.
@@ -78,12 +79,29 @@ export function createMockTransport(scenario: string | null = null): Transport {
   const projects = scenario === "empty" ? [] : MOCK_REPOS.slice(0, 2);
   const find = (id: string) => projects.find((p) => p.id === id);
   let last = 0;
-  const terminals = new Map<number, { onData: (bytes: Uint8Array) => void; line: string }>();
+  type MockTerminal = {
+    onData: (bytes: Uint8Array) => void;
+    line: string;
+    cwd: string;
+    agent: string | null;
+  };
+  const terminals = new Map<number, MockTerminal>();
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
   const exit = (id: number, code: number | null) => {
+    const agent = terminals.get(id)?.agent;
+    if (agent) later({ type: "agent_removed", channel: id, id: agent });
     if (terminals.delete(id)) later({ type: "terminal_exited", channel: id, code });
+  };
+  // A stand-in for a `SessionStart` placed by `projects::place`: only an exact worktree path.
+  const detect = (id: number, terminal: MockTerminal) => {
+    const cwd = terminal.cwd;
+    const project = projects.find((p) => p.worktrees.some((w) => w.path === cwd));
+    const worktree = project ? cwd : null;
+    terminal.agent = `mock-session-${id}`;
+    const placed = { project: project?.id ?? null, worktree, cwd };
+    later({ type: "agent_detected", channel: id, id: terminal.agent, ...placed });
   };
 
   return {
@@ -135,9 +153,9 @@ export function createMockTransport(scenario: string | null = null): Transport {
       const path = worktree(id, name).path;
       later({ type: "worktree_created", project: updated, path, notes: [] });
     },
-    async openTerminal(_cwd, _cols, _rows, onData) {
+    async openTerminal(cwd, _cols, _rows, onData) {
       const id = ++last;
-      terminals.set(id, { onData, line: "" });
+      terminals.set(id, { onData, line: "", cwd, agent: null });
       later({ type: "terminal_opened", channel: id });
       setTimeout(() => print(id, PROMPT), 0);
       return id;
@@ -154,6 +172,11 @@ export function createMockTransport(scenario: string | null = null): Transport {
         const line = terminal.line;
         terminal.line = "";
         if (line === "exit") return exit(id, 0);
+        if (line === "claude") detect(id, terminal);
+        if (line.startsWith("cd ")) {
+          const dir = line.slice(3);
+          terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;
+        }
         print(id, `\r\n${line ? `${line}\r\n` : ""}${PROMPT}`);
       }
     },

@@ -108,6 +108,27 @@ test("exit ends the terminal with code 0 and close with no code", async () => {
   ]);
 });
 
+test("claude detects an agent where the terminal is; exit removes it first", async () => {
+  const { transport, messages } = await connected();
+  const [shop] = MOCK_REPOS;
+  const id = await transport.openTerminal(shop.path, 80, 24, () => {});
+  await transport.writeTerminal(id, "cd .claude/worktrees/fix-login\rclaude\r");
+  await transport.writeTerminal(id, "cd /tmp\rclaude\r");
+  await tick();
+  const fixLogin = `${shop.path}/.claude/worktrees/fix-login`;
+  const agent = { type: "agent_detected", channel: id, id: "mock-session-1" } as const;
+  expect(messages.slice(-2)).toEqual([
+    { ...agent, project: shop.id, worktree: fixLogin, cwd: fixLogin },
+    { ...agent, project: null, worktree: null, cwd: "/tmp" },
+  ]);
+  await transport.writeTerminal(id, "exit\r");
+  await tick();
+  expect(messages.slice(-2)).toEqual([
+    { type: "agent_removed", channel: id, id: "mock-session-1" },
+    { type: "terminal_exited", channel: id, code: 0 },
+  ]);
+});
+
 test("branches, name checks and new worktrees for the dialog", async () => {
   const { transport, messages } = await connected();
   const [shop, , dotfiles] = MOCK_REPOS;
