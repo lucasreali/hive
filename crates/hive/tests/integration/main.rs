@@ -6,3 +6,5 @@ mod common;
 mod daemon;
 #[cfg(test)]
 mod terminal;
+#[cfg(test)]
+mod worktree;
