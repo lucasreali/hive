@@ -170,6 +170,8 @@ pub enum Control {
         terminal_id: Option<String>,
         payload: serde_json::Value,
     },
+    /// A provider event translated to the internal model.
+    Agent(AgentEvent),
     Error {
         message: String,
     },
@@ -183,6 +185,76 @@ impl Control {
             role,
         }
     }
+}
+
+/// Provider-independent agent event, produced by an adapter from a raw hook payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentEvent {
+    /// Adapter that produced the event, e.g. `claude-code`.
+    pub provider: String,
+    /// `HIVE_TERMINAL_ID` of the terminal the agent runs in.
+    pub terminal_id: Option<String>,
+    pub session_id: Option<String>,
+    /// Set when the event comes from a subagent.
+    pub subagent: Option<Subagent>,
+    /// Working directory reported by the agent; places it under a worktree.
+    pub cwd: Option<String>,
+    pub kind: EventKind,
+    /// The provider payload, unchanged.
+    pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Subagent {
+    pub id: String,
+    pub agent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EventKind {
+    SessionStarted,
+    PromptSubmitted,
+    ToolStarted {
+        tool: Option<String>,
+    },
+    ToolFinished {
+        tool: Option<String>,
+    },
+    ToolFailed {
+        tool: Option<String>,
+    },
+    PermissionRequested {
+        tool: Option<String>,
+    },
+    Notification {
+        notification: Notification,
+    },
+    /// The agent finished its turn.
+    TurnFinished,
+    /// The turn ended because of an error (API, auth, limits).
+    TurnFailed {
+        error: Option<String>,
+    },
+    SubagentStarted,
+    SubagentStopped,
+    SessionEnded {
+        reason: Option<String>,
+    },
+    /// Any provider event without an internal meaning yet.
+    Other {
+        event: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Notification {
+    PermissionPrompt,
+    ElicitationDialog,
+    IdlePrompt,
+    AgentNeedsInput,
+    Other(String),
 }
 
 #[cfg(test)]
@@ -228,6 +300,26 @@ mod tests {
             &frame.payload[..],
             br#"{"type":"resize","cols":80,"rows":24}"#
         );
+    }
+
+    #[test]
+    fn agent_event_round_trips_through_a_control_frame() {
+        let msg = Control::Agent(AgentEvent {
+            provider: "claude-code".into(),
+            terminal_id: Some("3".into()),
+            session_id: Some("s".into()),
+            subagent: Some(Subagent {
+                id: "a".into(),
+                agent_type: None,
+            }),
+            cwd: None,
+            kind: EventKind::Notification {
+                notification: Notification::Other("x".into()),
+            },
+            raw: serde_json::json!({"k": [1, 2]}),
+        });
+        let frame = Frame::control(0, &msg).unwrap();
+        assert_eq!(frame.to_control().unwrap(), msg);
     }
 
     #[test]
