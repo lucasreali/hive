@@ -16,6 +16,8 @@ fn isolate<'a>(cmd: &'a mut Command, env: &Env) -> &'a mut Command {
     cmd.env("HOME", env.path("home"))
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        // Never walk up into an enclosing repository (e.g. when TMPDIR lies inside one).
+        .env("GIT_CEILING_DIRECTORIES", env.dir.path())
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
