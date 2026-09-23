@@ -246,6 +246,32 @@ impl Hive {
     pub fn add_project(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::AddProject { path })
     }
+
+    /// The answer arrives as `branches`.
+    pub fn list_branches(&self, project: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListBranches { project })
+    }
+
+    /// The answer arrives as `worktree_name_validated`.
+    pub fn validate_worktree_name(&self, project: String, name: String) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::ValidateWorktreeName { project, name })
+    }
+
+    /// The answer arrives as `worktree_created` or `create_worktree_failed`.
+    pub fn create_worktree(
+        &self,
+        project: String,
+        name: String,
+        base: Option<String>,
+    ) -> Result<(), String> {
+        let create = Control::CreateWorktree {
+            project,
+            name,
+            base,
+        };
+        self.link().send(0, &create)
+    }
 }
 
 /// A piped stdio handle of the bridge; always there, since every one is requested.
@@ -365,6 +391,30 @@ pub mod commands {
     #[tauri::command]
     pub fn add_project(hive: State<'_, Hive>, path: String) -> Result<(), String> {
         hive.add_project(path)
+    }
+
+    #[tauri::command]
+    pub fn list_branches(hive: State<'_, Hive>, project: String) -> Result<(), String> {
+        hive.list_branches(project)
+    }
+
+    #[tauri::command]
+    pub fn validate_worktree_name(
+        hive: State<'_, Hive>,
+        project: String,
+        name: String,
+    ) -> Result<(), String> {
+        hive.validate_worktree_name(project, name)
+    }
+
+    #[tauri::command]
+    pub fn create_worktree(
+        hive: State<'_, Hive>,
+        project: String,
+        name: String,
+        base: Option<String>,
+    ) -> Result<(), String> {
+        hive.create_worktree(project, name, base)
     }
 }
 

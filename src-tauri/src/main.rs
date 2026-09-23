@@ -18,6 +18,9 @@ fn main() {
             commands::close_terminal,
             commands::list_projects,
             commands::add_project,
+            commands::list_branches,
+            commands::validate_worktree_name,
+            commands::create_worktree,
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {

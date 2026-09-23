@@ -231,6 +231,26 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         path: "/r/sub".into(),
     };
     assert_eq!(service.control().await, (0, add));
+    hive.list_branches("/r".into()).unwrap();
+    let branches = Control::ListBranches {
+        project: "/r".into(),
+    };
+    assert_eq!(service.control().await, (0, branches));
+    hive.validate_worktree_name("/r".into(), "x".into())
+        .unwrap();
+    let validate = Control::ValidateWorktreeName {
+        project: "/r".into(),
+        name: "x".into(),
+    };
+    assert_eq!(service.control().await, (0, validate));
+    hive.create_worktree("/r".into(), "x".into(), Some("main".into()))
+        .unwrap();
+    let create = Control::CreateWorktree {
+        project: "/r".into(),
+        name: "x".into(),
+        base: Some("main".into()),
+    };
+    assert_eq!(service.control().await, (0, create));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -350,6 +370,15 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.close_terminal(1), not_connected);
     assert_eq!(hive.list_projects(), not_connected);
     assert_eq!(hive.add_project("/r".into()), not_connected);
+    assert_eq!(hive.list_branches("/r".into()), not_connected);
+    assert_eq!(
+        hive.validate_worktree_name("/r".into(), "x".into()),
+        not_connected
+    );
+    assert_eq!(
+        hive.create_worktree("/r".into(), "x".into(), None),
+        not_connected
+    );
     let (channel, _bytes) = output();
     assert_eq!(
         hive.open_terminal("/".into(), 1, 1, channel),
@@ -507,7 +536,10 @@ fn commands_reach_the_managed_hive() {
             resize_terminal,
             close_terminal,
             list_projects,
-            add_project
+            add_project,
+            list_branches,
+            validate_worktree_name,
+            create_worktree
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -539,6 +571,16 @@ fn commands_reach_the_managed_hive() {
     assert_eq!(invoke(&webview, "list_projects", json!({})), not_connected);
     let add = json!({"path": "/r"});
     assert_eq!(invoke(&webview, "add_project", add.clone()), not_connected);
+    let branches = json!({"project": "/r"});
+    let validate = json!({"project": "/r", "name": "x"});
+    let create = json!({"project": "/r", "name": "x", "base": null});
+    for (cmd, args) in [
+        ("list_branches", &branches),
+        ("validate_worktree_name", &validate),
+        ("create_worktree", &create),
+    ] {
+        assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
+    }
 
     let refused = invoke(&webview, "connect", json!({})).unwrap_err();
     assert!(refused.as_str().unwrap().contains("onMessage"), "{refused}");
@@ -558,4 +600,11 @@ fn commands_reach_the_managed_hive() {
         Ok(Value::Null)
     );
     assert_eq!(invoke(&webview, "add_project", add), Ok(Value::Null));
+    for (cmd, args) in [
+        ("list_branches", branches),
+        ("validate_worktree_name", validate),
+        ("create_worktree", create),
+    ] {
+        assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
+    }
 }
