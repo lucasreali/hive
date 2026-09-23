@@ -536,6 +536,9 @@ fn commands_reach_the_managed_hive() {
         invoke(&webview, "close_terminal", close.clone()),
         not_connected
     );
+    assert_eq!(invoke(&webview, "list_projects", json!({})), not_connected);
+    let add = json!({"path": "/r"});
+    assert_eq!(invoke(&webview, "add_project", add.clone()), not_connected);
 
     let refused = invoke(&webview, "connect", json!({})).unwrap_err();
     assert!(refused.as_str().unwrap().contains("onMessage"), "{refused}");
@@ -554,6 +557,5 @@ fn commands_reach_the_managed_hive() {
         invoke(&webview, "list_projects", json!({})),
         Ok(Value::Null)
     );
-    let add = json!({"path": "/r"});
     assert_eq!(invoke(&webview, "add_project", add), Ok(Value::Null));
 }

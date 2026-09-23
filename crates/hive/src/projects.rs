@@ -78,9 +78,7 @@ fn read(file: &Path) -> io::Result<Vec<String>> {
 }
 
 fn save(file: &Path, paths: &[String]) -> io::Result<()> {
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
+    file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
     let json = serde_json::to_vec_pretty(paths)?;
     write_atomic(file, &json, 0o600)
 }
@@ -282,7 +280,9 @@ mod tests {
     fn saved_lists_are_private_and_load_back() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("data/hive/projects.json");
-        let paths = ["/a".to_owned(), "/b c".to_owned()];
+        // Longer than a few KiB, well within the read limit.
+        let mut paths: Vec<String> = (0..500).map(|i| format!("/projects/{i:04}")).collect();
+        paths.push("/b c".to_owned());
         save(&file, &paths).unwrap();
         let mode = std::fs::metadata(&file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);

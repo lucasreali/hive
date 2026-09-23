@@ -172,9 +172,12 @@ impl State {
         let state = self.clone();
         tokio::spawn(async move {
             let inner = state.clone();
-            if let Ok(reply) = tokio::task::spawn_blocking(move || request(&inner.projects)).await {
-                state.to_app(0, &reply).await;
-            }
+            let reply = tokio::task::spawn_blocking(move || request(&inner.projects))
+                .await
+                .unwrap_or_else(|err| Control::Error {
+                    message: format!("project request failed: {err}"),
+                });
+            state.to_app(0, &reply).await;
         });
     }
 

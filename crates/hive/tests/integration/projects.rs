@@ -101,7 +101,7 @@ async fn a_project_lists_its_worktrees_and_survives_a_restart() {
     let mode = std::fs::metadata(&file).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
     let saved: Vec<String> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    assert_eq!(saved, [root.clone()]);
+    assert_eq!(saved, [root]);
 
     drop(conn);
     assert!(daemon.wait_exit().success());
