@@ -12,6 +12,7 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 | `TODO.md` | The work plan. Do the next unchecked task only; stop at every ⏸ checkpoint |
 | `docs/prototype/` | The human's prototype: look, layout, states, glossary. Read-only. Shortcuts follow `docs/hive.md` #35, not the prototype |
 | `COVERAGE_EXCLUSIONS.md` | Approved coverage exclusions (created when the first one is approved) |
+| `.claude/skills/stage/` | How to develop a whole stage: the orchestrator procedure (`SKILL.md`, `/stage <N>`) and the brief every task agent follows (`task-brief.md`) |
 
 ## Hard rules
 
