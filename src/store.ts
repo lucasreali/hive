@@ -17,6 +17,8 @@ export type ServiceMessage =
   | { type: "terminal_opened"; channel: number }
   | { type: "terminal_exited"; channel: number; code: number | null }
   | { type: "unhooked_agent"; channel: number }
+  | ({ type: "agent_detected"; channel: number } & Omit<Agent, "terminal">)
+  | { type: "agent_removed"; channel: number; id: string }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
@@ -101,8 +103,18 @@ export type WorktreeDialog = {
   createFailure: CreateFailure | null;
 };
 
-// ponytail: id-only shape; fields and `apply` cases arrive with the service messages that feed it (1.8).
-export type Agent = { id: string };
+/**
+ * A detected agent (Stage 1: presence only). `id` is its session id and `terminal` its tab.
+ * `project`/`worktree` are ids placed by the service from the agent's own cwd (#19); null
+ * outside every followed project.
+ */
+export type Agent = {
+  id: string;
+  terminal: number;
+  project: string | null;
+  worktree: string | null;
+  cwd: string | null;
+};
 
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
@@ -179,6 +191,14 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return patchTerminal(s, m.channel, { exited: true, code: m.code });
     case "unhooked_agent":
       return patchTerminal(s, m.channel, { unhooked: true });
+    case "agent_detected": {
+      const { type: _, channel, ...agent } = m;
+      return { agents: { ...s.agents, [m.id]: { ...agent, terminal: channel } } };
+    }
+    case "agent_removed": {
+      const { [m.id]: _, ...agents } = s.agents;
+      return { agents };
+    }
     case "projects":
       return { projects: Object.fromEntries(m.projects.map((p) => [p.id, p])) };
     case "project_added":
@@ -210,7 +230,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     }
     case "disconnected":
-      return { connection: { status: "disconnected", reason: m.reason } };
+      // The service is gone, and every agent with it.
+      return { connection: { status: "disconnected", reason: m.reason }, agents: {} };
     default:
       // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.
       return {};

@@ -92,17 +92,41 @@ test("tabs open shown, switch with the selection and close to their neighbour", 
   expect([tabs(), active()]).toEqual([[], null]);
 });
 
+const agent = (id: string, terminal = 1) => ({
+  id,
+  terminal,
+  project: "/r",
+  worktree: "/r/.claude/worktrees/x",
+  cwd: "/r/.claude/worktrees/x/src",
+});
+
+test("agents are stored as the service places them and removed by id", () => {
+  const { terminal: _, ...a } = agent("a", 2);
+  apply({ type: "agent_detected", channel: 2, ...a });
+  apply({ type: "agent_detected", channel: 3, ...agent("b"), project: null, worktree: null });
+  expect(useHive.getState().agents).toEqual({
+    a: agent("a", 2),
+    b: { ...agent("b", 3), project: null, worktree: null },
+  });
+  apply({ type: "agent_removed", channel: 2, id: "a" });
+  apply({ type: "agent_removed", channel: 2, id: "unknown" });
+  expect(Object.keys(useHive.getState().agents)).toEqual(["b"]);
+  // A lost service takes every agent with it.
+  apply({ type: "disconnected", reason: "gone" });
+  expect(useHive.getState().agents).toEqual({});
+});
+
 test("useAgent re-renders only when its own agent changes", () => {
-  useHive.setState({ agents: { a: { id: "a" }, b: { id: "b" } } });
+  useHive.setState({ agents: { a: agent("a"), b: agent("b") } });
   let renders = 0;
   const { result } = renderHook(() => {
     renders++;
     return useAgent("a");
   });
-  expect(result.current).toEqual({ id: "a" });
-  act(() => useHive.setState((s) => ({ agents: { ...s.agents, b: { id: "b" } } })));
+  expect(result.current).toEqual(agent("a"));
+  act(() => useHive.setState((s) => ({ agents: { ...s.agents, b: agent("b") } })));
   expect(renders).toBe(1);
-  act(() => useHive.setState((s) => ({ agents: { ...s.agents, a: { id: "a" } } })));
+  act(() => useHive.setState((s) => ({ agents: { ...s.agents, a: agent("a") } })));
   expect(renders).toBe(2);
 });
 

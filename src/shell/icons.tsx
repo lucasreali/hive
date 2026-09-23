@@ -119,6 +119,21 @@ export const BranchIcon = () => (
   </svg>
 );
 
+// `StateIcon.dc.html`'s idle state; the only agent icon until states arrive (Stage 2).
+export const IdleIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <circle cx="6" cy="6" r="5.2" fill="var(--state-idle)" />
+    <path
+      d="M3.6 6.2 5.3 7.8 8.5 4.4"
+      fill="none"
+      stroke="var(--bg)"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 // Not in the prototype: the sidebar's "Refresh worktrees" button (worktrees are not watched yet).
 export const RefreshIcon = () => (
   <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
