@@ -1,7 +1,10 @@
 import type { Project, ServiceMessage, Worktree } from "../store";
 import type { Transport } from ".";
+import { loadReplay, type ReplayEvent } from "./replay";
 
 const PROMPT = "mock$ ";
+/** With `?mock=load`, sent after every echo so the load test can time it; xterm ignores it. */
+export const ECHO_MARK = "\x1b]7777;echo\x07";
 
 /** What the fake service answers on `connect`, picked with `?mock=<scenario>`. */
 const HANDSHAKE: Record<string, ServiceMessage> = {
@@ -14,6 +17,9 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
   },
   disconnected: { type: "disconnected", reason: "mock: the hive bridge exited" },
 };
+/** `?mock=load`: when the first terminal's replay starts, and how much later each next one does. */
+export const LOAD_START_MS = 500;
+export const LOAD_STAGGER_MS = 100;
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
 
 const worktree = (root: string, name: string, main = false): Worktree => {
@@ -72,9 +78,15 @@ function nameError(project: Project, name: string): string | null {
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
- * "empty" starts with no projects.
+ * "empty" starts with no projects. "load" (1.11) replays a recording into every terminal right
+ * after its prompt, at recorded timing, each terminal starting `LOAD_STAGGER_MS` later than
+ * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
+ * generated one.
  */
-export function createMockTransport(scenario: string | null = null): Transport {
+export function createMockTransport(
+  scenario: string | null = null,
+  cast: string | null = null,
+): Transport {
   let send: (message: ServiceMessage) => void = () => {};
   const projects = scenario === "empty" ? [] : MOCK_REPOS.slice(0, 2);
   const find = (id: string) => projects.find((p) => p.id === id);
@@ -89,6 +101,23 @@ export function createMockTransport(scenario: string | null = null): Transport {
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
+  let recording: Promise<ReplayEvent[]> | undefined;
+  const replay = async (id: number) => {
+    recording ??= loadReplay(cast);
+    const events = await recording;
+    const start = performance.now() + LOAD_START_MS + (id % 20) * LOAD_STAGGER_MS;
+    let next = 0;
+    const step = () => {
+      const now = performance.now() - start;
+      while (next < events.length && (events[next] as ReplayEvent).at <= now) {
+        print(id, (events[next++] as ReplayEvent).data);
+      }
+      if (next < events.length && terminals.has(id)) {
+        setTimeout(step, (events[next] as ReplayEvent).at - now);
+      }
+    };
+    setTimeout(step, start - performance.now());
+  };
   const exit = (id: number, code: number | null) => {
     const agent = terminals.get(id)?.agent;
     if (agent) later({ type: "agent_removed", channel: id, id: agent });
@@ -158,6 +187,7 @@ export function createMockTransport(scenario: string | null = null): Transport {
       terminals.set(id, { onData, line: "", cwd, agent: null });
       later({ type: "terminal_opened", channel: id });
       setTimeout(() => print(id, PROMPT), 0);
+      if (scenario === "load") void replay(id);
       return id;
     },
     async writeTerminal(id, data) {
@@ -179,6 +209,7 @@ export function createMockTransport(scenario: string | null = null): Transport {
         }
         print(id, `\r\n${line ? `${line}\r\n` : ""}${PROMPT}`);
       }
+      if (scenario === "load") print(id, ECHO_MARK);
     },
     async resizeTerminal() {},
     async closeTerminal(id) {

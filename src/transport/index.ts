@@ -35,11 +35,13 @@ export interface Transport {
 /**
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
- * `?mock=empty` starts it with no projects.
+ * `?mock=empty` starts it with no projects; `?mock=load[&cast=<url>]` replays a recording into
+ * every terminal (the load test, 1.11).
  */
 export function pickTransport(tauri = isTauri(), search = location.search): Transport {
-  const mock = new URLSearchParams(search).get("mock");
-  return tauri && mock === null ? tauriTransport : createMockTransport(mock);
+  const params = new URLSearchParams(search);
+  const mock = params.get("mock");
+  return tauri && mock === null ? tauriTransport : createMockTransport(mock, params.get("cast"));
 }
 
 export const transport = pickTransport();

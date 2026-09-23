@@ -1,8 +1,16 @@
 import { expect, test } from "bun:test";
 import type { ServiceMessage } from "../store";
-import { createMockTransport, MOCK_BRANCHES, MOCK_REPOS } from "./mock";
+import {
+  createMockTransport,
+  ECHO_MARK,
+  LOAD_STAGGER_MS,
+  LOAD_START_MS,
+  MOCK_BRANCHES,
+  MOCK_REPOS,
+} from "./mock";
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const tick = () => wait(0);
 
 async function connected() {
   const transport = createMockTransport();
@@ -189,4 +197,31 @@ test("branches, name checks and new worktrees for the dialog", async () => {
   await transport.addProject(shop.path);
   await tick();
   expect(messages.at(-1)).toEqual({ type: "project_added", project: created.project });
+});
+
+test("?mock=load replays a recording into each terminal and marks every echo", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response('{"version":2}\n[0,"o","one "]\n[0.05,"o","two"]')) as unknown as typeof fetch;
+  try {
+    const transport = createMockTransport("load", "/rec.cast");
+    await transport.connect(() => {});
+    const out = ["", ""];
+    const decoder = new TextDecoder();
+    const a = await transport.openTerminal("/w", 80, 24, (bytes) => {
+      out[0] += decoder.decode(bytes);
+    });
+    const b = await transport.openTerminal("/w", 80, 24, (bytes) => {
+      out[1] += decoder.decode(bytes);
+    });
+    await transport.writeTerminal(a, "x");
+    expect(out[0]).toBe(`x${ECHO_MARK}`);
+    // The second terminal starts later; closed before its second event, it stops there.
+    await wait(LOAD_START_MS + b * LOAD_STAGGER_MS + 20);
+    await transport.closeTerminal(b);
+    await wait(100);
+    expect(out).toEqual([`x${ECHO_MARK}mock$ one two`, "mock$ one "]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
