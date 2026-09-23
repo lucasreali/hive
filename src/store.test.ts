@@ -7,10 +7,12 @@ import {
   type ServiceMessage,
   select,
   setRightPanel,
+  toggleCollapsed,
   useAgent,
   useHive,
   useTerminal,
 } from "./store";
+import { MOCK_REPOS } from "./transport/mock";
 
 beforeEach(() => useHive.setState(initialState, true));
 
@@ -84,4 +86,31 @@ test("useTerminal reads one terminal", () => {
   apply({ type: "terminal_opened", channel: 4 });
   const { result } = renderHook(() => useTerminal(4));
   expect(result.current?.id).toBe(4);
+});
+
+test("projects replace the list; an added project joins it and closes its dialog", () => {
+  const [shop, api] = MOCK_REPOS;
+  expect(useHive.getState().projects).toBeNull();
+  apply({ type: "projects", projects: [shop] });
+  expect(useHive.getState().projects).toEqual({ [shop.id]: shop });
+  openModal("add-project");
+  apply({ type: "add_project_failed", path: "x", error: "not_absolute", message: "m" });
+  expect(useHive.getState().addProjectError).toBe("m");
+  apply({ type: "project_added", project: api });
+  const s = useHive.getState();
+  expect(Object.keys(s.projects ?? {})).toEqual([shop.id, api.id]);
+  expect([s.modal, s.addProjectError]).toEqual([null, null]);
+  // Another dialog stays open.
+  openModal("new-worktree");
+  apply({ type: "project_added", project: shop });
+  expect(useHive.getState().modal).toBe("new-worktree");
+  apply({ type: "projects", projects: [] });
+  expect(useHive.getState().projects).toEqual({});
+});
+
+test("tree nodes toggle between collapsed and expanded", () => {
+  toggleCollapsed("p");
+  expect(useHive.getState().collapsed).toEqual({ p: true });
+  toggleCollapsed("p");
+  expect(useHive.getState().collapsed).toEqual({ p: false });
 });

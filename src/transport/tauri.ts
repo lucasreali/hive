@@ -14,4 +14,6 @@ export const tauriTransport: Transport = {
   writeTerminal: (id, data) => invoke("write_terminal", { id, data }),
   resizeTerminal: (id, cols, rows) => invoke("resize_terminal", { id, cols, rows }),
   closeTerminal: (id) => invoke("close_terminal", { id }),
+  listProjects: () => invoke("list_projects"),
+  addProject: (path) => invoke("add_project", { path }),
 };

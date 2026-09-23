@@ -1,4 +1,4 @@
-import type { ServiceMessage } from "../store";
+import type { Project, ServiceMessage, Worktree } from "../store";
 import type { Transport } from ".";
 
 const PROMPT = "mock$ ";
@@ -16,14 +16,36 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
 };
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
 
+const worktree = (root: string, name: string, main = false): Worktree => {
+  const path = main ? root : `${root}/.claude/worktrees/${name}`;
+  return { id: path, name, path, branch: main ? name : `worktree-${name}`, main, claude: !main };
+};
+const project = (path: string, name: string, worktrees: string[]): Project => ({
+  id: path,
+  name,
+  path,
+  worktrees: [worktree(path, "main", true), ...worktrees.map((w) => worktree(path, w))],
+  error: null,
+});
+
+/** The fake service's git repositories; the first two are followed from the start. */
+export const MOCK_REPOS = [
+  project("/home/user/projects/shop", "shop", ["fix-login", "feat-checkout"]),
+  project("/home/user/projects/api", "api", ["refactor-auth"]),
+  project("/home/user/dotfiles", "dotfiles", []),
+];
+
 /**
  * A fake service for the browser (`bun run dev`, Playwright): it welcomes the UI, and each
  * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`.
+ * Projects come from `MOCK_REPOS`; any other path is refused as not found.
  * Service messages arrive asynchronously, as they do from the real service.
- * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead.
+ * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
+ * "empty" starts with no projects.
  */
 export function createMockTransport(scenario: string | null = null): Transport {
   let send: (message: ServiceMessage) => void = () => {};
+  const projects = scenario === "empty" ? [] : MOCK_REPOS.slice(0, 2);
   let last = 0;
   const terminals = new Map<number, { onData: (bytes: Uint8Array) => void; line: string }>();
   const encoder = new TextEncoder();
@@ -36,7 +58,21 @@ export function createMockTransport(scenario: string | null = null): Transport {
   return {
     async connect(onMessage) {
       send = onMessage;
-      later(HANDSHAKE[scenario ?? ""] ?? WELCOME);
+      const failure = HANDSHAKE[scenario ?? ""];
+      later(failure ?? WELCOME);
+      if (!failure) later({ type: "projects", projects });
+    },
+    async listProjects() {
+      later({ type: "projects", projects });
+    },
+    async addProject(path) {
+      const repo = MOCK_REPOS.find((p) => p.path === path);
+      if (!repo) {
+        const message = `cannot open ${path}: No such file or directory (os error 2)`;
+        return void later({ type: "add_project_failed", path, error: "not_found", message });
+      }
+      if (!projects.includes(repo)) projects.push(repo);
+      later({ type: "project_added", project: repo });
     },
     async openTerminal(_cwd, _cols, _rows, onData) {
       const id = ++last;

@@ -38,14 +38,18 @@ test("each terminal gets its own byte channel", async () => {
   expect(received).toEqual([new Uint8Array([104, 105])]);
 });
 
-test("terminal actions call their commands", async () => {
+test("terminal and project actions call their commands", async () => {
   const calls = record();
   await tauriTransport.writeTerminal(7, "ls\r");
   await tauriTransport.resizeTerminal(7, 100, 30);
   await tauriTransport.closeTerminal(7);
+  await tauriTransport.listProjects();
+  await tauriTransport.addProject("/r");
   expect(calls).toEqual([
     ["write_terminal", { id: 7, data: "ls\r" }],
     ["resize_terminal", { id: 7, cols: 100, rows: 30 }],
     ["close_terminal", { id: 7 }],
+    ["list_projects", {}],
+    ["add_project", { path: "/r" }],
   ]);
 });

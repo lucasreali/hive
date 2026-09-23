@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ServiceMessage } from "../store";
-import { createMockTransport } from "./mock";
+import { createMockTransport, MOCK_REPOS } from "./mock";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -29,20 +29,54 @@ test("welcomes the UI asynchronously", async () => {
   await transport.connect((m) => messages.push(m));
   expect(messages).toEqual([]);
   await tick();
-  expect(messages).toEqual([{ type: "welcome", version: "mock", distro: "Ubuntu" }]);
+  expect(messages).toEqual([
+    { type: "welcome", version: "mock", distro: "Ubuntu" },
+    { type: "projects", projects: MOCK_REPOS.slice(0, 2) },
+  ]);
 });
 
 test("a scenario fails the connection instead", async () => {
-  for (const [scenario, type] of [
-    ["mismatch", "version_mismatch"],
-    ["disconnected", "disconnected"],
-    ["", "welcome"],
-  ]) {
+  for (const [scenario, types] of [
+    ["mismatch", ["version_mismatch"]],
+    ["disconnected", ["disconnected"]],
+    ["", ["welcome", "projects"]],
+  ] as const) {
     const messages: ServiceMessage[] = [];
     await createMockTransport(scenario).connect((m) => messages.push(m));
     await tick();
-    expect(messages.map((m) => m.type)).toEqual([type as ServiceMessage["type"]]);
+    expect(messages.map((m) => m.type)).toEqual([...types]);
   }
+});
+
+test("projects are added from the fake repositories only", async () => {
+  const transport = createMockTransport("empty");
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "projects", projects: [] });
+
+  const [shop] = MOCK_REPOS;
+  await transport.addProject(shop.path);
+  await transport.addProject(shop.path);
+  await transport.addProject("/nope");
+  await transport.listProjects();
+  await tick();
+  expect(messages.slice(2)).toEqual([
+    { type: "project_added", project: shop },
+    { type: "project_added", project: shop },
+    {
+      type: "add_project_failed",
+      path: "/nope",
+      error: "not_found",
+      message: "cannot open /nope: No such file or directory (os error 2)",
+    },
+    { type: "projects", projects: [shop] },
+  ]);
+  expect(shop.worktrees.map((w) => [w.name, w.branch, w.main, w.claude])).toEqual([
+    ["main", "main", true, false],
+    ["fix-login", "worktree-fix-login", false, true],
+    ["feat-checkout", "worktree-feat-checkout", false, true],
+  ]);
 });
 
 test("a terminal prints a prompt, echoes input and repeats the line", async () => {

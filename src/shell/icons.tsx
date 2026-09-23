@@ -58,3 +58,64 @@ export const PanelIcon = () => (
     <path d="M8.75 2.25v9.5" stroke="currentColor" strokeWidth="1.1" />
   </svg>
 );
+
+export const ChevronIcon = ({ open }: { open: boolean }) => (
+  <svg
+    width="10"
+    height="10"
+    viewBox="0 0 10 10"
+    aria-hidden="true"
+    style={{ transform: open ? "rotate(90deg)" : undefined }}
+  >
+    <path
+      d="M3.5 2 6.5 5 3.5 8"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const FOLDER =
+  "M1.75 4.2c0-.64.52-1.2 1.2-1.2h2.7l1.3 1.4h4.1c.66 0 1.2.54 1.2 1.2v5.2c0 .66-.54 1.2-1.2 1.2H2.95c-.66 0-1.2-.54-1.2-1.2z";
+
+export const FolderIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d={FOLDER} fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+  </svg>
+);
+
+/** The empty state's large "add folder" icon. */
+export const AddFolderIcon = () => (
+  <svg width="28" height="28" viewBox="0 0 14 14" aria-hidden="true">
+    <path d={FOLDER} fill="none" stroke="currentColor" strokeWidth=".7" strokeLinejoin="round" />
+    <path d="M7 6.3v3M5.5 7.8h3" stroke="currentColor" strokeWidth=".7" strokeLinecap="round" />
+  </svg>
+);
+
+export const BranchIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <g fill="none" stroke="currentColor" strokeWidth="1.1">
+      <circle cx="3.2" cy="2.6" r="1.35" />
+      <circle cx="3.2" cy="9.4" r="1.35" />
+      <circle cx="8.8" cy="3.6" r="1.35" />
+      <path d="M3.2 4v4M8.8 5c0 2.2-5.6 1.4-5.6 3" />
+    </g>
+  </svg>
+);
+
+// Not in the prototype: the sidebar's "Refresh worktrees" button (worktrees are not watched yet).
+export const RefreshIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <path
+      d="M10 6a4 4 0 1 1-1.2-2.85M10 1.8v2.4H7.6"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);

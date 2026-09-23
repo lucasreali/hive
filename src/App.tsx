@@ -1,3 +1,4 @@
+import { AddProjectDialog } from "./shell/AddProjectDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { RightPanel } from "./shell/RightPanel";
 import { Sidebar } from "./shell/Sidebar";
@@ -9,6 +10,7 @@ import { useHive } from "./store";
 export function App() {
   const rightPanel = useHive((s) => s.rightPanel);
   const status = useHive((s) => s.connection.status);
+  const modal = useHive((s) => s.modal);
   // Nothing works without the service: the workspace is inert under the block (#29).
   // The title bar stays usable, so the window can still be closed.
   const blocked = status === "version_mismatch" || status === "disconnected";
@@ -21,6 +23,7 @@ export function App() {
           <TerminalArea />
           {rightPanel === "files" && <RightPanel />}
         </main>
+        {modal === "add-project" && !blocked && <AddProjectDialog />}
         <ConnectionBlock />
       </div>
       <StatusBar />

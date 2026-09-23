@@ -20,11 +20,16 @@ export interface Transport {
   writeTerminal(id: number, data: string): Promise<void>;
   resizeTerminal(id: number, cols: number, rows: number): Promise<void>;
   closeTerminal(id: number): Promise<void>;
+  /** Asks for every project with its worktrees again; they arrive as `projects`. */
+  listProjects(): Promise<void>;
+  /** Asks the service to follow `path`; answered by `project_added` or `add_project_failed`. */
+  addProject(path: string): Promise<void>;
 }
 
 /**
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
- * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection.
+ * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
+ * `?mock=empty` starts it with no projects.
  */
 export function pickTransport(tauri = isTauri(), search = location.search): Transport {
   const mock = new URLSearchParams(search).get("mock");

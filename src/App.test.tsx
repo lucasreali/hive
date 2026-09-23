@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "./App";
 import { apply, initialState, useHive } from "./store";
+import { MOCK_REPOS } from "./transport/mock";
 
 afterEach(() => {
   cleanup();
@@ -72,4 +73,16 @@ test("new terminal waits for the worktree picker", () => {
   expect((screen.getByTitle("New terminal (Ctrl+Shift+T)") as HTMLButtonElement).disabled).toBe(
     true,
   );
+});
+
+test("the empty state shows only once the service says there are no projects", () => {
+  render(<App />);
+  const empty = () => screen.queryByText("No project open");
+  expect(empty()).toBeNull();
+  act(() => apply({ type: "projects", projects: [] }));
+  expect(screen.getByRole("region", { name: "Terminals" }).textContent).toContain(
+    "No project openAdd a project to follow the agents running in its worktrees.Add project Ctrl+Shift+OA project is a folder inside WSL, for example:/home/user/projects/shop",
+  );
+  act(() => apply({ type: "projects", projects: [MOCK_REPOS[0]] }));
+  expect(empty()).toBeNull();
 });
