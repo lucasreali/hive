@@ -178,6 +178,26 @@ pub enum Control {
     Agent(AgentEvent),
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
+    /// App → service: every project with its worktrees, answered by `Projects`. Sent after
+    /// the handshake and on an explicit refresh.
+    ListProjects,
+    Projects {
+        projects: Vec<Project>,
+    },
+    /// App → service: follow the git repository containing `path` (#4). Answered by
+    /// `ProjectAdded` (also when it is already followed) or `AddProjectFailed`.
+    AddProject {
+        path: String,
+    },
+    ProjectAdded {
+        project: Project,
+    },
+    AddProjectFailed {
+        path: String,
+        error: ProjectError,
+        /// Readable explanation, shown as is.
+        message: String,
+    },
     Error {
         message: String,
     },
@@ -191,6 +211,48 @@ impl Control {
             role,
         }
     }
+}
+
+/// A git repository inside WSL that the app follows (#4). Paths are the service's, never
+/// derived by the app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    /// Stable id: the repository's top-level path.
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    /// Every worktree from `git worktree list` (#8), the main one first.
+    pub worktrees: Vec<Worktree>,
+    /// Why the worktrees could not be listed (e.g. the folder was moved).
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Worktree {
+    /// Stable id: the worktree's path.
+    pub id: String,
+    /// Shown in the sidebar: the folder name for a Claude worktree, else the branch.
+    pub name: String,
+    pub path: String,
+    /// `None` when detached.
+    pub branch: Option<String>,
+    /// The repository's main worktree.
+    pub main: bool,
+    /// Follows Claude's convention: `<repo>/.claude/worktrees/<name>` (#7).
+    pub claude: bool,
+}
+
+/// Why a folder cannot be added as a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectError {
+    NotAbsolute,
+    /// Missing or unreadable.
+    NotFound,
+    NotADirectory,
+    NotAGitRepository,
+    /// The project list could not be saved.
+    Storage,
 }
 
 /// Provider-independent agent event, produced by an adapter from a raw hook payload.
@@ -340,6 +402,37 @@ mod tests {
         });
         let frame = Frame::control(0, &msg);
         assert_eq!(frame.to_control().unwrap(), msg);
+    }
+
+    #[test]
+    fn project_messages_are_tagged_json() {
+        let worktree = Worktree {
+            id: "/r".into(),
+            name: "main".into(),
+            path: "/r".into(),
+            branch: Some("main".into()),
+            main: true,
+            claude: false,
+        };
+        let msg = Control::ProjectAdded {
+            project: Project {
+                id: "/r".into(),
+                name: "r".into(),
+                path: "/r".into(),
+                worktrees: vec![worktree],
+                error: None,
+            },
+        };
+        assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
+        let failed = Control::AddProjectFailed {
+            path: "x".into(),
+            error: ProjectError::NotAGitRepository,
+            message: "m".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &failed).payload[..],
+            br#"{"type":"add_project_failed","path":"x","error":"not_a_git_repository","message":"m"}"#
+        );
     }
 
     #[test]

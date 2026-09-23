@@ -14,7 +14,8 @@ use serde_json::Value;
 pub const HOOK_INPUT_LIMIT: u64 = 64 * 1024;
 /// Largest project settings file inspected for a competing `WorktreeCreate` hook.
 const SETTINGS_LIMIT: u64 = 1024 * 1024;
-const WORKTREES_DIR: &str = ".claude/worktrees";
+/// Where Claude Code (and Hive) put worktrees, relative to the main worktree.
+pub const WORKTREES_DIR: &str = ".claude/worktrees";
 const INCLUDE_FILE: &str = ".worktreeinclude";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,7 +223,7 @@ fn own_create_hooks(root: &Path) -> Vec<&'static str> {
 }
 
 /// The main worktree's root, from anywhere inside the repository or one of its worktrees.
-fn main_root(dir: &Path) -> io::Result<PathBuf> {
+pub fn main_root(dir: &Path) -> io::Result<PathBuf> {
     list(dir)?
         .into_iter()
         .next()

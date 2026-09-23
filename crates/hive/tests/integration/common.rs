@@ -83,6 +83,10 @@ impl Env {
             .env("XDG_DATA_HOME", self.path("data"))
             .env("XDG_CONFIG_HOME", self.path("config"))
             .env("WSL_DISTRO_NAME", DISTRO)
+            // git run by the service sees neither the real config nor an enclosing repository.
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CEILING_DIRECTORIES", self.dir.path())
             .env_remove("HIVE_TERMINAL_ID");
         cmd
     }

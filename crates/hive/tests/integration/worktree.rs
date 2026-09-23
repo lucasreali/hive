@@ -7,9 +7,9 @@ use serde_json::json;
 use crate::common::Env;
 
 /// A throwaway repository with one commit on `main`; git never sees the real user config.
-struct Repo {
-    env: Env,
-    root: PathBuf,
+pub(crate) struct Repo {
+    pub(crate) env: Env,
+    pub(crate) root: PathBuf,
 }
 
 fn isolate<'a>(cmd: &'a mut Command, env: &Env) -> &'a mut Command {
@@ -43,7 +43,7 @@ fn assert_fails(out: &Output, message: &str) {
 }
 
 impl Repo {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let env = Env::new();
         let root = env.path("home/repo");
         std::fs::create_dir(&root).unwrap();
@@ -56,7 +56,7 @@ impl Repo {
         repo
     }
 
-    fn git_in(&self, dir: &Path, args: &[&str]) -> String {
+    pub(crate) fn git_in(&self, dir: &Path, args: &[&str]) -> String {
         let out = isolate(&mut Command::new("git"), &self.env)
             .arg("-C")
             .arg(dir)
@@ -67,7 +67,7 @@ impl Repo {
         stdout(&out).trim().to_owned()
     }
 
-    fn git(&self, args: &[&str]) -> String {
+    pub(crate) fn git(&self, args: &[&str]) -> String {
         self.git_in(&self.root, args)
     }
 
@@ -96,7 +96,7 @@ impl Repo {
         self.hive_cmd(dir, args).output().unwrap()
     }
 
-    fn hive(&self, args: &[&str]) -> Output {
+    pub(crate) fn hive(&self, args: &[&str]) -> Output {
         self.hive_in(&self.root, args)
     }
 

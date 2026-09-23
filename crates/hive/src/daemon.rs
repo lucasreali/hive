@@ -26,6 +26,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use crate::VERSION;
 use crate::adapter::{Adapter, ClaudeCode};
 use crate::paths::Paths;
+use crate::projects::Projects;
 use crate::terminal::{self, Input, Terminal};
 use crate::{procs, watch, wrapper};
 
@@ -43,7 +44,8 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
-    let result = serve(listener, terminate, paths.bin_dir()).await;
+    let projects = Projects::load(paths.projects());
+    let result = serve(listener, terminate, paths.bin_dir(), projects).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -65,11 +67,17 @@ fn lock(paths: &Paths) -> io::Result<File> {
     Ok(file)
 }
 
-async fn serve(listener: UnixListener, mut terminate: Signal, bin_dir: PathBuf) -> io::Result<()> {
+async fn serve(
+    listener: UnixListener,
+    mut terminate: Signal,
+    bin_dir: PathBuf,
+    projects: Projects,
+) -> io::Result<()> {
     let state = Arc::new(State {
         app: Mutex::new(None),
         terminals: Mutex::new(HashMap::new()),
         bin_dir,
+        projects,
     });
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
@@ -100,6 +108,7 @@ struct State {
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
     bin_dir: PathBuf,
+    projects: Projects,
 }
 
 /// Queue to the app connection's writer.
@@ -156,6 +165,17 @@ impl State {
             Err(message) => Control::Error { message },
         };
         self.to_app(channel, &reply).await;
+    }
+
+    /// Answers a project request off the frame loop, since git can take a while.
+    fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let inner = state.clone();
+            if let Ok(reply) = tokio::task::spawn_blocking(move || request(&inner.projects)).await {
+                state.to_app(0, &reply).await;
+            }
+        });
     }
 
     /// Ends the terminal's processes; its exit is reported by [`pump`].
@@ -338,6 +358,19 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.input(channel, Input::Resize { cols, rows }).await
         }
         Ok(Control::CloseTerminal) => state.close(channel).await,
+        Ok(Control::ListProjects) => state.projects(|projects| Control::Projects {
+            projects: projects.list(),
+        }),
+        Ok(Control::AddProject { path }) => {
+            state.projects(move |projects| match projects.add(&path) {
+                Ok(project) => Control::ProjectAdded { project },
+                Err((error, message)) => Control::AddProjectFailed {
+                    path,
+                    error,
+                    message,
+                },
+            })
+        }
         _ => {
             let message = "unexpected message from the app".to_owned();
             state.to_app(channel, &Control::Error { message }).await;

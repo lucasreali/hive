@@ -57,6 +57,11 @@ impl Paths {
         self.data.join("hive-hooks.json")
     }
 
+    /// The projects the app follows (`hive::projects`).
+    pub fn projects(&self) -> PathBuf {
+        self.data.join("projects.json")
+    }
+
     /// Creates the runtime directory with mode `0700` and refuses one that
     /// another user owns or that others can access (e.g. a planted `/tmp/hive-<uid>`).
     pub fn prepare_runtime(&self) -> io::Result<()> {
@@ -111,6 +116,7 @@ mod tests {
             paths.hooks_settings(),
             PathBuf::from("/d/hive/hive-hooks.json")
         );
+        assert_eq!(paths.projects(), PathBuf::from("/d/hive/projects.json"));
     }
 
     #[test]

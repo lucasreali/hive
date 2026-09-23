@@ -1,9 +1,9 @@
 //! The `claude` wrapper put first on `PATH` in Hive terminals, and the hooks settings it injects.
 
 use std::fs::Permissions;
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
@@ -109,9 +109,17 @@ fn sh_quote(path: &Path) -> Vec<u8> {
 }
 
 /// Replaces `path` in one step, so a terminal never runs a half-written file.
-fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
+/// Writes `path` through a temporary file created with `mode` and renamed over it.
+pub(crate) fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, contents)?;
+    // A leftover could have looser permissions; a new file never shows the contents to others.
+    let _ = std::fs::remove_file(&tmp);
+    let mut file = std::fs::File::options()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(&tmp)?;
+    file.write_all(contents)?;
     std::fs::set_permissions(&tmp, Permissions::from_mode(mode))?;
     std::fs::rename(&tmp, path)
 }

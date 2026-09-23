@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod hook;
 pub mod paths;
 pub mod procs;
+pub mod projects;
 pub mod terminal;
 pub mod watch;
 pub mod worktree;

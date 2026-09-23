@@ -9,6 +9,8 @@ mod daemon;
 #[cfg(test)]
 mod hook;
 #[cfg(test)]
+mod projects;
+#[cfg(test)]
 mod terminal;
 #[cfg(test)]
 mod watch;
