@@ -77,6 +77,13 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `add_project {path}` | app → service | 0 | Follow the git repository containing `path`. |
 | `project_added {project}` | service → app | 0 | The project, with its worktrees. Also the answer when it was already followed. |
 | `add_project_failed {path, error, message}` | service → app | 0 | `path` was refused. `error` is `not_absolute`, `not_found`, `not_a_directory`, `not_a_git_repository` or `storage`; `message` is shown as is. |
+| `list_branches {project}` | app → service | 0 | The local and remote branches of a followed project; answered by `branches`. |
+| `branches {project, local, remote, current, error}` | service → app | 0 | Short names from `git for-each-ref` (remote `HEAD` symrefs skipped, at most 1 MiB of names). `current` is the branch checked out in the main worktree, shown as "default"; `error` says why they could not be listed. |
+| `validate_worktree_name {project, name}` | app → service | 0 | Sent as the user types a new worktree's name. |
+| `worktree_name_validated {project, name, folder, branch, error}` | service → app | 0 | The CLI's verdict (`error`, or null) and where the worktree would go (`.claude/worktrees/<name>/`, `worktree-<name>`; `<name>` when empty). Answers may arrive out of order, so the app matches them by name. |
+| `create_worktree {project, name, base}` | app → service | 0 | `hive worktree create` in a followed project, from `base` (null: the main worktree's HEAD). |
+| `worktree_created {project, path, notes}` | service → app | 0 | The project with its updated worktrees, the new path, and what the CLI prints on stderr (a competing `WorktreeCreate` hook, the files copied from `.worktreeinclude`). |
+| `create_worktree_failed {project, name, message}` | service → app | 0 | The CLI's error, shown as is. |
 | `error {message}` | service → client | 0 or n | A refused request, e.g. channel 0, a channel already open, a bad cwd, an unexpected message, or a second app. |
 
 Between the app's Rust side and the WebView (#24), control messages travel on one Tauri `Channel` (given by the `connect` command) as the service's JSON plus a `channel` field, e.g. `{"type":"terminal_opened","channel":1}`. Terminal output travels as raw bytes on a separate `Channel` per terminal (given by `open_terminal`). No Tauri events are used. The Rust side adds `app_version` and `app_protocol` (its own values) to `version_mismatch`, so the UI can show both sides, and one message of its own:
@@ -120,6 +127,13 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare entries skipped.
 3. `add_project {path}` (the add-project dialog): the path must be absolute, an existing directory and inside a git repository with a working tree. It is normalised to the main worktree (the first entry of `git worktree list`), so a subfolder or a linked worktree adds its repository. A new project is appended to `<data>/hive/projects.json`; if that write fails the list is unchanged and the answer is `add_project_failed {error: storage}`.
 4. Project requests run on a blocking thread, off the app's frame loop, because git can be slow.
+5. Worktree requests name a project by id and are refused ("<id> is not a followed project") for any other.
+
+### New worktree (screens 1c/1d)
+1. The dialog opens for a project (the row's "New worktree", or `openModal("new-worktree", id)`), sends `list_branches` and `validate_worktree_name` for the empty name.
+2. Every keystroke in the name sends `validate_worktree_name`: the service runs `worktree::check_name` (the rule and the existing-folder check of `hive worktree create`, no git), so the dialog never has its own rule (#33, #37). Create stays disabled until the current name has a clean verdict.
+3. The branch list is filtered in the UI (case-insensitive substring) and virtualized (TanStack Virtual); ↑/↓ in the filter move the pick. A pick hidden by the filter gives way to the first branch shown.
+4. `create_worktree` runs `worktree::create`, the CLI's code. On `worktree_created` the UI selects the new worktree, opens a terminal in it if asked (`open_terminal` with its path), and closes the dialog; with notes, the dialog stays open to show them.
 
 The list is a JSON array of paths, written through a temporary file (mode 0600) renamed over it. A missing file is an empty list. An unreadable or corrupt one is moved to `projects.json.corrupt` with a warning on stderr (`daemon.log`), and the service starts with an empty list.
 
@@ -170,7 +184,7 @@ fish job control puts each job in its own process group, which is why the servic
 5. Copy the included regular files. Existing paths are never overwritten and symlinks are never followed.
 6. Print only the path. In hook mode, any failure exits non-zero with an empty stdout.
 
-A project that has its own `WorktreeCreate` hook in `.claude/settings{,.local}.json` gets a warning on stderr. `remove` and `hook-remove` run `git worktree remove` without `--force` and keep the branch. `hook-remove` only removes paths directly under `<repo>/.claude/worktrees/`. Neither hook is registered in `hive-hooks.json` yet (Stage 4).
+`create` returns the path and its notes, which the CLI prints on stderr as `hive: <note>` and the service sends to the app: a warning when the project has its own `WorktreeCreate` hook in `.claude/settings{,.local}.json`, and how many `.worktreeinclude` files were copied. `remove` and `hook-remove` run `git worktree remove` without `--force` and keep the branch. `hook-remove` only removes paths directly under `<repo>/.claude/worktrees/`. Neither hook is registered in `hive-hooks.json` yet (Stage 4).
 
 ## Files written
 
@@ -204,7 +218,7 @@ Integration tests run the real `hive` binary with a temporary `HOME` and `XDG_*`
 
 ### Frontend without Tauri
 
-Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu") and `projects` (two of three fake repositories under `/home/user`; `?mock=empty` starts with none, and `add_project` accepts only the fake paths), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
+Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu") and `projects` (two of three fake repositories under `/home/user`; `?mock=empty` starts with none, and `add_project` accepts only the fake paths; branches, name checks and new worktrees follow the CLI's wording, with a long remote branch list in `shop`), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
 
 ### Windows app during development
 

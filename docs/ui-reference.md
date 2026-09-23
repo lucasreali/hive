@@ -213,8 +213,8 @@ Refusals are the service's `message`, shown as is (e.g. "cannot open /x: No such
 | Projeto | Project |
 | Nome da worktree | Worktree name |
 | ex.: fix-carrinho | e.g. fix-cart |
-| Use apenas letras minúsculas, números, hífen, ponto ou sublinhado. | Use only lowercase letters, digits, hyphens, dots or underscores. |
-| Já existe uma worktree com esse nome. | A worktree with this name already exists. |
+| Use apenas letras minúsculas, números, hífen, ponto ou sublinhado. | The CLI's: `invalid worktree name "<name>": use lowercase letters, digits, '.', '_' and '-', starting with a letter or digit` |
+| Já existe uma worktree com esse nome. | The CLI's: `worktree "<name>" already exists at <path>` |
 | Branch de origem | Base branch |
 | Filtrar branches locais e remotas | Filter local and remote branches |
 | Locais | Local |
@@ -228,8 +228,10 @@ Refusals are the service's `message`, shown as is (e.g. "cannot open /x: No such
 | \<nome\> | \<name\> |
 | Cancelar · Esc | Cancel · Esc |
 | Criar worktree · Enter | Create worktree · Enter |
+| (new) Criada \<caminho\> (after create, only when the service sent notes) | Created \<path\> |
+| (new) Fechar · Enter | Close · Enter |
 
-The validation messages must match what `hive worktree create` prints (#33, TODO 1.6); if the CLI wording differs, the CLI wording wins and this table is updated.
+The validation and create messages are the service's, worded as `hive worktree create` prints them (#33, TODO 1.6); the dialog shows them as is. The notes after a create are the CLI's stderr lines without the `hive: ` prefix.
 
 ### Style sheet labels (screen 1f, reference only)
 
