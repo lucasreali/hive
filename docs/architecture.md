@@ -1,6 +1,6 @@
-# Hive architecture (Stage 0)
+# Hive architecture
 
-What exists after Stage 0: the WSL side, meaning the `hive` binary and the `hive-protocol` crate. There is no UI yet.
+The WSL side is the `hive` binary and the `hive-protocol` crate (Stage 0); the Windows side is the Tauri app (`src-tauri`) and its React UI (`src`).
 Decisions live in `docs/hive.md` (Portuguese). This file describes how the code implements them.
 
 ## Pieces
@@ -73,6 +73,12 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `unhooked_agent` | service → app | n | A `claude` runs in terminal n without sending hook events. |
 | `error {message}` | service → client | 0 or n | A refused request, e.g. channel 0, a channel already open, a bad cwd, an unexpected message, or a second app. |
 
+Between the app's Rust side and the WebView (#24), control messages travel on one Tauri `Channel` (given by the `connect` command) as the service's JSON plus a `channel` field, e.g. `{"type":"terminal_opened","channel":1}`. Terminal output travels as raw bytes on a separate `Channel` per terminal (given by `open_terminal`). No Tauri events are used. The Rust side adds one message of its own:
+
+| Message | Direction | Meaning |
+|---|---|---|
+| `disconnected {reason}` | app (Rust) → UI | The bridge exited or its stdout closed. `reason` is the bridge's stderr (at most 16 KiB), a protocol error, or "the hive bridge exited". Every open terminal gets `terminal_exited {code: null}` first. Not sent after `version_mismatch`. |
+
 `AgentEvent` has these fields: `provider`, `terminal_id`, `session_id`, `subagent {id, agent_type}`, `cwd`, `kind`, and `raw` (the unchanged payload).
 `kind` is one of: `session_started`, `prompt_submitted`, `tool_started`/`tool_finished`/`tool_failed {tool}`, `permission_requested {tool}`, `notification {notification}`, `turn_finished`, `turn_failed {error}`, `subagent_started`, `subagent_stopped`, `session_ended {reason}`, or `other {event}`.
 `notification` is one of `permission_prompt`, `elicitation_dialog`, `idle_prompt`, `agent_needs_input`, or `other`.
@@ -80,12 +86,25 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 ## Sequences
 
 ### Bridge start
-1. The app runs `wsl.exe hive bridge`.
+1. The app runs `wsl.exe [-d $HIVE_WSL_DISTRO] --exec /bin/sh -c 'exec "${1:-$HOME/.cargo/bin/hive}" bridge' sh [$HIVE_BRIDGE]`: the `hive` installed by `cargo install` (#29), or the absolute Linux path in `HIVE_BRIDGE` (development, `scripts/win-dev.sh`). `--exec` skips the user's login shell, so no fish config runs. The script is a constant; the override is a separate argument. On Windows the process gets `CREATE_NO_WINDOW`, and it is killed when the app drops the connection.
 2. The bridge connects to `<runtime>/hive.sock`.
 3. If the connection fails, the bridge prepares the runtime dir, truncates `daemon.log` (0600) and runs `setsid --fork hive daemon`. The daemon's stdin and stdout are null and its stderr goes to the log.
 4. The bridge retries the connection for up to 5 s. If the daemon never listens, the bridge fails with "the hive service did not start; see <log>".
 5. Two bridges racing is harmless: the second daemon cannot take the lockfile and exits.
 6. The bridge then copies bytes in both directions without looking at them. When either side closes, the bridge exits.
+
+### App connect (app side)
+1. The UI calls `connect(onMessage)` once at startup (`src/main.tsx`), handing a `Channel` to Rust.
+2. Rust starts the bridge and queues `hello {role: app, version}`; `version` is the app's `CARGO_PKG_VERSION`, so `hive-app` and `hive` share one version number.
+3. `welcome` or `version_mismatch` goes to the UI. After `version_mismatch`, Rust drops the bridge and sends nothing more.
+4. A UI that reloads calls `connect` again: if the connection is up, Rust closes that UI's old terminals, drops their later messages, and replays `welcome`; otherwise it starts a new bridge.
+5. When the bridge's stdout closes, Rust waits up to 2 s for its stderr, sends `terminal_exited` for every open terminal and then `disconnected {reason}`. Commands then fail with "not connected to the hive service".
+
+### Terminal from the UI
+1. `openTerminal(cwd, cols, rows, onData)`: Rust picks the next channel (never reused while the app runs), registers `onData` and sends `open_terminal` on it. The call resolves with the channel id.
+2. Output bytes for that channel go only to its `onData`. Control messages for channels the UI did not open are dropped.
+3. `writeTerminal` sends terminal frames, split at `MAX_PAYLOAD`; `resizeTerminal` and `closeTerminal` send `resize` and `close_terminal`.
+4. `terminal_exited` releases the channel's `onData`.
 
 ### Daemon start
 1. Prepare the runtime dir (0700, owned by the user).
@@ -165,12 +184,17 @@ Integration tests run the real `hive` binary with a temporary `HOME` and `XDG_*`
 - When a test ends, every process still carrying the test's `XDG_RUNTIME_DIR` is killed, so failing tests do not leak processes.
 - `llvm-cov` records a spawned `hive` only if it exits normally, so tests stop daemons with SIGTERM or by closing the app connection.
 
+### Frontend without Tauri
+
+Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome`, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
+
 ### Windows app during development
 
 The code and every build stay in WSL (TODO 1.0, human decision 2026-09-23). `scripts/win-dev.sh`:
 1. cross-compiles `hive-app` for `x86_64-pc-windows-msvc` with `cargo xwin`, with a static CRT because a stock Windows has no VC++ redistributable;
 2. copies the `.exe` to `%LOCALAPPDATA%\hive-dev`;
-3. starts Vite in WSL on port 1420. The debug build loads `devUrl`, which Windows reaches through WSL localhost forwarding, so hot reload works;
-4. opens the app through PowerShell, because launching a Windows `.exe` straight from WSL interop fails.
+3. builds `target/debug/hive` and exports `HIVE_BRIDGE` (that path) and `HIVE_WSL_DISTRO` through `WSLENV`, so the app's bridge runs the development build;
+4. starts Vite in WSL on port 1420. The debug build loads `devUrl`, which Windows reaches through WSL localhost forwarding, so hot reload works;
+5. opens the app through PowerShell, because launching a Windows `.exe` straight from WSL interop fails.
 
 One-time setup: `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin --locked`, `bun install`. The first build downloads the MSVC CRT and Windows SDK into `~/.cache/cargo-xwin`. Release bundles (MSI/NSIS) are not covered yet.
