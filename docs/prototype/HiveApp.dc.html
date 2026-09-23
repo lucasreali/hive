@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body { margin: 0; background: #1b1e23; }
+a { color: #74ade8; } a:hover { color: #9cc4f0; }
+.hive-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.hive-scroll::-webkit-scrollbar-thumb { background: #454a56; border: 3px solid transparent; background-clip: padding-box; border-radius: 6px; }
+.hive-scroll::-webkit-scrollbar-track { background: transparent; }
+</style>
+</helmet>
+<div ref="{{ rootRef }}" tabindex="-1" onKeyDown="{{ onKey }}" style="width:1440px;height:900px;display:flex;flex-direction:column;background:#282c33;color:#dce0e5;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;line-height:18px;overflow:hidden;position:relative;outline:none;box-sizing:border-box;border:1px solid #464b57;-webkit-font-smoothing:antialiased">
+
+  <div style="height:34px;flex:none;display:flex;align-items:center;background:#3b414d;border-bottom:1px solid #464b57;user-select:none">
+    <div style="display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12px;color:#a9afbc;min-width:0">
+      <svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1.5 11.8 4.25v5.5L7 12.5 2.2 9.75v-5.5z" fill="none" stroke="#a9afbc" style="stroke-width:1.2;stroke-linejoin:round"></path><path d="M7 5 9 6.1v2.3L7 9.5 5 8.4V6.1z" fill="#a9afbc"></path></svg>
+      <span style="font-weight:500">Hive</span>
+      <sc-if value="{{ hasCtx }}" hint-placeholder-val="{{ true }}">
+        <span style="color:#5d636f">/</span>
+        <span style="color:#a9afbc">{{ ctxProject }}</span>
+        <span style="color:#5d636f">/</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#dce0e5">{{ ctxWt }}</span>
+      </sc-if>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;height:34px">
+      <div title="Minimizar" style="width:46px;display:flex;align-items:center;justify-content:center;color:#a9afbc" style-hover="background:#464b57;color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5.5h10" stroke="currentColor"></path></svg></div>
+      <div title="Maximizar" style="width:46px;display:flex;align-items:center;justify-content:center;color:#a9afbc" style-hover="background:#464b57;color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" rx="1" fill="none" stroke="currentColor"></rect></svg></div>
+      <div title="Fechar" style="width:46px;display:flex;align-items:center;justify-content:center;color:#a9afbc" style-hover="background:#c42b1c;color:#ffffff"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M.5.5l9 9M9.5.5l-9 9" stroke="currentColor"></path></svg></div>
+    </div>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0">
+
+    <div style="width:{{ sideW }}px;flex:none;display:flex;flex-direction:column;background:#2f343e;border-right:1px solid #464b57;position:relative;min-width:0">
+      <div style="height:34px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 8px;border-bottom:1px solid #363c46;gap:6px">
+        <sc-if value="{{ hasPending }}" hint-placeholder-val="{{ true }}">
+          <button onClick="{{ onPending }}" title="Ir para o próximo agente pendente (F8)" style="display:flex;align-items:center;gap:6px;height:24px;padding:0 6px 0 7px;border:1px solid rgba(222,193,132,0.28);border-radius:4px;background:rgba(222,193,132,0.10);color:#dec184;font:inherit;font-size:12px;font-weight:500;cursor:pointer;outline:none" style-hover="background:rgba(222,193,132,0.18)" style-focus="border-color:#47679e">
+            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 8.3V5.4a3 3 0 0 1 6 0v2.9l.9 1.1H2.1z" fill="#dec184"></path><path d="M5 10.6h2" stroke="#dec184" style="stroke-width:1.2;stroke-linecap:round"></path></svg>
+            <span>{{ pendingLabel }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:14px;padding:0 3px;border-radius:3px;border:1px solid rgba(222,193,132,0.35);color:#dec184">F8</span>
+          </button>
+        </sc-if>
+        <sc-if value="{{ noPending }}" hint-placeholder-val="{{ false }}">
+          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#878a98;padding-left:2px">Nenhuma pendência</span>
+        </sc-if>
+        <button onClick="{{ onAddProject }}" title="Adicionar projeto" style="display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:0;border-radius:4px;background:transparent;color:#a9afbc;font:inherit;font-size:12px;cursor:pointer;outline:none" style-hover="background:#363c46;color:#dce0e5" style-focus="box-shadow:inset 0 0 0 1px #47679e">
+          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 2v8M2 6h8" stroke="currentColor" style="stroke-width:1.3;stroke-linecap:round"></path></svg>
+          <span>Projeto</span>
+        </button>
+      </div>
+
+      <div ref="{{ sideRef }}" class="hive-scroll" tabindex="0" onKeyDown="{{ onSideKey }}" onFocus="{{ onSideFocus }}" onBlur="{{ onSideBlur }}" onMouseLeave="{{ onRowsLeave }}" style="flex:1;overflow-y:auto;overflow-x:hidden;padding:4px 0;outline:none;user-select:none">
+        <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:10px 12px;font-size:12px;color:#878a98">Nenhum projeto</div>
+        </sc-if>
+        <sc-for list="{{ rows }}" as="r" hint-placeholder-count="12">
+
+          <sc-if value="{{ r.isProject }}">
+            <div onClick="{{ r.onClick }}" onMouseEnter="{{ r.onEnter }}" title="{{ r.path }}" style="display:flex;align-items:center;gap:6px;height:26px;padding:0 6px 0 6px;background:{{ r.bg }};box-shadow:{{ r.ring }};margin-top:{{ r.gapTop }}">
+              <span onClick="{{ r.onToggle }}" style="width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:#878a98;flex:none;border-radius:3px" style-hover="color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10" style="transform:rotate({{ r.chevRot }}deg)"><path d="M3.5 2 6.5 5 3.5 8" fill="none" stroke="currentColor" style="stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round"></path></svg></span>
+              <svg width="14" height="14" viewBox="0 0 14 14" style="flex:none"><path d="M1.75 4.2c0-.64.52-1.2 1.2-1.2h2.7l1.3 1.4h4.1c.66 0 1.2.54 1.2 1.2v5.2c0 .66-.54 1.2-1.2 1.2H2.95c-.66 0-1.2-.54-1.2-1.2z" fill="none" stroke="#a9afbc" style="stroke-width:1.1;stroke-linejoin:round"></path></svg>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:#dce0e5">{{ r.label }}</span>
+              <sc-if value="{{ r.showNewWt }}">
+                <button onClick="{{ r.onNewWt }}" title="Nova worktree (Alt+N)" style="display:flex;align-items:center;gap:4px;height:20px;padding:0 6px 0 4px;border:0;border-radius:4px;background:#454a56;color:#dce0e5;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap" style-hover="background:#4f5563">
+                  <svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 1.5v7M1.5 5h7" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg>Nova worktree
+                </button>
+              </sc-if>
+              <sc-if value="{{ r.showProp }}"><dc-import name="StateIcon" state="{{ r.propState }}" hint-size="12px,12px"></dc-import></sc-if>
+              <sc-if value="{{ r.alert }}"><svg width="12" height="12" viewBox="0 0 12 12" style="flex:none;color:{{ r.alertColor }}"><path d="M3 8.3V5.4a3 3 0 0 1 6 0v2.9l.9 1.1H2.1z" fill="currentColor"></path><path d="M5 10.6h2" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg></sc-if>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ r.isWt }}">
+            <div onClick="{{ r.onClick }}" onMouseEnter="{{ r.onEnter }}" title="{{ r.path }}" style="display:flex;align-items:center;gap:6px;height:24px;padding:0 6px 0 20px;background:{{ r.bg }};box-shadow:{{ r.ring }}">
+              <span onClick="{{ r.onToggle }}" style="width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:#878a98;flex:none;border-radius:3px;opacity:{{ r.chevOp }}" style-hover="color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10" style="transform:rotate({{ r.chevRot }}deg)"><path d="M3.5 2 6.5 5 3.5 8" fill="none" stroke="currentColor" style="stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round"></path></svg></span>
+              <svg width="12" height="12" viewBox="0 0 12 12" style="flex:none"><circle cx="3.2" cy="2.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="3.2" cy="9.4" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="8.8" cy="3.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><path d="M3.2 4v4M8.8 5c0 2.2-5.6 1.4-5.6 3" fill="none" stroke="#878a98" style="stroke-width:1.1"></path></svg>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#dce0e5">{{ r.label }}</span>
+              <sc-if value="{{ r.showProp }}"><dc-import name="StateIcon" state="{{ r.propState }}" hint-size="12px,12px"></dc-import></sc-if>
+              <sc-if value="{{ r.alert }}"><svg width="12" height="12" viewBox="0 0 12 12" style="flex:none;color:{{ r.alertColor }}"><path d="M3 8.3V5.4a3 3 0 0 1 6 0v2.9l.9 1.1H2.1z" fill="currentColor"></path><path d="M5 10.6h2" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg></sc-if>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ r.isAgent }}">
+            <div onClick="{{ r.onClick }}" onMouseEnter="{{ r.onEnter }}" style="display:flex;align-items:flex-start;gap:7px;padding:4px 8px 5px 40px;background:{{ r.bg }};box-shadow:{{ r.ring }}">
+              <span style="padding-top:2px;display:flex"><dc-import name="StateIcon" state="{{ r.state }}" hint-size="12px,12px"></dc-import></span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="flex:1;color:#dce0e5">Claude</span>
+                  <sc-if value="{{ r.showSince }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#878a98">{{ r.since }}</span></sc-if>
+                  <sc-if value="{{ r.alert }}"><svg width="12" height="12" viewBox="0 0 12 12" style="flex:none;color:{{ r.alertColor }}"><path d="M3 8.3V5.4a3 3 0 0 1 6 0v2.9l.9 1.1H2.1z" fill="currentColor"></path><path d="M5 10.6h2" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg></sc-if>
+                </div>
+                <span style="font-size:12px;line-height:15px;color:{{ r.labelColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.stateLabel }}</span>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ r.isSub }}">
+            <div onClick="{{ r.onClick }}" onMouseEnter="{{ r.onEnter }}" style="display:flex;align-items:flex-start;gap:7px;padding:4px 8px 5px 56px;background:{{ r.bg }};box-shadow:{{ r.ring }};position:relative">
+              <span style="position:absolute;left:45px;top:0;width:1px;height:{{ r.vH }};background:#4a505c"></span>
+              <span style="position:absolute;left:45px;top:11px;width:8px;height:1px;background:#4a505c"></span>
+              <span style="padding-top:2px;display:flex"><dc-import name="StateIcon" state="{{ r.state }}" hint-size="12px,12px"></dc-import></span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="color:#878a98">subagente: </span><span style="color:#dce0e5">{{ r.label }}</span></span>
+                <div style="display:flex;align-items:center;gap:6px;font-size:12px;line-height:15px;color:{{ r.labelColor }}">
+                  <span>{{ r.stateLabel }}</span>
+                  <sc-if value="{{ r.showSince }}"><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#878a98">{{ r.since }}</span></sc-if>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ r.isSubWt }}">
+            <div onClick="{{ r.onClick }}" onMouseEnter="{{ r.onEnter }}" title="{{ r.path }}" style="display:flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 63px;background:{{ r.bg }};position:relative;margin-top:-2px">
+              <span style="position:absolute;left:45px;top:0;width:1px;height:{{ r.vH }};background:#4a505c"></span>
+              <svg width="12" height="12" viewBox="0 0 12 12" style="flex:none"><circle cx="3.2" cy="2.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="3.2" cy="9.4" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="8.8" cy="3.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><path d="M3.2 4v4M8.8 5c0 2.2-5.6 1.4-5.6 3" fill="none" stroke="#878a98" style="stroke-width:1.1"></path></svg>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#a9afbc">{{ r.label }}</span>
+            </div>
+          </sc-if>
+
+        </sc-for>
+      </div>
+      <div onMouseDown="{{ onResizeDown }}" title="Arraste para redimensionar" style="position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:5" style-hover="background:rgba(71,103,158,0.6)"></div>
+    </div>
+
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;position:relative">
+      <sc-if value="{{ notEmpty }}" hint-placeholder-val="{{ true }}">
+        <div style="height:34px;flex:none;display:flex;align-items:flex-start;background:#2f343e;border-bottom:1px solid #464b57;box-sizing:border-box">
+          <div class="hive-scroll" style="display:flex;min-width:0;overflow-x:auto;overflow-y:hidden;height:34px">
+            <sc-for list="{{ tabsV }}" as="t" hint-placeholder-count="4">
+              <div onClick="{{ t.onClick }}" onMouseEnter="{{ t.onEnter }}" onMouseLeave="{{ t.onLeave }}" title="{{ t.path }}" style="height:34px;box-sizing:border-box;display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;border-right:1px solid #363c46;background:{{ t.bg }};color:{{ t.color }};cursor:default;flex:none;user-select:none">
+                <sc-if value="{{ t.hasState }}"><dc-import name="StateIcon" state="{{ t.state }}" hint-size="12px,12px"></dc-import></sc-if>
+                <sc-if value="{{ t.noState }}"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="2" width="10" height="8" rx="1.5" fill="none" stroke="#878a98"></rect><path d="M3.5 5 5 6.2 3.5 7.4M6.2 7.6h2.2" fill="none" stroke="#878a98" style="stroke-linecap:round;stroke-linejoin:round"></path></svg></sc-if>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px">{{ t.label }}</span>
+                <sc-if value="{{ t.hasHint }}"><span style="font-size:12px;color:#878a98">{{ t.hint }}</span></sc-if>
+                <span onClick="{{ t.onClose }}" title="Fechar terminal" style="opacity:{{ t.closeOp }};width:18px;height:18px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#a9afbc" style-hover="background:#454a56;color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2 2 8" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg></span>
+              </div>
+            </sc-for>
+          </div>
+          <button onClick="{{ onPlus }}" title="Novo terminal (Alt+T)" style="width:34px;height:33px;flex:none;display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#a9afbc;cursor:pointer;outline:none" style-hover="background:#363c46;color:#dce0e5" style-focus="box-shadow:inset 0 0 0 1px #47679e">
+            <svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 3v8M3 7h8" stroke="currentColor" style="stroke-width:1.3;stroke-linecap:round"></path></svg>
+          </button>
+          <div style="flex:1"></div>
+          <div style="height:33px;display:flex;align-items:center;padding:0 6px">
+            <button onClick="{{ toggleRight }}" title="Arquivos e diff (Alt+B)" style="width:26px;height:24px;display:flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:{{ rightBtnBg }};color:{{ rightBtnColor }};cursor:pointer;outline:none" style-hover="color:#dce0e5;background:#363c46" style-focus="box-shadow:inset 0 0 0 1px #47679e">
+              <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1.75" y="2.25" width="10.5" height="9.5" rx="1.5" fill="none" stroke="currentColor" style="stroke-width:1.1"></rect><path d="M8.75 2.25v9.5" stroke="currentColor" style="stroke-width:1.1"></path></svg>
+            </button>
+          </div>
+        </div>
+        <div ref="{{ termRef }}" class="hive-scroll" tabindex="0" onKeyDown="{{ onTermKey }}" style="flex:1;min-height:0;overflow:auto;background:#282c33;padding:12px 16px 14px;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:19px;outline:none;color:#dce0e5">
+          <sc-for list="{{ blocks }}" as="b" hint-placeholder-count="1">
+            <sc-if value="{{ b.box }}">
+              <div style="border:1px solid {{ b.border }};border-radius:6px;padding:6px 12px;margin:2px 0 4px;max-width:880px">
+                <sc-for list="{{ b.lines }}" as="ln"><div onClick="{{ ln.onClick }}" style="white-space:pre-wrap;min-height:19px;background:{{ ln.bg }};cursor:{{ ln.cursor }}"><sc-for list="{{ ln.segs }}" as="s"><span style="color:{{ s.c }};font-weight:{{ s.w }};background:{{ s.bg }}">{{ s.t }}</span></sc-for></div></sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ b.plain }}">
+              <div>
+                <sc-for list="{{ b.lines }}" as="ln"><div style="white-space:pre-wrap;min-height:19px;background:{{ ln.bg }}"><sc-for list="{{ ln.segs }}" as="s"><span style="color:{{ s.c }};font-weight:{{ s.w }};background:{{ s.bg }}">{{ s.t }}</span></sc-for></div></sc-for>
+              </div>
+            </sc-if>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;background:#282c33">
+          <div style="width:400px;display:flex;flex-direction:column;align-items:flex-start;gap:14px">
+            <svg width="28" height="28" viewBox="0 0 14 14"><path d="M1.75 4.2c0-.64.52-1.2 1.2-1.2h2.7l1.3 1.4h4.1c.66 0 1.2.54 1.2 1.2v5.2c0 .66-.54 1.2-1.2 1.2H2.95c-.66 0-1.2-.54-1.2-1.2z" fill="none" stroke="#878a98" style="stroke-width:.7;stroke-linejoin:round"></path><path d="M7 6.3v3M5.5 7.8h3" stroke="#878a98" style="stroke-width:.7;stroke-linecap:round"></path></svg>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="font-size:15px;font-weight:500;color:#dce0e5">Nenhum projeto aberto</div>
+              <div style="font-size:13px;line-height:19px;color:#a9afbc;text-wrap:pretty">Adicione um projeto para acompanhar os agentes que rodam nas worktrees dele.</div>
+            </div>
+            <button onClick="{{ onAddProject }}" style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px 0 12px;border:0;border-radius:4px;background:#74ade8;color:#1f2329;font:inherit;font-weight:500;cursor:pointer;outline:none" style-hover="background:#8bbbee" style-focus="box-shadow:0 0 0 2px #282c33, 0 0 0 3px #74ade8">
+              Adicionar projeto
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:15px;padding:0 4px;border-radius:3px;border:1px solid rgba(31,35,41,0.35)">Ctrl O</span>
+            </button>
+            <div style="display:flex;flex-direction:column;gap:6px;padding-top:6px;border-top:1px solid #363c46;align-self:stretch">
+              <span style="font-size:12px;color:#878a98;padding-top:8px">O projeto é uma pasta dentro do WSL, por exemplo:</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#dce0e5">/home/usuario/projetos/loja</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ pickerOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ closePicker }}" style="position:absolute;inset:0;z-index:20"></div>
+        <div onKeyDown="{{ onPickKey }}" style="position:absolute;top:44px;left:50%;transform:translateX(-50%);width:560px;z-index:21;background:#2f343e;border:1px solid #464b57;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,0.4);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:8px;height:38px;padding:0 12px;border-bottom:1px solid #464b57">
+            <svg width="13" height="13" viewBox="0 0 14 14"><circle cx="6" cy="6" r="4" fill="none" stroke="#878a98" style="stroke-width:1.2"></circle><path d="M9 9l3 3" stroke="#878a98" style="stroke-width:1.2;stroke-linecap:round"></path></svg>
+            <input ref="{{ pickRef }}" value="{{ pickQ }}" onChange="{{ onPickQ }}" placeholder="Abrir terminal na worktree…" style="flex:1;height:36px;border:0;outline:none;background:transparent;color:#dce0e5;font:inherit;font-size:13px">
+          </div>
+          <div class="hive-scroll" style="max-height:300px;overflow:auto;padding:4px">
+            <sc-for list="{{ pickItems }}" as="it">
+              <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border-radius:4px;background:{{ it.bg }}">
+                <sc-if value="{{ it.hasState }}"><dc-import name="StateIcon" state="{{ it.state }}" hint-size="12px,12px"></dc-import></sc-if>
+                <sc-if value="{{ it.noState }}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="3.2" cy="2.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="3.2" cy="9.4" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="8.8" cy="3.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><path d="M3.2 4v4M8.8 5c0 2.2-5.6 1.4-5.6 3" fill="none" stroke="#878a98" style="stroke-width:1.1"></path></svg></sc-if>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#dce0e5">{{ it.name }}</span>
+                <span style="font-size:12px;color:#a9afbc">{{ it.project }}</span>
+                <span style="flex:1"></span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#878a98;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px">{{ it.path }}</span>
+              </div>
+            </sc-for>
+            <sc-if value="{{ pickNone }}"><div style="padding:10px 8px;font-size:12px;color:#878a98">Nenhuma worktree encontrada</div></sc-if>
+          </div>
+          <div style="display:flex;gap:14px;padding:7px 12px;border-top:1px solid #363c46;font-size:11.5px;color:#878a98">
+            <span style="display:flex;gap:5px;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;padding:0 4px;border:1px solid #464b57;border-radius:3px;color:#a9afbc">↑↓</span>navegar</span>
+            <span style="display:flex;gap:5px;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;padding:0 4px;border:1px solid #464b57;border-radius:3px;color:#a9afbc">Enter</span>abrir terminal</span>
+            <span style="display:flex;gap:5px;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;padding:0 4px;border:1px solid #464b57;border-radius:3px;color:#a9afbc">Esc</span>fechar</span>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+
+    <sc-if value="{{ rightOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="width:{{ rightW }}px;flex:none;display:flex;flex-direction:column;background:#2f343e;border-left:1px solid #464b57;min-height:0;position:relative">
+        <div onMouseDown="{{ onRightResizeDown }}" title="Arraste para redimensionar" style="position:absolute;top:0;left:-3px;width:6px;height:100%;cursor:col-resize;z-index:5" style-hover="background:rgba(71,103,158,0.6)"></div>
+        <div style="height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;border-bottom:1px solid #464b57;font-size:12px;color:#a9afbc">
+          <span style="flex:1">Arquivos e diff</span>
+          <div style="display:flex;height:22px;border:1px solid #464b57;border-radius:4px;overflow:hidden">
+            <button onClick="{{ rShowAll }}" title="Mostrar todos os arquivos" style="border:0;padding:0 8px;font:inherit;font-size:11.5px;cursor:pointer;background:{{ rAllBg }};color:{{ rAllColor }}">Todos</button>
+            <button onClick="{{ rShowChanged }}" title="Mostrar só arquivos alterados" style="border:0;border-left:1px solid #464b57;padding:0 8px;font:inherit;font-size:11.5px;cursor:pointer;background:{{ rChBg }};color:{{ rChColor }}">Alterados</button>
+          </div>
+          <button onClick="{{ toggleRight }}" title="Recolher (Alt+B)" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:transparent;color:#a9afbc;cursor:pointer" style-hover="background:#363c46;color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2 2 8" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg></button>
+        </div>
+        <sc-if value="{{ rHasWt }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:none;display:flex;flex-direction:column;gap:3px;padding:8px 12px;border-bottom:1px solid #363c46">
+            <div style="display:flex;align-items:center;gap:6px;min-width:0">
+              <svg width="12" height="12" viewBox="0 0 12 12" style="flex:none"><circle cx="3.2" cy="2.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="3.2" cy="9.4" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="8.8" cy="3.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><path d="M3.2 4v4M8.8 5c0 2.2-5.6 1.4-5.6 3" fill="none" stroke="#878a98" style="stroke-width:1.1"></path></svg>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#dce0e5">{{ rWtName }}</span>
+              <span style="font-size:12px;color:#878a98;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ rProject }}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#a9afbc">
+              <span>{{ rSummary }}</span>
+              <sc-if value="{{ rHasChanges }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#a1c181">+{{ rAdd }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#d07277">−{{ rDel }}</span></sc-if>
+            </div>
+          </div>
+          <div class="hive-scroll" style="flex:1 1 0;min-height:120px;overflow:auto;padding:4px 0;user-select:none">
+            <sc-for list="{{ rTree }}" as="f" hint-placeholder-count="10">
+              <div onClick="{{ f.onClick }}" title="{{ f.path }}" style="display:flex;align-items:center;gap:6px;height:22px;padding:0 10px 0 {{ f.pad }}px;background:{{ f.bg }};cursor:default" style-hover="background:#363c46">
+                <sc-if value="{{ f.isDir }}">
+                  <svg width="10" height="10" viewBox="0 0 10 10" style="flex:none;transform:rotate({{ f.rot }}deg)"><path d="M3.5 2 6.5 5 3.5 8" fill="none" stroke="#878a98" style="stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round"></path></svg>
+                  <svg width="13" height="13" viewBox="0 0 14 14" style="flex:none"><path d="M1.75 4.2c0-.64.52-1.2 1.2-1.2h2.7l1.3 1.4h4.1c.66 0 1.2.54 1.2 1.2v5.2c0 .66-.54 1.2-1.2 1.2H2.95c-.66 0-1.2-.54-1.2-1.2z" fill="none" stroke="#878a98" style="stroke-width:1.1;stroke-linejoin:round"></path></svg>
+                </sc-if>
+                <sc-if value="{{ f.isFile }}">
+                  <span style="width:10px;flex:none"></span>
+                  <svg width="12" height="13" viewBox="0 0 12 14" style="flex:none"><path d="M2.5 1.5h4.8L10 4.2v8.3H2.5z" fill="none" stroke="#878a98" style="stroke-width:1;stroke-linejoin:round"></path><path d="M7 1.5v3h3" fill="none" stroke="#878a98" style="stroke-width:1;stroke-linejoin:round"></path></svg>
+                </sc-if>
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:{{ f.color }};text-decoration:{{ f.deco }}">{{ f.name }}</span>
+                <sc-if value="{{ f.hasCounts }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a1c181">{{ f.addT }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#d07277">{{ f.delT }}</span></sc-if>
+                <sc-if value="{{ f.hasSt }}"><span style="width:12px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:{{ f.stColor }}">{{ f.st }}</span></sc-if>
+                <sc-if value="{{ f.dirDot }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ f.stColor }};margin-right:3px"></span></sc-if>
+              </div>
+            </sc-for>
+            <sc-if value="{{ rTreeEmpty }}"><div style="padding:14px 12px;font-size:12px;color:#878a98">Nenhuma alteração nesta worktree.</div></sc-if>
+          </div>
+          <sc-if value="{{ rHasFile }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:1 1 0;min-height:0;display:flex;flex-direction:column;border-top:1px solid #464b57;background:#282c33">
+              <div style="height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;border-bottom:1px solid #363c46;background:#2f343e">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:{{ rFileStColor }}">{{ rFileSt }}</span>
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#dce0e5">{{ rFilePath }}</span>
+                <sc-if value="{{ rFileHasCounts }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a1c181">{{ rFileAdd }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#d07277">{{ rFileDel }}</span></sc-if>
+                <button onClick="{{ rCloseFile }}" title="Fechar diff" style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:transparent;color:#a9afbc;cursor:pointer" style-hover="background:#363c46;color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2 2 8" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg></button>
+              </div>
+              <div class="hive-scroll" style="flex:1;min-height:0;overflow:auto;padding:4px 0;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:18px">
+                <sc-for list="{{ rDiff }}" as="d">
+                  <div style="display:flex;min-width:max-content;background:{{ d.bg }}">
+                    <span style="width:32px;flex:none;text-align:right;color:#5d636f;padding-right:6px;box-sizing:border-box">{{ d.o }}</span>
+                    <span style="width:32px;flex:none;text-align:right;color:#5d636f;padding-right:6px;box-sizing:border-box">{{ d.n }}</span>
+                    <span style="width:14px;flex:none;color:{{ d.c }}">{{ d.sign }}</span>
+                    <span style="white-space:pre;color:{{ d.c }};padding-right:12px">{{ d.t }}</span>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ rNoDiff }}"><div style="padding:10px 12px;font-family:'IBM Plex Sans',sans-serif;font-size:12px;color:#878a98">Sem alterações neste arquivo.</div></sc-if>
+              </div>
+            </div>
+          </sc-if>
+        </sc-if>
+        <sc-if value="{{ rNoWt }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:12px;color:#878a98;padding:0 24px;text-align:center">Selecione um projeto ou agente para ver os arquivos.</div>
+        </sc-if>
+      </div>
+    </sc-if>
+  </div>
+
+  <div style="height:24px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#3b414d;border-top:1px solid #464b57;font-size:12px;color:#a9afbc;user-select:none">
+    <div title="Distribuição WSL conectada" style="display:flex;align-items:center;gap:6px">
+      <span style="width:7px;height:7px;border-radius:50%;background:#a1c181"></span>
+      <span>WSL: Ubuntu</span>
+      <span style="color:#878a98">conectado</span>
+    </div>
+    <span>{{ activeLabel }}</span>
+  </div>
+
+  <sc-if value="{{ modalOpen }}" hint-placeholder-val="{{ false }}">
+    <div onMouseDown="{{ onBackdrop }}" style="position:absolute;inset:0;z-index:40;background:rgba(18,20,24,0.55);display:flex;align-items:flex-start;justify-content:center;padding-top:120px">
+      <div ref="{{ modalRef }}" onMouseDown="{{ stop }}" onKeyDown="{{ onModalKey }}" role="dialog" aria-label="Nova worktree" style="width:520px;background:#2f343e;border:1px solid #464b57;border-radius:8px;box-shadow:0 16px 40px rgba(0,0,0,0.45);display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;height:42px;padding:0 10px 0 16px;border-bottom:1px solid #363c46">
+          <span style="font-size:13px;font-weight:600;color:#dce0e5">Nova worktree</span>
+          <button onClick="{{ closeModal }}" data-role="cancel" tabindex="-1" title="Fechar (Esc)" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:transparent;color:#a9afbc;cursor:pointer" style-hover="background:#363c46;color:#dce0e5"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2 2 8" stroke="currentColor" style="stroke-width:1.2;stroke-linecap:round"></path></svg></button>
+        </div>
+        <div style="padding:14px 16px 16px;display:flex;flex-direction:column;gap:14px">
+
+          <label style="display:flex;flex-direction:column;gap:6px">
+            <span style="font-size:12px;color:#a9afbc">Projeto</span>
+            <div style="position:relative;display:flex">
+              <select data-role="select" value="{{ mProject }}" onChange="{{ onMProject }}" style="flex:1;appearance:none;-webkit-appearance:none;height:30px;padding:0 30px 0 10px;background:#282c33;border:1px solid #464b57;border-radius:4px;color:#dce0e5;font:inherit;font-size:13px;outline:none;cursor:pointer" style-focus="border-color:#47679e;box-shadow:0 0 0 1px #47679e">
+                <sc-for list="{{ mProjects }}" as="o"><option value="{{ o.id }}">{{ o.name }}</option></sc-for>
+              </select>
+              <svg width="10" height="10" viewBox="0 0 10 10" style="position:absolute;right:11px;top:10px;pointer-events:none"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="#a9afbc" style="stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round"></path></svg>
+            </div>
+          </label>
+
+          <label style="display:flex;flex-direction:column;gap:6px">
+            <span style="font-size:12px;color:#a9afbc">Nome da worktree</span>
+            <input ref="{{ nameRef }}" value="{{ mName }}" onChange="{{ onMName }}" placeholder="ex.: fix-carrinho" spellcheck="false" aria-invalid="{{ mInvalid }}" style="height:30px;padding:0 10px;background:#282c33;border:1px solid {{ mNameBorder }};border-radius:4px;color:#dce0e5;font-family:'IBM Plex Mono',monospace;font-size:12.5px;outline:none;box-shadow:{{ mNameShadow }}" style-focus="border-color:{{ mNameFocus }};box-shadow:0 0 0 1px {{ mNameFocus }}">
+            <sc-if value="{{ mHasErr }}" hint-placeholder-val="{{ false }}">
+              <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#d07277"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="#d07277"></circle><path d="M6 3.4v3.2" stroke="#282c33" style="stroke-width:1.4;stroke-linecap:round"></path><circle cx="6" cy="8.5" r=".8" fill="#282c33"></circle></svg>{{ mErr }}</span>
+            </sc-if>
+          </label>
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <span style="font-size:12px;color:#a9afbc">Branch de origem</span>
+            <div style="border:1px solid #464b57;border-radius:4px;background:#282c33;overflow:hidden" style-focus-within="border-color:#47679e">
+              <div style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border-bottom:1px solid #363c46">
+                <svg width="12" height="12" viewBox="0 0 14 14"><circle cx="6" cy="6" r="4" fill="none" stroke="#878a98" style="stroke-width:1.2"></circle><path d="M9 9l3 3" stroke="#878a98" style="stroke-width:1.2;stroke-linecap:round"></path></svg>
+                <input value="{{ mQ }}" onChange="{{ onMQ }}" onKeyDown="{{ onMQKey }}" placeholder="Filtrar branches locais e remotas" spellcheck="false" style="flex:1;height:28px;border:0;outline:none;background:transparent;color:#dce0e5;font:inherit;font-size:12.5px">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;padding:0 4px;border:1px solid #464b57;border-radius:3px;color:#878a98">↑↓</span>
+              </div>
+              <div class="hive-scroll" style="height:156px;overflow-y:auto;padding:3px">
+                <sc-for list="{{ mBranches }}" as="bi" hint-placeholder-count="5">
+                  <sc-if value="{{ bi.isHead }}"><div style="height:22px;display:flex;align-items:center;padding:0 8px;font-size:11px;color:#878a98">{{ bi.label }}</div></sc-if>
+                  <sc-if value="{{ bi.isItem }}">
+                    <div onClick="{{ bi.onClick }}" style="display:flex;align-items:center;gap:8px;height:24px;padding:0 8px;border-radius:3px;background:{{ bi.bg }};cursor:default">
+                      <svg width="12" height="12" viewBox="0 0 12 12" style="flex:none"><circle cx="3.2" cy="2.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="3.2" cy="9.4" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><circle cx="8.8" cy="3.6" r="1.35" fill="none" stroke="#878a98" style="stroke-width:1.1"></circle><path d="M3.2 4v4M8.8 5c0 2.2-5.6 1.4-5.6 3" fill="none" stroke="#878a98" style="stroke-width:1.1"></path></svg>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#dce0e5">{{ bi.name }}</span>
+                      <sc-if value="{{ bi.isDefault }}"><span style="font-size:11px;color:#878a98">principal</span></sc-if>
+                      <span style="flex:1"></span>
+                      <svg width="12" height="12" viewBox="0 0 12 12" style="opacity:{{ bi.checkOp }}"><path d="M2.5 6.3 4.8 8.5 9.5 3.5" fill="none" stroke="#dce0e5" style="stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round"></path></svg>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ bi.isEmpty }}"><div style="padding:8px;font-size:12px;color:#878a98">Nenhuma branch encontrada</div></sc-if>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <button onClick="{{ onMCheck }}" data-role="check" role="checkbox" aria-checked="{{ mOpenTerm }}" style="display:flex;align-items:center;gap:8px;align-self:flex-start;padding:2px 4px 2px 0;border:0;background:transparent;color:#dce0e5;font:inherit;font-size:13px;cursor:pointer;outline:none;border-radius:4px" style-focus="box-shadow:0 0 0 1px #47679e">
+            <span style="width:14px;height:14px;border-radius:3px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:{{ mCheckBg }};border:1px solid {{ mCheckBorder }}">
+              <svg width="10" height="10" viewBox="0 0 10 10" style="opacity:{{ mCheckOp }}"><path d="M2 5.2 4 7.2 8 3" fill="none" stroke="#1f2329" style="stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round"></path></svg>
+            </span>
+            Abrir terminal na nova worktree
+          </button>
+
+          <div style="background:#282c33;border:1px solid #363c46;border-radius:4px;padding:8px 10px;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:19px;white-space:pre">
+            <div><span style="color:#878a98">Pasta:  </span><span style="color:#dce0e5">{{ mFolder }}</span></div>
+            <div><span style="color:#878a98">Branch: </span><span style="color:#dce0e5">{{ mBranchName }}</span><span style="color:#878a98">   (a partir de {{ mFrom }})</span></div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #363c46">
+          <button onClick="{{ closeModal }}" data-role="cancel" style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px 0 10px;border:1px solid #464b57;border-radius:4px;background:#363c46;color:#dce0e5;font:inherit;font-size:12.5px;cursor:pointer;outline:none" style-hover="background:#454a56" style-focus="border-color:#47679e;box-shadow:0 0 0 1px #47679e">
+            Cancelar<span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:14px;padding:0 4px;border:1px solid #5d636f;border-radius:3px;color:#a9afbc">Esc</span>
+          </button>
+          <button onClick="{{ submitModal }}" data-role="submit" aria-disabled="{{ mDisabled }}" style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px 0 10px;border:0;border-radius:4px;background:{{ mSubmitBg }};color:{{ mSubmitColor }};font:inherit;font-size:12.5px;font-weight:500;cursor:{{ mSubmitCursor }};outline:none" style-focus="box-shadow:0 0 0 2px #2f343e, 0 0 0 3px #74ade8">
+            Criar worktree<span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:14px;padding:0 4px;border:1px solid {{ mSubmitKbd }};border-radius:3px">Enter</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;scene&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;principal&quot;,&quot;permissao&quot;,&quot;arquivos&quot;,&quot;modal&quot;,&quot;modal-erro&quot;,&quot;vazio&quot;],&quot;default&quot;:&quot;principal&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;showSince&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+const ST = {
+  perm: { label: 'aguardando permissão', color: '#dec184', alert: true },
+  erro: { label: 'erro', color: '#d07277', alert: true },
+  voce: { label: 'aguardando você', color: '#e08a5a' },
+  trab: { label: 'trabalhando', color: '#74ade8' },
+  sub: { label: 'com subagentes', color: '#b477cf' },
+  ocioso: { label: 'ocioso', color: '#a1c181' },
+  fim: { label: 'encerrado', color: '#878a98' }
+};
+const ORDER = ['perm', 'erro', 'voce', 'trab', 'sub', 'ocioso', 'fim'];
+const T = { fg: '#dce0e5', dim: '#878a98', green: '#a1c181', red: '#d07277', yellow: '#dec184', blue: '#74ade8', magenta: '#b477cf', orange: '#e08a5a' };
+const BR = {
+  loja: { local: ['main', 'develop', 'fix-login', 'feat-checkout'], remote: ['origin/main', 'origin/develop', 'origin/release/2.4', 'origin/feat-cupom', 'origin/fix-frete-sul'] },
+  api: { local: ['main', 'refactor-auth'], remote: ['origin/main', 'origin/v2-legacy', 'origin/feat-webhooks'] },
+  dot: { local: ['main'], remote: ['origin/main'] }
+};
+const BASE = {
+  loja: ['.gitignore', 'package.json', 'tsconfig.json', 'README.md', 'config/frete.json', 'src/App.tsx', 'src/auth/constants.ts', 'src/auth/login.ts', 'src/auth/session.ts', 'src/auth/store.ts', 'src/checkout/Cart.tsx', 'src/checkout/CheckoutSummary.tsx', 'src/components/Button.tsx', 'src/components/Header.tsx', 'test/auth/login.test.ts', 'test/checkout/cart.test.ts'],
+  api: ['.gitignore', 'package.json', 'tsconfig.json', 'README.md', 'docs/api.md', 'src/server.ts', 'src/db/queries/pedidos.sql', 'src/legacy/jwt.ts', 'src/middleware/auth.ts', 'src/routes/clientes.ts', 'src/routes/pedidos.ts', 'test/routes/pedidos.test.ts'],
+  dot: ['.gitconfig', '.zshrc', 'nvim/init.lua', 'tmux.conf']
+};
+const h = (t) => ['h', null, null, t];
+const c = (o, n, t) => [' ', o, n, t];
+const a = (n, t) => ['+', null, n, t];
+const r = (o, t) => ['-', o, null, t];
+const more = (t) => ['n', null, null, t];
+const CHANGES = {
+  'loja-fix-login': {
+    'src/auth/session.ts': { st: 'M', add: 3, del: 1, diff: [h('@@ -36,7 +36,9 @@ import { store } from "./store";'), c(36, 36, ''), c(37, 37, '// Cria a sessão e grava no store'), c(38, 38, 'export function createSession(user: User, opts: SessionOptions) {'), r(39, '  const ttl = SESSION_TTL;'), a(39, '  const ttl = opts.rememberMe'), a(40, '    ? REMEMBER_ME_TTL // 30 dias'), a(41, '    : SESSION_TTL;'), c(40, 42, '  return store.set(user.id, { ttl, createdAt: Date.now() });'), c(41, 43, '}')] },
+    'src/auth/constants.ts': { st: 'M', add: 1, del: 0, diff: [h('@@ -1,2 +1,3 @@'), c(1, 1, 'export const SESSION_TTL = 5 * 60;'), a(2, 'export const REMEMBER_ME_TTL = 30 * 24 * 60 * 60;'), c(2, 3, 'export const COOKIE_NAME = "loja_sid";')] }
+  },
+  'loja-feat-checkout': {
+    'src/checkout/frete.ts': { st: 'A', add: 42, del: 0, diff: [h('@@ -0,0 +1,42 @@'), a(1, 'import faixas from "../../config/frete.json";'), a(2, ''), a(3, 'export function calcularFrete(cep: string, pesoKg: number): number {'), a(4, '  const faixa = faixas.find((f) => cep >= f.inicio && cep <= f.fim);'), a(5, '  if (!faixa) throw new Error(`CEP fora da área de entrega: ${cep}`);'), a(6, '  const excedente = Math.max(0, pesoKg - faixa.pesoBase);'), a(7, '  return faixa.valorBase + excedente * faixa.valorPorKg;'), a(8, '}'), more('… +34 linhas')] },
+    'src/checkout/CheckoutSummary.tsx': { st: 'M', add: 6, del: 2, diff: [h('@@ -12,9 +12,13 @@ export function CheckoutSummary({ pedido }: Props) {'), c(12, 12, '  const subtotal = somarItens(pedido.itens);'), r(13, '  const frete = 0;'), r(14, '  const total = subtotal;'), a(13, '  const frete = calcularFrete('), a(14, '    pedido.endereco.cep,'), a(15, '    pesoTotal(pedido.itens),'), a(16, '  );'), a(17, '  const total = subtotal + frete;'), c(15, 18, ''), c(16, 19, '  return ('), a(20, '      <Linha rotulo="Frete" valor={frete} />'), c(17, 21, '      <Linha rotulo="Total" valor={total} destaque />')] }
+  },
+  'api-main': {
+    'src/routes/pedidos.ts': { st: 'M', add: 18, del: 5, diff: [h('@@ -8,11 +8,24 @@ const router = Router();'), c(8, 8, 'router.get("/pedidos", async (req, res) => {'), r(9, '  const page = Number(req.query.page ?? 1);'), r(10, '  const offset = (page - 1) * LIMITE;'), r(11, '  const pedidos = await db.pedidos.listar({ offset, limite: LIMITE });'), a(9, '  const cursor = req.query.cursor as string | undefined;'), a(10, '  const pedidos = await db.pedidos.listarApos({'), a(11, '    cursor: cursor ? decodificar(cursor) : null,'), a(12, '    limite: LIMITE + 1,'), a(13, '  });'), a(14, '  const temMais = pedidos.length > LIMITE;'), a(15, '  const pagina = pedidos.slice(0, LIMITE);'), more('… +11 linhas')] },
+    'test/routes/pedidos.test.ts': { st: 'M', add: 22, del: 0, diff: [h('@@ -41,3 +41,25 @@'), c(41, 41, '});'), c(42, 42, ''), a(43, 'describe("GET /pedidos com cursor", () => {'), a(44, '  it("retorna nextCursor quando há mais itens", async () => {'), a(45, '    const res = await api.get("/pedidos?limite=2");'), a(46, '    expect(res.body.nextCursor).toBeDefined();'), a(47, '  });'), more('… +17 linhas')] },
+    'docs/api.md': { st: 'M', add: 4, del: 2, diff: [h('@@ -22,5 +22,7 @@ ## GET /pedidos'), r(22, '| page | number | Página, começando em 1 |'), r(23, '| limite | number | Itens por página |'), a(22, '| cursor | string | Cursor retornado em nextCursor |'), a(23, '| limite | number | Itens por página (máx. 100) |'), a(24, ''), a(25, 'A resposta inclui `nextCursor` quando há mais resultados.')] }
+  },
+  'api-refactor-auth': {
+    'src/middleware/auth.ts': { st: 'M', add: 21, del: 17, diff: [h('@@ -1,12 +1,16 @@'), r(1, 'import jwt from "express-jwt";'), a(1, 'import { jwtVerify } from "jose";'), c(2, 2, 'import type { Request, Response, NextFunction } from "express";'), c(3, 3, ''), r(4, 'export const auth = jwt({ secret: process.env.JWT_SECRET, algorithms: ["HS256"] });'), a(4, 'const secret = new TextEncoder().encode(process.env.JWT_SECRET);'), a(5, ''), a(6, 'export async function auth(req: Request, res: Response, next: NextFunction) {'), a(7, '  const token = req.headers.authorization?.replace("Bearer ", "");'), a(8, '  if (!token) return res.status(401).end();'), more('… +30 linhas')] },
+    'package.json': { st: 'M', add: 1, del: 1, diff: [h('@@ -14,7 +14,7 @@ "dependencies": {'), c(14, 14, '    "express": "^4.19.2",'), r(15, '    "express-jwt": "^8.4.1",'), a(15, '    "jose": "^5.6.3",'), c(16, 16, '    "pg": "^8.12.0",')] },
+    'src/legacy/jwt.ts': { st: 'D', add: 0, del: 30, diff: [h('@@ -1,30 +0,0 @@'), r(1, '// Wrapper antigo, substituído por jose'), r(2, 'import jwt from "jsonwebtoken";'), r(3, ''), r(4, 'export function verificar(token: string) {'), more('… −26 linhas')] }
+  },
+  'dot-main': {
+    '.zshrc': { st: 'M', add: 1, del: 1, diff: [h('@@ -40,5 +40,5 @@'), c(40, 40, 'alias gl="git log --oneline --graph"'), c(41, 41, 'alias gd="git diff"'), r(42, 'alias gs="git status"'), a(42, 'alias gs="git status -sb"'), c(43, 43, 'alias gp="git push"')] }
+  }
+};
+const GIT = { M: { color: '#dec184', rank: 1 }, A: { color: '#a1c181', rank: 2 }, D: { color: '#d07277', rank: 3 } };
+function seed() {
+  return [
+    { id: 'loja', name: 'projeto-loja', path: '/home/usuario/projetos/loja', worktrees: [
+      { id: 'loja-main', name: 'main', agents: [] },
+      { id: 'loja-fix-login', name: 'fix-login', agents: [{ id: 'a1', state: 'sub', since: '14 min', subs: [
+        { id: 's1', name: 'testes-login', state: 'trab', since: '3 min', worktree: 'worktree-testes-login' },
+        { id: 's2', name: 'revisar-auth', state: 'fim', since: '1 min' }] }] },
+      { id: 'loja-feat-checkout', name: 'feat-checkout', agents: [{ id: 'a2', state: 'perm', since: '2 min' }] }] },
+    { id: 'api', name: 'projeto-api', path: '/home/usuario/projetos/api', worktrees: [
+      { id: 'api-main', name: 'main', agents: [{ id: 'a3', state: 'voce', since: '8 min' }] },
+      { id: 'api-refactor-auth', name: 'refactor-auth', agents: [{ id: 'a4', state: 'erro', since: '5 min' }] }] },
+    { id: 'dot', name: 'dotfiles', path: '/home/usuario/dotfiles', worktrees: [
+      { id: 'dot-main', name: 'main', agents: [{ id: 'a5', state: 'ocioso', since: '1 h' }] }] }
+  ];
+}
+function seedTabs() {
+  return [{ id: 't1', wt: 'loja-fix-login', agent: 'a1' }, { id: 't2', wt: 'loja-feat-checkout', agent: 'a2' }, { id: 't3', wt: 'api-main', agent: 'a3' }, { id: 't4', wt: 'api-refactor-auth', agent: 'a4' }];
+}
+const sg = (t, c, o) => Object.assign({ t, c: c || T.fg, w: 400, bg: 'transparent' }, o || {});
+const Bd = (t) => sg(t, T.fg, { w: 600 });
+const line = (...segs) => ({ segs: segs.map(s => typeof s === 'string' ? sg(s) : s), bg: 'transparent', cursor: 'text', onClick: null });
+const blank = () => line(' ');
+const dl = (t, k) => ({ segs: [sg(t, k === '+' ? T.green : k === '-' ? T.red : T.dim)], bg: k === '+' ? 'rgba(161,193,129,0.10)' : k === '-' ? 'rgba(208,114,119,0.10)' : 'transparent', cursor: 'text', onClick: null });
+const plain = (lines) => ({ box: false, plain: true, lines, border: 'transparent' });
+const box = (lines, border) => ({ box: true, plain: false, lines, border: border || '#4a505c' });
+const shellSegs = (path, cmd) => [sg('usuario@DESKTOP-HIVE', T.green), sg(':'), sg(path, T.blue), sg('$ ' + (cmd || ''))];
+const tool = (name, arg, dot) => line(sg('⏺ ', dot || T.green), Bd(name), sg('(' + arg + ')'));
+const res = (t, c) => line(sg('  ⎿  ' + t, c || T.dim));
+const say = (t) => line(sg('⏺ '), sg(t));
+const cont = (t) => line(sg('  ' + t));
+const user = (t) => line(sg('> ' + t, T.dim));
+const cur = () => sg(' ', T.fg, { bg: '#dce0e5' });
+const inputBox = () => box([line(sg('> ', T.dim), cur())], '#4a505c');
+const hints = (t) => plain([line(sg('  ' + (t || '? for shortcuts'), T.dim))]);
+const tilde = (p) => p.replace('/home/usuario', '~');
+
+function tFixLogin() {
+  return [
+    plain([line(...shellSegs('~/projetos/loja/.claude/worktrees/fix-login', 'claude')), blank()]),
+    box([line(sg('✻ ', T.orange), Bd('Welcome to Claude Code!')), blank(), line(sg('  /help for help, /status for your current setup', T.dim)), blank(), line(sg('  cwd: /home/usuario/projetos/loja/.claude/worktrees/fix-login', T.dim))]),
+    plain([blank(),
+      user('O login está expirando a sessão depois de 5 minutos mesmo com "lembrar de mim" marcado. Investigue e corrija, com testes.'), blank(),
+      say('Vou localizar onde a sessão é criada e como o TTL é definido.'), blank(),
+      tool('Search', 'pattern: "rememberMe", path: "src"'), res('Found 4 files'), blank(),
+      tool('Read', 'src/auth/session.ts'), res('Read 112 lines'), blank(),
+      say('O problema está em createSession: a opção rememberMe é recebida, mas ignorada,'), cont('e o TTL fica sempre em SESSION_TTL (5 min). Vou corrigir.'), blank(),
+      tool('Update', 'src/auth/session.ts'), res('Updated src/auth/session.ts with 3 additions and 1 removal'),
+      dl('       38   export function createSession(user: User, opts: SessionOptions) {', ' '),
+      dl('       39 -   const ttl = SESSION_TTL;', '-'),
+      dl('       39 +   const ttl = opts.rememberMe', '+'),
+      dl('       40 +     ? REMEMBER_ME_TTL // 30 dias', '+'),
+      dl('       41 +     : SESSION_TTL;', '+'),
+      dl('       42     return store.set(user.id, { ttl, createdAt: Date.now() });', ' '), blank(),
+      say('Correção aplicada. Vou dividir o restante entre dois subagentes: um escreve os'), cont('testes numa worktree separada e o outro revisa o fluxo de autenticação.'), blank(),
+      tool('Task', 'testes-login', T.blue), res('Escrever testes de createSession com e sem rememberMe'), line(sg('     '), sg('Running… ', T.blue), sg('worktree-testes-login · 7 tool uses · 3m 02s', T.dim)), blank(),
+      tool('Task', 'revisar-auth', T.dim), res('Done (6 tool uses · 18.4k tokens · 2m 41s)'), line(sg('     Nenhum outro uso de SESSION_TTL em src/auth/. Sugere invalidar sessões antigas no deploy.', T.dim)), blank(),
+      line(sg('✻ ', T.orange), sg('Aguardando subagentes… ', T.orange), sg('(14m 18s · ↓ 9.1k tokens · esc to interrupt)', T.dim)), blank()]),
+    inputBox(), hints()
+  ];
+}
+function tCheckout(ctx) {
+  const head = plain([line(...shellSegs('~/projetos/loja/.claude/worktrees/feat-checkout', 'claude')), blank(),
+    user('Implemente o cálculo de frete no checkout usando a tabela de faixas em config/frete.json.'), blank(),
+    tool('Read', 'config/frete.json'), res('Read 36 lines'), blank(),
+    tool('Read', 'src/checkout/CheckoutSummary.tsx'), res('Read 148 lines'), blank(),
+    tool('Write', 'src/checkout/frete.ts'), res('Wrote 42 lines to src/checkout/frete.ts'),
+    dl('        1 import faixas from "../../config/frete.json";', ' '),
+    dl('        2 ', ' '),
+    dl('        3 export function calcularFrete(cep: string, pesoKg: number): number {', ' '),
+    dl('        4   const faixa = faixas.find((f) => cep >= f.inicio && cep <= f.fim);', ' '),
+    line(sg('       … +38 lines (ctrl+r to expand)', T.dim)), blank(),
+    tool('Update', 'src/checkout/CheckoutSummary.tsx'), res('Updated src/checkout/CheckoutSummary.tsx with 6 additions and 2 removals'), blank(),
+    say('Cálculo de frete implementado e integrado ao resumo do pedido.'), cont('Vou rodar a suíte de testes do checkout para validar.'), blank()]);
+  if (ctx.done === null) {
+    const opts = ['1. Yes', "2. Yes, and don't ask again for npm test commands in /home/usuario/projetos/loja", '3. No, and tell Claude what to do differently (esc)'];
+    const optLines = opts.map((t, i) => {
+      const on = i === ctx.choice;
+      const l = line(sg(on ? '❯ ' : '  ', T.blue), sg(t, on ? T.blue : T.fg));
+      l.cursor = 'pointer'; l.onClick = () => ctx.resolve(i);
+      return l;
+    });
+    return [head, box([line(sg('Bash command', T.yellow, { w: 600 })), blank(), line(sg('  npm test -- checkout')), line(sg('  Roda a suíte de testes do checkout', T.dim)), blank(), line(sg('Do you want to proceed?')), ...optLines], '#dec184')];
+  }
+  if (ctx.done === 2) {
+    return [head, plain([tool('Bash', 'npm test -- checkout', T.dim), res('No (tell Claude what to do differently)'), blank()]), inputBox(), hints()];
+  }
+  return [head, plain([tool('Bash', 'npm test -- checkout', T.blue), res('Running…', T.blue), blank(), line(sg('✻ ', T.orange), sg('Rodando testes… ', T.orange), sg('(3s · esc to interrupt)', T.dim)), blank()]), inputBox(), hints()];
+}
+function tApi() {
+  return [
+    plain([line(...shellSegs('~/projetos/api', 'claude')), blank(),
+      user('Adicione paginação por cursor no endpoint GET /pedidos.'), blank(),
+      tool('Read', 'src/routes/pedidos.ts'), res('Read 87 lines'), blank(),
+      tool('Read', 'src/db/queries/pedidos.sql'), res('Read 24 lines'), blank(),
+      tool('Update', 'src/routes/pedidos.ts'), res('Updated src/routes/pedidos.ts with 18 additions and 5 removals'), blank(),
+      tool('Bash', 'npm test -- pedidos'), res('PASS  test/routes/pedidos.test.ts (12 tests) 1.84s', T.green), blank(),
+      say('Paginação por cursor implementada e testes passando.'), blank(),
+      cont('Antes de seguir, preciso de uma decisão: o parâmetro antigo ?page= ainda é usado'),
+      cont('pelo app mobile 2.3. Prefere que eu mantenha compatibilidade (convertendo page em'),
+      cont('cursor) ou que remova o parâmetro e registre a mudança no CHANGELOG?'), blank()]),
+    inputBox(), hints()
+  ];
+}
+function tRefactor() {
+  return [
+    plain([line(...shellSegs('~/projetos/api/.claude/worktrees/refactor-auth', 'claude')), blank(),
+      user('Migre o middleware de auth de express-jwt para jose, mantendo as mesmas claims.'), blank(),
+      tool('Read', 'src/middleware/auth.ts'), res('Read 64 lines'), blank(),
+      tool('Update', 'src/middleware/auth.ts'), res('Updated src/middleware/auth.ts with 21 additions and 17 removals'), blank(),
+      tool('Bash', 'npx tsc --noEmit', T.red),
+      res("src/middleware/auth.ts(27,31): error TS2345: Argument of type 'string | undefined'", T.red),
+      line(sg("     is not assignable to parameter of type 'string'.", T.red)), blank(),
+      say('O segredo pode vir undefined. Vou validar JWT_SECRET na inicialização do servidor.'), blank(),
+      line(sg('⏺ ', T.red), sg('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', T.red)),
+      res('Retried 10 times. Send a message to try again.'), blank()]),
+    inputBox(), hints()
+  ];
+}
+function tDot() {
+  return [
+    plain([line(...shellSegs('~/dotfiles', 'claude')), blank(),
+      user('Troque o alias gs para git status -sb e recarregue o zshrc.'), blank(),
+      tool('Update', '.zshrc'), res('Updated .zshrc with 1 addition and 1 removal'),
+      dl('       42 - alias gs="git status"', '-'), dl('       42 + alias gs="git status -sb"', '+'), blank(),
+      say('Pronto. Rode source ~/.zshrc ou abra um novo terminal para aplicar.'), blank()]),
+    inputBox(), hints()
+  ];
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = this.initial((props && props.scene) || 'principal');
+    this.rootRef = React.createRef(); this.termRef = React.createRef(); this.nameRef = React.createRef();
+    this.pickRef = React.createRef(); this.sideRef = React.createRef(); this.modalRef = React.createRef();
+  }
+  initial(scene) {
+    const s = { projects: seed(), collapsed: { dot: true }, sel: 'a1', activeTab: 't1', tabs: seedTabs(), hover: null, hoverTab: null, sideW: 264, sideFocus: false, rightOpen: false, picker: null, modal: null, permChoice: 0, permDone: null, rFile: null, rOnlyChanged: false, rCollapsed: {} };
+    if (scene === 'permissao') { s.sel = 'a2'; s.activeTab = 't2'; }
+    if (scene === 'arquivos') { s.rightOpen = true; s.rFile = { wt: 'loja-fix-login', path: 'src/auth/session.ts' }; s.rCollapsed = { 'loja-fix-login:src/checkout': true, 'loja-fix-login:src/components': true }; }
+    if (scene === 'modal') { s.modal = { pid: 'loja', name: 'fix-carrinho', q: '', branch: 'main', openTerm: true }; }
+    if (scene === 'modal-erro') { s.modal = { pid: 'loja', name: 'fix-login', q: '', branch: 'main', openTerm: true }; }
+    if (scene === 'vazio') { s.projects = []; s.tabs = []; s.sel = null; s.activeTab = null; }
+    return s;
+  }
+  componentDidMount() { this.scrollBottom(); }
+  componentDidUpdate(pp, ps) {
+    if (pp.scene !== this.props.scene) { this.setState(this.initial(this.props.scene || 'principal')); return; }
+    if (ps.activeTab !== this.state.activeTab || ps.permDone !== this.state.permDone) this.scrollBottom();
+    if (!ps.modal && this.state.modal && this.nameRef.current) this.nameRef.current.focus();
+    if (!ps.picker && this.state.picker && this.pickRef.current) this.pickRef.current.focus();
+  }
+  scrollBottom() { requestAnimationFrame(() => { const el = this.termRef.current; if (el) el.scrollTop = el.scrollHeight; }); }
+
+  idx() {
+    const m = {};
+    for (const p of this.state.projects) { m[p.id] = { kind: 'p', p };
+      for (const w of p.worktrees) { m[w.id] = { kind: 'w', p, w };
+        for (const a of w.agents) { m[a.id] = { kind: 'a', p, w, a };
+          for (const s of a.subs || []) m[s.id] = { kind: 's', p, w, a, s }; } } }
+    return m;
+  }
+  wtStates(w) { const r = []; for (const a of w.agents) { r.push(a.state); for (const s of a.subs || []) r.push(s.state); } return r; }
+  top(list) { let b = null; for (const s of list) if (b === null || ORDER.indexOf(s) < ORDER.indexOf(b)) b = s; return b; }
+  wtPath(p, w) { return w.name === 'main' ? p.path : p.path + '/.claude/worktrees/' + w.name; }
+  pendingIds() {
+    const out = [];
+    for (const p of this.state.projects) for (const w of p.worktrees) for (const a of w.agents) {
+      if (ST[a.state].alert) out.push(a.id);
+      for (const s of a.subs || []) if (ST[s.state].alert) out.push(s.id);
+    }
+    return out;
+  }
+  select(id) {
+    const e = this.idx()[id]; if (!e) return;
+    const st = { sel: id };
+    const agentId = e.kind === 'a' || e.kind === 's' ? e.a.id : null;
+    if (e.w) {
+      let tab = this.state.tabs.find(t => agentId ? t.agent === agentId : t.wt === e.w.id);
+      if (!tab && e.kind === 'w' && e.w.agents[0]) tab = this.state.tabs.find(t => t.agent === e.w.agents[0].id);
+      if (tab) st.activeTab = tab.id;
+      else if (agentId) { const nt = { id: 't' + Date.now(), wt: e.w.id, agent: agentId }; st.tabs = [...this.state.tabs, nt]; st.activeTab = nt.id; }
+    }
+    this.setState(st);
+  }
+  toggle(id) { this.setState(s => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } })); }
+  jumpPending() {
+    const ids = this.pendingIds(); if (!ids.length) return;
+    const i = ids.indexOf(this.state.sel); const next = ids[(i + 1) % ids.length];
+    const e = this.idx()[next];
+    this.setState(s => ({ collapsed: { ...s.collapsed, [e.p.id]: false, [e.w.id]: false } }), () => this.select(next));
+  }
+  curProject() { const e = this.idx()[this.state.sel]; return e ? e.p.id : (this.state.projects[0] || {}).id; }
+  openModal(pid) { if (!pid) return; this.setState({ modal: { pid, name: '', q: '', branch: 'main', openTerm: true }, picker: null }); }
+  closeModal() { this.setState({ modal: null }, () => this.rootRef.current && this.rootRef.current.focus()); }
+  setModal(patch) { this.setState(s => ({ modal: { ...s.modal, ...patch } })); }
+  resolvePerm(i) {
+    this.setState(s => ({ permDone: i, projects: s.projects.map(p => ({ ...p, worktrees: p.worktrees.map(w => ({ ...w, agents: w.agents.map(a => a.id === 'a2' ? { ...a, state: i === 2 ? 'voce' : 'trab', since: 'agora' } : a) })) })) }));
+  }
+  newShellTab(wtId) {
+    const t = { id: 't' + Date.now(), wt: wtId, agent: null };
+    this.setState(s => ({ tabs: [...s.tabs, t], activeTab: t.id, picker: null, sel: wtId }), () => this.termRef.current && this.termRef.current.focus());
+  }
+  closeTab(id) {
+    this.setState(s => {
+      const i = s.tabs.findIndex(t => t.id === id); const tabs = s.tabs.filter(t => t.id !== id);
+      let at = s.activeTab; if (at === id) at = tabs.length ? tabs[Math.min(i, tabs.length - 1)].id : null;
+      return { tabs, activeTab: at };
+    });
+  }
+
+  rows() {
+    const { projects, collapsed, sel, hover, sideFocus } = this.state;
+    const showSince = this.props.showSince ?? true;
+    const rows = [];
+    const bg = (id) => sel === id ? '#454a56' : hover === id ? '#363c46' : 'transparent';
+    const ring = (id) => sel === id && sideFocus ? 'inset 0 0 0 1px #47679e' : 'none';
+    const base = (id, x) => Object.assign({ id, key: id, bg: bg(id), ring: ring(id), onClick: () => this.select(id), onEnter: () => { if (this.state.hover !== id) this.setState({ hover: id }); }, isProject: false, isWt: false, isAgent: false, isSub: false, isSubWt: false, showSince, path: '' }, x);
+    projects.forEach((p, pi) => {
+      const pc = !!collapsed[p.id]; const all = p.worktrees.flatMap(w => this.wtStates(w)); const t = this.top(all); const al = all.filter(s => ST[s].alert);
+      rows.push(base(p.id, { isProject: true, label: p.name, path: p.path, gapTop: pi ? '4px' : '0px', chevRot: pc ? 0 : 90, onToggle: (e) => { e.stopPropagation(); this.toggle(p.id); },
+        showProp: pc && !!t && !ST[t].alert, propState: t || 'fim', alert: al.length > 0, alertColor: al.length ? ST[this.top(al)].color : 'transparent',
+        showNewWt: hover === p.id, onNewWt: (e) => { e.stopPropagation(); this.openModal(p.id); } }));
+      if (pc) return;
+      for (const w of p.worktrees) {
+        const wc = !!collapsed[w.id]; const ws = this.wtStates(w); const wt = this.top(ws); const has = w.agents.length > 0; const wa = ws.filter(s => ST[s].alert);
+        rows.push(base(w.id, { isWt: true, label: w.name, path: this.wtPath(p, w), chevOp: has ? 1 : 0, chevRot: wc ? 0 : 90, onToggle: (e) => { e.stopPropagation(); if (has) this.toggle(w.id); },
+          showProp: wc && has && !(wt && ST[wt].alert), propState: wt || 'fim', alert: wc && wa.length > 0, alertColor: wa.length ? ST[this.top(wa)].color : 'transparent' }));
+        if (wc) continue;
+        for (const a of w.agents) {
+          rows.push(base(a.id, { isAgent: true, state: a.state, stateLabel: ST[a.state].label, labelColor: ST[a.state].alert ? ST[a.state].color : '#a9afbc', since: a.since, alert: !!ST[a.state].alert, alertColor: ST[a.state].color }));
+          const subs = a.subs || [];
+          subs.forEach((s, i) => {
+            const last = i === subs.length - 1;
+            rows.push(base(s.id, { isSub: true, label: s.name, state: s.state, stateLabel: ST[s.state].label, labelColor: '#a9afbc', since: s.since, vH: last ? '12px' : '100%' }));
+            if (s.worktree) rows.push(base(s.id + '-wt', { isSubWt: true, label: s.worktree, path: p.path + '/.claude/worktrees/' + s.worktree, vH: last ? '0px' : '100%', onClick: () => this.select(s.id) }));
+          });
+        }
+      }
+    });
+    return rows;
+  }
+  onSideKey(e) {
+    const rows = this.rows().filter(r => !r.isSubWt); const i = rows.findIndex(r => r.id === this.state.sel);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); const n = rows[Math.max(0, Math.min(rows.length - 1, i < 0 ? 0 : i + (e.key === 'ArrowDown' ? 1 : -1)))]; if (n) this.select(n.id);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const r = rows[i]; if (r && (r.isProject || (r.isWt && r.chevOp))) { e.preventDefault(); this.setState(s => ({ collapsed: { ...s.collapsed, [r.id]: e.key === 'ArrowLeft' } })); }
+    } else if (e.key === 'Enter') { e.preventDefault(); this.termRef.current && this.termRef.current.focus(); }
+  }
+  onKey(e) {
+    if (this.state.modal || this.state.picker) return;
+    if (e.altKey && e.code === 'KeyT') { e.preventDefault(); if (this.state.projects.length) this.setState({ picker: { q: '', sel: 0 } }); }
+    else if (e.altKey && e.code === 'KeyN') { e.preventDefault(); this.openModal(this.curProject()); }
+    else if (e.altKey && e.code === 'KeyB') { e.preventDefault(); this.setState(s => ({ rightOpen: !s.rightOpen })); }
+    else if (e.key === 'F8') { e.preventDefault(); this.jumpPending(); }
+  }
+  onTermKey(e) {
+    const tab = this.state.tabs.find(t => t.id === this.state.activeTab); const a = this.idx().a2;
+    if (!tab || tab.agent !== 'a2' || this.state.permDone !== null || !a || a.a.state !== 'perm') return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(s => ({ permChoice: Math.min(2, s.permChoice + 1) })); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(s => ({ permChoice: Math.max(0, s.permChoice - 1) })); }
+    else if (e.key === 'Enter') { e.preventDefault(); this.resolvePerm(this.state.permChoice); }
+    else if (['1', '2', '3'].includes(e.key)) this.resolvePerm(+e.key - 1);
+    else if (e.key === 'Escape') this.resolvePerm(2);
+  }
+  pickList() {
+    const q = ((this.state.picker && this.state.picker.q) || '').toLowerCase(); const out = [];
+    for (const p of this.state.projects) for (const w of p.worktrees) {
+      if (q && !(w.name + ' ' + p.name).toLowerCase().includes(q)) continue;
+      const t = this.top(this.wtStates(w));
+      out.push({ wt: w.id, name: w.name, project: p.name, path: tilde(this.wtPath(p, w)), state: t || 'fim', hasState: !!t, noState: !t });
+    }
+    return out;
+  }
+  onPickKey(e) {
+    const list = this.pickList(); const sel = this.state.picker.sel;
+    if (e.key === 'Escape') { e.preventDefault(); this.setState({ picker: null }); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(s => ({ picker: { ...s.picker, sel: Math.min(list.length - 1, sel + 1) } })); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(s => ({ picker: { ...s.picker, sel: Math.max(0, sel - 1) } })); }
+    else if (e.key === 'Enter') { e.preventDefault(); const it = list[sel]; if (it) this.newShellTab(it.wt); }
+  }
+  modalCalc() {
+    const m = this.state.modal; const p = this.state.projects.find(x => x.id === m.pid) || this.state.projects[0];
+    const name = m.name.trim(); let err = null;
+    if (name && !/^[a-z0-9][a-z0-9._-]*$/.test(name)) err = 'Use apenas letras minúsculas, números, hífen, ponto ou sublinhado.';
+    else if (name && p.worktrees.some(w => w.name === name)) err = 'Já existe uma worktree com esse nome.';
+    const br = BR[p.id] || { local: ['main'], remote: ['origin/main'] }; const q = m.q.toLowerCase();
+    const loc = br.local.filter(b => b.includes(q)), rem = br.remote.filter(b => b.includes(q));
+    return { p, name, err, loc, rem, flat: [...loc, ...rem], canCreate: !!name && !err };
+  }
+  onMQKey(e) {
+    const { flat } = this.modalCalc(); if (!flat.length) return; const i = flat.indexOf(this.state.modal.branch);
+    if (e.key === 'ArrowDown') { e.preventDefault(); this.setModal({ branch: flat[Math.min(flat.length - 1, i + 1)] }); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this.setModal({ branch: flat[Math.max(0, i - 1)] }); }
+  }
+  onModalKey(e) {
+    e.stopPropagation();
+    if (e.key === 'Escape') { e.preventDefault(); this.closeModal(); return; }
+    if (e.key === 'Enter') { const r = e.target.getAttribute && e.target.getAttribute('data-role'); if (r === 'cancel' || r === 'check' || r === 'select') return; e.preventDefault(); this.submitModal(); return; }
+    if (e.key === 'Tab' && this.modalRef.current) {
+      const f = [...this.modalRef.current.querySelectorAll('input,select,button:not([tabindex="-1"])')];
+      const i = f.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+    }
+  }
+  submitModal() {
+    const v = this.modalCalc(); if (!v.canCreate) { this.nameRef.current && this.nameRef.current.focus(); return; }
+    const m = this.state.modal; const w = { id: v.p.id + '-' + v.name + '-' + Date.now(), name: v.name, agents: [] };
+    const st = { projects: this.state.projects.map(x => x.id === v.p.id ? { ...x, worktrees: [...x.worktrees, w] } : x), modal: null, sel: w.id, collapsed: { ...this.state.collapsed, [v.p.id]: false } };
+    if (m.openTerm) { const t = { id: 't' + Date.now(), wt: w.id, agent: null, created: true, from: m.branch }; st.tabs = [...this.state.tabs, t]; st.activeTab = t.id; }
+    this.setState(st, () => (m.openTerm ? this.termRef.current : this.rootRef.current) && (m.openTerm ? this.termRef.current : this.rootRef.current).focus());
+  }
+  blocksFor(tab, m) {
+    if (!tab) return [];
+    if (tab.agent === 'a1') return tFixLogin();
+    if (tab.agent === 'a2') return tCheckout({ done: this.state.permDone, choice: this.state.permChoice, resolve: (i) => this.resolvePerm(i) });
+    if (tab.agent === 'a3') return tApi();
+    if (tab.agent === 'a4') return tRefactor();
+    if (tab.agent === 'a5') return tDot();
+    const e = m[tab.wt]; const path = e ? tilde(this.wtPath(e.p, e.w)) : '~';
+    const lines = [];
+    if (tab.created && e) {
+      lines.push(line(sg('Preparing worktree (new branch \'worktree-' + e.w.name + '\')', T.dim)));
+      lines.push(line(sg('HEAD is now at 3f9c2e1 Merge pull request #218 from ' + tab.from, T.dim)), blank());
+    }
+    lines.push(line(...shellSegs(path, ''), cur()));
+    return [plain(lines)];
+  }
+
+  panelWt(m) {
+    const e = m[this.state.sel];
+    if (e) { if (e.w) return e; const w = e.p.worktrees.find(x => x.name === 'main') || e.p.worktrees[0]; return w ? { p: e.p, w } : null; }
+    const tab = this.state.tabs.find(t => t.id === this.state.activeTab);
+    return tab && m[tab.wt] ? m[tab.wt] : null;
+  }
+  panelVals(m) {
+    const s = this.state; const e = this.panelWt(m);
+    if (!e) return { rHasWt: false, rNoWt: true, rHasFile: false };
+    const wid = e.w.id; const ch = CHANGES[wid] || {};
+    const paths = [...new Set([...(BASE[e.p.id] || []), ...Object.keys(ch)])];
+    const shown = s.rOnlyChanged ? paths.filter(p => ch[p]) : paths;
+    const root = { dirs: {}, files: [] };
+    for (const p of shown) { const parts = p.split('/'); let n = root; for (let i = 0; i < parts.length - 1; i++) { n.dirs[parts[i]] = n.dirs[parts[i]] || { dirs: {}, files: [] }; n = n.dirs[parts[i]]; } n.files.push(p); }
+    const tree = [];
+    const walk = (n, prefix, depth) => {
+      Object.keys(n.dirs).sort().forEach(d => {
+        const full = prefix + d; const key = wid + ':' + full; const open = !s.rCollapsed[key];
+        const sts = Object.keys(ch).filter(p => p.startsWith(full + '/')).map(p => ch[p].st);
+        const top = sts.sort((x, y) => GIT[y].rank - GIT[x].rank)[0];
+        tree.push({ key, path: full, name: d, isDir: true, isFile: false, rot: open ? 90 : 0, pad: 8 + depth * 14, bg: 'transparent', color: top ? GIT[top].color : '#a9afbc', deco: 'none', hasCounts: false, hasSt: false, dirDot: !!top && !open, stColor: top ? GIT[top].color : 'transparent', onClick: () => this.setState(x => ({ rCollapsed: { ...x.rCollapsed, [key]: open } })) });
+        if (open) walk(n.dirs[d], full + '/', depth + 1);
+      });
+      n.files.sort().forEach(p => {
+        const cg = ch[p]; const selF = s.rFile && s.rFile.wt === wid && s.rFile.path === p;
+        tree.push({ key: wid + ':' + p, path: p, name: p.split('/').pop(), isDir: false, isFile: true, pad: 8 + depth * 14, bg: selF ? '#454a56' : 'transparent', color: cg ? GIT[cg.st].color : '#dce0e5', deco: cg && cg.st === 'D' ? 'line-through' : 'none',
+          hasCounts: !!cg, addT: cg && cg.add ? '+' + cg.add : '', delT: cg && cg.del ? '−' + cg.del : '', hasSt: !!cg, st: cg ? cg.st : '', stColor: cg ? GIT[cg.st].color : 'transparent', dirDot: false,
+          onClick: () => this.setState({ rFile: { wt: wid, path: p } }) });
+      });
+    };
+    walk(root, '', 0);
+    const files = Object.values(ch); const add = files.reduce((t, f) => t + f.add, 0), del = files.reduce((t, f) => t + f.del, 0);
+    const out = { rHasWt: true, rNoWt: false, rWtName: e.w.name, rProject: e.p.name, rTree: tree, rTreeEmpty: !tree.length,
+      rSummary: files.length ? files.length + (files.length === 1 ? ' arquivo alterado' : ' arquivos alterados') : 'Sem alterações', rHasChanges: files.length > 0, rAdd: add, rDel: del,
+      rAllBg: s.rOnlyChanged ? 'transparent' : '#454a56', rAllColor: s.rOnlyChanged ? '#a9afbc' : '#dce0e5', rChBg: s.rOnlyChanged ? '#454a56' : 'transparent', rChColor: s.rOnlyChanged ? '#dce0e5' : '#a9afbc',
+      rShowAll: () => this.setState({ rOnlyChanged: false }), rShowChanged: () => this.setState({ rOnlyChanged: true }), rCloseFile: () => this.setState({ rFile: null }), rHasFile: false };
+    if (s.rFile && s.rFile.wt === wid) {
+      const cg = ch[s.rFile.path];
+      const bgs = { '+': 'rgba(161,193,129,0.12)', '-': 'rgba(208,114,119,0.12)', h: 'rgba(116,173,232,0.08)', ' ': 'transparent', n: 'transparent' };
+      const cs = { '+': '#a1c181', '-': '#d07277', h: '#74ade8', ' ': '#a9afbc', n: '#878a98' };
+      Object.assign(out, { rHasFile: true, rFilePath: s.rFile.path, rFileSt: cg ? cg.st : '', rFileStColor: cg ? GIT[cg.st].color : '#878a98', rFileHasCounts: !!cg, rFileAdd: cg && cg.add ? '+' + cg.add : '', rFileDel: cg && cg.del ? '−' + cg.del : '',
+        rNoDiff: !cg, rDiff: cg ? cg.diff.map((d, i) => ({ key: i, o: d[1] ?? '', n: d[2] ?? '', sign: d[0] === '+' || d[0] === '-' ? d[0] : '', t: d[3], bg: bgs[d[0]], c: cs[d[0]] })) : [] });
+    }
+    return out;
+  }
+  renderVals() {
+    const s = this.state; const m = this.idx();
+    const pend = this.pendingIds().length;
+    const tab = s.tabs.find(t => t.id === s.activeTab);
+    const te = tab ? m[tab.wt] : null;
+    const names = s.tabs.map(t => m[t.wt] ? m[t.wt].w.name : '');
+    const tabsV = s.tabs.map((t, i) => {
+      const e = m[t.wt]; const ag = t.agent && m[t.agent] ? m[t.agent].a : null; const active = t.id === s.activeTab;
+      const dup = names.filter(n => n === names[i]).length > 1;
+      return { key: t.id, label: e ? e.w.name : '?', hint: e ? e.p.name : '', hasHint: dup, path: e ? this.wtPath(e.p, e.w) : '', hasState: !!ag, noState: !ag, state: ag ? ag.state : 'fim',
+        bg: active ? '#282c33' : s.hoverTab === t.id ? '#363c46' : 'transparent', color: active ? '#dce0e5' : '#a9afbc', closeOp: active || s.hoverTab === t.id ? 1 : 0,
+        onClick: () => this.setState({ activeTab: t.id, sel: t.agent || t.wt }), onEnter: () => this.setState({ hoverTab: t.id }), onLeave: () => this.setState({ hoverTab: null }),
+        onClose: (ev) => { ev.stopPropagation(); this.closeTab(t.id); } };
+    });
+    const active = s.projects.flatMap(p => p.worktrees.flatMap(w => w.agents)).filter(a => a.state !== 'ocioso' && a.state !== 'fim').length;
+    const pl = s.picker ? this.pickList() : [];
+    const out = {
+      rootRef: this.rootRef, sideRef: this.sideRef, termRef: this.termRef, pickRef: this.pickRef, nameRef: this.nameRef, modalRef: this.modalRef,
+      onKey: (e) => this.onKey(e),
+      hasCtx: !!te, ctxProject: te ? te.p.name : '', ctxWt: te ? te.w.name : '',
+      sideW: s.sideW, rows: this.rows(),
+      hasPending: pend > 0, noPending: pend === 0, pendingLabel: pend + (pend === 1 ? ' pendente' : ' pendentes'), onPending: () => this.jumpPending(),
+      onAddProject: () => { if (!s.projects.length) this.setState(this.initial('principal')); },
+      onSideKey: (e) => this.onSideKey(e), onSideFocus: () => this.setState({ sideFocus: true }), onSideBlur: () => this.setState({ sideFocus: false }), onRowsLeave: () => this.setState({ hover: null }),
+      onResizeDown: (e) => {
+        e.preventDefault(); const x0 = e.clientX, w0 = s.sideW; const r = this.rootRef.current; const sc = r ? r.getBoundingClientRect().width / 1440 : 1;
+        const mv = (ev) => this.setState({ sideW: Math.round(Math.max(200, Math.min(440, w0 + (ev.clientX - x0) / (sc || 1)))) });
+        const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up); };
+        window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up);
+      },
+      rightW: s.rightW || 380,
+      onRightResizeDown: (e) => {
+        e.preventDefault(); const x0 = e.clientX, w0 = s.rightW || 380; const r = this.rootRef.current; const sc = r ? r.getBoundingClientRect().width / 1440 : 1;
+        const mv = (ev) => this.setState({ rightW: Math.round(Math.max(260, Math.min(720, w0 - (ev.clientX - x0) / (sc || 1)))) });
+        const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up); };
+        window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up);
+      },
+      isEmpty: !s.projects.length, notEmpty: !!s.projects.length,
+      tabsV, onPlus: () => this.setState({ picker: { q: '', sel: 0 } }),
+      rightOpen: s.rightOpen, toggleRight: () => this.setState(x => ({ rightOpen: !x.rightOpen })),
+      rightBtnBg: s.rightOpen ? '#454a56' : 'transparent', rightBtnColor: s.rightOpen ? '#dce0e5' : '#a9afbc',
+      blocks: this.blocksFor(tab, m), onTermKey: (e) => this.onTermKey(e),
+      activeLabel: active + (active === 1 ? ' agente ativo' : ' agentes ativos'),
+      pickerOpen: !!s.picker, closePicker: () => this.setState({ picker: null }), pickQ: s.picker ? s.picker.q : '',
+      onPickQ: (e) => this.setState({ picker: { q: e.target.value, sel: 0 } }), onPickKey: (e) => this.onPickKey(e),
+      pickItems: pl.map((it, i) => ({ ...it, key: it.wt, bg: i === s.picker.sel ? '#454a56' : 'transparent', onClick: () => this.newShellTab(it.wt), onEnter: () => this.setState(x => ({ picker: { ...x.picker, sel: i } })) })),
+      pickNone: !!s.picker && !pl.length,
+      modalOpen: !!s.modal,
+      ...(s.rightOpen ? this.panelVals(m) : {})
+    };
+    if (s.modal && s.projects.length) {
+      const v = this.modalCalc(); const md = s.modal; const nm = v.name || '<nome>';
+      const item = (b) => ({ key: b, isHead: false, isItem: true, isEmpty: false, name: b, isDefault: b === 'main', bg: b === md.branch ? '#454a56' : 'transparent', checkOp: b === md.branch ? 1 : 0, onClick: () => this.setModal({ branch: b }) });
+      const list = [];
+      if (v.loc.length) { list.push({ key: 'h1', isHead: true, isItem: false, isEmpty: false, label: 'Locais' }); v.loc.forEach(b => list.push(item(b))); }
+      if (v.rem.length) { list.push({ key: 'h2', isHead: true, isItem: false, isEmpty: false, label: 'Remotas' }); v.rem.forEach(b => list.push(item(b))); }
+      if (!list.length) list.push({ key: 'e', isHead: false, isItem: false, isEmpty: true });
+      Object.assign(out, {
+        onBackdrop: () => this.closeModal(), stop: (e) => e.stopPropagation(), closeModal: () => this.closeModal(), onModalKey: (e) => this.onModalKey(e), submitModal: () => this.submitModal(),
+        mProject: v.p.id, mProjects: s.projects.map(p => ({ key: p.id, id: p.id, name: p.name })), onMProject: (e) => this.setModal({ pid: e.target.value, branch: 'main', q: '' }),
+        mName: md.name, onMName: (e) => this.setModal({ name: e.target.value }),
+        mHasErr: !!v.err, mErr: v.err || '', mInvalid: v.err ? 'true' : 'false',
+        mNameBorder: v.err ? '#d07277' : '#464b57', mNameShadow: v.err ? '0 0 0 1px #d07277' : 'none', mNameFocus: v.err ? '#d07277' : '#47679e',
+        mQ: md.q, onMQ: (e) => { const q = e.target.value.toLowerCase(); const br = BR[v.p.id] || { local: [], remote: [] }; const f = [...br.local, ...br.remote].filter(b => b.includes(q)); this.setModal({ q: e.target.value, branch: f.includes(md.branch) || !f.length ? md.branch : f[0] }); },
+        onMQKey: (e) => this.onMQKey(e), mBranches: list,
+        mOpenTerm: md.openTerm ? 'true' : 'false', onMCheck: () => this.setModal({ openTerm: !md.openTerm }),
+        mCheckBg: md.openTerm ? '#74ade8' : 'transparent', mCheckBorder: md.openTerm ? '#74ade8' : '#5d636f', mCheckOp: md.openTerm ? 1 : 0,
+        mFolder: '.claude/worktrees/' + nm + '/', mBranchName: 'worktree-' + nm, mFrom: md.branch,
+        mDisabled: v.canCreate ? 'false' : 'true', mSubmitBg: v.canCreate ? '#74ade8' : '#3e4a5c', mSubmitColor: v.canCreate ? '#1f2329' : '#878a98', mSubmitCursor: v.canCreate ? 'pointer' : 'not-allowed', mSubmitKbd: v.canCreate ? 'rgba(31,35,41,0.35)' : '#5d636f'
+      });
+    }
+    return out;
+  }
+}
+</script>
+</body>
+</html>
