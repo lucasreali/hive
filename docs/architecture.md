@@ -29,7 +29,7 @@ Windows                         WSL
 | `hive-protocol` | Frame codec, `Control` messages, handshake constants, internal event model (`AgentEvent`, `EventKind`). Shared with the app. |
 | `hive::cli` | clap subcommands. Runs each async command on a runtime that is dropped without waiting for a pending stdin read. |
 | `hive::paths` | Runtime dir (`$XDG_RUNTIME_DIR/hive`, or `/tmp/hive-<uid>`, checked to be ours and mode 0700), socket, lockfile, `daemon.log`, data dir, bin dir, hooks settings. |
-| `hive::daemon` | Lockfile, socket (0600), handshake, app/hook connections, prioritized writer, terminal registry, shutdown. |
+| `hive::daemon` | Lockfile, socket (0600), handshake, app/hook connections, prioritized writer, terminal and agent registries, shutdown. |
 | `hive::terminal` | Spawns `fish -C 'set -gx PATH <bin> $PATH'` on a PTY with `HIVE_TERMINAL_ID`. Handles input and resize, and ends process groups. |
 | `hive::procs` | Minimal `/proc` reader (pid, ppid, pgrp, session, comm; skips zombies). |
 | `hive::watch` | Pure state machine for the unhooked-`claude` warning. |
@@ -37,7 +37,7 @@ Windows                         WSL
 | `hive::hook` | `hive hook`: reads stdin (512 KiB limit), optionally records JSONL, sends with a 200 ms timeout. |
 | `hive::bridge` | Relay plus detached daemon start (`setsid --fork`, stderr to `daemon.log`). |
 | `hive::wrapper` | Installs `<data>/hive/bin/claude` (sh wrapper) and `<data>/hive/hive-hooks.json` when the daemon starts. |
-| `hive::projects` | The projects the app follows: validation, `<data>/hive/projects.json`, worktrees per project for the sidebar. |
+| `hive::projects` | The projects the app follows: validation, `<data>/hive/projects.json`, worktrees per project for the sidebar, placing an agent's `cwd` in a worktree. |
 | `hive::worktree` | Worktrees in `.claude/worktrees/<name>` on branch `worktree-<name>`; git through the executable with separate arguments; `.worktreeinclude` copy. |
 
 ## Wire protocol
@@ -72,6 +72,8 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `hook {event, terminal_id, payload}` | `hive hook` → service | 0 | One raw hook call. The service closes the connection after it. |
 | `agent {…AgentEvent}` | service → app | 0 | A translated hook event. |
 | `unhooked_agent` | service → app | n | A `claude` runs in terminal n without sending hook events. |
+| `agent_detected {id, project, worktree, cwd}` | service → app | n | An agent (`id` = its session id) started in terminal n. `project`/`worktree` are the ids of the followed worktree containing `cwd`, both null outside every followed project. |
+| `agent_removed {id}` | service → app | n | The agent's session ended, or terminal n exited (sent before `terminal_exited`). |
 | `list_projects` | app → service | 0 | Asks for every project; answered by `projects`. |
 | `projects {projects}` | service → app | 0 | Every project with its worktrees, in the order they were added. |
 | `add_project {path}` | app → service | 0 | Follow the git repository containing `path`. |
@@ -170,7 +172,17 @@ See [Handshake](#handshake). A refused client is not the app, so the daemon keep
 3. If `--record` is given, it appends a JSONL line.
 4. It connects and sends `hello` and `hook` within 200 ms. It prints nothing and exits 0.
 5. The service translates the call with the `ClaudeCode` adapter. A `SessionStart` marks the terminal's `claude` as hooked.
-6. The service forwards `agent` to the app. With no app connected, the event is dropped.
+6. Agents (see [Agent detection](#agent-detection)) are updated.
+7. The service forwards `agent` to the app (used by tests and the latency bench; the UI ignores it). With no app connected, the event is dropped.
+
+### Agent detection
+Stage 1 tracks presence only; states are Stage 2.
+1. A `SessionStart` with a `session_id`, no `agent_id` (subagents are ignored until Stage 4) and a `HIVE_TERMINAL_ID` naming an open terminal registers the agent: session id → terminal.
+2. The service places it by the payload's `cwd`, never the terminal's (#19): the followed worktree whose path contains `cwd`, by whole path components, the deepest one winning (Claude worktrees live inside the main one). Placement runs git (`projects.list()`) on a blocking thread, and is done once; a project followed later does not move an agent already detected.
+3. It sends `agent_detected` on the terminal's channel. The agents lock is held while placing, so a `SessionEnd` or the terminal's exit arriving meanwhile is handled after the announcement (other terminals are not blocked). An agent outside every followed project is sent with a null `project` and `worktree`; the UI does not show it.
+4. A `SessionEnd` for that session, or the terminal's exit, removes it with `agent_removed`. A `/clear` is a `SessionEnd` plus a `SessionStart` with a new session id, in either order.
+5. Channel n messages go through the app's Rust side like other terminal messages, so a reloaded UI never sees agents of terminals it did not open. On `disconnected` the UI drops every agent.
+6. The sidebar shows each agent as a "Claude" row (idle icon) under its worktree; clicking it shows its terminal's tab (`activateTab`).
 
 ### App disconnect (or SIGTERM)
 1. The accept loop stops and the watcher stops.
@@ -227,7 +239,7 @@ Integration tests run the real `hive` binary with a temporary `HOME` and `XDG_*`
 
 ### Frontend without Tauri
 
-Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu") and `projects` (two of three fake repositories under `/home/user`; `?mock=empty` starts with none, and `add_project` accepts only the fake paths; branches, name checks and new worktrees follow the CLI's wording, with a long remote branch list in `shop`), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`. `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
+Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu") and `projects` (two of three fake repositories under `/home/user`; `?mock=empty` starts with none, and `add_project` accepts only the fake paths; branches, name checks and new worktrees follow the CLI's wording, with a long remote branch list in `shop`), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`; `cd <dir>` moves it and `claude` sends `agent_detected` placed at the worktree whose path is exactly that directory (`agent_removed` when the terminal exits). `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
 
 ### Windows app during development
 
