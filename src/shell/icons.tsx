@@ -160,3 +160,12 @@ export const TerminalIcon = () => (
     />
   </svg>
 );
+
+export const SearchIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true">
+    <g fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+      <circle cx="6" cy="6" r="4" />
+      <path d="M9 9l3 3" />
+    </g>
+  </svg>
+);

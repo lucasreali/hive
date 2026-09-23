@@ -129,3 +129,38 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   act(() => apply({ type: "agent_removed", channel: 1, id: "s1" }));
   expect(screen.getAllByRole("button", { name: "Claude" })).toHaveLength(1);
 });
+
+test("arrow keys move in the tree and collapse or expand a project", () => {
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [shop, api] }));
+  const row = (name: string, i = 0) => screen.getAllByRole("button", { name })[i];
+  const key = (key: string) => fireEvent.keyDown(document.activeElement as Element, { key });
+  // Keys outside the rows are not the tree's.
+  screen.getByTitle("Refresh worktrees").focus();
+  key("ArrowDown");
+  expect(document.activeElement).toBe(screen.getByTitle("Refresh worktrees"));
+
+  row("shop").focus();
+  key("ArrowUp");
+  expect(document.activeElement).toBe(row("shop"));
+  key("ArrowDown");
+  expect(document.activeElement).toBe(row("main"));
+  // A worktree has nothing to collapse.
+  key("ArrowLeft");
+  expect(row("fix-login")).toBeDefined();
+  key("ArrowUp");
+  key("ArrowRight");
+  expect(row("fix-login")).toBeDefined();
+  key("ArrowLeft");
+  expect(screen.queryByRole("button", { name: "fix-login" })).toBeNull();
+  key("ArrowLeft");
+  expect(screen.queryByRole("button", { name: "fix-login" })).toBeNull();
+  key("ArrowDown");
+  expect(document.activeElement).toBe(row("api"));
+  key("ArrowUp");
+  key("ArrowRight");
+  expect(row("fix-login")).toBeDefined();
+  // Other keys (Enter clicks the row, which selects it) are left alone.
+  key("Tab");
+  expect(document.activeElement).toBe(row("shop"));
+});
