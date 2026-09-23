@@ -24,6 +24,7 @@ use crate::VERSION;
 use crate::adapter::{Adapter, ClaudeCode};
 use crate::paths::Paths;
 use crate::terminal::{self, Input, Terminal};
+use crate::wrapper;
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
@@ -31,6 +32,7 @@ const TERMINAL_QUEUE: usize = 256;
 pub async fn run(paths: &Paths) -> io::Result<()> {
     paths.prepare_runtime()?;
     let _lock = lock(paths)?;
+    wrapper::install(paths, &std::env::current_exe()?)?;
     let socket = paths.socket();
     // A socket left by a crashed daemon; the lock proves nobody is serving it.
     let _ = std::fs::remove_file(&socket);

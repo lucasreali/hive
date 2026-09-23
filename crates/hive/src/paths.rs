@@ -47,6 +47,11 @@ impl Paths {
         self.data.join("bin")
     }
 
+    /// Hooks settings the `claude` wrapper passes to Claude Code with `--settings`.
+    pub fn hooks_settings(&self) -> PathBuf {
+        self.data.join("hive-hooks.json")
+    }
+
     /// Creates the runtime directory with mode `0700` and refuses one that
     /// another user owns or that others can access (e.g. a planted `/tmp/hive-<uid>`).
     pub fn prepare_runtime(&self) -> io::Result<()> {
@@ -93,6 +98,10 @@ mod tests {
         );
         assert_eq!(paths.lock(), PathBuf::from("/run/user/1000/hive/hive.lock"));
         assert_eq!(paths.bin_dir(), PathBuf::from("/d/hive/bin"));
+        assert_eq!(
+            paths.hooks_settings(),
+            PathBuf::from("/d/hive/hive-hooks.json")
+        );
     }
 
     #[test]

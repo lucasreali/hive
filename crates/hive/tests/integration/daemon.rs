@@ -211,3 +211,35 @@ async fn daemon_exits_cleanly_on_sigterm() {
     stop(daemon);
     assert!(!env.socket().exists());
 }
+
+#[tokio::test]
+async fn daemon_installs_the_claude_wrapper_and_hooks_settings() {
+    let env = Env::new();
+    let daemon = env.daemon();
+    let wrapper = env.path("data/hive/bin/claude");
+    assert_eq!(mode(wrapper.clone()), 0o755);
+    let script = std::fs::read_to_string(wrapper).unwrap();
+    let settings_path = env.path("data/hive/hive-hooks.json");
+    assert!(
+        script.contains(&format!("hive_settings='{}'", settings_path.display())),
+        "{script}"
+    );
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(settings_path).unwrap()).unwrap();
+    let hive = std::fs::canonicalize(env!("CARGO_BIN_EXE_hive")).unwrap();
+    assert_eq!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+        json!(hive.to_str().unwrap())
+    );
+    stop(daemon);
+}
+
+#[tokio::test]
+async fn daemon_fails_when_the_wrapper_cannot_be_installed() {
+    let env = Env::new();
+    // A file where the data directory should be.
+    std::fs::write(env.path("data/hive"), "").unwrap();
+    let out = env.hive().arg("daemon").output().unwrap();
+    assert!(!out.status.success());
+    assert!(!env.socket().exists());
+}
