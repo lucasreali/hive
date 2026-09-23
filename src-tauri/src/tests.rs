@@ -1,10 +1,12 @@
 use super::commands::*;
 use super::*;
 
-use tauri::Manager;
-use tokio::io::{AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
+use tauri::ipc::{CallbackFn, InvokeBody};
+use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+use tauri::webview::InvokeRequest;
+use tokio::io::{AsyncWriteExt, DuplexStream};
 
-const WAIT: Duration = Duration::from_secs(10);
+const WAIT: Duration = Duration::from_secs(5);
 
 async fn next<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> T {
     tokio::time::timeout(WAIT, rx.recv())
@@ -44,8 +46,8 @@ fn output() -> (
 
 /// The service end of an in-memory connection.
 struct Service {
-    reader: FramedRead<ReadHalf<DuplexStream>, FrameCodec>,
-    writer: FramedWrite<WriteHalf<DuplexStream>, FrameCodec>,
+    reader: FramedRead<DuplexStream, FrameCodec>,
+    writer: FramedWrite<DuplexStream, FrameCodec>,
 }
 
 impl Service {
@@ -76,12 +78,12 @@ fn hive() -> Hive {
 }
 
 fn attach(hive: &Hive, reason: &'static str) -> Service {
-    let (app, service) = tokio::io::duplex(1 << 16);
-    let (reader, writer) = tokio::io::split(app);
-    hive.attach(reader, writer, async move { reason.to_owned() });
-    let (reader, writer) = tokio::io::split(service);
+    // One pipe per direction, so each side can close them separately.
+    let (reader, writer) = tokio::io::duplex(1 << 16);
+    let (to_service, from_app) = tokio::io::duplex(1 << 16);
+    hive.attach(reader, to_service, async move { reason.to_owned() });
     Service {
-        reader: FramedRead::new(reader, FrameCodec),
+        reader: FramedRead::new(from_app, FrameCodec),
         writer: FramedWrite::new(writer, FrameCodec),
     }
 }
@@ -281,6 +283,27 @@ async fn a_ui_reloaded_during_the_handshake_waits_for_welcome() {
 }
 
 #[tokio::test]
+async fn welcome_waits_for_a_ui_that_connects_later() {
+    let hive = hive();
+    let mut service = attach(&hive, "");
+    service.control().await;
+    let welcome = Control::Welcome {
+        version: VERSION.into(),
+    };
+    service.send(0, welcome).await;
+    let stored = async {
+        while hive.link().welcome.is_none() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(WAIT, stored).await.unwrap();
+    let (channel, mut rx) = ui();
+    hive.connect(channel);
+    let message = next(&mut rx).await;
+    assert_eq!(message["type"], "welcome");
+}
+
+#[tokio::test]
 async fn bridge_exit_ends_terminals_then_disconnects() {
     let (hive, mut service, mut rx) = welcomed().await;
     let (channel, _bytes) = output();
@@ -387,6 +410,13 @@ async fn the_bridge_reads_the_hello_frame_on_stdin() {
     assert_eq!(disconnect_reason(&hive).await, "hello read");
 }
 
+#[test]
+fn a_missing_pipe_is_an_error() {
+    assert_eq!(pipe(Some(1)).unwrap(), 1);
+    let error = pipe::<()>(None).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+}
+
 #[tokio::test]
 async fn a_bridge_that_cannot_start_disconnects_at_once() {
     let reason = disconnect_reason(&hive()).await;
@@ -398,20 +428,89 @@ async fn a_bridge_that_cannot_start_disconnects_at_once() {
 }
 
 #[tokio::test]
-async fn commands_act_on_the_managed_hive() {
-    let app = tauri::test::mock_app();
-    app.manage(hive());
-    let (channel, mut rx) = ui();
-    connect(app.state(), channel).await.unwrap();
-    assert_eq!(next(&mut rx).await["type"], "disconnected");
+async fn a_service_that_stops_reading_fails_later_writes() {
+    let (hive, service, _rx) = welcomed().await;
+    drop(service.reader);
+    let failed = async {
+        while hive.write_terminal(1, "x").is_ok() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(WAIT, failed).await.unwrap();
+}
 
-    let not_connected = Err(NOT_CONNECTED.to_owned());
-    let (channel, _bytes) = output();
+/// Calls a command through the IPC layer, as the UI does (argument names in camelCase).
+fn invoke(
+    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+    cmd: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    get_ipc_response(
+        webview,
+        InvokeRequest {
+            cmd: cmd.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        },
+    )
+    .map(|body| body.deserialize::<Value>().unwrap())
+}
+
+#[test]
+fn commands_reach_the_managed_hive() {
+    // A stand-in bridge that stays up and reads its stdin.
+    let app = mock_builder()
+        .manage(sh("cat >/dev/null"))
+        .invoke_handler(tauri::generate_handler![
+            connect,
+            open_terminal,
+            write_terminal,
+            resize_terminal,
+            close_terminal
+        ])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let open = json!({"cwd": "/", "cols": 80, "rows": 24, "onData": "__CHANNEL__:2"});
+    let write = json!({"id": 1, "data": "x"});
+    let resize = json!({"id": 1, "cols": 80, "rows": 24});
+    let close = json!({"id": 1});
+
+    let not_connected = Err(json!(NOT_CONNECTED));
     assert_eq!(
-        open_terminal(app.state(), "/".into(), 80, 24, channel),
-        Err(NOT_CONNECTED.into())
+        invoke(&webview, "open_terminal", open.clone()),
+        not_connected
     );
-    assert_eq!(write_terminal(app.state(), 1, "x".into()), not_connected);
-    assert_eq!(resize_terminal(app.state(), 1, 80, 24), not_connected);
-    assert_eq!(close_terminal(app.state(), 1), not_connected);
+    assert_eq!(
+        invoke(&webview, "write_terminal", write.clone()),
+        not_connected
+    );
+    assert_eq!(
+        invoke(&webview, "resize_terminal", resize.clone()),
+        not_connected
+    );
+    assert_eq!(
+        invoke(&webview, "close_terminal", close.clone()),
+        not_connected
+    );
+
+    let refused = invoke(&webview, "connect", json!({})).unwrap_err();
+    assert!(refused.as_str().unwrap().contains("onMessage"), "{refused}");
+    let connect = json!({"onMessage": "__CHANNEL__:1"});
+    assert_eq!(invoke(&webview, "connect", connect), Ok(Value::Null));
+
+    assert_eq!(
+        invoke(&webview, "open_terminal", open.clone()),
+        Ok(json!(1))
+    );
+    assert_eq!(invoke(&webview, "open_terminal", open), Ok(json!(2)));
+    assert_eq!(invoke(&webview, "write_terminal", write), Ok(Value::Null));
+    assert_eq!(invoke(&webview, "resize_terminal", resize), Ok(Value::Null));
+    assert_eq!(invoke(&webview, "close_terminal", close), Ok(Value::Null));
 }

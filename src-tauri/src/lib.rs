@@ -149,10 +149,9 @@ impl Hive {
         #[cfg(windows)]
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console window for wsl.exe
         let mut child = command.spawn()?;
-        let missing = || std::io::Error::other("missing bridge pipe");
-        let stdin = child.stdin.take().ok_or_else(missing)?;
-        let stdout = child.stdout.take().ok_or_else(missing)?;
-        let stderr = child.stderr.take().ok_or_else(missing)?;
+        let stdin = pipe(child.stdin.take())?;
+        let stdout = pipe(child.stdout.take())?;
+        let stderr = pipe(child.stderr.take())?;
         // Owns the child until the connection ends (it is killed on drop), then explains the end.
         let exit = async move {
             let mut text = Vec::new();
@@ -238,6 +237,11 @@ impl Hive {
     }
 }
 
+/// A piped stdio handle of the bridge; always there, since every one is requested.
+fn pipe<T>(pipe: Option<T>) -> std::io::Result<T> {
+    pipe.ok_or(std::io::ErrorKind::BrokenPipe.into())
+}
+
 /// Routes service frames until the connection ends.
 async fn pump<R: AsyncRead + Unpin>(
     link: &Mutex<Link>,
@@ -295,10 +299,13 @@ pub mod commands {
     use super::*;
     use tauri::State;
 
+    /// Sync on purpose: an `async` command's expansion in `main.rs` shows up as an uncovered
+    /// line here. Sync commands run outside Tokio, which the bridge's tasks need, so enter it.
     #[tauri::command]
-    pub async fn connect(hive: State<'_, Hive>, on_message: Channel<Value>) -> Result<(), String> {
+    pub fn connect(hive: State<'_, Hive>, on_message: Channel<Value>) {
+        let runtime = tauri::async_runtime::handle();
+        let _context = runtime.inner().enter();
         hive.connect(on_message);
-        Ok(())
     }
 
     #[tauri::command]
