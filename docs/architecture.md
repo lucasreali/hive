@@ -122,6 +122,15 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 3. `writeTerminal` sends terminal frames, split at `MAX_PAYLOAD`; `resizeTerminal` and `closeTerminal` send `resize` and `close_terminal`.
 4. `terminal_exited` releases the channel's `onData`.
 
+### Terminals in the UI (xterm.js)
+`src/terminals.ts` owns every xterm.js `Terminal`, outside React (#30); output goes straight from the transport's `onData` into `term.write`, never through React state.
+1. `openTerminal(cwd)` creates the `Terminal` first, then calls the transport at 80×24, so output that arrives before the tab renders is kept. It adds a tab to the store (`tabs`, `activeTab`, `selection` = the worktree path); the tab's title is the worktree's name from `projects` (the project's name is added when two tabs share a name; an unknown path shows as is).
+2. `TerminalArea` renders one host element (`mountTerminals`) and calls `showTerminal(activeTab)`. Only the shown terminal is opened in the DOM, fitted (`FitAddon`) and rendered with the WebGL addon; a hidden one loses its WebGL addon and keeps parsing output into its buffer. A lost WebGL context disposes the addon (xterm falls back to its DOM renderer); WebGL is tried again the next time the terminal is shown.
+3. Host size changes are debounced (50 ms) into one fit of the shown terminal; a new size sends `resizeTerminal`.
+4. Keys: `interceptKeys(handler)` sees every key event first (app shortcuts, 1.9); then Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes through the clipboard API (#35); everything else goes to xterm and, as `onData`, to `writeTerminal`. Input stops once the terminal exited.
+5. `closeTerminal(id)` sends `close_terminal` unless the shell already exited, disposes the `Terminal` and removes the tab (the right neighbour, or the new last tab, is shown). An exited terminal keeps its tab, marked "exited", until closed; `unhooked_agent` adds a "no hooks" badge.
+6. `scrollback` (default 5000 lines) in the store is applied to each new terminal; it is not persisted yet.
+
 ### Projects
 1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. Worktrees are not watched yet (Stage 3).
 2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare entries skipped.
@@ -133,7 +142,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 1. The dialog opens for a project (the row's "New worktree", or `openModal("new-worktree", id)`), sends `list_branches` and `validate_worktree_name` for the empty name.
 2. Every keystroke in the name sends `validate_worktree_name`: the service runs `worktree::check_name` (the rule and the existing-folder check of `hive worktree create`, no git), so the dialog never has its own rule (#33, #37). Create stays disabled until the current name has a clean verdict.
 3. The branch list is filtered in the UI (case-insensitive substring) and virtualized (TanStack Virtual); ↑/↓ in the filter move the pick. A pick hidden by the filter gives way to the first branch shown.
-4. `create_worktree` runs `worktree::create`, the CLI's code. On `worktree_created` the UI selects the new worktree, opens a terminal in it if asked (`open_terminal` with its path), and closes the dialog; with notes, the dialog stays open to show them.
+4. `create_worktree` runs `worktree::create`, the CLI's code. On `worktree_created` the UI selects the new worktree, opens a terminal tab in it if asked (`openTerminal` of `src/terminals.ts` with its path), and closes the dialog; with notes, the dialog stays open to show them.
 
 The list is a JSON array of paths, written through a temporary file (mode 0600) renamed over it. A missing file is an empty list. An unreadable or corrupt one is moved to `projects.json.corrupt` with a warning on stderr (`daemon.log`), and the service starts with an empty list.
 
