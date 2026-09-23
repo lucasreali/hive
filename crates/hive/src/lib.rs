@@ -4,6 +4,7 @@ pub mod adapter;
 pub mod bridge;
 pub mod cli;
 pub mod daemon;
+pub mod hook;
 pub mod paths;
 pub mod procs;
 pub mod terminal;

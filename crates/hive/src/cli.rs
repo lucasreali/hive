@@ -23,6 +23,14 @@ enum Command {
     Daemon,
     /// Connect stdio to the service, starting it if needed (run by the app through `wsl.exe`).
     Bridge,
+    /// Forward one Claude Code hook call (JSON on stdin) to the service. Always exits 0.
+    Hook {
+        /// Hook event name, e.g. `SessionStart`.
+        event: String,
+        /// Also append the raw call to this JSONL file (timestamp, event, terminal, payload).
+        #[arg(long, value_name = "FILE")]
+        record: Option<std::path::PathBuf>,
+    },
 }
 
 pub fn run() -> ExitCode {
@@ -32,6 +40,15 @@ pub fn run() -> ExitCode {
         Command::Daemon => block_on(crate::daemon::run(&paths)),
         Command::Bridge => {
             std::env::current_exe().and_then(|hive| block_on(crate::bridge::run(&paths, &hive)))
+        }
+        Command::Hook { event, record } => {
+            // Whatever happens, the agent must not see a failing hook.
+            let stdin = tokio::io::stdin();
+            let _ = block_on(async {
+                crate::hook::run(&event, record.as_deref(), &paths, stdin).await;
+                Ok(())
+            });
+            Ok(())
         }
     };
     match result {
