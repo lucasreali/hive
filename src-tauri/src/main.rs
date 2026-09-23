@@ -6,7 +6,6 @@
 fn main() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![hive_lib::commands::greet])
         .run(tauri::generate_context!());
     if let Err(error) = result {
         eprintln!("hive-app: {error}");
