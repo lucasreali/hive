@@ -12,3 +12,5 @@ mod hook;
 mod terminal;
 #[cfg(test)]
 mod watch;
+#[cfg(test)]
+mod worktree;

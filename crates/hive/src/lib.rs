@@ -9,6 +9,7 @@ pub mod paths;
 pub mod procs;
 pub mod terminal;
 pub mod watch;
+pub mod worktree;
 pub mod wrapper;
 
 /// Binary version, compared with the app's in the handshake.
