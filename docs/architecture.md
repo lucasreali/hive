@@ -139,6 +139,12 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 2. Nothing runs under the connection block (`version_mismatch`, `disconnected`) or while a dialog is open; the key then goes on as usual.
 3. The tree (sidebar): ↑/↓ move between rows, ←/→ collapse and expand a project, Enter selects (rows are buttons).
 
+### Closing the app (#18)
+1. The title bar Close, Alt+F4 and the taskbar all become one Tauri close request. `guardClose` (`src/shell/window.ts`) listens to it with `onCloseRequested` and asks `confirmClose` (`src/shell/CloseAppDialog.tsx`).
+2. When `agentsAtRisk` is empty the window is destroyed at once. Otherwise the request is cancelled and the "Close Hive?" dialog opens: Cancel/Esc keeps the app, "Close Hive" (focused, Enter) calls `closeWindow`, which destroys the window without asking again. Stage 1 counts every detected agent; Stage 2 narrows `agentsAtRisk` to working, waiting for permission and waiting for you.
+3. The last window gone, Tauri emits `RunEvent::Exit`; `on_run_event` runs `Hive::shutdown`: the frame queue closes, so the bridge's stdin closes, the bridge exits and the daemon runs "App disconnect" below. Shutdown waits up to 2 s for the bridge to end, then kills it (no `wsl.exe` left behind). A crashed app closes the same pipe through the OS.
+4. Outside Tauri (browser, mock transport) only the title bar Close requests a close, and a close that goes through sets `data-closed` on `<html>` for the browser checks.
+
 ### Projects
 1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. Worktrees are not watched yet (Stage 3).
 2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare entries skipped.
