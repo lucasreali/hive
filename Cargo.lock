@@ -1702,9 +1702,14 @@ dependencies = [
 name = "hive-app"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
+ "hive-protocol",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
