@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    hive_lib::run()
+    if let Err(error) = hive_lib::run() {
+        eprintln!("hive-app: {error}");
+        std::process::exit(1);
+    }
 }
