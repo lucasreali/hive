@@ -102,6 +102,18 @@ impl Projects {
     }
 }
 
+/// The followed worktree containing `cwd`, as `(project id, worktree id)`. Claude worktrees
+/// live inside the main one, so the deepest match wins (#19).
+pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
+    let cwd = Path::new(cwd);
+    projects
+        .iter()
+        .flat_map(|p| p.worktrees.iter().map(move |w| (p, w)))
+        .filter(|(_, w)| cwd.starts_with(&w.path))
+        .max_by_key(|(_, w)| w.path.len())
+        .map(|(p, w)| (p.id.clone(), w.id.clone()))
+}
+
 fn read(file: &Path) -> io::Result<Vec<String>> {
     let bytes = worktree::read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
     serde_json::from_slice(&bytes).map_err(io::Error::other)
@@ -247,6 +259,44 @@ mod tests {
         );
         assert_eq!(got.len(), 1);
         assert_eq!((got[0].name.as_str(), got[0].main), ("/", true));
+    }
+
+    #[test]
+    fn an_agent_is_placed_in_the_deepest_worktree_containing_its_cwd() {
+        let project = |root: &str, list| Project {
+            id: root.into(),
+            name: String::new(),
+            path: root.into(),
+            worktrees: worktrees(Path::new(root), list),
+            error: None,
+        };
+        let projects = [
+            project(
+                "/r",
+                vec![
+                    wt("/r", Some("main"), false),
+                    wt("/r/.claude/worktrees/a", None, false),
+                ],
+            ),
+            project("/r2", vec![wt("/r2", None, false)]),
+        ];
+        let place = |cwd| place(&projects, cwd);
+        let at = |p: &str, w: &str| Some((p.to_owned(), w.to_owned()));
+        assert_eq!(place("/r"), at("/r", "/r"));
+        assert_eq!(place("/r/src/x"), at("/r", "/r"));
+        assert_eq!(
+            place("/r/.claude/worktrees/a"),
+            at("/r", "/r/.claude/worktrees/a")
+        );
+        assert_eq!(
+            place("/r/.claude/worktrees/a/src"),
+            at("/r", "/r/.claude/worktrees/a")
+        );
+        assert_eq!(place("/r/.claude/worktrees/ab"), at("/r", "/r"));
+        // Whole path components only: /r2 is not inside /r.
+        assert_eq!(place("/r2/y"), at("/r2", "/r2"));
+        assert_eq!(place("/elsewhere"), None);
+        assert_eq!(place(""), None);
     }
 
     #[test]
