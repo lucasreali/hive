@@ -9,12 +9,15 @@ export type ServiceMessage =
   | { type: "version_mismatch"; protocol: number; version: string }
   | { type: "terminal_opened"; channel: number }
   | { type: "terminal_exited"; channel: number; code: number | null }
-  | { type: "unhooked_agent"; channel: number };
+  | { type: "unhooked_agent"; channel: number }
+  // Sent by the app side (Rust) when the bridge exits or its output closes.
+  | { type: "disconnected"; reason: string };
 
 export type Connection =
   | { status: "connecting" }
   | { status: "connected"; version: string }
-  | { status: "version_mismatch"; protocol: number; version: string };
+  | { status: "version_mismatch"; protocol: number; version: string }
+  | { status: "disconnected"; reason: string };
 
 export type Terminal = {
   id: number;
@@ -78,6 +81,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return patchTerminal(s, m.channel, { exited: true, code: m.code });
     case "unhooked_agent":
       return patchTerminal(s, m.channel, { unhooked: true });
+    case "disconnected":
+      return { connection: { status: "disconnected", reason: m.reason } };
+    default:
+      // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.
+      return {};
   }
 }
 

@@ -26,6 +26,8 @@ test("status bar follows the connection status", () => {
   expect(status.textContent).toBe("WSLconnected");
   act(() => apply({ type: "version_mismatch", protocol: 2, version: "0.2.0" }));
   expect(status.textContent).toBe("WSLversion mismatch");
+  act(() => apply({ type: "disconnected", reason: "gone" }));
+  expect(status.textContent).toBe("WSLdisconnected");
 });
 
 test("the files button toggles the right panel", () => {

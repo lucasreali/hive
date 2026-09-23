@@ -332,7 +332,8 @@ button:disabled {
   background: var(--state-idle);
 }
 
-.connection[data-status="version_mismatch"] .connection-dot {
+.connection[data-status="version_mismatch"] .connection-dot,
+.connection[data-status="disconnected"] .connection-dot {
   background: var(--state-error);
 }
 

@@ -4,6 +4,7 @@ const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
   connected: "connected",
   version_mismatch: "version mismatch",
+  disconnected: "disconnected",
 };
 
 // 1.4 adds the WSL distribution name and the version-mismatch message;

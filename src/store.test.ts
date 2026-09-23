@@ -4,6 +4,7 @@ import {
   apply,
   initialState,
   openModal,
+  type ServiceMessage,
   select,
   setRightPanel,
   useAgent,
@@ -29,6 +30,14 @@ test("welcome and version_mismatch set the connection", () => {
     protocol: 2,
     version: "0.2.0",
   });
+});
+
+test("disconnected keeps the reason; unknown messages change nothing", () => {
+  apply({ type: "disconnected", reason: "the hive bridge exited" });
+  const before = useHive.getState();
+  expect(before.connection).toEqual({ status: "disconnected", reason: "the hive bridge exited" });
+  apply({ type: "agent" } as unknown as ServiceMessage);
+  expect(useHive.getState()).toEqual(before);
 });
 
 test("terminal messages update only their terminal", () => {
