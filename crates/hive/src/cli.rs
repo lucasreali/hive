@@ -21,13 +21,17 @@ struct Cli {
 enum Command {
     /// Run the service (started by `hive bridge`; lives as long as the app connection).
     Daemon,
+    /// Connect stdio to the service, starting it if needed (run by the app through `wsl.exe`).
+    Bridge,
 }
 
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
+    let paths = Paths::from_env();
     let result = match cli.command {
-        Command::Daemon => {
-            runtime().and_then(|rt| rt.block_on(crate::daemon::run(&Paths::from_env())))
+        Command::Daemon => block_on(crate::daemon::run(&paths)),
+        Command::Bridge => {
+            std::env::current_exe().and_then(|hive| block_on(crate::bridge::run(&paths, &hive)))
         }
     };
     match result {
@@ -39,8 +43,13 @@ pub fn run() -> ExitCode {
     }
 }
 
-fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_multi_thread()
+/// Runs `task` to completion, then drops the runtime without waiting for blocking
+/// work (a pending stdin read would otherwise keep the process alive).
+fn block_on(task: impl Future<Output = std::io::Result<()>>) -> std::io::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()
+        .build()?;
+    let result = runtime.block_on(task);
+    runtime.shutdown_background();
+    result
 }

@@ -1,6 +1,7 @@
 //! The `hive` binary: service, bridge and CLI in one executable.
 
 pub mod adapter;
+pub mod bridge;
 pub mod cli;
 pub mod daemon;
 pub mod paths;

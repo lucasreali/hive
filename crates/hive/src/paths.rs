@@ -42,6 +42,11 @@ impl Paths {
         self.runtime.join("hive.lock")
     }
 
+    /// stderr of a daemon started by `hive bridge`: where a failed start explains itself.
+    pub fn daemon_log(&self) -> PathBuf {
+        self.runtime.join("daemon.log")
+    }
+
     /// Directory put first on `PATH` inside Hive terminals (the `claude` wrapper lives here).
     pub fn bin_dir(&self) -> PathBuf {
         self.data.join("bin")
@@ -92,6 +97,10 @@ mod tests {
             PathBuf::from("/run/user/1000/hive/hive.sock")
         );
         assert_eq!(paths.lock(), PathBuf::from("/run/user/1000/hive/hive.lock"));
+        assert_eq!(
+            paths.daemon_log(),
+            PathBuf::from("/run/user/1000/hive/daemon.log")
+        );
         assert_eq!(paths.bin_dir(), PathBuf::from("/d/hive/bin"));
     }
 
