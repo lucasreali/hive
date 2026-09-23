@@ -6,7 +6,8 @@ import { transport } from "./transport";
 
 void transport.connect(apply);
 
-createRoot(document.getElementById("root") as HTMLElement).render(
+export const root = createRoot(document.getElementById("root") as HTMLElement);
+root.render(
   <StrictMode>
     <App />
   </StrictMode>,
