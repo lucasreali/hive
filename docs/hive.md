@@ -148,7 +148,7 @@ O desenvolvimento é **incremental e guiado**: o agente segue o `TODO.md` do rep
 | D1 | **Tudo em inglês**: código, comentários, commits, docs do repositório, CLI, interface. Só este documento fica em português | Padrão do ecossistema; interface em inglês (#34) |
 | D2 | **100% de cobertura de linhas + teste de mutação** (`cargo llvm-cov`, `cargo mutants` sem mutante sobrevivente no código alterado); no frontend, 100% de linhas no `bun test`. Exceções só por arquivo, listadas com justificativa em `COVERAGE_EXCLUSIONS.md` e aprovadas pelo humano | Cobertura total com prova de que os testes verificam comportamento |
 | D3 | **Portões por tarefa**: `cargo fmt --check`, `clippy -D warnings` (sem `unwrap`/`expect` fora de testes), testes, `cargo deny`, `cargo machete`, `cargo check --locked`; frontend: lint, typecheck, `bun test --coverage`, `bun install --frozen-lockfile` | Qualidade constante, sem acumular dívida |
-| D4 | **Git**: um branch por tarefa (`task/<id>-<slug>`), commits pequenos `type(scope): description`; o agente nunca faz push nem merge na `main`: isso é do humano | Revisão tarefa por tarefa |
+| D4 | **Git**: um branch por tarefa (`task/<id>-<slug>`) criado a partir da `main`, commits pequenos no padrão Conventional Commits (`type(scope): description`); **ao concluir a tarefa** (portões verdes, `TODO.md` marcado, relatório feito) o agente faz o merge na `main` (`--ff-only`) e apaga o branch; se a `main` tiver mudado, para e pergunta. Nunca push, force nem reescrita de histórico | Tudo que o agente fez fica na `main`, sem branches pendurados; a revisão acontece nos checkpoints |
 | D5 | **O agente nunca muda uma decisão deste documento**; se algo estiver errado ou faltando, para e pergunta | O documento é a fonte da verdade |
 
 
@@ -288,6 +288,7 @@ Adaptadores futuros (Codex, Gemini...)
 | — | Cobertura só no relatório | Substituída por 100% de linhas + mutação (D2) |
 | — | Execução noturna autônoma com orquestração de agentes (N1–N17: distro dedicada, watchdog, 12 subagentes, portões automáticos) | Complexa demais para configurar e acompanhar; substituída pelo desenvolvimento incremental guiado pelo `TODO.md` |
 | — | pnpm como gerenciador do frontend (#36 original) | Trocado por bun por preferência; como o JS é só a interface, a diferença prática é pequena |
+| D4 original | O agente nunca fazia merge na `main`; o humano integrava cada branch | Muitos branches encadeados para integrar à mão; o agente passou a integrar ao concluir cada tarefa |
 | — | Som a cada mudança de estado | Toca quando eu mesmo envio o prompt; com vários agentes vira ruído |
 
 ---
