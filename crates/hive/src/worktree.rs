@@ -121,7 +121,7 @@ pub fn remove(dir: &Path, name: &str) -> io::Result<()> {
 }
 
 /// `WorktreeCreate` hook: creates the worktree `name` in the repository of `cwd`.
-pub fn hook_create(input: impl Read) -> io::Result<PathBuf> {
+pub fn hook_create(input: &mut dyn Read) -> io::Result<PathBuf> {
     let payload = read_payload(input)?;
     let name = field(&payload, "name")?;
     create(Path::new(field(&payload, "cwd")?), name, None)
@@ -129,7 +129,7 @@ pub fn hook_create(input: impl Read) -> io::Result<PathBuf> {
 
 /// `WorktreeRemove` hook: removes `worktree_path`, which must be a worktree directly under
 /// its repository's `.claude/worktrees/`.
-pub fn hook_remove(input: impl Read) -> io::Result<()> {
+pub fn hook_remove(input: &mut dyn Read) -> io::Result<()> {
     let payload = read_payload(input)?;
     let path = Path::new(field(&payload, "worktree_path")?).canonicalize()?;
     let root = main_root(&path)?;
@@ -154,7 +154,7 @@ fn remove_path(root: &Path, path: &Path) -> io::Result<()> {
 }
 
 /// Reads at most `limit` bytes; more is an error.
-pub fn read_limited(input: impl Read, limit: u64) -> io::Result<Vec<u8>> {
+pub fn read_limited(input: &mut dyn Read, limit: u64) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     input.take(limit + 1).read_to_end(&mut buf)?;
     if buf.len() as u64 > limit {
@@ -163,7 +163,7 @@ pub fn read_limited(input: impl Read, limit: u64) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn read_payload(input: impl Read) -> io::Result<Value> {
+fn read_payload(input: &mut dyn Read) -> io::Result<Value> {
     serde_json::from_slice(&read_limited(input, HOOK_INPUT_LIMIT)?)
         .map_err(|err| io::Error::other(format!("invalid hook input: {err}")))
 }
@@ -189,7 +189,7 @@ fn own_create_hooks(root: &Path) -> Vec<&'static str> {
         .into_iter()
         .filter(|file| {
             std::fs::File::open(root.join(file))
-                .and_then(|f| read_limited(f, SETTINGS_LIMIT))
+                .and_then(|mut f| read_limited(&mut f, SETTINGS_LIMIT))
                 .is_ok_and(|settings| has_create_hook(&settings))
         })
         .collect()
@@ -276,7 +276,8 @@ fn run_git(dir: &Path, args: &[&OsStr], input: &[u8], ok: &[i32]) -> io::Result<
     let out = std::thread::scope(|scope| {
         scope.spawn(move || stdin.map(|mut stdin| stdin.write_all(input)));
         child.wait_with_output()
-    })?;
+    });
+    let out = out?;
     if out.status.code().is_some_and(|code| ok.contains(&code)) {
         return Ok(out.stdout);
     }
@@ -366,8 +367,8 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
 
     #[test]
     fn input_is_size_limited() {
-        assert_eq!(read_limited(&b"abcd"[..], 4).unwrap(), b"abcd");
-        let err = read_limited(&b"abcde"[..], 4).unwrap_err();
+        assert_eq!(read_limited(&mut &b"abcd"[..], 4).unwrap(), b"abcd");
+        let err = read_limited(&mut &b"abcde"[..], 4).unwrap_err();
         assert_eq!(err.to_string(), "input larger than 4 bytes");
     }
 }

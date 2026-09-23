@@ -78,8 +78,8 @@ fn run_worktree(command: WorktreeCommand) -> io::Result<()> {
             .iter()
             .try_for_each(|wt| writeln!(io::stdout(), "{wt}")),
         WorktreeCommand::Remove { name } => worktree::remove(&cwd, &name),
-        WorktreeCommand::HookCreate => print_path(&worktree::hook_create(io::stdin())?),
-        WorktreeCommand::HookRemove => worktree::hook_remove(io::stdin()),
+        WorktreeCommand::HookCreate => print_path(&worktree::hook_create(&mut io::stdin())?),
+        WorktreeCommand::HookRemove => worktree::hook_remove(&mut io::stdin()),
     }
 }
 
