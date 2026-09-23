@@ -19,7 +19,7 @@ use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Child;
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
@@ -36,12 +36,14 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     paths.prepare_runtime()?;
     let _lock = lock(paths)?;
     wrapper::install(paths, &std::env::current_exe()?)?;
+    // Handle SIGTERM before anyone can connect, so an early one still cleans up.
+    let terminate = signal(SignalKind::terminate())?;
     let socket = paths.socket();
     // A socket left by a crashed daemon; the lock proves nobody is serving it.
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
-    let result = serve(listener, paths.bin_dir()).await;
+    let result = serve(listener, terminate, paths.bin_dir()).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -63,7 +65,7 @@ fn lock(paths: &Paths) -> io::Result<File> {
     Ok(file)
 }
 
-async fn serve(listener: UnixListener, bin_dir: PathBuf) -> io::Result<()> {
+async fn serve(listener: UnixListener, mut terminate: Signal, bin_dir: PathBuf) -> io::Result<()> {
     let state = Arc::new(State {
         app: Mutex::new(None),
         terminals: Mutex::new(HashMap::new()),
@@ -71,7 +73,6 @@ async fn serve(listener: UnixListener, bin_dir: PathBuf) -> io::Result<()> {
     });
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
-    let mut terminate = signal(SignalKind::terminate())?;
     loop {
         tokio::select! {
             accepted = listener.accept() => {
