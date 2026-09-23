@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import {
   type Agent,
   activateTab,
@@ -10,13 +11,32 @@ import {
 import { transport } from "../transport";
 import { BranchIcon, ChevronIcon, FolderIcon, IdleIcon, PlusIcon, RefreshIcon } from "./icons";
 
-// Agent states join the tree in 2.2, the pending counter in 2.3; arrow-key moves
-// in the tree with 1.9 (#35). ponytail: plain list, add TanStack Virtual when trees get long.
+/**
+ * Arrow keys in the tree (#35): up/down move between rows, left/right collapse and expand a
+ * project; Enter selects (the rows are buttons).
+ */
+function moveInTree(event: KeyboardEvent<HTMLElement>): void {
+  const rows = [...event.currentTarget.querySelectorAll<HTMLElement>(".row-main")];
+  const row = rows.indexOf(document.activeElement as HTMLElement);
+  if (row < 0) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    rows[row + (event.key === "ArrowDown" ? 1 : -1)]?.focus();
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    const chevron = rows[row].parentElement?.querySelector<HTMLElement>("button.chevron");
+    const open = chevron?.getAttribute("aria-expanded") === "true";
+    if (open === (event.key === "ArrowLeft")) chevron?.click();
+  } else {
+    return;
+  }
+  event.preventDefault();
+}
+
+// Agent states join the tree in 2.2, the pending counter in 2.3. ponytail: plain list, add TanStack Virtual when trees get long.
 export function Sidebar() {
   const projects = useHive((s) => s.projects);
   const list = Object.values(projects ?? {});
   return (
-    <nav className="sidebar" aria-label="Projects">
+    <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree}>
       <div className="bar">
         <span className="sidebar-pending">Nothing pending</span>
         <div className="sidebar-actions">
