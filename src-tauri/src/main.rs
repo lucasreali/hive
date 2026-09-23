@@ -22,9 +22,12 @@ fn main() {
             commands::validate_worktree_name,
             commands::create_worktree,
         ])
-        .run(tauri::generate_context!());
-    if let Err(error) = result {
-        eprintln!("hive-app: {error}");
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+    match result {
+        Ok(app) => app.run(hive_lib::on_run_event),
+        Err(error) => {
+            eprintln!("hive-app: {error}");
+            std::process::exit(1);
+        }
     }
 }
