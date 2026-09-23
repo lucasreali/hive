@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ServiceMessage } from "../store";
-import { createMockTransport, MOCK_REPOS } from "./mock";
+import { createMockTransport, MOCK_BRANCHES, MOCK_REPOS } from "./mock";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -106,4 +106,66 @@ test("exit ends the terminal with code 0 and close with no code", async () => {
     { type: "terminal_exited", channel: id, code: 0 },
     { type: "terminal_exited", channel: second, code: null },
   ]);
+});
+
+test("branches, name checks and new worktrees for the dialog", async () => {
+  const { transport, messages } = await connected();
+  const [shop, , dotfiles] = MOCK_REPOS;
+  const before = structuredClone(shop);
+  messages.length = 0;
+  await transport.listBranches(shop.id);
+  await transport.listBranches(dotfiles.id);
+  await transport.validateWorktreeName(shop.id, "");
+  await transport.validateWorktreeName(shop.id, "fix-login");
+  await transport.createWorktree(shop.id, "fix-cart", "main");
+  await transport.createWorktree(shop.id, "fix-cart", null);
+  await tick();
+  const path = `${shop.path}/.claude/worktrees/fix-cart`;
+  const created = messages[4] as Extract<ServiceMessage, { type: "worktree_created" }>;
+  expect(messages).toEqual([
+    { type: "branches", project: shop.id, ...MOCK_BRANCHES[shop.id], current: "main", error: null },
+    {
+      type: "branches",
+      project: dotfiles.id,
+      local: [],
+      remote: [],
+      current: null,
+      error: `${dotfiles.id} is not a followed project`,
+    },
+    {
+      type: "worktree_name_validated",
+      project: shop.id,
+      name: "",
+      folder: ".claude/worktrees/<name>/",
+      branch: "worktree-<name>",
+      error: `invalid worktree name "": use lowercase letters, digits, '.', '_' and '-', starting with a letter or digit`,
+    },
+    {
+      type: "worktree_name_validated",
+      project: shop.id,
+      name: "fix-login",
+      folder: ".claude/worktrees/fix-login/",
+      branch: "worktree-fix-login",
+      error: `worktree "fix-login" already exists at ${shop.path}/.claude/worktrees/fix-login`,
+    },
+    created,
+    {
+      type: "create_worktree_failed",
+      project: shop.id,
+      name: "fix-cart",
+      message: `worktree "fix-cart" already exists at ${path}`,
+    },
+  ]);
+  expect(created.path).toBe(path);
+  expect(created.notes).toEqual([]);
+  expect(created.project.worktrees.at(-1)?.path).toBe(path);
+  // The shared fake repositories are never changed.
+  expect(shop).toEqual(before);
+  await transport.listProjects();
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "projects", projects: [created.project, MOCK_REPOS[1]] });
+  // Adding a project again answers its current worktrees.
+  await transport.addProject(shop.path);
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "project_added", project: created.project });
 });

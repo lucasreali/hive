@@ -43,6 +43,19 @@ export const PlusIcon = ({ size = 12 }: { size?: number }) => (
   </svg>
 );
 
+export const CheckIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <path
+      d="M2.5 6.3 4.8 8.5 9.5 3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 export const PanelIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
     <rect

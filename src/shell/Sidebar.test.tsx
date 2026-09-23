@@ -22,7 +22,7 @@ test("projects show their worktrees with the service's names and paths", () => {
     r.getAttribute("title"),
   ]);
   expect(rows).toEqual([
-    ["tree-row project", "shop", "/home/user/projects/shop"],
+    ["tree-row project", "shopNew worktree", "/home/user/projects/shop"],
     ["tree-row worktree", "main", "/home/user/projects/shop"],
     ["tree-row worktree", "fix-login", "/home/user/projects/shop/.claude/worktrees/fix-login"],
     [
@@ -30,7 +30,7 @@ test("projects show their worktrees with the service's names and paths", () => {
       "feat-checkout",
       "/home/user/projects/shop/.claude/worktrees/feat-checkout",
     ],
-    ["tree-row project", "api", "/home/user/projects/api"],
+    ["tree-row project", "apiNew worktree", "/home/user/projects/api"],
     ["tree-row worktree", "main", "/home/user/projects/api"],
     [
       "tree-row worktree",

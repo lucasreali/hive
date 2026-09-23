@@ -24,6 +24,12 @@ export interface Transport {
   listProjects(): Promise<void>;
   /** Asks the service to follow `path`; answered by `project_added` or `add_project_failed`. */
   addProject(path: string): Promise<void>;
+  /** Answered by `branches`. */
+  listBranches(project: string): Promise<void>;
+  /** Checks a new worktree name with the CLI's rule; answered by `worktree_name_validated`. */
+  validateWorktreeName(project: string, name: string): Promise<void>;
+  /** `hive worktree create`; answered by `worktree_created` or `create_worktree_failed`. */
+  createWorktree(project: string, name: string, base: string | null): Promise<void>;
 }
 
 /**

@@ -74,6 +74,15 @@ function ProjectNode({ project }: { project: Project }) {
           <FolderIcon />
           <span className="label">{project.name}</span>
         </button>
+        <button
+          type="button"
+          className="new-worktree"
+          title="New worktree (Ctrl+Shift+N)"
+          onClick={() => openModal("new-worktree", project.id)}
+        >
+          <PlusIcon size={10} />
+          New worktree
+        </button>
       </div>
       {open && (
         <ul>

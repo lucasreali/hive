@@ -45,11 +45,17 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.closeTerminal(7);
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
+  await tauriTransport.listBranches("/r");
+  await tauriTransport.validateWorktreeName("/r", "x");
+  await tauriTransport.createWorktree("/r", "x", null);
   expect(calls).toEqual([
     ["write_terminal", { id: 7, data: "ls\r" }],
     ["resize_terminal", { id: 7, cols: 100, rows: 30 }],
     ["close_terminal", { id: 7 }],
     ["list_projects", {}],
     ["add_project", { path: "/r" }],
+    ["list_branches", { project: "/r" }],
+    ["validate_worktree_name", { project: "/r", name: "x" }],
+    ["create_worktree", { project: "/r", name: "x", base: null }],
   ]);
 });

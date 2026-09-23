@@ -114,3 +114,31 @@ test("tree nodes toggle between collapsed and expanded", () => {
   toggleCollapsed("p");
   expect(useHive.getState().collapsed).toEqual({ p: false });
 });
+
+test("new-worktree answers are kept for the dialog until it opens again", () => {
+  const [shop] = MOCK_REPOS;
+  apply({ type: "projects", projects: [shop] });
+  openModal("new-worktree", shop.id);
+  expect(useHive.getState().modalProject).toBe(shop.id);
+  const branches = { project: shop.id, local: ["main"], remote: [], current: "main", error: null };
+  apply({ type: "branches", ...branches });
+  const check = { project: shop.id, name: "x", folder: "f", branch: "b", error: null };
+  apply({ type: "worktree_name_validated", ...check });
+  const failure = { project: shop.id, name: "x", message: "m" };
+  apply({ type: "create_worktree_failed", ...failure });
+  expect(useHive.getState().worktreeDialog).toEqual({
+    branches,
+    nameChecks: { x: check },
+    created: null,
+    createFailure: failure,
+  });
+  const path = `${shop.path}/.claude/worktrees/x`;
+  const updated = { ...shop, worktrees: [...shop.worktrees, { ...shop.worktrees[1], id: path }] };
+  apply({ type: "worktree_created", project: updated, path, notes: ["n"] });
+  const s = useHive.getState();
+  expect(s.projects?.[shop.id]).toBe(updated);
+  expect(s.worktreeDialog.created).toEqual({ project: shop.id, path, notes: ["n"] });
+  openModal("new-worktree");
+  expect(useHive.getState().modalProject).toBeNull();
+  expect(useHive.getState().worktreeDialog).toEqual(initialState.worktreeDialog);
+});

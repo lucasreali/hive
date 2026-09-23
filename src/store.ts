@@ -20,6 +20,10 @@ export type ServiceMessage =
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
+  | ({ type: "branches" } & Branches)
+  | ({ type: "worktree_name_validated" } & NameCheck)
+  | { type: "worktree_created"; project: Project; path: string; notes: string[] }
+  | ({ type: "create_worktree_failed" } & CreateFailure)
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -68,6 +72,35 @@ export type ProjectError =
   | "not_a_git_repository"
   | "storage";
 
+/** A project's branches; `current` is checked out in its main worktree (the "default"). */
+export type Branches = {
+  project: string;
+  local: string[];
+  remote: string[];
+  current: string | null;
+  error: string | null;
+};
+
+/** The service's verdict on a new worktree name, with the folder and branch it would get. */
+export type NameCheck = {
+  project: string;
+  name: string;
+  folder: string;
+  branch: string;
+  error: string | null;
+};
+
+export type CreateFailure = { project: string; name: string; message: string };
+
+/** Answers for the new-worktree dialog; reset whenever a dialog opens. */
+export type WorktreeDialog = {
+  branches: Branches | null;
+  /** By name: answers can arrive out of order while the user types. */
+  nameChecks: Record<string, NameCheck>;
+  created: { project: string; path: string; notes: string[] } | null;
+  createFailure: CreateFailure | null;
+};
+
 // ponytail: id-only shape; fields and `apply` cases arrive with the service messages that feed it (1.8).
 export type Agent = { id: string };
 
@@ -88,6 +121,9 @@ export type HiveState = {
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
   addProjectError: string | null;
+  /** The project a dialog opened for (e.g. the row's "New worktree"). */
+  modalProject: string | null;
+  worktreeDialog: WorktreeDialog;
   terminals: Record<number, Terminal>;
   agents: Record<string, Agent>;
 };
@@ -101,6 +137,8 @@ export const initialState: HiveState = {
   connection: { status: "connecting" },
   projects: null,
   addProjectError: null,
+  modalProject: null,
+  worktreeDialog: { branches: null, nameChecks: {}, created: null, createFailure: null },
   terminals: {},
   agents: {},
 };
@@ -110,6 +148,10 @@ export const useHive = create<HiveState>()(() => initialState);
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
   const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };
   return { terminals: { ...s.terminals, [id]: { ...current, ...patch } } };
+}
+
+function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<HiveState> {
+  return { worktreeDialog: { ...s.worktreeDialog, ...patch } };
 }
 
 function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
@@ -137,6 +179,25 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "add_project_failed":
       return { addProjectError: m.message };
+    case "branches": {
+      const { type: _, ...branches } = m;
+      return patchDialog(s, { branches });
+    }
+    case "worktree_name_validated": {
+      const { type: _, ...check } = m;
+      return patchDialog(s, { nameChecks: { ...s.worktreeDialog.nameChecks, [m.name]: check } });
+    }
+    case "create_worktree_failed": {
+      const { type: _, ...createFailure } = m;
+      return patchDialog(s, { createFailure });
+    }
+    case "worktree_created": {
+      const { project, path, notes } = m;
+      return {
+        projects: { ...s.projects, [project.id]: project },
+        ...patchDialog(s, { created: { project: project.id, path, notes } }),
+      };
+    }
     case "disconnected":
       return { connection: { status: "disconnected", reason: m.reason } };
     default:
@@ -150,7 +211,13 @@ export function apply(message: ServiceMessage): void {
   useHive.setState((s) => reduce(s, message));
 }
 
-export const openModal = (modal: Modal) => useHive.setState({ modal, addProjectError: null });
+export const openModal = (modal: Modal, modalProject: string | null = null) =>
+  useHive.setState({
+    modal,
+    modalProject,
+    addProjectError: null,
+    worktreeDialog: initialState.worktreeDialog,
+  });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const select = (selection: string | null) => useHive.setState({ selection });
 export const toggleCollapsed = (id: string) =>

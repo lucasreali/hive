@@ -1,5 +1,6 @@
 import { AddProjectDialog } from "./shell/AddProjectDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
+import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { RightPanel } from "./shell/RightPanel";
 import { Sidebar } from "./shell/Sidebar";
 import { StatusBar } from "./shell/StatusBar";
@@ -11,6 +12,7 @@ export function App() {
   const rightPanel = useHive((s) => s.rightPanel);
   const status = useHive((s) => s.connection.status);
   const modal = useHive((s) => s.modal);
+  const hasProjects = useHive((s) => Object.keys(s.projects ?? {}).length > 0);
   // Nothing works without the service: the workspace is inert under the block (#29).
   // The title bar stays usable, so the window can still be closed.
   const blocked = status === "version_mismatch" || status === "disconnected";
@@ -24,6 +26,7 @@ export function App() {
           {rightPanel === "files" && <RightPanel />}
         </main>
         {modal === "add-project" && !blocked && <AddProjectDialog />}
+        {modal === "new-worktree" && !blocked && hasProjects && <NewWorktreeDialog />}
         <ConnectionBlock />
       </div>
       <StatusBar />
