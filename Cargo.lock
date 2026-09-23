@@ -1463,8 +1463,6 @@ version = "0.1.0"
 name = "hive-app"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
@@ -1473,6 +1471,13 @@ dependencies = [
 [[package]]
 name = "hive-protocol"
 version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio-util",
+]
 
 [[package]]
 name = "html5ever"
@@ -3775,6 +3780,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "libc",
  "pin-project-lite",
  "tokio",
 ]
