@@ -513,6 +513,11 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
             .collect();
         let branches = parse_branches(out.as_bytes());
         assert_eq!(branches.local.len(), BRANCHES_LIMIT / 1000);
+        // A big repository (5000 remote branches) is listed whole.
+        let out: String = (0..5000)
+            .map(|i| format!(" refs/remotes/origin/renovate/dependency-{i:05}\n"))
+            .collect();
+        assert_eq!(parse_branches(out.as_bytes()).remote.len(), 5000);
         // Exactly at the limit is kept.
         let out = format!(" refs/heads/{}\n", "b".repeat(BRANCHES_LIMIT));
         assert_eq!(parse_branches(out.as_bytes()).local.len(), 1);
