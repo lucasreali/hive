@@ -10,6 +10,9 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+/// `WSL_DISTRO_NAME` of every spawned `hive`, reported back in `Welcome`.
+pub const DISTRO: &str = "hive-test";
+
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Env {
@@ -79,6 +82,7 @@ impl Env {
             .env("XDG_RUNTIME_DIR", self.path("run"))
             .env("XDG_DATA_HOME", self.path("data"))
             .env("XDG_CONFIG_HOME", self.path("config"))
+            .env("WSL_DISTRO_NAME", DISTRO)
             .env_remove("HIVE_TERMINAL_ID");
         cmd
     }
@@ -116,7 +120,8 @@ impl Env {
             (
                 0,
                 Control::Welcome {
-                    version: hive::VERSION.into()
+                    version: hive::VERSION.into(),
+                    distro: Some(DISTRO.into()),
                 }
             )
         );

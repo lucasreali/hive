@@ -6,7 +6,7 @@ use hive_protocol::{Control, Frame, FrameCodec, PROTOCOL_VERSION, Role};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
-use crate::common::{Env, TIMEOUT, wait_until};
+use crate::common::{DISTRO, Env, TIMEOUT, wait_until};
 
 struct Bridge {
     child: Child,
@@ -60,6 +60,7 @@ impl Bridge {
 fn welcome() -> Control {
     Control::Welcome {
         version: hive::VERSION.into(),
+        distro: Some(DISTRO.into()),
     }
 }
 

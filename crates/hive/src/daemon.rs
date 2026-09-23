@@ -249,6 +249,7 @@ where
         }) if protocol == PROTOCOL_VERSION && version == VERSION => (
             Control::Welcome {
                 version: VERSION.to_owned(),
+                distro: std::env::var("WSL_DISTRO_NAME").ok(),
             },
             Some(role),
         ),

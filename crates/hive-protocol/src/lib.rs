@@ -142,9 +142,12 @@ pub enum Control {
         version: String,
         role: Role,
     },
-    /// Handshake accepted.
+    /// Handshake accepted. `distro` is the service's WSL distribution (`WSL_DISTRO_NAME`);
+    /// optional, so adding it kept protocol 1 compatible.
     Welcome {
         version: String,
+        #[serde(default)]
+        distro: Option<String>,
     },
     /// Handshake refused; the connection is closed after this message.
     VersionMismatch {
@@ -303,6 +306,20 @@ mod tests {
             &frame.payload[..],
             br#"{"type":"resize","cols":80,"rows":24}"#
         );
+    }
+
+    #[test]
+    fn welcome_without_a_distro_still_decodes() {
+        let frame = Frame {
+            kind: FrameType::Control,
+            channel: 0,
+            payload: Bytes::from_static(br#"{"type":"welcome","version":"0.1.0"}"#),
+        };
+        let welcome = Control::Welcome {
+            version: "0.1.0".into(),
+            distro: None,
+        };
+        assert_eq!(frame.to_control().unwrap(), welcome);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use hive_protocol::{Control, Frame, FrameCodec, FrameType, Role, MAX_PAYLOAD};
+use hive_protocol::{Control, Frame, FrameCodec, FrameType, Role, MAX_PAYLOAD, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -272,6 +272,9 @@ async fn pump<R: AsyncRead + Unpin>(
         match message {
             Control::Welcome { .. } => link.welcome = Some(value.clone()),
             Control::VersionMismatch { .. } => {
+                // The UI shows both sides, so it gets the app's own versions too.
+                value["app_version"] = VERSION.into();
+                value["app_protocol"] = PROTOCOL_VERSION.into();
                 link.to_ui(value);
                 link.frames = None;
                 return End::Refused;

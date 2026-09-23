@@ -100,11 +100,12 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
     );
     let welcome = Control::Welcome {
         version: VERSION.into(),
+        distro: Some("Ubuntu".into()),
     };
     service.send(0, welcome).await;
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "welcome", "version": VERSION, "channel": 0})
+        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
     );
     (hive, service, rx)
 }
@@ -249,7 +250,7 @@ async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
     hive.connect(channel);
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "welcome", "version": VERSION, "channel": 0})
+        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
     );
     assert_eq!(service.control().await, (1, Control::CloseTerminal));
     // The old terminal's exit is not reported to the new UI.
@@ -275,6 +276,7 @@ async fn a_ui_reloaded_during_the_handshake_waits_for_welcome() {
             0,
             Control::Welcome {
                 version: VERSION.into(),
+                distro: None,
             },
         )
         .await;
@@ -289,6 +291,7 @@ async fn welcome_waits_for_a_ui_that_connects_later() {
     service.control().await;
     let welcome = Control::Welcome {
         version: VERSION.into(),
+        distro: Some("Ubuntu".into()),
     };
     service.send(0, welcome).await;
     let stored = async {
@@ -343,7 +346,14 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
     service.send(0, refused).await;
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "version_mismatch", "protocol": 9, "version": "9.9.9", "channel": 0})
+        json!({
+            "type": "version_mismatch",
+            "protocol": 9,
+            "version": "9.9.9",
+            "app_version": VERSION,
+            "app_protocol": PROTOCOL_VERSION,
+            "channel": 0
+        })
     );
     assert_eq!(hive.write_terminal(1, "x"), Err(NOT_CONNECTED.into()));
     drop(service);
