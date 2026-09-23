@@ -28,7 +28,7 @@ use crate::adapter::{Adapter, ClaudeCode};
 use crate::paths::Paths;
 use crate::projects::Projects;
 use crate::terminal::{self, Input, Terminal};
-use crate::{procs, watch, wrapper};
+use crate::{procs, watch, worktree, wrapper};
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
@@ -370,6 +370,48 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 },
             })
         }
+        Ok(Control::ListBranches { project }) => state.projects(move |projects| {
+            let (branches, error) = match projects.branches(&project) {
+                Ok(branches) => (branches, None),
+                Err(err) => (Default::default(), Some(err.to_string())),
+            };
+            Control::Branches {
+                project,
+                local: branches.local,
+                remote: branches.remote,
+                current: branches.current,
+                error,
+            }
+        }),
+        Ok(Control::ValidateWorktreeName { project, name }) => state.projects(move |projects| {
+            let error = projects.validate_worktree_name(&project, &name).err();
+            let (folder, branch) = worktree::planned(&name);
+            Control::WorktreeNameValidated {
+                project,
+                name,
+                folder,
+                branch,
+                error: error.map(|err| err.to_string()),
+            }
+        }),
+        Ok(Control::CreateWorktree {
+            project,
+            name,
+            base,
+        }) => state.projects(move |projects| {
+            match projects.create_worktree(&project, &name, base.as_deref()) {
+                Ok((project, created)) => Control::WorktreeCreated {
+                    project,
+                    path: created.path.to_string_lossy().into_owned(),
+                    notes: created.notes,
+                },
+                Err(err) => Control::CreateWorktreeFailed {
+                    project,
+                    name,
+                    message: err.to_string(),
+                },
+            }
+        }),
         _ => {
             let message = "unexpected message from the app".to_owned();
             state.to_app(channel, &Control::Error { message }).await;

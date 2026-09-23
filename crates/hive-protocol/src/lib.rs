@@ -198,6 +198,59 @@ pub enum Control {
         /// Readable explanation, shown as is.
         message: String,
     },
+    /// App → service: the local and remote branches of a followed project, answered by
+    /// `Branches`.
+    ListBranches {
+        project: String,
+    },
+    Branches {
+        project: String,
+        /// Short names, e.g. `main`, sorted by git.
+        local: Vec<String>,
+        /// e.g. `origin/main`; remote `HEAD` symrefs are left out.
+        remote: Vec<String>,
+        /// The branch checked out in the main worktree: the base when none is given.
+        current: Option<String>,
+        /// Why the branches could not be listed.
+        error: Option<String>,
+    },
+    /// App → service: checks a new worktree's name with the CLI's rule (#33), answered by
+    /// `WorktreeNameValidated`. Sent as the user types.
+    ValidateWorktreeName {
+        project: String,
+        name: String,
+    },
+    WorktreeNameValidated {
+        project: String,
+        name: String,
+        /// Where the worktree would go, relative to the project, e.g. `.claude/worktrees/x/`.
+        folder: String,
+        /// The branch it would get, e.g. `worktree-x`.
+        branch: String,
+        /// Why the name is refused, worded as `hive worktree create` says it.
+        error: Option<String>,
+    },
+    /// App → service: `hive worktree create` for a followed project. Answered by
+    /// `WorktreeCreated` or `CreateWorktreeFailed`.
+    CreateWorktree {
+        project: String,
+        name: String,
+        /// Local or remote branch to start from; the main worktree's HEAD when `None`.
+        base: Option<String>,
+    },
+    WorktreeCreated {
+        /// The project with its updated worktrees.
+        project: Project,
+        /// The new worktree's path (also its id).
+        path: String,
+        /// What the CLI prints on stderr, e.g. a competing `WorktreeCreate` hook.
+        notes: Vec<String>,
+    },
+    CreateWorktreeFailed {
+        project: String,
+        name: String,
+        message: String,
+    },
     Error {
         message: String,
     },
@@ -433,6 +486,27 @@ mod tests {
             &Frame::control(0, &failed).payload[..],
             br#"{"type":"add_project_failed","path":"x","error":"not_a_git_repository","message":"m"}"#
         );
+    }
+
+    #[test]
+    fn worktree_messages_are_tagged_json() {
+        let create = Control::CreateWorktree {
+            project: "/r".into(),
+            name: "x".into(),
+            base: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &create).payload[..],
+            br#"{"type":"create_worktree","project":"/r","name":"x","base":null}"#
+        );
+        let branches = Control::Branches {
+            project: "/r".into(),
+            local: vec!["main".into()],
+            remote: vec!["origin/main".into()],
+            current: Some("main".into()),
+            error: None,
+        };
+        assert_eq!(Frame::control(0, &branches).to_control().unwrap(), branches);
     }
 
     #[test]

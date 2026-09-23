@@ -2,7 +2,6 @@
 
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -93,20 +92,24 @@ fn run_worktree(command: WorktreeCommand) -> io::Result<()> {
     let cwd = std::env::current_dir()?;
     match command {
         WorktreeCommand::Create { name, base } => {
-            print_path(&worktree::create(&cwd, &name, base.as_deref())?)
+            report(worktree::create(&cwd, &name, base.as_deref())?)
         }
         WorktreeCommand::List => worktree::list(&cwd)?
             .iter()
             .try_for_each(|wt| writeln!(io::stdout(), "{wt}")),
         WorktreeCommand::Remove { name } => worktree::remove(&cwd, &name),
-        WorktreeCommand::HookCreate => print_path(&worktree::hook_create(&mut io::stdin())?),
+        WorktreeCommand::HookCreate => report(worktree::hook_create(&mut io::stdin())?),
         WorktreeCommand::HookRemove => worktree::hook_remove(&mut io::stdin()),
     }
 }
 
-/// Prints a path byte for byte (a hook's stdout must be exactly the path).
-fn print_path(path: &Path) -> io::Result<()> {
-    let mut line = path.as_os_str().as_bytes().to_vec();
+/// Prints the notes on stderr and the path byte for byte on stdout (a hook's stdout must be
+/// exactly the path).
+fn report(created: worktree::Created) -> io::Result<()> {
+    for note in &created.notes {
+        eprintln!("hive: {note}");
+    }
+    let mut line = created.path.as_os_str().as_bytes().to_vec();
     line.push(b'\n');
     io::stdout().write_all(&line)
 }

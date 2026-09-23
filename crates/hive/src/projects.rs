@@ -67,6 +67,36 @@ impl Projects {
         Ok(project(&id))
     }
 
+    /// The branches of the followed project `id`.
+    pub fn branches(&self, id: &str) -> io::Result<worktree::Branches> {
+        worktree::branches(&self.root(id)?)
+    }
+
+    /// Checks a new worktree name for the followed project `id`, as `create` would.
+    pub fn validate_worktree_name(&self, id: &str, name: &str) -> io::Result<()> {
+        worktree::check_name(&self.root(id)?, name).map(drop)
+    }
+
+    /// `hive worktree create` in the followed project `id`; answers the project with its
+    /// updated worktrees.
+    pub fn create_worktree(
+        &self,
+        id: &str,
+        name: &str,
+        base: Option<&str>,
+    ) -> io::Result<(Project, worktree::Created)> {
+        let created = worktree::create(&self.root(id)?, name, base)?;
+        Ok((project(id), created))
+    }
+
+    /// Only followed projects are acted on: the id comes from the app.
+    fn root(&self, id: &str) -> io::Result<PathBuf> {
+        if self.paths().iter().any(|path| path == id) {
+            return Ok(PathBuf::from(id));
+        }
+        Err(io::Error::other(format!("{id} is not a followed project")))
+    }
+
     fn paths(&self) -> MutexGuard<'_, Vec<String>> {
         self.paths.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -249,6 +279,25 @@ mod tests {
         }
         assert!(projects.list().is_empty());
         assert!(!tmp.path().join("projects.json").exists());
+    }
+
+    #[test]
+    fn worktree_requests_need_a_followed_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = Projects::load(tmp.path().join("projects.json"));
+        let id = tmp.path().display().to_string();
+        let refused = format!("{id} is not a followed project");
+        assert_eq!(projects.branches(&id).unwrap_err().to_string(), refused);
+        let err = projects.validate_worktree_name(&id, "x").unwrap_err();
+        assert_eq!(err.to_string(), refused);
+        let err = projects.create_worktree(&id, "x", None).unwrap_err();
+        assert_eq!(err.to_string(), refused);
+        assert!(!tmp.path().join(WORKTREES_DIR).exists());
+        // A followed one gets the same checks as the CLI, without git for the name.
+        projects.paths().push(id.clone());
+        assert!(projects.validate_worktree_name(&id, "free").is_ok());
+        let err = projects.validate_worktree_name(&id, "Bad").unwrap_err();
+        assert!(err.to_string().starts_with("invalid worktree name"));
     }
 
     #[test]

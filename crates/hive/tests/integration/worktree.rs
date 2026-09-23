@@ -71,13 +71,13 @@ impl Repo {
         self.git_in(&self.root, args)
     }
 
-    fn write(&self, rel: &str, content: &str) {
+    pub(crate) fn write(&self, rel: &str, content: &str) {
         let path = self.root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
     }
 
-    fn commit(&self, rel: &str, content: &str) {
+    pub(crate) fn commit(&self, rel: &str, content: &str) {
         self.write(rel, content);
         self.git(&["add", "-f", rel]);
         self.git(&["commit", "-q", "-m", rel]);
@@ -279,7 +279,12 @@ fn worktreeinclude_copies_only_gitignored_matches() {
     repo.write("other.log", "ignored but not included");
     std::os::unix::fs::symlink(repo.env.path("home"), repo.root.join("link")).unwrap();
 
-    let path = repo.create(&["inc"]);
+    let out = repo.hive(&["create", "inc"]);
+    assert_eq!(
+        stderr(&out),
+        "hive: copied 2 files listed in .worktreeinclude\n"
+    );
+    let path = repo.path("inc");
     assert_eq!(
         std::fs::read_to_string(path.join(".env")).unwrap(),
         "SECRET=1"

@@ -17,6 +17,8 @@ const SETTINGS_LIMIT: u64 = 1024 * 1024;
 /// Where Claude Code (and Hive) put worktrees, relative to the main worktree.
 pub const WORKTREES_DIR: &str = ".claude/worktrees";
 const INCLUDE_FILE: &str = ".worktreeinclude";
+/// Most bytes of branch names listed for the app; a repository with more is cut short.
+const BRANCHES_LIMIT: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
@@ -50,6 +52,89 @@ pub fn validate_name(name: &str) -> io::Result<()> {
     )))
 }
 
+/// A new worktree and what the CLI reports about it on stderr.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Created {
+    pub path: PathBuf,
+    /// e.g. a competing `WorktreeCreate` hook or the `.worktreeinclude` files copied.
+    pub notes: Vec<String>,
+}
+
+/// The folder (relative to the main worktree) and branch the worktree `name` gets.
+/// An empty name shows as `<name>`.
+pub fn planned(name: &str) -> (String, String) {
+    let name = if name.is_empty() { "<name>" } else { name };
+    (
+        format!("{WORKTREES_DIR}/{name}/"),
+        format!("worktree-{name}"),
+    )
+}
+
+/// Refuses an invalid name, or one whose folder already exists under `root` (the main
+/// worktree). Returns the worktree's path. Git refuses an existing branch later.
+pub fn check_name(root: &Path, name: &str) -> io::Result<PathBuf> {
+    validate_name(name)?;
+    let path = root.join(WORKTREES_DIR).join(name);
+    if path.symlink_metadata().is_ok() {
+        return Err(io::Error::other(format!(
+            "worktree {name:?} already exists at {}",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+/// Local and remote branches, and the branch checked out where git runs.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Branches {
+    pub local: Vec<String>,
+    pub remote: Vec<String>,
+    pub current: Option<String>,
+}
+
+/// Parses `git for-each-ref --format=%(HEAD)%(refname) refs/heads refs/remotes`: one ref
+/// per line, prefixed by `*` for the checked-out branch. Remote `HEAD` symrefs are skipped
+/// and at most [`BRANCHES_LIMIT`] bytes of names are kept.
+pub fn parse_branches(out: &[u8]) -> Branches {
+    let mut branches = Branches::default();
+    let mut budget = BRANCHES_LIMIT;
+    for line in String::from_utf8_lossy(out).lines() {
+        let (current, refname) = match line.strip_prefix('*') {
+            Some(refname) => (true, refname),
+            None => (false, line.trim_start()),
+        };
+        let (list, name) = if let Some(name) = refname.strip_prefix("refs/heads/") {
+            (&mut branches.local, name)
+        } else if let Some(name) = refname.strip_prefix("refs/remotes/")
+            && !name.ends_with("/HEAD")
+        {
+            (&mut branches.remote, name)
+        } else {
+            continue;
+        };
+        let Some(left) = budget.checked_sub(name.len()) else {
+            break;
+        };
+        budget = left;
+        if current {
+            branches.current = Some(name.to_owned());
+        }
+        list.push(name.to_owned());
+    }
+    branches
+}
+
+/// The branches of the repository at `root`; `current` is the one checked out there.
+pub fn branches(root: &Path) -> io::Result<Branches> {
+    let args = [
+        "for-each-ref",
+        "--format=%(HEAD)%(refname)",
+        "refs/heads",
+        "refs/remotes",
+    ];
+    git(root, &args).map(|out| parse_branches(&out))
+}
+
 /// Parses `git worktree list --porcelain -z`.
 pub fn parse_porcelain(out: &[u8]) -> Vec<Worktree> {
     let mut list: Vec<Worktree> = Vec::new();
@@ -78,25 +163,22 @@ pub fn list(dir: &Path) -> io::Result<Vec<Worktree>> {
 }
 
 /// Creates the worktree `name` for the repository containing `dir` (even from inside a
-/// linked worktree) and returns its path.
-pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<PathBuf> {
+/// linked worktree). The CLI and the app's dialog both come here (#33).
+pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created> {
     validate_name(name)?;
     if let Some(base) = base.filter(|base| base.starts_with('-')) {
         return Err(io::Error::other(format!("invalid base branch {base:?}")));
     }
     let root = main_root(dir)?;
-    for file in own_create_hooks(&root) {
-        eprintln!(
-            "hive: warning: {file} defines its own WorktreeCreate hook; it will compete with Hive's"
-        );
-    }
-    let path = root.join(WORKTREES_DIR).join(name);
-    if path.symlink_metadata().is_ok() {
-        return Err(io::Error::other(format!(
-            "worktree {name:?} already exists at {}",
-            path.display()
-        )));
-    }
+    let path = check_name(&root, name)?;
+    let mut notes: Vec<String> = own_create_hooks(&root)
+        .into_iter()
+        .map(|file| {
+            format!(
+                "warning: {file} defines its own WorktreeCreate hook; it will compete with Hive's"
+            )
+        })
+        .collect();
     let included = included_files(&root)?;
     let branch = format!("worktree-{name}");
     // `-b` refuses an existing branch.
@@ -109,19 +191,28 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<PathBuf>
     ];
     args.extend(base.map(OsStr::new));
     run_git(&root, &args, &[], &[0])?;
-    if let Err(err) = copy_included(&root, &path, &included) {
-        // Undo the brand-new worktree and branch: a failed create leaves nothing behind.
-        let remove = [
-            OsStr::new("worktree"),
-            OsStr::new("remove"),
-            OsStr::new("--force"),
-            path.as_os_str(),
-        ];
-        let _ = run_git(&root, &remove, &[], &[0]);
-        let _ = git(&root, &["branch", "-D", &branch]);
-        return Err(err);
+    match copy_included(&root, &path, &included) {
+        Ok(0) => {}
+        Ok(copied) => notes.push(copied_note(copied)),
+        Err(err) => {
+            // Undo the brand-new worktree and branch: a failed create leaves nothing behind.
+            let remove = [
+                OsStr::new("worktree"),
+                OsStr::new("remove"),
+                OsStr::new("--force"),
+                path.as_os_str(),
+            ];
+            let _ = run_git(&root, &remove, &[], &[0]);
+            let _ = git(&root, &["branch", "-D", &branch]);
+            return Err(err);
+        }
     }
-    Ok(path)
+    Ok(Created { path, notes })
+}
+
+fn copied_note(copied: usize) -> String {
+    let files = if copied == 1 { "file" } else { "files" };
+    format!("copied {copied} {files} listed in {INCLUDE_FILE}")
 }
 
 /// Removes the worktree `name` with `git worktree remove` (refused if it has changes).
@@ -135,12 +226,15 @@ pub fn remove(dir: &Path, name: &str) -> io::Result<()> {
 /// `WorktreeCreate` hook: creates the worktree `name` in the repository of `cwd`, or
 /// reuses it when it is already a Hive worktree (`claude -w <existing>` reopens it, as
 /// Claude Code does without the hook).
-pub fn hook_create(input: &mut dyn Read) -> io::Result<PathBuf> {
+pub fn hook_create(input: &mut dyn Read) -> io::Result<Created> {
     let payload = read_payload(input)?;
     let name = field(&payload, "name")?;
     let cwd = Path::new(field(&payload, "cwd")?);
     match existing(cwd, name)? {
-        Some(path) => Ok(path),
+        Some(path) => Ok(Created {
+            path,
+            notes: Vec::new(),
+        }),
         None => create(cwd, name, None),
     }
 }
@@ -248,8 +342,10 @@ fn included_files(root: &Path) -> io::Result<Vec<u8>> {
 }
 
 /// Copies `included` (from [`included_files`]) from `root` into the new worktree. Only
-/// regular files are copied, never over an existing path nor through a symlink.
-fn copy_included(root: &Path, worktree: &Path, included: &[u8]) -> io::Result<()> {
+/// regular files are copied, never over an existing path nor through a symlink. Returns how
+/// many were copied.
+fn copy_included(root: &Path, worktree: &Path, included: &[u8]) -> io::Result<usize> {
+    let mut copied = 0;
     for rel in included
         .split(|&b| b == 0)
         .map(|p| Path::new(OsStr::from_bytes(p)))
@@ -262,8 +358,9 @@ fn copy_included(root: &Path, worktree: &Path, included: &[u8]) -> io::Result<()
         let dst = worktree.join(rel);
         std::fs::create_dir_all(dst.parent().unwrap_or(worktree))?;
         std::fs::copy(src, dst)?;
+        copied += 1;
     }
-    Ok(())
+    Ok(copied)
 }
 
 /// Whether writing `rel` under `base` would overwrite something (e.g. a tracked file or
@@ -390,6 +487,69 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
         assert!(!has_create_hook(br#"{"hooks":{"WorktreeRemove":[{}]}}"#));
         assert!(!has_create_hook(br#"{"hooks":{"WorktreeCreate":"x"}}"#));
         assert!(!has_create_hook(b"not json"));
+    }
+
+    #[test]
+    fn branches_are_parsed() {
+        let out = b"*refs/heads/main\n refs/heads/feat/x\n refs/remotes/origin/HEAD\n\
+ refs/remotes/origin/main\n refs/tags/v1\n";
+        let branches = parse_branches(out);
+        assert_eq!(
+            branches,
+            Branches {
+                local: vec!["main".into(), "feat/x".into()],
+                remote: vec!["origin/main".into()],
+                current: Some("main".into()),
+            }
+        );
+        assert_eq!(parse_branches(b""), Branches::default());
+    }
+
+    #[test]
+    fn branch_names_are_size_limited() {
+        let name = "b".repeat(1000);
+        let out: String = (0..BRANCHES_LIMIT / 1000 + 5)
+            .map(|_| format!(" refs/heads/{name}\n"))
+            .collect();
+        let branches = parse_branches(out.as_bytes());
+        assert_eq!(branches.local.len(), BRANCHES_LIMIT / 1000);
+        // Exactly at the limit is kept.
+        let out = format!(" refs/heads/{}\n", "b".repeat(BRANCHES_LIMIT));
+        assert_eq!(parse_branches(out.as_bytes()).local.len(), 1);
+    }
+
+    #[test]
+    fn planned_folder_and_branch() {
+        assert_eq!(
+            planned("fix-a"),
+            (".claude/worktrees/fix-a/".into(), "worktree-fix-a".into())
+        );
+        assert_eq!(
+            planned(""),
+            (".claude/worktrees/<name>/".into(), "worktree-<name>".into())
+        );
+    }
+
+    #[test]
+    fn existing_folders_are_refused_by_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".claude/worktrees/taken")).unwrap();
+        let err = check_name(tmp.path(), "taken").unwrap_err().to_string();
+        assert!(
+            err.starts_with("worktree \"taken\" already exists at "),
+            "{err}"
+        );
+        assert_eq!(
+            check_name(tmp.path(), "free").unwrap(),
+            tmp.path().join(".claude/worktrees/free")
+        );
+        assert!(check_name(tmp.path(), "Bad").is_err());
+    }
+
+    #[test]
+    fn copied_files_are_counted() {
+        assert_eq!(copied_note(1), "copied 1 file listed in .worktreeinclude");
+        assert_eq!(copied_note(3), "copied 3 files listed in .worktreeinclude");
     }
 
     #[test]

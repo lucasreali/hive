@@ -171,3 +171,140 @@ async fn a_moved_project_reports_why_it_has_no_worktrees() {
     drop(conn);
     assert!(daemon.wait_exit().success());
 }
+
+async fn request(conn: &mut Conn, message: Control) -> Control {
+    conn.send(0, message).await;
+    conn.control().await.1
+}
+
+#[tokio::test]
+async fn the_dialog_lists_branches_validates_names_and_creates_worktrees() {
+    let repo = Repo::new();
+    let origin = repo.env.path("home/origin.git");
+    repo.git(&["init", "-q", "--bare", origin.to_str().unwrap()]);
+    repo.git(&["remote", "add", "origin", origin.to_str().unwrap()]);
+    repo.git(&["push", "-q", "origin", "main"]);
+    repo.git(&["remote", "set-head", "origin", "main"]);
+    repo.git(&["branch", "develop"]);
+    repo.commit(".gitignore", ".env\n");
+    repo.commit(".worktreeinclude", ".env\n");
+    repo.write(".env", "SECRET=1");
+    repo.write(
+        ".claude/settings.local.json",
+        r#"{"hooks":{"WorktreeCreate":[{"hooks":[{"type":"command","command":"x"}]}]}}"#,
+    );
+    let root = repo.root.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+
+    // Requests for a project that is not followed are refused.
+    let refused = format!("{root} is not a followed project");
+    let branches = request(
+        &mut conn,
+        Control::ListBranches {
+            project: root.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        branches,
+        Control::Branches {
+            project: root.clone(),
+            local: vec![],
+            remote: vec![],
+            current: None,
+            error: Some(refused.clone()),
+        }
+    );
+    added(&mut conn, &root).await;
+
+    let branches = request(
+        &mut conn,
+        Control::ListBranches {
+            project: root.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        branches,
+        Control::Branches {
+            project: root.clone(),
+            local: vec!["develop".into(), "main".into()],
+            remote: vec!["origin/main".into()],
+            current: Some("main".into()),
+            error: None,
+        }
+    );
+
+    let validate = |name: &str| Control::ValidateWorktreeName {
+        project: root.clone(),
+        name: name.into(),
+    };
+    let checked = request(&mut conn, validate("fix-a")).await;
+    assert_eq!(
+        checked,
+        Control::WorktreeNameValidated {
+            project: root.clone(),
+            name: "fix-a".into(),
+            folder: ".claude/worktrees/fix-a/".into(),
+            branch: "worktree-fix-a".into(),
+            error: None,
+        }
+    );
+    let Control::WorktreeNameValidated { error, .. } = request(&mut conn, validate("Fix")).await
+    else {
+        panic!("expected a validation")
+    };
+    assert!(error.unwrap().starts_with("invalid worktree name \"Fix\""));
+
+    let create = |name: &str, base: Option<&str>| Control::CreateWorktree {
+        project: root.clone(),
+        name: name.into(),
+        base: base.map(Into::into),
+    };
+    let Control::WorktreeCreated {
+        project,
+        path,
+        notes,
+    } = request(&mut conn, create("fix-a", Some("origin/main"))).await
+    else {
+        panic!("expected a new worktree")
+    };
+    assert_eq!(path, format!("{root}/.claude/worktrees/fix-a"));
+    assert!(project.worktrees.iter().any(|w| w.path == path && w.claude));
+    assert_eq!(
+        notes,
+        [
+            "warning: .claude/settings.local.json defines its own WorktreeCreate hook; it will compete with Hive's",
+            "copied 1 file listed in .worktreeinclude",
+        ]
+    );
+    assert_eq!(
+        repo.git(&["rev-parse", "worktree-fix-a"]),
+        repo.git(&["rev-parse", "origin/main"])
+    );
+
+    // The existing folder is now refused by name, as the CLI does.
+    let Control::WorktreeNameValidated { error, .. } = request(&mut conn, validate("fix-a")).await
+    else {
+        panic!("expected a validation")
+    };
+    assert!(
+        error
+            .unwrap()
+            .starts_with("worktree \"fix-a\" already exists at ")
+    );
+    let failed = request(&mut conn, create("fix-a", None)).await;
+    let Control::CreateWorktreeFailed {
+        project,
+        name,
+        message,
+    } = failed
+    else {
+        panic!("expected a failure: {failed:?}")
+    };
+    assert_eq!((project.as_str(), name.as_str()), (&*root, "fix-a"));
+    assert!(message.starts_with("worktree \"fix-a\" already exists"));
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}
