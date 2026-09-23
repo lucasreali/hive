@@ -29,10 +29,7 @@ You implement **one** task of `TODO.md`, launched by the orchestrator (`.claude/
 ## Finishing (CLAUDE.md rule 4: you own your work, conflicts included)
 1. Tick the task in `TODO.md` (branch name + a short italic note, same style as earlier entries) and commit (small Conventional Commits throughout).
 2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, and re-run **all** gates.
-3. Integrate under the lock, from your worktree:
-   `flock /var/tmp/hive-merge.lock -c 'cd "$(git worktree list | head -1 | cut -d" " -f1)" && test "$(git branch --show-current)" = main && git diff --quiet HEAD && git merge <branch>'`
-   If `main` moved again, repeat step 2. If the main checkout is not on a clean `main`, wait a minute and retry.
-4. `git switch --detach`, then `git branch -d <branch>`.
+3. Leave the worktree clean on your branch and report. You cannot run git in the main checkout; the orchestrator fast-forwards `main` to your branch. If `main` moved meanwhile, it sends you back to step 2.
 
 ## Stop instead of guessing
 If a decision is unclear, missing or contradicted by reality, stop (branch unmerged) and put the question in your report with a recommendation. Never change a decision.
