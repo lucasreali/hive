@@ -685,7 +685,10 @@ fn the_app_exit_ends_the_connection() {
     let connect = json!({"onMessage": "__CHANNEL__:1"});
     assert_eq!(invoke(&webview, "connect", connect), Ok(Value::Null));
     on_run_event(app.handle(), RunEvent::Ready);
-    assert_eq!(invoke(&webview, "list_projects", json!({})), Ok(Value::Null));
+    assert_eq!(
+        invoke(&webview, "list_projects", json!({})),
+        Ok(Value::Null)
+    );
     on_run_event(app.handle(), RunEvent::Exit);
     assert_eq!(
         invoke(&webview, "list_projects", json!({})),
