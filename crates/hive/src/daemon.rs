@@ -171,12 +171,8 @@ impl State {
     fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
         let state = self.clone();
         tokio::spawn(async move {
-            let inner = state.clone();
-            let reply = tokio::task::spawn_blocking(move || request(&inner.projects))
-                .await
-                .unwrap_or_else(|err| Control::Error {
-                    message: format!("project request failed: {err}"),
-                });
+            // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
+            let reply = tokio::task::block_in_place(|| request(&state.projects));
             state.to_app(0, &reply).await;
         });
     }

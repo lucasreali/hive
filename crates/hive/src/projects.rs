@@ -115,7 +115,7 @@ fn project(path: &str) -> Project {
     };
     Project {
         id: path.to_owned(),
-        name: file_name(root).unwrap_or_else(|| path.to_owned()),
+        name: file_name(root).unwrap_or(path.to_owned()),
         path: path.to_owned(),
         worktrees,
         error,
