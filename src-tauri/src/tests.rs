@@ -254,6 +254,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.list_changes("/r".into()).unwrap();
     let changes = Control::ListChanges { path: "/r".into() };
     assert_eq!(service.control().await, (0, changes));
+    hive.open_file("/r".into(), "a".into()).unwrap();
+    let open = Control::OpenFile {
+        worktree: "/r".into(),
+        path: "a".into(),
+    };
+    assert_eq!(service.control().await, (0, open));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -383,6 +389,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.list_changes("/r".into()), not_connected);
+    assert_eq!(hive.open_file("/r".into(), "a".into()), not_connected);
     let (channel, _bytes) = output();
     assert_eq!(
         hive.open_terminal("/".into(), 1, 1, channel),
@@ -544,7 +551,8 @@ fn commands_reach_the_managed_hive() {
             list_branches,
             validate_worktree_name,
             create_worktree,
-            list_changes
+            list_changes,
+            open_file
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -580,11 +588,13 @@ fn commands_reach_the_managed_hive() {
     let validate = json!({"project": "/r", "name": "x"});
     let create = json!({"project": "/r", "name": "x", "base": null});
     let changes = json!({"path": "/r"});
+    let file = json!({"worktree": "/r", "path": "a"});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
         ("create_worktree", &create),
         ("list_changes", &changes),
+        ("open_file", &file),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
@@ -612,6 +622,7 @@ fn commands_reach_the_managed_hive() {
         ("validate_worktree_name", validate),
         ("create_worktree", create),
         ("list_changes", changes),
+        ("open_file", file),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

@@ -293,6 +293,31 @@ pub enum Control {
         /// Why nothing could be listed, or why the list was cut short.
         error: Option<String>,
     },
+    /// App → service: one file of a worktree of a followed project for the viewer and diff
+    /// (#31), answered by `File`. `path` is relative to the worktree and must stay inside it.
+    OpenFile {
+        worktree: String,
+        path: String,
+    },
+    /// A file's text on disk and at `HEAD`; both `None` when binary or too large.
+    File {
+        worktree: String,
+        path: String,
+        /// The text on disk; `None` when the file is gone.
+        content: Option<String>,
+        /// The text at `HEAD` (a renamed file's old path); `None` when the file is new or
+        /// before the first commit.
+        base: Option<String>,
+        /// An opaque token for the bytes on disk, only compared for equality; `None` when
+        /// they were not read (gone or too large).
+        version: Option<String>,
+        /// A NUL byte in the first 8000 bytes of either side, or not UTF-8.
+        binary: bool,
+        /// Over the service's size cap.
+        too_large: bool,
+        /// Why the file could not be read.
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -705,6 +730,29 @@ mod tests {
         );
         let list = Control::ListChanges { path: "/r".into() };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+    }
+
+    #[test]
+    fn file_messages_are_tagged_json() {
+        let file = Control::File {
+            worktree: "/r".into(),
+            path: "a".into(),
+            content: Some("x".into()),
+            base: None,
+            version: Some("v".into()),
+            binary: false,
+            too_large: false,
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &file).payload[..],
+            br#"{"type":"file","worktree":"/r","path":"a","content":"x","base":null,"version":"v","binary":false,"too_large":false,"error":null}"#
+        );
+        let open = Control::OpenFile {
+            worktree: "/r".into(),
+            path: "a".into(),
+        };
+        assert_eq!(Frame::control(0, &open).to_control().unwrap(), open);
     }
 
     #[test]

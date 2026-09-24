@@ -17,7 +17,7 @@ const GIT_LIMIT: u64 = 16_777_216; // 16 MiB
 /// Untracked files larger than this are not counted (their lines show as unknown).
 const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
 /// Git's binary heuristic: a NUL byte in the first 8000 bytes.
-const BINARY_PROBE: usize = 8000;
+pub(crate) const BINARY_PROBE: usize = 8000;
 /// Most bytes of JSON for the files of one `changes` message, well under `MAX_PAYLOAD`.
 const MESSAGE_BUDGET: usize = 3_145_728; // 3 MiB
 
@@ -230,7 +230,7 @@ fn git(dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     git_ok(dir, args, &[0])
 }
 
-fn git_ok(dir: &Path, args: &[&str], ok: &[i32]) -> io::Result<Vec<u8>> {
+pub(crate) fn git_ok(dir: &Path, args: &[&str], ok: &[i32]) -> io::Result<Vec<u8>> {
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     run_git(dir, &args, &[], ok, GIT_LIMIT)
 }

@@ -23,6 +23,7 @@ fn main() {
             commands::validate_worktree_name,
             commands::create_worktree,
             commands::list_changes,
+            commands::open_file,
         ])
         .build(tauri::generate_context!());
     match result {

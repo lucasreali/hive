@@ -5,6 +5,7 @@ pub mod bridge;
 pub mod changes;
 pub mod cli;
 pub mod daemon;
+pub mod file;
 pub mod hook;
 pub mod paths;
 pub mod procs;

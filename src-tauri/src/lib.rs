@@ -299,6 +299,11 @@ impl Hive {
     pub fn list_changes(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::ListChanges { path })
     }
+
+    /// The answer arrives as `file`.
+    pub fn open_file(&self, worktree: String, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::OpenFile { worktree, path })
+    }
 }
 
 /// A piped stdio handle of the bridge; always there, since every one is requested.
@@ -455,6 +460,11 @@ pub mod commands {
     #[tauri::command]
     pub fn list_changes(hive: State<'_, Hive>, path: String) -> Result<(), String> {
         hive.list_changes(path)
+    }
+
+    #[tauri::command]
+    pub fn open_file(hive: State<'_, Hive>, worktree: String, path: String) -> Result<(), String> {
+        hive.open_file(worktree, path)
     }
 }
 

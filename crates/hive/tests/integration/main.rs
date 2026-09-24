@@ -11,6 +11,8 @@ mod common;
 #[cfg(test)]
 mod daemon;
 #[cfg(test)]
+mod file;
+#[cfg(test)]
 mod hook;
 #[cfg(test)]
 mod projects;
