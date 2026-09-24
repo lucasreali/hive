@@ -576,6 +576,33 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 },
             }
         }),
+        Ok(Control::RemoveWorktree { path, force }) => {
+            state.projects(move |projects| {
+                match projects.remove_worktree(&path, force, Path::new("/proc")) {
+                    Ok(project) => Control::WorktreeRemoved { project, path },
+                    Err(err) => Control::RemoveWorktreeFailed {
+                        path,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
+        Ok(Control::RenameWorktree { path, name }) => {
+            state.projects(move |projects| {
+                match projects.rename_worktree(&path, &name, Path::new("/proc")) {
+                    Ok((project, to)) => Control::WorktreeRenamed {
+                        project,
+                        from: path,
+                        path: to,
+                    },
+                    Err(err) => Control::RenameWorktreeFailed {
+                        path,
+                        name,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
         Ok(Control::ListChanges { path }) => state.projects(move |projects| {
             let listed = projects.worktree(&path).and_then(|dir| changes::list(&dir));
             changes::message(path, listed)

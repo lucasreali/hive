@@ -309,3 +309,146 @@ async fn the_dialog_lists_branches_validates_names_and_creates_worktrees() {
     drop(conn);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn the_menu_removes_and_renames_worktrees() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let wt = |name: &str| format!("{root}/.claude/worktrees/{name}");
+    let mut daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    added(&mut conn, &root).await;
+    for name in ["a", "b", "c"] {
+        let create = Control::CreateWorktree {
+            project: root.clone(),
+            name: name.into(),
+            base: None,
+        };
+        let created = request(&mut conn, create).await;
+        assert!(
+            matches!(created, Control::WorktreeCreated { .. }),
+            "{created:?}"
+        );
+    }
+    let outside = repo.env.path("home/outside");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "out",
+        outside.to_str().unwrap(),
+    ]);
+    let outside = outside.display().to_string();
+
+    let remove = |path: &str, force: bool| Control::RemoveWorktree {
+        path: path.into(),
+        force,
+    };
+    let rename = |path: &str, name: &str| Control::RenameWorktree {
+        path: path.into(),
+        name: name.into(),
+    };
+    let remove_failure = |answer: Control| match answer {
+        Control::RemoveWorktreeFailed { message, .. } => message,
+        other => panic!("expected a failure: {other:?}"),
+    };
+    let rename_failure = |answer: Control| match answer {
+        Control::RenameWorktreeFailed { message, .. } => message,
+        other => panic!("expected a failure: {other:?}"),
+    };
+
+    // Only linked worktrees of followed projects.
+    let main = remove_failure(request(&mut conn, remove(&root, true)).await);
+    assert_eq!(main, format!("{root} is the project's main worktree"));
+    let stray = rename_failure(request(&mut conn, rename("/nope", "x")).await);
+    assert_eq!(stray, "/nope is not a worktree of a followed project");
+    let foreign = rename_failure(request(&mut conn, rename(&outside, "x")).await);
+    assert_eq!(
+        foreign,
+        "only worktrees under .claude/worktrees can be renamed"
+    );
+
+    // Changes keep a worktree unless forced; its branch stays.
+    std::fs::write(format!("{}/new.txt", wt("a")), "x").unwrap();
+    let dirty = remove_failure(request(&mut conn, remove(&wt("a"), false)).await);
+    assert!(dirty.contains("use --force"), "{dirty}");
+    let Control::WorktreeRemoved { project, path } =
+        request(&mut conn, remove(&wt("a"), true)).await
+    else {
+        panic!("expected a removal")
+    };
+    assert_eq!(path, wt("a"));
+    assert!(project.worktrees.iter().all(|w| w.path != path));
+    assert_eq!(repo.git(&["branch", "--list", "worktree-a"]), "worktree-a");
+
+    // A terminal working in a worktree keeps it from being renamed or removed.
+    conn.open_terminal(1, std::path::Path::new(&wt("b"))).await;
+    let busy = rename_failure(request(&mut conn, rename(&wt("b"), "d")).await);
+    assert!(busy.starts_with("in use by "), "{busy}");
+    assert!(busy.ends_with(": close its terminals first"), "{busy}");
+    let busy = remove_failure(request(&mut conn, remove(&wt("b"), false)).await);
+    assert!(busy.starts_with("in use by "), "{busy}");
+    conn.send(1, Control::CloseTerminal).await;
+    assert!(matches!(
+        conn.control().await,
+        (1, Control::TerminalExited { .. })
+    ));
+
+    // Folder and branch follow the new name.
+    let Control::WorktreeRenamed {
+        project,
+        from,
+        path,
+    } = request(&mut conn, rename(&wt("b"), "d")).await
+    else {
+        panic!("expected a rename")
+    };
+    assert_eq!((from, path.clone()), (wt("b"), wt("d")));
+    let renamed = project.worktrees.iter().find(|w| w.path == path).unwrap();
+    assert_eq!(
+        (renamed.name.as_str(), renamed.branch.as_deref()),
+        ("d", Some("worktree-d"))
+    );
+    assert_eq!(repo.git(&["branch", "--list", "worktree-b"]), "");
+
+    // A taken name is refused; a taken branch moves the folder back.
+    let taken = rename_failure(request(&mut conn, rename(&wt("d"), "c")).await);
+    assert!(
+        taken.starts_with("worktree \"c\" already exists"),
+        "{taken}"
+    );
+    repo.git(&["branch", "worktree-e"]);
+    let taken = rename_failure(request(&mut conn, rename(&wt("d"), "e")).await);
+    assert!(taken.contains("worktree-e"), "{taken}");
+    assert!(std::path::Path::new(&wt("d")).is_dir());
+    assert!(!std::path::Path::new(&wt("e")).exists());
+    assert_eq!(
+        repo.git_in(
+            std::path::Path::new(&wt("d")),
+            &["branch", "--show-current"]
+        ),
+        "worktree-d"
+    );
+
+    // A worktree on another branch keeps that branch.
+    repo.git_in(
+        std::path::Path::new(&wt("c")),
+        &["switch", "-q", "-c", "other"],
+    );
+    let renamed = request(&mut conn, rename(&wt("c"), "f")).await;
+    assert!(
+        matches!(renamed, Control::WorktreeRenamed { .. }),
+        "{renamed:?}"
+    );
+    assert_eq!(
+        repo.git_in(
+            std::path::Path::new(&wt("f")),
+            &["branch", "--show-current"]
+        ),
+        "other"
+    );
+    assert_eq!(repo.git(&["branch", "--list", "worktree-c"]), "worktree-c");
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}

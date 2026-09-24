@@ -277,6 +277,42 @@ pub enum Control {
         name: String,
         message: String,
     },
+    /// App → service: `git worktree remove` of a linked worktree of a followed project, with
+    /// `--force` when `force`. Without it, a worktree with changes or a process working in it
+    /// is kept. The branch stays. Answered by `WorktreeRemoved` or `RemoveWorktreeFailed`.
+    RemoveWorktree {
+        path: String,
+        force: bool,
+    },
+    WorktreeRemoved {
+        /// The project with its updated worktrees.
+        project: Project,
+        path: String,
+    },
+    RemoveWorktreeFailed {
+        path: String,
+        message: String,
+    },
+    /// App → service: renames a Claude worktree of a followed project (folder and, while it is
+    /// still on it, its `worktree-<name>` branch), never while a process works in it.
+    /// Answered by `WorktreeRenamed` or `RenameWorktreeFailed`.
+    RenameWorktree {
+        path: String,
+        name: String,
+    },
+    WorktreeRenamed {
+        /// The project with its updated worktrees.
+        project: Project,
+        /// The old path.
+        from: String,
+        /// The new path (also its id).
+        path: String,
+    },
+    RenameWorktreeFailed {
+        path: String,
+        name: String,
+        message: String,
+    },
     /// App → service: watch this worktree of a followed project for the files panel,
     /// answered by `Files` now and after every change. Only one worktree is watched: this
     /// replaces the previous one.
@@ -357,8 +393,8 @@ pub enum Control {
         /// Shown as is.
         message: String,
     },
-    /// App → service: where Windows sees this file, to open it in the user's editor.
-    /// Answered by `EditorTarget`.
+    /// App → service: where Windows sees this file, to open it in the user's editor; an empty
+    /// `path` is the worktree's folder, for the Windows Explorer. Answered by `EditorTarget`.
     OpenInEditor {
         worktree: String,
         path: String,
@@ -815,6 +851,43 @@ mod tests {
         );
         let list = Control::ListChanges { path: "/r".into() };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+    }
+
+    #[test]
+    fn worktree_menu_messages_are_tagged_json() {
+        let remove = Control::RemoveWorktree {
+            path: "/r/w".into(),
+            force: true,
+        };
+        assert_eq!(
+            &Frame::control(0, &remove).payload[..],
+            br#"{"type":"remove_worktree","path":"/r/w","force":true}"#
+        );
+        let rename = Control::RenameWorktree {
+            path: "/r/w".into(),
+            name: "x".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &rename).payload[..],
+            br#"{"type":"rename_worktree","path":"/r/w","name":"x"}"#
+        );
+        let failed = Control::RenameWorktreeFailed {
+            path: "/r/w".into(),
+            name: "x".into(),
+            message: "m".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &failed).payload[..],
+            br#"{"type":"rename_worktree_failed","path":"/r/w","name":"x","message":"m"}"#
+        );
+        let failed = Control::RemoveWorktreeFailed {
+            path: "/r/w".into(),
+            message: "m".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &failed).payload[..],
+            br#"{"type":"remove_worktree_failed","path":"/r/w","message":"m"}"#
+        );
     }
 
     #[test]

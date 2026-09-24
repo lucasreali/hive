@@ -301,6 +301,17 @@ impl Hive {
         self.link().send(0, &create)
     }
 
+    /// The answer arrives as `worktree_removed` or `remove_worktree_failed`.
+    pub fn remove_worktree(&self, path: String, force: bool) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::RemoveWorktree { path, force })
+    }
+
+    /// The answer arrives as `worktree_renamed` or `rename_worktree_failed`.
+    pub fn rename_worktree(&self, path: String, name: String) -> Result<(), String> {
+        self.link().send(0, &Control::RenameWorktree { path, name })
+    }
+
     /// Answered by `files` now and after every change in the worktree.
     pub fn watch_worktree(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::WatchWorktree { path })
@@ -493,6 +504,20 @@ pub mod commands {
         base: Option<String>,
     ) -> Result<(), String> {
         hive.create_worktree(project, name, base)
+    }
+
+    #[tauri::command]
+    pub fn remove_worktree(hive: State<'_, Hive>, path: String, force: bool) -> Result<(), String> {
+        hive.remove_worktree(path, force)
+    }
+
+    #[tauri::command]
+    pub fn rename_worktree(
+        hive: State<'_, Hive>,
+        path: String,
+        name: String,
+    ) -> Result<(), String> {
+        hive.rename_worktree(path, name)
     }
 
     #[tauri::command]

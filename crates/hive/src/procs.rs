@@ -22,6 +22,15 @@ pub fn list(root: &Path) -> Vec<Proc> {
         .collect()
 }
 
+/// Live processes under `root` whose working directory is `dir` or inside it.
+pub fn inside(root: &Path, dir: &Path) -> Vec<Proc> {
+    let cwd = |p: &Proc| std::fs::read_link(root.join(p.pid.to_string()).join("cwd"));
+    list(root)
+        .into_iter()
+        .filter(|p| cwd(p).is_ok_and(|cwd| cwd.starts_with(dir)))
+        .collect()
+}
+
 /// Parses `/proc/<pid>/stat`: `pid (comm) state ppid pgrp session ...`.
 /// `comm` may contain spaces and parentheses, so it ends at the last `)`.
 fn parse_stat(stat: &str) -> Option<Proc> {
@@ -82,6 +91,29 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn processes_are_found_by_working_directory() {
+        let root = fake_proc(&[
+            ("10", "10 (fish) S 1 10 10 34816 0 0"),
+            ("11", "11 (claude) S 10 11 10 34816 0 0"),
+            ("12", "12 (vim) S 10 12 10 34816 0 0"),
+            ("13", "13 (bash) S 10 13 10 34816 0 0"),
+        ]);
+        let link = |pid: &str, cwd: &str| {
+            std::os::unix::fs::symlink(cwd, root.path().join(pid).join("cwd")).unwrap()
+        };
+        link("10", "/r/.claude/worktrees/a");
+        link("11", "/r/.claude/worktrees/a/src");
+        link("12", "/r/.claude/worktrees/ab");
+        // 13 has no readable cwd.
+        let mut found: Vec<i32> = inside(root.path(), Path::new("/r/.claude/worktrees/a"))
+            .into_iter()
+            .map(|p| p.pid)
+            .collect();
+        found.sort();
+        assert_eq!(found, vec![10, 11]);
     }
 
     #[test]

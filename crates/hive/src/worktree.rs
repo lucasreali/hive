@@ -228,7 +228,31 @@ fn copied_note(copied: usize) -> String {
 pub fn remove(dir: &Path, name: &str) -> io::Result<()> {
     validate_name(name)?;
     let root = main_root(dir)?;
-    remove_path(&root, &root.join(WORKTREES_DIR).join(name))
+    remove_path(&root, &root.join(WORKTREES_DIR).join(name), false)
+}
+
+/// Renames the Claude worktree at `path` to `name`: its folder moves to
+/// `.claude/worktrees/<name>` and its branch `worktree-<old>`, if it is still on it, becomes
+/// `worktree-<name>`. A failed branch rename moves the folder back. Returns the new path.
+pub fn rename(root: &Path, path: &Path, name: &str) -> io::Result<PathBuf> {
+    let to = check_name(root, name)?;
+    let old = path.file_name().unwrap_or_default().to_string_lossy();
+    let branch = format!("worktree-{old}");
+    let on_branch = list(root)?
+        .iter()
+        .any(|wt| wt.path == path && wt.branch.as_deref() == Some(branch.as_str()));
+    let run = |args: &[&OsStr]| git::run(root, args, &[], &[0], OUTPUT_LIMIT);
+    let [worktree, mv] = ["worktree", "move"].map(OsStr::new);
+    run(&[worktree, mv, path.as_os_str(), to.as_os_str()])?;
+    if on_branch {
+        let renamed = format!("worktree-{name}");
+        let args = ["branch", "-m", &branch, &renamed].map(OsStr::new);
+        if let Err(err) = run(&args) {
+            let _ = run(&[worktree, mv, to.as_os_str(), path.as_os_str()]);
+            return Err(err);
+        }
+    }
+    Ok(to)
 }
 
 /// `WorktreeCreate` hook: creates the worktree `name` in the repository of `cwd`, or
@@ -267,16 +291,16 @@ pub fn hook_remove(payload: &Value) -> io::Result<()> {
             root.join(WORKTREES_DIR).display()
         )));
     }
-    remove_path(&root, &path)
+    remove_path(&root, &path, false)
 }
 
-/// `git worktree remove` without `--force`: a worktree with changes is kept.
-fn remove_path(root: &Path, path: &Path) -> io::Result<()> {
-    let args = [
-        OsStr::new("worktree"),
-        OsStr::new("remove"),
-        path.as_os_str(),
-    ];
+/// `git worktree remove`; without `force` a worktree with changes is kept. The branch stays.
+pub fn remove_path(root: &Path, path: &Path, force: bool) -> io::Result<()> {
+    let mut args = vec![OsStr::new("worktree"), OsStr::new("remove")];
+    if force {
+        args.push(OsStr::new("--force"));
+    }
+    args.push(path.as_os_str());
     git::run(root, &args, &[], &[0], OUTPUT_LIMIT).map(drop)
 }
 

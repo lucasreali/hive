@@ -191,11 +191,18 @@ const RUNS_ON_WINDOWS: &[&str] = &[
     "wsh",
 ];
 
-/// The Windows path (`<wslpath> -w`) of the file `path` of the worktree at `dir`, for the app
-/// to open it with its Windows default app. Refused for a file Windows would run.
+/// The Windows path (`<wslpath> -w`) of the file `path` of the worktree at `dir` (the folder
+/// itself when `path` is empty), for the app to open it with its Windows default app.
+/// Refused for a file Windows would run.
 pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<String> {
-    let Some(real) = resolve(dir, relative(path)?)? else {
-        return Err(io::Error::other(format!("{path} does not exist")));
+    let real = if path.is_empty() {
+        // The worktree's own folder, for the Windows Explorer.
+        dir.to_path_buf()
+    } else {
+        let Some(real) = resolve(dir, relative(path)?)? else {
+            return Err(io::Error::other(format!("{path} does not exist")));
+        };
+        real
     };
     let extension = real.extension().unwrap_or_default().to_string_lossy();
     let extension = extension.to_ascii_lowercase();
@@ -546,6 +553,8 @@ mod tests {
         };
         // `echo` stands in for `wslpath`: it prints its arguments.
         assert_eq!(at("a.ts", "echo"), Ok(format!("-w {}", real.display())));
+        // An empty path is the worktree's folder.
+        assert_eq!(at("", "echo"), Ok(format!("-w {}", dir.path().display())));
         let run = "Windows would run a .bat file instead of opening it in an editor";
         assert_eq!(at("run.BAT", "echo"), Err(run.to_owned()));
         assert_eq!(at("nope", "echo"), Err("nope does not exist".to_owned()));

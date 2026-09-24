@@ -7,12 +7,14 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use hive_protocol::{Project, ProjectError, Worktree};
 
-use crate::git;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
+use crate::{git, procs};
 
 /// Largest project list file read.
 const FILE_LIMIT: u64 = 1024 * 1024;
+/// Most processes named when a worktree is in use.
+const BUSY_SHOWN: usize = 5;
 
 pub struct Projects {
     file: PathBuf,
@@ -90,6 +92,54 @@ impl Projects {
         Ok((project(id), created))
     }
 
+    /// Removes the linked worktree `path` of a followed project, with `--force` when `force`;
+    /// answers the project with its updated worktrees. Without `force`, a worktree that a
+    /// process (under `proc`, normally `/proc`) works in is kept, as git keeps one with changes.
+    pub fn remove_worktree(&self, path: &str, force: bool, proc: &Path) -> io::Result<Project> {
+        let (owner, _) = self.linked(path)?;
+        if !force {
+            unused(proc, path)?;
+        }
+        worktree::remove_path(Path::new(&owner.id), Path::new(path), force)?;
+        Ok(project(&owner.id))
+    }
+
+    /// Renames the Claude worktree `path` of a followed project to `name`, never while a
+    /// process works in it (its folder moves). Answers the updated project and the new path.
+    pub fn rename_worktree(
+        &self,
+        path: &str,
+        name: &str,
+        proc: &Path,
+    ) -> io::Result<(Project, String)> {
+        let (owner, wt) = self.linked(path)?;
+        if !wt.claude {
+            return Err(io::Error::other(format!(
+                "only worktrees under {WORKTREES_DIR} can be renamed"
+            )));
+        }
+        unused(proc, path)?;
+        let to = worktree::rename(Path::new(&owner.id), Path::new(path), name)?;
+        Ok((project(&owner.id), to.to_string_lossy().into_owned()))
+    }
+
+    /// The followed project holding the worktree `path`, when it is not the main one.
+    fn linked(&self, path: &str) -> io::Result<(Project, Worktree)> {
+        let found = self.list().into_iter().find_map(|p| {
+            let wt = p.worktrees.iter().find(|w| w.path == path).cloned();
+            wt.map(|wt| (p, wt))
+        });
+        match found {
+            Some((_, wt)) if wt.main => Err(io::Error::other(format!(
+                "{path} is the project's main worktree"
+            ))),
+            Some(found) => Ok(found),
+            None => Err(io::Error::other(format!(
+                "{path} is not a worktree of a followed project"
+            ))),
+        }
+    }
+
     /// `path` when it is a worktree of a followed project: the path comes from the app.
     pub fn worktree(&self, path: &str) -> io::Result<PathBuf> {
         let followed = self.list().into_iter().flat_map(|p| p.worktrees);
@@ -124,6 +174,27 @@ pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
         .filter(|(_, w)| cwd.starts_with(&w.path))
         .max_by_key(|(_, w)| w.path.len())
         .map(|(p, w)| (p.id.clone(), w.id.clone()))
+}
+
+/// Refuses a worktree that some process (e.g. a terminal or an agent) works in.
+fn unused(proc: &Path, path: &str) -> io::Result<()> {
+    let mut busy = procs::inside(proc, Path::new(path));
+    if busy.is_empty() {
+        return Ok(());
+    }
+    busy.sort_by_key(|p| p.pid);
+    let mut names: Vec<String> = busy
+        .iter()
+        .take(BUSY_SHOWN)
+        .map(|p| format!("{} ({})", p.comm, p.pid))
+        .collect();
+    if busy.len() > BUSY_SHOWN {
+        names.push(format!("{} more", busy.len() - BUSY_SHOWN));
+    }
+    Err(io::Error::other(format!(
+        "in use by {}: close its terminals first",
+        names.join(", ")
+    )))
 }
 
 fn read(file: &Path) -> io::Result<Vec<String>> {
@@ -224,6 +295,25 @@ mod tests {
             bare,
             prunable: false,
         }
+    }
+
+    #[test]
+    fn a_worktree_in_use_names_its_processes() {
+        let proc = tempfile::tempdir().unwrap();
+        let dir = proc.path().join("wt");
+        for pid in 1..=7 {
+            let entry = proc.path().join(pid.to_string());
+            std::fs::create_dir(&entry).unwrap();
+            let stat = format!("{pid} (p{pid}) S 1 {pid} {pid} 0");
+            std::fs::write(entry.join("stat"), stat).unwrap();
+            std::os::unix::fs::symlink(&dir, entry.join("cwd")).unwrap();
+        }
+        let err = unused(proc.path(), dir.to_str().unwrap()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "in use by p1 (1), p2 (2), p3 (3), p4 (4), p5 (5), 2 more: close its terminals first"
+        );
+        assert!(unused(proc.path(), "/elsewhere").is_ok());
     }
 
     #[test]
