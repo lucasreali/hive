@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { type ServiceMessage, setEditorNotice, setNotice, useHive } from "../store";
+import { isMac } from "../window";
 import { isFor } from "./buffer";
 
 type EditorTarget = Extract<ServiceMessage, { type: "editor_target" }>;
@@ -31,7 +32,8 @@ export async function openExternal(target: EditorTarget, tauri = isTauri()): Pro
  */
 export async function openFolder(target: EditorTarget, tauri = isTauri()): Promise<void> {
   if (!target.windows_path) return setNotice(target.error);
-  if (!tauri) return setNotice(`Only the Hive app opens the Explorer: ${target.windows_path}`);
+  const finder = isMac() ? "the Finder" : "the Explorer";
+  if (!tauri) return setNotice(`Only the Hive app opens ${finder}: ${target.windows_path}`);
   try {
     await openPath(target.windows_path);
   } catch (error) {

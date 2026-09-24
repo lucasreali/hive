@@ -16,6 +16,7 @@ import {
 } from "../store";
 import { closeTerminal, mountTerminals, openTerminal, showTerminal } from "../terminals";
 import { isDirty } from "../viewer/buffer";
+import { isMac, keyText } from "../window";
 import {
   AddFolderIcon,
   CloseIcon,
@@ -29,6 +30,7 @@ import { FileView, leaveFile } from "./RightPanel";
 
 /** Screen 1e: shown once the service said there are no projects. */
 function EmptyState() {
+  const mac = isMac();
   return (
     <div className="empty-state">
       <div className="empty-state-content">
@@ -38,11 +40,11 @@ function EmptyState() {
           <p>Add a project to follow the agents running in its worktrees.</p>
         </div>
         <button type="button" className="primary" onClick={() => openModal("add-project")}>
-          Add project <kbd>Ctrl+Shift+O</kbd>
+          Add project <kbd>{keyText("Ctrl+Shift+O")}</kbd>
         </button>
         <div className="empty-state-example">
-          <span>A project is a folder inside WSL, for example:</span>
-          <code>/home/user/projects/shop</code>
+          <span>A project is a folder{mac ? "" : " inside WSL"}, for example:</span>
+          <code>{mac ? "/Users/you" : "/home/user"}/projects/shop</code>
         </div>
       </div>
     </div>
@@ -207,7 +209,7 @@ export function TerminalArea() {
           <button
             type="button"
             className="ghost"
-            title="New terminal (Ctrl+Shift+T)"
+            title={keyText("New terminal (Ctrl+Shift+T)")}
             disabled={selected === null}
             onClick={() => selected !== null && void openTerminal(selected)}
           >
@@ -218,7 +220,7 @@ export function TerminalArea() {
           <button
             type="button"
             className="ghost"
-            title="Files, diff and sessions (Ctrl+Shift+B)"
+            title={keyText("Files, diff and sessions (Ctrl+Shift+B)")}
             aria-pressed={open}
             onClick={() => setRightPanel(open ? null : "files")}
           >

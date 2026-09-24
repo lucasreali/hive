@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { asMac } from "../test/mac";
 import { App } from "./App";
 import { nextPending, shortcut } from "./shortcuts";
 import { type AgentState, apply, initialState, openModal, select, useHive } from "./store";
@@ -26,7 +27,13 @@ function app() {
   act(() => apply({ type: "projects", projects: [shop, api] }));
 }
 
-type Keys = { key: string; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean };
+type Keys = {
+  key: string;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+};
 const ctrlShift = (key: string): Keys => ({ key, ctrlKey: true, shiftKey: true });
 /** Presses keys with the focus outside any terminal; true when the app took them. */
 const press = (keys: Keys, target: Element = document.body) => {
@@ -159,6 +166,8 @@ test("other keys are not shortcuts", () => {
     { key: "t" },
     { key: "F8", shiftKey: true },
     { key: "T", ctrlKey: true, shiftKey: true, altKey: true },
+    { key: "T", ctrlKey: true, shiftKey: true, metaKey: true },
+    { key: "T", metaKey: true, shiftKey: true },
     ctrlShift("C"),
     ctrlShift("V"),
     ctrlShift("X"),
@@ -166,6 +175,16 @@ test("other keys are not shortcuts", () => {
     expect(press(keys)).toBe(false);
   }
   expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: "files" });
+});
+
+test("on macOS the shortcuts are Cmd+Shift+letter and Ctrl+Shift+letter is the terminal's", () => {
+  asMac();
+  app();
+  expect(press(ctrlShift("T"))).toBe(false);
+  expect(press({ key: "T", ctrlKey: true, metaKey: true, shiftKey: true })).toBe(false);
+  expect(useHive.getState().modal).toBeNull();
+  expect(press({ key: "t", metaKey: true, shiftKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("worktree-picker");
 });
 
 test("nothing runs under the connection block or while a dialog is open", () => {

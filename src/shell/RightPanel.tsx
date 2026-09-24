@@ -36,6 +36,7 @@ import { isDirty, isFor } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { referenceTarget, sendReference } from "../viewer/reference";
+import { isMac, keyText } from "../window";
 import {
   BranchIcon,
   ChevronIcon,
@@ -237,7 +238,7 @@ export function RightPanel() {
         <button
           type="button"
           className="ghost"
-          title="Collapse (Ctrl+Shift+B)"
+          title={keyText("Collapse (Ctrl+Shift+B)")}
           onClick={() => setRightPanel(null)}
         >
           <CloseIcon />
@@ -625,7 +626,7 @@ export function FileView({ worktree }: { worktree: string }) {
           <button
             type="button"
             className="ghost text"
-            title="Save (Ctrl+S)"
+            title={keyText("Save (Ctrl+S)")}
             disabled={!dirty || !!edit.saving}
             onClick={saveOpenFile}
           >
@@ -658,7 +659,7 @@ export function FileView({ worktree }: { worktree: string }) {
           type="button"
           className="ghost"
           aria-label="Open in external editor"
-          title="Open in external editor (the Windows default app for the file)"
+          title={`Open in external editor (the ${isMac() ? "" : "Windows "}default app for the file)`}
           onClick={() => void transport.openInEditor(worktree, openFile.path)}
         >
           <ExternalIcon />
@@ -667,7 +668,10 @@ export function FileView({ worktree }: { worktree: string }) {
           type="button"
           className="ghost"
           aria-label="Send to terminal"
-          title={unsendable ?? "Send the selected lines' reference to the terminal (Ctrl+Shift+L)"}
+          title={
+            unsendable ??
+            keyText("Send the selected lines' reference to the terminal (Ctrl+Shift+L)")
+          }
           disabled={unsendable !== null}
           onClick={sendReference}
         >

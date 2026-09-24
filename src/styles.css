@@ -137,6 +137,11 @@ button:disabled {
   user-select: none;
 }
 
+/* macOS: room for the native traffic lights on the left, none needed on the right. */
+.titlebar[data-mac] {
+  padding: 0 8px 0 70px;
+}
+
 .titlebar-brand {
   flex: 1;
   height: 100%;

@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { App } from "../App";
 import { apply, initialState, openModal, type Project, select, useHive } from "../store";
 import { transport } from "../transport";
@@ -139,6 +140,17 @@ test("new terminal, copy path and Explorer act on the worktree", async () => {
   open.mockRestore();
   explorer.mockRestore();
   writeText.mockRestore();
+});
+
+test("on macOS the folder is revealed in the Finder", () => {
+  const finder = spyOn(transport, "openInEditor").mockResolvedValue();
+  asMac();
+  show();
+  rightClick("fix-login");
+  expect(screen.queryByRole("menuitem", { name: "Open in Explorer" })).toBeNull();
+  fireEvent.click(item("Reveal in Finder"));
+  expect(finder).toHaveBeenCalledWith(login.path, "");
+  finder.mockRestore();
 });
 
 test("delete asks first; a refusal shows why and offers to force it", () => {

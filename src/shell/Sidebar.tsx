@@ -15,6 +15,7 @@ import {
 } from "../store";
 import { openClaude } from "../terminals";
 import { transport } from "../transport";
+import { keyText } from "../window";
 import {
   BranchIcon,
   ChevronIcon,
@@ -73,7 +74,7 @@ export function Sidebar() {
           <button
             type="button"
             className="ghost"
-            title="Add project (Ctrl+Shift+O)"
+            title={keyText("Add project (Ctrl+Shift+O)")}
             onClick={() => openModal("add-project")}
           >
             <PlusIcon />
@@ -135,7 +136,7 @@ function ProjectNode({ project }: { project: Project }) {
         <button
           type="button"
           className="new-worktree"
-          title="New worktree (Ctrl+Shift+N)"
+          title={keyText("New worktree (Ctrl+Shift+N)")}
           onClick={() => openModal("new-worktree", project.id)}
         >
           <PlusIcon size={10} />
