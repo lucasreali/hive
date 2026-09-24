@@ -7,7 +7,7 @@ async function openReadme(page: Page) {
   await page.keyboard.press("Control+Shift+B");
   const panel = page.getByRole("complementary", { name: "Files and diff" });
   await panel.getByRole("treeitem", { name: "README.md" }).click();
-  const view = panel.getByRole("region", { name: "README.md" });
+  const view = page.getByRole("region", { name: "README.md" });
   await expect(view.locator(".cm-content")).toContainText("export const value = 1;");
   return { panel, view };
 }
@@ -15,7 +15,10 @@ async function openReadme(page: Page) {
 test("editing: a file without changes is edited and saved with Ctrl+S", async ({ page }) => {
   await page.goto("/");
   const { panel, view } = await openReadme(page);
-  const unsaved = view.getByRole("img", { name: "Unsaved changes" });
+  // The file's tab marks unsaved edits.
+  const unsaved = page.getByRole("tab", { name: "README.md" }).getByRole("img", {
+    name: "Unsaved changes",
+  });
   await expect(unsaved).toBeHidden();
 
   await view.locator(".cm-line").first().click();
@@ -28,7 +31,7 @@ test("editing: a file without changes is edited and saved with Ctrl+S", async ({
   await expect(view.getByRole("button", { name: "Save" })).toBeDisabled();
 
   // Saved in the (fake) service: opened again, the file has the edit.
-  await view.getByTitle("Close diff").click();
+  await page.getByRole("button", { name: "Close file README.md" }).click();
   await panel.getByRole("treeitem", { name: "README.md" }).click();
   await expect(view.locator(".cm-line").first()).toHaveText("// edited");
 
@@ -49,11 +52,14 @@ test("editing: an agent writing the file under unsaved edits shows the conflict"
     "aria-selected",
     "true",
   );
-  // The fake service's stand-in for an agent writing the file.
+  // The fake service's stand-in for an agent writing the file, typed in the terminal's tab;
+  // then the file's tab is shown again.
   const agentWrites = async (text: string) => {
+    await page.getByRole("tab", { name: "fix-login" }).click();
     await page.locator(".xterm").click();
     await page.keyboard.type(`write README.md ${text}`);
     await page.keyboard.press("Enter");
+    await page.getByRole("tab", { name: /^README\.md/ }).click();
   };
 
   // A clean buffer follows the disk.
@@ -77,7 +83,7 @@ test("editing: an agent writing the file under unsaved edits shows the conflict"
   await banner.getByRole("button", { name: "Keep mine" }).click();
   await expect(banner).toBeHidden();
   await view.getByRole("button", { name: "Save" }).click();
-  await expect(view.getByRole("img", { name: "Unsaved changes" })).toBeHidden();
+  await expect(page.getByRole("img", { name: "Unsaved changes" })).toBeHidden();
 
   // Reload: the agent's text replaces the edits.
   await view.locator(".cm-line").first().click();

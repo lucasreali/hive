@@ -1,4 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, test } from "@playwright/test";
+
+/** Expands the folders `names` of the files tree, in order (they start collapsed). */
+async function open(files: Locator, ...names: string[]) {
+  for (const name of names) {
+    await files.getByRole("treeitem", { name, exact: true }).click();
+  }
+}
 
 test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({ page }) => {
   await page.goto("/");
@@ -14,19 +21,26 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
   const readme = files.getByRole("treeitem", { name: "README.md" });
   await expect(readme).toBeVisible();
   await expect(readme.locator(".status-letter")).toHaveCount(0);
-  await panel.getByRole("button", { name: "Changed" }).click();
-  await expect(files.getByRole("treeitem")).toHaveCount(10);
+  await panel.getByRole("button", { name: "Diff" }).click();
+  // Folders start collapsed.
+  await expect(files.getByRole("treeitem")).toHaveCount(3);
   await expect(readme).toBeHidden();
 
+  await open(files, "src", "auth");
   await files.getByRole("treeitem", { name: /token\.ts/ }).click();
-  const view = panel.getByRole("region", { name: "src/auth/token.ts" });
+  // The file opens in its tab, in place of the terminal.
+  const view = page.getByRole("region", { name: "src/auth/token.ts" });
   await expect(view).toBeVisible();
+  await expect(page.getByRole("tab", { name: "token.ts" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.screenshot({ path: "target/e2e/files-panel.png" });
 
-  // Selecting another worktree asks the service again.
+  // Selecting another worktree asks the service again; the file's tab stays.
   await tree.getByRole("button", { name: "fix-login" }).click();
   await expect(panel.locator(".files-summary")).toHaveText("2 files changed+4−1");
-  await expect(view).toBeHidden();
+  await expect(view).toBeVisible();
 
   await page.keyboard.press("Control+Shift+B");
   await expect(panel).toBeHidden();
@@ -40,8 +54,9 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
   const panel = page.getByRole("complementary", { name: "Files and diff" });
   const files = panel.getByRole("tree", { name: "Files" });
 
+  await open(files, "src", "auth");
   await files.getByRole("treeitem", { name: /session\.ts/ }).click();
-  const view = panel.getByRole("region", { name: "src/auth/session.ts" });
+  const view = page.getByRole("region", { name: "src/auth/session.ts" });
   await expect(view.locator(".cm-editor")).toBeVisible();
   // The removed line above the added ones, long unchanged stretches collapsed.
   await expect(view.locator(".cm-deletedChunk").nth(1)).toHaveText(/const ttl = SESSION_TTL;/);
@@ -57,16 +72,19 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
 
   // A deleted file shows all removed, a new one all added, a binary one a message.
   await tree.getByRole("button", { name: "refactor-auth" }).click();
+  await open(files, "src", "legacy");
   await files.getByRole("treeitem", { name: /jwt\.ts/ }).click();
-  const deleted = panel.getByRole("region", { name: "src/legacy/jwt.ts" });
+  const deleted = page.getByRole("region", { name: "src/legacy/jwt.ts" });
   await expect(deleted.locator(".cm-deletedChunk")).toHaveText(/export const value = 1;/);
+  await open(files, "assets");
   await files.getByRole("treeitem", { name: /logo\.png/ }).click();
-  await expect(panel.getByRole("region", { name: "assets/logo.png" })).toContainText(
+  await expect(page.getByRole("region", { name: "assets/logo.png" })).toContainText(
     "Binary file not shown.",
   );
   await tree.getByRole("button", { name: "feat-checkout" }).click();
+  await open(files, "src", "checkout");
   await files.getByRole("treeitem", { name: /shipping\.ts/ }).click();
-  const added = panel.getByRole("region", { name: "src/checkout/shipping.ts" });
+  const added = page.getByRole("region", { name: "src/checkout/shipping.ts" });
   await expect(added.locator(".cm-changedLine")).toHaveCount(2);
   // Nothing was removed: the chunk's removed part is empty.
   await expect(added.locator(".cm-deletedChunk")).toHaveText("");

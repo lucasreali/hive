@@ -35,10 +35,14 @@ export function referenceTarget(
   return { terminal: tab.id, text: reference(s.openFile.path, s.selectedLines) };
 }
 
-/** Ctrl+Shift+L and the file view's button: writes the reference and focuses the terminal. */
+/**
+ * Ctrl+Shift+L and the file view's button: writes the reference and shows and focuses the
+ * terminal, in front of the file's tab.
+ */
 export function sendReference(): void {
   const target = referenceTarget(useHive.getState());
   if ("why" in target) return;
   void transport.writeTerminal(target.terminal, target.text);
+  useHive.setState({ fileShown: false });
   terminal(target.terminal)?.focus();
 }

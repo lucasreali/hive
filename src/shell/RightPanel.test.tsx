@@ -14,6 +14,7 @@ import {
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
 import { allFiles, fileRows, RightPanel } from "./RightPanel";
+import { TerminalArea } from "./TerminalArea";
 
 beforeAll(() => {
   // happy-dom has no layout: give the tree its CSS size so the virtualizer shows rows.
@@ -57,7 +58,13 @@ function changes(path: string, files: ChangedFile[], error: string | null = null
 function panel() {
   const asked = spyOn(transport, "listChanges").mockImplementation(async () => {});
   apply({ type: "projects", projects: [shop, api] });
-  render(<RightPanel />);
+  // The open file shows in its tab of the terminal area.
+  render(
+    <>
+      <RightPanel />
+      <TerminalArea />
+    </>,
+  );
   return asked;
 }
 
@@ -177,7 +184,8 @@ test("one file, no changes, and the service's error", () => {
 test("the panel follows the selected agent, else the shown terminal", () => {
   const asked = panel();
   act(() => useHive.setState({ tabs: [{ id: 3, cwd: fixLogin.path }], activeTab: 3 }));
-  expect(screen.getByText("fix-login")).toBeDefined();
+  // The terminal's tab has the same name: the panel's header is the one read.
+  expect(document.querySelector(".files-worktree .name")?.textContent).toBe("fix-login");
   act(() =>
     apply({
       type: "agent_detected",
@@ -196,7 +204,7 @@ test("the panel follows the selected agent, else the shown terminal", () => {
   expect(asked.mock.calls.map(([p]) => p)).toEqual([fixLogin.path, refactor.path, shop.path]);
 });
 
-test("clicking a file opens it under the tree; folders collapse; Close diff closes it", () => {
+test("clicking a file opens it in a tab; folders collapse; the tab's close closes it", () => {
   panel();
   act(() => select(refactor.id));
   act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
@@ -209,6 +217,7 @@ test("clicking a file opens it under the tree; folders collapse; Close diff clos
   expect(screen.getByRole("treeitem", { name: /token\.ts/ }).getAttribute("aria-selected")).toBe(
     "true",
   );
+  expect(screen.getByRole("tab", { name: "token.ts" }).getAttribute("aria-selected")).toBe("true");
   const view = screen.getByRole("region", { name: "src/auth/token.ts" });
   expect(view.querySelector(".file-view-bar")?.textContent).toBe("Rsrc/auth/token.ts+2−1Edit");
   expect(view.textContent).not.toContain("No changes in this file.");
@@ -225,19 +234,18 @@ test("clicking a file opens it under the tree; folders collapse; Close diff clos
     screen.getByRole("treeitem", { name: "auth" }).querySelector(".status-dot"),
   ).not.toBeNull();
 
-  fireEvent.click(screen.getByTitle("Close diff"));
+  fireEvent.click(screen.getByRole("button", { name: "Close file token.ts" }));
   expect(useHive.getState().openFile).toBeNull();
-  expect(screen.queryByRole("region")).toBeNull();
+  expect(screen.queryByRole("region", { name: "src/auth/token.ts" })).toBeNull();
+  expect(screen.queryByRole("tab")).toBeNull();
 });
 
-test("a file without changes says so, and another worktree's file is not shown", () => {
+test("a file without changes says so", () => {
   panel();
   act(() => select(refactor.id));
-  act(() => useHive.setState({ openFile: { worktree: refactor.path, path: "README.md" } }));
+  act(() => setOpenFile({ worktree: refactor.path, path: "README.md" }));
   const view = screen.getByRole("region", { name: "README.md" });
   expect(view.textContent).toContain("No changes in this file.");
-  act(() => useHive.setState({ openFile: { worktree: fixLogin.path, path: "README.md" } }));
-  expect(screen.queryByRole("region")).toBeNull();
 });
 
 test("the open file's text shows as a diff when changed, else as is, or why not", () => {

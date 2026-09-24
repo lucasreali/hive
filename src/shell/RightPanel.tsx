@@ -194,7 +194,6 @@ export function RightPanel() {
             <Summary worktree={target.worktree.path} />
           </div>
           <FileTree worktree={target.worktree.path} />
-          <FileView worktree={target.worktree.path} />
         </>
       ) : (
         <div className="right-panel-empty">Select a project or agent to see its files.</div>
@@ -344,10 +343,10 @@ export function leaveFile(next: OpenFile | null, editing = false): void {
 
 /**
  * The open file's header and, under it, its diff against HEAD when it is among the changes,
- * else its text (CodeMirror, `src/viewer/`). Shown while `openFile` is in this worktree;
- * "Close diff" clears it. While `editing` it is editable text (the diff stays read-only, #31):
- * a changed file switches with Edit / Diff, the header marks unsaved edits and has Save
- * (Ctrl+S in the editor), "Agent working here" warns that an agent may write it meanwhile, and
+ * else its text (CodeMirror, `src/viewer/`), shown in the open file's tab of the terminal area
+ * (whose × closes it). While `editing` it is editable text (the diff stays read-only, #31):
+ * a changed file switches with Edit / Diff, the header has Save
+ * (Ctrl+S in the editor; its tab marks unsaved edits), "Agent working here" warns that an agent may write it meanwhile, and
  * "Open in external editor" hands it to Windows.
  */
 export function FileView({ worktree }: { worktree: string }) {
@@ -374,9 +373,6 @@ export function FileView({ worktree }: { worktree: string }) {
           {file && STATUS[file.status].letter}
         </span>
         <span className="path">{openFile.path}</span>
-        {dirty && (
-          <span className="dirty" role="img" aria-label="Unsaved changes" title="Unsaved changes" />
-        )}
         {file && <Counts added={file.added} removed={file.removed} />}
         {working && (
           <span className="tab-badge working" title="An agent in this worktree may write this file">
@@ -434,9 +430,6 @@ export function FileView({ worktree }: { worktree: string }) {
           onClick={sendReference}
         >
           <TerminalIcon />
-        </button>
-        <button type="button" className="ghost" title="Close diff" onClick={() => leaveFile(null)}>
-          <CloseIcon />
         </button>
       </div>
       {editorNotice && <div className="files-error">{editorNotice}</div>}

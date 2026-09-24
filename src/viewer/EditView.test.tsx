@@ -2,7 +2,7 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { FileView } from "../shell/RightPanel";
+import { TerminalArea } from "../shell/TerminalArea";
 import { apply, type FileText, initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
 import { saveOpenFile } from "./EditView";
@@ -38,7 +38,7 @@ const banner = () => screen.queryByRole("alert");
 function editing(content = "one\n") {
   const saves = spyOn(transport, "saveFile").mockImplementation(async () => {});
   act(() => setOpenFile({ worktree, path: "a.ts" }, true));
-  render(<FileView worktree={worktree} />);
+  render(<TerminalArea />);
   act(() => answer(content));
   return saves;
 }
@@ -135,7 +135,7 @@ test("a changed file switches between its diff and editable text", () => {
     error: null,
   });
   act(() => setOpenFile({ worktree, path: "a.ts" }));
-  render(<FileView worktree={worktree} />);
+  render(<TerminalArea />);
   expect(button("Edit").disabled).toBe(true); // No text yet.
   act(() => answer("one\n"));
   expect(view()?.state.facet(EditorState.readOnly)).toBe(true);
@@ -177,18 +177,18 @@ test("the header warns of a working agent and opens the file elsewhere", () => {
 test("unsaved edits are dropped only when the user agrees", () => {
   editing();
   const confirm = spyOn(window, "confirm").mockImplementation(() => false);
-  fireEvent.click(screen.getByTitle("Close diff"));
+  fireEvent.click(button("Close file a.ts"));
   expect(confirm).not.toHaveBeenCalled(); // Clean: closes at once.
   expect(useHive.getState().openFile).toBeNull();
 
   cleanup();
   editing();
   type("mine\n");
-  fireEvent.click(screen.getByTitle("Close diff"));
+  fireEvent.click(button("Close file a.ts"));
   expect(confirm.mock.calls).toEqual([["Discard your unsaved changes to a.ts?"]]);
   expect(useHive.getState().openFile).not.toBeNull();
   confirm.mockImplementation(() => true);
-  fireEvent.click(screen.getByTitle("Close diff"));
+  fireEvent.click(button("Close file a.ts"));
   expect(useHive.getState().openFile).toBeNull();
-  expect(screen.queryByRole("region")).toBeNull();
+  expect(screen.queryByRole("region", { name: "a.ts" })).toBeNull();
 });

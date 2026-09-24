@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
-import { addTab, apply, initialState, select, useHive } from "../store";
+import { addTab, apply, initialState, select, setOpenFile, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
@@ -93,4 +93,28 @@ test("the close button ends the terminal and removes its tab", () => {
   expect(close).toHaveBeenCalledWith(7);
   expect(screen.queryByRole("tab")).toBeNull();
   close.mockRestore();
+});
+
+test("the open file has its tab after the terminals, shown in place of the terminal", () => {
+  show();
+  act(() => addTab(1, shopMain.path));
+  act(() => setOpenFile({ worktree: shopMain.path, path: "src/app.ts" }));
+  const host = () => document.querySelector(".terminal-host") as HTMLElement;
+  const tabs = () => screen.getAllByRole("tab").map((t) => t.getAttribute("aria-selected"));
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["main", "app.ts"]);
+  expect(tab("app.ts").closest(".tab")?.getAttribute("title")).toBe("src/app.ts");
+  expect(tabs()).toEqual(["false", "true"]);
+  expect(host().hidden).toBe(true);
+  expect(screen.getByRole("region", { name: "src/app.ts" })).toBeDefined();
+
+  fireEvent.click(tab("main"));
+  expect(tabs()).toEqual(["true", "false"]);
+  expect(host().hidden).toBe(false);
+  expect(screen.queryByRole("region", { name: "src/app.ts" })).toBeNull();
+
+  fireEvent.click(tab("app.ts"));
+  expect(tabs()).toEqual(["false", "true"]);
+  // A new terminal is shown in front of the file.
+  act(() => addTab(2, fixLogin.path));
+  expect(tabs()).toEqual(["false", "true", "false"]);
 });

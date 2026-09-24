@@ -227,9 +227,11 @@ export type HiveState = {
   // UI state
   modal: Modal;
   rightPanel: RightPanel;
-  /** The files panel shows only changed files ("Changed") instead of every file ("All"). */
+  /** The files panel shows only changed files ("Diff") instead of every file ("All"). */
   changedOnly: boolean;
   openFile: OpenFile | null;
+  /** The open file's tab is the one shown, in place of the active terminal. */
+  fileShown: boolean;
   /** The lines selected in the open file's viewer (new-file numbers, 1-based), or null. */
   selectedLines: Lines | null;
   selection: string | null;
@@ -276,6 +278,7 @@ export const initialState: HiveState = {
   rightPanel: null,
   changedOnly: false,
   openFile: null,
+  fileShown: false,
   selectedLines: null,
   selection: null,
   collapsed: {},
@@ -437,15 +440,16 @@ export const clearAddProjectError = () => useHive.setState({ addProjectError: nu
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setChangedOnly = (changedOnly: boolean) => useHive.setState({ changedOnly });
 /**
- * Opens a file (null closes it), as editable text when `editing`, dropping the previous file's
- * edit buffer. The file already open stays as it is.
+ * Opens a file in its tab and shows it (null closes it), as editable text when `editing`,
+ * dropping the previous file's edit buffer. The file already open stays as it is.
  */
 export const setOpenFile = (openFile: OpenFile | null, editing = false) =>
   useHive.setState((s) =>
     openFile && s.openFile && isFor(openFile, s.openFile)
-      ? {}
-      : { openFile, editing, edit: null, editorNotice: null },
+      ? { fileShown: true }
+      : { openFile, fileShown: openFile !== null, editing, edit: null, editorNotice: null },
   );
+export const showFile = () => useHive.setState({ fileShown: true });
 /** Shows the open file as editable text (its buffer starts from the last answer) or not. */
 export const setEditing = (editing: boolean) =>
   useHive.setState((s) => ({ editing, edit: editing ? editFor({ ...s, editing }, s.file) : null }));
@@ -459,9 +463,14 @@ export const toggleCollapsed = (id: string) =>
 
 /** A terminal just opened in `cwd`: its tab is shown and its worktree selected. */
 export const addTab = (id: number, cwd: string) =>
-  useHive.setState((s) => ({ tabs: [...s.tabs, { id, cwd }], activeTab: id, selection: cwd }));
+  useHive.setState((s) => ({
+    tabs: [...s.tabs, { id, cwd }],
+    activeTab: id,
+    fileShown: false,
+    selection: cwd,
+  }));
 export const activateTab = (tab: Tab) =>
-  useHive.setState({ activeTab: tab.id, selection: tab.cwd });
+  useHive.setState({ activeTab: tab.id, fileShown: false, selection: tab.cwd });
 /** Removes the tab; when it was shown, its right neighbour (or the new last tab) is. */
 export const removeTab = (id: number) =>
   useHive.setState((s) => {

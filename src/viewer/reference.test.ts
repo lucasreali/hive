@@ -58,7 +58,8 @@ test("sending writes the reference as input, without Enter, only when it can", (
   const write = spyOn(transport, "writeTerminal").mockImplementation(async () => {});
   sendReference();
   expect(write).not.toHaveBeenCalled();
-  useHive.setState(ready);
+  useHive.setState({ ...ready, fileShown: true });
   sendReference();
   expect(write).toHaveBeenCalledWith(2, "@src/a.ts (lines 3–5) ");
+  expect(useHive.getState().fileShown).toBe(false);
 });

@@ -21,8 +21,11 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
 
   await page.keyboard.press("Control+Shift+B");
   const panel = page.getByRole("complementary", { name: "Files and diff" });
+  for (const name of ["src", "auth"]) {
+    await panel.getByRole("treeitem", { name, exact: true }).click();
+  }
   await panel.getByRole("treeitem", { name: /session\.ts/ }).click();
-  const view = panel.getByRole("region", { name: "src/auth/session.ts" });
+  const view = page.getByRole("region", { name: "src/auth/session.ts" });
   const send = view.getByRole("button", { name: "Send to terminal" });
   await expect(send).toBeDisabled();
   await expect(send).toHaveAttribute("title", "Select lines to send their reference");
@@ -39,7 +42,8 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await page.keyboard.type("why?");
   await expect.poll(() => screen(page, 1)).toBe("mock$ @src/auth/session.ts (lines 39–41) why?");
 
-  // One line, with the button.
+  // Sending showed the terminal; the file's tab is still there. One line, with the button.
+  await page.getByRole("tab", { name: "session.ts" }).click();
   await added.nth(1).click();
   await page.keyboard.press("Shift+Home");
   await send.click();
@@ -50,8 +54,11 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
 
   // A file of another worktree cannot go to this terminal.
   await tree.getByRole("button", { name: "refactor-auth" }).click();
+  for (const name of ["src", "auth"]) {
+    await panel.getByRole("treeitem", { name, exact: true }).click();
+  }
   await panel.getByRole("treeitem", { name: /token\.ts/ }).click();
-  const other = panel.getByRole("region", { name: "src/auth/token.ts" });
+  const other = page.getByRole("region", { name: "src/auth/token.ts" });
   await other.locator(".cm-line").first().click();
   await page.keyboard.press("Shift+Home");
   const blocked = other.getByRole("button", { name: "Send to terminal" });

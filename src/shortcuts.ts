@@ -40,6 +40,7 @@ export function nextPending(): void {
     },
     selection: agent.id,
     activeTab: tab?.id ?? s.activeTab,
+    fileShown: tab ? false : s.fileShown,
   });
 }
 
