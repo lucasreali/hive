@@ -28,6 +28,8 @@ test("the empty state opens a modal dialog focused on the folder field", () => {
   expect(dialog.open).toBe(true);
   expect(document.activeElement).toBe(field());
   expect(submit().disabled).toBe(true);
+  fireEvent.change(field(), { target: { value: "  " } });
+  expect(submit().disabled).toBe(true);
   expect(dialog.textContent).toContain("A git repository, or any folder inside one");
 });
 
@@ -42,6 +44,15 @@ test("the typed path goes to the service, and the answer closes the dialog", asy
   await waitFor(() => expect(useHive.getState().modal).toBeNull());
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByRole("button", { name: "shop" })).toBeDefined();
+});
+
+test("editing the field clears the refusal", () => {
+  open();
+  fireEvent.change(field(), { target: { value: "/" } });
+  act(() => apply({ type: "add_project_failed", path: "/", error: "not_a_git_repository", message: "m" }));
+  fireEvent.change(field(), { target: { value: "" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(field().getAttribute("aria-invalid")).toBe("false");
 });
 
 test("a refused path is explained under the field until the dialog reopens", () => {
