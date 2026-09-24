@@ -768,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn file_messages_are_tagged_json() {
+    fn open_file_messages_are_tagged_json() {
         let file = Control::File {
             worktree: "/r".into(),
             path: "a".into(),
