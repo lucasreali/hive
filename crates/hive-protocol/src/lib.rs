@@ -325,6 +325,8 @@ pub struct Worktree {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectError {
+    /// Empty or only whitespace.
+    EmptyPath,
     NotAbsolute,
     /// Missing or unreadable.
     NotFound,

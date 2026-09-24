@@ -69,6 +69,7 @@ export type Project = {
 };
 
 export type ProjectError =
+  | "empty_path"
   | "not_absolute"
   | "not_found"
   | "not_a_directory"
@@ -287,6 +288,7 @@ export const openModal = (modal: Modal, modalProject: string | null = null) =>
     addProjectError: null,
     worktreeDialog: initialState.worktreeDialog,
   });
+export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const select = (selection: string | null) => useHive.setState({ selection });
 export const toggleCollapsed = (id: string) =>

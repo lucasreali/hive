@@ -80,7 +80,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `projects {projects}` | service → app | 0 | Every project with its worktrees, in the order they were added. |
 | `add_project {path}` | app → service | 0 | Follow the git repository containing `path`. |
 | `project_added {project}` | service → app | 0 | The project, with its worktrees. Also the answer when it was already followed. |
-| `add_project_failed {path, error, message}` | service → app | 0 | `path` was refused. `error` is `not_absolute`, `not_found`, `not_a_directory`, `not_a_git_repository` or `storage`; `message` is shown as is. |
+| `add_project_failed {path, error, message}` | service → app | 0 | `path` was refused. `error` is `empty_path`, `not_absolute`, `not_found`, `not_a_directory`, `not_a_git_repository` or `storage`; `message` is shown as is. |
 | `list_branches {project}` | app → service | 0 | The local and remote branches of a followed project; answered by `branches`. |
 | `branches {project, local, remote, current, error}` | service → app | 0 | Short names from `git for-each-ref` (remote `HEAD` symrefs skipped, at most 1 MiB of names). `current` is the branch checked out in the main worktree, shown as "default"; `error` says why they could not be listed. |
 | `validate_worktree_name {project, name}` | app → service | 0 | Sent as the user types a new worktree's name. |
