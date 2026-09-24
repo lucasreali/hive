@@ -16,6 +16,7 @@ export const tauriTransport: Transport = {
   closeTerminal: (id) => invoke("close_terminal", { id }),
   listProjects: () => invoke("list_projects"),
   addProject: (path) => invoke("add_project", { path }),
+  listDirs: (path, windows) => invoke("list_dirs", { path, windows }),
   listBranches: (project) => invoke("list_branches", { project }),
   validateWorktreeName: (project, name) => invoke("validate_worktree_name", { project, name }),
   createWorktree: (project, name, base) => invoke("create_worktree", { project, name, base }),

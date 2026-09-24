@@ -1,6 +1,7 @@
 import type {
   AgentState,
   ChangedFile,
+  Dirs,
   FileStatus,
   FileText,
   Project,
@@ -108,7 +109,49 @@ export const MOCK_REPOS = [
   project("/home/user/projects/shop", "shop", ["fix-login", "feat-checkout"]),
   project("/home/user/projects/api", "api", ["refactor-auth"]),
   project("/home/user/dotfiles", "dotfiles", []),
+  // On the Windows side (C:), which WSL sees under /mnt/c.
+  project("/mnt/c/Users/user/source/site", "site", []),
 ];
+
+/**
+ * The fake machine's folders for "Add project", besides the repositories (every folder above
+ * one exists too): WSL's home and Windows' user folder (`C:\Users\user`, `/mnt/c/...`).
+ */
+export const MOCK_FOLDERS = [
+  ...MOCK_REPOS.map((p) => p.path),
+  "/home/user/Downloads",
+  "/home/user/projects/notes",
+  "/mnt/c/Users/user/Documents",
+];
+
+/** The folder part of `path`: up to its last separator (`\` too on Windows), else empty. */
+const folderPart = (path: string, windows: boolean) =>
+  path.slice(0, Math.max(path.lastIndexOf("/"), windows ? path.lastIndexOf("\\") : -1) + 1);
+
+/** A stand-in for `hive::dirs::answer` over `MOCK_FOLDERS`. */
+export function mockDirs(asked: string, windows: boolean): Dirs {
+  const path = asked || (windows ? "C:\\Users\\user\\" : "/home/user/");
+  const unix = windows
+    ? path
+        .replace(/^([A-Za-z]):/, (_, drive: string) => `/mnt/${drive.toLowerCase()}`)
+        .replaceAll("\\", "/")
+    : path;
+  const answer = { path, windows, linux_path: null, parent: null, dirs: [] };
+  if (!unix.startsWith("/")) return { ...answer, error: "type a full path" };
+  const folder = unix.slice(0, unix.lastIndexOf("/") + 1);
+  const inside = MOCK_FOLDERS.filter((f) => `${f}/`.startsWith(folder));
+  if (inside.length === 0) {
+    const error = `cannot open ${folder}: No such file or directory (os error 2)`;
+    return { ...answer, error };
+  }
+  const names = new Set(inside.map((f) => f.slice(folder.length).split("/")[0]).filter(Boolean));
+  const dirs = [...names]
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+    .map((name) => ({ name, git: MOCK_REPOS.some((p) => p.path === folder + name) }));
+  const above = folderPart(path, windows).replace(windows ? /[\\/]+$/ : /\/+$/, "");
+  const parent = folderPart(above, windows) || null;
+  return { ...answer, linux_path: unix, parent, dirs, error: null };
+}
 
 const MINUTE = 60_000;
 const session = (
@@ -508,6 +551,9 @@ export function createMockTransport(
       }
       if (!find(path)) projects.push(repo);
       later({ type: "project_added", project: find(path) as Project });
+    },
+    async listDirs(path, windows) {
+      later({ type: "dirs", ...mockDirs(path, windows) });
     },
     async listBranches(project) {
       const branches = MOCK_BRANCHES[project];

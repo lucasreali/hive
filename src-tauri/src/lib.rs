@@ -377,6 +377,11 @@ impl Hive {
         self.link().send(0, &Control::DeleteSession { id })
     }
 
+    /// The answer arrives as `dirs`.
+    pub fn list_dirs(&self, path: String, windows: bool) -> Result<(), String> {
+        self.link().send(0, &Control::ListDirs { path, windows })
+    }
+
     /// The answer arrives as `search_results`.
     pub fn search_files(&self, worktree: String, query: String) -> Result<(), String> {
         self.link()
@@ -648,6 +653,11 @@ pub mod commands {
     #[tauri::command]
     pub fn delete_session(hive: State<'_, Hive>, id: String) -> Result<(), String> {
         hive.delete_session(id)
+    }
+
+    #[tauri::command]
+    pub fn list_dirs(hive: State<'_, Hive>, path: String, windows: bool) -> Result<(), String> {
+        hive.list_dirs(path, windows)
     }
 
     #[tauri::command]

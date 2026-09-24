@@ -24,6 +24,11 @@ export interface Transport {
   listProjects(): Promise<void>;
   /** Asks the service to follow `path`; answered by `project_added` or `add_project_failed`. */
   addProject(path: string): Promise<void>;
+  /**
+   * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
+   * empty); answered by `dirs`.
+   */
+  listDirs(path: string, windows: boolean): Promise<void>;
   /** Answered by `branches`. */
   listBranches(project: string): Promise<void>;
   /** Checks a new worktree name with the CLI's rule; answered by `worktree_name_validated`. */

@@ -403,6 +403,26 @@ pub enum Control {
         /// Why nothing could be searched.
         error: Option<String>,
     },
+    /// App → service: the subfolders of the folder typed in "Add project", answered by `Dirs`.
+    /// `path` is Linux, or Windows (`C:\Users\...`) when `windows`; empty is the home folder.
+    /// Without a trailing separator, the folder holding the last name is listed.
+    ListDirs {
+        path: String,
+        windows: bool,
+    },
+    Dirs {
+        /// The request's `path`, or the home folder (ending with a separator) for an empty one.
+        path: String,
+        windows: bool,
+        /// `path` as a Linux path, for `AddProject`.
+        linux_path: Option<String>,
+        /// The folder above the listed one, in the request's form; `None` at the top.
+        parent: Option<String>,
+        /// Not hidden, sorted ignoring case, at most the service's cap.
+        dirs: Vec<Dir>,
+        /// Why nothing could be listed.
+        error: Option<String>,
+    },
     /// App → service: one file of a worktree of a followed project for the viewer and diff
     /// (#31), answered by `File`. `path` is relative to the worktree and must stay inside it.
     OpenFile {
@@ -556,6 +576,14 @@ pub enum SessionRole {
 pub enum SessionTarget {
     Log,
     Folder,
+}
+
+/// A subfolder listed for "Add project".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dir {
+    pub name: String,
+    /// Holds a `.git` entry: a repository (or a worktree) of its own.
+    pub git: bool,
 }
 
 /// A line of a worktree's file holding the searched text.
@@ -1061,6 +1089,30 @@ mod tests {
             query: "q".into(),
         };
         assert_eq!(Frame::control(0, &search).to_control().unwrap(), search);
+    }
+
+    #[test]
+    fn dirs_messages_are_tagged_json() {
+        let dirs = Control::Dirs {
+            path: "C:\\".into(),
+            windows: true,
+            linux_path: Some("/mnt/c".into()),
+            parent: None,
+            dirs: vec![Dir {
+                name: "Users".into(),
+                git: false,
+            }],
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &dirs).payload[..],
+            br#"{"type":"dirs","path":"C:\\","windows":true,"linux_path":"/mnt/c","parent":null,"dirs":[{"name":"Users","git":false}],"error":null}"#
+        );
+        let list = Control::ListDirs {
+            path: String::new(),
+            windows: false,
+        };
+        assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
     }
 
     #[test]

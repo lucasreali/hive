@@ -45,6 +45,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.closeTerminal(7);
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
+  await tauriTransport.listDirs("", true);
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
   await tauriTransport.createWorktree("/r", "x", null);
@@ -68,6 +69,7 @@ test("terminal and project actions call their commands", async () => {
     ["close_terminal", { id: 7 }],
     ["list_projects", {}],
     ["add_project", { path: "/r" }],
+    ["list_dirs", { path: "", windows: true }],
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],
     ["create_worktree", { project: "/r", name: "x", base: null }],

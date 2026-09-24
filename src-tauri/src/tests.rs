@@ -374,6 +374,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         query: "q".into(),
     };
     assert_eq!(service.control().await, (0, search));
+    hive.list_dirs("C:\\".into(), true).unwrap();
+    let dirs = Control::ListDirs {
+        path: "C:\\".into(),
+        windows: true,
+    };
+    assert_eq!(service.control().await, (0, dirs));
     hive.open_file("/r".into(), "a".into()).unwrap();
     let open = Control::OpenFile {
         worktree: "/r".into(),
@@ -548,6 +554,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
+    assert_eq!(hive.list_dirs(String::new(), false), not_connected);
     assert_eq!(hive.list_sessions(), not_connected);
     assert_eq!(
         hive.locate_session("s".into(), SessionTarget::Folder),
@@ -727,6 +734,7 @@ fn commands_reach_the_managed_hive() {
             list_changes,
             open_file,
             search_files,
+            list_dirs,
             list_sessions,
             locate_session,
             delete_session,
@@ -772,6 +780,7 @@ fn commands_reach_the_managed_hive() {
     let changes = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a"});
     let search = json!({"worktree": "/r", "query": "q"});
+    let dirs = json!({"path": "", "windows": false});
     let locate = json!({"id": "s", "target": "log"});
     let delete = json!({"id": "s"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
@@ -786,6 +795,7 @@ fn commands_reach_the_managed_hive() {
         ("list_changes", &changes),
         ("open_file", &file),
         ("search_files", &search),
+        ("list_dirs", &dirs),
         ("list_sessions", &json!({})),
         ("locate_session", &locate),
         ("delete_session", &delete),
@@ -824,6 +834,7 @@ fn commands_reach_the_managed_hive() {
         ("list_changes", changes),
         ("open_file", file.clone()),
         ("search_files", search),
+        ("list_dirs", dirs),
         ("list_sessions", json!({})),
         ("locate_session", locate),
         ("delete_session", delete),

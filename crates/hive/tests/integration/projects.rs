@@ -516,3 +516,35 @@ async fn contents_are_searched_in_tracked_and_untracked_files() {
     drop(conn);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn folders_are_browsed_from_home() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.path("home/projects/.git")).unwrap();
+    std::fs::create_dir(env.path("home/.config")).unwrap();
+    let mut daemon = env.daemon();
+    let mut conn = env.connect(Role::App).await;
+    let empty = Control::ListDirs {
+        path: String::new(),
+        windows: false,
+    };
+    let home = format!("{}/", env.path("home").display());
+    // `join("")` ends the path with a separator.
+    let above = env.path("").display().to_string();
+    assert_eq!(
+        request(&mut conn, empty).await,
+        Control::Dirs {
+            path: home.clone(),
+            windows: false,
+            linux_path: Some(home),
+            parent: Some(above),
+            dirs: vec![hive_protocol::Dir {
+                name: "projects".into(),
+                git: true,
+            }],
+            error: None,
+        }
+    );
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}
