@@ -14,8 +14,10 @@ import type { AgentState } from "../store";
 
 // Inline SVG icons from the prototype (docs/prototype/HiveApp.dc.html).
 
-// The Hive logo (src-tauri/icons/icon.svg): a honeycomb with one lit cell.
-const HEX = "0,-20 17.32,-10 17.32,10 0,20 -17.32,10 -17.32,-10";
+// The title bar's Hive logo: a honeycomb of hollow cells with one lit, solid cell (the human's
+// drawing), in the logo's colors (src-tauri/icons/icon.svg).
+const HEX = "M0-20L17.32-10V10L0 20L-17.32 10V-10Z";
+const HOLE = "M0-13L11.26-6.5V6.5L0 13L-11.26 6.5V-6.5Z";
 const CELLS = [
   [-19.32, -33.46],
   [-38.64, 0],
@@ -28,9 +30,15 @@ const CELLS = [
 export const HiveIcon = () => (
   <svg width="16" height="16" viewBox="-60 -60 120 120" aria-hidden="true">
     {CELLS.map(([x, y]) => (
-      <polygon key={`${x},${y}`} points={HEX} transform={`translate(${x} ${y})`} fill="#7D776C" />
+      <path
+        key={`${x},${y}`}
+        d={`${HEX} ${HOLE}`}
+        fillRule="evenodd"
+        transform={`translate(${x} ${y})`}
+        fill="#7D776C"
+      />
     ))}
-    <polygon points={HEX} transform="translate(19.32 -33.46)" fill="#F2B53C" />
+    <path d={HEX} transform="translate(19.32 -33.46)" fill="#F2B53C" />
   </svg>
 );
 
