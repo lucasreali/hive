@@ -64,6 +64,17 @@ function panel() {
 const rows = () => screen.queryAllByRole("treeitem").map((r) => [r.textContent, r.dataset.status]);
 const tree = () => screen.getByRole("tree", { name: "Files" });
 
+/** Opens every folder of the tree: they all start collapsed. */
+function expand() {
+  for (;;) {
+    const closed = screen
+      .queryAllByRole("treeitem")
+      .find((r) => r.getAttribute("aria-expanded") === "false");
+    if (!closed) return;
+    fireEvent.click(closed);
+  }
+}
+
 test("rows group paths into folders, folders first, with the strongest status inside", () => {
   const files = [
     file("README.md"),
@@ -78,7 +89,14 @@ test("rows group paths into folders, folders first, with the strongest status in
     fileRows("/w", files, collapsed).map((r) =>
       r.kind === "folder" ? [r.depth, `${r.name}/`, r.status, r.open] : [r.depth, r.name],
     );
+  // Every folder starts collapsed.
   expect(shape({})).toEqual([
+    [0, "src/", "deleted", false],
+    [0, "test/", "renamed", false],
+    [0, "README.md"],
+  ]);
+  const open = { "folder:/w/src": false, "folder:/w/src/b": false, "folder:/w/test": false };
+  expect(shape(open)).toEqual([
     [0, "src/", "deleted", true],
     [1, "b/", "deleted", true],
     [2, "c.ts"],
@@ -90,7 +108,7 @@ test("rows group paths into folders, folders first, with the strongest status in
     [1, "u.ts"],
     [0, "README.md"],
   ]);
-  expect(shape({ "folder:/w/src/b": true, "folder:/other/test": true })).toEqual([
+  expect(shape({ ...open, "folder:/w/src/b": true, "folder:/other/test": true })).toEqual([
     [0, "src/", "deleted", true],
     [1, "b/", "deleted", false],
     [1, "a.ts"],
@@ -100,7 +118,7 @@ test("rows group paths into folders, folders first, with the strongest status in
     [1, "u.ts"],
     [0, "README.md"],
   ]);
-  const key = fileRows("/w", files, {})[1].key;
+  const key = fileRows("/w", files, open)[1].key;
   expect(key).toBe("folder:/w/src/b");
 });
 
@@ -120,6 +138,12 @@ test("the selected worktree's changes: summary, totals, letters and counts", () 
   expect(screen.queryByText(/changed|No changes/)).toBeNull();
   act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
   expect(document.querySelector(".files-summary")?.textContent).toBe("5 files changed+24−49");
+  expect(rows()).toEqual([
+    ["assets", "M"],
+    ["src", "D"],
+    ["package.json+1−1M", "M"],
+  ]);
+  expand();
   expect(rows()).toEqual([
     ["assets", "M"],
     ["logo.pngM", "M"],
@@ -176,6 +200,7 @@ test("clicking a file opens it under the tree; folders collapse; Close diff clos
   panel();
   act(() => select(refactor.id));
   act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
+  expand();
   fireEvent.click(screen.getByRole("treeitem", { name: /token\.ts/ }));
   expect(useHive.getState().openFile).toEqual({
     worktree: refactor.path,
@@ -304,11 +329,11 @@ test("an empty tree ignores keys", () => {
   expect(fireEvent.keyDown(tree(), { key: "ArrowDown" })).toBe(true);
 });
 
-test("All and Changed switch the mode; the header button closes the panel", () => {
+test("All and Diff switch the mode; the header button closes the panel", () => {
   panel();
   act(() => setRightPanel("files"));
   const all = screen.getByRole("button", { name: "All" });
-  const changed = screen.getByRole("button", { name: "Changed" });
+  const changed = screen.getByRole("button", { name: "Diff" });
   expect([all.getAttribute("aria-pressed"), changed.getAttribute("aria-pressed")]).toEqual([
     "true",
     "false",
@@ -339,13 +364,14 @@ test("All lists every file with the changes' statuses, deleted files included", 
   ]);
 });
 
-test("the tree shows the watched worktree's files in All, only the changes in Changed", () => {
+test("the tree shows the watched worktree's files in All, only the changes in Diff", () => {
   panel();
   act(() => select(fixLogin.id));
   const listed = ["README.md", "src/auth/session.ts", "src/main.ts"];
   // Another worktree's list is not this one's.
   act(() => apply({ type: "files", path: refactor.path, files: ["x"], truncated: false }));
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/auth/session.ts")]) }));
+  expand();
   expect(rows()).toEqual([
     ["src", "M"],
     ["auth", "M"],

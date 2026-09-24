@@ -11,7 +11,6 @@ import {
   setEditing,
   setOpenFile,
   setRightPanel,
-  toggleCollapsed,
   useHive,
 } from "../store";
 import { transport } from "../transport";
@@ -79,8 +78,8 @@ export function allFiles(listed: string[], changed: ChangedFile[]): TreeFile[] {
 
 /**
  * The visible rows of the files tree: `files` (sorted by the service) grouped into folders,
- * folders before files, a collapsed folder (`collapsed["folder:<worktree>/<path>"]`) hiding
- * what is inside it. Grouping paths is presentation; statuses and counts are the service's.
+ * folders before files. A folder starts collapsed and is open only when
+ * `collapsed["folder:<worktree>/<path>"]` is false. Grouping paths is presentation; statuses and counts are the service's.
  */
 export function fileRows(
   worktree: string,
@@ -102,7 +101,7 @@ export function fileRows(
   const walk = (folder: Folder, prefix: string, depth: number) => {
     for (const [name, inner] of [...folder.folders].sort(([a], [b]) => (a < b ? -1 : 1))) {
       const key = `folder:${worktree}/${prefix}${name}`;
-      const open = !collapsed[key];
+      const open = collapsed[key] === false;
       rows.push({ kind: "folder", key, name, depth, open, status: strongest(inner) });
       if (open) walk(inner, `${prefix}${name}/`, depth + 1);
     }
@@ -173,7 +172,7 @@ export function RightPanel() {
         <span>Files and diff</span>
         <div className="segmented">
           {mode("All", "Show all files", false)}
-          {mode("Changed", "Show only changed files", true)}
+          {mode("Diff", "Show only changed files", true)}
         </div>
         <button
           type="button"
@@ -250,7 +249,7 @@ function FileTree({ worktree }: { worktree: string }) {
   // A file without changes opens as editable text; a changed one as its diff (#31).
   const pick = (row: FileRow) =>
     row.kind === "folder"
-      ? toggleCollapsed(row.key)
+      ? useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: row.open } }))
       : leaveFile({ worktree, path: row.key }, !row.file.status);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[at];
