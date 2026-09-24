@@ -15,6 +15,7 @@
     "e2e": "playwright test -c e2e"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/merge": "^6.12.2",
