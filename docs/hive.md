@@ -148,7 +148,7 @@ O desenvolvimento é **incremental e guiado**: o agente segue o `TODO.md` do rep
 | D1 | **Tudo em inglês**: código, comentários, commits, docs do repositório, CLI, interface. Só este documento fica em português | Padrão do ecossistema; interface em inglês (#34) |
 | D2 | **100% de cobertura de linhas + teste de mutação** (`cargo llvm-cov`, `cargo mutants` sem mutante sobrevivente no código alterado); no frontend, 100% de linhas no `bun test`. Exceções só por arquivo, listadas com justificativa em `COVERAGE_EXCLUSIONS.md` e aprovadas pelo humano | Cobertura total com prova de que os testes verificam comportamento |
 | D3 | **Portões por tarefa**: `cargo fmt --check`, `clippy -D warnings` (sem `unwrap`/`expect` fora de testes), testes, `cargo deny`, `cargo machete`, `cargo check --locked`; frontend: lint, typecheck, `bun test --coverage`, `bun install --frozen-lockfile` | Qualidade constante, sem acumular dívida |
-| D4 | **Git**: um branch por tarefa (`task/<id>-<slug>`) criado a partir da `main`, commits pequenos no padrão Conventional Commits (`type(scope): description`); **ao concluir a tarefa** (portões verdes, `TODO.md` marcado, relatório feito) o agente faz o merge na `main` (`--ff-only`) e apaga o branch; se a `main` tiver mudado, para e pergunta. Nunca push, force nem reescrita de histórico | Tudo que o agente fez fica na `main`, sem branches pendurados; a revisão acontece nos checkpoints |
+| D4 | **Git**: um branch por tarefa (`task/<id>-<slug>`) criado a partir da `main`, commits pequenos no padrão Conventional Commits (`type(scope): description`). Tarefas independentes rodam **em paralelo**, cada agente na sua worktree; **ao concluir** (portões verdes, `TODO.md` marcado, relatório feito) o agente faz `git merge main` no seu branch, resolve ele mesmo os conflitos preservando o trabalho dos outros e roda os portões de novo. A integração na `main` é sempre `--ff-only`: quem trabalha sozinho no checkout principal integra o próprio branch; branches feitos em worktree são integrados pelo orquestrador (`.claude/skills/stage/`), e se a `main` andou a tarefa volta ao agente para outro merge. O branch é apagado depois. Nunca push, force, rebase nem reescrita de histórico | Tudo que o agente fez fica na `main`, sem branches pendurados; paralelismo sem perder o histórico linear; a revisão acontece nos checkpoints |
 | D5 | **O agente nunca muda uma decisão deste documento**; se algo estiver errado ou faltando, para e pergunta | O documento é a fonte da verdade |
 
 
@@ -246,7 +246,7 @@ Adaptadores futuros (Codex, Gemini...)
 - **Substitui completamente** a criação padrão. O `.worktreeinclude` deixa de ser processado, então **o Hive precisa copiar os arquivos ignorados pelo git** (`.env` etc.). Isso já acontece no comando `criar worktree` da Etapa 1.
 - Qualquer saída diferente de 0 aborta a criação. A CLI devolve o **caminho da worktree no stdout**; qualquer saída extra quebra a criação.
 - `WorktreeRemove` dispara no fim da sessão, no fim de um subagente e ao apagar uma sessão em segundo plano. Saída diferente de 0 faz a remoção falhar se o diretório ainda existir.
-- Existe um bug aberto (ago/2026) de subagente com hook `WorktreeCreate` dando erro de isolamento. Testar no spike da Etapa 0.
+- Existe um bug aberto (ago/2026) de subagente com hook `WorktreeCreate` dando erro de isolamento. Testar no spike (tarefa 1.12).
 - Se um projeto tiver um hook `WorktreeCreate` próprio, ele e o do Hive vão disputar a criação. O Hive deve detectar e avisar.
 
 ### Mapeamento de estados (hooks do Claude Code → estado visual)
@@ -264,7 +264,7 @@ Adaptadores futuros (Codex, Gemini...)
 **Regras:**
 
 1. **O mais urgente vence:** um subagente em 🟡 põe o pai em 🟡, não em 🟣.
-2. **Reconciliação da interrupção:** o `Stop` não dispara quando o usuário interrompe (Esc/Ctrl+C). Se o agente está em 🔵 ou 🟡 e o PTY fica alguns segundos sem saída, ele vai para 🟠. Funciona porque o spinner do Claude escreve no terminal continuamente enquanto trabalha. *A verificar no spike:* se o spinner continua animando durante ferramentas longas.
+2. **Reconciliação da interrupção:** o `Stop` não dispara quando o usuário interrompe (Esc/Ctrl+C). Se o agente está em 🔵 ou 🟡 e o PTY fica alguns segundos sem saída, ele vai para 🟠. Funciona porque o spinner do Claude escreve no terminal continuamente enquanto trabalha. *A verificar no spike:* se o spinner continua animando durante ferramentas longas e durante a espera de permissão. Silêncio implementado: 5 s (Etapa 2).
 
 > Hooks de subagente trazem `agent_id` e `agent_type` no payload. O `cwd` segue o Claude para dentro da worktree.
 
@@ -332,14 +332,15 @@ Adaptadores futuros (Codex, Gemini...)
 
 | # | Ponto | Situação |
 |---|---|---|
-| 7 | **Identificar o subagente dono de uma worktree** a partir do payload dos hooks | Resolver no spike da Etapa 0 com `hive hook --record` |
+| 7 | **Identificar o subagente dono de uma worktree** a partir do payload dos hooks | Resolver no spike com `hive hook --record` (movido da Etapa 0 para a tarefa 1.12 do `TODO.md`; gravações ainda pendentes) |
 | 9 | **Revisão do protótipo de alta fidelidade** da Etapa 1 | Protótipo recebido e incorporado (#32, #33); pendência no ponto 13 (o 11 virou a #34 e o 12 a #35) |
 | 13 | **Referência visual para os agentes**: sem o `support.js`, os agentes não renderizam o protótipo; capturas PNG das telas 1a–1g (exportadas do Claude Design) permitiriam comparar a implementação com o desenho | Exportar as capturas antes da noite da Etapa 1 |
 
-**A verificar no spike de hooks (Etapa 0):**
+**A verificar no spike de hooks (tarefa 1.12, movida da Etapa 0):**
 
 - Se o `WorktreeCreate` disparado por um subagente traz `agent_id`/`agent_type`.
 - Se o spinner do Claude continua escrevendo no terminal durante ferramentas longas (regra 2 do mapeamento).
+- Se o Claude continua escrevendo no terminal enquanto espera uma permissão (🟡); se não, a regra 2 leva uma permissão sem resposta para 🟠 após 5 s.
 - O bug do `WorktreeCreate` com subagentes.
 - Se o Claude Code recusa editar um arquivo alterado desde a última leitura e o relê (lado do agente no conflito de edição).
 
