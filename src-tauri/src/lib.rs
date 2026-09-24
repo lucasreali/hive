@@ -68,7 +68,12 @@ pub fn bridge_command(
     }
     args.extend(["--exec", "/bin/sh", "-c", BRIDGE_SCRIPT, "sh"].map(OsString::from));
     args.push(var("HIVE_BRIDGE").unwrap_or_default());
-    args.push(bundled.filter(|path| path.is_file()).unwrap_or_default().into());
+    args.push(
+        bundled
+            .filter(|path| path.is_file())
+            .unwrap_or_default()
+            .into(),
+    );
     ("wsl.exe".into(), args)
 }
 

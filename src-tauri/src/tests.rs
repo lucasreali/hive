@@ -217,7 +217,11 @@ fn the_bridge_script_installs_the_bundled_hive_once_per_version() {
     );
     let inode = std::fs::metadata(&installed).unwrap().ino();
     home.run("", &bundled);
-    assert_eq!(std::fs::metadata(&installed).unwrap().ino(), inode, "same file: no copy");
+    assert_eq!(
+        std::fs::metadata(&installed).unwrap().ino(),
+        inode,
+        "same file: no copy"
+    );
 
     home.write("bundle/hive", "#!/bin/sh\necho \"v2 $*\"\n");
     assert_eq!(home.run("", &bundled), "v2 bridge\n");
