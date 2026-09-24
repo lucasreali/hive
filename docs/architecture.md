@@ -31,7 +31,7 @@ Windows                         WSL
 | `hive::paths` | Runtime dir (`$XDG_RUNTIME_DIR/hive`, or `/tmp/hive-<uid>`, checked to be ours and mode 0700), socket, lockfile, `daemon.log`, data dir, bin dir, hooks settings. |
 | `hive::daemon` | Lockfile, socket (0600), handshake, app/hook connections, prioritized writer, terminal and agent registries, shutdown. |
 | `hive::terminal` | Spawns `fish -C 'set -gx PATH <bin> $PATH'` on a PTY with `HIVE_TERMINAL_ID`. Handles input and resize, and ends process groups. |
-| `hive::procs` | Minimal `/proc` reader (pid, ppid, pgrp, session, comm; skips zombies). |
+| `hive::procs` | Minimal `/proc` reader (pid, pgrp, session, comm; skips zombies). |
 | `hive::watch` | Pure state machine for the unhooked-`claude` warning. |
 | `hive::states` | Pure agent state machine: hook events → state per agent and subagent, "the most urgent wins", PTY-silence reconciliation (the clock is passed in). |
 | `hive::adapter` | `Adapter` trait and `ClaudeCode` adapter: raw hook payload → `AgentEvent` (raw payload kept). |
@@ -50,7 +50,7 @@ Every message is a frame, big-endian: `[type: u8][channel: u32][length: u32][pay
 
 - **type** `0` = control: the payload is one JSON `Control` message, tagged by `"type"` in snake_case. **type** `1` = terminal: the payload is raw PTY bytes.
 - **channel** `0` is the connection itself. Channels from `1` up are terminals, and the channel number is also the terminal's `HIVE_TERMINAL_ID`.
-- **Size limit.** The maximum payload is 4 MiB (`MAX_PAYLOAD`) in both directions. The decoder never panics: it fails with `Oversized`, `UnknownType` or `Json` errors.
+- **Size limit.** The maximum payload is 4 MiB (`MAX_PAYLOAD`) in both directions. The decoder never panics: it fails with `Oversized`, `UnknownType` or `Json` errors. A message too big to encode never ends a connection: the app's Rust side refuses the command with the `Oversized` error (e.g. saving a huge paste), and the service's writer drops the frame with a warning in `daemon.log`.
 - **Priority.** The service's writer always drains queued control frames before terminal frames (`biased` select). Terminal output goes through a bounded queue of 256 frames, so a slow app slows the PTYs instead of growing memory.
 
 ### Handshake
@@ -128,7 +128,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 6. The bridge then copies bytes in both directions without looking at them. When either side closes, the bridge exits.
 
 ### App connect (app side)
-1. The UI calls `connect(onMessage)` once at startup (`src/main.tsx`), handing a `Channel` to Rust.
+1. The UI calls `connect(onMessage)` at startup (`connect` in `src/connect.ts`, called by `src/main.tsx`), handing a `Channel` to Rust. "Reconnect" goes through the same function, so every connection has the same handler.
 2. Rust starts the bridge and queues `hello {role: app, version}`; `version` is the app's `CARGO_PKG_VERSION`, so `hive-app` and `hive` share one version number.
 3. `welcome` or `version_mismatch` goes to the UI. After `version_mismatch`, Rust drops the bridge and sends nothing more.
    The UI (`src/shell/ConnectionBlock.tsx`) then blocks the workspace (`inert`, with a modal `alertdialog`; the title bar stays usable) and shows both versions and the fix: `cargo install --path crates/hive` and `pkill -f 'hive daemon'`, because a refused handshake leaves the old service running. `disconnected` blocks the same way and shows the reason. The dialog's "Reconnect" calls `connect` again, which starts a new bridge.
@@ -152,7 +152,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 
 ### Shortcuts (#35)
 `src/shortcuts.ts` has one `keydown` listener on the window. A focused terminal gives each key to `interceptKeys` first: a shortcut is kept from xterm, which leaves it unhandled, so it bubbles up to the window listener and runs once; every other key (Ctrl+Shift+C/V included) is the terminal's.
-1. Ctrl+Shift+T opens the worktree picker (every worktree of every project, filtered by worktree or project name; ↑/↓, Enter or a click opens a terminal in its path; Esc or a click outside closes). Ctrl+Shift+N opens the new worktree dialog for the selected project, the project of the selected worktree, or the first project (add project when there is none). Ctrl+Shift+B toggles the files panel. Ctrl+Shift+O opens add project. F8 (no modifiers, or a click on the "N pending" counter) selects the pending agent after the selected one (else after the one whose terminal is shown) in tree order, wrapping; it expands the agent's project and worktree, shows its terminal when it has a tab and scrolls it into view. Agents outside every project come last. With nothing pending it does nothing.
+1. Ctrl+Shift+T opens the worktree picker (every worktree of every project, filtered by worktree or project name; ↑/↓, Enter or a click opens a terminal in its path; Esc or a click outside closes). Ctrl+Shift+N opens the new worktree dialog for the selected project, the project of the selected worktree (a selected agent counts as its worktree, `selectedPlace` in `src/store.ts`; the tab bar's "+" uses it too), or the first project (add project when there is none). Ctrl+Shift+B toggles the files panel. Ctrl+Shift+O opens add project. F8 (no modifiers, or a click on the "N pending" counter) selects the pending agent after the selected one (else after the one whose terminal is shown) in tree order, wrapping; it expands the agent's project and worktree, shows its terminal when it has a tab and scrolls it into view. Agents outside every project come last. With nothing pending it does nothing.
 2. Nothing runs under the connection block (`version_mismatch`, `disconnected`) or while a dialog is open; the key then goes on as usual.
 3. The tree (sidebar): ↑/↓ move between rows, ←/→ collapse and expand a project or a worktree with agents, Enter selects (rows are buttons).
 
@@ -163,7 +163,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 4. Outside Tauri (browser, mock transport) only the title bar Close requests a close, and a close that goes through sets `data-closed` on `<html>` for the browser checks.
 
 ### Notifications (hive.md item 5)
-1. `src/main.tsx` passes every service message to `notify` (`src/notify.ts`) before `apply`, so the store still holds the agent's previous state. Only a change the service sent counts: an agent's first state is silent, and so is the snapshot after `welcome` (it always lands in an empty store: a fresh page, or after `disconnected` cleared it).
+1. `src/connect.ts` passes every service message to `notify` (`src/notify.ts`) before `apply`, so the store still holds the agent's previous state. Only a change the service sent counts: an agent's first state is silent, and so is the snapshot after `welcome` (it always lands in an empty store: a fresh page, or after `disconnected` cleared it).
 2. Entering waiting for permission, waiting for you or error plays a short tone synthesized with Web Audio (no audio file); changes within 500 ms share one tone.
 3. Working or with subagents → waiting for you is "agent finished": `showNotification` (`src/shell/window.ts`) sends an OS notification through `tauri-plugin-notification` ("Agent finished", "project · worktree: waiting for you"). The capability allows only `is_permission_granted`, `request_permission` and `notify`. Outside Tauri nothing is shown.
 
@@ -209,7 +209,7 @@ The files panel (screen 1g, "Árvore de arquivos com diff do git").
 ### Editing (3.5, #31)
 1. Which views are editable: a file without changes opens (from the tree) as editable text; a changed file opens as its read-only diff (#31: the diff stays read-only) and the header's "Edit" switches it to editable text, "Diff" back (disabled while there are unsaved edits). No LSP.
 2. The buffer (`src/viewer/buffer.ts`, pure; kept in the store as `edit`, so it survives the panel closing) holds the text being edited, the text on disk it is based on and its `version`. The CodeMirror view (`createEditor` in `editor.ts`) is created once per open file outside React state (#30); it splits lines on "\n" only, so a "\r" is text and saves unchanged. Undo, the standard keys and Tab indenting come from `@codemirror/commands` (Esc, then Tab, leaves the editor).
-3. Save: Ctrl+S while the editor has the focus (a CodeMirror key, so the terminal never loses it and no app-wide shortcut is taken, #35) or the header's Save sends `save_file` with the buffer's base `version`; one save at a time. `file_saved` makes the sent text the new base; the header's dot marks unsaved edits.
+3. Save: Ctrl+S while the editor has the focus (a CodeMirror key, so the terminal never loses it and no app-wide shortcut is taken, #35) or the header's Save sends `save_file` with the buffer's base `version`; one save at a time. A save the app cannot send (not connected, over the frame limit) fails at once with the reason. `file_saved` makes the sent text the new base; the header's dot marks unsaved edits.
 4. The service (blocking thread) checks the worktree and the path as `open_file` does. An existing file is written through its resolved path (a symlink inside the worktree stays a symlink); a new one only in a folder that resolves inside the worktree. `content` over 1 MiB is `too_large`. The text goes to `.<name>.hive-<pid>-<n>.tmp` in the same folder (created 0600, then given the file's permission bits, 0644 for a new file), is synced, the version on disk is checked, and the temporary file is renamed over the file; the folder is then synced. Any failure removes the temporary file. Known limit: a write between the version check and the rename is lost (agents take no lock, so none would help).
 5. Every new `file` answer for the open file (see [Viewer and diff](#viewer-and-diff-33-31)) updates the buffer: text equal to the buffer's makes it clean at that version; text equal to its base changes nothing (e.g. a new service build with new version tokens); a clean buffer reloads (keeping scroll and selection); a dirty one keeps the edits and shows the conflict banner "Changed on disk." (or "Deleted on disk."): Reload takes the disk's text; Keep mine takes the disk's version as the base, so the next save overwrites it (a deleted file is created again); View diff shows the edits against the disk as a read-only unified diff. A `save_failed` conflict asks for the file again, which brings the banner.
 6. Opening another file, or closing it, with unsaved edits asks "Discard your unsaved changes to <path>?" (`window.confirm`). Known limit: closing the app does not ask.
