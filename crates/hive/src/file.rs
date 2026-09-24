@@ -7,7 +7,6 @@ use std::hash::{DefaultHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, SaveError};
@@ -159,9 +158,16 @@ fn write_temp(mut file: File, content: &str, mode: u32) -> io::Result<()> {
     file.sync_all()
 }
 
-/// Extensions that Windows runs, installs or follows instead of opening them in an editor.
+/// The system that opens files for the app: Windows through WSL, or macOS itself.
+#[cfg(target_os = "linux")]
+const SYSTEM: &str = "Windows";
+#[cfg(target_os = "macos")]
+const SYSTEM: &str = "macOS";
+
+/// Extensions that the system runs, installs or follows instead of opening them in an editor.
 // ponytail: a fixed list, not the user's file associations; extend it when one is missing.
-const RUNS_ON_WINDOWS: &[&str] = &[
+#[cfg(target_os = "linux")]
+const RUNS_AS_PROGRAM: &[&str] = &[
     "appref-ms",
     "application",
     "bat",
@@ -190,10 +196,14 @@ const RUNS_ON_WINDOWS: &[&str] = &[
     "wsf",
     "wsh",
 ];
+#[cfg(target_os = "macos")]
+const RUNS_AS_PROGRAM: &[&str] = &[
+    "app", "command", "jar", "pkg", "scpt", "terminal", "tool", "workflow",
+];
 
-/// The Windows path (`<wslpath> -w`) of the file `path` of the worktree at `dir` (the folder
-/// itself when `path` is empty), for the app to open it with its Windows default app.
-/// Refused for a file Windows would run.
+/// The path the app opens (see [`windows`]) of the file `path` of the worktree at `dir` (the
+/// folder itself when `path` is empty), with the system's default app. Refused for a file
+/// the system would run.
 pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<String> {
     let real = if path.is_empty() {
         // The worktree's own folder, for the Windows Explorer.
@@ -206,17 +216,21 @@ pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<Strin
     };
     let extension = real.extension().unwrap_or_default().to_string_lossy();
     let extension = extension.to_ascii_lowercase();
-    if RUNS_ON_WINDOWS.contains(&extension.as_str()) {
+    if RUNS_AS_PROGRAM.contains(&extension.as_str()) {
         return Err(io::Error::other(format!(
-            "Windows would run a .{extension} file instead of opening it in an editor"
+            "{SYSTEM} would run a .{extension} file instead of opening it in an editor"
         )));
     }
     windows(&real, wslpath)
 }
 
 /// Where Windows sees `path`: `<wslpath> -w <path>`.
+#[cfg(target_os = "linux")]
 pub fn windows(path: &Path, wslpath: &OsStr) -> io::Result<String> {
-    let out = Command::new(wslpath).arg("-w").arg(path).output()?;
+    let out = std::process::Command::new(wslpath)
+        .arg("-w")
+        .arg(path)
+        .output()?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(io::Error::other(format!(
@@ -225,6 +239,12 @@ pub fn windows(path: &Path, wslpath: &OsStr) -> io::Result<String> {
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_owned())
+}
+
+/// On macOS the app runs beside the service: `path` itself.
+#[cfg(target_os = "macos")]
+pub fn windows(path: &Path, _wslpath: &OsStr) -> io::Result<String> {
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// At most [`TEXT_LIMIT`] bytes, else [`Side::TooLarge`].
@@ -547,6 +567,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_file_is_located_for_windows_unless_windows_would_run_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -567,6 +588,23 @@ mod tests {
         assert_eq!(at("../a.ts", "echo"), Err(not_inside.to_owned()));
         assert_eq!(at("a.ts", "false"), Err("wslpath failed: ".to_owned()));
         assert!(at("a.ts", "/nonexistent/wslpath").is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_file_is_located_on_macos_unless_macos_would_run_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), "").unwrap();
+        std::fs::create_dir(dir.path().join("Some.APP")).unwrap();
+        let real = dir.path().canonicalize().unwrap().join("a.ts");
+        let at = |path: &str| {
+            windows_path(dir.path(), path, OsStr::new("wslpath")).map_err(|e| e.to_string())
+        };
+        assert_eq!(at("a.ts"), Ok(real.display().to_string()));
+        assert_eq!(at(""), Ok(dir.path().display().to_string()));
+        let run = "macOS would run a .app file instead of opening it in an editor";
+        assert_eq!(at("Some.APP"), Err(run.to_owned()));
+        assert_eq!(at("nope"), Err("nope does not exist".to_owned()));
     }
 
     #[test]
