@@ -68,3 +68,14 @@ export async function showNotification(title: string, body: string): Promise<voi
   if (!(await isPermissionGranted()) && (await requestPermission()) !== "granted") return;
   sendNotification({ title, body });
 }
+
+/** Whether Hive runs on macOS, from the WebView's user agent; asked on every call. */
+export const isMac = () => navigator.userAgent.includes("Mac");
+
+/** The platform's command key held without the other one: Cmd on macOS, Ctrl elsewhere. */
+export const commandKey = (event: KeyboardEvent) =>
+  isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+
+/** A text naming Ctrl shortcuts, with macOS' symbols there: "Ctrl+Shift+O" becomes "⇧⌘O". */
+export const keyText = (text: string) =>
+  isMac() ? text.replaceAll("Ctrl+Shift+", "⇧⌘").replaceAll("Ctrl+", "⌘") : text;

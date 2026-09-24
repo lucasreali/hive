@@ -21,7 +21,6 @@ import {
   type FileStatus,
   type OpenFile,
   type PanelView,
-  type Project,
   panelWorktree,
   type SearchMatch,
   setEditing,
@@ -36,6 +35,7 @@ import { isDirty, isFor } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { referenceTarget, sendReference } from "../viewer/reference";
+import { isMac, keyText } from "../window";
 import {
   BranchIcon,
   ChevronIcon,
@@ -164,17 +164,16 @@ function Counts({ added, removed }: { added: number | null; removed: number | nu
   );
 }
 
-/** The shown worktree's name and project, and under it `children` (e.g. its change totals). */
-function WorktreeInfo(props: {
-  target: { project: Project; worktree: Worktree };
-  children?: ReactNode;
-}) {
+/**
+ * The shown worktree's name (not its project's: the panel always shows the worktree of the
+ * project you are in), and under it `children` (e.g. its change totals).
+ */
+function WorktreeInfo(props: { worktree: Worktree; children?: ReactNode }) {
   return (
     <div className="files-info">
       <div className="files-worktree">
         <BranchIcon />
-        <span className="name">{props.target.worktree.name}</span>
-        <span className="project">{props.target.project.name}</span>
+        <span className="name">{props.worktree.name}</span>
       </div>
       {props.children}
     </div>
@@ -237,7 +236,7 @@ export function RightPanel() {
         <button
           type="button"
           className="ghost"
-          title="Collapse (Ctrl+Shift+B)"
+          title={keyText("Collapse (Ctrl+Shift+B)")}
           onClick={() => setRightPanel(null)}
         >
           <CloseIcon />
@@ -245,7 +244,7 @@ export function RightPanel() {
       </div>
       {target ? (
         <section className="panel-view" aria-label={shown.label}>
-          <WorktreeInfo target={target}>
+          <WorktreeInfo worktree={target.worktree}>
             {view === "changes" && <Summary worktree={target.worktree.path} />}
           </WorktreeInfo>
           {view === "files" && <FilesView worktree={target.worktree.path} />}
@@ -625,7 +624,7 @@ export function FileView({ worktree }: { worktree: string }) {
           <button
             type="button"
             className="ghost text"
-            title="Save (Ctrl+S)"
+            title={keyText("Save (Ctrl+S)")}
             disabled={!dirty || !!edit.saving}
             onClick={saveOpenFile}
           >
@@ -658,7 +657,7 @@ export function FileView({ worktree }: { worktree: string }) {
           type="button"
           className="ghost"
           aria-label="Open in external editor"
-          title="Open in external editor (the Windows default app for the file)"
+          title={`Open in external editor (the ${isMac() ? "" : "Windows "}default app for the file)`}
           onClick={() => void transport.openInEditor(worktree, openFile.path)}
         >
           <ExternalIcon />
@@ -667,7 +666,10 @@ export function FileView({ worktree }: { worktree: string }) {
           type="button"
           className="ghost"
           aria-label="Send to terminal"
-          title={unsendable ?? "Send the selected lines' reference to the terminal (Ctrl+Shift+L)"}
+          title={
+            unsendable ??
+            keyText("Send the selected lines' reference to the terminal (Ctrl+Shift+L)")
+          }
           disabled={unsendable !== null}
           onClick={sendReference}
         >

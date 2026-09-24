@@ -137,6 +137,11 @@ button:disabled {
   user-select: none;
 }
 
+/* macOS: room for the native traffic lights on the left, none needed on the right. */
+.titlebar[data-mac] {
+  padding: 0 8px 0 70px;
+}
+
 .titlebar-brand {
   flex: 1;
   height: 100%;
@@ -558,16 +563,12 @@ button:disabled {
   color: var(--text);
 }
 
-.files-worktree .project,
+.files-worktree .name,
 .file-row .name,
 .file-view-bar .path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.files-worktree .project {
-  font-size: var(--fs-small);
 }
 
 .files-summary {

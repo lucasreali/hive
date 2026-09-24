@@ -2,6 +2,7 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { TerminalArea } from "../shell/TerminalArea";
 import { apply, type FileText, initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
@@ -173,6 +174,21 @@ test("the header warns of a working agent and opens the file elsewhere", () => {
   expect(opened.mock.calls).toEqual([[worktree, "a.ts"]]);
   act(() => useHive.setState({ editorNotice: "Only the Hive app opens an external editor" }));
   expect(screen.getByText("Only the Hive app opens an external editor")).toBeDefined();
+});
+
+test("the file view's tooltips name each platform's keys and default app", () => {
+  editing();
+  expect(button("Save").title).toBe("Save (Ctrl+S)");
+  expect(button("Open in external editor").title).toBe(
+    "Open in external editor (the Windows default app for the file)",
+  );
+  cleanup();
+  asMac();
+  editing();
+  expect(button("Save").title).toBe("Save (⌘S)");
+  expect(button("Open in external editor").title).toBe(
+    "Open in external editor (the default app for the file)",
+  );
 });
 
 test("unsaved edits are dropped only when the user agrees", () => {
