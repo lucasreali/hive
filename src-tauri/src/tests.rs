@@ -114,7 +114,7 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
 
 #[test]
 fn bridge_runs_a_constant_script_without_a_shell_config() {
-    let (program, args) = bridge_command(|_| None, None);
+    let (program, args) = bridge_command(false, &|_| None, None);
     assert_eq!(program, "wsl.exe");
     assert_eq!(
         args,
@@ -126,7 +126,8 @@ fn bridge_runs_a_constant_script_without_a_shell_config() {
 fn bridge_overrides_are_separate_arguments() {
     let bundled = std::env::current_exe().unwrap();
     let (_, args) = bridge_command(
-        |key| match key {
+        false,
+        &|key| match key {
             "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
             "HIVE_BRIDGE" => Some("/src/hive; rm -rf ~".into()),
             _ => None,
@@ -148,11 +149,34 @@ fn bridge_overrides_are_separate_arguments() {
 }
 
 #[test]
+fn on_macos_the_same_script_runs_in_sh_without_wsl() {
+    let bundled = std::env::current_exe().unwrap();
+    let (program, args) = bridge_command(
+        true,
+        &|key| match key {
+            "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
+            "HIVE_BRIDGE" => Some("/src/hive".into()),
+            _ => None,
+        },
+        Some(bundled.clone()),
+    );
+    assert_eq!(program, "/bin/sh");
+    let expected = [
+        "-c".into(),
+        BRIDGE_SCRIPT.into(),
+        "sh".into(),
+        "/src/hive".into(),
+        bundled.into_os_string(),
+    ];
+    assert_eq!(args, expected);
+}
+
+#[test]
 fn empty_overrides_and_a_missing_bundle_are_ignored() {
     let missing = std::env::temp_dir().join("hive-no-such-bundle");
     assert_eq!(
-        bridge_command(|_| Some("".into()), Some(missing)),
-        bridge_command(|_| None, None)
+        bridge_command(false, &|_| Some("".into()), Some(missing)),
+        bridge_command(false, &|_| None, None)
     );
 }
 
@@ -209,7 +233,8 @@ fn the_bridge_script_installs_the_bundled_hive_once_per_version() {
     use std::os::unix::fs::MetadataExt;
     let home = ScriptHome::new("install");
     let installed = home.installed();
-    // Windows gives a verbatim (`\\?\`) path; wslpath gets it without that prefix.
+    // Windows gives a verbatim (`\\?\`) path; wslpath gets it without that prefix. There is no
+    // `xattr` on WSL's PATH: the install goes on without it.
     let bundled = format!(r"\\?\{}", home.0.join("bundle/hive").display());
     assert_eq!(
         home.run("", &bundled),
@@ -226,6 +251,27 @@ fn the_bridge_script_installs_the_bundled_hive_once_per_version() {
     home.write("bundle/hive", "#!/bin/sh\necho \"v2 $*\"\n");
     assert_eq!(home.run("", &bundled), "v2 bridge\n");
     assert!(!installed.with_extension("new").exists());
+}
+
+#[test]
+fn the_bridge_script_takes_a_posix_bundle_as_is_and_unquarantines_the_copy() {
+    let home = ScriptHome::new("posix");
+    home.write("fakebin/wslpath", "#!/bin/sh\nexit 1\n");
+    // A failing `xattr` (no quarantine to remove) does not stop the install.
+    home.write(
+        "fakebin/xattr",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$HOME/xattr.log\"\nexit 1\n",
+    );
+    let installed = home.installed();
+    let bundled = home.0.join("bundle/hive").display().to_string();
+    assert_eq!(
+        home.run("", &bundled),
+        format!("v1 {} bridge\n", installed.display())
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.0.join("xattr.log")).unwrap(),
+        format!("-d\ncom.apple.quarantine\n{}.new\n", installed.display())
+    );
 }
 
 #[test]

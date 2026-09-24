@@ -2,8 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { asMac } from "../test/mac";
 import { TitleBar } from "./shell/TitleBar";
-import { closeWindow, guardClose, showNotification, windowAction } from "./window";
+import { closeWindow, guardClose, isMac, keyText, showNotification, windowAction } from "./window";
 
 const g = globalThis as { isTauri?: boolean };
 
@@ -15,6 +16,15 @@ afterEach(() => {
 });
 
 const buttons = ["Minimize", "Maximize", "Close"];
+
+test("shortcut texts use Ctrl, or macOS' symbols there", () => {
+  const send = "Send (Ctrl+Shift+L), save (Ctrl+S)";
+  expect(isMac()).toBe(false);
+  expect(keyText(send)).toBe(send);
+  asMac();
+  expect(isMac()).toBe(true);
+  expect(keyText(send)).toBe("Send (⇧⌘L), save (⌘S)");
+});
 const closed = () => document.documentElement.dataset.closed !== undefined;
 
 test("outside Tauri the window buttons call nothing; Close only marks the page", () => {
