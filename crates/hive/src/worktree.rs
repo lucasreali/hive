@@ -19,6 +19,8 @@ pub const WORKTREES_DIR: &str = ".claude/worktrees";
 const INCLUDE_FILE: &str = ".worktreeinclude";
 /// Most bytes of branch names listed for the app; a repository with more is cut short.
 const BRANCHES_LIMIT: usize = 1024 * 1024;
+/// Most bytes read from one git command's stdout, and separately from its stderr.
+const OUTPUT_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
@@ -190,7 +192,7 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
         path.as_os_str(),
     ];
     args.extend(base.map(OsStr::new));
-    run_git(&root, &args, &[], &[0])?;
+    run_git(&root, &args, &[], &[0], OUTPUT_LIMIT)?;
     match copy_included(&root, &path, &included) {
         Ok(0) => {}
         Ok(copied) => notes.push(copied_note(copied)),
@@ -202,7 +204,7 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
                 OsStr::new("--force"),
                 path.as_os_str(),
             ];
-            let _ = run_git(&root, &remove, &[], &[0]);
+            let _ = run_git(&root, &remove, &[], &[0], OUTPUT_LIMIT);
             let _ = git(&root, &["branch", "-D", &branch]);
             return Err(err);
         }
@@ -271,7 +273,7 @@ fn remove_path(root: &Path, path: &Path) -> io::Result<()> {
         OsStr::new("remove"),
         path.as_os_str(),
     ];
-    run_git(root, &args, &[], &[0]).map(drop)
+    run_git(root, &args, &[], &[0], OUTPUT_LIMIT).map(drop)
 }
 
 /// Reads at most `limit` bytes; more is an error.
@@ -338,7 +340,7 @@ fn included_files(root: &Path) -> io::Result<Vec<u8>> {
     let matching = git(root, &args)?;
     // Exit code 1 means none of them is ignored.
     let args = ["check-ignore", "-z", "--stdin"].map(OsStr::new);
-    run_git(root, &args, &matching, &[0, 1])
+    run_git(root, &args, &matching, &[0, 1], OUTPUT_LIMIT)
 }
 
 /// Copies `included` (from [`included_files`]) from `root` into the new worktree. Only
@@ -376,12 +378,19 @@ fn unsafe_target(base: &Path, rel: &Path) -> bool {
 
 fn git(dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
-    run_git(dir, &args, &[], &[0])
+    run_git(dir, &args, &[], &[0], OUTPUT_LIMIT)
 }
 
 /// Runs `git -C <dir> <args>` with `input` on stdin; any exit code outside `ok` is an error
-/// carrying git's stderr.
-fn run_git(dir: &Path, args: &[&OsStr], input: &[u8], ok: &[i32]) -> io::Result<Vec<u8>> {
+/// carrying git's stderr, and so is more than `limit` bytes on stdout (git then stops on a
+/// broken pipe).
+pub(crate) fn run_git(
+    dir: &Path,
+    args: &[&OsStr],
+    input: &[u8],
+    ok: &[i32],
+    limit: u64,
+) -> io::Result<Vec<u8>> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -395,21 +404,29 @@ fn run_git(dir: &Path, args: &[&OsStr], input: &[u8], ok: &[i32]) -> io::Result<
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|err| io::Error::new(err.kind(), format!("cannot run git: {err}")))?;
-    let stdin = child.stdin.take();
-    // Feed stdin from another thread so a large input cannot deadlock against stdout.
-    let out = std::thread::scope(|scope| {
+    let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    // Feed stdin and drain stderr from other threads, so no pipe can deadlock another.
+    let (out, err) = std::thread::scope(|scope| {
         scope.spawn(move || stdin.map(|mut stdin| stdin.write_all(input)));
-        child.wait_with_output()
+        let err = scope.spawn(move || {
+            let mut buf = Vec::new();
+            stderr.map(|stderr| stderr.take(OUTPUT_LIMIT).read_to_end(&mut buf));
+            buf
+        });
+        let out = stdout.map_or_else(|| Ok(Vec::new()), |mut out| read_limited(&mut out, limit));
+        (out, err.join().unwrap_or_default())
     });
-    let out = out?;
-    if out.status.code().is_some_and(|code| ok.contains(&code)) {
-        return Ok(out.stdout);
-    }
+    let status = child.wait()?;
     let command: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+    let command = command.join(" ");
+    let out = out
+        .map_err(|_| io::Error::other(format!("git {command} printed more than {limit} bytes")))?;
+    if status.code().is_some_and(|code| ok.contains(&code)) {
+        return Ok(out);
+    }
     Err(io::Error::other(format!(
-        "git {} failed: {}",
-        command.join(" "),
-        String::from_utf8_lossy(&out.stderr).trim()
+        "git {command} failed: {}",
+        String::from_utf8_lossy(&err).trim()
     )))
 }
 
@@ -562,5 +579,19 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
         assert_eq!(read_limited(&mut &b"abcd"[..], 4).unwrap(), b"abcd");
         let err = read_limited(&mut &b"abcde"[..], 4).unwrap_err();
         assert_eq!(err.to_string(), "input larger than 4 bytes");
+    }
+
+    #[test]
+    fn git_output_is_size_limited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let args = [OsStr::new("version")];
+        let out = run_git(tmp.path(), &args, &[], &[0], OUTPUT_LIMIT).unwrap();
+        let len = out.len() as u64;
+        assert_eq!(run_git(tmp.path(), &args, &[], &[0], len).unwrap(), out);
+        let err = run_git(tmp.path(), &args, &[], &[0], len - 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("git version printed more than {} bytes", len - 1)
+        );
     }
 }

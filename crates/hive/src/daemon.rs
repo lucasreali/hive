@@ -29,7 +29,7 @@ use crate::paths::Paths;
 use crate::projects::{self, Projects};
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{procs, watch, worktree, wrapper};
+use crate::{changes, procs, watch, worktree, wrapper};
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
@@ -501,6 +501,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                     message: err.to_string(),
                 },
             }
+        }),
+        Ok(Control::ListChanges { path }) => state.projects(move |projects| {
+            let listed = projects.worktree(&path).and_then(|dir| changes::list(&dir));
+            changes::message(path, listed)
         }),
         _ => {
             let message = "unexpected message from the app".to_owned();

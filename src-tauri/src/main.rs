@@ -22,6 +22,7 @@ fn main() {
             commands::list_branches,
             commands::validate_worktree_name,
             commands::create_worktree,
+            commands::list_changes,
         ])
         .build(tauri::generate_context!());
     match result {

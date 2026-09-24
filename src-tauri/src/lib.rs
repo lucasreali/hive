@@ -294,6 +294,11 @@ impl Hive {
         };
         self.link().send(0, &create)
     }
+
+    /// The answer arrives as `changes`.
+    pub fn list_changes(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListChanges { path })
+    }
 }
 
 /// A piped stdio handle of the bridge; always there, since every one is requested.
@@ -445,6 +450,11 @@ pub mod commands {
         base: Option<String>,
     ) -> Result<(), String> {
         hive.create_worktree(project, name, base)
+    }
+
+    #[tauri::command]
+    pub fn list_changes(hive: State<'_, Hive>, path: String) -> Result<(), String> {
+        hive.list_changes(path)
     }
 }
 

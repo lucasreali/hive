@@ -5,6 +5,8 @@ mod agents;
 #[cfg(test)]
 mod bridge;
 #[cfg(test)]
+mod changes;
+#[cfg(test)]
 mod common;
 #[cfg(test)]
 mod daemon;
