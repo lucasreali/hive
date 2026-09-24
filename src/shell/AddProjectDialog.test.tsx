@@ -49,7 +49,9 @@ test("the typed path goes to the service, and the answer closes the dialog", asy
 test("editing the field clears the refusal", () => {
   open();
   fireEvent.change(field(), { target: { value: "/" } });
-  act(() => apply({ type: "add_project_failed", path: "/", error: "not_a_git_repository", message: "m" }));
+  act(() =>
+    apply({ type: "add_project_failed", path: "/", error: "not_a_git_repository", message: "m" }),
+  );
   fireEvent.change(field(), { target: { value: "" } });
   expect(screen.queryByRole("alert")).toBeNull();
   expect(field().getAttribute("aria-invalid")).toBe("false");
