@@ -72,8 +72,8 @@ Consequências:
 1. **Árvore de arquivos em tempo real** *(decidido)*: atualiza conforme o agente trabalha.
 2. **Escolha da branch de origem** ao criar uma worktree.
 3. **Subagentes na barra lateral** *(decidido)*: indentados sob o agente pai, com estado próprio; quando o subagente tem worktree própria, ela aparece indentada sob ele (e não se repete no nível do projeto). Base técnica: hooks `SubagentStart`/`SubagentStop` e hooks `WorktreeCreate`/`WorktreeRemove`.
-4. **Estado propagado + contador de pendências** *(decidido)*: projeto ou worktree recolhido mostra o estado mais urgente dentro dele; contador "🚨 N pendentes" no topo leva ao próximo agente que precisa de ação. Compensa a ausência do kanban.
-5. **Notificação** *(decidido)*: som ao entrar em 🟡, 🟠 ou 🔴; notificação do sistema operacional quando o agente termina.
+4. **Estado propagado + contador de pendências** *(decidido)*: projeto ou worktree recolhido mostra o estado mais urgente dentro dele; contador "🚨 N pendentes" no topo leva ao próximo agente que precisa de ação. **Pendente = 🟡, 🔴 ou 🟠** (checkpoint 2); o serviço decide e manda `pending`/`urgency`. Nó recolhido mostra o **ícone do estado mais urgente**, sem o sino do protótipo. Compensa a ausência do kanban.
+5. **Notificação** *(decidido)*: som ao entrar em 🟡, 🟠 ou 🔴; notificação do sistema operacional quando o agente termina (🔵/🟣 → 🟠). **Sempre**, mesmo com a janela em foco, sem botão de mudo (checkpoint 2; rever se incomodar).
 6. **Edição de arquivos** *(decidido)*: editar no visualizador, salvando pelo serviço com verificação de versão; sem LSP na v1; diff somente leitura. *(Etapa 3b)*
 
 ### ✨ Inspirado em outros apps
@@ -218,7 +218,7 @@ Adaptadores futuros (Codex, Gemini...)
 | 14 | **Serviço no WSL ouvindo em Unix socket, com a mesma vida do app**: o `hive bridge` sobe o serviço (`setsid`, lockfile) se o socket não existir; o app conecta via `wsl.exe hive bridge` (stdio ↔ socket); a CLI usa o socket direto. Sem rede. | A CLI dos hooks precisa de um canal independente do stdio do app; sem portas nem firewall |
 | 15 | **Hooks `WorktreeCreate` e `WorktreeRemove` apontando para a CLI**, cobrindo `claude -w` e subagentes com `isolation: worktree`, **apenas nos terminais do Hive** | Toda worktree passa pelo Hive, aparece sob quem a criou e some quando é removida |
 | 17 | **Modelo interno independente do Claude** | Permite outros provedores |
-| 18 | **Terminal embutido**: PTY no serviço do WSL, xterm.js na interface; **terminais e agentes encerram quando o app fecha, inclusive em crash** (o serviço mata o grupo de processos de cada PTY); confirmação ao fechar se houver agente 🔵, 🟡 ou 🟠 | Simplicidade; sem reconexão nem snapshot de tela |
+| 18 | **Terminal embutido**: PTY no serviço do WSL, xterm.js na interface; **terminais e agentes encerram quando o app fecha, inclusive em crash** (o serviço mata o grupo de processos de cada PTY); confirmação ao fechar se houver agente 🔵, 🟣, 🟡 ou 🟠 (🟣 incluído no checkpoint 2: subagentes trabalhando também se perdem) | Simplicidade; sem reconexão nem snapshot de tela |
 | 19 | **`HIVE_TERMINAL_ID`** (herdada pelos hooks) liga agente ↔ aba; a posição na hierarquia vem do `cwd` do payload | Um `cd` no terminal não coloca o agente na worktree errada |
 | 20 | **O Hive mostra apenas sessões abertas nos seus próprios terminais** | Escopo claro; nada muda no uso externo |
 | 21 | **Hooks injetados só nos terminais do Hive**: um `claude` embrulhado no `PATH` desses terminais chama o real com `--settings <hooks-do-hive>` | Configuração global intocada; o `--settings` **mescla** hooks, então os hooks pessoais continuam valendo |
