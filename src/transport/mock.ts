@@ -728,6 +728,8 @@ export function createMockTransport(
     async unwatchWorktree() {
       watched = null;
     },
+    // Mock agents never finish, so nothing depends on the view.
+    async setView() {},
     async resizeTerminal() {},
     async closeTerminal(id) {
       exit(id, null);

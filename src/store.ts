@@ -338,6 +338,8 @@ export type HiveState = {
   /** Terminal tabs in the order they opened, and the one shown. */
   tabs: Tab[];
   activeTab: number | null;
+  /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
+  focused: boolean;
   /** Lines of history each new terminal keeps (#28). Not persisted yet. */
   scrollback: number;
   // Service data
@@ -398,6 +400,7 @@ export const initialState: HiveState = {
   collapsed: {},
   tabs: [],
   activeTab: null,
+  focused: false,
   scrollback: 5000,
   connection: { status: "connecting" },
   projects: null,
@@ -720,6 +723,7 @@ export const select = (selection: string | null) =>
       fileShown: s.fileShown && fileVisible(next),
     };
   });
+export const setFocused = (focused: boolean) => useHive.setState({ focused });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
 

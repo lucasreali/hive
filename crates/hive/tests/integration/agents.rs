@@ -335,6 +335,43 @@ async fn agent_states_follow_hook_events_and_terminal_silence() {
 }
 
 #[tokio::test]
+async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let cwd = repo.root.display().to_string();
+    let start = json!({"session_id": "s", "cwd": cwd});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let s = || json!({"session_id": "s"});
+    let turn = async |app: &mut Conn, terminal, focused| {
+        app.send(0, Control::View { terminal, focused }).await;
+        // Answered after the view is applied: frames are handled in order.
+        app.send(0, Control::ListProjects).await;
+        assert!(matches!(app.control().await, (0, Control::Projects { .. })));
+        hook(&repo, app, "1", "UserPromptSubmit", s()).await;
+        hook(&repo, app, "1", "Stop", s()).await
+    };
+    let finished = |pending| {
+        let message = Control::AgentState {
+            id: "s".into(),
+            state: WaitingYou,
+            urgency: WaitingYou.urgency(),
+            pending,
+            subagents: vec![],
+        };
+        vec![(1, message)]
+    };
+    // Shown but the window is not focused, or focused on another terminal: pending as usual.
+    assert_eq!(turn(&mut app, Some(1), false).await, finished(true));
+    assert_eq!(turn(&mut app, Some(2), true).await, finished(true));
+    assert_eq!(turn(&mut app, None, true).await, finished(true));
+    assert_eq!(turn(&mut app, Some(1), true).await, finished(false));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
     let repo = Repo::new();
     let root = repo.root.display().to_string();

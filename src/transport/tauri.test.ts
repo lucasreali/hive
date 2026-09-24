@@ -53,6 +53,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.renameWorktree("/r/w", "y");
   await tauriTransport.watchWorktree("/r");
   await tauriTransport.unwatchWorktree();
+  await tauriTransport.setView(3, true);
   await tauriTransport.listChanges("/r");
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
@@ -77,6 +78,7 @@ test("terminal and project actions call their commands", async () => {
     ["rename_worktree", { path: "/r/w", name: "y" }],
     ["watch_worktree", { path: "/r" }],
     ["unwatch_worktree", {}],
+    ["set_view", { terminal: 3, focused: true }],
     ["list_changes", { path: "/r" }],
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],

@@ -136,6 +136,14 @@ test("finishing (working or with subagents → waiting for you) notifies with th
   ]);
 });
 
+test("an agent finishing already seen (not pending) gets its tone but no notification", async () => {
+  feed("a", "working");
+  const seen = { ...state("a", "waiting_you"), pending: false };
+  notify(seen, useHive.getState(), clock);
+  await settle();
+  expect([tones, shown]).toEqual([1, []]);
+});
+
 test("other messages are ignored", () => {
   notify({ type: "welcome", version: "1", distro: null }, useHive.getState() as HiveState, clock);
   expect(tones).toBe(0);

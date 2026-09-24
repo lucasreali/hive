@@ -1,6 +1,15 @@
 import { beforeEach, expect, mock, test } from "bun:test";
-import { followOpenFile, followPanel } from "./follow";
-import { apply, initialState, select, setOpenFile, setRightPanel, useHive } from "./store";
+import { followOpenFile, followPanel, followView } from "./follow";
+import {
+  addTab,
+  apply,
+  initialState,
+  select,
+  setFocused,
+  setOpenFile,
+  setRightPanel,
+  useHive,
+} from "./store";
 import type { Transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
 
@@ -87,4 +96,35 @@ test("asks again when a save found a newer version on disk", () => {
   apply({ type: "save_failed", ...at, error: "conflict", message: "a.ts changed on disk" });
   expect(openFile).toHaveBeenCalledTimes(2);
   stop();
+});
+
+test("tells the service the terminal in view and the window focus, when either changes", () => {
+  const setView = mock(async (_terminal: number | null, _focused: boolean) => {});
+  addTab(1, "/w");
+  const stop = followView({ setView } as unknown as Transport);
+  setFocused(true);
+  expect(setView).not.toHaveBeenCalled(); // Not connected yet.
+  welcome();
+  expect(setView.mock.calls).toEqual([[1, true]]);
+  // Other changes do not send it again.
+  setRightPanel("files");
+  select("/w");
+  expect(setView).toHaveBeenCalledTimes(1);
+  setFocused(false);
+  addTab(2, "/w");
+  useHive.setState({ fileShown: true });
+  expect(setView.mock.calls.slice(1)).toEqual([
+    [1, false],
+    [2, false],
+    [null, false],
+  ]);
+  // A new service is told again once connected.
+  apply({ type: "disconnected", reason: "gone" });
+  setFocused(true);
+  expect(setView).toHaveBeenCalledTimes(4);
+  welcome();
+  expect(setView.mock.calls.at(-1)).toEqual([null, true]);
+  stop();
+  setFocused(false);
+  expect(setView).toHaveBeenCalledTimes(5);
 });

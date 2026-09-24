@@ -190,7 +190,8 @@ pub enum Control {
     },
     /// The agent's displayed state (after "the most urgent wins") and its live subagents.
     /// `urgency` and `pending` are `state`'s (`AgentState::urgency`/`pending`), so the app
-    /// can roll agents up and count them without its own table.
+    /// can roll agents up and count them without its own table; except that an agent that
+    /// finished while its terminal was in view (see `View`) is not pending.
     /// Sent on the agent's terminal channel whenever it changes, and for every live agent
     /// right after the app's `Welcome`.
     AgentState {
@@ -327,6 +328,13 @@ pub enum Control {
     },
     /// App → service: stop watching (the files panel closed).
     UnwatchWorktree,
+    /// App → service, sent when it changes: the terminal shown (none while a file, or
+    /// nothing, is) and whether the app window has the focus. An agent that finishes in that
+    /// terminal while the window has the focus was seen, so it is not pending.
+    View {
+        terminal: Option<u32>,
+        focused: bool,
+    },
     /// Every file of the watched worktree `path` that git lists (tracked, and untracked but
     /// not ignored), as sorted `/`-separated relative paths.
     Files {
@@ -974,6 +982,14 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &Control::UnwatchWorktree).payload[..],
             br#"{"type":"unwatch_worktree"}"#
+        );
+        let view = Control::View {
+            terminal: Some(3),
+            focused: true,
+        };
+        assert_eq!(
+            &Frame::control(0, &view).payload[..],
+            br#"{"type":"view","terminal":3,"focused":true}"#
         );
     }
 

@@ -2,7 +2,9 @@ import { type AgentState, type HiveState, type ServiceMessage, useHive } from ".
 import { showNotification } from "./window";
 
 // Presentation of state changes the service sent (hive.md item 5, #37): a tone when an agent
-// enters an alerting state, an OS notification when it finishes. Nothing here computes a state.
+// enters an alerting state, an OS notification when it finishes, unless the service says it is
+// not pending (it finished in view of the focused window: already seen). Nothing here computes a
+// state.
 
 const ALERTING: AgentState[] = ["waiting_permission", "waiting_you", "error"];
 const BUSY: AgentState[] = ["working", "with_subagents"];
@@ -53,7 +55,7 @@ export function notify(
     lastTone = now;
     tone();
   }
-  if (after === "waiting_you" && BUSY.includes(before)) {
+  if (after === "waiting_you" && BUSY.includes(before) && message.pending) {
     const where = place(s, message.id);
     void showNotification(
       "Agent finished",

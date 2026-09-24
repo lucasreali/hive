@@ -42,6 +42,26 @@ export function windowAction(action: WindowAction): void {
   else if (action === "close" && !keepOpen()) closeWindow();
 }
 
+/**
+ * Calls `onChange` with whether the window has the focus, now and on every change: Tauri's
+ * focus events in the app, the page's focus and blur outside it. Returns the cleanup.
+ */
+export function watchFocus(onChange: (focused: boolean) => void): () => void {
+  onChange(document.hasFocus());
+  if (isTauri()) {
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload }) => onChange(payload));
+    return () => void unlisten.then((stop) => stop());
+  }
+  const focus = () => onChange(true);
+  const blur = () => onChange(false);
+  window.addEventListener("focus", focus);
+  window.addEventListener("blur", blur);
+  return () => {
+    window.removeEventListener("focus", focus);
+    window.removeEventListener("blur", blur);
+  };
+}
+
 /** An OS notification through Tauri's plugin; nothing outside Tauri (browser, mock transport). */
 export async function showNotification(title: string, body: string): Promise<void> {
   if (!isTauri()) return;
