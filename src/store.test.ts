@@ -117,7 +117,12 @@ test("agents are stored as the service places them and removed by id", () => {
 });
 
 test("agent states are stored as sent, before or after the agent, and go with it", () => {
-  const sub = { id: "s1", agent_type: "Explore", state: "waiting_permission" } as const;
+  const sub = {
+    id: "s1",
+    agent_type: "Explore",
+    state: "waiting_permission",
+    worktree: null,
+  } as const;
   const permission = { state: "waiting_permission", urgency: 6, pending: true } as const;
   const idle = { state: "idle", urgency: 1, pending: false } as const;
   apply({
@@ -178,6 +183,32 @@ test("projects replace the list; an added project joins it and closes its dialog
   expect(useHive.getState().modal).toBe("new-worktree");
   apply({ type: "projects", projects: [] });
   expect(useHive.getState().projects).toEqual({});
+});
+
+test("a removed worktree leaves its project selected and its collapsed key goes", () => {
+  const [shop, api] = MOCK_REPOS;
+  const [main, fixLogin] = shop.worktrees;
+  const without = { ...shop, worktrees: shop.worktrees.filter((w) => w !== fixLogin) };
+  apply({ type: "projects", projects: [shop, api] });
+  select(fixLogin.id);
+  toggleCollapsed(`worktree:${fixLogin.id}`);
+  toggleCollapsed(`worktree:${main.id}`);
+  toggleCollapsed(shop.id);
+  apply({ type: "projects", projects: [without, api] });
+  let s = useHive.getState();
+  expect(s.selection).toBe(shop.id);
+  expect(s.collapsed).toEqual({ [`worktree:${main.id}`]: true, [shop.id]: true });
+  // Anything else still listed, an agent, or nothing stays selected.
+  for (const kept of [api.worktrees[1].id, "session-1", null]) {
+    select(kept);
+    apply({ type: "projects", projects: [without, api] });
+    expect(useHive.getState().selection).toBe(kept);
+  }
+  // With its project gone too, nothing is selected.
+  select(main.id);
+  apply({ type: "projects", projects: [api] });
+  s = useHive.getState();
+  expect(s.selection).toBeNull();
 });
 
 test("tree nodes toggle between collapsed and expanded", () => {

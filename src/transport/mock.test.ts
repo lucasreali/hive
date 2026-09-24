@@ -8,6 +8,7 @@ import {
   LOAD_START_MS,
   MOCK_BRANCHES,
   MOCK_CHANGES,
+  MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_STATES,
 } from "./mock";
@@ -61,6 +62,19 @@ test("a scenario fails the connection instead", async () => {
     await tick();
     expect(messages.map((m): string => m.type)).toEqual([...types]);
   }
+});
+
+test("states: shop also lists the worktree a subagent owns", async () => {
+  const messages: ServiceMessage[] = [];
+  await createMockTransport("states").connect((m) => messages.push(m));
+  await tick();
+  const [, listed] = messages;
+  const shop = listed?.type === "projects" ? listed.projects[0] : undefined;
+  expect(shop?.worktrees.map((w) => w.id).at(-1)).toBe(MOCK_OWN_WORKTREE);
+  const owners = MOCK_STATES.flatMap(([, , subs]) => subs).filter((s) => s.worktree);
+  expect(owners.map((s) => [s.id, s.worktree])).toEqual([["a3", MOCK_OWN_WORKTREE]]);
+  // Other scenarios keep the fake repositories as they are.
+  expect(MOCK_REPOS[0].worktrees.map((w) => w.id)).not.toContain(MOCK_OWN_WORKTREE);
 });
 
 test("projects are added from the fake repositories only", async () => {
@@ -153,6 +167,32 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
     { type: "agent_removed", channel: id, id: "mock-session-1" },
     { type: "terminal_exited", channel: id, code: 0 },
   ]);
+});
+
+test("worktree-remove drops that Claude worktree and sends the new list", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api] = MOCK_REPOS;
+  const id = await transport.openTerminal(shop.path, 80, 24, () => {});
+  await tick();
+  messages.length = 0;
+  // "main" is no Claude worktree, so it stays.
+  await transport.writeTerminal(id, "worktree-remove fix-login\rworktree-remove main\r");
+  await tick();
+  const names = (m: ServiceMessage) =>
+    m.type === "projects" ? m.projects.map((p) => p.worktrees.map((w) => w.name)) : [];
+  expect(messages.map(names)).toEqual([
+    [
+      ["main", "feat-checkout"],
+      ["main", "refactor-auth"],
+    ],
+    [
+      ["main", "feat-checkout"],
+      ["main", "refactor-auth"],
+    ],
+  ]);
+  // The shared fake repositories are left alone.
+  expect(shop.worktrees.map((w) => w.name)).toEqual(["main", "fix-login", "feat-checkout"]);
+  expect(api.worktrees).toHaveLength(2);
 });
 
 test("agent states carry the service's urgency and pending flag", () => {

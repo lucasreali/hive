@@ -28,6 +28,8 @@ pub struct Worktree {
     /// Short branch name; `None` when detached or bare.
     pub branch: Option<String>,
     pub bare: bool,
+    /// Its directory is gone; git keeps it until `git worktree prune`.
+    pub prunable: bool,
 }
 
 impl fmt::Display for Worktree {
@@ -146,6 +148,7 @@ pub fn parse_porcelain(out: &[u8]) -> Vec<Worktree> {
                 path: PathBuf::from(OsStr::from_bytes(path)),
                 branch: None,
                 bare: false,
+                prunable: false,
             });
         } else if let Some(current) = list.last_mut() {
             if let Some(branch) = field.strip_prefix(b"branch ") {
@@ -153,6 +156,8 @@ pub fn parse_porcelain(out: &[u8]) -> Vec<Worktree> {
                 current.branch = Some(String::from_utf8_lossy(branch).into_owned());
             } else if field == b"bare" {
                 current.bare = true;
+            } else if field.starts_with(b"prunable") {
+                current.prunable = true;
             }
         }
     }
@@ -456,17 +461,20 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
                 Worktree {
                     path: "/repo".into(),
                     branch: Some("main".into()),
-                    bare: false
+                    bare: false,
+                    prunable: false
                 },
                 Worktree {
                     path: "/repo/.claude/worktrees/a b".into(),
                     branch: None,
-                    bare: false
+                    bare: false,
+                    prunable: false
                 },
                 Worktree {
                     path: "/repo/.claude/worktrees/c".into(),
                     branch: Some("worktree-c".into()),
-                    bare: false
+                    bare: false,
+                    prunable: true
                 },
             ]
         );
@@ -484,6 +492,7 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
             path: "/r.git".into(),
             branch: None,
             bare: true,
+            prunable: false,
         };
         assert_eq!(list, vec![bare.clone()]);
         assert_eq!(bare.to_string(), "/r.git\t(bare)");

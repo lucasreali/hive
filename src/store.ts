@@ -153,8 +153,16 @@ export type AgentState =
   | "with_subagents"
   | "ended";
 
-/** A live subagent (`id` = its `agent_id`) with its own state. */
-export type Subagent = { id: string; agent_type: string | null; state: AgentState };
+/**
+ * A live subagent (`id` = its `agent_id`) with its own state, and the id of its own worktree
+ * (#22) when it has one.
+ */
+export type Subagent = {
+  id: string;
+  agent_type: string | null;
+  state: AgentState;
+  worktree: string | null;
+};
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins)
@@ -242,6 +250,10 @@ function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<Hive
   return { worktreeDialog: { ...s.worktreeDialog, ...patch } };
 }
 
+/** The project that is `id` or holds the worktree `id`. */
+export const owner = (projects: HiveState["projects"], id: string | null): Project | undefined =>
+  Object.values(projects ?? {}).find((p) => p.id === id || p.worktrees.some((w) => w.id === id));
+
 function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
     case "welcome":
@@ -269,8 +281,20 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, id, ...status } = m;
       return { agentStates: { ...s.agentStates, [id]: status } };
     }
-    case "projects":
-      return { projects: Object.fromEntries(m.projects.map((p) => [p.id, p])) };
+    case "projects": {
+      const projects = Object.fromEntries(m.projects.map((p) => [p.id, p]));
+      const ids = new Set(m.projects.flatMap((p) => [p.id, ...p.worktrees.map((w) => w.id)]));
+      // A selected worktree that went away (e.g. `WorktreeRemove`) leaves its project selected.
+      const was = owner(s.projects, s.selection);
+      const gone = was && !ids.has(s.selection as string);
+      const selection = gone ? (projects[was.id] ? was.id : null) : s.selection;
+      const collapsed = Object.fromEntries(
+        Object.entries(s.collapsed).filter(
+          ([key]) => !key.startsWith("worktree:") || ids.has(key.slice("worktree:".length)),
+        ),
+      );
+      return { projects, selection, collapsed };
+    }
     case "project_added":
       // Only the add-project dialog asks for this, so it has done its job.
       return {

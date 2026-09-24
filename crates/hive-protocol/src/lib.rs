@@ -487,6 +487,9 @@ pub struct SubagentState {
     pub id: String,
     pub agent_type: Option<String>,
     pub state: AgentState,
+    /// The worktree it works in when that is its own (not its agent's): the worktree's id,
+    /// shown nested under the subagent instead of at project level (#22).
+    pub worktree: Option<String>,
 }
 
 #[cfg(test)]
@@ -595,11 +598,12 @@ mod tests {
                 id: "a".into(),
                 agent_type: None,
                 state: AgentState::WithSubagents,
+                worktree: Some("/r/.claude/worktrees/w".into()),
             }],
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents"}]}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w"}]}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
     }

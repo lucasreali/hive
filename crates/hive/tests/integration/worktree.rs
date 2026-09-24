@@ -84,7 +84,7 @@ impl Repo {
         self.git(&["commit", "-q", "-m", rel]);
     }
 
-    fn hive_cmd(&self, dir: &Path, args: &[&str]) -> Command {
+    pub(crate) fn hive_cmd(&self, dir: &Path, args: &[&str]) -> Command {
         let mut cmd = self.env.hive();
         isolate(&mut cmd, &self.env)
             .current_dir(dir)
@@ -596,6 +596,29 @@ async fn worktree_hooks_update_the_apps_projects() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "");
     assert_eq!(event.kind, EventKind::WorktreeRemoved { path: Some(path) });
+    assert_eq!(worktree_names(&projects), ["main"]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn worktrees_whose_directory_is_gone_are_not_sent_to_the_app() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let path = repo.root.display().to_string();
+    app.send(0, Control::AddProject { path }).await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    // Deleted without `git worktree remove`: git still lists it, as prunable.
+    std::fs::remove_dir_all(repo.create(&["gone"])).unwrap();
+    assert!(stdout(&repo.hive(&["list"])).contains("gone"));
+    app.send(0, Control::ListProjects).await;
+    let (0, Control::Projects { projects }) = app.control().await else {
+        panic!("expected projects");
+    };
     assert_eq!(worktree_names(&projects), ["main"]);
     drop(app);
     assert!(daemon.wait_exit().success());

@@ -986,6 +986,45 @@ li:last-child > .tree-row.subagent::before {
   height: 1px;
 }
 
+/* A subagent's own worktree, under it; the agent's tree line goes on past it to the next one. */
+.tree-row.own-worktree {
+  position: relative;
+  height: 22px;
+  margin-top: -2px;
+  padding: 0 8px 0 63px;
+}
+
+.tree-row.own-worktree::before {
+  content: "";
+  position: absolute;
+  left: 45px;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: var(--tree-line);
+}
+
+li:last-child > .tree-row.own-worktree::before {
+  display: none;
+}
+
+.row-own {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  text-align: left;
+}
+
+.own-worktree .label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--text-2);
+}
+
 .agent .row-main,
 .subagent .row-main {
   align-items: flex-start;

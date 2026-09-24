@@ -30,11 +30,12 @@ export const LOAD_START_MS = 500;
 export const LOAD_STAGGER_MS = 100;
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
 
-const sub = (id: string, agent_type: string | null, state: AgentState): Subagent => ({
-  id,
-  agent_type,
-  state,
-});
+const sub = (
+  id: string,
+  agent_type: string | null,
+  state: AgentState,
+  worktree: string | null = null,
+): Subagent => ({ id, agent_type, state, worktree });
 /** A stand-in for `AgentState::urgency`/`pending`, least urgent first; the real rule lives in Rust. */
 const URGENCY: AgentState[] = [
   "ended",
@@ -50,6 +51,9 @@ export const agentStatus = (state: AgentState) => {
   return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you") };
 };
 
+/** `?mock=states`: shop's worktree that subagent a3 works in, shown under it (#22). */
+export const MOCK_OWN_WORKTREE = "/home/user/projects/shop/.claude/worktrees/tests-login";
+
 /**
  * `?mock=states`: agents without a terminal in every state, by worktree path (relative to
  * `/home/user/projects`), as the service would resolve them ("the most urgent wins").
@@ -59,7 +63,10 @@ export const MOCK_STATES: [string, AgentState, Subagent[]][] = [
   [
     "shop/.claude/worktrees/fix-login",
     "waiting_permission",
-    [sub("a3", "general-purpose", "waiting_permission"), sub("a4", "Explore", "idle")],
+    [
+      sub("a3", "general-purpose", "waiting_permission", MOCK_OWN_WORKTREE),
+      sub("a4", "Explore", "idle"),
+    ],
   ],
   ["shop/.claude/worktrees/feat-checkout", "waiting_you", []],
   ["api", "error", []],
@@ -183,12 +190,13 @@ function nameError(project: Project, name: string): string | null {
  * A fake service for the browser (`bun run dev`, Playwright): it welcomes the UI, and each
  * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`;
  * `cd <dir>` moves it and `claude` detects an idle agent there (removed when the terminal
- * exits); every later line sets that agent working.
+ * exits); every later line sets that agent working; `worktree-remove <name>` removes that
+ * Claude worktree as a `WorktreeRemove` hook would.
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
- * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents. "load" (1.11) replays a recording into every terminal right
+ * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
  * after its prompt, at recorded timing, each terminal starting `LOAD_STAGGER_MS` later than
  * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
  * generated one.
@@ -199,6 +207,10 @@ export function createMockTransport(
 ): Transport {
   let send: (message: ServiceMessage) => void = () => {};
   const projects = scenario === "empty" ? [] : MOCK_REPOS.slice(0, 2);
+  if (scenario === "states") {
+    const shop = projects[0] as Project;
+    projects[0] = { ...shop, worktrees: [...shop.worktrees, worktree(shop.path, "tests-login")] };
+  }
   const find = (id: string) => projects.find((p) => p.id === id);
   let last = 0;
   type MockTerminal = {
@@ -242,6 +254,14 @@ export function createMockTransport(
     const placed = { project: project?.id ?? null, worktree, cwd };
     later({ type: "agent_detected", channel: id, id: terminal.agent, ...placed });
     setState(terminal.agent, "idle");
+  };
+  // A stand-in for a `WorktreeRemove` hook: the Claude worktree `name` goes, and the service
+  // sends the new list.
+  const removeWorktree = (name: string) => {
+    projects.forEach((p, i) => {
+      projects[i] = { ...p, worktrees: p.worktrees.filter((w) => !w.claude || w.name !== name) };
+    });
+    later({ type: "projects", projects });
   };
   const setState = (id: string, state: AgentState) =>
     later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
@@ -328,6 +348,7 @@ export function createMockTransport(
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
         if (terminal.agent && line) setState(terminal.agent, "working");
         if (line === "claude") detect(id, terminal);
+        if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;
