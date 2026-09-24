@@ -65,7 +65,7 @@
 ## Stage 2 — Agent states
 
 - [ ] **2.1 State machine in the Rust service** (the UI only renders the resulting state) from the mapping table in `docs/hive.md` ("Mapeamento de estados"), including `Notification` by `notification_type`, "the most urgent state wins", and the PTY-silence reconciliation for interrupts.
-- [ ] **2.2 Sidebar tree** Project → Worktree → Agent → Subagents, with the state icon (color + shape, from `StateIcon.dc.html`).
+- [x] **2.2 Sidebar tree** `task/2.2-sidebar-states` — *orchestrator defaults, pending human review at checkpoint 2: `agent_state` is stored as sent in `agentStates` (by session id, apart from `agents`, so either may arrive first); an agent with no state yet shows as idle. Agent and subagent rows follow the prototype (icon, title over the state name, alerting states colored; subagents at 56px with tree lines, "subagent: <agent_type>", "unknown" when the type is null); clicking a subagent shows its agent's terminal. No "time since" (the protocol has no timestamp). The working pulse stops under `prefers-reduced-motion`. The close confirmation counts only working / waiting for permission / waiting for you (#18). `?mock=states` shows every state.* Project → Worktree → Agent → Subagents, with the state icon (color + shape, from `StateIcon.dc.html`).
 - [ ] **2.3 Propagation and pending counter.** Collapsed nodes show the most urgent state inside; "N pending" counter; F8 jumps to the next pending agent.
 - [ ] **2.4 Notifications.** Sound only when entering waiting-for-permission, waiting-for-you or error; OS notification when an agent finishes.
 

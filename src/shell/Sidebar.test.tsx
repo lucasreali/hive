@@ -1,9 +1,10 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
-import { apply, initialState, useHive } from "../store";
+import { type AgentState, apply, initialState, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
+import { STATE_LABEL } from "./icons";
 
 afterEach(() => {
   cleanup();
@@ -112,11 +113,11 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
     ["tree-row project", "shopNew worktree"],
     ["tree-row worktree", "main"],
     ["tree-row worktree", "fix-login"],
-    ["tree-row agent", "Claude"],
-    ["tree-row agent", "Claude"],
+    ["tree-row agent", "idleClaudeidle"],
+    ["tree-row agent", "idleClaudeidle"],
     ["tree-row worktree", "feat-checkout"],
   ]);
-  const [agent, orphan] = screen.getAllByRole("button", { name: "Claude" });
+  const [agent, orphan] = screen.getAllByRole("button", { name: "idle Claude" });
   expect(agent.parentElement?.getAttribute("title")).toBe(`${fixLogin.path}/src`);
   expect(agent.getAttribute("aria-current")).toBe("false");
   fireEvent.click(agent);
@@ -127,7 +128,59 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   fireEvent.click(orphan);
   expect(useHive.getState().activeTab).toBe(1);
   act(() => apply({ type: "agent_removed", channel: 1, id: "s1" }));
-  expect(screen.getAllByRole("button", { name: "Claude" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "idle Claude" })).toHaveLength(1);
+});
+
+test("agents and their subagents show the state the service sent, named for screen readers", () => {
+  render(<App />);
+  const [main, fixLogin] = shop.worktrees;
+  const at = (w: typeof main) => ({ project: shop.id, worktree: w.id, cwd: w.path });
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    useHive.setState({ tabs: [{ id: 1, cwd: shop.path }], activeTab: null });
+    apply({ type: "agent_detected", channel: 1, id: "s1", ...at(fixLogin) });
+    apply({ type: "agent_detected", channel: 2, id: "s2", ...at(main) });
+    apply({
+      type: "agent_state",
+      id: "s1",
+      state: "waiting_permission",
+      subagents: [
+        { id: "a1", agent_type: "Explore", state: "working" },
+        { id: "a2", agent_type: null, state: "waiting_permission" },
+      ],
+    });
+    apply({ type: "agent_state", id: "s2", state: "ended", subagents: [] });
+  });
+  const rows = [...tree().querySelectorAll(".tree-row.agent, .tree-row.subagent")].map((r) => [
+    r.className,
+    r.querySelector(".state-icon")?.getAttribute("aria-label"),
+    r.querySelector(".state-label")?.textContent,
+    r.querySelector(".label")?.textContent,
+  ]);
+  expect(rows).toEqual([
+    ["tree-row agent", "ended", "ended", "Claude"],
+    ["tree-row agent", "waiting for permission", "waiting for permission", "Claude"],
+    ["tree-row subagent", "working", "working", "subagent: Explore"],
+    ["tree-row subagent", "waiting for permission", "waiting for permission", "subagent: unknown"],
+  ]);
+  // Every state has its own shape.
+  const shapes = new Set<string>();
+  for (const state of Object.keys(STATE_LABEL) as AgentState[]) {
+    act(() => apply({ type: "agent_state", id: "s2", state, subagents: [] }));
+    // s2 is the first agent (main comes before fix-login).
+    const icon = within(tree().querySelector(".tree-row.agent") as HTMLElement).getByRole("img", {
+      name: STATE_LABEL[state],
+    });
+    expect(icon.getAttribute("data-state")).toBe(state);
+    shapes.add(icon.innerHTML.replace(/<title>.*<\/title>/, ""));
+  }
+  expect(shapes.size).toBe(7);
+  // A subagent row shows its agent's terminal.
+  fireEvent.click(screen.getByRole("button", { name: /subagent: Explore/ }));
+  expect(useHive.getState().activeTab).toBe(1);
+  // Subagents that ended leave the tree.
+  act(() => apply({ type: "agent_state", id: "s1", state: "idle", subagents: [] }));
+  expect(tree().querySelector(".tree-row.subagent")).toBeNull();
 });
 
 test("arrow keys move in the tree and collapse or expand a project", () => {

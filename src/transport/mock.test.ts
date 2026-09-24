@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ServiceMessage } from "../store";
+import type { AgentState, ServiceMessage } from "../store";
 import {
   createMockTransport,
   ECHO_MARK,
@@ -7,6 +7,7 @@ import {
   LOAD_START_MS,
   MOCK_BRANCHES,
   MOCK_REPOS,
+  MOCK_STATES,
 } from "./mock";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,11 +49,15 @@ test("a scenario fails the connection instead", async () => {
     ["mismatch", ["version_mismatch"]],
     ["disconnected", ["disconnected"]],
     ["", ["welcome", "projects"]],
+    [
+      "states",
+      ["welcome", "projects", ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state"])],
+    ],
   ] as const) {
     const messages: ServiceMessage[] = [];
     await createMockTransport(scenario).connect((m) => messages.push(m));
     await tick();
-    expect(messages.map((m) => m.type)).toEqual([...types]);
+    expect(messages.map((m): string => m.type)).toEqual([...types]);
   }
 });
 
@@ -116,18 +121,29 @@ test("exit ends the terminal with code 0 and close with no code", async () => {
   ]);
 });
 
-test("claude detects an agent where the terminal is; exit removes it first", async () => {
+test("claude detects an idle agent where the terminal is; lines set it working; exit removes it first", async () => {
   const { transport, messages } = await connected();
   const [shop] = MOCK_REPOS;
   const id = await transport.openTerminal(shop.path, 80, 24, () => {});
-  await transport.writeTerminal(id, "cd .claude/worktrees/fix-login\rclaude\r");
+  await transport.writeTerminal(id, "cd .claude/worktrees/fix-login\rclaude\r\r");
   await transport.writeTerminal(id, "cd /tmp\rclaude\r");
   await tick();
   const fixLogin = `${shop.path}/.claude/worktrees/fix-login`;
   const agent = { type: "agent_detected", channel: id, id: "mock-session-1" } as const;
-  expect(messages.slice(-2)).toEqual([
+  const state = (state: AgentState): ServiceMessage => ({
+    type: "agent_state",
+    id: agent.id,
+    state,
+    subagents: [],
+  });
+  expect(messages.filter((m) => m.type.startsWith("agent"))).toEqual([
     { ...agent, project: shop.id, worktree: fixLogin, cwd: fixLogin },
+    state("idle"),
+    // The empty line sent nothing; `cd /tmp` and the second `claude` are prompts.
+    state("working"),
+    state("working"),
     { ...agent, project: null, worktree: null, cwd: "/tmp" },
+    state("idle"),
   ]);
   await transport.writeTerminal(id, "exit\r");
   await tick();

@@ -116,6 +116,21 @@ test("agents are stored as the service places them and removed by id", () => {
   expect(useHive.getState().agents).toEqual({});
 });
 
+test("agent states are stored as sent, before or after the agent, and go with it", () => {
+  const sub = { id: "s1", agent_type: "Explore", state: "waiting_permission" } as const;
+  apply({ type: "agent_state", id: "a", state: "working", subagents: [] });
+  apply({ type: "agent_state", id: "b", state: "idle", subagents: [] });
+  apply({ type: "agent_state", id: "a", state: "waiting_permission", subagents: [sub] });
+  expect(useHive.getState().agentStates).toEqual({
+    a: { state: "waiting_permission", subagents: [sub] },
+    b: { state: "idle", subagents: [] },
+  });
+  apply({ type: "agent_removed", channel: 1, id: "a" });
+  expect(Object.keys(useHive.getState().agentStates)).toEqual(["b"]);
+  apply({ type: "disconnected", reason: "gone" });
+  expect(useHive.getState().agentStates).toEqual({});
+});
+
 test("useAgent re-renders only when its own agent changes", () => {
   useHive.setState({ agents: { a: agent("a"), b: agent("b") } });
   let renders = 0;

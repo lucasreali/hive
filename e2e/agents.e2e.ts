@@ -24,7 +24,7 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
     "shopNew worktree",
     "main",
     "fix-login",
-    "Claude",
+    "idleClaudeidle",
     "feat-checkout",
   ]);
 
