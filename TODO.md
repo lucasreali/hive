@@ -118,6 +118,19 @@
 
 ---
 
+## Stage 5 — Folder browser and macOS (v0.1.2)
+
+Human decisions (2026-09-24): Hive also runs natively on macOS, Apple Silicon only, ad-hoc signed (no Apple Developer account); terminals there open the user's login shell (`$SHELL`). **This adds a platform to `docs/hive.md` (Windows + WSL): the human updates it.** Plan: `~/.claude/plans/vamos-seguir-com-a-warm-pine.md`.
+
+- [ ] **5.0 Folder browser in Add project.** `task/5.0-folder-browser` — the service lists subfolders (`list_dirs {path, windows}` → `dirs {path, linux_path, parent, dirs[{name, git}], error}`; home when empty; no hidden ones; at most 1000). The dialog shows `[Windows | WSL] [path]` on Windows (the select only where both exist; none on macOS) with the typed folder's subfolders under the field: click to enter, ↑ to go up, a git icon on repositories; Windows paths are converted by the service (`wslpath`). A note under the field: Windows folders are slower and do not update live.
+- [ ] **5.1 Portable service.** `task/5.1-portable-service` — `setsid --fork` → in-process `setsid`; inotify → `notify` crate; a macOS process listing (`libproc`) behind `procs`; no `wslpath` on macOS and a macOS "runs as a program" list; terminals open `$SHELL` as a login shell with Hive's bin dir first (fish `-C`, zsh `ZDOTDIR`, bash `--rcfile`). Linux behaviour and coverage unchanged.
+- [ ] **5.2 macOS app.** `task/5.2-macos-app` — `bridge_command` runs the bridge script with `/bin/sh` on macOS (POSIX bundled path, quarantine removed from the copy); native traffic lights (`titleBarStyle: Overlay`); platform wording (no WSL/Explorer on macOS); Cmd instead of Ctrl for app shortcuts and terminal copy/paste on macOS.
+- [ ] **5.3 macOS build and release.** `task/5.3-macos-release` — `tauri.macos.conf.json` (app + dmg, bundled `hive`, ad-hoc signing, macOS 12+); a `macos-14` job in the release workflow (adds `darwin-aarch64` to `latest.json`); a `macos.yml` CI running the Rust and frontend tests on macOS (the only place the macOS-only code is tested); actions bumped to Node 24.
+
+**⏸ Checkpoint 5 — v0.1.2.** The human runs `scripts/release.sh 0.1.2`, pushes, installs the `.dmg` on the Mac, allows it in Privacy & Security, opens a project, a terminal and `claude`; Windows updates through the button.
+
+---
+
 ## Not now (Fase 2)
 
 Kanban screen, rich interactions (permissions and choices answered in the app), live edit view, session history, GitHub CLI integration. Do not build any of it during v1.
