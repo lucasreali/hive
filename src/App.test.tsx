@@ -43,7 +43,7 @@ test("status bar follows the connection status", () => {
 
 test("the files button toggles the right panel", () => {
   render(<App />);
-  const toggle = screen.getByTitle("Files, changes and sessions (Ctrl+Shift+B)");
+  const toggle = screen.getByTitle("Files, diff and sessions (Ctrl+Shift+B)");
   expect(toggle.getAttribute("aria-pressed")).toBe("false");
 
   fireEvent.click(toggle);

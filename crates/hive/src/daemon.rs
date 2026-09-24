@@ -14,8 +14,8 @@ use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, PROTOCOL_VERSION,
-    Role, SaveError, SessionTarget,
+    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, OpenSession,
+    PROTOCOL_VERSION, Role, SaveError, SessionTarget,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -51,7 +51,19 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
     let projects = Projects::load(paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
-    let result = serve(listener, terminate, paths.bin_dir(), projects, sessions).await;
+    let restore = Restore {
+        file: paths.open_sessions(),
+        pending: Mutex::new(sessions::take_open(&paths.open_sessions())),
+    };
+    let result = serve(
+        listener,
+        terminate,
+        paths.bin_dir(),
+        projects,
+        sessions,
+        restore,
+    )
+    .await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -79,6 +91,7 @@ async fn serve(
     bin_dir: PathBuf,
     projects: Projects,
     sessions: Sessions,
+    restore: Restore,
 ) -> io::Result<()> {
     let state = Arc::new(State {
         app: Mutex::new(None),
@@ -88,6 +101,7 @@ async fn serve(
         bin_dir,
         projects,
         sessions,
+        restore,
     });
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
@@ -102,6 +116,8 @@ async fn serve(
         }
     }
     watcher.abort();
+    // Before the terminals end (and their sessions with them): what to resume next time.
+    state.save_open().await;
     let sessions: Vec<i32> = state
         .terminals
         .lock()
@@ -127,6 +143,15 @@ struct State {
     projects: Projects,
     /// Claude Code's session logs of the followed projects.
     sessions: Sessions,
+    restore: Restore,
+}
+
+/// The sessions running in Hive's terminals when the app last closed.
+struct Restore {
+    /// Where they are kept between runs.
+    file: PathBuf,
+    /// Read at start, sent to the first app that connects.
+    pending: Mutex<Vec<OpenSession>>,
 }
 
 impl State {
@@ -187,6 +212,7 @@ impl State {
         let (project, worktree) = place.unzip();
         let mut agent = Agent::new(channel, Instant::now());
         agent.worktree = worktree.clone();
+        agent.cwd = cwd.clone();
         let state = agent.message(&id);
         agents.insert(id.clone(), agent);
         let detected = Control::AgentDetected {
@@ -197,6 +223,30 @@ impl State {
         };
         self.to_app(channel, &detected).await;
         self.to_app(channel, &state).await;
+    }
+
+    /// Keeps the sessions running in Hive's terminals, in terminal order, to resume them when
+    /// the app opens again.
+    async fn save_open(&self) {
+        let agents = self.agents.lock().await;
+        let mut open: Vec<(u32, OpenSession)> = agents
+            .iter()
+            .filter_map(|(id, agent)| {
+                let cwd = agent.cwd.clone()?;
+                Some((
+                    agent.channel,
+                    OpenSession {
+                        id: id.clone(),
+                        cwd,
+                    },
+                ))
+            })
+            .collect();
+        open.sort_by_key(|(channel, _)| *channel);
+        let open: Vec<OpenSession> = open.into_iter().map(|(_, s)| s).collect();
+        if let Err(err) = sessions::save_open(&self.restore.file, &open) {
+            eprintln!("hive: warning: cannot keep the open sessions: {err}");
+        }
     }
 
     /// Sent to a newly connected app right after `Welcome`: the state of every live agent.
@@ -511,6 +561,14 @@ where
         *app = Some(control_tx);
     }
     state.snapshot().await;
+    // Only the first app after a restart resumes the sessions the last one left.
+    let restore = std::mem::take(&mut *state.restore.pending.lock().await);
+    if !restore.is_empty() {
+        let sessions = restore;
+        state
+            .to_app(0, &Control::RestoreSessions { sessions })
+            .await;
+    }
     let writer = tokio::spawn(write_prioritized(writer, control_rx, terminal_rx));
     while let Some(Ok(frame)) = reader.next().await {
         app_frame(state, frame, &terminal_tx).await;
@@ -623,7 +681,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             changes::message(path, listed)
         }),
         Ok(Control::ListSessions) => state.sessions(|projects, sessions| {
-            let (sessions, error) = match sessions.list(&projects.list()) {
+            let running = procs::claude_cwds(Path::new("/proc"));
+            let (sessions, error) = match sessions.list(&projects.list(), &running) {
                 Ok(sessions) => (sessions, None),
                 Err(err) => (Vec::new(), Some(err.to_string())),
             };
@@ -802,6 +861,10 @@ mod tests {
             bin_dir: dir.path().into(),
             projects: Projects::load(dir.path().join("projects.json")),
             sessions: Sessions::new(None),
+            restore: Restore {
+                file: dir.path().join("open-sessions.json"),
+                pending: Mutex::new(Vec::new()),
+            },
         });
         // The same stream types as the daemon, so no second instantiation skews line coverage.
         let (client, server) = UnixStream::pair().unwrap();

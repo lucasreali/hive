@@ -62,6 +62,11 @@ impl Paths {
         self.data.join("projects.json")
     }
 
+    /// The Claude sessions that ran in Hive's terminals when the app last closed.
+    pub fn open_sessions(&self) -> PathBuf {
+        self.data.join("open-sessions.json")
+    }
+
     /// Creates the runtime directory with mode `0700` and refuses one that
     /// another user owns or that others can access (e.g. a planted `/tmp/hive-<uid>`).
     pub fn prepare_runtime(&self) -> io::Result<()> {
@@ -117,6 +122,10 @@ mod tests {
             PathBuf::from("/d/hive/hive-hooks.json")
         );
         assert_eq!(paths.projects(), PathBuf::from("/d/hive/projects.json"));
+        assert_eq!(
+            paths.open_sessions(),
+            PathBuf::from("/d/hive/open-sessions.json")
+        );
     }
 
     #[test]

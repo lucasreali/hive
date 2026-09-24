@@ -207,7 +207,7 @@ export function TerminalArea() {
           <button
             type="button"
             className="ghost"
-            title="Files, changes and sessions (Ctrl+Shift+B)"
+            title="Files, diff and sessions (Ctrl+Shift+B)"
             aria-pressed={open}
             onClick={() => setRightPanel(open ? null : "files")}
           >

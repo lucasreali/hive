@@ -1,6 +1,6 @@
 //! Minimal `/proc` reader: enough to find a terminal's processes.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proc {
@@ -28,6 +28,20 @@ pub fn inside(root: &Path, dir: &Path) -> Vec<Proc> {
     list(root)
         .into_iter()
         .filter(|p| cwd(p).is_ok_and(|cwd| cwd.starts_with(dir)))
+        .collect()
+}
+
+/// The working directory of every `claude` process under `root`, once per terminal session
+/// (a wrapper and the `claude` it starts share one).
+pub fn claude_cwds(root: &Path) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    list(root)
+        .into_iter()
+        .filter(|p| p.comm == "claude")
+        .filter_map(|p| {
+            let cwd = std::fs::read_link(root.join(p.pid.to_string()).join("cwd")).ok()?;
+            seen.insert((p.session, cwd.clone())).then_some(cwd)
+        })
         .collect()
 }
 
@@ -114,6 +128,28 @@ mod tests {
             .collect();
         found.sort();
         assert_eq!(found, vec![10, 11]);
+    }
+
+    #[test]
+    fn claude_processes_are_found_with_their_folder_once_per_session() {
+        let root = fake_proc(&[
+            ("20", "20 (claude) S 1 20 20 0 0"),
+            ("21", "21 (claude) S 20 20 20 0 0"),
+            ("22", "22 (claude) S 1 22 22 0 0"),
+            ("23", "23 (fish) S 1 23 23 0 0"),
+            ("24", "24 (claude) S 1 24 24 0 0"),
+        ]);
+        let link = |pid: &str, cwd: &str| {
+            std::os::unix::fs::symlink(cwd, root.path().join(pid).join("cwd")).unwrap()
+        };
+        link("20", "/r");
+        link("21", "/r");
+        link("22", "/r");
+        link("23", "/r");
+        // 24 has no readable cwd.
+        let mut cwds = claude_cwds(root.path());
+        cwds.sort();
+        assert_eq!(cwds, vec![PathBuf::from("/r"), PathBuf::from("/r")]);
     }
 
     #[test]

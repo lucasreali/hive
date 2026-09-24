@@ -118,6 +118,8 @@ const session = (
   last: [Session["last_role"], string] | null,
   messages: number,
   ago: number,
+  state: Session["state"] = "ended",
+  running = false,
 ): Session => {
   const place = [...MOCK_REPOS.flatMap((p) => p.worktrees.map((w) => ({ p, w })))]
     .filter(({ w }) => cwd === w.path || cwd.startsWith(`${w.path}/`))
@@ -137,6 +139,8 @@ const session = (
     model: "claude-opus-5-5",
     branch: place.w.branch,
     updated_ms: Date.now() - ago * MINUTE,
+    state,
+    running,
     log: `/home/user/.claude/projects/${cwd.replaceAll(/[^A-Za-z0-9]/g, "-")}/${id}.jsonl`,
   };
 };
@@ -150,6 +154,9 @@ export const MOCK_SESSIONS: Session[] = [
     ["assistant", "The redirect now keeps the original URL; tests pass."],
     42,
     2,
+    // Running in a terminal outside Hive, done with its turn.
+    "waiting_you",
+    true,
   ),
   session(
     "0b1d2c3e-1111-4a4a-9b9b-000000000002",
@@ -158,6 +165,7 @@ export const MOCK_SESSIONS: Session[] = [
     ["user", "[Request interrupted by user]"],
     7,
     55,
+    "waiting_you",
   ),
   session(
     "0b1d2c3e-1111-4a4a-9b9b-000000000003",
@@ -174,6 +182,7 @@ export const MOCK_SESSIONS: Session[] = [
     ["assistant", "Moved the token check into its own middleware."],
     118,
     60 * 24 * 9,
+    "error",
   ),
 ];
 

@@ -20,6 +20,9 @@ type Handing = "open" | "reveal";
 /** How each located path goes to Windows, by `<id>:<target>`, until the service answers. */
 const pending = new Map<string, Handing>();
 
+/** Why a session running outside Hive is not resumed here. */
+export const OUTSIDE = "This session runs in a terminal outside Hive: continue it there";
+
 /** `claude`'s arguments to go on with a session, or to start a new one from it (`fork`). */
 export const resumeArgs = (session: Session, fork = false) =>
   `--resume ${session.id}${fork ? " --fork-session" : ""}`;
@@ -40,10 +43,26 @@ export async function resume(session: Session, fork = false): Promise<void> {
   const agent = s.agents[session.id];
   const tab = agent && s.tabs.find((t) => t.id === agent.terminal);
   if (tab && !fork) return activateTab(tab);
+  // A second `claude` on the same session would write the same log.
+  if (session.running && !fork) return setNotice(OUTSIDE);
   try {
     await openClaude(session.cwd, resumeArgs(session, fork));
   } catch (error) {
     setNotice(`Cannot open a terminal in ${session.cwd}: ${error}`);
+  }
+}
+
+/**
+ * The sessions that ran in Hive's terminals when the app last closed: each is resumed in a new
+ * terminal in its folder, one after the other.
+ */
+export async function restore(sessions: { id: string; cwd: string }[]): Promise<void> {
+  for (const { id, cwd } of sessions) {
+    try {
+      await openClaude(cwd, `--resume ${id}`);
+    } catch (error) {
+      setNotice(`Cannot resume the session in ${cwd}: ${error}`);
+    }
   }
 }
 

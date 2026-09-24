@@ -27,6 +27,8 @@ pub struct Agent {
     /// The worktree the agent itself was placed in (#19). Subagents are linked to other
     /// worktrees only when it is known.
     pub worktree: Option<String>,
+    /// The folder the agent runs in, from its `SessionStart`: where to resume it.
+    pub cwd: Option<String>,
     state: AgentState,
     /// In start order.
     subagents: Vec<SubagentState>,
@@ -42,6 +44,7 @@ impl Agent {
         Self {
             channel,
             worktree: None,
+            cwd: None,
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),

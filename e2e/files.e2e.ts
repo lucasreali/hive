@@ -15,7 +15,7 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
   await page.keyboard.press("Control+Shift+B");
   const panel = page.getByRole("complementary", { name: "Side panel" });
   await expect(panel).toBeVisible();
-  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Changes" }).click();
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
   await expect(panel.locator(".files-summary")).toHaveText("5 files changed+24−49");
   const files = panel.getByRole("tree", { name: "Files" });
   // Only the changed files; folders start collapsed.

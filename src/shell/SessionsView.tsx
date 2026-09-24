@@ -1,10 +1,22 @@
 import { ArrowClockwiseIcon, DotsThreeIcon } from "@phosphor-icons/react";
 import { type MouseEvent, useEffect, useState } from "react";
-import { ago, copy, locate, remove, resume, resumeCommand, sessionName } from "../sessions";
+import {
+  ago,
+  copy,
+  locate,
+  OUTSIDE,
+  remove,
+  resume,
+  resumeCommand,
+  sessionName,
+} from "../sessions";
 import { openSessionMenu, type Session, useHive } from "../store";
 import { transport } from "../transport";
 import { StateIcon } from "./icons";
 import { ContextMenu } from "./WorktreeMenu";
+
+/** How often the open Sessions tab asks for the sessions again. */
+export const REFRESH_MS = 5000;
 
 /** Opens the session's menu at the pointer, or under the ⋯ button that was clicked. */
 function menuAt(session: Session) {
@@ -28,7 +40,12 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const error = useHive((s) => s.sessionsError);
   const agents = useHive((s) => s.agents);
   const [query, setQuery] = useState("");
-  useEffect(() => void transport.listSessions(), []);
+  // Asked again every few seconds: sessions outside Hive change state without hooks.
+  useEffect(() => {
+    void transport.listSessions();
+    const every = setInterval(() => void transport.listSessions(), REFRESH_MS);
+    return () => clearInterval(every);
+  }, []);
   const q = query.trim().toLowerCase();
   const matches = (x: Session) =>
     [x.title, x.last_text, x.branch, x.id].some((v) => v?.toLowerCase().includes(q));
@@ -72,19 +89,21 @@ export function SessionsView({ worktree }: { worktree: string }) {
 }
 
 function SessionRow({ session: x, live }: { session: Session; live: boolean }) {
-  const state = useHive((s) => s.agentStates[x.id]?.state ?? "idle");
+  // A session in a Hive terminal has its live state; any other, the one its log tells.
+  const state = useHive((s) => (live ? (s.agentStates[x.id]?.state ?? "idle") : x.state));
   const menu = menuAt(x);
+  const title = live ? "Show its terminal" : x.running ? OUTSIDE : "Resume in its worktree";
   return (
-    <li className="session" data-live={live}>
+    <li className="session" data-live={live} data-running={x.running}>
       <button
         type="button"
         className="session-main"
-        title={live ? "Show its terminal" : "Resume in its worktree"}
+        title={title}
         onClick={() => void resume(x)}
         onContextMenu={menu}
       >
         <span className="session-title">
-          {live && <StateIcon state={state} />}
+          <StateIcon state={state} />
           <span className="label">{x.title ?? "Untitled session"}</span>
         </span>
         {x.last_text && (
@@ -103,7 +122,7 @@ function SessionRow({ session: x, live }: { session: Session; live: boolean }) {
         title="Actions"
         onClick={menu}
       >
-        <DotsThreeIcon size={16} weight="bold" aria-hidden="true" />
+        <DotsThreeIcon size={18} weight="bold" aria-hidden="true" />
       </button>
     </li>
   );
@@ -117,6 +136,7 @@ export function SessionMenu() {
   const x = useHive((s) => s.sessions?.find((y) => y.id === s.sessionMenu?.session));
   const live = useHive((s) => !!x && !!s.agents[x.id]);
   if (!menu || !x) return null;
+  const outside = x.running && !live;
   const item = (label: string, action: () => void, extra: object = {}) => (
     <button
       type="button"
@@ -132,7 +152,10 @@ export function SessionMenu() {
   );
   return (
     <ContextMenu at={menu} label={`Session ${sessionName(x)}`} onClose={closeMenu}>
-      {item(live ? "Show Its Terminal" : "Resume in Worktree", () => void resume(x))}
+      {item(live ? "Show Its Terminal" : "Resume in Worktree", () => void resume(x), {
+        disabled: outside,
+        title: outside ? OUTSIDE : undefined,
+      })}
       {item("Continue in New Session", () => void resume(x, true))}
       {item("Copy Resume Command", () => void copy(resumeCommand(x), "resume command"))}
       <hr />
@@ -145,8 +168,8 @@ export function SessionMenu() {
       <hr />
       {item("Delete", () => remove(x), {
         className: "danger",
-        disabled: live,
-        title: live ? "End the session before deleting it" : undefined,
+        disabled: live || x.running,
+        title: live || x.running ? "End the session before deleting it" : undefined,
       })}
     </ContextMenu>
   );

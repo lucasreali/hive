@@ -10,15 +10,44 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hive_protocol::{Project, Session, SessionRole};
+use hive_protocol::{AgentState, OpenSession, Project, Session, SessionRole};
 use serde_json::Value;
 
 use crate::projects;
+use crate::wrapper::write_atomic;
 
 /// Most bytes read from one log; a longer one is summarized from its start.
 const LOG_LIMIT: u64 = 67_108_864; // 64 MiB
 /// Most characters kept of a title or a message.
 const TEXT_LIMIT: usize = 300;
+/// Largest list of open sessions read back.
+const OPEN_LIMIT: u64 = 1024 * 1024;
+
+/// Keeps the sessions running in Hive's terminals as the app closes, to resume them when it
+/// opens again (`take_open`). Nothing is kept when none ran.
+pub fn save_open(file: &Path, open: &[OpenSession]) -> io::Result<()> {
+    if open.is_empty() {
+        return Ok(());
+    }
+    file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
+    write_atomic(file, &serde_json::to_vec(open)?, 0o600)
+}
+
+/// The sessions `save_open` kept, once: the file is removed. Anything unreadable is dropped,
+/// and so is an entry whose id is not a session id (it is typed into a shell) or whose
+/// folder is not absolute.
+pub fn take_open(file: &Path) -> Vec<OpenSession> {
+    let read = File::open(file).and_then(|f| crate::git::read_limited(&mut &f, OPEN_LIMIT));
+    let _ = std::fs::remove_file(file);
+    let open: Vec<OpenSession> = read
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    open.into_iter()
+        .filter(|s| valid_id(&s.id) && Path::new(&s.cwd).is_absolute())
+        .collect()
+}
+
 /// Longest session id accepted (Claude's are 36-character UUIDs).
 const ID_LIMIT: usize = 64;
 
@@ -43,6 +72,60 @@ pub struct Summary {
     pub messages: u64,
     pub model: Option<String>,
     pub branch: Option<String>,
+    /// How the log ends, for the session's state.
+    pub end: Ending,
+}
+
+/// The last thing a log says happened in the main conversation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Ending {
+    /// No message yet.
+    #[default]
+    Nothing,
+    /// A prompt, a tool call or a tool result: Claude was going on.
+    Working,
+    /// Claude finished its turn (or a local slash command ran).
+    TurnDone,
+    /// The user interrupted Claude.
+    Interrupted,
+    /// The turn ended with an API error.
+    Error,
+}
+
+/// How a user or assistant record leaves the conversation.
+fn ending(kind: &str, record: &Value, message: Option<&Value>) -> Ending {
+    if kind == "assistant" {
+        if record.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) {
+            return Ending::Error;
+        }
+        let stop = message
+            .and_then(|m| m.get("stop_reason"))
+            .and_then(Value::as_str);
+        return match stop {
+            Some("end_turn" | "stop_sequence") => Ending::TurnDone,
+            _ => Ending::Working,
+        };
+    }
+    match message.and_then(|m| m.get("content")).and_then(first_text) {
+        Some(text) if text.starts_with("[Request interrupted by user") => Ending::Interrupted,
+        // A slash command's tags: no turn of Claude follows.
+        Some(text) if text.starts_with('<') => Ending::TurnDone,
+        _ => Ending::Working,
+    }
+}
+
+/// A session's state by how its log ends and whether a `claude` runs it ("Mapeamento de
+/// estados"): a running one works, waits for you or failed; a stopped one ended, failed, or
+/// was left in the middle of a turn (it waits for you).
+pub fn state(end: Ending, running: bool) -> AgentState {
+    match (end, running) {
+        (Ending::Error, _) => AgentState::Error,
+        (Ending::Working, true) => AgentState::Working,
+        (Ending::Nothing, true) => AgentState::Idle,
+        (Ending::TurnDone | Ending::Interrupted, true) => AgentState::WaitingYou,
+        (Ending::Working | Ending::Interrupted, false) => AgentState::WaitingYou,
+        (Ending::TurnDone | Ending::Nothing, false) => AgentState::Ended,
+    }
 }
 
 /// Summarizes a JSONL log, at most [`LOG_LIMIT`] bytes of it. Lines that are not JSON are
@@ -71,6 +154,7 @@ pub fn summarize(log: &mut dyn Read) -> Summary {
                     continue;
                 }
                 let message = record.get("message");
+                summary.end = ending(kind, &record, message);
                 if kind == "assistant"
                     && let Some(model) =
                         message.and_then(|m| m.get("model")).and_then(Value::as_str)
@@ -151,8 +235,10 @@ impl Sessions {
         }
     }
 
-    /// Every session whose `cwd` lies in a followed worktree, the most recent first.
-    pub fn list(&self, projects: &[Project]) -> io::Result<Vec<Session>> {
+    /// Every session whose `cwd` lies in a followed worktree, the most recent first. `running`
+    /// holds the folder of each `claude` process: in each folder, that many of the most recent
+    /// sessions count as running (a `claude` writes the newest log of its folder).
+    pub fn list(&self, projects: &[Project], running: &[PathBuf]) -> io::Result<Vec<Session>> {
         let Some(root) = &self.root else {
             return Ok(Vec::new());
         };
@@ -176,8 +262,16 @@ impl Sessions {
                 }
             }
         }
-        sessions.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
-        Ok(sessions)
+        sessions.sort_by(|(a, _), (b, _)| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
+        let mut left: Vec<&Path> = running.iter().map(PathBuf::as_path).collect();
+        for (session, end) in &mut sessions {
+            if let Some(i) = left.iter().position(|cwd| *cwd == Path::new(&session.cwd)) {
+                left.swap_remove(i);
+                session.running = true;
+            }
+            session.state = state(*end, session.running);
+        }
+        Ok(sessions.into_iter().map(|(session, _)| session).collect())
     }
 
     /// The listed session `id`.
@@ -185,7 +279,7 @@ impl Sessions {
         if !valid_id(id) {
             return Err(io::Error::other(format!("invalid session id {id:?}")));
         }
-        self.list(projects)?
+        self.list(projects, &[])?
             .into_iter()
             .find(|s| s.id == id)
             .ok_or_else(|| io::Error::other(format!("no session {id} in the followed projects")))
@@ -207,9 +301,9 @@ impl Sessions {
         Ok(())
     }
 
-    /// The session logged at `path`, when it is a regular `<id>.jsonl` file whose `cwd` lies
-    /// in a followed worktree.
-    fn session(&self, projects: &[Project], path: &Path) -> Option<Session> {
+    /// The session logged at `path` (stopped until `list` says otherwise) and how its log ends,
+    /// when it is a regular `<id>.jsonl` file whose `cwd` lies in a followed worktree.
+    fn session(&self, projects: &[Project], path: &Path) -> Option<(Session, Ending)> {
         let id = path
             .file_name()?
             .to_str()?
@@ -224,7 +318,8 @@ impl Sessions {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64);
         let (last_role, last_text) = summary.last.clone().unzip();
-        Some(Session {
+        let end = summary.end;
+        let session = Session {
             id: id.to_owned(),
             project,
             worktree,
@@ -237,7 +332,10 @@ impl Sessions {
             branch: summary.branch,
             updated_ms,
             log: path.to_string_lossy().into_owned(),
-        })
+            state: state(end, false),
+            running: false,
+        };
+        Some((session, end))
     }
 
     fn summary(&self, path: &Path, modified: SystemTime, len: u64) -> Option<Summary> {
@@ -302,6 +400,8 @@ not json
                 messages: 5,
                 model: Some("claude-x".into()),
                 branch: Some("feat".into()),
+                // The last record is a user message without text.
+                end: Ending::Working,
             }
         );
         // A title the user set wins over Claude's, wherever it is.
@@ -314,6 +414,95 @@ not json
         );
         let title = summarize(&mut long.as_bytes()).title.unwrap();
         assert_eq!(title.chars().count(), TEXT_LIMIT);
+    }
+
+    #[test]
+    fn a_log_ends_as_its_last_message_says() {
+        let end = |lines: &[&str]| summarize(&mut lines.join("\n").as_bytes()).end;
+        let assistant = |stop: &str| {
+            format!(r#"{{"type":"assistant","message":{{"stop_reason":{stop},"content":"x"}}}}"#)
+        };
+        let user =
+            |content: &str| format!(r#"{{"type":"user","message":{{"content":{content}}}}}"#);
+        assert_eq!(end(&[]), Ending::Nothing);
+        assert_eq!(end(&[&assistant(r#""end_turn""#)]), Ending::TurnDone);
+        assert_eq!(end(&[&assistant(r#""stop_sequence""#)]), Ending::TurnDone);
+        assert_eq!(end(&[&assistant(r#""tool_use""#)]), Ending::Working);
+        assert_eq!(end(&[&assistant("null")]), Ending::Working);
+        let failed = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"stop_reason":"end_turn","content":"x"}}"#;
+        assert_eq!(end(&[failed]), Ending::Error);
+        let interrupted = user(r#""[Request interrupted by user for tool use]""#);
+        assert_eq!(
+            end(&[&assistant(r#""end_turn""#), &interrupted]),
+            Ending::Interrupted
+        );
+        assert_eq!(
+            end(&[&user(r#""<command-name>/clear</command-name>""#)]),
+            Ending::TurnDone
+        );
+        assert_eq!(end(&[&user(r#""fix it""#)]), Ending::Working);
+        // Subagents and meta messages leave it as it was.
+        let sub = r#"{"type":"assistant","isSidechain":true,"message":{"stop_reason":"tool_use"}}"#;
+        assert_eq!(end(&[&assistant(r#""end_turn""#), sub]), Ending::TurnDone);
+    }
+
+    #[test]
+    fn states_follow_the_ending_and_whether_it_runs() {
+        use AgentState::*;
+        let table = [
+            (Ending::Error, true, Error),
+            (Ending::Error, false, Error),
+            (Ending::Working, true, Working),
+            (Ending::Nothing, true, Idle),
+            (Ending::TurnDone, true, WaitingYou),
+            (Ending::Interrupted, true, WaitingYou),
+            (Ending::Working, false, WaitingYou),
+            (Ending::Interrupted, false, WaitingYou),
+            (Ending::TurnDone, false, Ended),
+            (Ending::Nothing, false, Ended),
+        ];
+        for (end, running, expected) in table {
+            assert_eq!(state(end, running), expected, "{end:?} {running}");
+        }
+    }
+
+    #[test]
+    fn open_sessions_are_kept_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("data/open-sessions.json");
+        let open = |id: &str, cwd: &str| OpenSession {
+            id: id.into(),
+            cwd: cwd.into(),
+        };
+        // Nothing ran: nothing is kept.
+        save_open(&file, &[]).unwrap();
+        assert!(!file.exists());
+        assert_eq!(take_open(&file), vec![]);
+
+        save_open(
+            &file,
+            &[open("a", "/r"), open("x; rm", "/r"), open("b", "rel")],
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        // Ids that are not session ids, and relative folders, are dropped.
+        assert_eq!(take_open(&file), vec![open("a", "/r")]);
+        assert!(!file.exists());
+        assert_eq!(take_open(&file), vec![]);
+
+        // A long list (over a few KiB) is read back whole.
+        let many: Vec<OpenSession> = (0..200).map(|i| open(&format!("s{i}"), "/r")).collect();
+        save_open(&file, &many).unwrap();
+        assert!(file.metadata().unwrap().len() > 4096);
+        assert_eq!(take_open(&file), many);
+
+        std::fs::write(&file, "not json").unwrap();
+        assert_eq!(take_open(&file), vec![]);
+        assert!(!file.exists());
+        // A folder in the way cannot be written over.
+        std::fs::create_dir_all(&file).unwrap();
+        assert!(save_open(&file, &[open("a", "/r")]).is_err());
     }
 
     #[test]
@@ -383,7 +572,7 @@ not json
 
         let sessions = Sessions::new(Some(root.clone()));
         let followed = [project(repo), project("/other-not-followed")];
-        let list = sessions.list(&followed).unwrap();
+        let list = sessions.list(&followed, &[]).unwrap();
         let got: Vec<_> = list
             .iter()
             .map(|s| (s.id.as_str(), s.worktree.as_str(), s.title.as_deref()))
@@ -397,6 +586,30 @@ not json
         );
         assert_eq!(list[1].log, older.to_string_lossy());
         assert!(list[1].updated_ms > 0);
+        // Stopped, both were left in the middle of a turn (a prompt, no answer).
+        assert!(
+            list.iter()
+                .all(|s| !s.running && s.state == AgentState::WaitingYou)
+        );
+
+        // A `claude` in a folder runs the newest session of that folder; one in a folder
+        // with no session runs none.
+        let second = log(&folder, "h.jsonl", repo);
+        let running = [PathBuf::from(repo), PathBuf::from("/nowhere")];
+        let list = sessions.list(&followed, &running).unwrap();
+        let got: Vec<_> = list
+            .iter()
+            .map(|s| (s.id.as_str(), s.running, s.state))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("h", true, AgentState::Working),
+                ("b", false, AgentState::WaitingYou),
+                ("a", false, AgentState::WaitingYou),
+            ]
+        );
+        std::fs::remove_file(second).unwrap();
 
         // A summary is kept while the log's time and size stay the same, and read again
         // when they change.
@@ -431,7 +644,7 @@ not json
             "no session zz in the followed projects"
         );
         sessions.delete(&followed, "b").unwrap();
-        assert!(sessions.list(&followed).unwrap().is_empty());
+        assert!(sessions.list(&followed, &[]).unwrap().is_empty());
         assert!(sessions.delete(&followed, "b").is_err());
 
         log(&folder, "a.jsonl", repo);
@@ -445,11 +658,11 @@ not json
         assert!(folder.join("g").symlink_metadata().is_ok());
 
         // No Claude directory, or none yet: no sessions.
-        assert!(Sessions::new(None).list(&followed).unwrap().is_empty());
+        assert!(Sessions::new(None).list(&followed, &[]).unwrap().is_empty());
         let missing = Sessions::new(Some(tmp.path().join("none")));
-        assert!(missing.list(&followed).unwrap().is_empty());
+        assert!(missing.list(&followed, &[]).unwrap().is_empty());
         // A root that is a file cannot be listed.
         let file = Sessions::new(Some(tmp.path().join("projects/stray-file")));
-        assert!(file.list(&followed).is_err());
+        assert!(file.list(&followed, &[]).is_err());
     }
 }

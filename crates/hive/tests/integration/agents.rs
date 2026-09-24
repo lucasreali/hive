@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::Stdio;
 
 use hive_protocol::AgentState::{self, *};
-use hive_protocol::{Control, Role, SessionTarget, SubagentState};
+use hive_protocol::{Control, OpenSession, Role, SessionTarget, SubagentState};
 use serde_json::{Value, json};
 
 use crate::common::Conn;
@@ -450,4 +450,88 @@ async fn unreadable_session_logs_are_reported() {
     assert!(error.is_some_and(|e| e.contains("Not a directory")));
     drop(app);
     assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn sessions_running_when_the_app_closes_are_sent_to_the_next_app() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    app.open_terminal(2, &repo.root).await;
+    hook(
+        &repo,
+        &mut app,
+        "2",
+        "SessionStart",
+        json!({"session_id": "b", "cwd": root}),
+    )
+    .await;
+    hook(
+        &repo,
+        &mut app,
+        "1",
+        "SessionStart",
+        json!({"session_id": "a", "cwd": root}),
+    )
+    .await;
+    // One without a cwd cannot be resumed anywhere.
+    app.open_terminal(3, &repo.root).await;
+    hook(
+        &repo,
+        &mut app,
+        "3",
+        "SessionStart",
+        json!({"session_id": "c"}),
+    )
+    .await;
+    drop(app);
+    assert!(daemon.wait_exit().success());
+    let kept = repo.env.path("data/hive/open-sessions.json");
+    assert!(kept.exists());
+
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let open = |id: &str| OpenSession {
+        id: id.into(),
+        cwd: root.clone(),
+    };
+    assert_eq!(
+        app.control().await,
+        (
+            0,
+            Control::RestoreSessions {
+                sessions: vec![open("a"), open("b")]
+            }
+        )
+    );
+    assert!(!kept.exists());
+    drop(app);
+    assert!(daemon.wait_exit().success());
+    // Nothing ran this time: the next app resumes nothing.
+    assert!(!kept.exists());
+}
+
+#[tokio::test]
+async fn the_app_closes_even_when_the_open_sessions_cannot_be_kept() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    // A folder where the list goes: it cannot be written.
+    let kept = repo.env.path("data/hive/open-sessions.json");
+    std::fs::create_dir_all(&kept).unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    hook(
+        &repo,
+        &mut app,
+        "1",
+        "SessionStart",
+        json!({"session_id": "a", "cwd": root}),
+    )
+    .await;
+    drop(app);
+    assert!(daemon.wait_exit().success());
+    assert!(kept.is_dir());
 }

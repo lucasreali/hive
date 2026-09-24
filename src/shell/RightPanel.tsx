@@ -197,7 +197,7 @@ const NOTHING_SHOWN = "Select a project or agent to see its files.";
 
 const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
   { view: "files", label: "Files", icon: <FilesIcon size={14} aria-hidden="true" /> },
-  { view: "changes", label: "Changes", icon: <GitDiffIcon size={14} aria-hidden="true" /> },
+  { view: "changes", label: "Diff", icon: <GitDiffIcon size={14} aria-hidden="true" /> },
   {
     view: "sessions",
     label: "Sessions",

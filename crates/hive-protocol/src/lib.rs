@@ -352,6 +352,11 @@ pub enum Control {
         sessions: Vec<Session>,
         error: Option<String>,
     },
+    /// Sent once after `Welcome` when the app closed with sessions running in Hive's terminals:
+    /// the app resumes each in a new terminal.
+    RestoreSessions {
+        sessions: Vec<OpenSession>,
+    },
     /// App → service: where Windows sees a listed session's log or working folder, to open or
     /// reveal it. Answered by `SessionLocated`.
     LocateSession {
@@ -519,6 +524,17 @@ pub struct Session {
     pub updated_ms: u64,
     /// The log's path.
     pub log: String,
+    /// Its state by how the log ends (a session running in a Hive terminal has its live one).
+    pub state: AgentState,
+    /// A `claude` outside Hive's terminals runs it.
+    pub running: bool,
+}
+
+/// A Claude session that ran in a Hive terminal, and the folder it ran in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenSession {
+    pub id: String,
+    pub cwd: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -965,6 +981,8 @@ mod tests {
             branch: Some("main".into()),
             updated_ms: 5,
             log: "/c/s.jsonl".into(),
+            state: AgentState::Ended,
+            running: false,
         };
         let sessions = Control::Sessions {
             sessions: vec![session],
@@ -972,7 +990,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &sessions).payload[..],
-            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","updated_ms":5,"log":"/c/s.jsonl"}],"error":null}"#
+            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false}],"error":null}"#
         );
         let locate = Control::LocateSession {
             id: "s".into(),
@@ -981,6 +999,16 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &locate).payload[..],
             br#"{"type":"locate_session","id":"s","target":"folder"}"#
+        );
+        let restore = Control::RestoreSessions {
+            sessions: vec![OpenSession {
+                id: "s".into(),
+                cwd: "/r".into(),
+            }],
+        };
+        assert_eq!(
+            &Frame::control(0, &restore).payload[..],
+            br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r"}]}"#
         );
         for message in [
             Control::ListSessions,

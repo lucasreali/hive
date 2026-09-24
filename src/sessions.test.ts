@@ -4,8 +4,10 @@ import {
   ago,
   copy,
   locate,
+  OUTSIDE,
   openLocated,
   remove,
+  restore,
   resume,
   resumeArgs,
   resumeCommand,
@@ -22,7 +24,7 @@ afterEach(() => {
   useHive.setState(initialState, true);
 });
 
-const [session] = MOCK_SESSIONS;
+const [session, stopped] = MOCK_SESSIONS;
 const notice = () => useHive.getState().notice;
 
 test("resume commands go on with the session, or fork it", () => {
@@ -37,23 +39,46 @@ test("resume commands go on with the session, or fork it", () => {
 test("resume shows a running session's terminal, else runs claude --resume in its folder", async () => {
   const open = spyOn(transport, "openTerminal").mockResolvedValue(3);
   const write = spyOn(transport, "writeTerminal").mockResolvedValue();
-  await resume(session);
-  expect(open.mock.calls[0]?.[0]).toBe(session.cwd);
-  expect(write).toHaveBeenCalledWith(3, `claude --resume ${session.id}\r`);
+  await resume(stopped);
+  expect(open.mock.calls[0]?.[0]).toBe(stopped.cwd);
+  expect(write).toHaveBeenCalledWith(3, `claude --resume ${stopped.id}\r`);
 
   // Running in terminal 3: its tab is shown instead; a fork still opens a new terminal.
-  const { cwd } = session;
-  apply({ type: "agent_detected", channel: 3, id: session.id, project: null, worktree: null, cwd });
+  const { cwd } = stopped;
+  apply({ type: "agent_detected", channel: 3, id: stopped.id, project: null, worktree: null, cwd });
   useHive.setState({ activeTab: null });
-  await resume(session);
+  await resume(stopped);
   expect(open).toHaveBeenCalledTimes(1);
   expect(useHive.getState().activeTab).toBe(3);
+  await resume(stopped, true);
+  expect(write).toHaveBeenLastCalledWith(3, `claude --resume ${stopped.id} --fork-session\r`);
+
+  // Running outside Hive: not resumed a second time, but a fork is fine.
+  await resume(session);
+  expect(notice()).toBe(OUTSIDE);
+  expect(open).toHaveBeenCalledTimes(2);
   await resume(session, true);
-  expect(write).toHaveBeenLastCalledWith(3, `claude --resume ${session.id} --fork-session\r`);
+  expect(open).toHaveBeenCalledTimes(3);
 
   open.mockRejectedValue("no such folder");
-  await resume({ ...session, id: "other" });
-  expect(notice()).toBe(`Cannot open a terminal in ${session.cwd}: no such folder`);
+  await resume({ ...stopped, id: "other" });
+  expect(notice()).toBe(`Cannot open a terminal in ${stopped.cwd}: no such folder`);
+  open.mockRestore();
+  write.mockRestore();
+});
+
+test("the sessions open when the app last closed are resumed, one after the other", async () => {
+  const open = spyOn(transport, "openTerminal")
+    .mockResolvedValueOnce(4)
+    .mockRejectedValueOnce("gone");
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  await restore([
+    { id: "a", cwd: "/r" },
+    { id: "b", cwd: "/r/x" },
+  ]);
+  expect(open.mock.calls.map((c) => c[0])).toEqual(["/r", "/r/x"]);
+  expect(write).toHaveBeenCalledWith(4, "claude --resume a\r");
+  expect(notice()).toBe("Cannot resume the session in /r/x: gone");
   open.mockRestore();
   write.mockRestore();
 });

@@ -48,6 +48,8 @@ export type ServiceMessage =
       error: string | null;
     }
   | { type: "session_deleted"; id: string }
+  // Handled by `restore` (src/sessions.ts), not stored.
+  | { type: "restore_sessions"; sessions: { id: string; cwd: string }[] }
   | { type: "delete_session_failed"; id: string; message: string }
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
@@ -173,6 +175,10 @@ export type Session = {
   branch: string | null;
   updated_ms: number;
   log: string;
+  /** By how its log ends; a session running in a Hive terminal shows its live state instead. */
+  state: AgentState;
+  /** A `claude` outside Hive's terminals runs it. */
+  running: boolean;
 };
 export type SessionTarget = "log" | "folder";
 /** A session's context menu, at the pointer. */

@@ -17,7 +17,7 @@ test("app shell renders with bundled fonts and toggles the right panel", async (
     .toBe(true);
   await page.screenshot({ path: "target/e2e/shell.png" });
 
-  await page.getByTitle("Files, changes and sessions (Ctrl+Shift+B)").click();
+  await page.getByTitle("Files, diff and sessions (Ctrl+Shift+B)").click();
   await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
   await page.screenshot({ path: "target/e2e/shell-right-panel.png" });
   await page.getByTitle("Collapse (Ctrl+Shift+B)").click();
