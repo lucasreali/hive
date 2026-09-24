@@ -77,6 +77,8 @@ export async function openTerminal(cwd: string): Promise<number> {
     term.dispose();
     throw error;
   }
+  // xterm measures its cell once, when the tab is first shown: on the fallback font it is too narrow.
+  await document.fonts.load('13px "IBM Plex Mono"');
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.onData((data) => {

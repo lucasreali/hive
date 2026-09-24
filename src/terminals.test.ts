@@ -92,6 +92,21 @@ test("output written before the tab is shown is kept, and the tab opens shown", 
   ]);
 });
 
+test("a terminal is shown only once its font is loaded, so its grid is measured on it", async () => {
+  let loaded: () => void = () => {};
+  const load = spyOn(document.fonts, "load").mockImplementation(
+    () => new Promise((resolve) => (loaded = () => resolve([]))),
+  );
+  const pending = openTerminal("/w");
+  await settle();
+  expect(load.mock.calls).toEqual([['13px "IBM Plex Mono"']]);
+  expect(useHive.getState().tabs).toEqual([]);
+  loaded();
+  opened.push(await pending);
+  expect(useHive.getState().tabs).toHaveLength(1);
+  load.mockRestore();
+});
+
 test("the scrollback in the store applies to new terminals", async () => {
   useHive.setState({ scrollback: 42 });
   const { term } = await open();
