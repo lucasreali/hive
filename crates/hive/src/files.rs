@@ -208,11 +208,6 @@ impl Watcher {
         Ok(listing)
     }
 
-    /// The watched directories, relative to the worktree.
-    pub fn watched(&self) -> impl Iterator<Item = &str> {
-        self.dirs.keys().map(String::as_str)
-    }
-
     /// Waits until something in the worktree changed and the burst of events is over.
     pub async fn changed(&mut self) -> io::Result<()> {
         while !self.relevant().await? {}
