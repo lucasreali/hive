@@ -9,6 +9,7 @@ import {
 import { findWorktree, openMenu, openModal, owner, setNotice, useHive } from "../store";
 import { openTerminal } from "../terminals";
 import { transport } from "../transport";
+import { isMac } from "../window";
 import { CloseIcon } from "./icons";
 
 const closeMenu = () => openMenu(null);
@@ -76,7 +77,8 @@ export function ContextMenu(props: {
 
 /**
  * A worktree row's context menu (right click). What it does is the service's: deleting and
- * renaming go through their dialogs, "Open in Explorer" asks for the folder's Windows path.
+ * renaming go through their dialogs, "Open in Explorer" ("Reveal in Finder" on macOS) asks for
+ * the folder's path as the OS sees it.
  */
 export function WorktreeMenu() {
   const menu = useHive((s) => s.menu);
@@ -110,7 +112,7 @@ export function WorktreeMenu() {
         role="menuitem"
         onClick={act(() => void transport.openInEditor(w.path, ""))}
       >
-        Open in Explorer
+        {isMac() ? "Reveal in Finder" : "Open in Explorer"}
       </button>
       <hr />
       <button

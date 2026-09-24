@@ -1,33 +1,42 @@
 import { ArrowCircleUpIcon, BellIcon } from "@phosphor-icons/react";
 import { nextPending } from "../shortcuts";
 import { pendingAgents, useHive } from "../store";
-import { windowAction } from "../window";
+import { isMac, windowAction } from "../window";
 import { requestUpdate } from "./CloseAppDialog";
 import { HiveIcon, MaximizeIcon, MinimizeIcon, WindowCloseIcon } from "./icons";
 
-// The window has no native decorations; this bar drags it and holds the window buttons.
+// On Windows the window has no native decorations; this bar drags it and holds the window
+// buttons. On macOS it lies under the native traffic lights (`tauri.macos.conf.json`), which
+// replace the buttons and get room on the left.
 // ponytail: no "project / worktree" breadcrumb yet; it shows the active tab once tabs exist (1.7).
 export function TitleBar() {
+  const mac = isMac();
   return (
-    <header className="titlebar">
+    <header className="titlebar" data-mac={mac || undefined}>
       <div className="titlebar-brand" data-tauri-drag-region>
         <HiveIcon />
         <span>Hive</span>
       </div>
       <UpdateButton />
       <PendingBell />
-      <div className="window-controls">
-        <button type="button" title="Minimize" onClick={() => windowAction("minimize")}>
-          <MinimizeIcon />
-        </button>
-        <button type="button" title="Maximize" onClick={() => windowAction("toggleMaximize")}>
-          <MaximizeIcon />
-        </button>
-        <button type="button" title="Close" className="close" onClick={() => windowAction("close")}>
-          <WindowCloseIcon />
-        </button>
-      </div>
+      {!mac && <WindowControls />}
     </header>
+  );
+}
+
+function WindowControls() {
+  return (
+    <div className="window-controls">
+      <button type="button" title="Minimize" onClick={() => windowAction("minimize")}>
+        <MinimizeIcon />
+      </button>
+      <button type="button" title="Maximize" onClick={() => windowAction("toggleMaximize")}>
+        <MaximizeIcon />
+      </button>
+      <button type="button" title="Close" className="close" onClick={() => windowAction("close")}>
+        <WindowCloseIcon />
+      </button>
+    </div>
   );
 }
 

@@ -10,8 +10,10 @@ import {
 } from "./store";
 import { interceptKeys } from "./terminals";
 import { sendReference } from "./viewer/reference";
+import { commandKey } from "./window";
 
-// App shortcuts (#35): Ctrl+Shift+letter and F8, taken even with the focus in a terminal.
+// App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS) and F8, taken even with
+// the focus in a terminal.
 // Every other key goes to the terminal untouched.
 
 /** The selected project, the project of the selected worktree (or agent), else the first one. */
@@ -53,7 +55,7 @@ export function shortcut(event: KeyboardEvent): (() => void) | null {
   if (blocked || s.modal !== null) return null;
   const plain = !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
   if (plain && event.key === "F8") return nextPending;
-  if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return null;
+  if (!commandKey(event) || !event.shiftKey || event.altKey) return null;
   switch (event.key.toUpperCase()) {
     case "T":
       return () => openModal("worktree-picker");
