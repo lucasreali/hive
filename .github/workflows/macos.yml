@@ -24,6 +24,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       # The integration tests' terminals run fish, as on WSL (`common::Env`).
       - run: brew install fish
+      - name: TEMP probe the kernel name of a symlinked claude
+        run: |
+          mkdir -p /tmp/probe/versions && cp /bin/sleep /tmp/probe/versions/2.1.0
+          ln -s /tmp/probe/versions/2.1.0 /tmp/probe/claude
+          /tmp/probe/claude 5 & sleep 1
+          ps -o pid,ucomm,comm,args -p $!
       - run: bun install --frozen-lockfile
       # `tauri::generate_context!` needs the built frontend.
       - run: bun run build
