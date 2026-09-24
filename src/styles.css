@@ -2080,3 +2080,77 @@ body[data-resizing] {
   cursor: col-resize;
   user-select: none;
 }
+
+/* Add project: the folder field and the typed folder's subfolders under it */
+.folder-picker {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.folder-picker:focus-within {
+  border-color: var(--focus);
+}
+
+.folder-path {
+  display: flex;
+}
+
+.field .folder-path select {
+  height: 30px;
+  border: none;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+
+.field .folder-path input,
+.field .folder-path input:focus {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  box-shadow: none;
+}
+
+.folder-list {
+  height: 180px;
+  margin: 0;
+  padding: 3px;
+  list-style: none;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  text-align: left;
+}
+
+.folder-row:hover {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text);
+}
+
+.folder-empty {
+  padding: 8px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}

@@ -42,6 +42,7 @@ export type ServiceMessage =
   | ({ type: "changes" } & Changes)
   | ({ type: "file" } & FileText)
   | ({ type: "search_results" } & SearchResults)
+  | ({ type: "dirs" } & Dirs)
   | { type: "sessions"; sessions: Session[]; error: string | null }
   // Handled by `openSession` (src/sessions.ts), not stored.
   | {
@@ -196,6 +197,19 @@ export type SearchResults = {
   query: string;
   matches: SearchMatch[];
   truncated: boolean;
+  error: string | null;
+};
+
+/**
+ * The service's answer to `list_dirs`: `path` as asked (the home folder for an empty one), as a
+ * Linux path for `add_project`, the folder above the listed one and the listed subfolders.
+ */
+export type Dirs = {
+  path: string;
+  windows: boolean;
+  linux_path: string | null;
+  parent: string | null;
+  dirs: { name: string; git: boolean }[];
   error: string | null;
 };
 
@@ -357,6 +371,8 @@ export type HiveState = {
   editorNotice: string | null;
   /** The last contents search the service answered. */
   searchResults: SearchResults | null;
+  /** The last folder listing for "Add project". */
+  dirs: Dirs | null;
   /** Claude sessions of the followed projects, the most recent first; null until listed. */
   sessions: Session[] | null;
   /** Why the service could not list them. */
@@ -406,6 +422,7 @@ export const initialState: HiveState = {
   edit: null,
   editorNotice: null,
   searchResults: null,
+  dirs: null,
   sessions: null,
   sessionsError: null,
   gotoLine: null,
@@ -442,7 +459,7 @@ export function savedWidths(storage: Pick<Storage, "getItem"> | null = safeStora
   }
 }
 
-function safeStorage(): Storage | null {
+export function safeStorage(): Storage | null {
   try {
     return window.localStorage;
   } catch {
@@ -599,6 +616,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "search_results": {
       const { type: _, ...searchResults } = m;
       return { searchResults };
+    }
+    case "dirs": {
+      const { type: _, ...dirs } = m;
+      return { dirs };
     }
     case "file": {
       const { type: _, ...file } = m;
