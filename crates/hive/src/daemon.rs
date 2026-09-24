@@ -590,7 +590,8 @@ mod tests {
             }
         });
         let mut frames = FramedRead::new(client, FrameCodec);
-        let frame = frames.next().await.unwrap().unwrap();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
+        let frame = first.await.expect("no snapshot").unwrap().unwrap();
         assert_eq!(frame.channel, 4);
         assert_eq!(
             frame.to_control().unwrap(),
