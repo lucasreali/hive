@@ -24,7 +24,8 @@ export function ResizeHandle({ side }: { side: Side }) {
     event.preventDefault();
     const handle = event.currentTarget;
     handle.setPointerCapture?.(event.pointerId);
-    document.body.dataset.resizing = "true";
+    // Names the dragged edge, so only that one stays lit.
+    document.body.dataset.resizing = side;
     const move = (e: globalThis.PointerEvent) => {
       const wanted = side === "sidebar" ? e.clientX : window.innerWidth - e.clientX;
       if (side === "panel" && wanted < PANEL_CLOSE_AT) {

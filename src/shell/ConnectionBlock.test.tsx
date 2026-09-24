@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { App } from "../App";
 import { apply, initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
@@ -58,6 +59,24 @@ test("a disconnect shows the reason, and reconnect connects again", async () => 
   // Tests run outside Tauri, so the mock transport answers with `welcome`.
   await waitFor(() => expect(useHive.getState().connection.status).toBe("connected"));
   expect(workspace().inert).toBe(false);
+});
+
+test("on macOS the fixes do not mention WSL", () => {
+  asMac();
+  render(<App />);
+  act(() =>
+    apply({
+      type: "version_mismatch",
+      protocol: 2,
+      version: "0.2.0",
+      app_protocol: 1,
+      app_version: "0.1.0",
+    }),
+  );
+  expect(dialog()?.textContent).toContain("Stop the old one:pkill");
+  act(() => apply({ type: "disconnected", reason: "gone" }));
+  expect(dialog()?.textContent).toContain("check that hive is installed: cargo install");
+  expect(dialog()?.textContent).not.toContain("WSL");
 });
 
 test("after a reconnect, messages reach the same handler as at startup", async () => {

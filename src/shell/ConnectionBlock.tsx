@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { connect } from "../connect";
 import { useHive } from "../store";
+import { isMac } from "../window";
 
 // The installed app brings its own service (4.18), so a mismatch is an old service still
 // waiting for an app: a refused handshake does not stop it. Development builds use `cargo install`.
@@ -37,6 +38,8 @@ function Dialog({ title, children }: { title: string; children: ReactNode }) {
 /** Covers the workspace while there is no usable service connection (#29). */
 export function ConnectionBlock() {
   const c = useHive((s) => s.connection);
+  // On macOS the service runs natively, not in WSL.
+  const where = isMac() ? "" : " in WSL";
   if (c.status === "version_mismatch") {
     return (
       <Dialog title="The app and the hive service versions differ">
@@ -50,7 +53,7 @@ export function ConnectionBlock() {
             {c.version} (protocol {c.protocol})
           </dd>
         </dl>
-        <p>Hive brings its own service. Stop the old one in WSL:</p>
+        <p>Hive brings its own service. Stop the old one{where}:</p>
         <pre>{STOP}</pre>
         <p>Then reconnect, or restart Hive.</p>
         <p>
@@ -66,7 +69,7 @@ export function ConnectionBlock() {
         <pre>{c.reason}</pre>
         <p>
           Reconnect, or restart Hive. If it keeps failing, check that <code>hive</code> is installed
-          in WSL: <code>{INSTALL}</code>
+          {where}: <code>{INSTALL}</code>
         </p>
       </Dialog>
     );

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
+import { asMac } from "../test/mac";
 import { apply, initialState, useHive } from "./store";
 import { transport } from "./transport";
 
@@ -245,6 +246,34 @@ test("other keys go to the shell unless an app shortcut takes them first", async
   press(term, "T", { keyCode: 84 });
   expect(seen).toEqual(["T"]);
   expect(write).toHaveBeenCalledTimes(2);
+  write.mockRestore();
+});
+
+test("on macOS Cmd+C copies and Cmd+V pastes, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
+  asMac();
+  const write = spyOn(transport, "writeTerminal");
+  const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("pasted");
+  const { id, term } = await open();
+  showTerminal(id);
+  await new Promise<void>((resolve) => term.write("hello world", resolve));
+  term.select(0, 0, 5);
+  const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
+
+  expect(press(term, "c", cmd).defaultPrevented).toBe(true);
+  expect(copy).toHaveBeenCalledWith("hello");
+  expect(press(term, "v", cmd).defaultPrevented).toBe(true);
+  await settle();
+  expect(write.mock.calls).toEqual([[id, "pasted"]]);
+
+  press(term, "c", { shiftKey: false, keyCode: 67 }); // Ctrl+C
+  expect(write).toHaveBeenLastCalledWith(id, "\x03");
+  expect(press(term, "V", { keyCode: 86 }).defaultPrevented).toBe(false); // Ctrl+Shift+V
+  press(term, "C", { ...cmd, shiftKey: true }); // Cmd+Shift+C: not the copy chord
+  expect(copy).toHaveBeenCalledTimes(1);
+  expect(read).toHaveBeenCalledTimes(1);
+  copy.mockRestore();
+  read.mockRestore();
   write.mockRestore();
 });
 

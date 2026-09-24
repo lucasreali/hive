@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { asMac } from "../test/mac";
 import { App } from "./App";
 import { apply, initialState, useHive } from "./store";
 import { MOCK_REPOS } from "./transport/mock";
@@ -40,6 +41,30 @@ test("status bar follows the connection status", () => {
   expect(status.textContent).toBe("WSLversion mismatch");
   act(() => apply({ type: "disconnected", reason: "gone" }));
   expect(status.textContent).toBe("WSLdisconnected");
+});
+
+test("on macOS the shell leaves room for the traffic lights and speaks macOS", () => {
+  asMac();
+  render(<App />);
+  const bar = screen.getByRole("banner");
+  expect(bar.dataset.mac).toBe("true");
+  expect(screen.queryByTitle("Minimize")).toBeNull();
+  expect(screen.queryByTitle("Close")).toBeNull();
+  const status = screen.getByTitle("Service connection");
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  expect(status.textContent).toBe("macOSconnected");
+  for (const title of [
+    "Add project (⇧⌘O)",
+    "Files, diff and sessions (⇧⌘B)",
+    "New terminal (⇧⌘T)",
+    "Collapse (⇧⌘B)",
+  ]) {
+    expect(screen.getByTitle(title)).toBeDefined();
+  }
+  act(() => apply({ type: "projects", projects: [] }));
+  expect(screen.getByRole("region", { name: "Terminals" }).textContent).toContain(
+    "Add project ⇧⌘OA project is a folder, for example:/Users/you/projects/shop",
+  );
 });
 
 test("the files button toggles the right panel", () => {

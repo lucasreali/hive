@@ -3,6 +3,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 import { addTab, removeTab, useHive } from "./store";
 import { transport } from "./transport";
+import { commandKey, isMac } from "./window";
 
 // xterm.js lives here, outside React (#30): one Terminal per terminal id, fed straight from
 // the transport. React renders the host element and says which tab is shown; output never
@@ -102,13 +103,16 @@ export async function openClaude(cwd: string, args = ""): Promise<number> {
   return id;
 }
 
-/** Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); every other key is the shell's. */
+/**
+ * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C and Cmd+V, and
+ * Ctrl+C stays the shell's. Every other key is the shell's.
+ */
 function keys(term: Terminal, event: KeyboardEvent): boolean {
   if (intercept(event)) return false;
-  const chord = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
+  const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const key = event.key.toUpperCase();
   if (event.type !== "keydown" || !chord || (key !== "C" && key !== "V")) return true;
-  // The browser's own Ctrl+Shift+V would paste a second time.
+  // The browser's own paste (Ctrl+Shift+V, Cmd+V) would paste a second time.
   event.preventDefault();
   if (key === "C") {
     if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());

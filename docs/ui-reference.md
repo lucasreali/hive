@@ -248,7 +248,7 @@ Terminal content in the prototype (Claude Code output, sample code) is sample da
 | New worktree | Ctrl+Shift+N | Alt+N |
 | Files and diff panel | Ctrl+Shift+B | Alt+B |
 | Add project | Ctrl+Shift+O | Ctrl+O |
-| Copy / paste in the terminal | Ctrl+Shift+C / Ctrl+Shift+V | — |
+| Copy / paste in the terminal | Ctrl+Shift+C / Ctrl+Shift+V (macOS: ⌘C / ⌘V) | — |
 | Move in the tree | ↑ ↓ ← → Enter | same |
 
-Tooltips show the shortcut in parentheses, e.g. "Files and diff (Ctrl+Shift+B)"; buttons show it as a kbd chip (e.g. "Ctrl+Shift+O").
+Tooltips show the shortcut in parentheses, e.g. "Files and diff (Ctrl+Shift+B)"; buttons show it as a kbd chip (e.g. "Ctrl+Shift+O"). On macOS every Ctrl+Shift+letter is Cmd+Shift+letter, shown as "⇧⌘O", and Ctrl+S is "⌘S".

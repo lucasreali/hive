@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { asMac } from "../../test/mac";
 import { initialState, setOpenFile, useHive } from "../store";
 import { openExternal, openFolder } from "./external";
 
@@ -73,4 +74,10 @@ test("a worktree's folder opens in the Explorer, or the status bar says why not"
   await openFolder(target(folder, null, ""), true);
   expect(status()).toContain("no Explorer");
   await openFolder(target(folder, null, ""));
+});
+
+test("on macOS the folder opens in the Finder", async () => {
+  asMac();
+  await openFolder(target("/Users/you/w", null, ""), false);
+  expect(useHive.getState().notice).toBe("Only the Hive app opens the Finder: /Users/you/w");
 });
