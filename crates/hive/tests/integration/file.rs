@@ -64,7 +64,7 @@ async fn a_file_is_read_on_disk_and_at_head() {
     repo.write("n.txt", "n\n");
     repo.git(&["add", "n.txt"]);
     repo.write("u dir/u.txt", "u\n");
-    std::os::unix::fs::symlink("/etc/hostname", repo.root.join("out")).unwrap();
+    std::os::unix::fs::symlink("/etc/hosts", repo.root.join("out")).unwrap();
     let root = repo.root.display().to_string();
 
     let daemon = repo.env.daemon();

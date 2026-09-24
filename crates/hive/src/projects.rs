@@ -94,8 +94,13 @@ impl Projects {
 
     /// Removes the linked worktree `path` of a followed project, with `--force` when `force`;
     /// answers the project with its updated worktrees. Without `force`, a worktree that a
-    /// process (under `proc`, normally `/proc`) works in is kept, as git keeps one with changes.
-    pub fn remove_worktree(&self, path: &str, force: bool, proc: &Path) -> io::Result<Project> {
+    /// process (as `proc` lists them) works in is kept, as git keeps one with changes.
+    pub fn remove_worktree(
+        &self,
+        path: &str,
+        force: bool,
+        proc: procs::Source,
+    ) -> io::Result<Project> {
         let (owner, _) = self.linked(path)?;
         if !force {
             unused(proc, path)?;
@@ -110,7 +115,7 @@ impl Projects {
         &self,
         path: &str,
         name: &str,
-        proc: &Path,
+        proc: procs::Source,
     ) -> io::Result<(Project, String)> {
         let (owner, wt) = self.linked(path)?;
         if !wt.claude {
@@ -177,7 +182,7 @@ pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
 }
 
 /// Refuses a worktree that some process (e.g. a terminal or an agent) works in.
-fn unused(proc: &Path, path: &str) -> io::Result<()> {
+fn unused(proc: procs::Source, path: &str) -> io::Result<()> {
     let mut busy = procs::inside(proc, Path::new(path));
     if busy.is_empty() {
         return Ok(());
@@ -309,8 +314,8 @@ mod tests {
                 std::fs::write(entry.join("stat"), stat).unwrap();
                 std::os::unix::fs::symlink(&dir, entry.join("cwd")).unwrap();
             }
-            let err = unused(proc.path(), dir.to_str().unwrap()).unwrap_err();
-            assert!(unused(proc.path(), "/elsewhere").is_ok());
+            let err = unused(procs::Source::Dir(proc.path()), dir.to_str().unwrap()).unwrap_err();
+            assert!(unused(procs::Source::Dir(proc.path()), "/elsewhere").is_ok());
             err.to_string()
         };
         assert_eq!(

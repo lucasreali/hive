@@ -10,7 +10,7 @@ use crate::common::{Env, wait_until};
 /// so no real Claude Code runs.
 fn fake_claude(env: &Env) -> String {
     let path = env.path("home/claude");
-    std::fs::copy("/usr/bin/dash", &path).unwrap();
+    std::fs::copy("/bin/dash", &path).unwrap();
     format!("{} -c 'sleep 30'\r", path.display())
 }
 

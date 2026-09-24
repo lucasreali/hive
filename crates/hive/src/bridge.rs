@@ -1,4 +1,4 @@
-//! `hive bridge`: connects the app (on stdio, through `wsl.exe`) to the service socket,
+//! `hive bridge`: connects the app (on stdio, through `wsl.exe` on Windows) to the service socket,
 //! starting the service first when it is not running.
 
 use std::fs::File;
@@ -44,16 +44,14 @@ fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
         .truncate(true)
         .mode(0o600)
         .open(paths.daemon_log())?;
-    // With --fork, setsid returns at once; a daemon that fails to start is caught
-    // by the connection timeout, with its error in the log.
-    Command::new("setsid")
-        .arg("--fork")
-        .arg(hive)
+    // The daemon leaves this session itself. Not waited for: a daemon that fails to start is
+    // caught by the connection timeout, with its error in the log.
+    Command::new(hive)
         .arg("daemon")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log)
-        .status()?;
+        .spawn()?;
     Ok(())
 }
 
