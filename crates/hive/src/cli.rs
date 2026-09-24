@@ -77,7 +77,7 @@ pub fn run() -> ExitCode {
             });
             Ok(())
         }
-        Command::Worktree { command } => run_worktree(command),
+        Command::Worktree { command } => run_worktree(command, &paths),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -88,7 +88,7 @@ pub fn run() -> ExitCode {
     }
 }
 
-fn run_worktree(command: WorktreeCommand) -> io::Result<()> {
+fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
     let cwd = std::env::current_dir()?;
     match command {
         WorktreeCommand::Create { name, base } => {
@@ -98,9 +98,34 @@ fn run_worktree(command: WorktreeCommand) -> io::Result<()> {
             .iter()
             .try_for_each(|wt| writeln!(io::stdout(), "{wt}")),
         WorktreeCommand::Remove { name } => worktree::remove(&cwd, &name),
-        WorktreeCommand::HookCreate => report(worktree::hook_create(&mut io::stdin())?),
-        WorktreeCommand::HookRemove => worktree::hook_remove(&mut io::stdin()),
+        WorktreeCommand::HookCreate => {
+            let mut payload = worktree::read_payload(&mut io::stdin())?;
+            let created = worktree::hook_create(&payload)?;
+            let path = created.path.to_string_lossy().into_owned();
+            report(created)?;
+            if let Some(fields) = payload.as_object_mut() {
+                fields.insert("worktree_path".to_owned(), path.into());
+            }
+            tell_service(paths, "WorktreeCreate", payload);
+            Ok(())
+        }
+        WorktreeCommand::HookRemove => {
+            let payload = worktree::read_payload(&mut io::stdin())?;
+            worktree::hook_remove(&payload)?;
+            tell_service(paths, "WorktreeRemove", payload);
+            Ok(())
+        }
     }
+}
+
+/// Reports a worktree hook's work to the service like `hive hook` does, so the app's
+/// worktrees follow. Never changes the hook's output or exit code.
+fn tell_service(paths: &Paths, event: &str, payload: serde_json::Value) {
+    let terminal_id = std::env::var("HIVE_TERMINAL_ID").ok();
+    let _ = block_on(async {
+        crate::hook::forward(paths, event, terminal_id, payload).await;
+        Ok(())
+    });
 }
 
 /// Prints the notes on stderr and the path byte for byte on stdout (a hook's stdout must be

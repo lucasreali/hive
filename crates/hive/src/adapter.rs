@@ -34,6 +34,15 @@ impl Adapter for ClaudeCode {
             "SessionEnd" => EventKind::SessionEnded {
                 reason: field("reason"),
             },
+            // Forwarded by `hive worktree hook-create`/`hook-remove` after their work; create
+            // adds the path it printed as `worktree_path`.
+            "WorktreeCreate" => EventKind::WorktreeCreated {
+                name: field("name"),
+                path: field("worktree_path"),
+            },
+            "WorktreeRemove" => EventKind::WorktreeRemoved {
+                path: field("worktree_path"),
+            },
             other => EventKind::Other {
                 event: other.to_owned(),
             },
@@ -160,6 +169,29 @@ mod tests {
             kind("SessionEnd", json!({"reason": "prompt_input_exit"})),
             EventKind::SessionEnded {
                 reason: Some("prompt_input_exit".into())
+            }
+        );
+    }
+
+    #[test]
+    fn worktree_events_carry_name_and_path() {
+        let event = ClaudeCode.translate(
+            "WorktreeCreate",
+            None,
+            json!({"name": "n", "worktree_path": "/r/.claude/worktrees/n", "agent_id": "a1"}),
+        );
+        assert_eq!(
+            event.kind,
+            EventKind::WorktreeCreated {
+                name: Some("n".into()),
+                path: Some("/r/.claude/worktrees/n".into())
+            }
+        );
+        assert_eq!(event.subagent.map(|s| s.id), Some("a1".into()));
+        assert_eq!(
+            kind("WorktreeRemove", json!({"worktree_path": "/w"})),
+            EventKind::WorktreeRemoved {
+                path: Some("/w".into())
             }
         );
     }

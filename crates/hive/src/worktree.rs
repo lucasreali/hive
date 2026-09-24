@@ -226,10 +226,9 @@ pub fn remove(dir: &Path, name: &str) -> io::Result<()> {
 /// `WorktreeCreate` hook: creates the worktree `name` in the repository of `cwd`, or
 /// reuses it when it is already a Hive worktree (`claude -w <existing>` reopens it, as
 /// Claude Code does without the hook).
-pub fn hook_create(input: &mut dyn Read) -> io::Result<Created> {
-    let payload = read_payload(input)?;
-    let name = field(&payload, "name")?;
-    let cwd = Path::new(field(&payload, "cwd")?);
+pub fn hook_create(payload: &Value) -> io::Result<Created> {
+    let name = field(payload, "name")?;
+    let cwd = Path::new(field(payload, "cwd")?);
     match existing(cwd, name)? {
         Some(path) => Ok(Created {
             path,
@@ -250,9 +249,8 @@ fn existing(dir: &Path, name: &str) -> io::Result<Option<PathBuf>> {
 
 /// `WorktreeRemove` hook: removes `worktree_path`, which must be a worktree directly under
 /// its repository's `.claude/worktrees/`.
-pub fn hook_remove(input: &mut dyn Read) -> io::Result<()> {
-    let payload = read_payload(input)?;
-    let path = Path::new(field(&payload, "worktree_path")?).canonicalize()?;
+pub fn hook_remove(payload: &Value) -> io::Result<()> {
+    let path = Path::new(field(payload, "worktree_path")?).canonicalize()?;
     let root = main_root(&path)?;
     if path.parent() != Some(root.join(WORKTREES_DIR).canonicalize()?.as_path()) {
         return Err(io::Error::other(format!(
@@ -284,7 +282,8 @@ pub fn read_limited(input: &mut dyn Read, limit: u64) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn read_payload(input: &mut dyn Read) -> io::Result<Value> {
+/// A worktree hook's JSON input, at most [`HOOK_INPUT_LIMIT`] bytes.
+pub fn read_payload(input: &mut dyn Read) -> io::Result<Value> {
     serde_json::from_slice(&read_limited(input, HOOK_INPUT_LIMIT)?)
         .map_err(|err| io::Error::other(format!("invalid hook input: {err}")))
 }

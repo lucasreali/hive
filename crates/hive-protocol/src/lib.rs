@@ -388,6 +388,15 @@ pub enum EventKind {
     SessionEnded {
         reason: Option<String>,
     },
+    /// Hive created (or reused) the worktree `name` at `path` for the agent.
+    WorktreeCreated {
+        name: Option<String>,
+        path: Option<String>,
+    },
+    /// Hive removed the worktree at `path` for the agent.
+    WorktreeRemoved {
+        path: Option<String>,
+    },
     /// Any provider event without an internal meaning yet.
     Other {
         event: String,

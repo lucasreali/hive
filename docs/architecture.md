@@ -77,7 +77,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `agent_state {id, state, urgency, pending, subagents}` | service → app | n | The agent's displayed state, its urgency (0 ended … 6 waiting for permission; higher wins), whether it is pending (needs the user), and its live subagents `[{id, agent_type, state}]` (see [Agent states](#agent-states)). Sent when it changes, after `agent_detected`, and for every live agent right after `welcome`. |
 | `agent_removed {id}` | service → app | n | The agent's session ended, or terminal n exited (sent before `terminal_exited`). |
 | `list_projects` | app → service | 0 | Asks for every project; answered by `projects`. |
-| `projects {projects}` | service → app | 0 | Every project with its worktrees, in the order they were added. |
+| `projects {projects}` | service → app | 0 | Every project with its worktrees, in the order they were added. Also sent unasked after a `WorktreeCreate` or `WorktreeRemove` hook. |
 | `add_project {path}` | app → service | 0 | Follow the git repository containing `path`. |
 | `project_added {project}` | service → app | 0 | The project, with its worktrees. Also the answer when it was already followed. |
 | `add_project_failed {path, error, message}` | service → app | 0 | `path` was refused. `error` is `not_absolute`, `not_found`, `not_a_directory`, `not_a_git_repository` or `storage`; `message` is shown as is. |
@@ -99,7 +99,7 @@ Between the app's Rust side and the WebView (#24), control messages travel on on
 A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main worktree's path, `name` its folder name, and `error` (or null) says why `git worktree list` failed, e.g. for a moved folder. A worktree is `{id, name, path, branch, main, claude}`: `id` is its path, `branch` is null when detached, `main` marks the main worktree and `claude` one in `<repo>/.claude/worktrees/`. `name` is the folder name for a Claude worktree and the branch otherwise (the folder name when detached). The app never derives any of these.
 
 `AgentEvent` has these fields: `provider`, `terminal_id`, `session_id`, `subagent {id, agent_type}`, `cwd`, `kind`, and `raw` (the unchanged payload).
-`kind` is one of: `session_started`, `prompt_submitted`, `tool_started`/`tool_finished`/`tool_failed {tool}`, `permission_requested {tool}`, `notification {notification}`, `turn_finished`, `turn_failed {error}`, `subagent_started`, `subagent_stopped`, `session_ended {reason}`, or `other {event}`.
+`kind` is one of: `session_started`, `prompt_submitted`, `tool_started`/`tool_finished`/`tool_failed {tool}`, `permission_requested {tool}`, `notification {notification}`, `turn_finished`, `turn_failed {error}`, `subagent_started`, `subagent_stopped`, `session_ended {reason}`, `worktree_created {name, path}`, `worktree_removed {path}`, or `other {event}`.
 `notification` is one of `permission_prompt`, `elicitation_dialog`, `idle_prompt`, `agent_needs_input`, or `other`.
 
 ## Sequences
@@ -153,7 +153,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 3. Working or with subagents → waiting for you is "agent finished": `showNotification` (`src/shell/window.ts`) sends an OS notification through `tauri-plugin-notification` ("Agent finished", "project · worktree: waiting for you"). The capability allows only `is_permission_granted`, `request_permission` and `notify`. Outside Tauri nothing is shown.
 
 ### Projects
-1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. Worktrees are not watched yet (Stage 3).
+1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. The service also sends `projects` after each worktree hook (see [Worktree hooks](#worktree-hooks)); other worktree changes are not watched yet.
 2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare entries skipped.
 3. `add_project {path}` (the add-project dialog): the path must be absolute, an existing directory and inside a git repository with a working tree. It is normalised to the main worktree (the first entry of `git worktree list`), so a subfolder or a linked worktree adds its repository. A new project is appended to `<data>/hive/projects.json`; if that write fails the list is unchanged and the answer is `add_project_failed {error: storage}`.
 4. Project requests run on a blocking thread, off the app's frame loop, because git can be slow.
@@ -232,7 +232,13 @@ fish job control puts each job in its own process group, which is why the servic
 5. Copy the included regular files. Existing paths are never overwritten and symlinks are never followed.
 6. Print only the path. In hook mode, any failure exits non-zero with an empty stdout.
 
-`create` returns the path and its notes, which the CLI prints on stderr as `hive: <note>` and the service sends to the app: a warning when the project has its own `WorktreeCreate` hook in `.claude/settings{,.local}.json`, and how many `.worktreeinclude` files were copied. `remove` and `hook-remove` run `git worktree remove` without `--force` and keep the branch. `hook-remove` only removes paths directly under `<repo>/.claude/worktrees/`. Neither hook is registered in `hive-hooks.json` yet (Stage 4).
+`create` returns the path and its notes, which the CLI prints on stderr as `hive: <note>` and the service sends to the app: a warning when the project has its own `WorktreeCreate` hook in `.claude/settings{,.local}.json`, and how many `.worktreeinclude` files were copied. `remove` and `hook-remove` run `git worktree remove` without `--force` and keep the branch. `hook-remove` only removes paths directly under `<repo>/.claude/worktrees/`. Both hooks are registered in `hive-hooks.json` (see below).
+
+### Worktree hooks
+1. Claude Code, through the wrapper's settings, runs `<abs path>/hive worktree hook-create` for `WorktreeCreate` (60 s timeout: `git worktree add` plus the `.worktreeinclude` copy) and `hive worktree hook-remove` for `WorktreeRemove` (10 s timeout), in exec form. The hook input is at most 64 KiB.
+2. Each does its work as above. Only on success, it then forwards the call to the service like `hive hook` (same `hello` + `hook`, 200 ms, `HIVE_TERMINAL_ID`), as event `WorktreeCreate` with the created path added as `worktree_path`, or `WorktreeRemove` unchanged. Forwarding never changes stdout nor the exit code.
+3. The `ClaudeCode` adapter maps them to `worktree_created {name, path}` and `worktree_removed {path}`, keeping `session_id`, `cwd` and `agent_id`/`agent_type` (a subagent's worktree). They do not change agent states.
+4. On either one the service lists the projects again off the frame loop and sends `projects`, so a `claude -w` or subagent worktree appears, and a removed one disappears, without "Refresh worktrees". It also forwards `agent` as for every hook.
 
 ## Files written
 
@@ -243,7 +249,7 @@ fish job control puts each job in its own process group, which is why the servic
 | `<runtime>/daemon.log` | 0600 | stderr of a daemon started by the bridge. |
 | `<data>/hive/bin/claude` | 0755 | Wrapper: finds the real `claude` on `PATH` (skipping the bin dir and itself). If `HIVE_WRAPPED` is unset it exports it and adds `--settings`; otherwise it runs the real claude unchanged. |
 | `<data>/hive/projects.json` | 0600 | JSON array of the followed projects' paths. |
-| `<data>/hive/hive-hooks.json` | 0644 | One exec-form hook per observed event (12 events, no worktree events yet). |
+| `<data>/hive/hive-hooks.json` | 0644 | One exec-form hook per observed event (12 events, `hive hook <Event>`, 1 s) plus `WorktreeCreate` → `hive worktree hook-create` (60 s) and `WorktreeRemove` → `hive worktree hook-remove` (10 s). |
 
 ## Run and test
 

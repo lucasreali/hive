@@ -35,6 +35,12 @@ pub async fn run(event: &str, record: Option<&Path>, paths: &Paths, input: impl 
             file.display()
         );
     }
+    forward(paths, event, terminal_id, payload).await;
+}
+
+/// Sends one hook call to the service, giving up after [`SEND_TIMEOUT`]; errors are ignored.
+/// `hive worktree hook-create`/`hook-remove` also report their work through here.
+pub async fn forward(paths: &Paths, event: &str, terminal_id: Option<String>, payload: Value) {
     let _ = tokio::time::timeout(SEND_TIMEOUT, send(paths, event, terminal_id, payload)).await;
 }
 
