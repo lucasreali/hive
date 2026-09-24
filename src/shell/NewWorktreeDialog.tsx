@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
 import { openModal, select, useHive } from "../store";
-import { openTerminal as openTerminalIn } from "../terminals";
+import { openClaude, openTerminal as openTerminalIn } from "../terminals";
 import { transport } from "../transport";
 import { BranchIcon, CheckIcon, CloseIcon } from "./icons";
 
@@ -62,12 +62,7 @@ export function NewWorktreeDialog() {
   useEffect(() => {
     if (!created || handled.current === created) return;
     handled.current = created;
-    if (openTerminal) {
-      // Typed into the new shell as the user would; from then on Hive only observes it.
-      void openTerminalIn(created.path).then((id) => {
-        if (startClaude) void transport.writeTerminal(id, "claude\r");
-      });
-    }
+    if (openTerminal) void (startClaude ? openClaude : openTerminalIn)(created.path);
     select(created.path);
     if (created.notes.length === 0) close();
   }, [created, openTerminal, startClaude]);

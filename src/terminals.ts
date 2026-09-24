@@ -92,6 +92,16 @@ export async function openTerminal(cwd: string): Promise<number> {
   return id;
 }
 
+/**
+ * A new "chat": a terminal in `cwd` with `claude` typed into it as the user would; from then
+ * on Hive only observes it.
+ */
+export async function openClaude(cwd: string): Promise<number> {
+  const id = await openTerminal(cwd);
+  await transport.writeTerminal(id, "claude\r");
+  return id;
+}
+
 /** Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); every other key is the shell's. */
 function keys(term: Terminal, event: KeyboardEvent): boolean {
   if (intercept(event)) return false;

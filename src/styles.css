@@ -1393,6 +1393,29 @@ li:last-child > .tree-row.own-worktree::before {
   display: flex;
 }
 
+/* A worktree row's "+": a new chat (a terminal running claude), shown on hover. */
+.new-chat {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+}
+
+.new-chat:hover {
+  background: var(--selected-hover);
+  color: var(--text);
+}
+
+.tree-row.worktree:hover .new-chat,
+.tree-row.worktree:focus-within .new-chat {
+  display: flex;
+}
+
 .checkbox {
   display: flex;
   align-items: center;

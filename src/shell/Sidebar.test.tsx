@@ -1,7 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
 import { type AgentState, apply, initialState, useHive } from "../store";
+import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
 import { STATE_LABEL } from "./icons";
@@ -340,4 +341,19 @@ test("a subagent's own worktree shows under it, not at project level", () => {
   act(() => subagents(sub("a1", null), sub("a2", null)));
   expect(rows().map(([, label]) => label)).toContain("feat-checkout");
   expect(tree().querySelector(".own-worktree")).toBeNull();
+});
+
+test("a worktree's + opens a new chat there: a terminal running claude", async () => {
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(4);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [shop, api] }));
+  const [, fixLogin] = shop.worktrees;
+  fireEvent.click(screen.getByRole("button", { name: "New chat in fix-login" }));
+  await waitFor(() => expect(write).toHaveBeenCalledWith(4, "claude\r"));
+  expect(open.mock.calls[0]?.[0]).toBe(fixLogin.path);
+  expect(useHive.getState().selection).toBe(fixLogin.path);
+  closeTerminal(4);
+  open.mockRestore();
+  write.mockRestore();
 });

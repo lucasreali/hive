@@ -1,3 +1,4 @@
+import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
 import { nextPending } from "../shortcuts";
 import {
@@ -14,6 +15,7 @@ import {
   useHive,
   type Worktree,
 } from "../store";
+import { openClaude } from "../terminals";
 import { transport } from "../transport";
 import {
   BellIcon,
@@ -214,6 +216,15 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
           <BranchIcon />
           <span className="label">{w.name}</span>
           {!open && <Rollup agents={(a) => a.worktree === w.id} />}
+        </button>
+        <button
+          type="button"
+          className="new-chat"
+          title="New chat: a terminal running claude"
+          aria-label={`New chat in ${w.name}`}
+          onClick={() => void openClaude(w.path)}
+        >
+          <NewChatIcon size={12} weight="bold" aria-hidden="true" />
         </button>
       </div>
       {open && (
