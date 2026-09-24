@@ -412,7 +412,7 @@ pub(crate) fn run_git(
             stderr.map(|stderr| stderr.take(OUTPUT_LIMIT).read_to_end(&mut buf));
             buf
         });
-        let out = stdout.map_or_else(|| Ok(Vec::new()), |mut out| read_limited(&mut out, limit));
+        let out = stdout.map_or(Ok(Vec::new()), |mut out| read_limited(&mut out, limit));
         (out, err.join().unwrap_or_default())
     });
     let status = child.wait()?;
