@@ -145,8 +145,8 @@ test("agents and their subagents show the state the service sent, named for scre
       id: "s1",
       ...agentStatus("waiting_permission"),
       subagents: [
-        { id: "a1", agent_type: "Explore", state: "working" },
-        { id: "a2", agent_type: null, state: "waiting_permission" },
+        { id: "a1", agent_type: "Explore", state: "working", worktree: null },
+        { id: "a2", agent_type: null, state: "waiting_permission", worktree: null },
       ],
     });
     apply({ type: "agent_state", id: "s2", ...agentStatus("ended"), subagents: [] });
@@ -289,4 +289,55 @@ test("arrow keys move in the tree and collapse or expand a project", () => {
   // Other keys (Enter clicks the row, which selects it) are left alone.
   key("Tab");
   expect(document.activeElement).toBe(row("shop"));
+});
+
+test("a subagent's own worktree shows under it, not at project level", () => {
+  render(<App />);
+  const [main, , featCheckout] = shop.worktrees;
+  const sub = (id: string, worktree: string | null) =>
+    ({ id, agent_type: "Explore", state: "working", worktree }) as const;
+  const subagents = (...list: ReturnType<typeof sub>[]) =>
+    apply({ type: "agent_state", id: "s1", ...agentStatus("with_subagents"), subagents: list });
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    useHive.setState({ tabs: [{ id: 1, cwd: main.path }], activeTab: null });
+    const placed = { project: shop.id, worktree: main.id, cwd: main.path };
+    apply({ type: "agent_detected", channel: 1, id: "s1", ...placed });
+    subagents(sub("a1", featCheckout.id), sub("a2", null));
+  });
+  const rows = () =>
+    [...tree().querySelectorAll(".tree-row")].map((r) => [
+      r.className,
+      r.querySelector(".label")?.textContent,
+    ]);
+  expect(rows()).toEqual([
+    ["tree-row project", "shop"],
+    ["tree-row worktree", "main"],
+    ["tree-row agent", "Claude"],
+    ["tree-row subagent", "subagent: Explore"],
+    ["tree-row own-worktree", "feat-checkout"],
+    ["tree-row subagent", "subagent: Explore"],
+    ["tree-row worktree", "fix-login"],
+  ]);
+  const own = tree().querySelector(".own-worktree") as HTMLElement;
+  expect(own.title).toBe(featCheckout.path);
+  // It is out of the arrow keys' way; clicking it shows the agent's terminal.
+  const button = within(own).getByRole("button");
+  expect(button.tabIndex).toBe(-1);
+  fireEvent.click(button);
+  expect(useHive.getState().activeTab).toBe(1);
+  // An agent of its own keeps it at project level too.
+  act(() => {
+    const placed = { project: shop.id, worktree: featCheckout.id, cwd: featCheckout.path };
+    apply({ type: "agent_detected", channel: 2, id: "s2", ...placed });
+  });
+  expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(2);
+  act(() => apply({ type: "agent_removed", channel: 2, id: "s2" }));
+  expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(1);
+  // A worktree the projects do not list yet shows nowhere; unlinked, it is back in place.
+  act(() => subagents(sub("a1", "/elsewhere"), sub("a2", null)));
+  expect(tree().querySelector(".own-worktree")).toBeNull();
+  act(() => subagents(sub("a1", null), sub("a2", null)));
+  expect(rows().map(([, label]) => label)).toContain("feat-checkout");
+  expect(tree().querySelector(".own-worktree")).toBeNull();
 });

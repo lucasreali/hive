@@ -118,7 +118,12 @@ test("agents are stored as the service places them and removed by id", () => {
 });
 
 test("agent states are stored as sent, before or after the agent, and go with it", () => {
-  const sub = { id: "s1", agent_type: "Explore", state: "waiting_permission" } as const;
+  const sub = {
+    id: "s1",
+    agent_type: "Explore",
+    state: "waiting_permission",
+    worktree: null,
+  } as const;
   const permission = { state: "waiting_permission", urgency: 6, pending: true } as const;
   const idle = { state: "idle", urgency: 1, pending: false } as const;
   apply({

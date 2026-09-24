@@ -137,8 +137,16 @@ export type AgentState =
   | "with_subagents"
   | "ended";
 
-/** A live subagent (`id` = its `agent_id`) with its own state. */
-export type Subagent = { id: string; agent_type: string | null; state: AgentState };
+/**
+ * A live subagent (`id` = its `agent_id`) with its own state, and the id of its own worktree
+ * (#22) when it has one.
+ */
+export type Subagent = {
+  id: string;
+  agent_type: string | null;
+  state: AgentState;
+  worktree: string | null;
+};
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins)

@@ -22,11 +22,12 @@ export const LOAD_START_MS = 500;
 export const LOAD_STAGGER_MS = 100;
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
 
-const sub = (id: string, agent_type: string | null, state: AgentState): Subagent => ({
-  id,
-  agent_type,
-  state,
-});
+const sub = (
+  id: string,
+  agent_type: string | null,
+  state: AgentState,
+  worktree: string | null = null,
+): Subagent => ({ id, agent_type, state, worktree });
 /** A stand-in for `AgentState::urgency`/`pending`, least urgent first; the real rule lives in Rust. */
 const URGENCY: AgentState[] = [
   "ended",
@@ -42,6 +43,9 @@ export const agentStatus = (state: AgentState) => {
   return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you") };
 };
 
+/** `?mock=states`: shop's worktree that subagent a3 works in, shown under it (#22). */
+export const MOCK_OWN_WORKTREE = "/home/user/projects/shop/.claude/worktrees/tests-login";
+
 /**
  * `?mock=states`: agents without a terminal in every state, by worktree path (relative to
  * `/home/user/projects`), as the service would resolve them ("the most urgent wins").
@@ -51,7 +55,10 @@ export const MOCK_STATES: [string, AgentState, Subagent[]][] = [
   [
     "shop/.claude/worktrees/fix-login",
     "waiting_permission",
-    [sub("a3", "general-purpose", "waiting_permission"), sub("a4", "Explore", "idle")],
+    [
+      sub("a3", "general-purpose", "waiting_permission", MOCK_OWN_WORKTREE),
+      sub("a4", "Explore", "idle"),
+    ],
   ],
   ["shop/.claude/worktrees/feat-checkout", "waiting_you", []],
   ["api", "error", []],
@@ -160,7 +167,7 @@ function nameError(project: Project, name: string): string | null {
  * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list again.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
- * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents. "load" (1.11) replays a recording into every terminal right
+ * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
  * after its prompt, at recorded timing, each terminal starting `LOAD_STAGGER_MS` later than
  * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
  * generated one.
@@ -171,6 +178,10 @@ export function createMockTransport(
 ): Transport {
   let send: (message: ServiceMessage) => void = () => {};
   const projects = scenario === "empty" ? [] : MOCK_REPOS.slice(0, 2);
+  if (scenario === "states") {
+    const shop = projects[0] as Project;
+    projects[0] = { ...shop, worktrees: [...shop.worktrees, worktree(shop.path, "tests-login")] };
+  }
   const find = (id: string) => projects.find((p) => p.id === id);
   let last = 0;
   type MockTerminal = {

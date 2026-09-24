@@ -72,3 +72,26 @@ test("states: collapsed nodes show the most urgent state inside; F8 walks the pe
   await chip.click();
   await expect(selected).toHaveText("waiting for you");
 });
+
+test("states: a subagent's own worktree shows under it, not at project level", async ({ page }) => {
+  await page.goto("/?mock=states");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  const own = tree.locator(".tree-row.own-worktree");
+  await expect(own).toHaveCount(1);
+  await expect(own).toHaveText("tests-login");
+  await expect(own).toHaveAttribute(
+    "title",
+    "/home/user/projects/shop/.claude/worktrees/tests-login",
+  );
+  const owner = own.locator("xpath=preceding-sibling::div[1]");
+  await expect(owner).toHaveText(/subagent: general-purpose/);
+  await expect(tree.locator(".tree-row.worktree", { hasText: "tests-login" })).toHaveCount(0);
+  // Prototype: 22px under the subagent, indented past its icon; the tree line goes on to the
+  // next subagent.
+  const [height, padding, line] = await own.evaluate((el) => [
+    el.getBoundingClientRect().height,
+    getComputedStyle(el).paddingLeft,
+    getComputedStyle(el, "::before").height,
+  ]);
+  expect([height, padding, line]).toEqual([22, "63px", "22px"]);
+});
