@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { FileText } from "../store";
+import { type FileText, setSelectedLines } from "../store";
 import { createViewer, type Viewer } from "./editor";
 
 /** Why the service sent no text to show, or null. */
@@ -20,9 +20,12 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
   const viewer = useRef<Viewer | null>(null);
   const path = text.path;
   useEffect(() => {
-    const created = createViewer(parent.current as HTMLDivElement, path);
+    const created = createViewer(parent.current as HTMLDivElement, path, setSelectedLines);
     viewer.current = created;
-    return () => created.destroy();
+    return () => {
+      created.destroy();
+      setSelectedLines(null);
+    };
   }, [path]);
   useEffect(() => {
     const original = diff ? (text.base ?? "") : null;

@@ -131,6 +131,9 @@ export type Changes = {
 /** The file shown under the files tree, in the viewer or its diff. */
 export type OpenFile = { worktree: string; path: string };
 
+/** A 1-based, inclusive range of lines. */
+export type Lines = { from: number; to: number };
+
 /**
  * Mirrors `Control::File`: a file's text on disk (`content`, null when gone) and at HEAD
  * (`base`, null when new), both null when `binary` or `too_large`; `version` is opaque.
@@ -214,6 +217,8 @@ export type HiveState = {
   /** The files panel shows only changed files ("Changed") instead of every file ("All"). */
   changedOnly: boolean;
   openFile: OpenFile | null;
+  /** The lines selected in the open file's viewer (new-file numbers, 1-based), or null. */
+  selectedLines: Lines | null;
   selection: string | null;
   /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
@@ -252,6 +257,7 @@ export const initialState: HiveState = {
   rightPanel: null,
   changedOnly: false,
   openFile: null,
+  selectedLines: null,
   selection: null,
   collapsed: {},
   tabs: [],
@@ -396,6 +402,8 @@ export const clearAddProjectError = () => useHive.setState({ addProjectError: nu
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setChangedOnly = (changedOnly: boolean) => useHive.setState({ changedOnly });
 export const setOpenFile = (openFile: OpenFile | null) => useHive.setState({ openFile });
+export const setSelectedLines = (selectedLines: Lines | null) =>
+  useHive.setState({ selectedLines });
 export const select = (selection: string | null) => useHive.setState({ selection });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
