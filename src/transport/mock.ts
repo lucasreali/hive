@@ -496,6 +496,23 @@ export function createMockTransport(
         ),
       );
     },
+    async searchFiles(worktree, query) {
+      const answer = { worktree, query, truncated: false };
+      const shown = worktreeAt(worktree);
+      if (!shown) {
+        const error = `${worktree} is not a worktree of a followed project`;
+        return void later({ type: "search_results", ...answer, matches: [], error });
+      }
+      // As `git grep -i -F`: every line of the fake texts holding the query, in any case.
+      const q = query.toLowerCase();
+      const matches = (files.get(worktree) ?? mockFiles(shown)).flatMap((path) =>
+        (fileAt(worktree, path).content ?? "")
+          .split("\n")
+          .map((text, i) => ({ path, line: i + 1, text }))
+          .filter((m) => m.text.toLowerCase().includes(q)),
+      );
+      later({ type: "search_results", ...answer, matches, error: null });
+    },
     async openFile(worktree, path) {
       later({ type: "file", ...fileAt(worktree, path) });
     },

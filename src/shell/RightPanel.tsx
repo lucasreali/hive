@@ -1,3 +1,4 @@
+import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type KeyboardEvent,
@@ -16,6 +17,7 @@ import {
   type OpenFile,
   type Project,
   panelWorktree,
+  type SearchMatch,
   setEditing,
   setOpenFile,
   setRightPanel,
@@ -218,15 +220,192 @@ export function RightPanel() {
   );
 }
 
-/** The sidebar's Files: every file of the shown worktree, with the changes' statuses. */
+/** How long typing must pause before the service is asked to search the contents. */
+export const SEARCH_DELAY_MS = 250;
+/** Most file names listed for a name search. */
+export const NAME_LIMIT = 500;
+
+type SearchMode = "names" | "contents";
+
+/**
+ * The sidebar's Files: every file of the shown worktree, with the changes' statuses. Typing in
+ * "Find files" lists the files whose path holds the text ("Names"), or the lines holding it,
+ * searched by the service ("Contents"); a line opens its file there.
+ */
 export function FilesView() {
   const target = useShownWorktree();
+  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<SearchMode>("names");
   if (!target) return <div className="right-panel-empty">{NOTHING_SHOWN}</div>;
+  const worktree = target.worktree.path;
+  const q = query.trim();
+  const tab = (value: SearchMode, label: string) => (
+    <button type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>
+      {label}
+    </button>
+  );
   return (
     <>
       <WorktreeInfo target={target} />
-      <FileTree worktree={target.worktree.path} changedOnly={false} />
+      <div className="files-search">
+        <label className="files-search-field">
+          <MagnifyingGlassIcon size={14} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Find files"
+            placeholder={mode === "names" ? "Find files" : "Search in files"}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </label>
+        <fieldset className="segmented" aria-label="Search in">
+          {tab("names", "Names")}
+          {tab("contents", "Contents")}
+        </fieldset>
+      </div>
+      {q === "" ? (
+        <FileTree worktree={worktree} changedOnly={false} />
+      ) : mode === "names" ? (
+        <NameResults worktree={worktree} query={q} />
+      ) : (
+        <ContentResults key={worktree} worktree={worktree} query={q} />
+      )}
     </>
+  );
+}
+
+/** A file of the search results: its name, then its folder, then its status letter. */
+function ResultFile({ file }: { file: TreeFile }) {
+  const slash = file.path.lastIndexOf("/");
+  return (
+    <>
+      <FileIcon />
+      <span className="result-name">{file.path.slice(slash + 1)}</span>
+      <span className="result-folder">{file.path.slice(0, Math.max(slash, 0))}</span>
+      {file.status && (
+        <span className="status-letter" data-status={STATUS[file.status].letter}>
+          {STATUS[file.status].letter}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** The worktree's files (listed and changed) as the tree shows them, by path. */
+function useTreeFiles(worktree: string): TreeFile[] {
+  const listing = useHive((s) => (s.worktreeFiles?.path === worktree ? s.worktreeFiles : null));
+  const changes = useHive((s) => s.changes[worktree]);
+  return useMemo(() => allFiles(listing?.files ?? [], changes?.files ?? []), [listing, changes]);
+}
+
+/** "Names": the files whose path holds `query`, in any case. */
+function NameResults({ worktree, query }: { worktree: string; query: string }) {
+  const files = useTreeFiles(worktree);
+  const q = query.toLowerCase();
+  const found = files.filter((f) => f.path.toLowerCase().includes(q));
+  return (
+    <ul className="search-results hive-scroll" aria-label="Matching files">
+      {found.length === 0 && <li className="hint">No file name holds “{query}”.</li>}
+      {found.slice(0, NAME_LIMIT).map((file) => (
+        <li key={file.path}>
+          <button
+            type="button"
+            className="result-file"
+            title={file.path}
+            data-status={file.status ? STATUS[file.status].letter : undefined}
+            onClick={() => leaveFile({ worktree, path: file.path }, !file.status)}
+          >
+            <ResultFile file={file} />
+          </button>
+        </li>
+      ))}
+      {found.length > NAME_LIMIT && (
+        <li className="hint">
+          Showing {NAME_LIMIT} of {found.length} files: type more to narrow them.
+        </li>
+      )}
+    </ul>
+  );
+}
+
+/** `text` with every occurrence of `query` (any case) marked. */
+function Marked({ text, query }: { text: string; query: string }) {
+  const parts: ReactNode[] = [];
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  let at = 0;
+  for (let i = lower.indexOf(q); i >= 0; i = lower.indexOf(q, at)) {
+    parts.push(text.slice(at, i), <mark key={i}>{text.slice(i, i + q.length)}</mark>);
+    at = i + q.length;
+  }
+  parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+
+/**
+ * "Contents": the lines holding `query`, found by the service once typing pauses, grouped by
+ * file. A line opens its file with that line shown.
+ */
+function ContentResults({ worktree, query }: { worktree: string; query: string }) {
+  useEffect(() => {
+    const later = setTimeout(() => void transport.searchFiles(worktree, query), SEARCH_DELAY_MS);
+    return () => clearTimeout(later);
+  }, [worktree, query]);
+  const results = useHive((s) =>
+    s.searchResults?.worktree === worktree && s.searchResults.query === query
+      ? s.searchResults
+      : null,
+  );
+  const files = useTreeFiles(worktree);
+  if (!results) return <div className="hint search-hint">Searching…</div>;
+  if (results.error) return <div className="files-error">{results.error}</div>;
+  const byPath = new Map<string, SearchMatch[]>();
+  for (const m of results.matches) byPath.set(m.path, [...(byPath.get(m.path) ?? []), m]);
+  const fileOf = (path: string): TreeFile =>
+    files.find((f) => f.path === path) ?? {
+      path,
+      status: null,
+      old_path: null,
+      added: null,
+      removed: null,
+    };
+  return (
+    <ul className="search-results hive-scroll" aria-label="Matching lines">
+      {byPath.size === 0 && <li className="hint">No file holds “{query}”.</li>}
+      {[...byPath].map(([path, matches]) => {
+        const file = fileOf(path);
+        return (
+          <li key={path}>
+            <div className="result-file" title={path}>
+              <ResultFile file={file} />
+              <span className="result-count">{matches.length}</span>
+            </div>
+            <ul>
+              {matches.map((m) => (
+                <li key={m.line}>
+                  <button
+                    type="button"
+                    className="result-line"
+                    title={`${path}:${m.line}`}
+                    onClick={() => leaveFile({ worktree, path }, !file.status, m.line)}
+                  >
+                    <span className="line-number">{m.line}</span>
+                    <span className="line-text">
+                      <Marked text={m.text} query={query} />
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </li>
+        );
+      })}
+      {results.truncated && (
+        <li className="hint">Too many matches: only the first {results.matches.length} show.</li>
+      )}
+    </ul>
   );
 }
 
@@ -359,14 +538,14 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
 }
 
 /**
- * Opens `next` (null closes the file), once the user agrees to drop the unsaved edits of the
+ * Opens `next` (null closes the file), at `line` when given, once the user agrees to drop the unsaved edits of the
  * file open now, if any.
  */
-export function leaveFile(next: OpenFile | null, editing = false): void {
+export function leaveFile(next: OpenFile | null, editing = false, line?: number): void {
   const { edit } = useHive.getState();
   const losing = edit && isDirty(edit) && !(next && isFor(next, edit));
   if (losing && !window.confirm(`Discard your unsaved changes to ${edit.path}?`)) return;
-  setOpenFile(next, editing);
+  setOpenFile(next, editing, line);
 }
 
 /**

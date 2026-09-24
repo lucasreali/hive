@@ -4,7 +4,14 @@ import { getOriginalDoc } from "@codemirror/merge";
 import { EditorState } from "@codemirror/state";
 import { runScopeHandlers } from "@codemirror/view";
 import { toText } from "./buffer";
-import { createEditor, createViewer, type Editor, selectedLines, type Viewer } from "./editor";
+import {
+  createEditor,
+  createViewer,
+  type Editor,
+  revealLine,
+  selectedLines,
+  type Viewer,
+} from "./editor";
 
 let viewer: Viewer | null = null;
 afterEach(() => {
@@ -138,4 +145,18 @@ test("the editor highlights by the file name's language", async () => {
   const { view } = editing("const a = 1;\n", "src/a.ts");
   await until(() => syntaxTree(view.state).length > 0);
   expect(syntaxTree(view.state).topNode.name).toBe("Script");
+});
+
+test("a line is revealed selected, clamped to the text", () => {
+  viewer = createViewer(document.body, "a.txt");
+  viewer.show({ content: "one\ntwo\nthree", original: null });
+  const { view } = viewer;
+  const selected = () =>
+    view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
+  revealLine(view, 2);
+  expect(selected()).toBe("two");
+  revealLine(view, 99);
+  expect(selected()).toBe("three");
+  revealLine(view, 0);
+  expect(selected()).toBe("one");
 });

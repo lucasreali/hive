@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { setEdit, setSelectedLines, useHive } from "../store";
+import { clearGotoLine, setEdit, setSelectedLines, useHive } from "../store";
 import { transport } from "../transport";
 import { type EditBuffer, failed, isFor, resolve, startSave } from "./buffer";
-import { createEditor, type Editor } from "./editor";
+import { createEditor, type Editor, revealLine } from "./editor";
 
 /** Ctrl+S and the Save button: sends the buffer's text with the version it was based on. */
 export function saveOpenFile(): void {
@@ -51,6 +51,14 @@ export function EditView({ edit }: { edit: EditBuffer }) {
     };
   }, [path]);
   useEffect(() => editor.current?.load(doc), [doc]);
+  // A search result asked for a line: shown once the buffer is there.
+  const goto = useHive((s) => s.gotoLine);
+  useEffect(() => {
+    const view = editor.current?.view;
+    if (!view || !goto || goto.path !== path || goto.worktree !== edit.worktree) return;
+    revealLine(view, goto.line);
+    clearGotoLine();
+  }, [goto, path, edit.worktree]);
   const original = comparing && conflict ? (conflict.content ?? "") : null;
   useEffect(() => editor.current?.compare(original), [original]);
   const choose = (keepMine: boolean) => {

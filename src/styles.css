@@ -1769,3 +1769,136 @@ li:last-child > .tree-row.own-worktree::before {
   color: var(--text-2);
   font-size: var(--fs-small);
 }
+
+/* The sidebar's Files: search by name or contents */
+.files-search {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.files-search-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-3);
+}
+
+.files-search-field:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.files-search-field input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: var(--fs-small);
+}
+
+.files-search .segmented {
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.files-search .segmented button {
+  flex: 1;
+}
+
+.search-results {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  font-size: var(--fs-small);
+}
+
+.search-results ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-results .hint,
+.search-hint {
+  padding: 8px 12px;
+  color: var(--text-3);
+}
+
+.result-file,
+.result-line {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  text-align: left;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+button.result-file:hover,
+.result-line:hover {
+  background: var(--hover);
+}
+
+.result-name {
+  color: var(--text);
+}
+
+.result-folder {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-3);
+}
+
+.result-count {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--selected);
+  color: var(--text-2);
+  font-size: var(--fs-meta);
+}
+
+.result-line {
+  padding-left: 28px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+.result-line .line-number {
+  flex: none;
+  min-width: 24px;
+  color: var(--text-4);
+  text-align: right;
+}
+
+.result-line .line-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-line mark {
+  background: rgba(222, 193, 132, 0.3);
+  color: var(--text);
+  border-radius: 2px;
+}

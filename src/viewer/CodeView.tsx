@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { type FileText, setSelectedLines } from "../store";
-import { createViewer, type Viewer } from "./editor";
+import { clearGotoLine, type FileText, setSelectedLines, useHive } from "../store";
+import { createViewer, revealLine, type Viewer } from "./editor";
 
 /** Why the service sent no text to show, or null. */
 export function notice(text: FileText): string | null {
@@ -31,5 +31,13 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
     const original = diff ? (text.base ?? "") : null;
     viewer.current?.show({ content: text.content ?? "", original });
   }, [text, diff]);
+  // A search result asked for a line: shown once this file's text is there.
+  const goto = useHive((s) => s.gotoLine);
+  useEffect(() => {
+    const view = viewer.current?.view;
+    if (!view || !goto || goto.path !== path || goto.worktree !== text.worktree) return;
+    revealLine(view, goto.line);
+    clearGotoLine();
+  }, [goto, text, path]);
   return <div className="code-view" ref={parent} />;
 }

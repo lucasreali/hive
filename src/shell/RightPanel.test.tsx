@@ -1,11 +1,13 @@
 import { afterEach, beforeAll, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   apply,
   type ChangedFile,
   type Changes,
   type FileText,
   initialState,
+  type SearchResults,
   select,
   setOpenFile,
   setRightPanel,
@@ -13,7 +15,7 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
-import { allFiles, FilesView, fileRows, RightPanel } from "./RightPanel";
+import { allFiles, FilesView, fileRows, NAME_LIMIT, RightPanel } from "./RightPanel";
 import { TerminalArea } from "./TerminalArea";
 
 beforeAll(() => {
@@ -400,4 +402,162 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
     ["session.ts+1M", "M"],
   ]);
   expect(screen.queryByText(/cut short/)).toBeNull();
+});
+
+function filesView() {
+  const asked = spyOn(transport, "listChanges").mockImplementation(async () => {});
+  apply({ type: "projects", projects: [shop, api] });
+  render(
+    <>
+      <FilesView />
+      <TerminalArea />
+    </>,
+  );
+  act(() => select(fixLogin.id));
+  const listed = ["README.md", "src/auth/session.ts", "src/main.ts", "docs/session-notes.md"];
+  act(() => apply({ type: "files", path: fixLogin.path, files: listed, truncated: false }));
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/auth/session.ts")]) }));
+  return asked;
+}
+
+const find = (value: string) =>
+  fireEvent.change(screen.getByRole("searchbox", { name: "Find files" }), { target: { value } });
+
+test("Names lists the files whose path holds the text; one opens as the tree opens it", () => {
+  filesView();
+  find("  SESSION ");
+  const found = screen.getByRole("list", { name: "Matching files" });
+  const names = () =>
+    [...found.querySelectorAll<HTMLElement>(".result-file")].map((r) => [
+      r.textContent,
+      r.dataset.status,
+    ]);
+  expect(names()).toEqual([
+    ["session-notes.mddocs", undefined],
+    ["session.tssrc/authM", "M"],
+  ]);
+  expect(screen.queryByRole("tree")).toBeNull();
+  fireEvent.click(screen.getByTitle("src/auth/session.ts"));
+  expect(useHive.getState().openFile).toEqual({
+    worktree: fixLogin.path,
+    path: "src/auth/session.ts",
+  });
+  expect(useHive.getState().editing).toBe(false);
+  fireEvent.click(screen.getByTitle("docs/session-notes.md"));
+  expect(useHive.getState().editing).toBe(true);
+  find("nothing-like-it");
+  expect(found.textContent).toBe("No file name holds “nothing-like-it”.");
+  // Clearing the search shows the tree again.
+  find(" ");
+  expect(screen.getByRole("tree", { name: "Files" })).toBeDefined();
+});
+
+test("Names shows at most its cap and says how many there are", () => {
+  filesView();
+  const many = Array.from({ length: NAME_LIMIT + 3 }, (_, i) => `f/${i}.ts`);
+  act(() => apply({ type: "files", path: fixLogin.path, files: many, truncated: false }));
+  find(".ts");
+  expect(document.querySelectorAll(".search-results .result-file")).toHaveLength(NAME_LIMIT);
+  expect(
+    screen.getByText(`Showing ${NAME_LIMIT} of ${NAME_LIMIT + 4} files: type more to narrow them.`),
+  ).toBeDefined();
+});
+
+test("Contents asks the service once typing pauses and opens a line where it is", async () => {
+  const search = spyOn(transport, "searchFiles").mockImplementation(async () => {});
+  filesView();
+  fireEvent.click(screen.getByRole("button", { name: "Contents" }));
+  expect(screen.getByRole("searchbox").getAttribute("placeholder")).toBe("Search in files");
+  find("tok");
+  find("token");
+  expect(screen.getByText("Searching…")).toBeDefined();
+  await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+  expect(search).toHaveBeenCalledWith(fixLogin.path, "token");
+
+  const results = (patch: Partial<SearchResults>) =>
+    act(() =>
+      apply({
+        type: "search_results",
+        worktree: fixLogin.path,
+        query: "token",
+        matches: [],
+        truncated: false,
+        error: null,
+        ...patch,
+      }),
+    );
+  // An answer for an older query is not this one's.
+  results({ query: "tok", matches: [{ path: "a", line: 1, text: "tok" }] });
+  expect(screen.getByText("Searching…")).toBeDefined();
+  results({});
+  expect(screen.getByRole("list", { name: "Matching lines" }).textContent).toBe(
+    "No file holds “token”.",
+  );
+  results({ error: "search for 1 to 256 bytes on one line" });
+  expect(screen.getByText("search for 1 to 256 bytes on one line")).toBeDefined();
+  results({
+    matches: [
+      { path: "src/auth/session.ts", line: 3, text: "a Token, then token" },
+      { path: "src/auth/session.ts", line: 9, text: "token" },
+      { path: "gone.ts", line: 1, text: "x token" },
+    ],
+    truncated: true,
+  });
+  const found = screen.getByRole("list", { name: "Matching lines" });
+  expect([...found.querySelectorAll("mark")].map((m) => m.textContent)).toEqual([
+    "Token",
+    "token",
+    "token",
+    "token",
+  ]);
+  expect([...found.querySelectorAll(".result-count")].map((c) => c.textContent)).toEqual([
+    "2",
+    "1",
+  ]);
+  expect(found.textContent).toContain("Too many matches: only the first 3 show.");
+  // The changed file opens as its diff at the line; one git no longer lists opens editable.
+  fireEvent.click(screen.getByTitle("src/auth/session.ts:9"));
+  expect(useHive.getState().gotoLine).toEqual({
+    worktree: fixLogin.path,
+    path: "src/auth/session.ts",
+    line: 9,
+  });
+  expect(useHive.getState().editing).toBe(false);
+  fireEvent.click(screen.getByTitle("gone.ts:1"));
+  expect(useHive.getState().editing).toBe(true);
+});
+
+test("the line asked for is shown once the file's text is there, in the diff or the editor", () => {
+  panel();
+  act(() => select(fixLogin.id));
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("a.ts")]) }));
+  const text = (path: string): FileText => ({
+    worktree: fixLogin.path,
+    path,
+    content: "one\ntwo\nthree\n",
+    base: "one\n",
+    version: "v",
+    binary: false,
+    too_large: false,
+    error: null,
+  });
+  const selected = () => {
+    const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement);
+    const { from, to } = view?.state.selection.main ?? { from: 0, to: 0 };
+    return view?.state.sliceDoc(from, to);
+  };
+  act(() => setOpenFile({ worktree: fixLogin.path, path: "a.ts" }, false, 2));
+  expect(useHive.getState().gotoLine?.line).toBe(2);
+  act(() => apply({ type: "file", ...text("a.ts") }));
+  expect(useHive.getState().gotoLine).toBeNull();
+  expect(selected()).toBe("two");
+
+  act(() => setOpenFile({ worktree: fixLogin.path, path: "b.ts" }, true, 3));
+  act(() => apply({ type: "file", ...text("b.ts") }));
+  expect(useHive.getState().gotoLine).toBeNull();
+  expect(selected()).toBe("three");
+  // Another line of the open file moves there too.
+  act(() => setOpenFile({ worktree: fixLogin.path, path: "b.ts" }, true, 1));
+  expect(useHive.getState().gotoLine).toBeNull();
+  expect(selected()).toBe("one");
 });

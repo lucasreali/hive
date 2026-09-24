@@ -550,3 +550,28 @@ test("an empty path locates the worktree's folder for the Explorer", async () =>
     },
   ]);
 });
+
+test("a contents search finds the fake texts' lines in any case, or says why not", async () => {
+  const { transport, messages } = await connected();
+  const [shop] = MOCK_REPOS;
+  messages.length = 0;
+  await transport.searchFiles(shop.path, "EXPORT const");
+  await transport.searchFiles("/nowhere", "x");
+  await tick();
+  const [found, refused] = messages as Extract<ServiceMessage, { type: "search_results" }>[];
+  expect(found.error).toBeNull();
+  expect(found.matches.length).toBeGreaterThan(10);
+  expect(found.matches[0]).toEqual({
+    path: ".gitignore",
+    line: 2,
+    text: "export const value = 1;",
+  });
+  expect(refused).toEqual({
+    type: "search_results",
+    worktree: "/nowhere",
+    query: "x",
+    matches: [],
+    truncated: false,
+    error: "/nowhere is not a worktree of a followed project",
+  });
+});

@@ -136,6 +136,16 @@ export function createViewer(
   };
 }
 
+/** Selects line `line` (1-based, clamped to the text) and scrolls it to the middle. */
+export function revealLine(view: EditorView, line: number): void {
+  const doc = view.state.doc;
+  const at = doc.line(Math.max(1, Math.min(line, doc.lines)));
+  view.dispatch({
+    selection: { anchor: at.from, head: at.to },
+    effects: EditorView.scrollIntoView(at.from, { y: "center" }),
+  });
+}
+
 /** What the editable view tells its owner. */
 export type EditorEvents = {
   /** The user changed the text. */

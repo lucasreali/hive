@@ -37,6 +37,7 @@ export type ServiceMessage =
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
   | ({ type: "file" } & FileText)
+  | ({ type: "search_results" } & SearchResults)
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
@@ -146,6 +147,17 @@ export type Changes = {
 
 /** The file shown under the files tree, in the viewer or its diff. */
 export type OpenFile = { worktree: string; path: string };
+
+/** A line of a file holding the searched text (`line` is 1-based). */
+export type SearchMatch = { path: string; line: number; text: string };
+/** The service's answer to a search of a worktree's file contents. */
+export type SearchResults = {
+  worktree: string;
+  query: string;
+  matches: SearchMatch[];
+  truncated: boolean;
+  error: string | null;
+};
 
 /** Mirrors `hive_protocol::SaveError`. */
 export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";
@@ -293,6 +305,10 @@ export type HiveState = {
   edit: EditBuffer | null;
   /** Why "Open in external editor" did not open the file, shown under its header. */
   editorNotice: string | null;
+  /** The last contents search the service answered. */
+  searchResults: SearchResults | null;
+  /** A line to show once the open file's text is there (a search result), then cleared. */
+  gotoLine: (OpenFile & { line: number }) | null;
 };
 
 export const initialState: HiveState = {
@@ -330,6 +346,8 @@ export const initialState: HiveState = {
   editing: false,
   edit: null,
   editorNotice: null,
+  searchResults: null,
+  gotoLine: null,
 };
 
 export const useHive = create<HiveState>()(() => initialState);
@@ -451,6 +469,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...changes } = m;
       return { changes: { ...s.changes, [m.path]: changes } };
     }
+    case "search_results": {
+      const { type: _, ...searchResults } = m;
+      return { searchResults };
+    }
     case "file": {
       const { type: _, ...file } = m;
       return { file, edit: editFor(s, file) };
@@ -508,12 +530,22 @@ export const setSidebarView = (sidebarView: SidebarView) => useHive.setState({ s
  * Opens a file in its tab and shows it (null closes it), as editable text when `editing`,
  * dropping the previous file's edit buffer. The file already open stays as it is.
  */
-export const setOpenFile = (openFile: OpenFile | null, editing = false) =>
-  useHive.setState((s) =>
-    openFile && s.openFile && isFor(openFile, s.openFile)
-      ? { fileShown: true }
-      : { openFile, fileShown: openFile !== null, editing, edit: null, editorNotice: null },
-  );
+export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: number) =>
+  useHive.setState((s) => {
+    const gotoLine = openFile && line ? { ...openFile, line } : null;
+    return openFile && s.openFile && isFor(openFile, s.openFile)
+      ? { fileShown: true, gotoLine }
+      : {
+          openFile,
+          fileShown: openFile !== null,
+          editing,
+          edit: null,
+          editorNotice: null,
+          gotoLine,
+        };
+  });
+/** The line asked for was shown. */
+export const clearGotoLine = () => useHive.setState({ gotoLine: null });
 export const showFile = () => useHive.setState({ fileShown: true });
 /** Shows the open file as editable text (its buffer starts from the last answer) or not. */
 export const setEditing = (editing: boolean) =>

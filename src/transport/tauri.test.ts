@@ -53,6 +53,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.watchWorktree("/r");
   await tauriTransport.unwatchWorktree();
   await tauriTransport.listChanges("/r");
+  await tauriTransport.searchFiles("/r", "q");
   await tauriTransport.openFile("/r", "a.ts");
   await tauriTransport.saveFile("/r", "a.ts", "x", "v");
   await tauriTransport.openInEditor("/r", "a.ts");
@@ -70,6 +71,7 @@ test("terminal and project actions call their commands", async () => {
     ["watch_worktree", { path: "/r" }],
     ["unwatch_worktree", {}],
     ["list_changes", { path: "/r" }],
+    ["search_files", { worktree: "/r", query: "q" }],
     ["open_file", { worktree: "/r", path: "a.ts" }],
     ["save_file", { worktree: "/r", path: "a.ts", content: "x", version: "v" }],
     ["open_in_editor", { worktree: "/r", path: "a.ts" }],

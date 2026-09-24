@@ -43,6 +43,8 @@ export interface Transport {
   unwatchWorktree(): Promise<void>;
   /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
   listChanges(path: string): Promise<void>;
+  /** The lines of a followed worktree's files holding `query`; answered by `search_results`. */
+  searchFiles(worktree: string, query: string): Promise<void>;
   /** A file of a followed worktree on disk and at HEAD; answered by `file`. */
   openFile(worktree: string, path: string): Promise<void>;
   /**

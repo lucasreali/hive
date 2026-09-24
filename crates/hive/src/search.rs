@@ -53,7 +53,9 @@ pub fn search(dir: &Path, query: &str) -> io::Result<(Vec<SearchMatch>, bool)> {
 pub fn parse(out: &[u8]) -> (Vec<SearchMatch>, bool) {
     let mut matches = Vec::new();
     let mut rest = out;
-    while !rest.is_empty() {
+    // Each record takes at least one byte: bounding the loop by the input keeps it finite
+    // even if a split stopped moving forward.
+    for _ in 0..out.len() {
         let Some((path, after)) = split_once(rest, 0) else {
             break;
         };
@@ -137,11 +139,33 @@ mod tests {
     }
 
     #[test]
+    fn a_repository_is_searched() {
+        let dir = tempfile::tempdir().unwrap();
+        let init = git::command(dir.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(init.success());
+        std::fs::write(dir.path().join("a.txt"), "one\nTwo two\n").unwrap();
+        assert_eq!(
+            search(dir.path(), "two").unwrap(),
+            (vec![found("a.txt", 2, "Two two")], false)
+        );
+        assert_eq!(search(dir.path(), "three").unwrap(), (vec![], false));
+        // A query of exactly the limit is still searched.
+        let longest = "x".repeat(QUERY_LIMIT);
+        assert_eq!(search(dir.path(), &longest).unwrap(), (vec![], false));
+    }
+
+    #[test]
     fn bad_queries_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         for query in ["", "  ", "a\nb", "a\rb", &"x".repeat(QUERY_LIMIT + 1)] {
             let err = search(dir.path(), query).unwrap_err().to_string();
             assert_eq!(err, "search for 1 to 256 bytes on one line", "{query:?}");
         }
+        // Outside a git repository git fails, and says why.
+        let err = search(dir.path(), "x").unwrap_err().to_string();
+        assert!(err.starts_with("git grep "), "{err}");
     }
 }
