@@ -145,7 +145,8 @@ test("the selected worktree's changes: summary, totals, letters and counts", () 
   act(() => select(refactor.id));
   expect(asked).toHaveBeenCalledWith(refactor.path);
   expect(screen.getByText("refactor-auth")).toBeDefined();
-  expect(screen.getByText("api")).toBeDefined();
+  // Not its project (5.8): the panel always shows a worktree of the project you are in.
+  expect(screen.queryByText("api")).toBeNull();
   // Nothing is said before the service answers.
   expect(screen.queryByText(/changed|No changes/)).toBeNull();
   act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
@@ -191,6 +192,8 @@ test("the panel follows the selected agent, else the shown terminal", () => {
   act(() => useHive.setState({ tabs: [{ id: 3, cwd: fixLogin.path }], activeTab: 3 }));
   // The terminal's tab has the same name: the panel's header is the one read.
   expect(document.querySelector(".files-worktree .name")?.textContent).toBe("fix-login");
+  // Only the worktree: the project is the one you are in.
+  expect(document.querySelector(".files-worktree")?.textContent).toBe("fix-login");
   act(() =>
     apply({
       type: "agent_detected",

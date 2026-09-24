@@ -21,7 +21,6 @@ import {
   type FileStatus,
   type OpenFile,
   type PanelView,
-  type Project,
   panelWorktree,
   type SearchMatch,
   setEditing,
@@ -164,17 +163,16 @@ function Counts({ added, removed }: { added: number | null; removed: number | nu
   );
 }
 
-/** The shown worktree's name and project, and under it `children` (e.g. its change totals). */
-function WorktreeInfo(props: {
-  target: { project: Project; worktree: Worktree };
-  children?: ReactNode;
-}) {
+/**
+ * The shown worktree's name (not its project's: the panel always shows the worktree of the
+ * project you are in), and under it `children` (e.g. its change totals).
+ */
+function WorktreeInfo(props: { worktree: Worktree; children?: ReactNode }) {
   return (
     <div className="files-info">
       <div className="files-worktree">
         <BranchIcon />
-        <span className="name">{props.target.worktree.name}</span>
-        <span className="project">{props.target.project.name}</span>
+        <span className="name">{props.worktree.name}</span>
       </div>
       {props.children}
     </div>
@@ -245,7 +243,7 @@ export function RightPanel() {
       </div>
       {target ? (
         <section className="panel-view" aria-label={shown.label}>
-          <WorktreeInfo target={target}>
+          <WorktreeInfo worktree={target.worktree}>
             {view === "changes" && <Summary worktree={target.worktree.path} />}
           </WorktreeInfo>
           {view === "files" && <FilesView worktree={target.worktree.path} />}

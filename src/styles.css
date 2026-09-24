@@ -558,16 +558,12 @@ button:disabled {
   color: var(--text);
 }
 
-.files-worktree .project,
+.files-worktree .name,
 .file-row .name,
 .file-view-bar .path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.files-worktree .project {
-  font-size: var(--fs-small);
 }
 
 .files-summary {
