@@ -55,7 +55,7 @@ export const agentStatus = (state: AgentState) => {
   return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you") };
 };
 
-/** `?mock=states`: shop's worktree that subagent a3 works in, shown under it (#22). */
+/** `?mock=states`: shop's worktree that subagent a3 works in, shown as its parent row (#22). */
 export const MOCK_OWN_WORKTREE = "/home/user/projects/shop/.claude/worktrees/tests-login";
 
 /**
