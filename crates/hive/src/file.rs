@@ -211,7 +211,12 @@ pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<Strin
             "Windows would run a .{extension} file instead of opening it in an editor"
         )));
     }
-    let out = Command::new(wslpath).arg("-w").arg(&real).output()?;
+    windows(&real, wslpath)
+}
+
+/// Where Windows sees `path`: `<wslpath> -w <path>`.
+pub fn windows(path: &Path, wslpath: &OsStr) -> io::Result<String> {
+    let out = Command::new(wslpath).arg("-w").arg(path).output()?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(io::Error::other(format!(

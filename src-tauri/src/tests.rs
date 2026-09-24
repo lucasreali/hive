@@ -271,6 +271,17 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.list_changes("/r".into()).unwrap();
     let changes = Control::ListChanges { path: "/r".into() };
     assert_eq!(service.control().await, (0, changes));
+    hive.list_sessions().unwrap();
+    assert_eq!(service.control().await, (0, Control::ListSessions));
+    hive.locate_session("s".into(), SessionTarget::Log).unwrap();
+    let locate = Control::LocateSession {
+        id: "s".into(),
+        target: SessionTarget::Log,
+    };
+    assert_eq!(service.control().await, (0, locate));
+    hive.delete_session("s".into()).unwrap();
+    let delete = Control::DeleteSession { id: "s".into() };
+    assert_eq!(service.control().await, (0, delete));
     hive.search_files("/r".into(), "q".into()).unwrap();
     let search = Control::SearchFiles {
         worktree: "/r".into(),
@@ -451,6 +462,12 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
+    assert_eq!(hive.list_sessions(), not_connected);
+    assert_eq!(
+        hive.locate_session("s".into(), SessionTarget::Folder),
+        not_connected
+    );
+    assert_eq!(hive.delete_session("s".into()), not_connected);
     assert_eq!(hive.remove_worktree("/r/w".into(), false), not_connected);
     assert_eq!(
         hive.rename_worktree("/r/w".into(), "x".into()),
@@ -624,6 +641,9 @@ fn commands_reach_the_managed_hive() {
             list_changes,
             open_file,
             search_files,
+            list_sessions,
+            locate_session,
+            delete_session,
             save_file,
             open_in_editor
         ])
@@ -666,6 +686,8 @@ fn commands_reach_the_managed_hive() {
     let changes = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a"});
     let search = json!({"worktree": "/r", "query": "q"});
+    let locate = json!({"id": "s", "target": "log"});
+    let delete = json!({"id": "s"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
     for (cmd, args) in [
         ("list_branches", &branches),
@@ -678,6 +700,9 @@ fn commands_reach_the_managed_hive() {
         ("list_changes", &changes),
         ("open_file", &file),
         ("search_files", &search),
+        ("list_sessions", &json!({})),
+        ("locate_session", &locate),
+        ("delete_session", &delete),
         ("save_file", &save),
         ("open_in_editor", &file),
     ] {
@@ -713,6 +738,9 @@ fn commands_reach_the_managed_hive() {
         ("list_changes", changes),
         ("open_file", file.clone()),
         ("search_files", search),
+        ("list_sessions", json!({})),
+        ("locate_session", locate),
+        ("delete_session", delete),
         ("save_file", save),
         ("open_in_editor", file),
     ] {

@@ -345,6 +345,37 @@ pub enum Control {
         /// Why nothing could be listed, or why the list was cut short.
         error: Option<String>,
     },
+    /// App → service: Claude Code's sessions of the followed projects, answered by `Sessions`.
+    ListSessions,
+    /// The most recent first; `error` says why none could be read.
+    Sessions {
+        sessions: Vec<Session>,
+        error: Option<String>,
+    },
+    /// App → service: where Windows sees a listed session's log or working folder, to open or
+    /// reveal it. Answered by `SessionLocated`.
+    LocateSession {
+        id: String,
+        target: SessionTarget,
+    },
+    SessionLocated {
+        id: String,
+        target: SessionTarget,
+        windows_path: Option<String>,
+        error: Option<String>,
+    },
+    /// App → service: deletes a listed session's log (and its subagents' logs), never while it
+    /// runs. Answered by `SessionDeleted` or `DeleteSessionFailed`.
+    DeleteSession {
+        id: String,
+    },
+    SessionDeleted {
+        id: String,
+    },
+    DeleteSessionFailed {
+        id: String,
+        message: String,
+    },
     /// App → service: the lines of a followed worktree's files holding `query` (fixed string,
     /// any case; ignored and binary files skipped), answered by `SearchResults`.
     SearchFiles {
@@ -464,6 +495,45 @@ pub struct Worktree {
     pub main: bool,
     /// Follows Claude's convention: `<repo>/.claude/worktrees/<name>` (#7).
     pub claude: bool,
+}
+
+/// A Claude Code session of a followed project, from its log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Session {
+    /// Its session id (the log's name).
+    pub id: String,
+    /// The followed project and worktree its working directory lies in.
+    pub project: String,
+    pub worktree: String,
+    pub cwd: String,
+    /// A title set by the user or Claude, else the first prompt; cut at the service's cap.
+    pub title: Option<String>,
+    /// Who wrote the last message with text, and its text (cut).
+    pub last_role: Option<SessionRole>,
+    pub last_text: Option<String>,
+    /// User and assistant messages with text.
+    pub messages: u64,
+    pub model: Option<String>,
+    pub branch: Option<String>,
+    /// When its log last changed, in milliseconds since the Unix epoch.
+    pub updated_ms: u64,
+    /// The log's path.
+    pub log: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRole {
+    User,
+    Assistant,
+}
+
+/// What of a session to locate for Windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTarget {
+    Log,
+    Folder,
 }
 
 /// A line of a worktree's file holding the searched text.
@@ -878,6 +948,57 @@ mod tests {
         );
         let list = Control::ListChanges { path: "/r".into() };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+    }
+
+    #[test]
+    fn session_messages_are_tagged_json() {
+        let session = Session {
+            id: "s".into(),
+            project: "/r".into(),
+            worktree: "/r".into(),
+            cwd: "/r/src".into(),
+            title: Some("t".into()),
+            last_role: Some(SessionRole::Assistant),
+            last_text: Some("done".into()),
+            messages: 2,
+            model: None,
+            branch: Some("main".into()),
+            updated_ms: 5,
+            log: "/c/s.jsonl".into(),
+        };
+        let sessions = Control::Sessions {
+            sessions: vec![session],
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &sessions).payload[..],
+            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","updated_ms":5,"log":"/c/s.jsonl"}],"error":null}"#
+        );
+        let locate = Control::LocateSession {
+            id: "s".into(),
+            target: SessionTarget::Folder,
+        };
+        assert_eq!(
+            &Frame::control(0, &locate).payload[..],
+            br#"{"type":"locate_session","id":"s","target":"folder"}"#
+        );
+        for message in [
+            Control::ListSessions,
+            Control::DeleteSession { id: "s".into() },
+            Control::SessionDeleted { id: "s".into() },
+            Control::DeleteSessionFailed {
+                id: "s".into(),
+                message: "m".into(),
+            },
+            Control::SessionLocated {
+                id: "s".into(),
+                target: SessionTarget::Log,
+                windows_path: None,
+                error: Some("e".into()),
+            },
+        ] {
+            assert_eq!(Frame::control(0, &message).to_control().unwrap(), message);
+        }
     }
 
     #[test]

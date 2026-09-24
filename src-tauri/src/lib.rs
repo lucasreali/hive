@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    Control, Frame, FrameCodec, FrameError, FrameType, Role, MAX_PAYLOAD, PROTOCOL_VERSION,
+    Control, Frame, FrameCodec, FrameError, FrameType, Role, SessionTarget, MAX_PAYLOAD,
+    PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -326,6 +327,21 @@ impl Hive {
         self.link().send(0, &Control::ListChanges { path })
     }
 
+    /// The answer arrives as `sessions`.
+    pub fn list_sessions(&self) -> Result<(), String> {
+        self.link().send(0, &Control::ListSessions)
+    }
+
+    /// The answer arrives as `session_located`.
+    pub fn locate_session(&self, id: String, target: SessionTarget) -> Result<(), String> {
+        self.link().send(0, &Control::LocateSession { id, target })
+    }
+
+    /// The answer arrives as `session_deleted` or `delete_session_failed`.
+    pub fn delete_session(&self, id: String) -> Result<(), String> {
+        self.link().send(0, &Control::DeleteSession { id })
+    }
+
     /// The answer arrives as `search_results`.
     pub fn search_files(&self, worktree: String, query: String) -> Result<(), String> {
         self.link()
@@ -524,6 +540,25 @@ pub mod commands {
         name: String,
     ) -> Result<(), String> {
         hive.rename_worktree(path, name)
+    }
+
+    #[tauri::command]
+    pub fn list_sessions(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.list_sessions()
+    }
+
+    #[tauri::command]
+    pub fn locate_session(
+        hive: State<'_, Hive>,
+        id: String,
+        target: SessionTarget,
+    ) -> Result<(), String> {
+        hive.locate_session(id, target)
+    }
+
+    #[tauri::command]
+    pub fn delete_session(hive: State<'_, Hive>, id: String) -> Result<(), String> {
+        hive.delete_session(id)
     }
 
     #[tauri::command]

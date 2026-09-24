@@ -15,7 +15,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     AgentEvent, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, PROTOCOL_VERSION,
-    Role, SaveError,
+    Role, SaveError, SessionTarget,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -30,6 +30,7 @@ use crate::adapter::{Adapter, ClaudeCode};
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
+use crate::sessions::{self, Sessions};
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
 use crate::{changes, file, procs, search, watch, worktree, wrapper};
@@ -49,7 +50,8 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
     let projects = Projects::load(paths.projects());
-    let result = serve(listener, terminate, paths.bin_dir(), projects).await;
+    let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
+    let result = serve(listener, terminate, paths.bin_dir(), projects, sessions).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -76,6 +78,7 @@ async fn serve(
     mut terminate: Signal,
     bin_dir: PathBuf,
     projects: Projects,
+    sessions: Sessions,
 ) -> io::Result<()> {
     let state = Arc::new(State {
         app: Mutex::new(None),
@@ -84,6 +87,7 @@ async fn serve(
         watching: Mutex::new(None),
         bin_dir,
         projects,
+        sessions,
     });
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
@@ -121,6 +125,8 @@ struct State {
     watching: Mutex<Option<tokio::task::JoinHandle<()>>>,
     bin_dir: PathBuf,
     projects: Projects,
+    /// Claude Code's session logs of the followed projects.
+    sessions: Sessions,
 }
 
 impl State {
@@ -235,10 +241,19 @@ impl State {
 
     /// Answers a project request off the frame loop, since git can take a while.
     fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
+        self.sessions(move |projects, _| request(projects));
+    }
+
+    /// Answers a request on the followed projects and their Claude sessions off the frame
+    /// loop, since reading logs can take a while too.
+    fn sessions(
+        self: &Arc<Self>,
+        request: impl FnOnce(&Projects, &Sessions) -> Control + Send + 'static,
+    ) {
         let state = self.clone();
         tokio::spawn(async move {
             // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
-            let reply = tokio::task::block_in_place(|| request(&state.projects));
+            let reply = tokio::task::block_in_place(|| request(&state.projects, &state.sessions));
             state.to_app(0, &reply).await;
         });
     }
@@ -607,6 +622,46 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             let listed = projects.worktree(&path).and_then(|dir| changes::list(&dir));
             changes::message(path, listed)
         }),
+        Ok(Control::ListSessions) => state.sessions(|projects, sessions| {
+            let (sessions, error) = match sessions.list(&projects.list()) {
+                Ok(sessions) => (sessions, None),
+                Err(err) => (Vec::new(), Some(err.to_string())),
+            };
+            Control::Sessions { sessions, error }
+        }),
+        Ok(Control::LocateSession { id, target }) => state.sessions(move |projects, sessions| {
+            let located = sessions.find(&projects.list(), &id).and_then(|session| {
+                let path = match target {
+                    SessionTarget::Log => session.log,
+                    SessionTarget::Folder => session.cwd,
+                };
+                file::windows(Path::new(&path), OsStr::new("wslpath"))
+            });
+            Control::SessionLocated {
+                id,
+                target,
+                error: located.as_ref().err().map(ToString::to_string),
+                windows_path: located.ok(),
+            }
+        }),
+        Ok(Control::DeleteSession { id }) => {
+            // A running session keeps writing its log.
+            let live = state.agents.lock().await.contains_key(&id);
+            state.sessions(move |projects, sessions| {
+                let deleted = if live {
+                    Err(io::Error::other("the session is running: end it first"))
+                } else {
+                    sessions.delete(&projects.list(), &id)
+                };
+                match deleted {
+                    Ok(()) => Control::SessionDeleted { id },
+                    Err(err) => Control::DeleteSessionFailed {
+                        id,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
         Ok(Control::SearchFiles { worktree, query }) => state.projects(move |projects| {
             let found = projects
                 .worktree(&worktree)
@@ -746,6 +801,7 @@ mod tests {
             watching: Mutex::new(None),
             bin_dir: dir.path().into(),
             projects: Projects::load(dir.path().join("projects.json")),
+            sessions: Sessions::new(None),
         });
         // The same stream types as the daemon, so no second instantiation skews line coverage.
         let (client, server) = UnixStream::pair().unwrap();

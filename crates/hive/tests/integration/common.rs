@@ -87,7 +87,9 @@ impl Env {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CEILING_DIRECTORIES", self.dir.path())
-            .env_remove("HIVE_TERMINAL_ID");
+            .env_remove("HIVE_TERMINAL_ID")
+            // Claude's session logs are read (and deleted) under the throwaway HOME only.
+            .env_remove("CLAUDE_CONFIG_DIR");
         cmd
     }
 

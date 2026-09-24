@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::Stdio;
 
 use hive_protocol::AgentState::{self, *};
-use hive_protocol::{Control, Role, SubagentState};
+use hive_protocol::{Control, Role, SessionTarget, SubagentState};
 use serde_json::{Value, json};
 
 use crate::common::Conn;
@@ -330,6 +330,108 @@ async fn agent_states_follow_hook_events_and_terminal_silence() {
     )
     .await;
     assert_eq!(seen, vec![(1, state("s", Error, vec![]))]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let logs = repo.env.path("home/.claude/projects").join(
+        root.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>(),
+    );
+    std::fs::create_dir_all(&logs).unwrap();
+    for id in ["s", "old"] {
+        let line =
+            json!({"type": "user", "cwd": root, "message": {"content": format!("task {id}")}});
+        std::fs::write(logs.join(format!("{id}.jsonl")), line.to_string()).unwrap();
+    }
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let mut ask = async |message: Control| {
+        app.send(0, message).await;
+        app.control().await.1
+    };
+    // Only the followed projects' sessions.
+    assert_eq!(
+        ask(Control::ListSessions).await,
+        Control::Sessions {
+            sessions: vec![],
+            error: None
+        }
+    );
+    let added = ask(Control::AddProject { path: root.clone() }).await;
+    assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
+    let Control::Sessions { sessions, error } = ask(Control::ListSessions).await else {
+        panic!("expected sessions")
+    };
+    let mut ids: Vec<_> = sessions.iter().map(|s| s.id.as_str()).collect();
+    ids.sort();
+    assert_eq!((ids, error), (vec!["old", "s"], None));
+
+    for target in [SessionTarget::Log, SessionTarget::Folder] {
+        let located = ask(Control::LocateSession {
+            id: "s".into(),
+            target,
+        })
+        .await;
+        let Control::SessionLocated { id, target: t, .. } = located else {
+            panic!("expected a location: {located:?}")
+        };
+        assert_eq!((id.as_str(), t), ("s", target));
+    }
+    let Control::SessionLocated { error, .. } = ask(Control::LocateSession {
+        id: "nope".into(),
+        target: SessionTarget::Log,
+    })
+    .await
+    else {
+        panic!("expected a location")
+    };
+    assert_eq!(
+        error.as_deref(),
+        Some("no session nope in the followed projects")
+    );
+
+    // A running session is not deleted.
+    app.open_terminal(1, &repo.root).await;
+    hook(
+        &repo,
+        &mut app,
+        "1",
+        "SessionStart",
+        json!({"session_id": "s", "cwd": root}),
+    )
+    .await;
+    let mut ask = async |message: Control| {
+        app.send(0, message).await;
+        loop {
+            match app.control().await {
+                (
+                    0,
+                    answer @ (Control::SessionDeleted { .. } | Control::DeleteSessionFailed { .. }),
+                ) => {
+                    return answer;
+                }
+                _ => {}
+            }
+        }
+    };
+    assert_eq!(
+        ask(Control::DeleteSession { id: "s".into() }).await,
+        Control::DeleteSessionFailed {
+            id: "s".into(),
+            message: "the session is running: end it first".into()
+        }
+    );
+    assert_eq!(
+        ask(Control::DeleteSession { id: "old".into() }).await,
+        Control::SessionDeleted { id: "old".into() }
+    );
+    assert!(!logs.join("old.jsonl").exists());
     drop(app);
     assert!(daemon.wait_exit().success());
 }

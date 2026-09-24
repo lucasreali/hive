@@ -29,6 +29,9 @@ fn main() {
             commands::list_changes,
             commands::open_file,
             commands::search_files,
+            commands::list_sessions,
+            commands::locate_session,
+            commands::delete_session,
             commands::save_file,
             commands::open_in_editor,
         ])
