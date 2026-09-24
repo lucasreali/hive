@@ -19,4 +19,5 @@ export const tauriTransport: Transport = {
   listBranches: (project) => invoke("list_branches", { project }),
   validateWorktreeName: (project, name) => invoke("validate_worktree_name", { project, name }),
   createWorktree: (project, name, base) => invoke("create_worktree", { project, name, base }),
+  listChanges: (path) => invoke("list_changes", { path }),
 };

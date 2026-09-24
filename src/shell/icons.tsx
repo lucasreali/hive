@@ -103,6 +103,15 @@ export const FolderIcon = () => (
   </svg>
 );
 
+export const FileIcon = () => (
+  <svg width="12" height="13" viewBox="0 0 12 14" aria-hidden="true">
+    <g fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round">
+      <path d="M2.5 1.5h4.8L10 4.2v8.3H2.5z" />
+      <path d="M7 1.5v3h3" />
+    </g>
+  </svg>
+);
+
 /** The empty state's large "add folder" icon. */
 export const AddFolderIcon = () => (
   <svg width="28" height="28" viewBox="0 0 14 14" aria-hidden="true">

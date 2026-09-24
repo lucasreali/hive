@@ -30,6 +30,8 @@ export interface Transport {
   validateWorktreeName(project: string, name: string): Promise<void>;
   /** `hive worktree create`; answered by `worktree_created` or `create_worktree_failed`. */
   createWorktree(project: string, name: string, base: string | null): Promise<void>;
+  /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
+  listChanges(path: string): Promise<void>;
 }
 
 /**

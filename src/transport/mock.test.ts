@@ -7,6 +7,7 @@ import {
   LOAD_STAGGER_MS,
   LOAD_START_MS,
   MOCK_BRANCHES,
+  MOCK_CHANGES,
   MOCK_REPOS,
   MOCK_STATES,
 } from "./mock";
@@ -255,4 +256,34 @@ test("?mock=load replays a recording into each terminal and marks every echo", a
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("changes of a followed worktree with their totals, or why not", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api, dotfiles] = MOCK_REPOS;
+  const refactor = api.worktrees[1].path;
+  messages.length = 0;
+  await transport.listChanges(refactor);
+  await transport.listChanges(shop.path);
+  await transport.listChanges(dotfiles.path);
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "changes",
+      path: refactor,
+      files: MOCK_CHANGES[refactor],
+      added: 24,
+      removed: 49,
+      error: null,
+    },
+    { type: "changes", path: shop.path, files: [], added: 0, removed: 0, error: null },
+    {
+      type: "changes",
+      path: dotfiles.path,
+      files: [],
+      added: 0,
+      removed: 0,
+      error: `${dotfiles.path} is not a worktree of a followed project`,
+    },
+  ]);
 });

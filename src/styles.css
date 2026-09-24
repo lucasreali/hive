@@ -36,6 +36,12 @@
   --state-idle: #a1c181;
   --state-ended: #878a98;
 
+  /* git status in the files panel */
+  --git-modified: #dec184;
+  --git-added: #a1c181;
+  --git-deleted: #d07277;
+  --git-renamed: #74ade8;
+
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
   --fs-title: 15px;
@@ -404,6 +410,249 @@ button:disabled {
 
 .right-panel .ghost {
   width: 24px;
+}
+
+.segmented {
+  display: flex;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.segmented button {
+  border: 0;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--border);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.segmented button:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.files-info {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-3);
+}
+
+.files-worktree {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.files-worktree .name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text);
+}
+
+.files-worktree .project,
+.file-row .name,
+.file-view-bar .path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-worktree .project {
+  font-size: var(--fs-small);
+}
+
+.files-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-small);
+  color: var(--text-2);
+}
+
+.files-error {
+  font-size: var(--fs-small);
+  color: var(--state-error);
+  overflow-wrap: anywhere;
+}
+
+.count-added,
+.count-removed {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--git-added);
+}
+
+.count-removed {
+  color: var(--git-deleted);
+}
+
+.files-summary .count-added,
+.files-summary .count-removed {
+  font-size: 11.5px;
+}
+
+.files-tree {
+  flex: 1 1 0;
+  min-height: 120px;
+  overflow: auto;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.files-tree .hint {
+  padding: 10px 12px 0;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+.files-tree [role="tree"]:focus-visible {
+  outline: none;
+}
+
+.file-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 10px;
+  color: var(--text-3);
+  cursor: default;
+}
+
+.file-row:hover {
+  background: var(--hover);
+}
+
+.file-row[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.files-tree [role="tree"]:focus-visible .file-row[data-active="true"] {
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.file-row svg {
+  flex: none;
+}
+
+.chevron-space {
+  width: 10px;
+  flex: none;
+}
+
+/* A row's name, letter and dot take its git status color (screen 1g). */
+.file-row,
+.file-view-bar {
+  --git: var(--text);
+}
+[data-status="M"] {
+  --git: var(--git-modified);
+}
+[data-status="A"] {
+  --git: var(--git-added);
+}
+[data-status="D"] {
+  --git: var(--git-deleted);
+}
+[data-status="R"] {
+  --git: var(--git-renamed);
+}
+
+.file-row .name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-mono);
+  color: var(--git);
+}
+
+.status-letter {
+  width: 12px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--git);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: var(--git);
+}
+
+.file-row[data-deleted="true"]:not([aria-expanded]) .name {
+  text-decoration: line-through;
+}
+
+.file-view {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.file-view-bar {
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--panel);
+}
+
+.file-view-bar .path {
+  flex: 1;
+  min-width: 0;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--text);
+}
+
+.file-view-bar .ghost {
+  width: 22px;
+  height: 22px;
+}
+
+.file-view-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.file-view-body .hint {
+  padding: 10px 12px;
+  font-size: var(--fs-small);
+  color: var(--text-3);
 }
 
 .right-panel-empty {
