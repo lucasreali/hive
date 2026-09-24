@@ -334,6 +334,42 @@ pub enum Control {
         /// Why the file could not be read.
         error: Option<String>,
     },
+    /// App → service: write `content` over the file (3.5, #31), only if its bytes on disk
+    /// still have `version` (`None`: the file must not exist). Answered by `FileSaved` or
+    /// `SaveFailed`.
+    SaveFile {
+        worktree: String,
+        path: String,
+        content: String,
+        version: Option<String>,
+    },
+    /// The file now holds the saved content; `version` is its new token.
+    FileSaved {
+        worktree: String,
+        path: String,
+        version: String,
+    },
+    /// Nothing was written.
+    SaveFailed {
+        worktree: String,
+        path: String,
+        error: SaveError,
+        /// Shown as is.
+        message: String,
+    },
+    /// App → service: where Windows sees this file, to open it in the user's editor.
+    /// Answered by `EditorTarget`.
+    OpenInEditor {
+        worktree: String,
+        path: String,
+    },
+    /// The file's Windows path (`wslpath -w`), or why it cannot be opened.
+    EditorTarget {
+        worktree: String,
+        path: String,
+        windows_path: Option<String>,
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -400,6 +436,20 @@ pub enum FileStatus {
     Renamed,
     /// New and not yet added to git.
     Untracked,
+}
+
+/// Why a file was not saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveError {
+    /// The bytes on disk are not the version the app edited.
+    Conflict,
+    /// Over the service's size cap.
+    TooLarge,
+    /// Not a file inside a worktree of a followed project.
+    InvalidPath,
+    /// Writing failed.
+    Io,
 }
 
 /// Why a folder cannot be added as a project.
@@ -788,6 +838,40 @@ mod tests {
             path: "a".into(),
         };
         assert_eq!(Frame::control(0, &open).to_control().unwrap(), open);
+    }
+
+    #[test]
+    fn save_and_editor_messages_are_tagged_json() {
+        let save = Control::SaveFile {
+            worktree: "/r".into(),
+            path: "a".into(),
+            content: "x".into(),
+            version: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &save).payload[..],
+            br#"{"type":"save_file","worktree":"/r","path":"a","content":"x","version":null}"#
+        );
+        let failed = Control::SaveFailed {
+            worktree: "/r".into(),
+            path: "a".into(),
+            error: SaveError::TooLarge,
+            message: "m".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &failed).payload[..],
+            br#"{"type":"save_failed","worktree":"/r","path":"a","error":"too_large","message":"m"}"#
+        );
+        let target = Control::EditorTarget {
+            worktree: "/r".into(),
+            path: "a".into(),
+            windows_path: Some("w".into()),
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &target).payload[..],
+            br#"{"type":"editor_target","worktree":"/r","path":"a","windows_path":"w","error":null}"#
+        );
     }
 
     #[test]
