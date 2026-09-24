@@ -129,13 +129,6 @@ export const BranchIcon = () => (
 );
 
 /** The pending counter's bell. */
-export const BellIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-    <path d="M3 8.3V5.4a3 3 0 0 1 6 0v2.9l.9 1.1H2.1z" fill="currentColor" />
-    <path d="M5 10.6h2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-  </svg>
-);
-
 /** Row labels for each state (docs/ui-reference.md glossary). */
 export const STATE_LABEL: Record<AgentState, string> = {
   waiting_permission: "waiting for permission",

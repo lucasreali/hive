@@ -184,7 +184,7 @@ test("agents and their subagents show the state the service sent, named for scre
   expect(tree().querySelector(".tree-row.subagent")).toBeNull();
 });
 
-test("a collapsed node shows the most urgent state inside; the counter counts pending agents", () => {
+test("a collapsed node shows the most urgent state inside; the bell counts pending agents", () => {
   render(<App />);
   const [main, fixLogin] = shop.worktrees;
   const agent = (id: string, worktree: (typeof main)["id"] | null, state?: AgentState) => {
@@ -193,23 +193,28 @@ test("a collapsed node shows the most urgent state inside; the counter counts pe
     apply({ type: "agent_detected", channel: 1, id, ...placed });
     if (state) apply({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
   };
-  const counter = () => tree().querySelector(".bar > :first-child") as HTMLElement;
+  // In the title bar: a bell with the number of pending agents.
+  const counter = () => document.querySelector(".pending-bell") as HTMLButtonElement;
   act(() => apply({ type: "projects", projects: [shop, api] }));
-  expect(counter().textContent).toBe("Nothing pending");
+  expect([counter().textContent, counter().title, counter().disabled]).toEqual([
+    "",
+    "Nothing pending",
+    true,
+  ]);
   act(() => {
     agent("s1", main.id, "working");
     agent("s2", fixLogin.id, "idle");
     agent("s3", api.worktrees[0].id, "error");
     agent("s4", api.worktrees[1].id);
   });
-  expect(counter().textContent).toBe("1 pendingF8");
+  expect(counter().textContent).toBe("1");
   act(() => {
     agent("s2", fixLogin.id, "waiting_you");
     agent("s5", null, "waiting_permission");
   });
   // An agent outside every project still counts.
-  expect(counter().textContent).toBe("3 pendingF8");
-  expect(counter().title).toBe("Go to the next pending agent (F8)");
+  expect(counter().textContent).toBe("3");
+  expect(counter().getAttribute("aria-label")).toBe("3 pending: go to the next (F8)");
 
   const rollup = (name: string) =>
     screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }).querySelector(".state-icon");
@@ -234,7 +239,7 @@ test("a collapsed node shows the most urgent state inside; the counter counts pe
   act(() => agent("s1", main.id, "waiting_permission"));
   expect(rollup("shop")?.getAttribute("data-state")).toBe("waiting_permission");
 
-  // The counter is F8.
+  // The bell is F8.
   fireEvent.click(counter());
   expect(useHive.getState().selection).toBe("s1");
   expect(screen.getByRole("button", { name: /^shop/ }).querySelector(".state-icon")).toBeNull();

@@ -156,6 +156,43 @@ button:disabled {
   height: 100%;
 }
 
+/* The pending agents: a bell with their number (F8). */
+.pending-bell {
+  position: relative;
+  width: 32px;
+  height: 26px;
+  margin-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-3);
+}
+
+.pending-bell[data-pending="true"] {
+  color: var(--state-permission);
+}
+
+.pending-bell:not(:disabled):hover {
+  background: var(--border);
+}
+
+.pending-count {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--state-permission);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
 .window-controls button {
   width: 46px;
   display: flex;
@@ -261,7 +298,7 @@ button:disabled {
 }
 
 .sidebar > .bar {
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 6px;
   padding: 0 6px 0 8px;
   border-bottom: 1px solid var(--border-subtle);
@@ -269,30 +306,6 @@ button:disabled {
 
 .sidebar .ghost {
   padding: 0 7px 0 5px;
-}
-
-.sidebar-pending {
-  padding-left: 2px;
-  font-size: var(--fs-small);
-  color: var(--text-3);
-}
-
-.pending-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 6px 0 7px;
-  border: 1px solid rgba(222, 193, 132, 0.28);
-  border-radius: var(--radius);
-  background: rgba(222, 193, 132, 0.1);
-  color: var(--state-permission);
-  font-size: var(--fs-small);
-  font-weight: 500;
-}
-
-.pending-chip:hover {
-  background: rgba(222, 193, 132, 0.18);
 }
 
 .sidebar-tree {
@@ -959,11 +972,6 @@ kbd {
 
 .primary kbd {
   border-color: rgba(31, 35, 41, 0.35);
-  color: inherit;
-}
-
-.pending-chip kbd {
-  border-color: rgba(222, 193, 132, 0.35);
   color: inherit;
 }
 

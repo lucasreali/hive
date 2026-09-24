@@ -47,7 +47,7 @@ test("states: collapsed nodes show the most urgent state inside; F8 walks the pe
 }) => {
   await page.goto("/?mock=states");
   const tree = page.getByRole("navigation", { name: "Projects" });
-  const chip = tree.getByRole("button", { name: "3 pending F8" });
+  const chip = page.getByRole("button", { name: "3 pending: go to the next (F8)" });
   await expect(chip).toBeVisible();
   await expect(chip).toHaveCSS("color", "rgb(222, 193, 132)");
 

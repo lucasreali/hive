@@ -1,6 +1,5 @@
 import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
-import { nextPending } from "../shortcuts";
 import {
   type Agent,
   type AgentState,
@@ -9,7 +8,6 @@ import {
   openMenu,
   openModal,
   type Project,
-  pendingAgents,
   select,
   toggleCollapsed,
   useHive,
@@ -18,7 +16,6 @@ import {
 import { openClaude } from "../terminals";
 import { transport } from "../transport";
 import {
-  BellIcon,
   BranchIcon,
   ChevronIcon,
   FolderIcon,
@@ -48,24 +45,6 @@ function moveInTree(event: KeyboardEvent<HTMLElement>): void {
   event.preventDefault();
 }
 
-/** "N pending" (agents the service marks pending); clicking it is F8. */
-function PendingCounter() {
-  const count = useHive((s) => pendingAgents(s).length);
-  if (count === 0) return <span className="sidebar-pending">Nothing pending</span>;
-  return (
-    <button
-      type="button"
-      className="pending-chip"
-      title="Go to the next pending agent (F8)"
-      onClick={nextPending}
-    >
-      <BellIcon />
-      <span>{count} pending</span>
-      <kbd>F8</kbd>
-    </button>
-  );
-}
-
 /** A collapsed node's most urgent state inside (rule 1), by the service's urgency. */
 function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
   const state = useHive((s) => mostUrgent(s, Object.values(s.agents).filter(agents)));
@@ -79,7 +58,6 @@ export function Sidebar() {
   return (
     <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree}>
       <div className="bar">
-        <PendingCounter />
         <div className="sidebar-actions">
           <button
             type="button"
