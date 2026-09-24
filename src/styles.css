@@ -678,13 +678,107 @@ button.chevron:hover {
   font-size: var(--fs-mono);
 }
 
-.tree-row.agent {
-  height: 24px;
-  padding: 0 8px 0 40px;
+/* Agent and subagent rows: state icon, then the title over the state's name. */
+.tree-row.agent,
+.tree-row.subagent {
+  padding: 4px 8px 5px 40px;
 }
 
-.agent .row-main {
+.tree-row.subagent {
+  position: relative;
+  padding-left: 56px;
+}
+
+/* Tree lines from the agent down to each subagent; the last one stops at its row. */
+.tree-row.subagent::before,
+.tree-row.subagent::after {
+  content: "";
+  position: absolute;
+  left: 45px;
+  background: var(--tree-line);
+}
+
+.tree-row.subagent::before {
+  top: 0;
+  width: 1px;
+  height: 100%;
+}
+
+li:last-child > .tree-row.subagent::before {
+  height: 12px;
+}
+
+.tree-row.subagent::after {
+  top: 11px;
+  width: 8px;
+  height: 1px;
+}
+
+.agent .row-main,
+.subagent .row-main {
+  align-items: flex-start;
   gap: 7px;
+}
+
+.state-icon {
+  flex: none;
+  margin-top: 2px;
+  overflow: visible;
+}
+
+.state-icon .pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: hive-pulse 2.4s ease-out infinite;
+}
+
+@keyframes hive-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  70%,
+  100% {
+    transform: scale(2.3);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state-icon .pulse {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+.agent-lines {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.subagent .prefix {
+  color: var(--text-3);
+}
+
+.state-label {
+  font-size: var(--fs-small);
+  line-height: 15px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Only the alerting states color their name (prototype); subagent names stay neutral. */
+.agent .state-label[data-state="waiting_permission"] {
+  color: var(--state-permission);
+}
+
+.agent .state-label[data-state="error"] {
+  color: var(--state-error);
 }
 
 .tree-error {

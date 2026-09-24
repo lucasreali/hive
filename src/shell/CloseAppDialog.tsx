@@ -1,14 +1,17 @@
-import { type HiveState, openModal, useHive } from "../store";
+import { type AgentState, type HiveState, openModal, useHive } from "../store";
 import { CloseIcon } from "./icons";
 import { closeWindow } from "./window";
 
 const cancel = () => openModal(null);
 
+const AT_RISK = new Set<AgentState>(["working", "waiting_permission", "waiting_you"]);
+
 /**
- * The agents that make closing ask first (#18). Stage 1 has no agent states yet, so every
- * detected agent counts; Stage 2 keeps only working, waiting for permission and waiting for you.
+ * The agents that make closing ask first (#18): working, waiting for permission or waiting
+ * for you, as the service last said. An agent with no state yet is idle.
  */
-export const agentsAtRisk = (s: HiveState) => Object.values(s.agents);
+export const agentsAtRisk = (s: HiveState) =>
+  Object.values(s.agents).filter((a) => AT_RISK.has(s.agentStates[a.id]?.state ?? "idle"));
 
 /** The close guard: asks when agents would end with the app. True keeps the window open. */
 export function confirmClose(): boolean {

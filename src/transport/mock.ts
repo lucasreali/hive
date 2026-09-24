@@ -1,4 +1,4 @@
-import type { Project, ServiceMessage, Worktree } from "../store";
+import type { AgentState, Project, ServiceMessage, Subagent, Worktree } from "../store";
 import type { Transport } from ".";
 import { loadReplay, type ReplayEvent } from "./replay";
 
@@ -21,6 +21,42 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
 export const LOAD_START_MS = 500;
 export const LOAD_STAGGER_MS = 100;
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
+
+const sub = (id: string, agent_type: string | null, state: AgentState): Subagent => ({
+  id,
+  agent_type,
+  state,
+});
+/**
+ * `?mock=states`: agents without a terminal in every state, by worktree path (relative to
+ * `/home/user/projects`), as the service would resolve them ("the most urgent wins").
+ */
+export const MOCK_STATES: [string, AgentState, Subagent[]][] = [
+  ["shop", "with_subagents", [sub("a1", "Explore", "working"), sub("a2", null, "working")]],
+  [
+    "shop/.claude/worktrees/fix-login",
+    "waiting_permission",
+    [sub("a3", "general-purpose", "waiting_permission"), sub("a4", "Explore", "idle")],
+  ],
+  ["shop/.claude/worktrees/feat-checkout", "waiting_you", []],
+  ["api", "error", []],
+  ["api", "ended", []],
+  ["api/.claude/worktrees/refactor-auth", "working", []],
+  ["api/.claude/worktrees/refactor-auth", "idle", []],
+];
+
+function mockStates(): ServiceMessage[] {
+  return MOCK_STATES.flatMap(([dir, state, subagents], i) => {
+    const path = `/home/user/projects/${dir}`;
+    const id = `mock-state-${i + 1}`;
+    const project = `/home/user/projects/${dir.split("/")[0]}`;
+    const place = { project, worktree: path, cwd: path };
+    return [
+      { type: "agent_detected", channel: 1000 + i, id, ...place },
+      { type: "agent_state", id, state, subagents },
+    ];
+  });
+}
 
 const worktree = (root: string, name: string, main = false): Worktree => {
   const path = main ? root : `${root}/.claude/worktrees/${name}`;
@@ -73,12 +109,13 @@ function nameError(project: Project, name: string): string | null {
 /**
  * A fake service for the browser (`bun run dev`, Playwright): it welcomes the UI, and each
  * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`;
- * `cd <dir>` moves it and `claude` detects an agent there (removed when the terminal exits).
+ * `cd <dir>` moves it and `claude` detects an idle agent there (removed when the terminal
+ * exits); every later line sets that agent working.
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
- * "empty" starts with no projects. "load" (1.11) replays a recording into every terminal right
+ * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents. "load" (1.11) replays a recording into every terminal right
  * after its prompt, at recorded timing, each terminal starting `LOAD_STAGGER_MS` later than
  * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
  * generated one.
@@ -131,14 +168,19 @@ export function createMockTransport(
     terminal.agent = `mock-session-${id}`;
     const placed = { project: project?.id ?? null, worktree, cwd };
     later({ type: "agent_detected", channel: id, id: terminal.agent, ...placed });
+    setState(terminal.agent, "idle");
   };
+  const setState = (id: string, state: AgentState) =>
+    later({ type: "agent_state", id, state, subagents: [] });
 
   return {
     async connect(onMessage) {
       send = onMessage;
       const failure = HANDSHAKE[scenario ?? ""];
       later(failure ?? WELCOME);
-      if (!failure) later({ type: "projects", projects });
+      if (failure) return;
+      later({ type: "projects", projects });
+      if (scenario === "states") for (const m of mockStates()) later(m);
     },
     async listProjects() {
       later({ type: "projects", projects });
@@ -202,6 +244,8 @@ export function createMockTransport(
         const line = terminal.line;
         terminal.line = "";
         if (line === "exit") return exit(id, 0);
+        // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
+        if (terminal.agent && line) setState(terminal.agent, "working");
         if (line === "claude") detect(id, terminal);
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);

@@ -19,6 +19,7 @@ export type ServiceMessage =
   | { type: "unhooked_agent"; channel: number }
   | ({ type: "agent_detected"; channel: number } & Omit<Agent, "terminal">)
   | { type: "agent_removed"; channel: number; id: string }
+  | ({ type: "agent_state"; id: string } & AgentStatus)
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
@@ -116,6 +117,22 @@ export type Agent = {
   cwd: string | null;
 };
 
+/** An agent's displayed state, already resolved by the service ("the most urgent wins"). */
+export type AgentState =
+  | "idle"
+  | "working"
+  | "waiting_permission"
+  | "waiting_you"
+  | "error"
+  | "with_subagents"
+  | "ended";
+
+/** A live subagent (`id` = its `agent_id`) with its own state. */
+export type Subagent = { id: string; agent_type: string | null; state: AgentState };
+
+/** What `agent_state` says about an agent, stored by its session id. */
+export type AgentStatus = { state: AgentState; subagents: Subagent[] };
+
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
 
@@ -146,6 +163,8 @@ export type HiveState = {
   worktreeDialog: WorktreeDialog;
   terminals: Record<number, Terminal>;
   agents: Record<string, Agent>;
+  /** By session id; kept apart from `agents` so either message may arrive first. */
+  agentStates: Record<string, AgentStatus>;
 };
 
 export const initialState: HiveState = {
@@ -164,6 +183,7 @@ export const initialState: HiveState = {
   worktreeDialog: { branches: null, nameChecks: {}, created: null, createFailure: null },
   terminals: {},
   agents: {},
+  agentStates: {},
 };
 
 export const useHive = create<HiveState>()(() => initialState);
@@ -197,7 +217,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "agent_removed": {
       const { [m.id]: _, ...agents } = s.agents;
-      return { agents };
+      const { [m.id]: __, ...agentStates } = s.agentStates;
+      return { agents, agentStates };
+    }
+    case "agent_state": {
+      const { type: _, id, ...status } = m;
+      return { agentStates: { ...s.agentStates, [id]: status } };
     }
     case "projects":
       return { projects: Object.fromEntries(m.projects.map((p) => [p.id, p])) };
@@ -231,7 +256,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "disconnected":
       // The service is gone, and every agent with it.
-      return { connection: { status: "disconnected", reason: m.reason }, agents: {} };
+      return {
+        connection: { status: "disconnected", reason: m.reason },
+        agents: {},
+        agentStates: {},
+      };
     default:
       // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.
       return {};

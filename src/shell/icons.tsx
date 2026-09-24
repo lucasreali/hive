@@ -1,3 +1,6 @@
+import type { ReactNode } from "react";
+import type { AgentState } from "../store";
+
 // Inline SVG icons from the prototype (docs/prototype/HiveApp.dc.html).
 
 export const HiveIcon = () => (
@@ -119,18 +122,90 @@ export const BranchIcon = () => (
   </svg>
 );
 
-// `StateIcon.dc.html`'s idle state; the only agent icon until states arrive (Stage 2).
-export const IdleIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-    <circle cx="6" cy="6" r="5.2" fill="var(--state-idle)" />
-    <path
-      d="M3.6 6.2 5.3 7.8 8.5 4.4"
-      fill="none"
-      stroke="var(--bg)"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
+/** Row labels for each state (docs/ui-reference.md glossary). */
+export const STATE_LABEL: Record<AgentState, string> = {
+  waiting_permission: "waiting for permission",
+  error: "error",
+  waiting_you: "waiting for you",
+  working: "working",
+  with_subagents: "running subagents",
+  idle: "idle",
+  ended: "ended",
+};
+
+const STATE_SHAPE: Record<AgentState, ReactNode> = {
+  waiting_permission: (
+    <>
+      <path
+        d="M6 1.3 11.2 10.5H.8z"
+        fill="var(--state-permission)"
+        stroke="var(--state-permission)"
+        strokeLinejoin="round"
+      />
+      <rect x="5.35" y="4.2" width="1.3" height="3.3" rx=".6" fill="var(--bg)" />
+      <circle cx="6" cy="8.9" r=".75" fill="var(--bg)" />
+    </>
+  ),
+  error: (
+    <>
+      <circle cx="6" cy="6" r="5.2" fill="var(--state-error)" />
+      <path d="M4 4 8 8M8 4 4 8" stroke="var(--bg)" strokeWidth="1.5" strokeLinecap="round" />
+    </>
+  ),
+  waiting_you: (
+    <>
+      <circle cx="6" cy="6" r="4.4" fill="none" stroke="var(--state-you)" strokeWidth="1.6" />
+      <circle cx="6" cy="6" r="1.7" fill="var(--state-you)" />
+    </>
+  ),
+  working: (
+    <>
+      <circle className="pulse" cx="6" cy="6" r="3.1" fill="var(--state-working)" />
+      <circle cx="6" cy="6" r="3.1" fill="var(--state-working)" />
+    </>
+  ),
+  with_subagents: (
+    <>
+      <path
+        d="M6 3v3M6 6 2.8 9M6 6l3.2 3"
+        fill="none"
+        stroke="var(--state-subagents)"
+        strokeWidth="1.2"
+      />
+      <circle cx="6" cy="2.6" r="2" fill="var(--state-subagents)" />
+      <circle cx="2.6" cy="9.3" r="2" fill="var(--state-subagents)" />
+      <circle cx="9.4" cy="9.3" r="2" fill="var(--state-subagents)" />
+    </>
+  ),
+  idle: (
+    <>
+      <circle cx="6" cy="6" r="5.2" fill="var(--state-idle)" />
+      <path
+        d="M3.6 6.2 5.3 7.8 8.5 4.4"
+        fill="none"
+        stroke="var(--bg)"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </>
+  ),
+  ended: <rect x="2" y="2" width="8" height="8" rx="1.5" fill="var(--state-ended)" />,
+};
+
+/** `StateIcon.dc.html`: a state's color and shape, named for screen readers. */
+export const StateIcon = ({ state }: { state: AgentState }) => (
+  <svg
+    className="state-icon"
+    width="12"
+    height="12"
+    viewBox="0 0 12 12"
+    role="img"
+    aria-label={STATE_LABEL[state]}
+    data-state={state}
+  >
+    <title>{STATE_LABEL[state]}</title>
+    {STATE_SHAPE[state]}
   </svg>
 );
 

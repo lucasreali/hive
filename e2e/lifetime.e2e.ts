@@ -12,7 +12,7 @@ test("closing with no agent closes at once", async ({ page }) => {
   expect(await closed(page)).toBe(true);
 });
 
-test("closing with an agent asks first: cancel keeps the app, confirm closes it", async ({
+test("closing with a working agent asks first: cancel keeps the app, confirm closes it", async ({
   page,
 }) => {
   await page.goto("/");
@@ -21,10 +21,21 @@ test("closing with an agent asks first: cancel keeps the app, confirm closes it"
   await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
   await page.keyboard.type("claude");
   await page.keyboard.press("Enter");
-  await expect(tree.locator(".tree-row.agent")).toHaveCount(1);
+  await expect(tree.getByRole("img", { name: "idle" })).toHaveCount(1);
 
+  // An idle agent loses nothing: the app closes at once (#18).
   const close = page.getByTitle("Close", { exact: true });
   const dialog = page.getByRole("dialog", { name: "Close Hive?" });
+  await close.click();
+  await expect(dialog).toHaveCount(0);
+  expect(await closed(page)).toBe(true);
+  await page.evaluate(() => delete document.documentElement.dataset.closed);
+
+  // A prompt sets the fake agent working.
+  await page.locator(".xterm").click();
+  await page.keyboard.type("fix the login bug");
+  await page.keyboard.press("Enter");
+  await expect(tree.getByRole("img", { name: "working" })).toHaveCount(1);
   await close.click();
   await expect(dialog).toContainText("1 agent is running.");
   await dialog.getByRole("button", { name: "Cancel Esc" }).click();

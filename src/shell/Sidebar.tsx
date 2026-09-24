@@ -1,6 +1,7 @@
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import {
   type Agent,
+  type AgentState,
   activateTab,
   openModal,
   type Project,
@@ -9,7 +10,15 @@ import {
   useHive,
 } from "../store";
 import { transport } from "../transport";
-import { BranchIcon, ChevronIcon, FolderIcon, IdleIcon, PlusIcon, RefreshIcon } from "./icons";
+import {
+  BranchIcon,
+  ChevronIcon,
+  FolderIcon,
+  PlusIcon,
+  RefreshIcon,
+  STATE_LABEL,
+  StateIcon,
+} from "./icons";
 
 /**
  * Arrow keys in the tree (#35): up/down move between rows, left/right collapse and expand a
@@ -31,7 +40,7 @@ function moveInTree(event: KeyboardEvent<HTMLElement>): void {
   event.preventDefault();
 }
 
-// Agent states join the tree in 2.2, the pending counter in 2.3. ponytail: plain list, add TanStack Virtual when trees get long.
+// The pending counter joins in 2.3. ponytail: plain list, add TanStack Virtual when trees get long.
 export function Sidebar() {
   const projects = useHive((s) => s.projects);
   const list = Object.values(projects ?? {});
@@ -145,23 +154,59 @@ function ProjectNode({ project }: { project: Project }) {
   );
 }
 
-/** An agent, under the worktree the service placed it in; clicking it shows its terminal. */
+/** The icon and the state's name under the row's title; the icon names it for screen readers. */
+function StateLines({ state, title }: { state: AgentState; title: ReactNode }) {
+  return (
+    <>
+      <StateIcon state={state} />
+      <span className="agent-lines">
+        <span className="label">{title}</span>
+        <span className="state-label" data-state={state} aria-hidden="true">
+          {STATE_LABEL[state]}
+        </span>
+      </span>
+    </>
+  );
+}
+
+/**
+ * An agent, under the worktree the service placed it in, with its live subagents; clicking
+ * either shows the agent's terminal. States are the service's (#37); until the first
+ * `agent_state` arrives the agent shows as idle, as `SessionStart` leaves it.
+ */
 function AgentRow({ agent }: { agent: Agent }) {
   const tab = useHive((s) => s.tabs.find((t) => t.id === agent.terminal));
   const shown = useHive((s) => s.activeTab === agent.terminal);
+  const status = useHive((s) => s.agentStates[agent.id]);
+  const show = () => tab && activateTab(tab);
   return (
     <li>
       <div className="tree-row agent" title={agent.cwd ?? undefined} data-selected={shown}>
-        <button
-          type="button"
-          className="row-main"
-          aria-current={shown}
-          onClick={() => tab && activateTab(tab)}
-        >
-          <IdleIcon />
-          <span className="label">Claude</span>
+        <button type="button" className="row-main" aria-current={shown} onClick={show}>
+          <StateLines state={status?.state ?? "idle"} title="Claude" />
         </button>
       </div>
+      {status && status.subagents.length > 0 && (
+        <ul>
+          {status.subagents.map((sub) => (
+            <li key={sub.id}>
+              <div className="tree-row subagent">
+                <button type="button" className="row-main" onClick={show}>
+                  <StateLines
+                    state={sub.state}
+                    title={
+                      <>
+                        <span className="prefix">subagent: </span>
+                        {sub.agent_type ?? "unknown"}
+                      </>
+                    }
+                  />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </li>
   );
 }
