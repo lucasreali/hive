@@ -473,6 +473,15 @@ export const removeTab = (id: number) =>
   });
 
 /**
+ * The selected project or worktree id (a path). A selected agent (F8) stands for the worktree
+ * the service placed it in, null when none.
+ */
+export function selectedPlace(s: HiveState): string | null {
+  const agent = s.agents[s.selection ?? ""];
+  return agent ? agent.worktree : s.selection;
+}
+
+/**
  * The worktree the files panel shows: the selected worktree (a selected project is its main
  * worktree, which shares its id) or the selected agent's; else the shown terminal's.
  */
@@ -481,9 +490,8 @@ export function panelWorktree(s: HiveState): { project: Project; worktree: Workt
     project.worktrees.map((worktree) => ({ project, worktree })),
   );
   const find = (id: string | null | undefined) => all.find((e) => e.worktree.id === id);
-  const agent = s.agents[s.selection ?? ""];
   const tab = s.tabs.find((t) => t.id === s.activeTab);
-  return find(agent ? agent.worktree : s.selection) ?? find(tab?.cwd) ?? null;
+  return find(selectedPlace(s)) ?? find(tab?.cwd) ?? null;
 }
 
 /** Agents in the sidebar's order (project, worktree, arrival); those outside the tree last. */

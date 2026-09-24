@@ -4,6 +4,7 @@ import {
   openModal,
   owner,
   pendingAgents,
+  selectedPlace,
   setRightPanel,
   useHive,
 } from "./store";
@@ -13,9 +14,9 @@ import { sendReference } from "./viewer/reference";
 // App shortcuts (#35): Ctrl+Shift+letter and F8, taken even with the focus in a terminal.
 // Every other key goes to the terminal untouched.
 
-/** The selected project, the project of the selected worktree, or else the first project. */
+/** The selected project, the project of the selected worktree (or agent), else the first one. */
 function currentProject(s: HiveState): string | null {
-  return (owner(s.projects, s.selection) ?? Object.values(s.projects ?? {})[0])?.id ?? null;
+  return (owner(s.projects, selectedPlace(s)) ?? Object.values(s.projects ?? {})[0])?.id ?? null;
 }
 
 /**

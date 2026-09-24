@@ -3,6 +3,7 @@ import {
   activateTab,
   type HiveState,
   openModal,
+  selectedPlace,
   setRightPanel,
   type Tab,
   useHive,
@@ -104,11 +105,7 @@ export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
   const empty = useHive((s) => s.projects !== null && Object.keys(s.projects).length === 0);
   const tabs = useHive((s) => s.tabs);
-  // A selected agent (F8) is not a folder: its worktree is, when the service placed it in one.
-  const selected = useHive((s) => {
-    const agent = s.agents[s.selection ?? ""];
-    return agent ? agent.worktree : s.selection;
-  });
+  const selected = useHive(selectedPlace);
   return (
     <section className="terminals" aria-label="Terminals">
       <div className="bar">

@@ -55,6 +55,15 @@ test("Ctrl+Shift+N opens the new worktree dialog for the current project", () =>
     press(ctrlShift("n"));
     expect(useHive.getState()).toMatchObject({ modal: "new-worktree", modalProject: api.id });
   }
+  // A selected agent (F8): the project of its worktree.
+  act(() => {
+    openModal(null);
+    const worktree = api.worktrees[1].id;
+    apply({ type: "agent_detected", channel: 9, id: "s", project: api.id, worktree, cwd: null });
+    select("s");
+  });
+  press(ctrlShift("N"));
+  expect(useHive.getState()).toMatchObject({ modal: "new-worktree", modalProject: api.id });
 });
 
 test("Ctrl+Shift+N without projects opens the add project dialog", () => {
