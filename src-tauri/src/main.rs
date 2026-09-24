@@ -2,15 +2,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use hive_lib::commands;
+use tauri::path::BaseDirectory;
+use tauri::Manager;
 
 // Wiring only (excluded from coverage, see COVERAGE_EXCLUSIONS.md): builder, plugins, state and
 // command registration. Commands and any logic live in lib.rs, which is tested.
 fn main() {
-    let (program, args) = hive_lib::bridge_command(|key| std::env::var_os(key));
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .manage(hive_lib::Hive::new(program, args))
+        .setup(|app| {
+            let bundled = app.path().resolve("hive", BaseDirectory::Resource).ok();
+            let (program, args) = hive_lib::bridge_command(|key| std::env::var_os(key), bundled);
+            app.manage(hive_lib::Hive::new(program, args));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::open_terminal,

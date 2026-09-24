@@ -113,45 +113,127 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
 }
 
 #[test]
-fn bridge_runs_the_installed_hive_without_a_shell_config() {
-    let (program, args) = bridge_command(|_| None);
+fn bridge_runs_a_constant_script_without_a_shell_config() {
+    let (program, args) = bridge_command(|_| None, None);
     assert_eq!(program, "wsl.exe");
     assert_eq!(
         args,
-        ["--exec", "/bin/sh", "-c", BRIDGE_SCRIPT, "sh"].map(OsString::from)
-    );
-    assert_eq!(
-        BRIDGE_SCRIPT,
-        r#"exec "${1:-$HOME/.cargo/bin/hive}" bridge"#
+        ["--exec", "/bin/sh", "-c", BRIDGE_SCRIPT, "sh", "", ""].map(OsString::from)
     );
 }
 
 #[test]
 fn bridge_overrides_are_separate_arguments() {
-    let (_, args) = bridge_command(|key| match key {
-        "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
-        "HIVE_BRIDGE" => Some("/src/hive; rm -rf ~".into()),
-        _ => None,
-    });
+    let bundled = std::env::current_exe().unwrap();
+    let (_, args) = bridge_command(
+        |key| match key {
+            "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
+            "HIVE_BRIDGE" => Some("/src/hive; rm -rf ~".into()),
+            _ => None,
+        },
+        Some(bundled.clone()),
+    );
     let expected = [
-        "-d",
-        "Ubuntu",
-        "--exec",
-        "/bin/sh",
-        "-c",
-        BRIDGE_SCRIPT,
-        "sh",
-        "/src/hive; rm -rf ~",
+        "-d".into(),
+        "Ubuntu".into(),
+        "--exec".into(),
+        "/bin/sh".into(),
+        "-c".into(),
+        BRIDGE_SCRIPT.into(),
+        "sh".into(),
+        "/src/hive; rm -rf ~".into(),
+        bundled.into_os_string(),
     ];
-    assert_eq!(args, expected.map(OsString::from));
+    assert_eq!(args, expected);
 }
 
 #[test]
-fn empty_overrides_are_ignored() {
+fn empty_overrides_and_a_missing_bundle_are_ignored() {
+    let missing = std::env::temp_dir().join("hive-no-such-bundle");
     assert_eq!(
-        bridge_command(|_| Some("".into())),
-        bridge_command(|_| None)
+        bridge_command(|_| Some("".into()), Some(missing)),
+        bridge_command(|_| None, None)
     );
+}
+
+/// A temporary `HOME` with a fake `wslpath` (prints its path argument) and a bundled `hive`
+/// that prints what ran it. Removed on drop.
+struct ScriptHome(std::path::PathBuf);
+
+impl ScriptHome {
+    fn new(name: &str) -> Self {
+        let root = std::env::temp_dir().join(format!("hive-bridge-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("fakebin")).unwrap();
+        let home = Self(root);
+        home.write("fakebin/wslpath", "#!/bin/sh\nprintf '%s\\n' \"$2\"\n");
+        home.write("bundle/hive", "#!/bin/sh\necho \"v1 $0 $*\"\n");
+        home
+    }
+
+    fn write(&self, path: &str, text: &str) {
+        let path = self.0.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Runs the bridge script as `wsl.exe` would, with the given `$1` and `$2`.
+    fn run(&self, over: &str, bundled: &str) -> String {
+        let path = format!("{}:/usr/bin:/bin", self.0.join("fakebin").display());
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", BRIDGE_SCRIPT, "sh", over, bundled])
+            .env_clear()
+            .env("HOME", &self.0)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn installed(&self) -> std::path::PathBuf {
+        self.0.join(".local/share/hive/bin/hive")
+    }
+}
+
+impl Drop for ScriptHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn the_bridge_script_installs_the_bundled_hive_once_per_version() {
+    use std::os::unix::fs::MetadataExt;
+    let home = ScriptHome::new("install");
+    let installed = home.installed();
+    // Windows gives a verbatim (`\\?\`) path; wslpath gets it without that prefix.
+    let bundled = format!(r"\\?\{}", home.0.join("bundle/hive").display());
+    assert_eq!(
+        home.run("", &bundled),
+        format!("v1 {} bridge\n", installed.display())
+    );
+    let inode = std::fs::metadata(&installed).unwrap().ino();
+    home.run("", &bundled);
+    assert_eq!(std::fs::metadata(&installed).unwrap().ino(), inode, "same file: no copy");
+
+    home.write("bundle/hive", "#!/bin/sh\necho \"v2 $*\"\n");
+    assert_eq!(home.run("", &bundled), "v2 bridge\n");
+    assert!(!installed.with_extension("new").exists());
+}
+
+#[test]
+fn the_bridge_script_prefers_the_override_then_cargo_install() {
+    let home = ScriptHome::new("override");
+    home.write("dev/hive", "#!/bin/sh\necho \"dev $*\"\n");
+    home.write(".cargo/bin/hive", "#!/bin/sh\necho \"cargo $*\"\n");
+    let bundled = home.0.join("bundle/hive").display().to_string();
+    let dev = home.0.join("dev/hive").display().to_string();
+    assert_eq!(home.run(&dev, &bundled), "dev bridge\n");
+    assert_eq!(home.run("", ""), "cargo bridge\n");
+    assert!(!home.installed().exists());
 }
 
 #[tokio::test]

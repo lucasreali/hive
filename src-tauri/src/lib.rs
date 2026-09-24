@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -29,8 +30,21 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Runs inside WSL through `wsl.exe --exec`, so no login or interactive shell (and no fish
-/// config) runs first. `$1` is the optional `HIVE_BRIDGE` override, passed as an argument.
-const BRIDGE_SCRIPT: &str = r#"exec "${1:-$HOME/.cargo/bin/hive}" bridge"#;
+/// config) runs first. `$1` is the `HIVE_BRIDGE` override and `$2` the Windows path of the
+/// `hive` the installer bundles, each passed as an argument (maybe empty). The bundled one is
+/// copied into Hive's bin dir when it differs from the copy there, through a temporary file and
+/// a rename, so a running `hive` keeps its file. Without either, `cargo install`'s (development).
+const BRIDGE_SCRIPT: &str = r#"[ -n "$1" ] && exec "$1" bridge
+hive=$HOME/.cargo/bin/hive
+if [ -n "$2" ]; then
+  hive=${XDG_DATA_HOME:-$HOME/.local/share}/hive/bin/hive
+  src=$(wslpath -u "${2#'\\?\'}") || exit 1
+  if ! cmp -s "$src" "$hive"; then
+    mkdir -p "${hive%/*}" && cp "$src" "$hive.new" && chmod 755 "$hive.new" &&
+      mv -f "$hive.new" "$hive" || exit 1
+  fi
+fi
+exec "$hive" bridge"#;
 
 /// How much of the bridge's stderr is kept as the disconnect reason.
 const STDERR_LIMIT: u64 = 16_384;
@@ -39,17 +53,22 @@ const EXIT_WAIT: Duration = Duration::from_secs(2);
 
 const NOT_CONNECTED: &str = "not connected to the hive service";
 
-/// Program and arguments that start `hive bridge` from Windows (#14, #29).
+/// Program and arguments that start `hive bridge` from Windows (#14, 4.18).
 /// `HIVE_WSL_DISTRO` picks the WSL distribution and `HIVE_BRIDGE` the `hive` binary
-/// (an absolute Linux path, for development). Neither is ever spliced into the script.
-pub fn bridge_command(var: impl Fn(&str) -> Option<OsString>) -> (OsString, Vec<OsString>) {
+/// (an absolute Linux path, for development). `bundled` is where the installer put the Linux
+/// `hive`, used when that file exists. Nothing is ever spliced into the script.
+pub fn bridge_command(
+    var: impl Fn(&str) -> Option<OsString>,
+    bundled: Option<PathBuf>,
+) -> (OsString, Vec<OsString>) {
     let var = |key| var(key).filter(|value| !value.is_empty());
     let mut args = Vec::new();
     if let Some(distro) = var("HIVE_WSL_DISTRO") {
         args.extend([OsString::from("-d"), distro]);
     }
     args.extend(["--exec", "/bin/sh", "-c", BRIDGE_SCRIPT, "sh"].map(OsString::from));
-    args.extend(var("HIVE_BRIDGE"));
+    args.push(var("HIVE_BRIDGE").unwrap_or_default());
+    args.push(bundled.filter(|path| path.is_file()).unwrap_or_default().into());
     ("wsl.exe".into(), args)
 }
 

@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import { connect } from "../connect";
 import { useHive } from "../store";
 
-// How the service is installed (#29). `pkill` ends an old service still waiting for an app:
-// a refused handshake does not stop it.
+// The installed app brings its own service (4.18), so a mismatch is an old service still
+// waiting for an app: a refused handshake does not stop it. Development builds use `cargo install`.
 const INSTALL = "cargo install --path crates/hive";
 const STOP = "pkill -f 'hive daemon'";
 
@@ -50,12 +50,13 @@ export function ConnectionBlock() {
             {c.version} (protocol {c.protocol})
           </dd>
         </dl>
-        <p>
-          Build both from the same commit of the Hive repository. To reinstall the service, run in
-          WSL from the repository:
-        </p>
-        <pre>{`${INSTALL}\n${STOP}`}</pre>
+        <p>Hive brings its own service. Stop the old one in WSL:</p>
+        <pre>{STOP}</pre>
         <p>Then reconnect, or restart Hive.</p>
+        <p>
+          A development build runs the service from <code>{INSTALL}</code>: build both from the
+          same commit.
+        </p>
       </Dialog>
     );
   }

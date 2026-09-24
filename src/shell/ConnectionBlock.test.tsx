@@ -36,9 +36,8 @@ test("a version mismatch blocks the workspace with both versions and the fix", (
   expect(block.getAttribute("aria-modal")).toBe("true");
   expect(block.textContent).toContain("The app and the hive service versions differ");
   expect(block.textContent).toContain("App0.1.0 (protocol 1)Service0.2.0 (protocol 2)");
-  expect(block.querySelector("pre")?.textContent).toBe(
-    "cargo install --path crates/hive\npkill -f 'hive daemon'",
-  );
+  expect(block.querySelector("pre")?.textContent).toBe("pkill -f 'hive daemon'");
+  expect(block.querySelector("code")?.textContent).toBe("cargo install --path crates/hive");
   expect(workspace().inert).toBe(true);
   // The title bar stays usable so the window can be closed.
   expect(screen.getByTitle("Close").closest("[inert]")).toBeNull();

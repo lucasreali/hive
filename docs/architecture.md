@@ -121,7 +121,12 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 ## Sequences
 
 ### Bridge start
-1. The app runs `wsl.exe [-d $HIVE_WSL_DISTRO] --exec /bin/sh -c 'exec "${1:-$HOME/.cargo/bin/hive}" bridge' sh [$HIVE_BRIDGE]`: the `hive` installed by `cargo install` (#29), or the absolute Linux path in `HIVE_BRIDGE` (development, `scripts/win-dev.sh`). `--exec` skips the user's login shell, so no fish config runs. The script is a constant; the override is a separate argument. On Windows the process gets `CREATE_NO_WINDOW`, and it is killed when the app drops the connection.
+1. The app runs `wsl.exe [-d $HIVE_WSL_DISTRO] --exec /bin/sh -c <BRIDGE_SCRIPT> sh "$HIVE_BRIDGE" "<bundled>"` (`src-tauri/src/lib.rs`). `--exec` skips the user's login shell, so no fish config runs. The script is a constant; both values are separate arguments, empty when absent. The script runs, in order:
+   - `$HIVE_BRIDGE`, an absolute Linux path (development, `scripts/win-dev.sh`);
+   - the `hive` the installer bundles (4.18): `<bundled>` is its Windows path in the app's resources, only when that file exists. `wslpath -u` (after dropping a verbatim `\\?\` prefix) finds it in WSL; when `cmp` finds it differs from `<data>/hive/bin/hive`, it is copied to `hive.new` there and renamed over it, so a running `hive` keeps its file. The copy runs, so hooks (which call the daemon's `current_exe`) use it too;
+   - otherwise `~/.cargo/bin/hive` (`cargo install`, development).
+
+   On Windows the process gets `CREATE_NO_WINDOW`, and it is killed when the app drops the connection.
 2. The bridge connects to `<runtime>/hive.sock`.
 3. If the connection fails, the bridge prepares the runtime dir, truncates `daemon.log` (0600) and runs `setsid --fork hive daemon`. The daemon's stdin and stdout are null and its stderr goes to the log.
 4. The bridge retries the connection for up to 5 s. If the daemon never listens, the bridge fails with "the hive service did not start; see <log>".
@@ -132,7 +137,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 1. The UI calls `connect(onMessage)` at startup (`connect` in `src/connect.ts`, called by `src/main.tsx`), handing a `Channel` to Rust. "Reconnect" goes through the same function, so every connection has the same handler.
 2. Rust starts the bridge and queues `hello {role: app, version}`; `version` is the app's `CARGO_PKG_VERSION`, so `hive-app` and `hive` share one version number.
 3. `welcome` or `version_mismatch` goes to the UI. After `version_mismatch`, Rust drops the bridge and sends nothing more.
-   The UI (`src/shell/ConnectionBlock.tsx`) then blocks the workspace (`inert`, with a modal `alertdialog`; the title bar stays usable) and shows both versions and the fix: `cargo install --path crates/hive` and `pkill -f 'hive daemon'`, because a refused handshake leaves the old service running. `disconnected` blocks the same way and shows the reason. The dialog's "Reconnect" calls `connect` again, which starts a new bridge.
+   The UI (`src/shell/ConnectionBlock.tsx`) then blocks the workspace (`inert`, with a modal `alertdialog`; the title bar stays usable) and shows both versions and the fix: `pkill -f 'hive daemon'`, because a refused handshake leaves the old service running (the installed app brings its own `hive`), and, for development builds, `cargo install --path crates/hive`. `disconnected` blocks the same way and shows the reason. The dialog's "Reconnect" calls `connect` again, which starts a new bridge.
 4. A UI that reloads calls `connect` again: if the connection is up, Rust closes that UI's old terminals, drops their later messages, and replays `welcome`; otherwise it starts a new bridge.
 5. When the bridge's stdout closes, Rust waits up to 2 s for its stderr, sends `terminal_exited` for every open terminal and then `disconnected {reason}`. Commands then fail with "not connected to the hive service".
 
