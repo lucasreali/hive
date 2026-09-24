@@ -75,7 +75,7 @@
 
 ## Stage 3 — See what the agent did
 
-- [ ] **3.1 File watching** in the service (inotify) → real-time file tree.
+- [x] **3.1 File watching** `task/3.1-file-watching` — *orchestrator defaults, pending human review at checkpoint 3: `watch_worktree {path}` / `unwatch_worktree` / `files {path, files, truncated}` on channel 0, one watched worktree at a time (the files panel's: the selected worktree, a project's main one, or the selected agent's; re-sent after a new `welcome`). Files = `git ls-files --cached --others --exclude-standard` (not-UTF-8 names and nested repositories skipped, cap 50 000 files / 3 MiB of names). inotify through `nix` on the listed directories, untracked (even empty) ones and the git dir's `HEAD`/`index`, at most 8192 watches, never in ignored trees; any event (overflow included) → full re-list after 200 ms quiet (1 s at most); `files` only when the list changed. Every Hive git call now runs with `GIT_OPTIONAL_LOCKS=0`. `State::worktree_changed` in `hive::daemon` is the hook for 3.2's `changes`. Mock: `touch <name>` in a worktree's terminal.* In the service (inotify) → real-time file tree.
 - [ ] **3.2 Git diff** per worktree; right panel (screen 1g), toggled by Ctrl+Shift+B.
 - [ ] **3.3 Viewer and diff** with CodeMirror 6 and `@codemirror/merge` (diff read-only). *(#31)*
 - [ ] **3.4 Selection → terminal.** Selecting code writes only the reference into the active terminal, e.g. `@src/checkout/validators.ts (lines 44–46)`.
