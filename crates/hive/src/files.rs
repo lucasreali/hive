@@ -274,8 +274,7 @@ fn git(root: &Path, args: &[&str], limit: u64) -> io::Result<(Vec<u8>, bool)> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .map_err(|err| io::Error::new(err.kind(), format!("cannot run git: {err}")))?;
+        .spawn()?;
     let mut out = Vec::new();
     let read = child
         .stdout
