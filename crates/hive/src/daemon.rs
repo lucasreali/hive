@@ -149,7 +149,7 @@ impl State {
             let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), cwd));
             place.map(|(_, worktree)| worktree)
         };
-        if let Some(state) = agent.apply(id, event, Instant::now(), place) {
+        if let Some(state) = agent.apply(id, event, Instant::now(), &place) {
             self.to_app(channel, &state).await;
         }
         if event.subagent.is_none() && matches!(event.kind, EventKind::SessionEnded { .. }) {
