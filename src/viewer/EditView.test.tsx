@@ -31,7 +31,8 @@ const view = () => EditorView.findFromDOM(document.querySelector(".cm-editor") a
 const type = (text: string) =>
   act(() => view()?.dispatch({ changes: { from: 0, to: view()?.state.doc.length, insert: text } }));
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
-const dirty = () => screen.queryByRole("img", { name: "Unsaved changes" });
+// The file tab's × turns into the unsaved dot, and says so in its name.
+const dirty = () => screen.queryByRole("button", { name: /\(unsaved changes\)$/ });
 const banner = () => screen.queryByRole("alert");
 
 /** A file without changes, opened from the tree: editable once its text arrives. */
@@ -184,11 +185,11 @@ test("unsaved edits are dropped only when the user agrees", () => {
   cleanup();
   editing();
   type("mine\n");
-  fireEvent.click(button("Close file a.ts"));
+  fireEvent.click(button("Close file a.ts (unsaved changes)"));
   expect(confirm.mock.calls).toEqual([["Discard your unsaved changes to a.ts?"]]);
   expect(useHive.getState().openFile).not.toBeNull();
   confirm.mockImplementation(() => true);
-  fireEvent.click(button("Close file a.ts"));
+  fireEvent.click(button("Close file a.ts (unsaved changes)"));
   expect(useHive.getState().openFile).toBeNull();
   expect(screen.queryByRole("region", { name: "a.ts" })).toBeNull();
 });

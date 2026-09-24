@@ -1,10 +1,11 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
-import { addTab, apply, initialState, select, setOpenFile, useHive } from "../store";
+import { addTab, apply, initialState, select, setEdit, setOpenFile, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
+import { toText } from "../viewer/buffer";
 
 const [shop, api] = MOCK_REPOS;
 const [shopMain, fixLogin] = shop.worktrees;
@@ -117,4 +118,31 @@ test("the open file has its tab after the terminals, shown in place of the termi
   // A new terminal is shown in front of the file.
   act(() => addTab(2, fixLogin.path));
   expect(tabs()).toEqual(["false", "true", "false"]);
+});
+
+test("unsaved edits put a dot in place of the file tab's ×, named for screen readers", () => {
+  show();
+  act(() => setOpenFile({ worktree: shopMain.path, path: "src/app.ts" }));
+  const buffer = {
+    worktree: shopMain.path,
+    path: "src/app.ts",
+    doc: toText("one\n"),
+    saved: toText("one\n"),
+    version: "v",
+    conflict: null,
+    saving: null,
+    error: null,
+    recheck: 0,
+  };
+  act(() => setEdit(buffer));
+  const clean = screen.getByRole("button", { name: "Close file app.ts" });
+  expect(clean.hasAttribute("data-dirty")).toBe(false);
+  expect(clean.querySelector(".dirty")).toBeNull();
+
+  act(() => setEdit({ ...buffer, doc: toText("two\n") }));
+  const dirty = screen.getByRole("button", { name: "Close file app.ts (unsaved changes)" });
+  expect(dirty.hasAttribute("data-dirty")).toBe(true);
+  expect(dirty.querySelector(".dirty")).not.toBeNull();
+  // The dot is on the × only, not a second marker in the label.
+  expect(tab("app.ts").querySelector(".dirty")).toBeNull();
 });
