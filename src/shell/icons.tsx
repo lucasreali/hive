@@ -3,16 +3,23 @@ import type { AgentState } from "../store";
 
 // Inline SVG icons from the prototype (docs/prototype/HiveApp.dc.html).
 
+// The Hive logo (src-tauri/icons/icon.svg): a honeycomb with one lit cell.
+const HEX = "0,-20 17.32,-10 17.32,10 0,20 -17.32,10 -17.32,-10";
+const CELLS = [
+  [-19.32, -33.46],
+  [-38.64, 0],
+  [0, 0],
+  [38.64, 0],
+  [-19.32, 33.46],
+  [19.32, 33.46],
+];
+
 export const HiveIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-    <path
-      d="M7 1.5 11.8 4.25v5.5L7 12.5 2.2 9.75v-5.5z"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.2"
-      strokeLinejoin="round"
-    />
-    <path d="M7 5 9 6.1v2.3L7 9.5 5 8.4V6.1z" fill="currentColor" />
+  <svg width="16" height="16" viewBox="-60 -60 120 120" aria-hidden="true">
+    {CELLS.map(([x, y]) => (
+      <polygon key={`${x},${y}`} points={HEX} transform={`translate(${x} ${y})`} fill="#7D776C" />
+    ))}
+    <polygon points={HEX} transform="translate(19.32 -33.46)" fill="#F2B53C" />
   </svg>
 );
 

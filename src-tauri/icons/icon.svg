@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-60 -60 120 120" width="512" height="512">
+  <title>Hive</title>
+  <defs>
+    <!-- Pointy-top hexagon, radius 20 -->
+    <polygon id="hex" points="0,-20 17.32,-10 17.32,10 0,20 -17.32,10 -17.32,-10"/>
+  </defs>
+  <g fill="#7D776C">
+    <use href="#hex" x="-19.32" y="-33.46"/>
+    <use href="#hex" x="-38.64" y="0"/>
+    <use href="#hex" x="0" y="0"/>
+    <use href="#hex" x="38.64" y="0"/>
+    <use href="#hex" x="-19.32" y="33.46"/>
+    <use href="#hex" x="19.32" y="33.46"/>
+  </g>
+  <!-- Lit cell -->
+  <use href="#hex" x="19.32" y="-33.46" fill="#F2B53C"/>
+</svg>
