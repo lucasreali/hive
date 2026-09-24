@@ -37,9 +37,7 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await page.keyboard.press("Control+Shift+L");
   // Written as input, no Enter, and the terminal has the focus: typing goes on after it.
   await page.keyboard.type("why?");
-  await expect
-    .poll(() => screen(page, 1))
-    .toBe("mock$ @src/auth/session.ts (lines 39–41) why?");
+  await expect.poll(() => screen(page, 1)).toBe("mock$ @src/auth/session.ts (lines 39–41) why?");
 
   // One line, with the button.
   await added.nth(1).click();
