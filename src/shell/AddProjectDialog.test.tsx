@@ -59,7 +59,7 @@ test("typing filters the typed folder's subfolders; a click enters one and ↑ g
   await waitFor(() => expect(folders()).toEqual(["/home/user/", "notes", "shop"]));
   // Repositories carry a git icon.
   expect(screen.getByLabelText("Repository")).toBeDefined();
-  fireEvent.click(screen.getByRole("button", { name: "shop" }));
+  fireEvent.click(screen.getByRole("button", { name: "Repository shop" }));
   expect(field().value).toBe("/home/user/projects/shop/");
   expect(document.activeElement).toBe(field());
   await waitFor(() => expect(folders()).toEqual(["/home/user/projects/", "No folders here"]));
@@ -80,7 +80,7 @@ test("a cleared field lists the home folder without filling it again", async () 
   type("");
   await waitFor(() => expect(folders()).toContain("dotfiles"));
   expect(field().value).toBe("");
-  fireEvent.click(screen.getByRole("button", { name: "dotfiles" }));
+  fireEvent.click(screen.getByRole("button", { name: "Repository dotfiles" }));
   expect(field().value).toBe("/home/user/dotfiles/");
 });
 
@@ -119,7 +119,7 @@ test("in WSL, Windows folders are browsed as Windows paths and the choice is rem
   fireEvent.click(submit());
   expect(add).toHaveBeenCalledWith(site.path);
   add.mockRestore();
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(useHive.getState().modal).toBeNull());
 
   // The next time, the dialog starts on the Windows side.
   cleanup();
