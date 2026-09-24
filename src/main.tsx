@@ -2,9 +2,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { connect } from "./connect";
-import { followPanel } from "./files";
+import { followOpenFile, followPanel } from "./follow";
 import { transport } from "./transport";
-import { followOpenFile } from "./viewer/follow";
 
 void connect();
 followOpenFile(transport);
