@@ -224,7 +224,8 @@ impl Watcher {
             let settled = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now));
             tokio::select! {
                 event = self.events.recv() => {
-                    let event = event.ok_or_else(|| io::Error::other("the file watcher stopped"))?;
+                    // No event ever again: the watcher's thread is gone.
+                    let event = event.ok_or(io::ErrorKind::BrokenPipe)?;
                     if self.saw(event) {
                         let now = Instant::now();
                         burst.get_or_insert(Debounce::new(now)).event(now);
