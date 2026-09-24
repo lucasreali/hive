@@ -409,14 +409,12 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
     let mut ask = async |message: Control| {
         app.send(0, message).await;
         loop {
-            match app.control().await {
-                (
-                    0,
-                    answer @ (Control::SessionDeleted { .. } | Control::DeleteSessionFailed { .. }),
-                ) => {
-                    return answer;
-                }
-                _ => {}
+            if let (
+                0,
+                answer @ (Control::SessionDeleted { .. } | Control::DeleteSessionFailed { .. }),
+            ) = app.control().await
+            {
+                return answer;
             }
         }
     };
