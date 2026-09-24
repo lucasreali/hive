@@ -8,6 +8,7 @@ import {
   useHive,
 } from "./store";
 import { interceptKeys } from "./terminals";
+import { sendReference } from "./viewer/reference";
 
 // App shortcuts (#35): Ctrl+Shift+letter and F8, taken even with the focus in a terminal.
 // Every other key goes to the terminal untouched.
@@ -63,6 +64,8 @@ export function shortcut(event: KeyboardEvent): (() => void) | null {
       return () => setRightPanel(s.rightPanel ? null : "files");
     case "O":
       return () => openModal("add-project");
+    case "L":
+      return sendReference;
     default:
       return null;
   }

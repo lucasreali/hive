@@ -13,7 +13,8 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { CodeView, notice } from "../viewer/CodeView";
-import { BranchIcon, ChevronIcon, CloseIcon, FileIcon, FolderIcon } from "./icons";
+import { referenceTarget, sendReference } from "../viewer/reference";
+import { BranchIcon, ChevronIcon, CloseIcon, FileIcon, FolderIcon, TerminalIcon } from "./icons";
 
 /**
  * How a git status shows (screen 1g): its letter (colored by CSS) and its weight when a
@@ -326,6 +327,10 @@ export function FileView({ worktree }: { worktree: string }) {
   const text = useHive((s) =>
     s.file?.worktree === worktree && s.file.path === openFile?.path ? s.file : null,
   );
+  const unsendable = useHive((s) => {
+    const target = referenceTarget(s);
+    return "why" in target ? target.why : null;
+  });
   if (openFile?.worktree !== worktree) return null;
   const why = text && notice(text);
   return (
@@ -336,6 +341,16 @@ export function FileView({ worktree }: { worktree: string }) {
         </span>
         <span className="path">{openFile.path}</span>
         {file && <Counts added={file.added} removed={file.removed} />}
+        <button
+          type="button"
+          className="ghost"
+          aria-label="Send to terminal"
+          title={unsendable ?? "Send the selected lines' reference to the terminal (Ctrl+Shift+L)"}
+          disabled={unsendable !== null}
+          onClick={sendReference}
+        >
+          <TerminalIcon />
+        </button>
         <button
           type="button"
           className="ghost"

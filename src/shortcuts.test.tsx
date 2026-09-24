@@ -198,6 +198,26 @@ test("in a terminal, shortcuts run once and never reach it; other keys do", asyn
   write.mockRestore();
 });
 
+test("Ctrl+Shift+L writes the selected lines' reference into the terminal and focuses it", async () => {
+  const write = spyOn(transport, "writeTerminal").mockImplementation(async () => {});
+  app();
+  const worktree = shop.worktrees[1].path;
+  const id = await act(() => openTerminal(worktree));
+  // Lets the mock's first messages for the new terminal arrive.
+  await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+  act(() => {
+    useHive.setState({
+      openFile: { worktree, path: "src/auth/session.ts" },
+      selectedLines: { from: 12, to: 12 },
+    });
+    (document.activeElement as HTMLElement | null)?.blur();
+  });
+  expect(press(ctrlShift("L"))).toBe(true);
+  expect(write).toHaveBeenCalledWith(id, "@src/auth/session.ts (line 12) ");
+  expect(document.activeElement).toBe(terminal(id)?.textarea as Element);
+  write.mockRestore();
+});
+
 test("the app stops listening when it unmounts", () => {
   app();
   cleanup();

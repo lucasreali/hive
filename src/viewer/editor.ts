@@ -4,6 +4,7 @@ import { unifiedMergeView } from "@codemirror/merge";
 import { Compartment, EditorState, type Extension, Prec } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, lineNumbers } from "@codemirror/view";
+import type { Lines } from "../store";
 
 /** What the viewer shows: `content`, and as a unified diff against `original` when given. */
 export type Doc = { content: string; original: string | null };
@@ -37,6 +38,19 @@ const theme = Prec.highest(
   ),
 );
 
+/**
+ * The lines the main selection covers, or null when it is empty. In a diff the document is the
+ * new file (removed lines are widgets, not selectable text), so these are new-file lines. A
+ * selection ending at the start of a line does not take that line.
+ */
+export function selectedLines(state: EditorState): Lines | null {
+  const { from, to } = state.selection.main;
+  if (from === to) return null;
+  const first = state.doc.lineAt(from).number;
+  const end = state.doc.lineAt(to);
+  return { from: first, to: end.from === to ? end.number - 1 : end.number };
+}
+
 /** A read-only CodeMirror view for one open file; `show` replaces what it shows. */
 export type Viewer = { view: EditorView; show(doc: Doc): void; destroy(): void };
 
@@ -44,8 +58,13 @@ export type Viewer = { view: EditorView; show(doc: Doc): void; destroy(): void }
  * Creates the view in `parent` for the file at `path`, highlighted by its name's language
  * (loaded on demand). CodeMirror lives outside React (#30): the component only calls `show`
  * with each new answer and `destroy` when the file closes. `show` keeps the scroll position.
+ * `onSelect` hears the selected lines (null when none) whenever they may have changed.
  */
-export function createViewer(parent: HTMLElement, path: string): Viewer {
+export function createViewer(
+  parent: HTMLElement,
+  path: string,
+  onSelect: (lines: Lines | null) => void = () => {},
+): Viewer {
   const language = new Compartment();
   let support: Extension = [];
   let destroyed = false;
@@ -77,10 +96,12 @@ export function createViewer(parent: HTMLElement, path: string): Viewer {
             theme,
             language.of(support),
             diff,
+            EditorView.updateListener.of((u) => u.selectionSet && onSelect(selectedLines(u.state))),
           ],
         }),
       );
       view.scrollDOM.scrollTop = top;
+      onSelect(null);
     },
     destroy() {
       destroyed = true;

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { syntaxTree } from "@codemirror/language";
 import { getOriginalDoc } from "@codemirror/merge";
 import { EditorState } from "@codemirror/state";
-import { createViewer, type Viewer } from "./editor";
+import { createViewer, selectedLines, type Viewer } from "./editor";
 
 let viewer: Viewer | null = null;
 afterEach(() => {
@@ -52,4 +52,18 @@ test("a viewer closed before its language loads is left alone", async () => {
   const { view } = viewer;
   await until(() => syntaxTree(view.state).length > 0);
   expect(syntaxTree(closed.view.state).length).toBe(0);
+});
+
+test("the selected lines: none when empty, a line ending the range only when entered", () => {
+  const seen: unknown[] = [];
+  viewer = createViewer(document.body, "a.txt", (lines) => seen.push(lines));
+  const { view } = viewer;
+  viewer.show({ content: "one\ntwo\nthree\n", original: "one\n" });
+  expect(seen).toEqual([null]);
+  // From inside line 1 to the start of line 3: lines 1-2.
+  view.dispatch({ selection: { anchor: 1, head: 8 } });
+  view.dispatch({ selection: { anchor: 9, head: 10 } });
+  view.dispatch({ selection: { anchor: 5 } });
+  expect(seen).toEqual([null, { from: 1, to: 2 }, { from: 3, to: 3 }, null]);
+  expect(selectedLines(view.state)).toBeNull();
 });
