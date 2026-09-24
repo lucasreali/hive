@@ -592,7 +592,7 @@ mod tests {
     fn a_file_is_located_on_macos_unless_macos_would_run_it() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.ts"), "").unwrap();
-        std::fs::create_dir(dir.path().join("Some.APP")).unwrap();
+        std::fs::write(dir.path().join("Some.APP"), "").unwrap();
         let real = dir.path().canonicalize().unwrap().join("a.ts");
         let at = |path: &str| {
             windows_path(dir.path(), path, OsStr::new("wslpath")).map_err(|e| e.to_string())

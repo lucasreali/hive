@@ -207,19 +207,27 @@ mod tests {
         let top = format!("{}/", root.display());
         let (path, linux, parent, dirs, error) = ask(&top, false, None, &WINDOWS);
         assert_eq!((path, linux, error), (top.clone(), Some(top), None));
-        assert_eq!(
-            dirs,
-            [
-                dir("A", false),
-                dir("a", false),
-                dir("b", false),
-                dir("c d", false),
-                dir("link", false),
-                dir("repo", true),
-                dir("work", true),
-                dir("Z", false),
-            ]
+        // macOS ignores case in names: there `a` is the folder `A`.
+        let names: Vec<_> = fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        let mut expected = vec![dir("A", false)];
+        expected.extend(
+            names
+                .iter()
+                .any(|name| name == "a")
+                .then(|| dir("a", false)),
         );
+        expected.extend([
+            dir("b", false),
+            dir("c d", false),
+            dir("link", false),
+            dir("repo", true),
+            dir("work", true),
+            dir("Z", false),
+        ]);
+        assert_eq!(dirs, expected);
         let above = root.parent().unwrap().display().to_string();
         assert_eq!(parent, Some(format!("{above}/")));
 
@@ -227,7 +235,7 @@ mod tests {
         let typed = format!("{}/re", root.display());
         let (path, linux, parent, dirs, _) = ask(&typed, false, None, &WINDOWS);
         assert_eq!((path, linux), (typed.clone(), Some(typed)));
-        assert_eq!(dirs.len(), 8);
+        assert_eq!(dirs.len(), expected.len());
         assert_eq!(parent, Some(format!("{above}/")));
     }
 

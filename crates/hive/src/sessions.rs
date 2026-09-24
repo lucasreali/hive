@@ -648,6 +648,8 @@ not json
 
         // A `claude` in a folder runs the newest session of that folder; one in a folder
         // with no session runs none.
+        // Newer by more than the millisecond the order is measured in.
+        std::thread::sleep(std::time::Duration::from_millis(20));
         let second = log(&folder, "h.jsonl", repo);
         let running = [PathBuf::from(repo), PathBuf::from("/nowhere")];
         let list = sessions.list(&followed, &running).unwrap();
