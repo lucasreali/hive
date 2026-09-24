@@ -114,13 +114,13 @@ pub async fn end_sessions(sessions: &[i32]) {
 }
 
 fn any_alive(sessions: &[i32]) -> bool {
-    procs::list(Path::new("/proc"))
+    procs::list(procs::Source::System)
         .iter()
         .any(|p| sessions.contains(&p.session))
 }
 
 fn signal_sessions(sessions: &[i32], signal: Signal) {
-    for proc in procs::list(Path::new("/proc")) {
+    for proc in procs::list(procs::Source::System) {
         if sessions.contains(&proc.session) {
             let _ = killpg(Pid::from_raw(proc.pgrp), signal);
         }

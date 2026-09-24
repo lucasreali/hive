@@ -26,7 +26,7 @@ async fn printed_pid(app: &mut crate::common::Conn, channel: u32) -> i32 {
 }
 
 fn gone(pid: i32) -> bool {
-    !hive::procs::list(std::path::Path::new("/proc"))
+    !hive::procs::list(hive::procs::Source::System)
         .iter()
         .any(|p| p.pid == pid)
 }
