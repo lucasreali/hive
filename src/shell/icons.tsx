@@ -5,6 +5,7 @@ import {
   CircleHalfIcon,
   CirclesThreeIcon,
   type Icon as PhosphorIcon,
+  SidebarSimpleIcon,
   StopCircleIcon,
   XCircleIcon,
   XIcon,
@@ -68,21 +69,8 @@ export const CheckIcon = () => (
   </svg>
 );
 
-export const PanelIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-    <rect
-      x="1.75"
-      y="2.25"
-      width="10.5"
-      height="9.5"
-      rx="1.5"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.1"
-    />
-    <path d="M8.75 2.25v9.5" stroke="currentColor" strokeWidth="1.1" />
-  </svg>
-);
+// The right panel's toggle: Phosphor's sidebar, mirrored so the panel is on the right.
+export const PanelIcon = () => <SidebarSimpleIcon size={14} mirrored aria-hidden="true" />;
 
 export const ChevronIcon = ({ open }: { open: boolean }) => (
   <svg
