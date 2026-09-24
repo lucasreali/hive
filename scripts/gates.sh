@@ -26,10 +26,10 @@ if [ "${MUTANTS:-1}" = 1 ]; then
   mkdir -p /var/tmp/hive-mutants
   git diff "${BASE:-main}" -- '*.rs' > "$out/diff.patch"
   ( while sleep 2; do
-      pgrep -f 'cargo-mutants|cargo mutants' >/dev/null || break
+      pgrep -x cargo-mutants >/dev/null || break  # -x: by name, never another shell's command line
       if [ "$(awk '/MemAvailable/{print $2}' /proc/meminfo)" -lt 1500000 ]; then
         echo "gates: memory low, mutants stopped" >>"$out/mutants.log"
-        pkill -f 'cargo-mutants|cargo mutants'
+        pkill -x cargo-mutants
         break
       fi
     done ) &
