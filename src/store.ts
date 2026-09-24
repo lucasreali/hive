@@ -28,6 +28,7 @@ export type ServiceMessage =
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
   | ({ type: "create_worktree_failed" } & CreateFailure)
   | ({ type: "changes" } & Changes)
+  | ({ type: "file" } & FileText)
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -118,8 +119,23 @@ export type Changes = {
   error: string | null;
 };
 
-/** The file shown under the files tree (its viewer and diff are task 3.3). */
+/** The file shown under the files tree, in the viewer or its diff. */
 export type OpenFile = { worktree: string; path: string };
+
+/**
+ * Mirrors `Control::File`: a file's text on disk (`content`, null when gone) and at HEAD
+ * (`base`, null when new), both null when `binary` or `too_large`; `version` is opaque.
+ */
+export type FileText = {
+  worktree: string;
+  path: string;
+  content: string | null;
+  base: string | null;
+  version: string | null;
+  binary: boolean;
+  too_large: boolean;
+  error: string | null;
+};
 
 /** Answers for the new-worktree dialog; reset whenever a dialog opens. */
 export type WorktreeDialog = {
@@ -215,6 +231,8 @@ export type HiveState = {
   agentStates: Record<string, AgentStatus>;
   /** By worktree path: the last `changes` the service sent for it. */
   changes: Record<string, Changes>;
+  /** The last `file` the service sent; shown only while it is the open file. */
+  file: FileText | null;
 };
 
 export const initialState: HiveState = {
@@ -237,6 +255,7 @@ export const initialState: HiveState = {
   agents: {},
   agentStates: {},
   changes: {},
+  file: null,
 };
 
 export const useHive = create<HiveState>()(() => initialState);
@@ -326,6 +345,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "changes": {
       const { type: _, ...changes } = m;
       return { changes: { ...s.changes, [m.path]: changes } };
+    }
+    case "file": {
+      const { type: _, ...file } = m;
+      return { file };
     }
     case "disconnected":
       // The service is gone, and every agent with it.

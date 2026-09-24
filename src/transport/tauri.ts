@@ -20,4 +20,5 @@ export const tauriTransport: Transport = {
   validateWorktreeName: (project, name) => invoke("validate_worktree_name", { project, name }),
   createWorktree: (project, name, base) => invoke("create_worktree", { project, name, base }),
   listChanges: (path) => invoke("list_changes", { path }),
+  openFile: (worktree, path) => invoke("open_file", { worktree, path }),
 };

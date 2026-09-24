@@ -646,7 +646,14 @@ button:disabled {
 .file-view-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* CodeMirror scrolls inside it (src/viewer/editor.ts). */
+.code-view {
+  flex: 1;
+  min-height: 0;
 }
 
 .file-view-body .hint {

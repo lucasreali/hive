@@ -4,8 +4,10 @@ import {
   apply,
   type ChangedFile,
   type Changes,
+  type FileText,
   initialState,
   select,
+  setOpenFile,
   setRightPanel,
   useHive,
 } from "../store";
@@ -205,6 +207,55 @@ test("a file without changes says so, and another worktree's file is not shown",
   expect(view.textContent).toContain("No changes in this file.");
   act(() => useHive.setState({ openFile: { worktree: fixLogin.path, path: "README.md" } }));
   expect(screen.queryByRole("region")).toBeNull();
+});
+
+test("the open file's text shows as a diff when changed, else as is, or why not", () => {
+  panel();
+  act(() => select(refactor.id));
+  act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
+  const text = (path: string, patch: Partial<FileText> = {}): FileText => ({
+    worktree: refactor.path,
+    path,
+    content: "new\n",
+    base: "old\n",
+    version: "v",
+    binary: false,
+    too_large: false,
+    error: null,
+    ...patch,
+  });
+  const body = () => document.querySelector(".file-view-body") as HTMLElement;
+  const editor = () => body().querySelector(".cm-editor");
+  act(() => setOpenFile({ worktree: refactor.path, path: "src/legacy/jwt.ts" }));
+  expect(editor()).toBeNull(); // Nothing until the service answers.
+  // An answer for another file is not this one's.
+  act(() => apply({ type: "file", ...text("package.json") }));
+  expect(editor()).toBeNull();
+
+  act(() => apply({ type: "file", ...text("src/legacy/jwt.ts", { content: null }) }));
+  const shown = editor();
+  expect(shown?.classList.contains("cm-merge-b")).toBe(true);
+  expect(body().querySelector(".cm-deletedChunk")?.textContent).toBe("old");
+  // A new answer updates the same view.
+  act(() => apply({ type: "file", ...text("src/legacy/jwt.ts", { content: "x\n" }) }));
+  expect(editor()).toBe(shown);
+  expect(body().querySelector(".cm-content > .cm-line")?.textContent).toBe("x");
+
+  act(() => setOpenFile({ worktree: refactor.path, path: "README.md" }));
+  act(() => apply({ type: "file", ...text("README.md", { base: "new\n" }) }));
+  expect(body().textContent).toStartWith("No changes in this file.");
+  expect(editor()?.classList.contains("cm-merge-b")).toBe(false);
+  expect(body().querySelector(".cm-content")?.textContent).toBe("new");
+
+  for (const [patch, why] of [
+    [{ binary: true, content: null, base: null }, "Binary file not shown."],
+    [{ too_large: true, content: null, base: null }, "File too large to show."],
+    [{ error: "README.md does not exist" }, "README.md does not exist"],
+  ] as const) {
+    act(() => apply({ type: "file", ...text("README.md", patch) }));
+    expect(body().textContent).toBe(`No changes in this file.${why}`);
+    expect(editor()).toBeNull();
+  }
 });
 
 test("the tree works from the keyboard", () => {

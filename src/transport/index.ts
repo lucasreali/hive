@@ -32,6 +32,8 @@ export interface Transport {
   createWorktree(project: string, name: string, base: string | null): Promise<void>;
   /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
   listChanges(path: string): Promise<void>;
+  /** A file of a followed worktree on disk and at HEAD; answered by `file`. */
+  openFile(worktree: string, path: string): Promise<void>;
 }
 
 /**

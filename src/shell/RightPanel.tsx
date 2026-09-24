@@ -12,6 +12,7 @@ import {
   useHive,
 } from "../store";
 import { transport } from "../transport";
+import { CodeView, notice } from "../viewer/CodeView";
 import { BranchIcon, ChevronIcon, CloseIcon, FileIcon, FolderIcon } from "./icons";
 
 /**
@@ -272,13 +273,18 @@ function FileTree({ worktree }: { worktree: string }) {
 }
 
 /**
- * The open file's header and the slot where its viewer and diff go (task 3.3, CodeMirror).
- * Shown while `openFile` is in this worktree; "Close diff" clears it.
+ * The open file's header and, under it, its diff against HEAD when it is among the changes,
+ * else its text (CodeMirror, `src/viewer/`). Shown while `openFile` is in this worktree;
+ * "Close diff" clears it.
  */
 export function FileView({ worktree }: { worktree: string }) {
   const openFile = useHive((s) => s.openFile);
   const file = useHive((s) => s.changes[worktree]?.files.find((f) => f.path === openFile?.path));
+  const text = useHive((s) =>
+    s.file?.worktree === worktree && s.file.path === openFile?.path ? s.file : null,
+  );
   if (openFile?.worktree !== worktree) return null;
+  const why = text && notice(text);
   return (
     <section className="file-view" aria-label={openFile.path}>
       <div className="file-view-bar">
@@ -296,8 +302,12 @@ export function FileView({ worktree }: { worktree: string }) {
           <CloseIcon />
         </button>
       </div>
-      <div className="file-view-body hive-scroll">
+      <div className="file-view-body">
         {!file && <div className="hint">No changes in this file.</div>}
+        {why && <div className="hint">{why}</div>}
+        {text && !why && (
+          <CodeView key={`${worktree}\n${openFile.path}`} text={text} diff={!!file} />
+        )}
       </div>
     </section>
   );

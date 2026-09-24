@@ -25,3 +25,43 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
   await page.keyboard.press("Control+Shift+B");
   await expect(panel).toBeHidden();
 });
+
+test("files panel: a changed file shows as a read-only unified diff", async ({ page }) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await page.keyboard.press("Control+Shift+B");
+  const panel = page.getByRole("complementary", { name: "Files and diff" });
+  const files = panel.getByRole("tree", { name: "Files" });
+
+  await files.getByRole("treeitem", { name: /session\.ts/ }).click();
+  const view = panel.getByRole("region", { name: "src/auth/session.ts" });
+  await expect(view.locator(".cm-editor")).toBeVisible();
+  // The removed line above the added ones, long unchanged stretches collapsed.
+  await expect(view.locator(".cm-deletedChunk").nth(1)).toHaveText(/const ttl = SESSION_TTL;/);
+  await expect(view.locator(".cm-changedLine").nth(1)).toHaveText(/opts\.rememberMe/);
+  await expect(view.locator(".cm-collapsedLines").first()).toBeVisible();
+  // Highlighted as TypeScript once its language loads.
+  await expect(view.locator(".cm-line span").first()).toBeVisible();
+  await page.screenshot({ path: "target/e2e/file-diff.png" });
+  // Read-only: typing changes nothing.
+  await view.locator(".cm-line").first().click();
+  await page.keyboard.type("zzz");
+  await expect(view.locator(".cm-content")).not.toContainText("zzz");
+
+  // A deleted file shows all removed, a new one all added, a binary one a message.
+  await tree.getByRole("button", { name: "refactor-auth" }).click();
+  await files.getByRole("treeitem", { name: /jwt\.ts/ }).click();
+  const deleted = panel.getByRole("region", { name: "src/legacy/jwt.ts" });
+  await expect(deleted.locator(".cm-deletedChunk")).toHaveText(/export const value = 1;/);
+  await files.getByRole("treeitem", { name: /logo\.png/ }).click();
+  await expect(panel.getByRole("region", { name: "assets/logo.png" })).toContainText(
+    "Binary file not shown.",
+  );
+  await tree.getByRole("button", { name: "feat-checkout" }).click();
+  await files.getByRole("treeitem", { name: /shipping\.ts/ }).click();
+  const added = panel.getByRole("region", { name: "src/checkout/shipping.ts" });
+  await expect(added.locator(".cm-changedLine")).toHaveCount(2);
+  // Nothing was removed: the chunk's removed part is empty.
+  await expect(added.locator(".cm-deletedChunk")).toHaveText("");
+});

@@ -177,6 +177,56 @@ function changes(worktrees: string[], path: string): ServiceMessage {
   };
 }
 
+const SESSION_BASE = [
+  'import type { User } from "../types";',
+  'import { SESSION_TTL } from "./constants";',
+  'import { store } from "./store";',
+  "",
+  ...Array.from({ length: 31 }, (_, i) => `// session helper ${i + 1}`),
+  "",
+  "// Creates the session and saves it in the store",
+  "export function createSession(user: User, opts: SessionOptions) {",
+  "  const ttl = SESSION_TTL;",
+  "  return store.set(user.id, { ttl, createdAt: Date.now() });",
+  "}",
+  "",
+].join("\n");
+
+/** Texts of the fake files by path (after the prototype's screen 1g): `[content, base]`. */
+export const MOCK_FILES: Record<string, [string, string]> = {
+  "src/auth/session.ts": [
+    SESSION_BASE.replace(
+      "  const ttl = SESSION_TTL;",
+      [
+        "  const ttl = opts.rememberMe",
+        "    ? REMEMBER_ME_TTL // 30 days",
+        "    : SESSION_TTL;",
+      ].join("\n"),
+    ).replace("import { SESSION_TTL }", "import { REMEMBER_ME_TTL, SESSION_TTL }"),
+    SESSION_BASE,
+  ],
+};
+
+/**
+ * A stand-in for `hive::file`: the fake worktree's file as its status in `MOCK_CHANGES` says
+ * (a new file has no base, a deleted one no content, a `.png` is binary), or why not.
+ */
+function file(worktrees: string[], worktree: string, path: string): ServiceMessage {
+  const answer = { type: "file" as const, worktree, path, binary: false, too_large: false };
+  const none = { content: null, base: null, version: null };
+  if (!worktrees.includes(worktree)) {
+    const error = `${worktree} is not a worktree of a followed project`;
+    return { ...answer, ...none, error };
+  }
+  const status = MOCK_CHANGES[worktree]?.find((f) => f.path === path)?.status;
+  if (path.endsWith(".png")) return { ...answer, ...none, binary: true, error: null };
+  const sample = `// ${path}\nexport const value = 1;\n`;
+  const [text, original] = MOCK_FILES[path] ?? [sample.replace("1", "2"), sample];
+  const content = status === "deleted" ? null : status ? text : original;
+  const base = status === "added" || status === "untracked" ? null : original;
+  return { ...answer, content, base, version: content && `mock-${content.length}`, error: null };
+}
+
 // A stand-in for `hive::worktree::check_name` and its CLI wording; the real rule lives in Rust.
 function nameError(project: Project, name: string): string | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) {
@@ -321,6 +371,15 @@ export function createMockTransport(
       later(
         changes(
           projects.flatMap((p) => p.worktrees.map((w) => w.path)),
+          path,
+        ),
+      );
+    },
+    async openFile(worktree, path) {
+      later(
+        file(
+          projects.flatMap((p) => p.worktrees.map((w) => w.path)),
+          worktree,
           path,
         ),
       );

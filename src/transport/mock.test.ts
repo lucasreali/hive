@@ -8,6 +8,7 @@ import {
   LOAD_START_MS,
   MOCK_BRANCHES,
   MOCK_CHANGES,
+  MOCK_FILES,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_STATES,
@@ -325,5 +326,53 @@ test("changes of a followed worktree with their totals, or why not", async () =>
       removed: 0,
       error: `${dotfiles.path} is not a worktree of a followed project`,
     },
+  ]);
+});
+
+test("files of a followed worktree as their status says, or why not", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api, dotfiles] = MOCK_REPOS;
+  const refactor = api.worktrees[1].path;
+  const fixLogin = shop.worktrees[1].path;
+  messages.length = 0;
+  const asked: [string, string][] = [
+    [fixLogin, "src/auth/session.ts"],
+    [refactor, "src/legacy/jwt.ts"],
+    [refactor, "src/auth/token.ts"],
+    [api.path, "test/routes/orders.test.ts"],
+    [shop.path, "README.md"],
+    [refactor, "assets/logo.png"],
+    [dotfiles.path, "a"],
+  ];
+  for (const [worktree, path] of asked) await transport.openFile(worktree, path);
+  await tick();
+  const texts = messages.map((m) =>
+    m.type === "file" ? [m.path, m.content, m.base, m.binary, m.error, m.version] : m,
+  );
+  const [session, sessionBase] = MOCK_FILES["src/auth/session.ts"];
+  const sample = (path: string, n = 1) => `// ${path}\nexport const value = ${n};\n`;
+  expect(session).toContain("REMEMBER_ME_TTL // 30 days");
+  expect(texts).toEqual([
+    ["src/auth/session.ts", session, sessionBase, false, null, `mock-${session.length}`],
+    ["src/legacy/jwt.ts", null, sample("src/legacy/jwt.ts"), false, null, null],
+    [
+      "src/auth/token.ts",
+      sample("src/auth/token.ts", 2),
+      sample("src/auth/token.ts"),
+      false,
+      null,
+      "mock-45",
+    ],
+    [
+      "test/routes/orders.test.ts",
+      sample("test/routes/orders.test.ts", 2),
+      null,
+      false,
+      null,
+      "mock-54",
+    ],
+    ["README.md", sample("README.md"), sample("README.md"), false, null, "mock-37"],
+    ["assets/logo.png", null, null, true, null, null],
+    ["a", null, null, false, `${dotfiles.path} is not a worktree of a followed project`, null],
   ]);
 });
