@@ -116,6 +116,16 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
     repo.write("d.txt", "");
     let listed = [".gitignore", "README", "d.txt", "src/c.rs"];
     assert_eq!(files(&mut conn, &root).await, listed);
+    // The index counts: an ignored file added by force is listed.
+    repo.git(&["add", "-f", "target/debug/build.o"]);
+    let listed = [
+        ".gitignore",
+        "README",
+        "d.txt",
+        "src/c.rs",
+        "target/debug/build.o",
+    ];
+    assert_eq!(files(&mut conn, &root).await, listed);
 
     // Watching another worktree replaces the first.
     watch(&mut conn, &fix_path).await;
