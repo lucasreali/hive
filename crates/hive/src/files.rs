@@ -505,6 +505,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_directory_that_becomes_ignored_loses_its_watch() {
+        let (_dir, root) = repo();
+        write(&root, "d/a.txt");
+        let mut watcher = Watcher::new(&root).unwrap();
+        watcher.list().unwrap();
+        assert_eq!(watched(&watcher), ["", "d"]);
+        std::fs::write(root.join(".gitignore"), "d/\n").unwrap();
+        assert!(changes(&mut watcher, SOON).await);
+        assert_eq!(names(&watcher.list().unwrap()), [".gitignore"]);
+        assert_eq!(watched(&watcher), [""]);
+        write(&root, "d/b.txt");
+        assert!(!changes(&mut watcher, NEVER).await);
+    }
+
+    #[tokio::test]
     async fn the_index_changes_what_is_listed() {
         let (_dir, root) = repo();
         std::fs::write(root.join(".gitignore"), "*.log\n").unwrap();

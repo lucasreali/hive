@@ -4,7 +4,6 @@
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -45,20 +44,14 @@ fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
         .truncate(true)
         .mode(0o600)
         .open(paths.daemon_log())?;
-    let mut daemon = Command::new(hive);
-    daemon
+    // The daemon leaves this session itself. Not waited for: a daemon that fails to start is
+    // caught by the connection timeout, with its error in the log.
+    Command::new(hive)
         .arg("daemon")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(log);
-    // SAFETY: between fork and exec the child only calls setsid(2), which is
-    // async-signal-safe and touches no memory of the parent.
-    unsafe {
-        daemon.pre_exec(|| Ok(nix::unistd::setsid().map(drop)?));
-    }
-    // Not waited for: a daemon that fails to start is caught by the connection timeout,
-    // with its error in the log.
-    daemon.spawn()?;
+        .stderr(log)
+        .spawn()?;
     Ok(())
 }
 

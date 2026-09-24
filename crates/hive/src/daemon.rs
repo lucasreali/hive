@@ -39,6 +39,9 @@ use crate::{changes, file, procs, search, watch, worktree, wrapper};
 const TERMINAL_QUEUE: usize = 256;
 
 pub async fn run(paths: &Paths) -> io::Result<()> {
+    // Started by `hive bridge`: leave its session, so the service outlives nothing but the
+    // app connection. Fails harmlessly for a group leader (e.g. started from a shell).
+    let _ = nix::unistd::setsid();
     paths.prepare_runtime()?;
     let _lock = lock(paths)?;
     wrapper::install(paths, &std::env::current_exe()?)?;
