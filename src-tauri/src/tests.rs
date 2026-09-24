@@ -958,7 +958,11 @@ fn release_server(version: &str) -> String {
 fn updater_app(endpoint: &str, hive: Hive) -> tauri::App<tauri::test::MockRuntime> {
     let mut context = mock_context(noop_assets());
     let updater = json!({"endpoints": [endpoint], "pubkey": "not a key"});
-    context.config_mut().plugins.0.insert("updater".into(), updater);
+    context
+        .config_mut()
+        .plugins
+        .0
+        .insert("updater".into(), updater);
     mock_builder()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(hive)
@@ -987,7 +991,10 @@ async fn a_newer_release_is_offered_and_an_unsigned_one_is_not_installed() {
         next(&mut rx).await,
         json!({"type": "update_available", "version": "99.0.0"})
     );
-    assert_eq!(invoke(&webview, "install_update", json!({})), Ok(Value::Null));
+    assert_eq!(
+        invoke(&webview, "install_update", json!({})),
+        Ok(Value::Null)
+    );
     let failed = next(&mut rx).await;
     assert_eq!(failed["type"], "update_failed");
     assert_ne!(failed["error"], "no update to install", "{failed}");
@@ -1001,10 +1008,14 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
     let app = updater_app(&endpoint, hive_with_ui().0);
     hive.check_update(app.updater()).await;
     // Anything but `/latest.json` answers the installer, which is not JSON: the check fails.
-    let broken = vec![endpoint.replace("latest.json", "broken.json").parse().unwrap()];
+    let broken = vec![endpoint
+        .replace("latest.json", "broken.json")
+        .parse()
+        .unwrap()];
     let updater = app.updater_builder().endpoints(broken).unwrap().build();
     hive.check_update(updater).await;
-    hive.install_update(|| panic!("nothing was installed")).await;
+    hive.install_update(|| panic!("nothing was installed"))
+        .await;
     assert_eq!(
         next(&mut rx).await,
         json!({"type": "update_failed", "error": "no update to install"})
