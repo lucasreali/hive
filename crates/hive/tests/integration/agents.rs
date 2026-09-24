@@ -60,7 +60,105 @@ fn sub(id: &str, state: AgentState) -> SubagentState {
         id: id.into(),
         agent_type: Some("Explore".into()),
         state,
+        worktree: None,
     }
+}
+
+/// Runs `hive worktree <hook>` from terminal 1 and returns the app's messages up to the
+/// forwarded event, leaving out the `projects` it triggers.
+async fn worktree_hook(
+    repo: &Repo,
+    app: &mut Conn,
+    hook: &str,
+    payload: Value,
+) -> Vec<(u32, Control)> {
+    let mut child = repo
+        .hive_cmd(&repo.root, &[hook])
+        .env("HIVE_TERMINAL_ID", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(payload.to_string().as_bytes()).unwrap();
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let (mut seen, mut forwarded, mut listed) = (Vec::new(), false, false);
+    while !(forwarded && listed) {
+        match app.control().await {
+            (0, Control::Agent(_)) => forwarded = true,
+            (0, Control::Projects { .. }) => listed = true,
+            other => seen.push(other),
+        }
+    }
+    seen
+}
+
+#[tokio::test]
+async fn a_subagents_own_worktree_is_sent_with_it() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let worktree = |name: &str| format!("{root}/.claude/worktrees/{name}");
+    let (sub_a, sub_b) = (worktree("sub-a"), worktree("sub-b"));
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    app.open_terminal(1, &repo.root).await;
+    let start = json!({"session_id": "s", "cwd": root});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let subagent = |id: &str, extra| {
+        let ids = json!({"session_id": "s", "agent_id": id, "agent_type": "Explore", "cwd": root});
+        merged(ids, extra)
+    };
+    let owning = |id: &str, path: &str| SubagentState {
+        worktree: Some(path.into()),
+        ..sub(id, Working)
+    };
+    let with = |subagents| vec![(1, state("s", WithSubagents, subagents))];
+
+    // In its agent's worktree a subagent has none of its own.
+    let seen = hook(
+        &repo,
+        &mut app,
+        "1",
+        "SubagentStart",
+        subagent("a", json!({})),
+    )
+    .await;
+    assert_eq!(seen, with(vec![sub("a", Working)]));
+    // A `WorktreeCreate` naming the subagent gives it the new worktree.
+    let create = subagent("a", json!({"name": "sub-a"}));
+    let seen = worktree_hook(&repo, &mut app, "hook-create", create).await;
+    assert_eq!(seen, with(vec![owning("a", &sub_a)]));
+    // One naming nobody: the subagent whose events come from inside it owns it.
+    let create = json!({"session_id": "s", "cwd": root, "name": "sub-b"});
+    assert_eq!(
+        worktree_hook(&repo, &mut app, "hook-create", create).await,
+        vec![]
+    );
+    let inside = subagent("b", json!({"cwd": format!("{sub_b}/src")}));
+    let seen = hook(&repo, &mut app, "1", "SubagentStart", inside).await;
+    assert_eq!(seen, with(vec![owning("a", &sub_a), owning("b", &sub_b)]));
+    // Removing the worktree unlinks it; the subagent leaving takes its own along.
+    let remove = json!({"session_id": "s", "cwd": sub_a, "worktree_path": sub_a});
+    let seen = worktree_hook(&repo, &mut app, "hook-remove", remove).await;
+    assert_eq!(seen, with(vec![sub("a", Working), owning("b", &sub_b)]));
+    let seen = hook(
+        &repo,
+        &mut app,
+        "1",
+        "SubagentStop",
+        subagent("b", json!({})),
+    )
+    .await;
+    assert_eq!(seen, with(vec![sub("a", Working)]));
+    drop(app);
+    assert!(daemon.wait_exit().success());
 }
 
 fn detected(id: &str, place: Option<(&str, &str)>, cwd: &str) -> Control {

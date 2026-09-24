@@ -84,7 +84,7 @@ impl Repo {
         self.git(&["commit", "-q", "-m", rel]);
     }
 
-    fn hive_cmd(&self, dir: &Path, args: &[&str]) -> Command {
+    pub(crate) fn hive_cmd(&self, dir: &Path, args: &[&str]) -> Command {
         let mut cmd = self.env.hive();
         isolate(&mut cmd, &self.env)
             .current_dir(dir)
