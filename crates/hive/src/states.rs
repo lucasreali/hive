@@ -519,40 +519,42 @@ mod tests {
         let now = Instant::now();
         let mut agent = Agent::new(1, now);
         let at = |cwd: &str| hook("PreToolUse", Some("a"), json!({"cwd": cwd}));
+        let asked = std::cell::Cell::new(0);
         let place = |cwd: &str| {
-            Some(
-                if cwd.starts_with("/r/w") {
-                    "/r/w"
-                } else {
-                    "/r"
-                }
-                .into(),
-            )
+            asked.set(asked.get() + 1);
+            let own = cwd.starts_with("/r/w");
+            Some(if own { "/r/w" } else { "/r" }.to_owned())
         };
-        let unasked = |_: &str| -> Option<String> { panic!("placed again") };
         // Without the agent's own worktree nothing is placed.
-        assert!(agent.apply("s", &at("/r/w"), now, unasked).is_some());
+        assert!(agent.apply("s", &at("/r/w"), now, place).is_some());
+        assert_eq!((asked.get(), worktrees(&agent)), (0, vec![("a", None)]));
         agent.worktree = Some("/r".into());
         // In the agent's worktree: not its own; the same cwd is not placed twice.
         assert_eq!(agent.apply("s", &at("/r/src"), now, place), None);
-        assert_eq!(agent.apply("s", &at("/r/src"), now, unasked), None);
-        assert_eq!(worktrees(&agent), [("a", None)]);
+        assert_eq!(agent.apply("s", &at("/r/src"), now, place), None);
+        assert_eq!((asked.get(), worktrees(&agent)), (1, vec![("a", None)]));
         let sent = agent.apply("s", &at("/r/w/src"), now, place);
         assert_eq!(sent, Some(agent.message("s")));
         assert_eq!(worktrees(&agent), [("a", Some("/r/w"))]);
         // Once linked, it keeps it wherever it goes.
-        assert_eq!(agent.apply("s", &at("/r"), now, unasked), None);
+        assert_eq!(agent.apply("s", &at("/r"), now, place), None);
+        assert_eq!(asked.get(), 2);
         // Leaving forgets it all: back with the same cwd, it is placed again.
         agent.feed("s", &hook("SubagentStop", Some("a"), json!({})), now);
         agent.apply("s", &at("/r/w/src"), now, place);
-        assert_eq!(worktrees(&agent), [("a", Some("/r/w"))]);
+        assert_eq!(
+            (asked.get(), worktrees(&agent)),
+            (3, vec![("a", Some("/r/w"))])
+        );
         // A subagent without a cwd, or with one too long, is not placed.
         let b = |extra| hook("PreToolUse", Some("b"), extra);
-        agent.apply("s", &b(json!({})), now, unasked);
+        agent.apply("s", &b(json!({})), now, place);
         let long = format!("/r/w/{}", "x".repeat(MAX_PATH));
-        agent.apply("s", &b(json!({"cwd": long})), now, unasked);
+        agent.apply("s", &b(json!({"cwd": long})), now, place);
+        assert_eq!(asked.get(), 3);
         let at_limit = &long[..MAX_PATH];
         agent.apply("s", &b(json!({"cwd": at_limit})), now, place);
+        assert_eq!(asked.get(), 4);
         assert_eq!(
             worktrees(&agent),
             [("a", Some("/r/w")), ("b", Some("/r/w"))]
