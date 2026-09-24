@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { act, renderHook } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import {
   type AgentState,
   activateTab,
@@ -19,7 +19,6 @@ import {
   setOpenFile,
   setRightPanel,
   toggleCollapsed,
-  useAgent,
   useHive,
   useTerminal,
 } from "./store";
@@ -152,20 +151,6 @@ test("agent states are stored as sent, before or after the agent, and go with it
   expect(Object.keys(useHive.getState().agentStates)).toEqual(["b"]);
   apply({ type: "disconnected", reason: "gone" });
   expect(useHive.getState().agentStates).toEqual({});
-});
-
-test("useAgent re-renders only when its own agent changes", () => {
-  useHive.setState({ agents: { a: agent("a"), b: agent("b") } });
-  let renders = 0;
-  const { result } = renderHook(() => {
-    renders++;
-    return useAgent("a");
-  });
-  expect(result.current).toEqual(agent("a"));
-  act(() => useHive.setState((s) => ({ agents: { ...s.agents, b: agent("b") } })));
-  expect(renders).toBe(1);
-  act(() => useHive.setState((s) => ({ agents: { ...s.agents, a: agent("a") } })));
-  expect(renders).toBe(2);
 });
 
 test("useTerminal reads one terminal", () => {

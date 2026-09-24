@@ -225,7 +225,6 @@ export type RightPanel = "files" | null;
 
 export type HiveState = {
   // UI state
-  view: "main";
   modal: Modal;
   rightPanel: RightPanel;
   /** The files panel shows only changed files ("Changed") instead of every file ("All"). */
@@ -272,7 +271,6 @@ export type HiveState = {
 };
 
 export const initialState: HiveState = {
-  view: "main",
   modal: null,
   rightPanel: null,
   changedOnly: false,
@@ -518,8 +516,6 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
   return top?.state ?? null;
 }
 
-/** Re-renders only when this agent's entry changes. */
-export const useAgent = (id: string) => useHive((s) => s.agents[id]);
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
 
 /** States in which an agent may be writing files: the file view's "Agent working here". */
