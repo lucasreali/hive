@@ -116,6 +116,16 @@ impl Env {
     }
 
     /// Connects and completes the handshake.
+    /// Connects the app and waits until the service serves it. `Welcome` goes out before the
+    /// service registers the app, so an event sent right after it could miss the app.
+    pub async fn app(&self) -> Conn {
+        let mut app = self.connect(Role::App).await;
+        app.send(0, Control::ListProjects).await;
+        let projects = Control::Projects { projects: vec![] };
+        assert_eq!(app.control().await, (0, projects));
+        app
+    }
+
     pub async fn connect(&self, role: Role) -> Conn {
         let mut conn = self.raw().await;
         conn.send(0, Control::hello(role, hive::VERSION)).await;

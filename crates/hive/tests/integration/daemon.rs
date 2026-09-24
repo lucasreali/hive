@@ -117,7 +117,7 @@ async fn first_message_must_be_hello() {
 async fn hook_events_are_translated_and_sent_to_the_app() {
     let env = Env::new();
     let mut daemon = env.daemon();
-    let mut app = env.connect(Role::App).await;
+    let mut app = env.app().await;
     let mut hook = env.connect(Role::Hook).await;
     let payload = json!({"session_id": "s1", "cwd": "/w"});
     hook.send(
@@ -147,7 +147,7 @@ async fn hook_events_are_translated_and_sent_to_the_app() {
 async fn a_hook_connection_is_closed_after_one_message() {
     let env = Env::new();
     let mut daemon = env.daemon();
-    let mut app = env.connect(Role::App).await;
+    let mut app = env.app().await;
     // Not a hook event: nothing is forwarded, the connection is closed.
     let mut hook = env.connect(Role::Hook).await;
     hook.send(0, Control::CloseTerminal).await;

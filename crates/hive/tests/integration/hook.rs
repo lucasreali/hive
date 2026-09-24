@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{Control, EventKind, Role};
+use hive_protocol::{Control, EventKind};
 use serde_json::{Value, json};
 
 use crate::common::Env;
@@ -30,7 +30,7 @@ fn hook(env: &Env, args: &[&str], stdin: &[u8]) -> Output {
 async fn hook_call_reaches_the_app_and_prints_nothing() {
     let env = Env::new();
     let mut daemon = env.daemon();
-    let mut app = env.connect(Role::App).await;
+    let mut app = env.app().await;
     let payload = json!({"session_id": "s", "cwd": "/w", "hook_event_name": "Stop"});
     let out = hook(&env, &["Stop"], payload.to_string().as_bytes());
     assert!(out.status.success());
