@@ -185,7 +185,7 @@ test("clicking a file opens it under the tree; folders collapse; Close diff clos
     "true",
   );
   const view = screen.getByRole("region", { name: "src/auth/token.ts" });
-  expect(view.querySelector(".file-view-bar")?.textContent).toBe("Rsrc/auth/token.ts+2−1");
+  expect(view.querySelector(".file-view-bar")?.textContent).toBe("Rsrc/auth/token.ts+2−1Edit");
   expect(view.textContent).not.toContain("No changes in this file.");
   // Nothing selected yet: the reference cannot be sent, and the button says why.
   const send = screen.getByRole("button", { name: "Send to terminal" }) as HTMLButtonElement;

@@ -2,19 +2,32 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  agentWorkingIn,
   type ChangedFile,
   type FileStatus,
+  type OpenFile,
   panelWorktree,
   setChangedOnly,
+  setEditing,
   setOpenFile,
   setRightPanel,
   toggleCollapsed,
   useHive,
 } from "../store";
 import { transport } from "../transport";
+import { isDirty, isFor } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
+import { EditView, saveOpenFile } from "../viewer/EditView";
 import { referenceTarget, sendReference } from "../viewer/reference";
-import { BranchIcon, ChevronIcon, CloseIcon, FileIcon, FolderIcon, TerminalIcon } from "./icons";
+import {
+  BranchIcon,
+  ChevronIcon,
+  CloseIcon,
+  ExternalIcon,
+  FileIcon,
+  FolderIcon,
+  TerminalIcon,
+} from "./icons";
 
 /**
  * How a git status shows (screen 1g): its letter (colored by CSS) and its weight when a
@@ -234,8 +247,11 @@ function FileTree({ worktree }: { worktree: string }) {
     overscan: 8,
   });
   const at = Math.min(active, rows.length - 1);
+  // A file without changes opens as editable text; a changed one as its diff (#31).
   const pick = (row: FileRow) =>
-    row.kind === "folder" ? toggleCollapsed(row.key) : setOpenFile({ worktree, path: row.key });
+    row.kind === "folder"
+      ? toggleCollapsed(row.key)
+      : leaveFile({ worktree, path: row.key }, !row.file.status);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[at];
     if (!row) return;
@@ -317,9 +333,23 @@ function FileTree({ worktree }: { worktree: string }) {
 }
 
 /**
+ * Opens `next` (null closes the file), once the user agrees to drop the unsaved edits of the
+ * file open now, if any.
+ */
+export function leaveFile(next: OpenFile | null, editing = false): void {
+  const { edit } = useHive.getState();
+  const losing = edit && isDirty(edit) && !(next && isFor(next, edit));
+  if (losing && !window.confirm(`Discard your unsaved changes to ${edit.path}?`)) return;
+  setOpenFile(next, editing);
+}
+
+/**
  * The open file's header and, under it, its diff against HEAD when it is among the changes,
  * else its text (CodeMirror, `src/viewer/`). Shown while `openFile` is in this worktree;
- * "Close diff" clears it.
+ * "Close diff" clears it. While `editing` it is editable text (the diff stays read-only, #31):
+ * a changed file switches with Edit / Diff, the header marks unsaved edits and has Save
+ * (Ctrl+S in the editor), "Agent working here" warns that an agent may write it meanwhile, and
+ * "Open in external editor" hands it to Windows.
  */
 export function FileView({ worktree }: { worktree: string }) {
   const openFile = useHive((s) => s.openFile);
@@ -331,8 +361,13 @@ export function FileView({ worktree }: { worktree: string }) {
     const target = referenceTarget(s);
     return "why" in target ? target.why : null;
   });
+  const editing = useHive((s) => s.editing);
+  const edit = useHive((s) => s.edit);
+  const editorNotice = useHive((s) => s.editorNotice);
+  const working = useHive((s) => agentWorkingIn(s, worktree));
   if (openFile?.worktree !== worktree) return null;
   const why = text && notice(text);
+  const dirty = !!edit && isDirty(edit);
   return (
     <section className="file-view" aria-label={openFile.path}>
       <div className="file-view-bar">
@@ -340,7 +375,57 @@ export function FileView({ worktree }: { worktree: string }) {
           {file && STATUS[file.status].letter}
         </span>
         <span className="path">{openFile.path}</span>
+        {dirty && (
+          <span className="dirty" role="img" aria-label="Unsaved changes" title="Unsaved changes" />
+        )}
         {file && <Counts added={file.added} removed={file.removed} />}
+        {working && (
+          <span className="tab-badge working" title="An agent in this worktree may write this file">
+            Agent working here
+          </span>
+        )}
+        {edit && (
+          <button
+            type="button"
+            className="ghost text"
+            title="Save (Ctrl+S)"
+            disabled={!dirty || !!edit.saving}
+            onClick={saveOpenFile}
+          >
+            Save
+          </button>
+        )}
+        {file &&
+          (editing ? (
+            <button
+              type="button"
+              className="ghost text"
+              title={dirty ? "Save or reload the file first" : "Show the diff against HEAD"}
+              disabled={dirty}
+              onClick={() => setEditing(false)}
+            >
+              Diff
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ghost text"
+              title="Edit the file"
+              disabled={text?.content == null || !!why}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </button>
+          ))}
+        <button
+          type="button"
+          className="ghost"
+          aria-label="Open in external editor"
+          title="Open in external editor (the Windows default app for the file)"
+          onClick={() => void transport.openInEditor(worktree, openFile.path)}
+        >
+          <ExternalIcon />
+        </button>
         <button
           type="button"
           className="ghost"
@@ -351,20 +436,22 @@ export function FileView({ worktree }: { worktree: string }) {
         >
           <TerminalIcon />
         </button>
-        <button
-          type="button"
-          className="ghost"
-          title="Close diff"
-          onClick={() => setOpenFile(null)}
-        >
+        <button type="button" className="ghost" title="Close diff" onClick={() => leaveFile(null)}>
           <CloseIcon />
         </button>
       </div>
+      {editorNotice && <div className="files-error">{editorNotice}</div>}
       <div className="file-view-body">
-        {!file && <div className="hint">No changes in this file.</div>}
-        {why && <div className="hint">{why}</div>}
-        {text && !why && (
-          <CodeView key={`${worktree}\n${openFile.path}`} text={text} diff={!!file} />
+        {edit ? (
+          <EditView key={`${worktree}\n${openFile.path}`} edit={edit} />
+        ) : (
+          <>
+            {!file && <div className="hint">No changes in this file.</div>}
+            {why && <div className="hint">{why}</div>}
+            {text && !why && (
+              <CodeView key={`${worktree}\n${openFile.path}`} text={text} diff={!!file} />
+            )}
+          </>
         )}
       </div>
     </section>

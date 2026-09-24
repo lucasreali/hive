@@ -2,7 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { syntaxTree } from "@codemirror/language";
 import { getOriginalDoc } from "@codemirror/merge";
 import { EditorState } from "@codemirror/state";
-import { createViewer, selectedLines, type Viewer } from "./editor";
+import { runScopeHandlers } from "@codemirror/view";
+import { toText } from "./buffer";
+import { createEditor, createViewer, type Editor, selectedLines, type Viewer } from "./editor";
 
 let viewer: Viewer | null = null;
 afterEach(() => {
@@ -66,4 +68,74 @@ test("the selected lines: none when empty, a line ending the range only when ent
   view.dispatch({ selection: { anchor: 5 } });
   expect(seen).toEqual([null, { from: 1, to: 2 }, { from: 3, to: 3 }, null]);
   expect(selectedLines(view.state)).toBeNull();
+});
+
+/** An editor on `content` that records what it tells its owner. */
+function editing(content: string, path = "a.txt") {
+  const heard = { changes: [] as string[], saves: 0, selections: [] as unknown[] };
+  const editor = createEditor(document.body, path, toText(content), {
+    change: (doc) => heard.changes.push(doc.toString()),
+    save: () => heard.saves++,
+    select: (lines) => heard.selections.push(lines),
+  });
+  editors.push(editor);
+  return { editor, view: editor.view, heard };
+}
+const editors: Editor[] = [];
+afterEach(() => {
+  for (const editor of editors.splice(0)) editor.destroy();
+});
+
+test("the editor is editable text that reports edits, selections and Ctrl+S", () => {
+  const { view, heard } = editing("one\r\ntwo\n");
+  expect(view.state.facet(EditorState.readOnly)).toBe(false);
+  // Split on "\n" only: the "\r" stays in the line.
+  expect(view.state.doc.lines).toBe(3);
+  view.dispatch({ changes: { from: 0, insert: "x" } });
+  expect(heard.changes).toEqual(["xone\r\ntwo\n"]);
+  view.dispatch({ selection: { anchor: 0, head: 8 } });
+  expect(heard.selections).toEqual([{ from: 1, to: 2 }]);
+  const key = new KeyboardEvent("keydown", { key: "s", ctrlKey: true });
+  expect(runScopeHandlers(view, key, "editor")).toBe(true);
+  expect(heard.saves).toBe(1);
+  // Undo is there.
+  const undo = new KeyboardEvent("keydown", { key: "z", ctrlKey: true });
+  runScopeHandlers(view, undo, "editor");
+  expect(view.state.doc.toString()).toBe("one\r\ntwo\n");
+});
+
+test("a reload swaps the text, keeping scroll and a clamped selection", () => {
+  const { editor, view, heard } = editing("0123456789\n");
+  const doc = view.state.doc;
+  editor.load(doc);
+  expect(view.state.doc).toBe(doc); // Its own text: nothing to do.
+  view.dispatch({ selection: { anchor: 2, head: 9 } });
+  view.scrollDOM.scrollTop = 30;
+  heard.selections.length = 0;
+  editor.load(toText("abcde"));
+  expect(view.state.doc.toString()).toBe("abcde");
+  expect([view.state.selection.main.anchor, view.state.selection.main.head]).toEqual([2, 5]);
+  expect(view.scrollDOM.scrollTop).toBe(30);
+  expect(heard.selections).toEqual([{ from: 1, to: 1 }]);
+  expect(heard.changes).toEqual([]); // A reload is not an edit.
+  // Still editable, with its keys.
+  view.dispatch({ changes: { from: 0, insert: "!" } });
+  expect(heard.changes).toEqual(["!abcde"]);
+});
+
+test("compare shows the text against the disk's, read-only, until editing again", () => {
+  const { editor, view } = editing("mine\n");
+  editor.compare("disk\n");
+  expect(view.state.facet(EditorState.readOnly)).toBe(true);
+  expect(getOriginalDoc(view.state).toString()).toBe("disk\n");
+  expect(view.dom.classList.contains("cm-merge-b")).toBe(true);
+  editor.compare(null);
+  expect(view.state.facet(EditorState.readOnly)).toBe(false);
+  expect(view.dom.classList.contains("cm-merge-b")).toBe(false);
+});
+
+test("the editor highlights by the file name's language", async () => {
+  const { view } = editing("const a = 1;\n", "src/a.ts");
+  await until(() => syntaxTree(view.state).length > 0);
+  expect(syntaxTree(view.state).topNode.name).toBe("Script");
 });

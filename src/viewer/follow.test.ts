@@ -35,3 +35,19 @@ test("asks for the open file when it opens, its worktree changes, or the service
   setOpenFile({ worktree: "/w", path: "c.ts" });
   expect(openFile).toHaveBeenCalledTimes(4);
 });
+
+test("asks again when a save found a newer version on disk", () => {
+  const openFile = mock(async (_worktree: string, _path: string) => {});
+  welcome();
+  setOpenFile({ worktree: "/w", path: "a.ts" }, true);
+  const stop = followOpenFile({ openFile } as unknown as Transport);
+  const answer = { worktree: "/w", path: "a.ts", base: null, binary: false, too_large: false };
+  apply({ type: "file", ...answer, content: "a\n", version: "v", error: null });
+  expect(openFile).toHaveBeenCalledTimes(1); // A new buffer is no reason.
+  const at = { worktree: "/w", path: "a.ts" };
+  apply({ type: "save_failed", ...at, error: "io", message: "disk full" });
+  expect(openFile).toHaveBeenCalledTimes(1);
+  apply({ type: "save_failed", ...at, error: "conflict", message: "a.ts changed on disk" });
+  expect(openFile).toHaveBeenCalledTimes(2);
+  stop();
+});

@@ -253,6 +253,19 @@ export const TerminalIcon = () => (
   </svg>
 );
 
+/** A box with an arrow out of it: open elsewhere. */
+export const ExternalIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <path
+      d="M5 2.5H3a1 1 0 0 0-1 1V9a1 1 0 0 0 1 1h5.5a1 1 0 0 0 1-1V7M7 2h3v3M10 2 5.5 6.5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 export const SearchIcon = () => (
   <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true">
     <g fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">

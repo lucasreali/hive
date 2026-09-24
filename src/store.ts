@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { type EditBuffer, failed, fromDisk, isFor, saved, startEdit } from "./viewer/buffer";
 
 // The one store (#30, #38). UI state is set by components; service data changes
 // only through `apply`, which stores what the service sent without deriving anything (#37).
@@ -32,6 +33,16 @@ export type ServiceMessage =
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
   | ({ type: "file" } & FileText)
+  | { type: "file_saved"; worktree: string; path: string; version: string }
+  | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
+  // Handled by `openExternal` (src/viewer/external.ts), not stored.
+  | {
+      type: "editor_target";
+      worktree: string;
+      path: string;
+      windows_path: string | null;
+      error: string | null;
+    }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -130,6 +141,9 @@ export type Changes = {
 
 /** The file shown under the files tree, in the viewer or its diff. */
 export type OpenFile = { worktree: string; path: string };
+
+/** Mirrors `hive_protocol::SaveError`. */
+export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";
 
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
@@ -249,6 +263,12 @@ export type HiveState = {
   changes: Record<string, Changes>;
   /** The last `file` the service sent; shown only while it is the open file. */
   file: FileText | null;
+  /** The open file shows as editable text (UI state), not as its read-only diff. */
+  editing: boolean;
+  /** The open file's edit buffer while editing (UI state, kept when the panel closes). */
+  edit: EditBuffer | null;
+  /** Why "Open in external editor" did not open the file, shown under its header. */
+  editorNotice: string | null;
 };
 
 export const initialState: HiveState = {
@@ -274,6 +294,9 @@ export const initialState: HiveState = {
   worktreeFiles: null,
   changes: {},
   file: null,
+  editing: false,
+  edit: null,
+  editorNotice: null,
 };
 
 export const useHive = create<HiveState>()(() => initialState);
@@ -370,8 +393,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "file": {
       const { type: _, ...file } = m;
-      return { file };
+      return { file, edit: editFor(s, file) };
     }
+    case "file_saved":
+      return s.edit && isFor(s.edit, m) ? { edit: saved(s.edit, m.version) } : {};
+    case "save_failed":
+      return s.edit && isFor(s.edit, m) ? { edit: failed(s.edit, m.error, m.message) } : {};
     case "disconnected":
       // The service is gone, and every agent and the watch with it.
       return {
@@ -384,6 +411,15 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.
       return {};
   }
+}
+
+/**
+ * The edit buffer after an answer for the open file while editing: the buffer updated from
+ * it, or started from it; unchanged for any other file or when not editing.
+ */
+function editFor(s: HiveState, file: FileText | null): EditBuffer | null {
+  if (!s.editing || !file || !s.openFile || !isFor(file, s.openFile)) return s.edit;
+  return s.edit ? fromDisk(s.edit, file) : startEdit(file);
 }
 
 /** The only way service data enters the store. */
@@ -401,7 +437,21 @@ export const openModal = (modal: Modal, modalProject: string | null = null) =>
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setChangedOnly = (changedOnly: boolean) => useHive.setState({ changedOnly });
-export const setOpenFile = (openFile: OpenFile | null) => useHive.setState({ openFile });
+/**
+ * Opens a file (null closes it), as editable text when `editing`, dropping the previous file's
+ * edit buffer. The file already open stays as it is.
+ */
+export const setOpenFile = (openFile: OpenFile | null, editing = false) =>
+  useHive.setState((s) =>
+    openFile && s.openFile && isFor(openFile, s.openFile)
+      ? {}
+      : { openFile, editing, edit: null, editorNotice: null },
+  );
+/** Shows the open file as editable text (its buffer starts from the last answer) or not. */
+export const setEditing = (editing: boolean) =>
+  useHive.setState((s) => ({ editing, edit: editing ? editFor({ ...s, editing }, s.file) : null }));
+export const setEdit = (edit: EditBuffer | null) => useHive.setState({ edit });
+export const setEditorNotice = (editorNotice: string | null) => useHive.setState({ editorNotice });
 export const setSelectedLines = (selectedLines: Lines | null) =>
   useHive.setState({ selectedLines });
 export const select = (selection: string | null) => useHive.setState({ selection });
@@ -463,3 +513,17 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
 /** Re-renders only when this agent's entry changes. */
 export const useAgent = (id: string) => useHive((s) => s.agents[id]);
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
+
+/** States in which an agent may be writing files: the file view's "Agent working here". */
+const WRITING: AgentState[] = ["working", "with_subagents", "waiting_permission"];
+
+/** An agent placed in `worktree`, or a subagent in its own worktree there, may be writing. */
+export const agentWorkingIn = (s: HiveState, worktree: string): boolean =>
+  Object.values(s.agents).some((a) => {
+    const status = s.agentStates[a.id];
+    const subagents = status?.subagents ?? [];
+    return (
+      (a.worktree === worktree && !!status && WRITING.includes(status.state)) ||
+      subagents.some((sub) => sub.worktree === worktree && WRITING.includes(sub.state))
+    );
+  });

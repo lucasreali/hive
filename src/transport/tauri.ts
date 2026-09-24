@@ -23,4 +23,7 @@ export const tauriTransport: Transport = {
   unwatchWorktree: () => invoke("unwatch_worktree"),
   listChanges: (path) => invoke("list_changes", { path }),
   openFile: (worktree, path) => invoke("open_file", { worktree, path }),
+  saveFile: (worktree, path, content, version) =>
+    invoke("save_file", { worktree, path, content, version }),
+  openInEditor: (worktree, path) => invoke("open_in_editor", { worktree, path }),
 };

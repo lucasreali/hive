@@ -2,7 +2,9 @@ import type {
   AgentState,
   ChangedFile,
   FileStatus,
+  FileText,
   Project,
+  SaveError,
   ServiceMessage,
   Subagent,
   Worktree,
@@ -239,8 +241,13 @@ export const MOCK_TEXTS: Record<string, [string, string]> = {
  * A stand-in for `hive::file`: the fake worktree's file as its status in `MOCK_CHANGES` says
  * (a new file has no base, a deleted one no content, a `.png` is binary), or why not.
  */
-function file(worktrees: string[], worktree: string, path: string): ServiceMessage {
-  const answer = { type: "file" as const, worktree, path, binary: false, too_large: false };
+function file(
+  worktrees: string[],
+  worktree: string,
+  path: string,
+  written: Map<string, string>,
+): FileText {
+  const answer = { worktree, path, binary: false, too_large: false };
   const none = { content: null, base: null, version: null };
   if (!worktrees.includes(worktree)) {
     const error = `${worktree} is not a worktree of a followed project`;
@@ -250,10 +257,15 @@ function file(worktrees: string[], worktree: string, path: string): ServiceMessa
   if (path.endsWith(".png")) return { ...answer, ...none, binary: true, error: null };
   const sample = `// ${path}\nexport const value = 1;\n`;
   const [text, original] = MOCK_TEXTS[path] ?? [sample.replace("1", "2"), sample];
-  const content = status === "deleted" ? null : status ? text : original;
+  const content =
+    written.get(`${worktree}/${path}`) ?? (status === "deleted" ? null : status ? text : original);
   const base = status === "added" || status === "untracked" ? null : original;
-  return { ...answer, content, base, version: content && `mock-${content.length}`, error: null };
+  return { ...answer, content, base, version: content && mockVersion(content), error: null };
 }
+
+/** A stand-in for `hive::file::version`: the length and a 32-bit hash of the text. */
+export const mockVersion = (text: string) =>
+  `${text.length}-${[...text].reduce((h, c) => (h * 31 + (c.codePointAt(0) ?? 0)) | 0, 0)}`;
 
 // A stand-in for `hive::worktree::check_name` and its CLI wording; the real rule lives in Rust.
 function nameError(project: Project, name: string): string | null {
@@ -273,7 +285,8 @@ function nameError(project: Project, name: string): string | null {
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project. A watched worktree lists
  * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list (and the
- * changes) again.
+ * changes) again. `write <path> <text>` there replaces that file's text, as an agent would;
+ * a save checks the version as the service does and keeps the text.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
  * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
@@ -363,6 +376,21 @@ export function createMockTransport(
     files.set(cwd, [...new Set([...listed, name])].sort());
     if (watched === cwd) sendFiles(cwd);
   };
+  // Texts saved, or written by `write`, by `<worktree>/<path>`.
+  const written = new Map<string, string>();
+  const fileAt = (worktree: string, path: string) =>
+    file(
+      projects.flatMap((p) => p.worktrees.map((w) => w.path)),
+      worktree,
+      path,
+      written,
+    );
+  // A stand-in for an agent editing a file: `write <path> <text>` in a worktree's terminal.
+  const write = (cwd: string, args: string) => {
+    const [path = "", ...words] = args.split(" ");
+    written.set(`${cwd}/${path}`, `${words.join(" ")}\n`);
+    if (watched === cwd) sendFiles(cwd);
+  };
 
   return {
     async connect(onMessage) {
@@ -424,13 +452,22 @@ export function createMockTransport(
       );
     },
     async openFile(worktree, path) {
-      later(
-        file(
-          projects.flatMap((p) => p.worktrees.map((w) => w.path)),
-          worktree,
-          path,
-        ),
-      );
+      later({ type: "file", ...fileAt(worktree, path) });
+    },
+    async saveFile(worktree, path, content, version) {
+      const now = fileAt(worktree, path);
+      const failure = (error: SaveError, message: string) =>
+        later({ type: "save_failed", worktree, path, error, message });
+      if (now.error) return void failure("invalid_path", now.error);
+      if (now.version !== version) return void failure("conflict", `${path} changed on disk`);
+      written.set(`${worktree}/${path}`, content);
+      later({ type: "file_saved", worktree, path, version: mockVersion(content) });
+    },
+    async openInEditor(worktree, path) {
+      const { error } = fileAt(worktree, path);
+      const unc = `\\\\wsl.localhost\\Ubuntu${`${worktree}/${path}`.replaceAll("/", "\\")}`;
+      const windows_path = error ? null : unc;
+      later({ type: "editor_target", worktree, path, error, windows_path });
     },
     async openTerminal(cwd, _cols, _rows, onData) {
       const id = ++last;
@@ -456,6 +493,7 @@ export function createMockTransport(
         if (terminal.agent && line) setState(terminal.agent, "working");
         if (line === "claude") detect(id, terminal);
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
+        if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);

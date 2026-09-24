@@ -13,6 +13,7 @@ import {
   MOCK_REPOS,
   MOCK_STATES,
   MOCK_TEXTS,
+  mockVersion,
 } from "./mock";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -395,7 +396,7 @@ test("files of a followed worktree as their status says, or why not", async () =
   const sample = (path: string, n = 1) => `// ${path}\nexport const value = ${n};\n`;
   expect(session).toContain("REMEMBER_ME_TTL // 30 days");
   expect(texts).toEqual([
-    ["src/auth/session.ts", session, sessionBase, false, null, `mock-${session.length}`],
+    ["src/auth/session.ts", session, sessionBase, false, null, mockVersion(session)],
     ["src/legacy/jwt.ts", null, sample("src/legacy/jwt.ts"), false, null, null],
     [
       "src/auth/token.ts",
@@ -403,7 +404,7 @@ test("files of a followed worktree as their status says, or why not", async () =
       sample("src/auth/token.ts"),
       false,
       null,
-      "mock-45",
+      mockVersion(sample("src/auth/token.ts", 2)),
     ],
     [
       "test/routes/orders.test.ts",
@@ -411,10 +412,82 @@ test("files of a followed worktree as their status says, or why not", async () =
       null,
       false,
       null,
-      "mock-54",
+      mockVersion(sample("test/routes/orders.test.ts", 2)),
     ],
-    ["README.md", sample("README.md"), sample("README.md"), false, null, "mock-37"],
+    [
+      "README.md",
+      sample("README.md"),
+      sample("README.md"),
+      false,
+      null,
+      mockVersion(sample("README.md")),
+    ],
     ["assets/logo.png", null, null, true, null, null],
     ["a", null, null, false, `${dotfiles.path} is not a worktree of a followed project`, null],
+  ]);
+});
+
+test("a save checks the version as the service does; write stands in for an agent", async () => {
+  const { transport, messages } = await connected();
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  const readme = "// README.md\nexport const value = 1;\n";
+  messages.length = 0;
+  await transport.saveFile(shop.path, "README.md", "mine\n", mockVersion(readme));
+  await transport.saveFile(shop.path, "README.md", "late\n", mockVersion(readme));
+  await transport.saveFile("/nowhere", "a", "x", null);
+  await transport.openFile(shop.path, "README.md");
+  await tick();
+  const at = { worktree: shop.path, path: "README.md" };
+  expect(messages.slice(0, 3)).toEqual([
+    { type: "file_saved", ...at, version: mockVersion("mine\n") },
+    { type: "save_failed", ...at, error: "conflict", message: "README.md changed on disk" },
+    {
+      type: "save_failed",
+      worktree: "/nowhere",
+      path: "a",
+      error: "invalid_path",
+      message: "/nowhere is not a worktree of a followed project",
+    },
+  ]);
+  expect(messages[3]).toMatchObject({ type: "file", content: "mine\n" });
+
+  // `write` in a watched worktree's terminal changes the text and sends the changes again.
+  await transport.watchWorktree(shop.path);
+  const id = await transport.openTerminal(shop.path, 80, 24, () => {});
+  await tick();
+  messages.length = 0;
+  await transport.writeTerminal(id, "write README.md agent was here\r");
+  await transport.openFile(shop.path, "README.md");
+  await tick();
+  expect(messages.map((m) => m.type)).toEqual(["files", "changes", "file"]);
+  expect(messages[2]).toMatchObject({ content: "agent was here\n" });
+  await transport.unwatchWorktree();
+  await transport.writeTerminal(id, "write README.md again\r");
+  await tick();
+  expect(messages).toHaveLength(3);
+});
+
+test("a file's Windows path for an external editor, or why not", async () => {
+  const { transport, messages } = await connected();
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  messages.length = 0;
+  await transport.openInEditor(shop.path, "src/App.tsx");
+  await transport.openInEditor("/nowhere", "a");
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "editor_target",
+      worktree: shop.path,
+      path: "src/App.tsx",
+      windows_path: "\\\\wsl.localhost\\Ubuntu\\home\\user\\projects\\shop\\src\\App.tsx",
+      error: null,
+    },
+    {
+      type: "editor_target",
+      worktree: "/nowhere",
+      path: "a",
+      windows_path: null,
+      error: "/nowhere is not a worktree of a followed project",
+    },
   ]);
 });

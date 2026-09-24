@@ -1,15 +1,22 @@
 import { beforeEach, expect, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import {
+  type AgentState,
   activateTab,
   addTab,
+  agentWorkingIn,
   apply,
   initialState,
   openModal,
   panelWorktree,
   removeTab,
   type ServiceMessage,
+  type Subagent,
   select,
+  setEdit,
+  setEditing,
+  setEditorNotice,
+  setOpenFile,
   setRightPanel,
   toggleCollapsed,
   useAgent,
@@ -17,6 +24,7 @@ import {
   useTerminal,
 } from "./store";
 import { MOCK_REPOS } from "./transport/mock";
+import { type EditBuffer, toText } from "./viewer/buffer";
 
 beforeEach(() => useHive.setState(initialState, true));
 
@@ -274,4 +282,98 @@ test("the files panel shows the selected worktree or the selected agent's", () =
   expect(shown()).toBeNull();
   select(null);
   expect(shown()).toBeNull();
+});
+
+const fileAnswer = (content: string | null, path = "a.ts"): ServiceMessage => ({
+  type: "file",
+  worktree: "/w",
+  path,
+  content,
+  base: null,
+  version: content && `v:${content}`,
+  binary: false,
+  too_large: false,
+  error: null,
+});
+
+test("editing keeps a buffer for the open file, fed by its answers", () => {
+  const edit = () => useHive.getState().edit;
+  setOpenFile({ worktree: "/w", path: "a.ts" }, true);
+  expect(useHive.getState().editing).toBe(true);
+  apply(fileAnswer("one\n", "b.ts")); // Another file's answer starts nothing.
+  expect(edit()).toBeNull();
+  apply(fileAnswer("one\n"));
+  expect(edit()?.doc.toString()).toBe("one\n");
+  apply(fileAnswer("two\n"));
+  expect([edit()?.doc.toString(), edit()?.version]).toEqual(["two\n", "v:two\n"]);
+
+  // Saves: answers for another file change nothing.
+  const sending = { ...(edit() as EditBuffer), saving: toText("three\n") };
+  setEdit(sending);
+  const at = { worktree: "/w", path: "b.ts" };
+  apply({ type: "file_saved", ...at, version: "v" });
+  apply({ type: "save_failed", ...at, error: "io", message: "m" });
+  expect(edit()).toBe(sending);
+  apply({ type: "file_saved", worktree: "/w", path: "a.ts", version: "v:three\n" });
+  expect(edit()?.version).toBe("v:three\n");
+  apply({ type: "save_failed", worktree: "/w", path: "a.ts", error: "conflict", message: "m" });
+  expect([edit()?.error, edit()?.recheck]).toEqual(["m", 1]);
+
+  // The same file again keeps the buffer; another file or closing drops it.
+  setOpenFile({ worktree: "/w", path: "a.ts" }, false);
+  expect(useHive.getState().editing).toBe(true);
+  useHive.setState({ editorNotice: "n" });
+  setOpenFile({ worktree: "/w", path: "b.ts" });
+  expect(useHive.getState()).toMatchObject({ editing: false, edit: null, editorNotice: null });
+  setOpenFile(null);
+  expect(useHive.getState().openFile).toBeNull();
+  // Not editing: answers keep no buffer, and nothing is stored for these.
+  apply(fileAnswer("x\n", "b.ts"));
+  apply({ type: "file_saved", worktree: "/w", path: "b.ts", version: "v" });
+  apply({ type: "save_failed", worktree: "/w", path: "b.ts", error: "io", message: "m" });
+  expect(edit()).toBeNull();
+});
+
+test("Edit starts the buffer from the last answer; Diff drops it", () => {
+  setOpenFile({ worktree: "/w", path: "a.ts" });
+  setEditing(true); // No answer yet: the buffer starts with the first one.
+  expect(useHive.getState().edit).toBeNull();
+  apply(fileAnswer("one\n"));
+  setEditing(false);
+  expect(useHive.getState().edit).toBeNull();
+  setEditing(true);
+  expect(useHive.getState().edit?.doc.toString()).toBe("one\n");
+  setEditorNotice("why");
+  expect(useHive.getState().editorNotice).toBe("why");
+});
+
+test("an agent is working in a worktree while it (or its subagent there) may write", () => {
+  const worktree = "/w";
+  const place = (id: string, at: string | null) =>
+    apply({ type: "agent_detected", channel: 1, id, project: "/p", worktree: at, cwd: at });
+  const state = (id: string, state: AgentState, subagents: Subagent[] = []) =>
+    apply({ type: "agent_state", id, state, urgency: 0, pending: false, subagents });
+  const working = () => agentWorkingIn(useHive.getState(), worktree);
+  place("a", worktree);
+  expect(working()).toBe(false); // No state yet.
+  for (const [s, expected] of [
+    ["idle", false],
+    ["waiting_you", false],
+    ["error", false],
+    ["ended", false],
+    ["working", true],
+    ["with_subagents", true],
+    ["waiting_permission", true],
+  ] as const) {
+    state("a", s);
+    expect(working()).toBe(expected);
+  }
+  state("a", "idle");
+  place("b", "/elsewhere");
+  state("b", "working", [{ id: "s", agent_type: null, state: "working", worktree: "/other" }]);
+  expect(working()).toBe(false);
+  state("b", "with_subagents", [{ id: "s", agent_type: null, state: "idle", worktree }]);
+  expect(working()).toBe(false);
+  state("b", "with_subagents", [{ id: "s", agent_type: null, state: "working", worktree }]);
+  expect(working()).toBe(true);
 });

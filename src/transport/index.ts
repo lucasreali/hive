@@ -38,6 +38,13 @@ export interface Transport {
   listChanges(path: string): Promise<void>;
   /** A file of a followed worktree on disk and at HEAD; answered by `file`. */
   openFile(worktree: string, path: string): Promise<void>;
+  /**
+   * Writes `content` over the file if its bytes on disk still have `version` (null: the file
+   * must not exist); answered by `file_saved` or `save_failed`.
+   */
+  saveFile(worktree: string, path: string, content: string, version: string | null): Promise<void>;
+  /** The file's Windows path for an external editor; answered by `editor_target`. */
+  openInEditor(worktree: string, path: string): Promise<void>;
 }
 
 /**
