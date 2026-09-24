@@ -490,10 +490,7 @@ mod tests {
     }
 
     fn pending(agent: &Agent) -> bool {
-        let Control::AgentState { pending, .. } = agent.message("s") else {
-            unreachable!()
-        };
-        pending
+        matches!(agent.message("s"), Control::AgentState { pending: true, .. })
     }
 
     #[test]
