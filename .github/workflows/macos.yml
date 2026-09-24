@@ -28,7 +28,7 @@ jobs:
       # `tauri::generate_context!` needs the built frontend.
       - run: bun run build
       # Runs `cargo test --workspace` instrumented.
-      - run: cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
+      - run: cargo llvm-cov --workspace --no-fail-fast --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
       # `--no-config`: `.cargo/mutants.toml` excludes this file for Linux.
       - run: cargo mutants --no-config -f crates/hive/src/macos.rs -j 2 --timeout 120
       - run: bun test
