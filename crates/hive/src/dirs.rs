@@ -62,10 +62,7 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     let separators: &[char] = if windows { &['\\', '/'] } else { &['/'] };
     let path = match (path.is_empty(), windows) {
         (false, _) => path.to_owned(),
-        (true, true) => with_separator(
-            run(programs.cmd, &["/c", "echo", "%USERPROFILE%"])?,
-            '\\',
-        ),
+        (true, true) => with_separator(run(programs.cmd, &["/c", "echo", "%USERPROFILE%"])?, '\\'),
         (true, false) => {
             let home = home.ok_or_else(|| io::Error::other("HOME is not set"))?;
             with_separator(home.to_string_lossy().into_owned(), '/')
@@ -354,7 +351,9 @@ mod tests {
         };
         let (.., error) = ask("", true, None, &programs);
         assert!(
-            error.unwrap().starts_with(&format!("cannot run {missing}: ")),
+            error
+                .unwrap()
+                .starts_with(&format!("cannot run {missing}: ")),
         );
     }
 }
