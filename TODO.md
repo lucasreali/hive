@@ -105,6 +105,12 @@
 - [x] **4.15 Resizable side panels** (human request, 2026-09-24). `task/4.15-resizable-sidebars` — *human decisions: both side panels resize within a minimum and a maximum; dragging the right panel past its minimum closes it. Defaults pending human review: left sidebar 200–480 px (264 by default), right panel 280–640 px (380 by default); the right panel closes when dragged under 200 px and reopens at its last width; a 6 px handle on each inner edge (a focusable `separator`, ←/→ move it 16 px); the widths are UI preferences kept in the window's `localStorage` (`hive.widths`), not in the service. Also: the pending bell's count badge is orange (`--state-you`) with a ring of the bar's color, set apart from the yellow bell.*
 - [x] **4.16 Title bar logo** (human request, 2026-09-24). `task/4.16-titlebar-logo` — *the title bar's Hive logo follows the human's drawing: six hollow hexagons and one solid (top right), in the color of the "Hive" text beside it (`currentColor`, `--text-2`), after trying the logo's yellow and the system's blues (human decisions), still 16 px. The app icons (`src-tauri/icons/`) are unchanged.*
 
+- [ ] **4.17 Release pipeline** (human request, 2026-09-24: distribution through GitHub Releases). `task/4.17-release` — a tag `v*` builds the Linux `hive` (ubuntu-22.04) and the Windows NSIS installer with the updater artifacts (`tauri-action`), and publishes them with `latest.json` in a GitHub release; `scripts/release.sh <version>` bumps every manifest, commits and tags (the human pushes).
+- [ ] **4.18 Bundled service** (human decision, 2026-09-24: **replaces #29**, the human updates `docs/hive.md`). `task/4.18-bundled-service` — the installer carries the Linux `hive`; the bridge script copies it to `<data-dir>/hive/bin/hive` when it differs from the installed one and runs that copy. `HIVE_BRIDGE` still overrides it for development. One WSL distribution only (the default one).
+- [ ] **4.19 Update button** (human request, 2026-09-24). `task/4.19-update-button` — on start the app asks GitHub for a newer release (`tauri-plugin-updater`); when there is one, the title bar shows "Update to vX" left of the bell; a click installs it and restarts the app, asking first when agents would end.
+
+**⏸ Checkpoint 4b — first releases.** The human adds the signing secrets, pushes `v0.1.0`, installs it, pushes `v0.1.1` and updates through the button.
+
 **⏸ Checkpoint 4 — v1 complete.**
 
 ---
