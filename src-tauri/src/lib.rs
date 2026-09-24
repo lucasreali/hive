@@ -67,7 +67,7 @@ const NOT_CONNECTED: &str = "not connected to the hive service";
 /// the installer put `hive`, used when that file exists. Nothing is ever spliced into the script.
 pub fn bridge_command(
     macos: bool,
-    var: impl Fn(&str) -> Option<OsString>,
+    var: &dyn Fn(&str) -> Option<OsString>,
     bundled: Option<PathBuf>,
 ) -> (OsString, Vec<OsString>) {
     let var = |key| var(key).filter(|value| !value.is_empty());

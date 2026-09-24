@@ -16,7 +16,7 @@ fn main() {
             let bundled = app.path().resolve("hive", BaseDirectory::Resource).ok();
             let macos = cfg!(target_os = "macos");
             let (program, args) =
-                hive_lib::bridge_command(macos, |key| std::env::var_os(key), bundled);
+                hive_lib::bridge_command(macos, &|key| std::env::var_os(key), bundled);
             // Restarting runs the exit events, so the connection ends first (`on_run_event`).
             let handle = app.handle().clone();
             let hive =

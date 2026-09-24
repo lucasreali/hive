@@ -114,7 +114,7 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
 
 #[test]
 fn bridge_runs_a_constant_script_without_a_shell_config() {
-    let (program, args) = bridge_command(false, |_| None, None);
+    let (program, args) = bridge_command(false, &|_| None, None);
     assert_eq!(program, "wsl.exe");
     assert_eq!(
         args,
@@ -127,7 +127,7 @@ fn bridge_overrides_are_separate_arguments() {
     let bundled = std::env::current_exe().unwrap();
     let (_, args) = bridge_command(
         false,
-        |key| match key {
+        &|key| match key {
             "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
             "HIVE_BRIDGE" => Some("/src/hive; rm -rf ~".into()),
             _ => None,
@@ -153,7 +153,7 @@ fn on_macos_the_same_script_runs_in_sh_without_wsl() {
     let bundled = std::env::current_exe().unwrap();
     let (program, args) = bridge_command(
         true,
-        |key| match key {
+        &|key| match key {
             "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
             "HIVE_BRIDGE" => Some("/src/hive".into()),
             _ => None,
@@ -175,8 +175,8 @@ fn on_macos_the_same_script_runs_in_sh_without_wsl() {
 fn empty_overrides_and_a_missing_bundle_are_ignored() {
     let missing = std::env::temp_dir().join("hive-no-such-bundle");
     assert_eq!(
-        bridge_command(false, |_| Some("".into()), Some(missing)),
-        bridge_command(false, |_| None, None)
+        bridge_command(false, &|_| Some("".into()), Some(missing)),
+        bridge_command(false, &|_| None, None)
     );
 }
 
