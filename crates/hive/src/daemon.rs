@@ -14,7 +14,8 @@ use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameType, PROTOCOL_VERSION, Role, SaveError,
+    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, PROTOCOL_VERSION,
+    Role, SaveError,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -646,8 +647,13 @@ async fn write_prioritized<W: AsyncWrite + Unpin>(
             Some(frame) = terminal.recv() => frame,
             else => return,
         };
-        if writer.send(frame).await.is_err() {
-            return;
+        match writer.send(frame).await {
+            // Nothing was written: the app misses this message, not every later one.
+            Err(FrameError::Oversized(len)) => {
+                eprintln!("hive: warning: dropped a {len}-byte message to the app");
+            }
+            Err(_) => return,
+            Ok(()) => {}
         }
     }
 }
@@ -730,6 +736,34 @@ mod tests {
         );
         drop(frames);
         assert!(serving.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_frame_too_big_to_write_is_dropped_and_writing_goes_on() {
+        let (control_tx, control_rx) = mpsc::unbounded_channel();
+        let (terminal_tx, terminal_rx) = mpsc::channel(1);
+        let huge = Frame {
+            kind: FrameType::Control,
+            channel: 0,
+            payload: Bytes::from(vec![b' '; hive_protocol::MAX_PAYLOAD + 1]),
+        };
+        control_tx.send(huge).unwrap();
+        control_tx
+            .send(Frame::control(0, &Control::CloseTerminal))
+            .unwrap();
+        drop((control_tx, terminal_tx));
+        let (client, server) = tokio::io::duplex(1024);
+        write_prioritized(
+            FramedWrite::new(server, FrameCodec),
+            control_rx,
+            terminal_rx,
+        )
+        .await;
+        let frames: Vec<Frame> = FramedRead::new(client, FrameCodec)
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        assert_eq!(frames, vec![Frame::control(0, &Control::CloseTerminal)]);
     }
 
     #[tokio::test]
