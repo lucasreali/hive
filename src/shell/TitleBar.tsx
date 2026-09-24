@@ -1,7 +1,8 @@
-import { BellIcon } from "@phosphor-icons/react";
+import { ArrowCircleUpIcon, BellIcon } from "@phosphor-icons/react";
 import { nextPending } from "../shortcuts";
 import { pendingAgents, useHive } from "../store";
 import { windowAction } from "../window";
+import { requestUpdate } from "./CloseAppDialog";
 import { HiveIcon, MaximizeIcon, MinimizeIcon, WindowCloseIcon } from "./icons";
 
 // The window has no native decorations; this bar drags it and holds the window buttons.
@@ -13,6 +14,7 @@ export function TitleBar() {
         <HiveIcon />
         <span>Hive</span>
       </div>
+      <UpdateButton />
       <PendingBell />
       <div className="window-controls">
         <button type="button" title="Minimize" onClick={() => windowAction("minimize")}>
@@ -26,6 +28,24 @@ export function TitleBar() {
         </button>
       </div>
     </header>
+  );
+}
+
+/** A newer release found at startup (4.19): a click installs it and restarts Hive. */
+function UpdateButton() {
+  const update = useHive((s) => s.update);
+  if (!update) return null;
+  return (
+    <button
+      type="button"
+      className="update-button"
+      title="Install the new version and restart Hive"
+      disabled={update.installing}
+      onClick={requestUpdate}
+    >
+      <ArrowCircleUpIcon size={16} weight="bold" aria-hidden="true" />
+      {update.installing ? "Updating…" : `Update to v${update.version}`}
+    </button>
   );
 }
 

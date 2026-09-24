@@ -11,6 +11,7 @@ fn main() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let bundled = app.path().resolve("hive", BaseDirectory::Resource).ok();
             let (program, args) = hive_lib::bridge_command(|key| std::env::var_os(key), bundled);
@@ -19,6 +20,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::connect,
+            commands::check_update,
+            commands::install_update,
             commands::open_terminal,
             commands::write_terminal,
             commands::resize_terminal,

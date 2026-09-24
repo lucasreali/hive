@@ -366,7 +366,7 @@ function nameError(project: Project, name: string): string | null {
  * a save checks the version as the service does and keeps the text.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
- * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
+ * "empty" starts with no projects; "update" offers version 9.9.9, whose install fails; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
  * after its prompt, at recorded timing, each terminal starting `LOAD_STAGGER_MS` later than
  * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
  * generated one.
@@ -493,6 +493,12 @@ export function createMockTransport(
     },
     async listProjects() {
       later({ type: "projects", projects });
+    },
+    async checkUpdate() {
+      if (scenario === "update") later({ type: "update_available", version: "9.9.9" });
+    },
+    async installUpdate() {
+      later({ type: "update_failed", error: "mock: nothing to install" });
     },
     async addProject(path) {
       const repo = MOCK_REPOS.find((p) => p.path === path);

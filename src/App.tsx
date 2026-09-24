@@ -40,6 +40,7 @@ export function App() {
         {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
         {modal === "close-app" && <CloseAppDialog />}
+        {modal === "update-app" && <CloseAppDialog updating />}
         {!blocked && <WorktreeMenu />}
         {!blocked && <SessionMenu />}
         <ConnectionBlock />

@@ -632,3 +632,21 @@ test("sessions: listed, located, and deleted unless running", async () => {
   // The shared fake list is left alone.
   expect(MOCK_SESSIONS[0]).toBe(first);
 });
+
+test("?mock=update offers an update whose install fails; otherwise none is offered", async () => {
+  const { transport, messages } = await connected();
+  await transport.checkUpdate();
+  await tick();
+  expect(messages.some((m) => m.type === "update_available")).toBe(false);
+
+  const update = createMockTransport("update");
+  const offered: ServiceMessage[] = [];
+  await update.connect((m) => offered.push(m));
+  await update.checkUpdate();
+  await update.installUpdate();
+  await tick();
+  expect(offered.slice(-2)).toEqual([
+    { type: "update_available", version: "9.9.9" },
+    { type: "update_failed", error: "mock: nothing to install" },
+  ]);
+});

@@ -5,7 +5,8 @@ import { connect } from "./connect";
 import { followOpenFile, followPanel } from "./follow";
 import { transport } from "./transport";
 
-void connect();
+// The update check answers on the channel `connect` gives, so it goes second.
+void connect().then(() => transport.checkUpdate());
 followOpenFile(transport);
 followPanel(transport);
 

@@ -21,6 +21,7 @@ use hive_protocol::{
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
+use tauri_plugin_updater::{Update, Updater};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -97,6 +98,8 @@ struct Link {
     last_channel: u32,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
+    /// The newer release `check_update` found, for `install_update` (4.19).
+    update: Option<Update>,
 }
 
 impl Link {
@@ -401,6 +404,44 @@ impl Hive {
     }
 }
 
+impl Hive {
+    /// Asks the release endpoint for a newer version (4.19). A newer one is kept for
+    /// `install_update` and goes to the UI as `update_available {version}`. No newer version,
+    /// or a failed check (offline, GitHub down), sends nothing: it is not worth a notice.
+    pub async fn check_update(&self, updater: tauri_plugin_updater::Result<Updater>) {
+        let Ok(Some(update)) = async { updater?.check().await }.await else {
+            return;
+        };
+        let mut link = self.link();
+        link.to_ui(json!({"type": "update_available", "version": update.version}));
+        link.update = Some(update);
+    }
+
+    /// Downloads, checks the signature of and runs the installer of the update `check_update`
+    /// found, then `restart`s. On Windows the installer ends the app itself.
+    pub async fn install_update(&self, restart: impl FnOnce()) {
+        let update = self.link().update.clone();
+        let result = match update {
+            Some(update) => update
+                .download_and_install(|_, _| {}, || {})
+                .await
+                .map_err(|error| error.to_string()),
+            None => Err("no update to install".to_owned()),
+        };
+        self.installed(result, restart);
+    }
+
+    /// Restarts once installed; a failure goes to the UI as `update_failed {error}`.
+    fn installed(&self, result: Result<(), String>, restart: impl FnOnce()) {
+        match result {
+            Ok(()) => restart(),
+            Err(error) => self
+                .link()
+                .to_ui(json!({"type": "update_failed", "error": error})),
+        }
+    }
+}
+
 /// A piped stdio handle of the bridge; always there, since every one is requested.
 fn pipe<T>(pipe: Option<T>) -> std::io::Result<T> {
     pipe.ok_or(std::io::ErrorKind::BrokenPipe.into())
@@ -485,6 +526,25 @@ pub mod commands {
         let runtime = tauri::async_runtime::handle();
         let _context = runtime.inner().enter();
         hive.connect(on_message);
+    }
+
+    /// Sync like `connect`: the check runs on Tauri's runtime and answers on the UI channel.
+    #[tauri::command]
+    pub fn check_update<R: Runtime>(app: AppHandle<R>) {
+        use tauri_plugin_updater::UpdaterExt;
+        tauri::async_runtime::spawn(async move {
+            app.state::<Hive>().check_update(app.updater()).await;
+        });
+    }
+
+    /// Restarting runs the exit events, so the connection ends first (`on_run_event`).
+    #[tauri::command]
+    pub fn install_update<R: Runtime>(app: AppHandle<R>) {
+        tauri::async_runtime::spawn(async move {
+            app.state::<Hive>()
+                .install_update(|| app.request_restart())
+                .await;
+        });
     }
 
     #[tauri::command]

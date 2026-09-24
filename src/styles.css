@@ -155,6 +155,26 @@ button:disabled {
 }
 
 /* The pending agents: a bell with their number (F8). */
+.update-button {
+  height: 26px;
+  margin-right: 6px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.update-button:not(:disabled):hover {
+  background: var(--border);
+}
+
+.update-button:disabled {
+  color: var(--text-3);
+}
+
 .pending-bell {
   position: relative;
   width: 32px;

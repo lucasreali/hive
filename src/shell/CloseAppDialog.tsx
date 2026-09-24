@@ -1,4 +1,5 @@
 import { type AgentState, type HiveState, openModal, useHive } from "../store";
+import { transport } from "../transport";
 import { closeWindow } from "../window";
 import { CloseIcon } from "./icons";
 
@@ -25,9 +26,26 @@ export function confirmClose(): boolean {
   return true;
 }
 
-/** Closing ends every terminal and the agents in them (#18). The prototype has no screen for it. */
-export function CloseAppDialog() {
+/** Installs the update found at startup (4.19); the app restarts, or says why it could not. */
+export function installUpdate(): void {
+  openModal(null);
+  useHive.setState((s) => ({ update: s.update && { ...s.update, installing: true } }));
+  void transport.installUpdate();
+}
+
+/** The update button: restarting ends agents as closing does, so it asks the same way. */
+export function requestUpdate(): void {
+  if (agentsAtRisk(useHive.getState()).length === 0) installUpdate();
+  else openModal("update-app");
+}
+
+/**
+ * Closing ends every terminal and the agents in them (#18), and so does the restart of an
+ * update (`updating`). The prototype has no screen for it.
+ */
+export function CloseAppDialog({ updating = false }: { updating?: boolean }) {
   const count = useHive((s) => agentsAtRisk(s).length);
+  const title = updating ? "Update Hive?" : "Close Hive?";
   return (
     // A native modal dialog: the page behind is inert and Esc closes it.
     <dialog
@@ -44,19 +62,21 @@ export function CloseAppDialog() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          closeWindow();
+          if (updating) installUpdate();
+          else closeWindow();
         }}
       >
         <header>
-          <h2 id="close-app-title">Close Hive?</h2>
+          <h2 id="close-app-title">{title}</h2>
           <button type="button" className="ghost" title="Close (Esc)" onClick={cancel}>
             <CloseIcon />
           </button>
         </header>
         <div className="dialog-body">
           <p>
-            {count === 1 ? "1 agent is" : `${count} agents are`} running. Closing Hive ends every
-            terminal and the agents in them.
+            {count === 1 ? "1 agent is" : `${count} agents are`} running.{" "}
+            {updating ? "Updating restarts Hive, which ends" : "Closing Hive ends"} every terminal
+            and the agents in them.
           </p>
         </div>
         <footer>
@@ -64,7 +84,7 @@ export function CloseAppDialog() {
             Cancel <kbd>Esc</kbd>
           </button>
           <button type="submit" className="primary">
-            Close Hive <kbd>Enter</kbd>
+            {updating ? "Update and restart" : "Close Hive"} <kbd>Enter</kbd>
           </button>
         </footer>
       </form>

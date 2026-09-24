@@ -921,3 +921,101 @@ fn the_app_exit_ends_the_connection() {
     );
     assert!(app.state::<Hive>().link().reader.is_none());
 }
+
+/// A GitHub stand-in: serves `/latest.json` announcing `version`, with an installer on this
+/// server that carries no valid signature, until the test process ends. Returns its URL.
+fn release_server(version: &str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let manifest = json!({
+        "version": version,
+        "platforms": {
+            "linux-x86_64": {"url": format!("{base}/hive-setup"), "signature": "not signed"}
+        }
+    })
+    .to_string();
+    std::thread::spawn(move || {
+        for mut socket in listener.incoming().map_while(Result::ok) {
+            let mut request = [0; 4096];
+            let read = socket.read(&mut request).unwrap_or(0);
+            let body = if request[..read].starts_with(b"GET /latest.json ") {
+                manifest.as_str()
+            } else {
+                "not an installer"
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(format!("{head}{body}").as_bytes());
+        }
+    });
+    format!("{base}/latest.json")
+}
+
+/// An app with the updater plugin reading `endpoint`, managing `hive`.
+fn updater_app(endpoint: &str, hive: Hive) -> tauri::App<tauri::test::MockRuntime> {
+    let mut context = mock_context(noop_assets());
+    let updater = json!({"endpoints": [endpoint], "pubkey": "not a key"});
+    context.config_mut().plugins.0.insert("updater".into(), updater);
+    mock_builder()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![check_update, install_update])
+        .build(context)
+        .unwrap()
+}
+
+/// A `Hive` without a service whose UI messages arrive on the receiver.
+fn hive_with_ui() -> (Hive, mpsc::UnboundedReceiver<Value>) {
+    let hive = hive();
+    let (channel, rx) = ui();
+    hive.link().ui = Some(channel);
+    (hive, rx)
+}
+
+#[tokio::test]
+async fn a_newer_release_is_offered_and_an_unsigned_one_is_not_installed() {
+    let (hive, mut rx) = hive_with_ui();
+    let app = updater_app(&release_server("99.0.0"), hive);
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    assert_eq!(invoke(&webview, "check_update", json!({})), Ok(Value::Null));
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_available", "version": "99.0.0"})
+    );
+    assert_eq!(invoke(&webview, "install_update", json!({})), Ok(Value::Null));
+    let failed = next(&mut rx).await;
+    assert_eq!(failed["type"], "update_failed");
+    assert_ne!(failed["error"], "no update to install", "{failed}");
+}
+
+#[tokio::test]
+async fn no_newer_release_or_a_failed_check_offers_nothing() {
+    use tauri_plugin_updater::UpdaterExt;
+    let (hive, mut rx) = hive_with_ui();
+    let endpoint = release_server("0.0.1");
+    let app = updater_app(&endpoint, hive_with_ui().0);
+    hive.check_update(app.updater()).await;
+    // Anything but `/latest.json` answers the installer, which is not JSON: the check fails.
+    let broken = vec![endpoint.replace("latest.json", "broken.json").parse().unwrap()];
+    let updater = app.updater_builder().endpoints(broken).unwrap().build();
+    hive.check_update(updater).await;
+    hive.install_update(|| panic!("nothing was installed")).await;
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_failed", "error": "no update to install"})
+    );
+}
+
+#[test]
+fn an_installed_update_restarts_the_app() {
+    let (hive, mut rx) = hive_with_ui();
+    let mut restarted = false;
+    hive.installed(Ok(()), || restarted = true);
+    assert!(restarted);
+    assert!(rx.try_recv().is_err());
+}

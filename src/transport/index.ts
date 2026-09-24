@@ -63,12 +63,16 @@ export interface Transport {
    * answered by `editor_target`.
    */
   openInEditor(worktree: string, path: string): Promise<void>;
+  /** Asks GitHub for a newer release; answered by `update_available` only when there is one. */
+  checkUpdate(): Promise<void>;
+  /** Installs that release and restarts the app; answered by `update_failed` on a failure. */
+  installUpdate(): Promise<void>;
 }
 
 /**
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
- * `?mock=empty` starts it with no projects; `?mock=states` adds agents in every state;
+ * `?mock=empty` starts it with no projects; `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
  * every terminal (the load test, 1.11).
  */
