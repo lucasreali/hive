@@ -93,18 +93,20 @@ impl Agent {
     /// The `agent_state` message. Rule 1: the most urgent of the agent, its subagents and
     /// "with subagents" (when any is live) is shown.
     pub fn message(&self, id: &str) -> Control {
+        Control::AgentState {
+            id: id.to_owned(),
+            state: self.displayed(),
+            subagents: self.subagents.clone(),
+        }
+    }
+
+    fn displayed(&self) -> AgentState {
         let with = (!self.subagents.is_empty()).then_some(AgentState::WithSubagents);
-        let state = self
-            .subagents
+        self.subagents
             .iter()
             .map(|s| s.state)
             .chain(with)
-            .fold(self.state, Ord::max);
-        Control::AgentState {
-            id: id.to_owned(),
-            state,
-            subagents: self.subagents.clone(),
-        }
+            .fold(self.state, Ord::max)
     }
 
     fn changed(&mut self, id: &str, update: impl FnOnce(&mut Self)) -> Option<Control> {
@@ -168,17 +170,8 @@ mod tests {
     }
 
     fn shown(agent: &Agent) -> (AgentState, Vec<(String, AgentState)>) {
-        let Control::AgentState {
-            id,
-            state,
-            subagents,
-        } = agent.message("s")
-        else {
-            unreachable!()
-        };
-        assert_eq!(id, "s");
-        let subs = subagents.into_iter().map(|s| (s.id, s.state)).collect();
-        (state, subs)
+        let subs = agent.subagents.iter().map(|s| (s.id.clone(), s.state));
+        (agent.displayed(), subs.collect())
     }
 
     fn after(event: &AgentEvent) -> AgentState {

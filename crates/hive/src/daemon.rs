@@ -186,6 +186,13 @@ impl State {
         self.to_app(channel, &state).await;
     }
 
+    /// Sent to a newly connected app right after `Welcome`: the state of every live agent.
+    async fn snapshot(&self) {
+        for (id, agent) in self.agents.lock().await.iter() {
+            self.to_app(agent.channel, &agent.message(id)).await;
+        }
+    }
+
     async fn input(&self, channel: u32, input: Input) {
         if let Some(terminal) = self.terminals.lock().await.get(&channel) {
             terminal.send(input);
@@ -291,9 +298,11 @@ async fn pump(
 ) {
     let mut buf = vec![0; 64 * 1024];
     while let Ok(n @ 1..) = pty.read(&mut buf).await {
-        if let Some(terminal) = state.terminals.lock().await.get_mut(&channel) {
-            terminal.last_output = Instant::now();
-        }
+        let mut terminals = state.terminals.lock().await;
+        terminals
+            .entry(channel)
+            .and_modify(|t| t.last_output = Instant::now());
+        drop(terminals);
         let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
         if output.send(frame).await.is_err() {
             break;
@@ -414,10 +423,7 @@ where
             control: control_tx,
         });
     }
-    // Snapshot: the app learns the state of every live agent right after `Welcome`.
-    for (id, agent) in state.agents.lock().await.iter() {
-        state.to_app(agent.channel, &agent.message(id)).await;
-    }
+    state.snapshot().await;
     let writer = tokio::spawn(write_prioritized(writer, control_rx, terminal_rx));
     while let Some(Ok(frame)) = reader.next().await {
         app_frame(state, frame, &terminal_tx).await;
@@ -573,8 +579,9 @@ mod tests {
             bin_dir: dir.path().into(),
             projects: Projects::load(dir.path().join("projects.json")),
         });
-        let (client, server) = tokio::io::duplex(4096);
-        let (read, write) = tokio::io::split(server);
+        // The same stream types as the daemon, so no second instantiation skews line coverage.
+        let (client, server) = UnixStream::pair().unwrap();
+        let (read, write) = server.into_split();
         let serving = tokio::spawn({
             let state = state.clone();
             async move {
