@@ -299,21 +299,28 @@ mod tests {
 
     #[test]
     fn a_worktree_in_use_names_its_processes() {
-        let proc = tempfile::tempdir().unwrap();
-        let dir = proc.path().join("wt");
-        for pid in 1..=7 {
-            let entry = proc.path().join(pid.to_string());
-            std::fs::create_dir(&entry).unwrap();
-            let stat = format!("{pid} (p{pid}) S 1 {pid} {pid} 0");
-            std::fs::write(entry.join("stat"), stat).unwrap();
-            std::os::unix::fs::symlink(&dir, entry.join("cwd")).unwrap();
-        }
-        let err = unused(proc.path(), dir.to_str().unwrap()).unwrap_err();
+        let busy = |count: i32| {
+            let proc = tempfile::tempdir().unwrap();
+            let dir = proc.path().join("wt");
+            for pid in 1..=count {
+                let entry = proc.path().join(pid.to_string());
+                std::fs::create_dir(&entry).unwrap();
+                let stat = format!("{pid} (p{pid}) S 1 {pid} {pid} 0");
+                std::fs::write(entry.join("stat"), stat).unwrap();
+                std::os::unix::fs::symlink(&dir, entry.join("cwd")).unwrap();
+            }
+            let err = unused(proc.path(), dir.to_str().unwrap()).unwrap_err();
+            assert!(unused(proc.path(), "/elsewhere").is_ok());
+            err.to_string()
+        };
         assert_eq!(
-            err.to_string(),
+            busy(7),
             "in use by p1 (1), p2 (2), p3 (3), p4 (4), p5 (5), 2 more: close its terminals first"
         );
-        assert!(unused(proc.path(), "/elsewhere").is_ok());
+        assert_eq!(
+            busy(5),
+            "in use by p1 (1), p2 (2), p3 (3), p4 (4), p5 (5): close its terminals first"
+        );
     }
 
     #[test]
