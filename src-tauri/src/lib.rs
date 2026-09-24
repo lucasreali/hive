@@ -83,6 +83,8 @@ pub struct Hive {
     program: OsString,
     args: Vec<OsString>,
     link: Arc<Mutex<Link>>,
+    /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
+    restart: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Default)]
@@ -145,7 +147,13 @@ impl Hive {
             program,
             args,
             link: Arc::default(),
+            restart: None,
         }
+    }
+
+    pub fn with_restart(mut self, restart: impl Fn() + Send + Sync + 'static) -> Self {
+        self.restart = Some(Box::new(restart));
+        self
     }
 
     fn link(&self) -> MutexGuard<'_, Link> {
@@ -418,8 +426,8 @@ impl Hive {
     }
 
     /// Downloads, checks the signature of and runs the installer of the update `check_update`
-    /// found, then `restart`s. On Windows the installer ends the app itself.
-    pub async fn install_update(&self, restart: impl FnOnce()) {
+    /// found, then restarts. On Windows the installer ends the app itself.
+    pub async fn install_update(&self) {
         let update = self.link().update.clone();
         let result = match update {
             Some(update) => update
@@ -428,13 +436,13 @@ impl Hive {
                 .map_err(|error| error.to_string()),
             None => Err("no update to install".to_owned()),
         };
-        self.installed(result, restart);
+        self.installed(result);
     }
 
     /// Restarts once installed; a failure goes to the UI as `update_failed {error}`.
-    fn installed(&self, result: Result<(), String>, restart: impl FnOnce()) {
+    fn installed(&self, result: Result<(), String>) {
         match result {
-            Ok(()) => restart(),
+            Ok(()) => self.restart.iter().for_each(|restart| restart()),
             Err(error) => self
                 .link()
                 .to_ui(json!({"type": "update_failed", "error": error})),
@@ -537,13 +545,10 @@ pub mod commands {
         });
     }
 
-    /// Restarting runs the exit events, so the connection ends first (`on_run_event`).
     #[tauri::command]
     pub fn install_update<R: Runtime>(app: AppHandle<R>) {
         tauri::async_runtime::spawn(async move {
-            app.state::<Hive>()
-                .install_update(|| app.request_restart())
-                .await;
+            app.state::<Hive>().install_update().await;
         });
     }
 

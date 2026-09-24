@@ -15,7 +15,11 @@ fn main() {
         .setup(|app| {
             let bundled = app.path().resolve("hive", BaseDirectory::Resource).ok();
             let (program, args) = hive_lib::bridge_command(|key| std::env::var_os(key), bundled);
-            app.manage(hive_lib::Hive::new(program, args));
+            // Restarting runs the exit events, so the connection ends first (`on_run_event`).
+            let handle = app.handle().clone();
+            let hive =
+                hive_lib::Hive::new(program, args).with_restart(move || handle.request_restart());
+            app.manage(hive);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

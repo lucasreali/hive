@@ -1014,8 +1014,7 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
         .unwrap()];
     let updater = app.updater_builder().endpoints(broken).unwrap().build();
     hive.check_update(updater).await;
-    hive.install_update(|| panic!("nothing was installed"))
-        .await;
+    hive.install_update().await;
     assert_eq!(
         next(&mut rx).await,
         json!({"type": "update_failed", "error": "no update to install"})
@@ -1025,8 +1024,9 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
 #[test]
 fn an_installed_update_restarts_the_app() {
     let (hive, mut rx) = hive_with_ui();
-    let mut restarted = false;
-    hive.installed(Ok(()), || restarted = true);
-    assert!(restarted);
+    let (tx, restarted) = std::sync::mpsc::channel();
+    let hive = hive.with_restart(move || tx.send(()).unwrap());
+    hive.installed(Ok(()));
+    assert_eq!(restarted.try_recv(), Ok(()));
     assert!(rx.try_recv().is_err());
 }
