@@ -7,6 +7,7 @@ import {
   LOAD_STAGGER_MS,
   LOAD_START_MS,
   MOCK_BRANCHES,
+  MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_STATES,
 } from "./mock";
@@ -60,6 +61,19 @@ test("a scenario fails the connection instead", async () => {
     await tick();
     expect(messages.map((m): string => m.type)).toEqual([...types]);
   }
+});
+
+test("states: shop also lists the worktree a subagent owns", async () => {
+  const messages: ServiceMessage[] = [];
+  await createMockTransport("states").connect((m) => messages.push(m));
+  await tick();
+  const [, listed] = messages;
+  const shop = listed?.type === "projects" ? listed.projects[0] : undefined;
+  expect(shop?.worktrees.map((w) => w.id).at(-1)).toBe(MOCK_OWN_WORKTREE);
+  const owners = MOCK_STATES.flatMap(([, , subs]) => subs).filter((s) => s.worktree);
+  expect(owners.map((s) => [s.id, s.worktree])).toEqual([["a3", MOCK_OWN_WORKTREE]]);
+  // Other scenarios keep the fake repositories as they are.
+  expect(MOCK_REPOS[0].worktrees.map((w) => w.id)).not.toContain(MOCK_OWN_WORKTREE);
 });
 
 test("projects are added from the fake repositories only", async () => {
