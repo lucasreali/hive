@@ -9,7 +9,7 @@ test("a version mismatch blocks the workspace", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Reconnect" })).toBeFocused();
   await page.screenshot({ path: "target/e2e/version-mismatch.png" });
   // The workspace under the block takes no clicks.
-  await page.getByTitle("Changes (Ctrl+Shift+B)").click({ force: true });
+  await page.getByTitle("Files, changes and sessions (Ctrl+Shift+B)").click({ force: true });
   await expect(page.getByRole("complementary")).toHaveCount(0);
 });
 

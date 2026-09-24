@@ -226,44 +226,41 @@ button:disabled {
   min-width: 0;
 }
 
-.sidebar-views {
-  flex: none;
+.panel-views {
+  flex: 1;
   display: flex;
   gap: 2px;
-  height: 36px;
-  align-items: flex-end;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--border-subtle);
+  height: 100%;
+  align-items: stretch;
 }
 
-.sidebar-views [role="tab"] {
+.panel-views [role="tab"] {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: var(--fs-small);
   border-bottom: 2px solid transparent;
   color: var(--text-3);
 }
 
-.sidebar-views [role="tab"]:hover {
+.panel-views [role="tab"]:hover {
   color: var(--text);
 }
 
-.sidebar-views [role="tab"][aria-selected="true"] {
+.panel-views [role="tab"][aria-selected="true"] {
   color: var(--text);
   border-bottom-color: var(--accent);
 }
 
-.sidebar-worktrees,
-.sidebar-files {
+.panel-view {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.sidebar-worktrees > .bar {
+.sidebar > .bar {
   justify-content: space-between;
   gap: 6px;
   padding: 0 6px 0 8px;
@@ -1901,4 +1898,112 @@ button.result-file:hover,
   background: rgba(222, 193, 132, 0.3);
   color: var(--text);
   border-radius: 2px;
+}
+
+/* The sidebar's Sessions (Claude Code's logs of the followed projects) */
+.sessions-search {
+  flex-direction: row;
+  align-items: center;
+}
+
+.sessions-search .files-search-field {
+  flex: 1;
+}
+
+.sessions-count {
+  white-space: nowrap;
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.sessions {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 0 0 8px;
+  list-style: none;
+}
+
+.sessions ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sessions .hint {
+  padding: 8px 12px;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+.session {
+  position: relative;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.session:hover {
+  background: var(--hover);
+}
+
+.session-main {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 32px 8px 12px;
+  text-align: left;
+  min-width: 0;
+}
+
+.session-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.session-title .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-last {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.session-last b {
+  color: var(--text);
+}
+
+.session-meta {
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.session-more {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-3);
+}
+
+.session-more:hover {
+  background: var(--selected-hover);
+  color: var(--text);
 }

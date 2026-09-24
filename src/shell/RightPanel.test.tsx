@@ -10,6 +10,7 @@ import {
   type SearchResults,
   select,
   setOpenFile,
+  setPanelView,
   setRightPanel,
   useHive,
 } from "../store";
@@ -60,6 +61,8 @@ function changes(path: string, files: ChangedFile[], error: string | null = null
 function panel() {
   const asked = spyOn(transport, "listChanges").mockImplementation(async () => {});
   apply({ type: "projects", projects: [shop, api] });
+  // Most of these check the changed files' tree.
+  setPanelView("changes");
   // The open file shows in its tab of the terminal area.
   render(
     <>
@@ -239,7 +242,8 @@ test("clicking a file opens it in a tab; folders collapse; the tab's close close
   fireEvent.click(screen.getByRole("button", { name: "Close file token.ts" }));
   expect(useHive.getState().openFile).toBeNull();
   expect(screen.queryByRole("region", { name: "src/auth/token.ts" })).toBeNull();
-  expect(screen.queryByRole("tab")).toBeNull();
+  const tabs = screen.getByRole("tablist", { name: "Open terminals and files" });
+  expect(tabs.querySelector("[role=tab]")).toBeNull();
 });
 
 test("a file without changes says so", () => {
@@ -342,7 +346,7 @@ test("an empty tree ignores keys", () => {
 test("the Changes panel's header button closes it", () => {
   panel();
   act(() => setRightPanel("files"));
-  expect(screen.getByRole("complementary", { name: "Changes" })).toBeDefined();
+  expect(screen.getByRole("complementary", { name: "Side panel" })).toBeDefined();
   fireEvent.click(screen.getByTitle("Collapse (Ctrl+Shift+B)"));
   expect(useHive.getState().rightPanel).toBeNull();
 });
@@ -367,7 +371,7 @@ test("All lists every file with the changes' statuses, deleted files included", 
 test("Files shows the watched worktree's files, the Changes panel only the changes", () => {
   const asked = spyOn(transport, "listChanges").mockImplementation(async () => {});
   apply({ type: "projects", projects: [shop, api] });
-  const view = render(<FilesView />);
+  const view = render(<FilesView worktree={fixLogin.path} />);
   act(() => select(fixLogin.id));
   const listed = ["README.md", "src/auth/session.ts", "src/main.ts"];
   // Another worktree's list is not this one's.
@@ -393,8 +397,9 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
   fireEvent.click(screen.getByText("lib"));
   expect(document.querySelectorAll(".status-dot")).toHaveLength(0);
   expect(screen.getByText("Too many files: the list is cut short.")).toBeDefined();
-  expect(asked).toHaveBeenCalledWith(fixLogin.path);
+  expect(asked).not.toHaveBeenCalled();
   view.unmount();
+  setPanelView("changes");
   render(<RightPanel />);
   expect(rows()).toEqual([
     ["src", "M"],
@@ -407,13 +412,13 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
 function filesView() {
   const asked = spyOn(transport, "listChanges").mockImplementation(async () => {});
   apply({ type: "projects", projects: [shop, api] });
+  act(() => select(fixLogin.id));
   render(
     <>
-      <FilesView />
+      <FilesView worktree={fixLogin.path} />
       <TerminalArea />
     </>,
   );
-  act(() => select(fixLogin.id));
   const listed = ["README.md", "src/auth/session.ts", "src/main.ts", "docs/session-notes.md"];
   act(() => apply({ type: "files", path: fixLogin.path, files: listed, truncated: false }));
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/auth/session.ts")]) }));

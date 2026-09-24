@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
-import { type AgentState, apply, initialState, select, useHive } from "../store";
+import { type AgentState, apply, initialState, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
@@ -356,23 +356,4 @@ test("a worktree's + opens a new chat there: a terminal running claude", async (
   closeTerminal(4);
   open.mockRestore();
   write.mockRestore();
-});
-
-test("the sidebar's tabs switch between the worktrees and the shown worktree's files", () => {
-  const asked = spyOn(transport, "listChanges").mockResolvedValue();
-  render(<App />);
-  act(() => apply({ type: "projects", projects: [shop, api] }));
-  const views = within(screen.getByRole("tablist", { name: "Sidebar" }));
-  expect(views.getByRole("tab", { name: "Worktrees" }).getAttribute("aria-selected")).toBe("true");
-  fireEvent.click(views.getByRole("tab", { name: "Files" }));
-  expect(views.getByRole("tab", { name: "Files" }).getAttribute("aria-selected")).toBe("true");
-  expect(screen.queryByRole("navigation", { name: "Projects" })).toBeNull();
-  const files = screen.getByRole("region", { name: "Files of the shown worktree" });
-  expect(files.textContent).toBe("Select a project or agent to see its files.");
-  act(() => select(shop.worktrees[1].id));
-  expect(within(files).getByRole("tree", { name: "Files" })).toBeDefined();
-  expect(asked).toHaveBeenCalledWith(shop.worktrees[1].path);
-  fireEvent.click(views.getByRole("tab", { name: "Worktrees" }));
-  expect(tree()).toBeDefined();
-  asked.mockRestore();
 });

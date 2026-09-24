@@ -19,13 +19,14 @@ import {
   setEditorNotice,
   setOpenFile,
   setRightPanel,
+  tabPlace,
   tabsPlace,
   toggleCollapsed,
   useHive,
   useTerminal,
   visibleTabs,
 } from "./store";
-import { MOCK_REPOS } from "./transport/mock";
+import { MOCK_REPOS, MOCK_SESSIONS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";
 
 beforeEach(() => useHive.setState(initialState, true));
@@ -423,4 +424,28 @@ test("an agent is working in a worktree while it (or its subagent there) may wri
   expect(working()).toBe(false);
   state("b", "with_subagents", [{ id: "s", agent_type: null, state: "working", worktree }]);
   expect(working()).toBe(true);
+});
+
+test("sessions are stored as listed; a deleted one leaves, a refused delete says why", () => {
+  const [a, b] = MOCK_SESSIONS;
+  apply({ type: "session_deleted", id: a.id });
+  expect(useHive.getState().sessions).toBeNull();
+  apply({ type: "sessions", sessions: [a, b], error: null });
+  apply({ type: "session_deleted", id: a.id });
+  expect(useHive.getState().sessions).toEqual([b]);
+  apply({ type: "delete_session_failed", id: b.id, message: "busy" });
+  expect(useHive.getState().notice).toBe("Cannot delete the session: busy");
+});
+
+test("a tab belongs to the deepest worktree holding its folder", () => {
+  const [shop] = MOCK_REPOS;
+  const [main, login] = shop.worktrees;
+  apply({ type: "projects", projects: [shop] });
+  const s = useHive.getState();
+  expect(tabPlace(s, `${login.path}/src/auth`)).toBe(login.id);
+  expect(tabPlace(s, `${shop.path}/src`)).toBe(main.id);
+  expect(tabPlace(s, login.path)).toBe(login.id);
+  // A sibling folder whose name starts the same is not inside.
+  expect(tabPlace(s, `${login.path}-copy`)).toBe(main.id);
+  expect(tabPlace(s, "/elsewhere")).toBe("/elsewhere");
 });

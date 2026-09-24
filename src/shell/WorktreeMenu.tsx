@@ -1,4 +1,11 @@
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { findWorktree, openMenu, openModal, owner, setNotice, useHive } from "../store";
 import { openTerminal } from "../terminals";
 import { transport } from "../transport";
@@ -7,54 +14,73 @@ import { CloseIcon } from "./icons";
 const closeMenu = () => openMenu(null);
 const close = () => openModal(null);
 
-/** Up/down move between the menu's enabled items, wrapping around. */
-function moveInMenu(event: KeyboardEvent<HTMLElement>): void {
+/** Up/down move between the menu's enabled items, wrapping around; Esc and Tab close it. */
+function moveInMenu(event: KeyboardEvent<HTMLElement>, onClose: () => void): void {
   const items = [
     ...event.currentTarget.querySelectorAll<HTMLElement>("[role=menuitem]:not(:disabled)"),
   ];
   const at = items.indexOf(document.activeElement as HTMLElement);
   const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-  if (event.key === "Escape" || event.key === "Tab") closeMenu();
+  if (event.key === "Escape" || event.key === "Tab") onClose();
   else if (step) items[(at + step + items.length) % items.length]?.focus();
   else return;
   event.preventDefault();
 }
 
 /**
+ * A context menu at `at` (kept inside the window), focused on its first item. It closes
+ * (`onClose`, which must not change between renders) on a click outside, Esc, Tab,
+ * scrolling, resizing or the window losing focus.
+ */
+export function ContextMenu(props: {
+  at: { x: number; y: number };
+  label: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const { at, onClose } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const outside = (e: Event) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("scroll", onClose, true);
+    window.addEventListener("blur", onClose);
+    window.addEventListener("resize", onClose);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+  useLayoutEffect(() => {
+    const el = ref.current as HTMLDivElement;
+    el.style.left = `${Math.max(0, Math.min(at.x, window.innerWidth - el.offsetWidth))}px`;
+    el.style.top = `${Math.max(0, Math.min(at.y, window.innerHeight - el.offsetHeight))}px`;
+    el.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+  }, [at]);
+  return (
+    <div
+      ref={ref}
+      className="context-menu"
+      role="menu"
+      aria-label={props.label}
+      onKeyDown={(e) => moveInMenu(e, onClose)}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+/**
  * A worktree row's context menu (right click). What it does is the service's: deleting and
  * renaming go through their dialogs, "Open in Explorer" asks for the folder's Windows path.
- * It closes on a click outside, Esc, Tab, scrolling or the window losing focus.
  */
 export function WorktreeMenu() {
   const menu = useHive((s) => s.menu);
   const w = useHive((s) => findWorktree(s.projects, s.menu?.worktree ?? null));
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    const outside = (e: Event) => {
-      if (!ref.current?.contains(e.target as Node)) closeMenu();
-    };
-    document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("scroll", closeMenu, true);
-    window.addEventListener("blur", closeMenu);
-    window.addEventListener("resize", closeMenu);
-    return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      document.removeEventListener("scroll", closeMenu, true);
-      window.removeEventListener("blur", closeMenu);
-      window.removeEventListener("resize", closeMenu);
-    };
-  }, [menu]);
-
-  // Kept inside the window, then focused on its first item for the keyboard.
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!menu || !el) return;
-    el.style.left = `${Math.max(0, Math.min(menu.x, window.innerWidth - el.offsetWidth))}px`;
-    el.style.top = `${Math.max(0, Math.min(menu.y, window.innerHeight - el.offsetHeight))}px`;
-    el.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-  }, [menu]);
 
   if (!menu || !w) return null;
   const act = (action: () => void) => () => {
@@ -72,13 +98,7 @@ export function WorktreeMenu() {
       ? "Only worktrees under .claude/worktrees can be renamed"
       : undefined;
   return (
-    <div
-      ref={ref}
-      className="context-menu"
-      role="menu"
-      aria-label={`Worktree ${w.name}`}
-      onKeyDown={moveInMenu}
-    >
+    <ContextMenu at={menu} label={`Worktree ${w.name}`} onClose={closeMenu}>
       <button type="button" role="menuitem" onClick={act(() => void openTerminal(w.path))}>
         New terminal here
       </button>
@@ -112,7 +132,7 @@ export function WorktreeMenu() {
       >
         Delete…
       </button>
-    </div>
+    </ContextMenu>
   );
 }
 

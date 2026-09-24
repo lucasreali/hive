@@ -43,13 +43,13 @@ test("status bar follows the connection status", () => {
 
 test("the files button toggles the right panel", () => {
   render(<App />);
-  const toggle = screen.getByTitle("Changes (Ctrl+Shift+B)");
+  const toggle = screen.getByTitle("Files, changes and sessions (Ctrl+Shift+B)");
   expect(toggle.getAttribute("aria-pressed")).toBe("false");
 
   fireEvent.click(toggle);
   expect(useHive.getState().rightPanel).toBe("files");
   expect(toggle.getAttribute("aria-pressed")).toBe("true");
-  expect(screen.getByRole("complementary", { name: "Changes" }).textContent).toContain(
+  expect(screen.getByRole("complementary", { name: "Side panel" }).textContent).toContain(
     "Select a project or agent to see its files.",
   );
 

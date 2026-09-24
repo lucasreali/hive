@@ -1,5 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
-import type { ServiceMessage } from "../store";
+import type { ServiceMessage, SessionTarget } from "../store";
 import { createMockTransport } from "./mock";
 import { tauriTransport } from "./tauri";
 
@@ -43,6 +43,12 @@ export interface Transport {
   unwatchWorktree(): Promise<void>;
   /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
   listChanges(path: string): Promise<void>;
+  /** Claude sessions of the followed projects; answered by `sessions`. */
+  listSessions(): Promise<void>;
+  /** Where Windows sees a session's log or folder; answered by `session_located`. */
+  locateSession(id: string, target: SessionTarget): Promise<void>;
+  /** Deletes a session's log; answered by `session_deleted` or `delete_session_failed`. */
+  deleteSession(id: string): Promise<void>;
   /** The lines of a followed worktree's files holding `query`; answered by `search_results`. */
   searchFiles(worktree: string, query: string): Promise<void>;
   /** A file of a followed worktree on disk and at HEAD; answered by `file`. */

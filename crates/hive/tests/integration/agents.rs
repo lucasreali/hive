@@ -433,3 +433,21 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn unreadable_session_logs_are_reported() {
+    let repo = Repo::new();
+    // Claude's `projects` is a file here: its logs cannot be listed.
+    std::fs::create_dir_all(repo.env.path("home/.claude")).unwrap();
+    std::fs::write(repo.env.path("home/.claude/projects"), "").unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::ListSessions).await;
+    let Control::Sessions { sessions, error } = app.control().await.1 else {
+        panic!("expected sessions")
+    };
+    assert!(sessions.is_empty());
+    assert!(error.is_some_and(|e| e.contains("Not a directory")));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

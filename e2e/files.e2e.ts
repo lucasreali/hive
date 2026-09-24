@@ -13,8 +13,9 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
   await tree.getByRole("button", { name: "refactor-auth" }).click();
 
   await page.keyboard.press("Control+Shift+B");
-  const panel = page.getByRole("complementary", { name: "Changes" });
+  const panel = page.getByRole("complementary", { name: "Side panel" });
   await expect(panel).toBeVisible();
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Changes" }).click();
   await expect(panel.locator(".files-summary")).toHaveText("5 files changed+24−49");
   const files = panel.getByRole("tree", { name: "Files" });
   // Only the changed files; folders start collapsed.
@@ -40,9 +41,10 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
   await page.keyboard.press("Control+Shift+B");
   await expect(panel).toBeHidden();
 
-  // The sidebar's Files: every file of the worktree, unchanged ones without a letter.
-  await page.getByRole("tablist", { name: "Sidebar" }).getByRole("tab", { name: "Files" }).click();
-  const all = page.getByRole("region", { name: "Files of the shown worktree" });
+  // Files: every file of the worktree, unchanged ones without a letter.
+  await page.keyboard.press("Control+Shift+B");
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Files" }).click();
+  const all = panel.getByRole("region", { name: "Files" });
   const readme = all.getByRole("treeitem", { name: "README.md" });
   await expect(readme).toBeVisible();
   await expect(readme.locator(".status-letter")).toHaveCount(0);
@@ -53,7 +55,7 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
   await page.keyboard.press("Control+Shift+B");
-  const panel = page.getByRole("complementary", { name: "Changes" });
+  const panel = page.getByRole("complementary", { name: "Side panel" });
   const files = panel.getByRole("tree", { name: "Files" });
 
   await open(files, "src", "auth");

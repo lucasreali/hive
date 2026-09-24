@@ -1,11 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
 
-/** Opens the sidebar's Files on fix-login with README.md (no changes): editable text. */
+/** Opens the right panel's Files on fix-login with README.md (no changes): editable text. */
 async function openReadme(page: Page) {
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.getByRole("tablist", { name: "Sidebar" }).getByRole("tab", { name: "Files" }).click();
-  const panel = page.getByRole("region", { name: "Files of the shown worktree" });
+  await page.keyboard.press("Control+Shift+B");
+  const panel = page.getByRole("region", { name: "Files" });
   await panel.getByRole("treeitem", { name: "README.md" }).click();
   const view = page.getByRole("region", { name: "README.md" });
   await expect(view.locator(".cm-content")).toContainText("export const value = 1;");

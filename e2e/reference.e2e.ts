@@ -20,7 +20,7 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await expect.poll(() => screen(page, 1)).toBe("mock$");
 
   await page.keyboard.press("Control+Shift+B");
-  const panel = page.getByRole("complementary", { name: "Changes" });
+  const panel = page.getByRole("complementary", { name: "Side panel" });
   for (const name of ["src", "auth"]) {
     await panel.getByRole("treeitem", { name, exact: true }).click();
   }

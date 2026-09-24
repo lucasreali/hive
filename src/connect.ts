@@ -1,4 +1,5 @@
 import { notify } from "./notify";
+import { openLocated } from "./sessions";
 import { apply, type ServiceMessage } from "./store";
 import { transport } from "./transport";
 import { openExternal, openFolder } from "./viewer/external";
@@ -7,6 +8,7 @@ import { openExternal, openFolder } from "./viewer/external";
 function onMessage(message: ServiceMessage): void {
   notify(message);
   apply(message);
+  if (message.type === "session_located") void openLocated(message);
   if (message.type === "editor_target") {
     void (message.path === "" ? openFolder(message) : openExternal(message));
   }

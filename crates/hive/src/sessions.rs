@@ -284,6 +284,7 @@ not json
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
 {"type":"assistant","isSidechain":true,"message":{"model":"claude-sub","content":"sub"}}
 {"type":"user","isMeta":true,"message":{"content":"meta"}}
+{"type":"user","message":{"role":"user","content":"Thanks, go on"}}
 {"type":"assistant","gitBranch":"feat","message":{"model":"<synthetic>","content":"Done."}}
 {"type":"ai-title","aiTitle":"Login fix"}
 {"type":"user","message":{"content":7}}"#;
@@ -298,7 +299,7 @@ not json
                 title: Some("Login fix".into()),
                 first_prompt: Some("Fix the login".into()),
                 last: Some((SessionRole::Assistant, "Done.".into())),
-                messages: 4,
+                messages: 5,
                 model: Some("claude-x".into()),
                 branch: Some("feat".into()),
             }
@@ -375,6 +376,8 @@ not json
         log(&folder, "e.jsonl", "/elsewhere");
         log(&root.join("-other"), "f.jsonl", "/other");
         std::fs::write(root.join("stray-file"), "").unwrap();
+        // A file whose name starts like the project's folder is no folder of logs.
+        std::fs::write(root.join(format!("{}-x", normalized(repo))), "").unwrap();
         // A session's own folder (subagents' logs).
         std::fs::create_dir_all(folder.join("a/subagents")).unwrap();
 

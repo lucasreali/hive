@@ -6,6 +6,7 @@ import type {
   Project,
   SaveError,
   ServiceMessage,
+  Session,
   Subagent,
   Worktree,
 } from "../store";
@@ -107,6 +108,73 @@ export const MOCK_REPOS = [
   project("/home/user/projects/shop", "shop", ["fix-login", "feat-checkout"]),
   project("/home/user/projects/api", "api", ["refactor-auth"]),
   project("/home/user/dotfiles", "dotfiles", []),
+];
+
+const MINUTE = 60_000;
+const session = (
+  id: string,
+  cwd: string,
+  title: string | null,
+  last: [Session["last_role"], string] | null,
+  messages: number,
+  ago: number,
+): Session => {
+  const place = [...MOCK_REPOS.flatMap((p) => p.worktrees.map((w) => ({ p, w })))]
+    .filter(({ w }) => cwd === w.path || cwd.startsWith(`${w.path}/`))
+    .sort((a, b) => b.w.path.length - a.w.path.length)[0] as {
+    p: Project;
+    w: Worktree;
+  };
+  return {
+    id,
+    project: place.p.id,
+    worktree: place.w.id,
+    cwd,
+    title,
+    last_role: last?.[0] ?? null,
+    last_text: last?.[1] ?? null,
+    messages,
+    model: "claude-opus-5-5",
+    branch: place.w.branch,
+    updated_ms: Date.now() - ago * MINUTE,
+    log: `/home/user/.claude/projects/${cwd.replaceAll(/[^A-Za-z0-9]/g, "-")}/${id}.jsonl`,
+  };
+};
+
+/** The fake service's Claude sessions, the most recent first (`?mock` sessions view). */
+export const MOCK_SESSIONS: Session[] = [
+  session(
+    "0b1d2c3e-1111-4a4a-9b9b-000000000001",
+    "/home/user/projects/shop/.claude/worktrees/fix-login",
+    "Fix the login redirect",
+    ["assistant", "The redirect now keeps the original URL; tests pass."],
+    42,
+    2,
+  ),
+  session(
+    "0b1d2c3e-1111-4a4a-9b9b-000000000002",
+    "/home/user/projects/shop",
+    "Checkout totals",
+    ["user", "[Request interrupted by user]"],
+    7,
+    55,
+  ),
+  session(
+    "0b1d2c3e-1111-4a4a-9b9b-000000000003",
+    "/home/user/projects/shop/src",
+    null,
+    null,
+    0,
+    60 * 26,
+  ),
+  session(
+    "0b1d2c3e-1111-4a4a-9b9b-000000000004",
+    "/home/user/projects/api/.claude/worktrees/refactor-auth",
+    "Refactor auth middleware",
+    ["assistant", "Moved the token check into its own middleware."],
+    118,
+    60 * 24 * 9,
+  ),
 ];
 
 /** The fake repositories' branches; shop has enough remote ones to need scrolling. */
@@ -368,6 +436,7 @@ export function createMockTransport(
     if (ids.length === 0) return null;
     return `in use by ${ids.map(([id]) => `fish (${id})`).join(", ")}: close its terminals first`;
   };
+  let sessions = MOCK_SESSIONS;
   const setState = (id: string, state: AgentState) =>
     later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
   // Files by worktree path, and the one watched.
@@ -495,6 +564,25 @@ export function createMockTransport(
           path,
         ),
       );
+    },
+    async listSessions() {
+      later({ type: "sessions", sessions: [...sessions], error: null });
+    },
+    async locateSession(id, target) {
+      const found = sessions.find((x) => x.id === id);
+      const path = found && (target === "log" ? found.log : found.cwd);
+      const windows_path = path ? `\\\\wsl.localhost\\Ubuntu${path.replaceAll("/", "\\")}` : null;
+      const error = found ? null : `no session ${id} in the followed projects`;
+      later({ type: "session_located", id, target, windows_path, error });
+    },
+    async deleteSession(id) {
+      const running = [...terminals.values()].some((t) => t.agent === id);
+      if (running) {
+        const message = "the session is running: end it first";
+        return void later({ type: "delete_session_failed", id, message });
+      }
+      sessions = sessions.filter((x) => x.id !== id);
+      later({ type: "session_deleted", id });
     },
     async searchFiles(worktree, query) {
       const answer = { worktree, query, truncated: false };

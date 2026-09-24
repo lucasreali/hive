@@ -11,6 +11,7 @@ import {
   MOCK_FILES,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
+  MOCK_SESSIONS,
   MOCK_STATES,
   MOCK_TEXTS,
   mockVersion,
@@ -574,4 +575,60 @@ test("a contents search finds the fake texts' lines in any case, or says why not
     truncated: false,
     error: "/nowhere is not a worktree of a followed project",
   });
+});
+
+test("sessions: listed, located, and deleted unless running", async () => {
+  const { transport, messages } = await connected();
+  const [first] = MOCK_SESSIONS;
+  const answers = async (request: () => Promise<unknown>) => {
+    messages.length = 0;
+    await request();
+    await tick();
+    return messages;
+  };
+  expect(await answers(() => transport.listSessions())).toEqual([
+    { type: "sessions", sessions: MOCK_SESSIONS, error: null },
+  ]);
+  expect(await answers(() => transport.locateSession(first.id, "folder"))).toEqual([
+    {
+      type: "session_located",
+      id: first.id,
+      target: "folder",
+      windows_path:
+        "\\\\wsl.localhost\\Ubuntu\\home\\user\\projects\\shop\\.claude\\worktrees\\fix-login",
+      error: null,
+    },
+  ]);
+  const [log] = (await answers(() => transport.locateSession(first.id, "log"))) as {
+    windows_path: string;
+  }[];
+  expect(log.windows_path).toEndWith(`\\${first.id}.jsonl`);
+  expect(await answers(() => transport.locateSession("nope", "log"))).toEqual([
+    {
+      type: "session_located",
+      id: "nope",
+      target: "log",
+      windows_path: null,
+      error: "no session nope in the followed projects",
+    },
+  ]);
+  // `claude` in a terminal runs as a session of the fake service.
+  const id = await transport.openTerminal("/home/user/projects/shop", 80, 24, () => {});
+  await transport.writeTerminal(id, "claude\r");
+  await tick();
+  const agent = `mock-session-${id}`;
+  expect(await answers(() => transport.deleteSession(agent))).toEqual([
+    {
+      type: "delete_session_failed",
+      id: agent,
+      message: "the session is running: end it first",
+    },
+  ]);
+  expect(await answers(() => transport.deleteSession(first.id))).toEqual([
+    { type: "session_deleted", id: first.id },
+  ]);
+  const [listed] = (await answers(() => transport.listSessions())) as { sessions: unknown[] }[];
+  expect(listed.sessions).toHaveLength(MOCK_SESSIONS.length - 1);
+  // The shared fake list is left alone.
+  expect(MOCK_SESSIONS[0]).toBe(first);
 });

@@ -4,6 +4,7 @@ import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { RightPanel } from "./shell/RightPanel";
+import { SessionMenu } from "./shell/SessionsView";
 import { Sidebar } from "./shell/Sidebar";
 import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
@@ -40,6 +41,7 @@ export function App() {
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {!blocked && <WorktreeMenu />}
+        {!blocked && <SessionMenu />}
         <ConnectionBlock />
       </div>
       <StatusBar />

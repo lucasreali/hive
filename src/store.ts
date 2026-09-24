@@ -38,6 +38,17 @@ export type ServiceMessage =
   | ({ type: "changes" } & Changes)
   | ({ type: "file" } & FileText)
   | ({ type: "search_results" } & SearchResults)
+  | { type: "sessions"; sessions: Session[]; error: string | null }
+  // Handled by `openSession` (src/sessions.ts), not stored.
+  | {
+      type: "session_located";
+      id: string;
+      target: SessionTarget;
+      windows_path: string | null;
+      error: string | null;
+    }
+  | { type: "session_deleted"; id: string }
+  | { type: "delete_session_failed"; id: string; message: string }
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
@@ -148,6 +159,25 @@ export type Changes = {
 /** The file shown under the files tree, in the viewer or its diff. */
 export type OpenFile = { worktree: string; path: string };
 
+/** A Claude Code session of a followed project, as the service read it from its log. */
+export type Session = {
+  id: string;
+  project: string;
+  worktree: string;
+  cwd: string;
+  title: string | null;
+  last_role: "user" | "assistant" | null;
+  last_text: string | null;
+  messages: number;
+  model: string | null;
+  branch: string | null;
+  updated_ms: number;
+  log: string;
+};
+export type SessionTarget = "log" | "folder";
+/** A session's context menu, at the pointer. */
+export type SessionMenu = { session: string; x: number; y: number };
+
 /** A line of a file holding the searched text (`line` is 1-based). */
 export type SearchMatch = { path: string; line: number; text: string };
 /** The service's answer to a search of a worktree's file contents. */
@@ -250,17 +280,19 @@ export type Modal =
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type RightPanel = "files" | null;
-export type SidebarView = "worktrees" | "files";
+/** What the right panel shows. */
+export type PanelView = "files" | "changes" | "sessions";
 
 export type HiveState = {
   // UI state
   modal: Modal;
   menu: WorktreeMenu | null;
+  sessionMenu: SessionMenu | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
   rightPanel: RightPanel;
-  /** What the left sidebar shows: the worktree tree or the files of the shown worktree. */
-  sidebarView: SidebarView;
+  /** What the right panel shows, for the shown worktree. */
+  panelView: PanelView;
   openFile: OpenFile | null;
   /** The open file's tab is the one shown, in place of the active terminal. */
   fileShown: boolean;
@@ -307,6 +339,10 @@ export type HiveState = {
   editorNotice: string | null;
   /** The last contents search the service answered. */
   searchResults: SearchResults | null;
+  /** Claude sessions of the followed projects, the most recent first; null until listed. */
+  sessions: Session[] | null;
+  /** Why the service could not list them. */
+  sessionsError: string | null;
   /** A line to show once the open file's text is there (a search result), then cleared. */
   gotoLine: (OpenFile & { line: number }) | null;
 };
@@ -314,9 +350,10 @@ export type HiveState = {
 export const initialState: HiveState = {
   modal: null,
   menu: null,
+  sessionMenu: null,
   notice: null,
   rightPanel: null,
-  sidebarView: "worktrees",
+  panelView: "files",
   openFile: null,
   fileShown: false,
   selectedLines: null,
@@ -347,6 +384,8 @@ export const initialState: HiveState = {
   edit: null,
   editorNotice: null,
   searchResults: null,
+  sessions: null,
+  sessionsError: null,
   gotoLine: null,
 };
 
@@ -469,6 +508,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...changes } = m;
       return { changes: { ...s.changes, [m.path]: changes } };
     }
+    case "sessions":
+      return { sessions: m.sessions, sessionsError: m.error };
+    case "session_deleted":
+      return { sessions: s.sessions?.filter((x) => x.id !== m.id) ?? null };
+    case "delete_session_failed":
+      return { notice: `Cannot delete the session: ${m.message}` };
     case "search_results": {
       const { type: _, ...searchResults } = m;
       return { searchResults };
@@ -522,10 +567,12 @@ export const openModal = (
     worktreeDialog: initialState.worktreeDialog,
   });
 export const openMenu = (menu: WorktreeMenu | null) => useHive.setState({ menu });
+export const openSessionMenu = (sessionMenu: SessionMenu | null) =>
+  useHive.setState({ sessionMenu });
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
-export const setSidebarView = (sidebarView: SidebarView) => useHive.setState({ sidebarView });
+export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });
 /**
  * Opens a file in its tab and shows it (null closes it), as editable text when `editing`,
  * dropping the previous file's edit buffer. The file already open stays as it is.
@@ -601,14 +648,15 @@ export const removeTab = (id: number) =>
   });
 
 /**
- * The worktree a tab (or the open file) at `path` belongs to: the worktree it opened in. When
- * that worktree is gone, the project whose folder holds the path (its main worktree, which
- * shares its id); else the path itself.
+ * The worktree a tab (or the open file) at `path` belongs to: the deepest followed worktree
+ * holding it (a Claude worktree lies inside its main one). A gone worktree's path falls to its
+ * project's main worktree, whose id is the project's; a path outside every project is itself.
  */
 export function tabPlace(s: HiveState, path: string): string {
-  if (owner(s.projects, path)) return path;
-  const project = Object.values(s.projects ?? {}).find((p) => path.startsWith(`${p.path}/`));
-  return project?.id ?? path;
+  const inside = Object.values(s.projects ?? {})
+    .flatMap((p) => p.worktrees)
+    .filter((w) => path === w.path || path.startsWith(`${w.path}/`));
+  return inside.sort((a, b) => b.path.length - a.path.length)[0]?.id ?? path;
 }
 
 /**

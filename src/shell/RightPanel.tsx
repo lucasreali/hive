@@ -1,4 +1,9 @@
-import { MagnifyingGlassIcon } from "@phosphor-icons/react";
+import {
+  ClockCounterClockwiseIcon,
+  FilesIcon,
+  GitDiffIcon,
+  MagnifyingGlassIcon,
+} from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type KeyboardEvent,
@@ -15,11 +20,13 @@ import {
   type ChangedFile,
   type FileStatus,
   type OpenFile,
+  type PanelView,
   type Project,
   panelWorktree,
   type SearchMatch,
   setEditing,
   setOpenFile,
+  setPanelView,
   setRightPanel,
   useHive,
   type Worktree,
@@ -38,6 +45,7 @@ import {
   FolderIcon,
   TerminalIcon,
 } from "./icons";
+import { SessionsView } from "./SessionsView";
 
 /**
  * How a git status shows (screen 1g): its letter (colored by CSS) and its weight when a
@@ -187,16 +195,42 @@ function useShownWorktree() {
 
 const NOTHING_SHOWN = "Select a project or agent to see its files.";
 
+const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
+  { view: "files", label: "Files", icon: <FilesIcon size={14} aria-hidden="true" /> },
+  { view: "changes", label: "Changes", icon: <GitDiffIcon size={14} aria-hidden="true" /> },
+  {
+    view: "sessions",
+    label: "Sessions",
+    icon: <ClockCounterClockwiseIcon size={14} aria-hidden="true" />,
+  },
+];
+
 /**
- * Changes (screen 1g's diff side), toggled by Ctrl+Shift+B: the shown worktree's changed files,
- * with their totals. Every file is in the sidebar's Files.
+ * The right panel (screen 1g, grown), toggled by Ctrl+Shift+B: for the shown worktree, every
+ * file with a search ("Files"), the changed files with their totals ("Changes"), or its Claude
+ * sessions ("Sessions").
  */
 export function RightPanel() {
   const target = useShownWorktree();
+  const view = useHive((s) => s.panelView);
+  const shown = VIEWS.find((v) => v.view === view) as (typeof VIEWS)[number];
   return (
-    <aside className="right-panel" aria-label="Changes">
+    <aside className="right-panel" aria-label="Side panel">
       <div className="bar">
-        <span>Changes</span>
+        <div className="panel-views" role="tablist" aria-label="Panel">
+          {VIEWS.map((v) => (
+            <button
+              key={v.view}
+              type="button"
+              role="tab"
+              aria-selected={view === v.view}
+              onClick={() => setPanelView(v.view)}
+            >
+              {v.icon}
+              {v.label}
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           className="ghost"
@@ -207,12 +241,14 @@ export function RightPanel() {
         </button>
       </div>
       {target ? (
-        <>
+        <section className="panel-view" aria-label={shown.label}>
           <WorktreeInfo target={target}>
-            <Summary worktree={target.worktree.path} />
+            {view === "changes" && <Summary worktree={target.worktree.path} />}
           </WorktreeInfo>
-          <FileTree worktree={target.worktree.path} changedOnly />
-        </>
+          {view === "files" && <FilesView worktree={target.worktree.path} />}
+          {view === "changes" && <FileTree worktree={target.worktree.path} changedOnly />}
+          {view === "sessions" && <SessionsView worktree={target.worktree.id} />}
+        </section>
       ) : (
         <div className="right-panel-empty">{NOTHING_SHOWN}</div>
       )}
@@ -228,16 +264,13 @@ export const NAME_LIMIT = 500;
 type SearchMode = "names" | "contents";
 
 /**
- * The sidebar's Files: every file of the shown worktree, with the changes' statuses. Typing in
- * "Find files" lists the files whose path holds the text ("Names"), or the lines holding it,
- * searched by the service ("Contents"); a line opens its file there.
+ * Files: every file of the shown worktree, with the changes' statuses. Typing in "Find files"
+ * lists the files whose path holds the text ("Names"), or the lines holding it, searched by
+ * the service ("Contents"); a line opens its file there.
  */
-export function FilesView() {
-  const target = useShownWorktree();
+export function FilesView({ worktree }: { worktree: string }) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("names");
-  if (!target) return <div className="right-panel-empty">{NOTHING_SHOWN}</div>;
-  const worktree = target.worktree.path;
   const q = query.trim();
   const tab = (value: SearchMode, label: string) => (
     <button type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>
@@ -246,7 +279,6 @@ export function FilesView() {
   );
   return (
     <>
-      <WorktreeInfo target={target} />
       <div className="files-search">
         <label className="files-search-field">
           <MagnifyingGlassIcon size={14} aria-hidden="true" />
