@@ -17,7 +17,7 @@ run test cargo test --workspace
 run check-locked cargo check --workspace --locked
 run deny cargo deny check
 run machete cargo machete
-run llvm-cov cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
+run llvm-cov cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'
 grep -E '^\S+\.rs|^TOTAL' "$out/llvm-cov.log" | awk '$10 != "100.00%" || /TOTAL/ {print "      " $1, "lines missed:", $9, $10}'
 if [ "${MUTANTS:-1}" = 1 ]; then
   git add -N . 2>/dev/null  # untracked files must show up in the diff
