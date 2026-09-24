@@ -345,6 +345,22 @@ pub enum Control {
         /// Why nothing could be listed, or why the list was cut short.
         error: Option<String>,
     },
+    /// App → service: the lines of a followed worktree's files holding `query` (fixed string,
+    /// any case; ignored and binary files skipped), answered by `SearchResults`.
+    SearchFiles {
+        worktree: String,
+        query: String,
+    },
+    SearchResults {
+        worktree: String,
+        query: String,
+        /// In path order, at most the service's cap.
+        matches: Vec<SearchMatch>,
+        /// There were more matches than the cap.
+        truncated: bool,
+        /// Why nothing could be searched.
+        error: Option<String>,
+    },
     /// App → service: one file of a worktree of a followed project for the viewer and diff
     /// (#31), answered by `File`. `path` is relative to the worktree and must stay inside it.
     OpenFile {
@@ -448,6 +464,17 @@ pub struct Worktree {
     pub main: bool,
     /// Follows Claude's convention: `<repo>/.claude/worktrees/<name>` (#7).
     pub claude: bool,
+}
+
+/// A line of a worktree's file holding the searched text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchMatch {
+    /// Relative to the worktree, `/`-separated.
+    pub path: String,
+    /// 1-based.
+    pub line: u64,
+    /// The line, cut at the service's length cap.
+    pub text: String,
 }
 
 /// A file that differs from `HEAD` in a worktree.
@@ -851,6 +878,30 @@ mod tests {
         );
         let list = Control::ListChanges { path: "/r".into() };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+    }
+
+    #[test]
+    fn search_messages_are_tagged_json() {
+        let results = Control::SearchResults {
+            worktree: "/r".into(),
+            query: "q".into(),
+            matches: vec![SearchMatch {
+                path: "a".into(),
+                line: 3,
+                text: "q!".into(),
+            }],
+            truncated: false,
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &results).payload[..],
+            br#"{"type":"search_results","worktree":"/r","query":"q","matches":[{"path":"a","line":3,"text":"q!"}],"truncated":false,"error":null}"#
+        );
+        let search = Control::SearchFiles {
+            worktree: "/r".into(),
+            query: "q".into(),
+        };
+        assert_eq!(Frame::control(0, &search).to_control().unwrap(), search);
     }
 
     #[test]

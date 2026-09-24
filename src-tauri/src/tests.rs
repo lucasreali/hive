@@ -271,6 +271,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.list_changes("/r".into()).unwrap();
     let changes = Control::ListChanges { path: "/r".into() };
     assert_eq!(service.control().await, (0, changes));
+    hive.search_files("/r".into(), "q".into()).unwrap();
+    let search = Control::SearchFiles {
+        worktree: "/r".into(),
+        query: "q".into(),
+    };
+    assert_eq!(service.control().await, (0, search));
     hive.open_file("/r".into(), "a".into()).unwrap();
     let open = Control::OpenFile {
         worktree: "/r".into(),
@@ -444,6 +450,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
+    assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
     assert_eq!(hive.remove_worktree("/r/w".into(), false), not_connected);
     assert_eq!(
         hive.rename_worktree("/r/w".into(), "x".into()),
@@ -616,6 +623,7 @@ fn commands_reach_the_managed_hive() {
             unwatch_worktree,
             list_changes,
             open_file,
+            search_files,
             save_file,
             open_in_editor
         ])
@@ -657,6 +665,7 @@ fn commands_reach_the_managed_hive() {
     let watch = json!({"path": "/r"});
     let changes = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a"});
+    let search = json!({"worktree": "/r", "query": "q"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
     for (cmd, args) in [
         ("list_branches", &branches),
@@ -668,6 +677,7 @@ fn commands_reach_the_managed_hive() {
         ("unwatch_worktree", &json!({})),
         ("list_changes", &changes),
         ("open_file", &file),
+        ("search_files", &search),
         ("save_file", &save),
         ("open_in_editor", &file),
     ] {
@@ -702,6 +712,7 @@ fn commands_reach_the_managed_hive() {
         ("unwatch_worktree", json!({})),
         ("list_changes", changes),
         ("open_file", file.clone()),
+        ("search_files", search),
         ("save_file", save),
         ("open_in_editor", file),
     ] {

@@ -452,3 +452,67 @@ async fn the_menu_removes_and_renames_worktrees() {
     drop(conn);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn contents_are_searched_in_tracked_and_untracked_files() {
+    let repo = Repo::new();
+    repo.commit(".gitignore", "ignored.txt\n");
+    repo.commit("src/a.ts", "const Needle = 1;\nno\nneedle again\n");
+    repo.write("new.md", "a NEEDLE here\n");
+    repo.write("ignored.txt", "needle\n");
+    repo.write("bin.dat", "needle\0binary");
+    let root = repo.root.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    let search = |worktree: &str, query: &str| Control::SearchFiles {
+        worktree: worktree.into(),
+        query: query.into(),
+    };
+
+    // Only followed worktrees.
+    let Control::SearchResults { error, .. } = request(&mut conn, search(&root, "needle")).await
+    else {
+        panic!("expected results")
+    };
+    assert_eq!(
+        error,
+        Some(format!("{root} is not a worktree of a followed project"))
+    );
+    added(&mut conn, &root).await;
+
+    let found = request(&mut conn, search(&root, "needle")).await;
+    let Control::SearchResults {
+        worktree,
+        query,
+        matches,
+        truncated,
+        error,
+    } = found
+    else {
+        panic!("expected results: {found:?}")
+    };
+    assert_eq!(
+        (worktree, query, truncated, error),
+        (root.clone(), "needle".into(), false, None)
+    );
+    let lines: Vec<(String, u64, String)> = matches
+        .into_iter()
+        .map(|m| (m.path, m.line, m.text))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            ("new.md".into(), 1, "a NEEDLE here".into()),
+            ("src/a.ts".into(), 1, "const Needle = 1;".into()),
+            ("src/a.ts".into(), 3, "needle again".into()),
+        ]
+    );
+    let Control::SearchResults { matches, error, .. } =
+        request(&mut conn, search(&root, "absent")).await
+    else {
+        panic!("expected results")
+    };
+    assert_eq!((matches, error), (vec![], None));
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}

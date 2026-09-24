@@ -326,6 +326,12 @@ impl Hive {
         self.link().send(0, &Control::ListChanges { path })
     }
 
+    /// The answer arrives as `search_results`.
+    pub fn search_files(&self, worktree: String, query: String) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::SearchFiles { worktree, query })
+    }
+
     /// The answer arrives as `file`.
     pub fn open_file(&self, worktree: String, path: String) -> Result<(), String> {
         self.link().send(0, &Control::OpenFile { worktree, path })
@@ -518,6 +524,15 @@ pub mod commands {
         name: String,
     ) -> Result<(), String> {
         hive.rename_worktree(path, name)
+    }
+
+    #[tauri::command]
+    pub fn search_files(
+        hive: State<'_, Hive>,
+        worktree: String,
+        query: String,
+    ) -> Result<(), String> {
+        hive.search_files(worktree, query)
     }
 
     #[tauri::command]

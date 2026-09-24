@@ -28,6 +28,7 @@ fn main() {
             commands::unwatch_worktree,
             commands::list_changes,
             commands::open_file,
+            commands::search_files,
             commands::save_file,
             commands::open_in_editor,
         ])

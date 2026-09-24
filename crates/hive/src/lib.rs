@@ -12,6 +12,7 @@ pub mod hook;
 pub mod paths;
 pub mod procs;
 pub mod projects;
+pub mod search;
 pub mod states;
 pub mod terminal;
 pub mod watch;
