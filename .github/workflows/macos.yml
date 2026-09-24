@@ -1,0 +1,59 @@
+# The only place the macOS-only code runs (#39, TODO 5.3): the Rust and frontend tests,
+# coverage and mutants of `crates/hive/src/macos.rs` (excluded from the Linux gates, see
+# COVERAGE_EXCLUSIONS.md), and the release bundle built without publishing it.
+name: macos
+
+on:
+  push:
+    branches: [main, task/5.3-macos-release]  # TEMP: remove before merging
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-14
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-mutants
+      - uses: oven-sh/setup-bun@v2
+      # The integration tests' terminals run fish, as on WSL (`common::Env`).
+      - run: brew install fish
+      - run: bun install --frozen-lockfile
+      # `tauri::generate_context!` needs the built frontend.
+      - run: bun run build
+      # Runs `cargo test --workspace` instrumented.
+      - run: cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
+      # `--no-config`: `.cargo/mutants.toml` excludes this file for Linux.
+      - run: cargo mutants --no-config -f crates/hive/src/macos.rs -j 2 --timeout 120
+      - run: bun test
+
+  bundle:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+      - run: |
+          cargo build --release --locked -p hive
+          mkdir -p src-tauri/resources
+          cp target/release/hive src-tauri/resources/hive
+      - run: bun install --frozen-lockfile
+      - run: bun tauri build --config src-tauri/tauri.release.macos.conf.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: hive-macos
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app.tar.gz
+            target/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error
+          retention-days: 7
