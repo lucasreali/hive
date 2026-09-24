@@ -226,7 +226,44 @@ button:disabled {
   min-width: 0;
 }
 
-.sidebar > .bar {
+.sidebar-views {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  height: 36px;
+  align-items: flex-end;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sidebar-views [role="tab"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+}
+
+.sidebar-views [role="tab"]:hover {
+  color: var(--text);
+}
+
+.sidebar-views [role="tab"][aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.sidebar-worktrees,
+.sidebar-files {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-worktrees > .bar {
   justify-content: space-between;
   gap: 6px;
   padding: 0 6px 0 8px;

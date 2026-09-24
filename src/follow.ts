@@ -4,15 +4,15 @@ import { type HiveState, panelWorktree, useHive } from "./store";
 import type { Transport } from "./transport";
 
 /**
- * Keeps the service watching the worktree the open files panel shows (`panelWorktree`): one at a
- * time, none while the panel is closed. A new connection starts with no watch, so it is sent
+ * Keeps the service watching the worktree the files views show (`panelWorktree`): one at a
+ * time, none while both the sidebar's Files and the Changes panel are closed. A new connection starts with no watch, so it is sent
  * again. Returns the unsubscribe.
  */
 export function followPanel(transport: Transport): () => void {
   let watched: string | null = null;
   const sync = (s: HiveState) => {
     const connected = s.connection.status === "connected";
-    const open = connected && s.rightPanel === "files";
+    const open = connected && (s.rightPanel === "files" || s.sidebarView === "files");
     const shown = open ? (panelWorktree(s)?.worktree.path ?? null) : null;
     if (shown === watched) return;
     if (shown) void transport.watchWorktree(shown);

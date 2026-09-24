@@ -188,7 +188,7 @@ export function TerminalArea() {
   return (
     <section className="terminals" aria-label="Terminals">
       <div className="bar">
-        <div className="tabs" role="tablist">
+        <div className="tabs" role="tablist" aria-label="Open terminals and files">
           {tabs.map((tab) => (
             <TerminalTab key={tab.id} tab={tab} />
           ))}
@@ -207,7 +207,7 @@ export function TerminalArea() {
           <button
             type="button"
             className="ghost"
-            title="Files and diff (Ctrl+Shift+B)"
+            title="Changes (Ctrl+Shift+B)"
             aria-pressed={open}
             onClick={() => setRightPanel(open ? null : "files")}
           >

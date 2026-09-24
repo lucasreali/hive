@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
 import { addTab, apply, initialState, select, setEdit, setOpenFile, useHive } from "../store";
 import { closeTerminal } from "../terminals";
@@ -22,7 +22,8 @@ function show() {
   act(() => apply({ type: "projects", projects: [shop, api] }));
 }
 
-const tab = (name: string) => screen.getByRole("tab", { name: new RegExp(`^${name}`) });
+const bar = () => within(screen.getByRole("tablist", { name: "Open terminals and files" }));
+const tab = (name: string) => bar().getByRole("tab", { name: new RegExp(`^${name}`) });
 
 test("New terminal opens one in the selected worktree, shown in its tab", async () => {
   const open = spyOn(transport, "openTerminal");
@@ -65,7 +66,7 @@ test("tabs switch, tell same-named worktrees apart, and show exit and missing ho
     addTab(3, "/somewhere/else");
   });
   // Only the selected worktree's tabs show: the last one opened selected its own place.
-  const tabs = () => screen.getAllByRole("tab");
+  const tabs = () => bar().getAllByRole("tab");
   expect(tabs().map((t) => t.textContent)).toEqual(["/somewhere/else"]);
   // With nothing selected every tab shows. Both are "main": the project tells them apart.
   act(() => select(null));
@@ -96,7 +97,7 @@ test("the close button ends the terminal and removes its tab", () => {
   act(() => addTab(7, fixLogin.path));
   fireEvent.click(screen.getByRole("button", { name: "Close terminal fix-login" }));
   expect(close).toHaveBeenCalledWith(7);
-  expect(screen.queryByRole("tab")).toBeNull();
+  expect(bar().queryByRole("tab")).toBeNull();
   close.mockRestore();
 });
 
@@ -105,8 +106,15 @@ test("the open file has its tab after the terminals, shown in place of the termi
   act(() => addTab(1, shopMain.path));
   act(() => setOpenFile({ worktree: shopMain.path, path: "src/app.ts" }));
   const host = () => document.querySelector(".terminal-host") as HTMLElement;
-  const tabs = () => screen.getAllByRole("tab").map((t) => t.getAttribute("aria-selected"));
-  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["main", "app.ts"]);
+  const tabs = () =>
+    bar()
+      .getAllByRole("tab")
+      .map((t) => t.getAttribute("aria-selected"));
+  expect(
+    bar()
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["main", "app.ts"]);
   expect(tab("app.ts").closest(".tab")?.getAttribute("title")).toBe("src/app.ts");
   expect(tabs()).toEqual(["false", "true"]);
   expect(host().hidden).toBe(true);
@@ -121,10 +129,18 @@ test("the open file has its tab after the terminals, shown in place of the termi
   expect(tabs()).toEqual(["false", "true"]);
   // A terminal in another worktree selects it: only its tab shows, the file's goes with main.
   act(() => addTab(2, fixLogin.path));
-  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["fix-login"]);
+  expect(
+    bar()
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["fix-login"]);
   expect(screen.queryByRole("region", { name: "src/app.ts" })).toBeNull();
   act(() => select(shopMain.id));
-  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["main", "app.ts"]);
+  expect(
+    bar()
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["main", "app.ts"]);
   expect(tabs()).toEqual(["true", "false"]);
   // Leaving the worktree while its file is shown hides the file; coming back shows a terminal.
   fireEvent.click(tab("app.ts"));
@@ -139,7 +155,7 @@ test("a worktree without terminals says so and opens one", () => {
   show();
   act(() => addTab(1, shopMain.path));
   act(() => select(fixLogin.id));
-  expect(screen.queryByRole("tab")).toBeNull();
+  expect(bar().queryByRole("tab")).toBeNull();
   expect(screen.getByText("No terminal in fix-login")).toBeDefined();
   expect((document.querySelector(".terminal-host") as HTMLElement).hidden).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "New terminal" }));

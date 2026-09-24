@@ -1,17 +1,26 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   agentWorkingIn,
   type ChangedFile,
   type FileStatus,
   type OpenFile,
+  type Project,
   panelWorktree,
-  setChangedOnly,
   setEditing,
   setOpenFile,
   setRightPanel,
   useHive,
+  type Worktree,
 } from "../store";
 import { transport } from "../transport";
 import { isDirty, isFor } from "../viewer/buffer";
@@ -144,36 +153,48 @@ function Counts({ added, removed }: { added: number | null; removed: number | nu
   );
 }
 
+/** The shown worktree's name and project, and under it `children` (e.g. its change totals). */
+function WorktreeInfo(props: {
+  target: { project: Project; worktree: Worktree };
+  children?: ReactNode;
+}) {
+  return (
+    <div className="files-info">
+      <div className="files-worktree">
+        <BranchIcon />
+        <span className="name">{props.target.worktree.name}</span>
+        <span className="project">{props.target.project.name}</span>
+      </div>
+      {props.children}
+    </div>
+  );
+}
+
 /**
- * Files and diff (screen 1g), toggled by Ctrl+Shift+B. It shows the selected worktree (or the
- * selected agent's, or the shown terminal's) and asks the service for its changes when it
- * opens and whenever that worktree changes.
+ * The worktree the files views show (the selected worktree, or the selected agent's, or the
+ * shown terminal's); its changes are asked for when it is shown and whenever it changes.
  */
-export function RightPanel() {
+function useShownWorktree() {
   const target = useHive(useShallow(panelWorktree));
-  const changedOnly = useHive((s) => s.changedOnly);
   const path = target?.worktree.path;
   useEffect(() => {
     if (path) void transport.listChanges(path);
   }, [path]);
-  const mode = (label: string, title: string, changed: boolean) => (
-    <button
-      type="button"
-      title={title}
-      aria-pressed={changedOnly === changed}
-      onClick={() => setChangedOnly(changed)}
-    >
-      {label}
-    </button>
-  );
+  return target;
+}
+
+const NOTHING_SHOWN = "Select a project or agent to see its files.";
+
+/**
+ * Changes (screen 1g's diff side), toggled by Ctrl+Shift+B: the shown worktree's changed files,
+ * with their totals. Every file is in the sidebar's Files.
+ */
+export function RightPanel() {
+  const target = useShownWorktree();
   return (
-    <aside className="right-panel" aria-label="Files and diff">
+    <aside className="right-panel" aria-label="Changes">
       <div className="bar">
-        <span>Files and diff</span>
-        <div className="segmented">
-          {mode("All", "Show all files", false)}
-          {mode("Diff", "Show only changed files", true)}
-        </div>
+        <span>Changes</span>
         <button
           type="button"
           className="ghost"
@@ -185,20 +206,27 @@ export function RightPanel() {
       </div>
       {target ? (
         <>
-          <div className="files-info">
-            <div className="files-worktree">
-              <BranchIcon />
-              <span className="name">{target.worktree.name}</span>
-              <span className="project">{target.project.name}</span>
-            </div>
+          <WorktreeInfo target={target}>
             <Summary worktree={target.worktree.path} />
-          </div>
-          <FileTree worktree={target.worktree.path} />
+          </WorktreeInfo>
+          <FileTree worktree={target.worktree.path} changedOnly />
         </>
       ) : (
-        <div className="right-panel-empty">Select a project or agent to see its files.</div>
+        <div className="right-panel-empty">{NOTHING_SHOWN}</div>
       )}
     </aside>
+  );
+}
+
+/** The sidebar's Files: every file of the shown worktree, with the changes' statuses. */
+export function FilesView() {
+  const target = useShownWorktree();
+  if (!target) return <div className="right-panel-empty">{NOTHING_SHOWN}</div>;
+  return (
+    <>
+      <WorktreeInfo target={target} />
+      <FileTree worktree={target.worktree.path} changedOnly={false} />
+    </>
   );
 }
 
@@ -221,13 +249,13 @@ function Summary({ worktree }: { worktree: string }) {
 /**
  * The tree, virtualized (#30). It is one focusable element (#35): ↑/↓ move the active row,
  * ←/→ collapse and expand a folder, Enter opens a file or toggles a folder; a click does the
- * same. "All" shows every file the service lists for the watched worktree with the changes'
- * statuses; until that list arrives, the changed files.
+ * same. Unless `changedOnly`, it shows every file the service lists for the watched worktree
+ * with the changes' statuses; until that list arrives, the changed files.
  */
-function FileTree({ worktree }: { worktree: string }) {
+function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: boolean }) {
   const changes = useHive((s) => s.changes[worktree]);
   const listing = useHive((s) => (s.worktreeFiles?.path === worktree ? s.worktreeFiles : null));
-  const all = useHive((s) => s.changedOnly) ? null : listing;
+  const all = changedOnly ? null : listing;
   const collapsed = useHive((s) => s.collapsed);
   const open = useHive((s) => (s.openFile?.worktree === worktree ? s.openFile.path : null));
   const files = useMemo(

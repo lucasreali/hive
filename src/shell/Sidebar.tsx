@@ -1,4 +1,4 @@
-import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
+import { FilesIcon, PlusIcon as NewChatIcon, TreeViewIcon } from "@phosphor-icons/react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
 import { nextPending } from "../shortcuts";
 import {
@@ -10,7 +10,9 @@ import {
   openModal,
   type Project,
   pendingAgents,
+  type SidebarView,
   select,
+  setSidebarView,
   toggleCollapsed,
   useHive,
   type Worktree,
@@ -27,6 +29,7 @@ import {
   STATE_LABEL,
   StateIcon,
 } from "./icons";
+import { FilesView } from "./RightPanel";
 
 /**
  * Arrow keys in the tree (#35): up/down move between rows, left/right collapse and expand a
@@ -72,12 +75,48 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
   return state && <StateIcon state={state} />;
 }
 
-// ponytail: plain list, add TanStack Virtual when trees get long.
+const VIEWS: { view: SidebarView; label: string; icon: ReactNode }[] = [
+  { view: "worktrees", label: "Worktrees", icon: <TreeViewIcon size={16} aria-hidden="true" /> },
+  { view: "files", label: "Files", icon: <FilesIcon size={16} aria-hidden="true" /> },
+];
+
+/** The left sidebar: a tab per view (as in Orca), then the view. */
 export function Sidebar() {
+  const view = useHive((s) => s.sidebarView);
+  return (
+    <div className="sidebar">
+      <div className="sidebar-views" role="tablist" aria-label="Sidebar">
+        {VIEWS.map((v) => (
+          <button
+            key={v.view}
+            type="button"
+            role="tab"
+            aria-label={v.label}
+            title={v.label}
+            aria-selected={view === v.view}
+            onClick={() => setSidebarView(v.view)}
+          >
+            {v.icon}
+          </button>
+        ))}
+      </div>
+      {view === "worktrees" ? (
+        <Worktrees />
+      ) : (
+        <section className="sidebar-files" aria-label="Files of the shown worktree">
+          <FilesView />
+        </section>
+      )}
+    </div>
+  );
+}
+
+// ponytail: plain list, add TanStack Virtual when trees get long.
+function Worktrees() {
   const projects = useHive((s) => s.projects);
   const list = Object.values(projects ?? {});
   return (
-    <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree}>
+    <nav className="sidebar-worktrees" aria-label="Projects" onKeyDown={moveInTree}>
       <div className="bar">
         <PendingCounter />
         <div className="sidebar-actions">

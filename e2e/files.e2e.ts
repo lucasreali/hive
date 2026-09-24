@@ -13,18 +13,13 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
   await tree.getByRole("button", { name: "refactor-auth" }).click();
 
   await page.keyboard.press("Control+Shift+B");
-  const panel = page.getByRole("complementary", { name: "Files and diff" });
+  const panel = page.getByRole("complementary", { name: "Changes" });
   await expect(panel).toBeVisible();
   await expect(panel.locator(".files-summary")).toHaveText("5 files changed+24−49");
   const files = panel.getByRole("tree", { name: "Files" });
-  // "All": every file of the watched worktree, unchanged ones without a letter.
-  const readme = files.getByRole("treeitem", { name: "README.md" });
-  await expect(readme).toBeVisible();
-  await expect(readme.locator(".status-letter")).toHaveCount(0);
-  await panel.getByRole("button", { name: "Diff" }).click();
-  // Folders start collapsed.
+  // Only the changed files; folders start collapsed.
   await expect(files.getByRole("treeitem")).toHaveCount(3);
-  await expect(readme).toBeHidden();
+  await expect(files.getByRole("treeitem", { name: "README.md" })).toHaveCount(0);
 
   await open(files, "src", "auth");
   await files.getByRole("treeitem", { name: /token\.ts/ }).click();
@@ -44,6 +39,13 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
 
   await page.keyboard.press("Control+Shift+B");
   await expect(panel).toBeHidden();
+
+  // The sidebar's Files: every file of the worktree, unchanged ones without a letter.
+  await page.getByRole("tablist", { name: "Sidebar" }).getByRole("tab", { name: "Files" }).click();
+  const all = page.getByRole("region", { name: "Files of the shown worktree" });
+  const readme = all.getByRole("treeitem", { name: "README.md" });
+  await expect(readme).toBeVisible();
+  await expect(readme.locator(".status-letter")).toHaveCount(0);
 });
 
 test("files panel: a changed file shows as a read-only unified diff", async ({ page }) => {
@@ -51,7 +53,7 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
   await page.keyboard.press("Control+Shift+B");
-  const panel = page.getByRole("complementary", { name: "Files and diff" });
+  const panel = page.getByRole("complementary", { name: "Changes" });
   const files = panel.getByRole("tree", { name: "Files" });
 
   await open(files, "src", "auth");

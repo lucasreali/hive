@@ -50,7 +50,7 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
   await expect.poll(writes).toEqual(["a", "b", "\x0f", "\x1bb", "\x14"]);
 
   // Ctrl+Shift+B toggles the files panel, and never reaches the terminal.
-  const panel = page.getByRole("complementary", { name: "Files and diff" });
+  const panel = page.getByRole("complementary", { name: "Changes" });
   await page.keyboard.press("Control+Shift+B");
   await expect(panel).toBeVisible();
   await input.focus();

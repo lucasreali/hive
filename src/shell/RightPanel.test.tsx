@@ -13,7 +13,7 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
-import { allFiles, fileRows, RightPanel } from "./RightPanel";
+import { allFiles, FilesView, fileRows, RightPanel } from "./RightPanel";
 import { TerminalArea } from "./TerminalArea";
 
 beforeAll(() => {
@@ -337,20 +337,10 @@ test("an empty tree ignores keys", () => {
   expect(fireEvent.keyDown(tree(), { key: "ArrowDown" })).toBe(true);
 });
 
-test("All and Diff switch the mode; the header button closes the panel", () => {
+test("the Changes panel's header button closes it", () => {
   panel();
   act(() => setRightPanel("files"));
-  const all = screen.getByRole("button", { name: "All" });
-  const changed = screen.getByRole("button", { name: "Diff" });
-  expect([all.getAttribute("aria-pressed"), changed.getAttribute("aria-pressed")]).toEqual([
-    "true",
-    "false",
-  ]);
-  fireEvent.click(changed);
-  expect(useHive.getState().changedOnly).toBe(true);
-  expect(changed.getAttribute("aria-pressed")).toBe("true");
-  fireEvent.click(all);
-  expect(useHive.getState().changedOnly).toBe(false);
+  expect(screen.getByRole("complementary", { name: "Changes" })).toBeDefined();
   fireEvent.click(screen.getByTitle("Collapse (Ctrl+Shift+B)"));
   expect(useHive.getState().rightPanel).toBeNull();
 });
@@ -372,8 +362,10 @@ test("All lists every file with the changes' statuses, deleted files included", 
   ]);
 });
 
-test("the tree shows the watched worktree's files in All, only the changes in Diff", () => {
-  panel();
+test("Files shows the watched worktree's files, the Changes panel only the changes", () => {
+  const asked = spyOn(transport, "listChanges").mockImplementation(async () => {});
+  apply({ type: "projects", projects: [shop, api] });
+  const view = render(<FilesView />);
   act(() => select(fixLogin.id));
   const listed = ["README.md", "src/auth/session.ts", "src/main.ts"];
   // Another worktree's list is not this one's.
@@ -399,7 +391,9 @@ test("the tree shows the watched worktree's files in All, only the changes in Di
   fireEvent.click(screen.getByText("lib"));
   expect(document.querySelectorAll(".status-dot")).toHaveLength(0);
   expect(screen.getByText("Too many files: the list is cut short.")).toBeDefined();
-  act(() => useHive.setState({ changedOnly: true }));
+  expect(asked).toHaveBeenCalledWith(fixLogin.path);
+  view.unmount();
+  render(<RightPanel />);
   expect(rows()).toEqual([
     ["src", "M"],
     ["auth", "M"],

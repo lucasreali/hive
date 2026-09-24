@@ -238,6 +238,7 @@ export type Modal =
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type RightPanel = "files" | null;
+export type SidebarView = "worktrees" | "files";
 
 export type HiveState = {
   // UI state
@@ -246,8 +247,8 @@ export type HiveState = {
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
   rightPanel: RightPanel;
-  /** The files panel shows only changed files ("Diff") instead of every file ("All"). */
-  changedOnly: boolean;
+  /** What the left sidebar shows: the worktree tree or the files of the shown worktree. */
+  sidebarView: SidebarView;
   openFile: OpenFile | null;
   /** The open file's tab is the one shown, in place of the active terminal. */
   fileShown: boolean;
@@ -299,7 +300,7 @@ export const initialState: HiveState = {
   menu: null,
   notice: null,
   rightPanel: null,
-  changedOnly: false,
+  sidebarView: "worktrees",
   openFile: null,
   fileShown: false,
   selectedLines: null,
@@ -502,7 +503,7 @@ export const openMenu = (menu: WorktreeMenu | null) => useHive.setState({ menu }
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
-export const setChangedOnly = (changedOnly: boolean) => useHive.setState({ changedOnly });
+export const setSidebarView = (sidebarView: SidebarView) => useHive.setState({ sidebarView });
 /**
  * Opens a file in its tab and shows it (null closes it), as editable text when `editing`,
  * dropping the previous file's edit buffer. The file already open stays as it is.

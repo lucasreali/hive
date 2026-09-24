@@ -1,6 +1,14 @@
 import { beforeEach, expect, mock, test } from "bun:test";
 import { followOpenFile, followPanel } from "./follow";
-import { apply, initialState, select, setOpenFile, setRightPanel, useHive } from "./store";
+import {
+  apply,
+  initialState,
+  select,
+  setOpenFile,
+  setRightPanel,
+  setSidebarView,
+  useHive,
+} from "./store";
 import type { Transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
 
@@ -37,9 +45,14 @@ test("the service watches the worktree the open files panel shows, and nothing e
   apply({ type: "disconnected", reason: "gone" });
   apply({ type: "welcome", version: "0.1.0", distro: null });
   expect(calls).toEqual([shop.id, api.id, null, api.id, api.id]);
+  // The sidebar's Files watches too, with the Changes panel closed.
+  setRightPanel(null);
+  setSidebarView("files");
+  setSidebarView("worktrees");
+  expect(calls.slice(5)).toEqual([null, api.id, null]);
   stop();
   select(shop.id);
-  expect(calls).toHaveLength(5);
+  expect(calls).toHaveLength(8);
 });
 
 const welcome = () => apply({ type: "welcome", version: "1", distro: null });
