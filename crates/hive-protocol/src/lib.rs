@@ -277,6 +277,22 @@ pub enum Control {
         name: String,
         message: String,
     },
+    /// App → service: watch this worktree of a followed project for the files panel,
+    /// answered by `Files` now and after every change. Only one worktree is watched: this
+    /// replaces the previous one.
+    WatchWorktree {
+        path: String,
+    },
+    /// App → service: stop watching (the files panel closed).
+    UnwatchWorktree,
+    /// Every file of the watched worktree `path` that git lists (tracked, and untracked but
+    /// not ignored), as sorted `/`-separated relative paths.
+    Files {
+        path: String,
+        files: Vec<String>,
+        /// The list stopped at the service's cap.
+        truncated: bool,
+    },
     Error {
         message: String,
     },
@@ -627,6 +643,25 @@ mod tests {
             error: None,
         };
         assert_eq!(Frame::control(0, &branches).to_control().unwrap(), branches);
+    }
+
+    #[test]
+    fn file_messages_are_tagged_json() {
+        let files = Control::Files {
+            path: "/r".into(),
+            files: vec!["a/b.rs".into()],
+            truncated: false,
+        };
+        assert_eq!(
+            &Frame::control(0, &files).payload[..],
+            br#"{"type":"files","path":"/r","files":["a/b.rs"],"truncated":false}"#
+        );
+        let watch = Control::WatchWorktree { path: "/r".into() };
+        assert_eq!(Frame::control(0, &watch).to_control().unwrap(), watch);
+        assert_eq!(
+            &Frame::control(0, &Control::UnwatchWorktree).payload[..],
+            br#"{"type":"unwatch_worktree"}"#
+        );
     }
 
     #[test]
