@@ -110,7 +110,8 @@ async fn serve(
 }
 
 struct State {
-    app: Mutex<Option<Outbox>>,
+    /// Control frames to the app connection's writer, while an app is connected.
+    app: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
     /// Detected agents by session id, with their terminal and state. Locked after `terminals`
@@ -122,16 +123,11 @@ struct State {
     projects: Projects,
 }
 
-/// Queue to the app connection's writer.
-struct Outbox {
-    control: mpsc::UnboundedSender<Frame>,
-}
-
 impl State {
     /// Sends a control message to the app, if one is connected.
     async fn to_app(&self, channel: u32, message: &Control) {
         if let Some(app) = &*self.app.lock().await {
-            let _ = app.control.send(Frame::control(channel, message));
+            let _ = app.send(Frame::control(channel, message));
         }
     }
 
@@ -497,9 +493,7 @@ where
             let _ = writer.send(Frame::control(0, &message)).await;
             return false;
         }
-        *app = Some(Outbox {
-            control: control_tx,
-        });
+        *app = Some(control_tx);
     }
     state.snapshot().await;
     let writer = tokio::spawn(write_prioritized(writer, control_rx, terminal_rx));
