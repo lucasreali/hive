@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { setEdit, setSelectedLines, useHive } from "../store";
 import { transport } from "../transport";
-import { type EditBuffer, resolve, startSave } from "./buffer";
+import { type EditBuffer, failed, isFor, resolve, startSave } from "./buffer";
 import { createEditor, type Editor } from "./editor";
 
 /** Ctrl+S and the Save button: sends the buffer's text with the version it was based on. */
@@ -10,7 +10,13 @@ export function saveOpenFile(): void {
   const next = edit && startSave(edit);
   if (!next) return;
   setEdit(next);
-  void transport.saveFile(next.worktree, next.path, next.doc.toString(), next.version);
+  transport
+    .saveFile(next.worktree, next.path, next.doc.toString(), next.version)
+    .catch((error: unknown) => {
+      // Never sent (e.g. not connected), so no answer will come.
+      const { edit } = useHive.getState();
+      if (edit && isFor(edit, next)) setEdit(failed(edit, "io", String(error)));
+    });
 }
 
 /** The user's edits reach the buffer; ignored once it is gone (the file closed). */

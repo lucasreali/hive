@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FileView } from "../shell/RightPanel";
 import { apply, type FileText, initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
@@ -67,6 +67,27 @@ test("an unchanged file is edited and saved with the version it was read at", ()
   act(() => apply({ ...failure, message: "No space left on device" }));
   expect(screen.getByText("No space left on device")).toBeDefined();
   expect(button("Save").disabled).toBe(false);
+});
+
+test("a save the app cannot send fails at once instead of waiting forever", async () => {
+  const saves = editing();
+  saves.mockImplementation(() => Promise.reject("not connected to the hive service"));
+  type("two\n");
+  fireEvent.click(button("Save"));
+  await waitFor(() => expect(screen.getByText("not connected to the hive service")).toBeDefined());
+  expect(button("Save").disabled).toBe(false);
+
+  // A late rejection leaves another open file's buffer alone.
+  let reject: (reason: string) => void = () => {};
+  saves.mockImplementation(() => new Promise((_, no) => (reject = no)));
+  fireEvent.click(button("Save"));
+  act(() => {
+    setOpenFile({ worktree, path: "b.ts" }, true);
+    answer("b\n", { path: "b.ts" });
+  });
+  await act(async () => reject("late"));
+  expect(useHive.getState().edit?.path).toBe("b.ts");
+  expect(useHive.getState().edit?.error).toBeNull();
 });
 
 test("a clean buffer follows the disk; a dirty one shows the conflict banner", () => {
