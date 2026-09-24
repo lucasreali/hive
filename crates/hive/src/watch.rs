@@ -95,7 +95,6 @@ mod tests {
     fn claude_sessions_are_found_by_process_name() {
         let proc = |pid, session, comm: &str| Proc {
             pid,
-            ppid: 1,
             pgrp: pid,
             session,
             comm: comm.into(),

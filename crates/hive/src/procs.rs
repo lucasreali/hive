@@ -5,7 +5,6 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proc {
     pub pid: i32,
-    pub ppid: i32,
     pub pgrp: i32,
     pub session: i32,
     pub comm: String,
@@ -32,10 +31,10 @@ fn parse_stat(stat: &str) -> Option<Proc> {
     if fields.next()? == "Z" {
         return None;
     }
+    let _ppid = fields.next()?;
     let mut number = || fields.next()?.parse().ok();
     Some(Proc {
         pid: pid.parse().ok()?,
-        ppid: number()?,
         pgrp: number()?,
         session: number()?,
         comm: comm.to_owned(),
@@ -71,14 +70,12 @@ mod tests {
             vec![
                 Proc {
                     pid: 10,
-                    ppid: 1,
                     pgrp: 10,
                     session: 10,
                     comm: "fish".into()
                 },
                 Proc {
                     pid: 11,
-                    ppid: 10,
                     pgrp: 11,
                     session: 10,
                     comm: "my (weird) cmd".into()
@@ -99,7 +96,6 @@ mod tests {
             .into_iter()
             .find(|p| p.pid == me)
             .unwrap();
-        assert_eq!(found.ppid, nix::unistd::getppid().as_raw());
         assert_eq!(found.pgrp, nix::unistd::getpgrp().as_raw());
     }
 }
