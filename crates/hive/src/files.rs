@@ -210,25 +210,31 @@ impl Watcher {
 
     /// Waits until something in the worktree changed and the burst of events is over.
     pub async fn changed(&mut self) -> io::Result<()> {
-        while !self.relevant().await? {}
-        let mut debounce = Debounce::new(Instant::now());
+        // Every wait is in this one loop, so no helper can return without waiting.
+        let mut burst: Option<Debounce> = None;
         loop {
+            let deadline = burst.map(|burst| burst.deadline());
+            let settled = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now));
             tokio::select! {
-                relevant = self.relevant() => if relevant? { debounce.event(Instant::now()) },
-                () = tokio::time::sleep_until(debounce.deadline()) => return Ok(()),
+                ready = self.inotify.readable() => {
+                    let read = ready?.try_io(|fd| Ok(fd.get_ref().0.read_events()?));
+                    // Nothing to read after all: wait again.
+                    let Ok(events) = read else { continue };
+                    if self.relevant(&events?) {
+                        let now = Instant::now();
+                        burst.get_or_insert(Debounce::new(now)).event(now);
+                    }
+                }
+                () = settled, if deadline.is_some() => return Ok(()),
             }
         }
     }
 
-    /// Waits for events; whether any of them may change what git lists.
-    async fn relevant(&mut self) -> io::Result<bool> {
-        let mut ready = self.inotify.readable().await?;
-        let Ok(events) = ready.try_io(|fd| Ok(fd.get_ref().0.read_events()?)) else {
-            return Ok(false);
-        };
+    /// Whether any of `events` may change what git lists.
+    fn relevant(&mut self, events: &[InotifyEvent]) -> bool {
         // Every event is seen: some only update the watches.
-        let seen: Vec<bool> = events?.iter().map(|e| self.saw(e)).collect();
-        Ok(seen.contains(&true))
+        let seen: Vec<bool> = events.iter().map(|e| self.saw(e)).collect();
+        seen.contains(&true)
     }
 
     fn saw(&mut self, event: &InotifyEvent) -> bool {
@@ -452,6 +458,9 @@ mod tests {
         // Nothing happens, and nothing in an ignored tree counts.
         assert!(!changes(&mut watcher, NEVER).await);
         write(&root, "ignored/deep/y.txt");
+        assert!(!changes(&mut watcher, NEVER).await);
+        // Nor does the git dir, apart from HEAD and the index.
+        write(&root, ".git/other");
         assert!(!changes(&mut watcher, NEVER).await);
         // A file in an empty untracked directory is seen.
         write(&root, "empty/new.txt");

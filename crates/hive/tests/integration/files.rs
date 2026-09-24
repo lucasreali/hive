@@ -78,6 +78,14 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
         conn.control().await.1,
         Control::ProjectAdded { .. }
     ));
+    // Nor any other folder of it.
+    let src = format!("{root}/src");
+    watch(&mut conn, &src).await;
+    let refused = format!("{src} is not a worktree of a followed project");
+    assert_eq!(
+        conn.control().await,
+        (0, Control::Error { message: refused })
+    );
 
     watch(&mut conn, &root).await;
     let listed = [".gitignore", "README", "src/a.rs"];
