@@ -15,7 +15,8 @@ test("renders the shell regions", () => {
   expect(screen.getByRole("navigation", { name: "Projects" }).textContent).toContain("No projects");
   expect(screen.getByRole("region", { name: "Terminals" })).toBeDefined();
   expect(screen.getByRole("contentinfo").textContent).toBe("WSLconnecting");
-  expect(screen.queryByRole("complementary")).toBeNull();
+  // The side panel starts open.
+  expect(screen.getByRole("complementary", { name: "Side panel" })).toBeDefined();
 });
 
 test("status bar follows the connection status", () => {
@@ -44,6 +45,8 @@ test("status bar follows the connection status", () => {
 test("the files button toggles the right panel", () => {
   render(<App />);
   const toggle = screen.getByTitle("Files, diff and sessions (Ctrl+Shift+B)");
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(toggle);
   expect(toggle.getAttribute("aria-pressed")).toBe("false");
 
   fireEvent.click(toggle);

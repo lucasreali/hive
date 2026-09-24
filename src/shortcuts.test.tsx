@@ -76,9 +76,9 @@ test("Ctrl+Shift+N without projects opens the add project dialog", () => {
 test("Ctrl+Shift+B toggles the files panel and Ctrl+Shift+O opens add project", () => {
   app();
   press(ctrlShift("B"));
-  expect(useHive.getState().rightPanel).toBe("files");
-  press(ctrlShift("B"));
   expect(useHive.getState().rightPanel).toBeNull();
+  press(ctrlShift("B"));
+  expect(useHive.getState().rightPanel).toBe("files");
   press(ctrlShift("O"));
   expect(useHive.getState().modal).toBe("add-project");
 });
@@ -165,7 +165,7 @@ test("other keys are not shortcuts", () => {
   ]) {
     expect(press(keys)).toBe(false);
   }
-  expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: null });
+  expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: "files" });
 });
 
 test("nothing runs under the connection block or while a dialog is open", () => {
@@ -188,7 +188,7 @@ test("nothing runs under the connection block or while a dialog is open", () => 
     expect(press(ctrlShift("T"))).toBe(false);
     expect(press({ key: "F8" })).toBe(false);
   }
-  expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: null });
+  expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: "files" });
 });
 
 test("in a terminal, shortcuts run once and never reach it; other keys do", async () => {
@@ -197,13 +197,13 @@ test("in a terminal, shortcuts run once and never reach it; other keys do", asyn
   const id = await act(() => openTerminal(shop.worktrees[1].path));
   const textarea = terminal(id)?.textarea as HTMLTextAreaElement;
   press(ctrlShift("B"), textarea);
-  expect(useHive.getState().rightPanel).toBe("files");
+  expect(useHive.getState().rightPanel).toBeNull();
   press({ key: "F8", code: "F8", keyCode: 119 } as Keys, textarea);
   expect(write).not.toHaveBeenCalled();
   // Ctrl+O is Claude Code's: it goes to the terminal.
   press({ key: "o", code: "KeyO", keyCode: 79, ctrlKey: true } as Keys, textarea);
   await waitFor(() => expect(write).toHaveBeenCalledWith(id, "\x0f"));
-  expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: "files" });
+  expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: null });
   write.mockRestore();
 });
 
@@ -231,5 +231,5 @@ test("the app stops listening when it unmounts", () => {
   app();
   cleanup();
   press(ctrlShift("B"));
-  expect(useHive.getState().rightPanel).toBeNull();
+  expect(useHive.getState().rightPanel).toBe("files");
 });

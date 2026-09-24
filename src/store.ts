@@ -371,7 +371,7 @@ export const initialState: HiveState = {
   sessionMenu: null,
   notice: null,
   update: null,
-  rightPanel: null,
+  rightPanel: "files",
   panelView: "files",
   sidebarWidth: 264,
   panelWidth: 380,
