@@ -182,6 +182,7 @@ pub fn message(worktree: String, path: String, read: io::Result<(Side, Side)>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn file(content: Option<&str>, base: Option<&str>) -> Control {
         Control::File {
@@ -198,6 +199,11 @@ mod tests {
 
     fn answer(read: io::Result<(Side, Side)>) -> Control {
         message("/w".into(), "a".into(), read)
+    }
+
+    /// The answer's fields by name.
+    fn fields(reply: Control) -> serde_json::Value {
+        serde_json::to_value(reply).unwrap()
     }
 
     fn bytes(text: &str) -> Side {
@@ -298,41 +304,45 @@ mod tests {
 
     #[test]
     fn the_answer_says_why_there_is_no_text() {
-        let Control::File { error, .. } = answer(Ok((Side::Missing, Side::Missing))) else {
-            panic!("expected a file")
-        };
-        assert_eq!(error.as_deref(), Some("a does not exist"));
-        let Control::File { error, version, .. } = answer(Err(io::Error::other("nope"))) else {
-            panic!("expected a file")
-        };
-        assert_eq!((error.as_deref(), version), (Some("nope"), None));
+        let missing = fields(answer(Ok((Side::Missing, Side::Missing))));
+        assert_eq!(missing["error"], "a does not exist");
+        let failed = fields(answer(Err(io::Error::other("nope"))));
+        assert_eq!(
+            (&failed["error"], &failed["version"]),
+            (&json!("nope"), &json!(null))
+        );
 
-        let flags = |read| match answer(Ok(read)) {
-            Control::File {
-                content,
-                base,
-                version,
-                binary,
-                too_large,
-                ..
-            } => {
-                assert_eq!((content, base), (None, None));
-                (version, binary, too_large)
-            }
-            other => panic!("{other:?}"),
+        let flags = |read| {
+            let file = fields(answer(Ok(read)));
+            assert_eq!(
+                (&file["content"], &file["base"]),
+                (&json!(null), &json!(null))
+            );
+            (
+                file["version"].clone(),
+                file["binary"].clone(),
+                file["too_large"].clone(),
+            )
         };
         let nul = Side::Bytes(b"a\0b".to_vec());
-        let v = Some(super::version(b"a\0b"));
-        assert_eq!(flags((nul, bytes("x"))), (v, true, false));
-        assert_eq!(flags((bytes("x"), Side::Bytes(b"\xff".to_vec()))).1, true);
+        let v = json!(super::version(b"a\0b"));
+        assert_eq!(flags((nul, bytes("x"))), (v, json!(true), json!(false)));
+        assert_eq!(
+            flags((bytes("x"), Side::Bytes(b"\xff".to_vec()))).1,
+            json!(true)
+        );
         let mut late_nul = vec![b'a'; BINARY_PROBE];
         late_nul.push(0);
         let (_, binary, _) = flags((Side::Bytes(late_nul), Side::TooLarge));
-        assert!(!binary, "a NUL after the probe is text");
-        assert_eq!(flags((Side::TooLarge, bytes("x"))), (None, false, true));
+        assert_eq!(binary, json!(false), "a NUL after the probe is text");
+        let null = json!(null);
+        assert_eq!(
+            flags((Side::TooLarge, bytes("x"))),
+            (null.clone(), json!(false), json!(true))
+        );
         assert_eq!(
             flags((Side::TooLarge, Side::Bytes(vec![0]))),
-            (None, true, true)
+            (null, json!(true), json!(true))
         );
     }
 
@@ -340,23 +350,13 @@ mod tests {
     fn texts_that_do_not_fit_in_a_frame_are_too_large() {
         // Every quote doubles when escaped: two sides of 1 MiB are over 4 MiB of JSON.
         let quotes = "\"".repeat(TEXT_LIMIT as usize);
-        let Control::File {
-            content,
-            base,
-            version,
-            too_large,
-            ..
-        } = answer(Ok((bytes(&quotes), bytes(&quotes))))
-        else {
-            panic!("expected a file")
-        };
-        assert_eq!((content, base, too_large), (None, None, true));
-        assert_eq!(version, Some(super::version(quotes.as_bytes())));
+        let both = fields(answer(Ok((bytes(&quotes), bytes(&quotes)))));
+        let shown = (&both["content"], &both["base"], &both["too_large"]);
+        assert_eq!(shown, (&json!(null), &json!(null), &json!(true)));
+        assert_eq!(both["version"], super::version(quotes.as_bytes()));
         // One side alone fits.
-        let Control::File { too_large, .. } = answer(Ok((bytes(&quotes), Side::Missing))) else {
-            panic!("expected a file")
-        };
-        assert!(!too_large);
+        let one = fields(answer(Ok((bytes(&quotes), Side::Missing))));
+        assert_eq!(one["too_large"], false);
 
         // Exactly one frame still fits; one more escaped byte does not.
         let json = |base: &str| {
