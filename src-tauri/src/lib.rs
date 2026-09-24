@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use hive_protocol::{Control, Frame, FrameCodec, FrameType, Role, MAX_PAYLOAD, PROTOCOL_VERSION};
+use hive_protocol::{
+    Control, Frame, FrameCodec, FrameError, FrameType, Role, MAX_PAYLOAD, PROTOCOL_VERSION,
+};
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
@@ -80,6 +82,10 @@ impl Link {
     }
 
     fn frame(&self, frame: Frame) -> Result<(), String> {
+        // The writer could not encode it and would end the connection.
+        if frame.payload.len() > MAX_PAYLOAD {
+            return Err(FrameError::Oversized(frame.payload.len()).to_string());
+        }
         self.frames
             .as_ref()
             .and_then(|frames| frames.send(frame).ok())

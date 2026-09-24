@@ -299,6 +299,21 @@ async fn big_input_is_split_into_frames_the_service_accepts() {
 }
 
 #[tokio::test]
+async fn a_message_over_the_frame_limit_is_refused_and_the_link_keeps_working() {
+    let (hive, mut service, _rx) = welcomed().await;
+    let pasted = "a".repeat(MAX_PAYLOAD);
+    let refused = hive.save_file("/w".into(), "a".into(), pasted, None);
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.starts_with("frame payload of ")),
+        "{refused:?}"
+    );
+    hive.write_terminal(1, "x").unwrap();
+    assert_eq!(service.next().await, Frame::terminal(1, "x"));
+}
+
+#[tokio::test]
 async fn channel_numbers_run_out_instead_of_wrapping() {
     let (hive, _service, _rx) = welcomed().await;
     hive.link().last_channel = u32::MAX;
