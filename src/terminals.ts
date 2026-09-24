@@ -67,7 +67,7 @@ export async function openTerminal(cwd: string): Promise<number> {
     scrollback: useHive.getState().scrollback,
     fontFamily: '"IBM Plex Mono", monospace',
     fontSize: 13,
-    lineHeight: 19 / 13,
+    lineHeight: 1.2,
     theme: THEME,
   });
   let id: number;
