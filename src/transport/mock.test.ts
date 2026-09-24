@@ -168,6 +168,32 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   ]);
 });
 
+test("worktree-remove drops that Claude worktree and sends the new list", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api] = MOCK_REPOS;
+  const id = await transport.openTerminal(shop.path, 80, 24, () => {});
+  await tick();
+  messages.length = 0;
+  // "main" is no Claude worktree, so it stays.
+  await transport.writeTerminal(id, "worktree-remove fix-login\rworktree-remove main\r");
+  await tick();
+  const names = (m: ServiceMessage) =>
+    m.type === "projects" ? m.projects.map((p) => p.worktrees.map((w) => w.name)) : [];
+  expect(messages.map(names)).toEqual([
+    [
+      ["main", "feat-checkout"],
+      ["main", "refactor-auth"],
+    ],
+    [
+      ["main", "feat-checkout"],
+      ["main", "refactor-auth"],
+    ],
+  ]);
+  // The shared fake repositories are left alone.
+  expect(shop.worktrees.map((w) => w.name)).toEqual(["main", "fix-login", "feat-checkout"]);
+  expect(api.worktrees).toHaveLength(2);
+});
+
 test("agent states carry the service's urgency and pending flag", () => {
   const calm = ["ended", "idle", "working", "with_subagents"] as const;
   const pending = ["waiting_you", "error", "waiting_permission"] as const;

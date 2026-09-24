@@ -168,11 +168,12 @@ fn project(path: &str) -> Project {
     }
 }
 
-/// Describes `git worktree list` for the sidebar, skipping bare entries.
+/// Describes `git worktree list` for the sidebar, skipping bare entries and worktrees whose
+/// directory is gone (git lists them as prunable until `git worktree prune`).
 fn worktrees(root: &Path, list: Vec<worktree::Worktree>) -> Vec<Worktree> {
     let claude_dir = root.join(WORKTREES_DIR);
     list.into_iter()
-        .filter(|wt| !wt.bare)
+        .filter(|wt| !wt.bare && !wt.prunable)
         .enumerate()
         .map(|(i, wt)| {
             let path = wt.path.to_string_lossy().into_owned();
@@ -209,6 +210,7 @@ mod tests {
             path: path.into(),
             branch: branch.map(Into::into),
             bare,
+            prunable: false,
         }
     }
 
@@ -263,6 +265,20 @@ mod tests {
         );
         assert_eq!(got.len(), 1);
         assert_eq!((got[0].name.as_str(), got[0].main), ("/", true));
+    }
+
+    #[test]
+    fn worktrees_whose_directory_is_gone_are_skipped() {
+        let gone = worktree::Worktree {
+            prunable: true,
+            ..wt("/r/.claude/worktrees/gone", None, false)
+        };
+        let list = vec![wt("/r", None, false), gone, wt("/r/x", None, false)];
+        let got: Vec<String> = worktrees(Path::new("/r"), list)
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(got, ["/r", "/r/x"]);
     }
 
     #[test]
