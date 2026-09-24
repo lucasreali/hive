@@ -15,16 +15,20 @@ async function openReadme(page: Page) {
 test("editing: a file without changes is edited and saved with Ctrl+S", async ({ page }) => {
   await page.goto("/");
   const { panel, view } = await openReadme(page);
-  // The file's tab marks unsaved edits.
-  const unsaved = page.getByRole("tab", { name: "README.md" }).getByRole("img", {
-    name: "Unsaved changes",
-  });
+  // The file's tab marks unsaved edits: a dot in place of the ×, the × again on hover.
+  const unsaved = page.getByRole("button", { name: "Close file README.md (unsaved changes)" });
   await expect(unsaved).toBeHidden();
 
   await view.locator(".cm-line").first().click();
   await page.keyboard.press("Control+Home");
   await page.keyboard.type("// edited\n");
   await expect(unsaved).toBeVisible();
+  await expect(unsaved.locator(".dirty")).toBeVisible();
+  await expect(unsaved.locator("svg")).toBeHidden();
+  await unsaved.hover();
+  await expect(unsaved.locator(".dirty")).toBeHidden();
+  await expect(unsaved.locator("svg")).toBeVisible();
+  await view.locator(".cm-line").first().hover();
   await page.screenshot({ path: "target/e2e/editing.png" });
   await page.keyboard.press("Control+s");
   await expect(unsaved).toBeHidden();
@@ -83,7 +87,7 @@ test("editing: an agent writing the file under unsaved edits shows the conflict"
   await banner.getByRole("button", { name: "Keep mine" }).click();
   await expect(banner).toBeHidden();
   await view.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("img", { name: "Unsaved changes" })).toBeHidden();
+  await expect(page.getByRole("button", { name: /\(unsaved changes\)$/ })).toBeHidden();
 
   // Reload: the agent's text replaces the edits.
   await view.locator(".cm-line").first().click();

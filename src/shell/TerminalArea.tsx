@@ -46,13 +46,18 @@ function find(s: HiveState, path: string) {
   return null;
 }
 
-/** A tab of the bar: its label shows it, its × closes it. Terminals and the open file share it. */
+/**
+ * A tab of the bar: its label shows it, its × closes it. Terminals and the open file share it.
+ * With unsaved edits the × shows a dot instead, as in other editors, and turns back into the ×
+ * on hover or keyboard focus, where it is about to be used.
+ */
 function TabItem(props: {
   active: boolean;
   title: string;
   onShow: () => void;
   close: string;
   onClose: () => void;
+  dirty?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -69,10 +74,12 @@ function TabItem(props: {
       <button
         type="button"
         className="tab-close"
-        title={props.close}
-        aria-label={props.close}
+        data-dirty={props.dirty || undefined}
+        title={props.dirty ? `${props.close} (unsaved changes)` : props.close}
+        aria-label={props.dirty ? `${props.close} (unsaved changes)` : props.close}
         onClick={props.onClose}
       >
+        {props.dirty && <span className="dirty" aria-hidden="true" />}
         <CloseIcon />
       </button>
     </div>
@@ -130,12 +137,10 @@ function FileTab() {
       onShow={showFile}
       close={`Close file ${name}`}
       onClose={() => leaveFile(null)}
+      dirty={dirty}
     >
       <FileIcon />
       <span className="tab-name">{name}</span>
-      {dirty && (
-        <span className="dirty" role="img" aria-label="Unsaved changes" title="Unsaved changes" />
-      )}
     </TabItem>
   );
 }

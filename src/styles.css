@@ -692,6 +692,23 @@ button:disabled {
   background: var(--text-2);
 }
 
+/* Unsaved edits: the dot takes the ×'s place and stays visible on every tab; hover or keyboard
+   focus shows the × again, where the click closes. */
+.tab-close[data-dirty] {
+  opacity: 1;
+}
+
+.tab-close[data-dirty] > svg,
+.tab-close[data-dirty]:hover > .dirty,
+.tab-close[data-dirty]:focus-visible > .dirty {
+  display: none;
+}
+
+.tab-close[data-dirty]:hover > svg,
+.tab-close[data-dirty]:focus-visible > svg {
+  display: block;
+}
+
 .tab-badge.working {
   flex: none;
   white-space: nowrap;
