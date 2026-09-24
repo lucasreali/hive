@@ -58,7 +58,7 @@ test("with an agent selected (F8), New terminal opens one in the agent's worktre
   open.mockRestore();
 });
 
-test("tabs switch, tell same-named worktrees apart, and show exit and missing hooks", () => {
+test("tabs switch and show exit and missing hooks", () => {
   show();
   act(() => {
     addTab(1, shopMain.path);
@@ -68,9 +68,10 @@ test("tabs switch, tell same-named worktrees apart, and show exit and missing ho
   // Only the selected worktree's tabs show: the last one opened selected its own place.
   const tabs = () => bar().getAllByRole("tab");
   expect(tabs().map((t) => t.textContent)).toEqual(["/somewhere/else"]);
-  // With nothing selected every tab shows. Both are "main": the project tells them apart.
+  // With nothing selected every tab shows, by its worktree's name (no project: a tab bar
+  // shows one worktree's tabs).
   act(() => select(null));
-  expect(tabs().map((t) => t.textContent)).toEqual(["mainshop", "mainapi", "/somewhere/else"]);
+  expect(tabs().map((t) => t.textContent)).toEqual(["main", "main", "/somewhere/else"]);
   expect(tabs().map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "false", "true"]);
 
   fireEvent.click(tabs()[0]);
@@ -84,11 +85,45 @@ test("tabs switch, tell same-named worktrees apart, and show exit and missing ho
   expect(screen.getByText("no hooks").getAttribute("title")).toBe(
     "Claude runs in this terminal without Hive's hooks: its state is not observed",
   );
-  expect(tabs()[1].textContent).toBe("mainapiexited");
+  expect(tabs()[1].textContent).toBe("mainexited");
   expect(screen.getAllByText("exited").map((b) => b.getAttribute("title"))).toEqual([
     "Exit code: 3",
     "Exit code: none (killed)",
   ]);
+});
+
+test("a tab running Claude shows the agent's state and its session's name", () => {
+  show();
+  act(() => addTab(4, fixLogin.path));
+  const tab = () => bar().getByRole("tab");
+  expect(tab().querySelector(".tab-name")?.textContent).toBe("fix-login");
+  const agent = { type: "agent_detected", channel: 4, id: "s", project: shop.id } as const;
+  act(() => apply({ ...agent, worktree: fixLogin.id, cwd: fixLogin.path }));
+  // Idle until its first state; the worktree's name until the session has one.
+  expect(tab().querySelector("[role=img]")?.getAttribute("aria-label")).toBe("idle");
+  act(() => {
+    apply({
+      type: "agent_state",
+      id: "s",
+      state: "working",
+      urgency: 2,
+      pending: false,
+      subagents: [],
+    });
+    apply({ type: "agent_title", channel: 4, id: "s", title: "Fix the login redirect" });
+  });
+  expect(tab().querySelector("[role=img]")?.getAttribute("aria-label")).toBe("working");
+  expect(tab().querySelector(".tab-name")?.textContent).toBe("Fix the login redirect");
+  expect(tab().closest(".tab")?.getAttribute("title")).toBe(
+    `Fix the login redirect\n${fixLogin.path}`,
+  );
+  expect(
+    screen.getByRole("button", { name: "Close terminal Fix the login redirect" }),
+  ).toBeDefined();
+  // The session ended: the tab is the worktree's again.
+  act(() => apply({ type: "agent_removed", channel: 4, id: "s" }));
+  expect(tab().querySelector(".tab-name")?.textContent).toBe("fix-login");
+  expect(useHive.getState().agentTitles).toEqual({});
 });
 
 test("the close button ends the terminal and removes its tab", () => {

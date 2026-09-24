@@ -16,7 +16,15 @@ import {
 } from "../store";
 import { closeTerminal, mountTerminals, openTerminal, showTerminal } from "../terminals";
 import { isDirty } from "../viewer/buffer";
-import { AddFolderIcon, CloseIcon, FileIcon, PanelIcon, PlusIcon, TerminalIcon } from "./icons";
+import {
+  AddFolderIcon,
+  CloseIcon,
+  FileIcon,
+  PanelIcon,
+  PlusIcon,
+  StateIcon,
+  TerminalIcon,
+} from "./icons";
 import { FileView, leaveFile } from "./RightPanel";
 
 /** Screen 1e: shown once the service said there are no projects. */
@@ -90,26 +98,29 @@ function TabItem(props: {
   );
 }
 
+/**
+ * A terminal's tab: the worktree's name, or, while a Claude agent runs in it, the agent's
+ * state and its session's name (as in Orca). Tabs show only their worktree's, so no project.
+ */
 function TerminalTab({ tab }: { tab: Tab }) {
   const active = useHive((s) => s.activeTab === tab.id && !s.fileShown);
   const state = useTerminal(tab.id);
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
-  // As in the prototype, the project tells apart tabs of worktrees with the same name.
-  const project = useHive((s) => find(s, tab.cwd)?.project.name);
-  const duplicate = useHive(
-    (s) => s.tabs.filter((t) => (find(s, t.cwd)?.worktree.name ?? t.cwd) === name).length > 1,
-  );
+  const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
+  const agentState = useHive((s) => (agent ? (s.agentStates[agent]?.state ?? "idle") : null));
+  const title = useHive((s) => (agent ? s.agentTitles[agent] : undefined));
   return (
     <TabItem
       active={active}
-      title={tab.cwd}
+      title={title ? `${title}\n${tab.cwd}` : tab.cwd}
       onShow={() => activateTab(tab)}
-      close={`Close terminal ${name}`}
+      close={`Close terminal ${title ?? name}`}
       onClose={() => closeTerminal(tab.id)}
     >
-      <TerminalIcon />
-      <span className="tab-name">{name}</span>
-      {duplicate && project && <span className="tab-hint">{project}</span>}
+      {agentState ? <StateIcon state={agentState} /> : <TerminalIcon />}
+      <span className="tab-name" data-agent={title ? true : undefined}>
+        {title ?? name}
+      </span>
       {state?.unhooked && (
         <span
           className="tab-badge warn"

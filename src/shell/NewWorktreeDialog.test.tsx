@@ -178,8 +178,8 @@ test("create asks the service, opens a terminal in the new worktree and updates 
   expect(openTerminal.mock.calls[0].slice(0, 3)).toEqual([path, 80, 24]);
   expect(useHive.getState().selection).toBe(path);
   expect(screen.getByRole("button", { name: "fix-cart" })).toBeDefined();
-  // Its tab is shown, with the worktree's name.
-  await waitFor(() => expect(screen.getByRole("tab", { name: "fix-cart" })).toBeDefined());
+  // Its tab is shown, with the worktree's name (after the agent's state, once claude runs).
+  await waitFor(() => expect(screen.getByRole("tab", { name: /fix-cart$/ })).toBeDefined());
   expect(useHive.getState().tabs.map((t) => t.cwd)).toEqual([path]);
   // Claude is started in it, typed as the user would.
   const id = useHive.getState().tabs[0].id;

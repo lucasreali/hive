@@ -369,9 +369,14 @@ button:disabled {
   font-size: var(--fs-mono);
 }
 
-.tab-hint {
-  font-size: var(--fs-small);
-  color: var(--text-3);
+/* A session's name, not a path: prose, cut when long. */
+.tab-name[data-agent] {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
 }
 
 .tab-badge {
@@ -388,8 +393,8 @@ button:disabled {
 }
 
 .tab-close {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

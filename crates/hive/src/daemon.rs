@@ -185,6 +185,11 @@ impl State {
         if let Some(state) = agent.apply(id, event, Instant::now(), &place) {
             self.to_app(channel, &state).await;
         }
+        // Claude names a session after its first turn; a rename shows at the end of a turn.
+        let turn = matches!(event.kind, EventKind::TurnFinished);
+        if event.subagent.is_none() && (agent.title.is_none() || turn) {
+            self.retitle(id, agent).await;
+        }
         if event.subagent.is_none() && matches!(event.kind, EventKind::SessionEnded { .. }) {
             agents.remove(id);
             let id = id.clone();
@@ -214,15 +219,32 @@ impl State {
         agent.worktree = worktree.clone();
         agent.cwd = cwd.clone();
         let state = agent.message(&id);
-        agents.insert(id.clone(), agent);
         let detected = Control::AgentDetected {
-            id,
+            id: id.clone(),
             project,
             worktree,
             cwd,
         };
         self.to_app(channel, &detected).await;
         self.to_app(channel, &state).await;
+        // A resumed session already has its name.
+        self.retitle(&id, &mut agent).await;
+        agents.insert(id, agent);
+    }
+
+    /// Reads the agent's session name from its log and sends it when it changed.
+    async fn retitle(&self, id: &str, agent: &mut Agent) {
+        let Some(cwd) = agent.cwd.clone() else { return };
+        let title = tokio::task::block_in_place(|| self.sessions.title(id, &cwd));
+        let Some(title) = title.filter(|t| agent.title.as_ref() != Some(t)) else {
+            return;
+        };
+        agent.title = Some(title.clone());
+        let message = Control::AgentTitle {
+            id: id.to_owned(),
+            title,
+        };
+        self.to_app(agent.channel, &message).await;
     }
 
     /// Keeps the sessions running in Hive's terminals, in terminal order, to resume them when
@@ -253,6 +275,11 @@ impl State {
     async fn snapshot(&self) {
         for (id, agent) in self.agents.lock().await.iter() {
             self.to_app(agent.channel, &agent.message(id)).await;
+            if let Some(title) = agent.title.clone() {
+                let id = id.clone();
+                self.to_app(agent.channel, &Control::AgentTitle { id, title })
+                    .await;
+            }
         }
     }
 
@@ -850,13 +877,15 @@ mod tests {
         // Agents outlive an app connection only in principle (the service exits with the
         // app), so the snapshot is checked here rather than through a real daemon.
         let dir = tempfile::tempdir().unwrap();
+        let mut named = Agent::new(4, Instant::now());
+        named.title = Some("Named".into());
         let state = Arc::new(State {
             app: Mutex::new(None),
             terminals: Mutex::new(HashMap::new()),
-            agents: Mutex::new(HashMap::from([(
-                "s".to_owned(),
-                Agent::new(4, Instant::now()),
-            )])),
+            agents: Mutex::new(HashMap::from([
+                ("s".to_owned(), named),
+                ("u".to_owned(), Agent::new(5, Instant::now())),
+            ])),
             watching: Mutex::new(None),
             bin_dir: dir.path().into(),
             projects: Projects::load(dir.path().join("projects.json")),
@@ -877,19 +906,29 @@ mod tests {
             }
         });
         let mut frames = FramedRead::new(client, FrameCodec);
-        let first = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
-        let frame = first.await.expect("no snapshot").unwrap().unwrap();
-        assert_eq!(frame.channel, 4);
-        assert_eq!(
-            frame.to_control().unwrap(),
-            Control::AgentState {
-                id: "s".into(),
-                state: hive_protocol::AgentState::Idle,
-                urgency: 1,
-                pending: false,
-                subagents: vec![],
-            }
-        );
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
+            let frame = next.await.expect("no snapshot").unwrap().unwrap();
+            got.push((frame.channel, frame.to_control().unwrap()));
+        }
+        let idle = |id: &str| Control::AgentState {
+            id: id.into(),
+            state: hive_protocol::AgentState::Idle,
+            urgency: 1,
+            pending: false,
+            subagents: vec![],
+        };
+        // Each agent's state; the named one's name too, and only after its state.
+        let named = Control::AgentTitle {
+            id: "s".into(),
+            title: "Named".into(),
+        };
+        let at = |message: &Control| got.iter().position(|(_, m)| m == message);
+        assert!(got.contains(&(4, idle("s"))), "{got:?}");
+        assert!(got.contains(&(5, idle("u"))), "{got:?}");
+        assert!(at(&named) > at(&idle("s")), "{got:?}");
+        assert_eq!(got[at(&named).unwrap()].0, 4);
         drop(frames);
         assert!(serving.await.unwrap());
     }

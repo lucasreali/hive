@@ -535,3 +535,68 @@ async fn the_app_closes_even_when_the_open_sessions_cannot_be_kept() {
     assert!(daemon.wait_exit().success());
     assert!(kept.is_dir());
 }
+
+#[tokio::test]
+async fn an_agent_gets_its_session_name_and_its_renames() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let logs = repo.env.path("home/.claude/projects").join(
+        root.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>(),
+    );
+    std::fs::create_dir_all(&logs).unwrap();
+    let log = logs.join("s.jsonl");
+    std::fs::write(&log, "{\"type\":\"ai-title\",\"aiTitle\":\"Fix it\"}\n").unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let title = |title: &str| {
+        (
+            1,
+            Control::AgentTitle {
+                id: "s".into(),
+                title: title.into(),
+            },
+        )
+    };
+    let seen = hook(
+        &repo,
+        &mut app,
+        "1",
+        "SessionStart",
+        json!({"session_id": "s", "cwd": root}),
+    )
+    .await;
+    assert_eq!(seen.last(), Some(&title("Fix it")));
+    // The same name is not sent again; a rename shows at the end of the turn.
+    let turn = json!({"session_id": "s", "cwd": root});
+    let seen = hook(&repo, &mut app, "1", "Stop", turn.clone()).await;
+    assert!(!seen.contains(&title("Fix it")), "{seen:?}");
+    let renamed = "{\"type\":\"ai-title\",\"aiTitle\":\"Fix it\"}\n{\"type\":\"custom-title\",\"customTitle\":\"Mine\"}\n";
+    std::fs::write(&log, renamed).unwrap();
+    // A subagent's end of turn does not read the log again.
+    let sub = json!({"session_id": "s", "agent_id": "a", "agent_type": "Explore", "cwd": root});
+    let seen = hook(&repo, &mut app, "1", "Stop", sub).await;
+    assert!(!seen.contains(&title("Mine")), "{seen:?}");
+    let seen = hook(&repo, &mut app, "1", "Stop", turn).await;
+    assert!(seen.contains(&title("Mine")), "{seen:?}");
+    // An agent without a folder has no log to name it.
+    app.open_terminal(2, &repo.root).await;
+    let seen = hook(
+        &repo,
+        &mut app,
+        "2",
+        "SessionStart",
+        json!({"session_id": "t"}),
+    )
+    .await;
+    assert!(
+        !seen
+            .iter()
+            .any(|(_, m)| matches!(m, Control::AgentTitle { .. })),
+        "{seen:?}"
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

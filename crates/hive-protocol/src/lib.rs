@@ -200,6 +200,12 @@ pub enum Control {
         pending: bool,
         subagents: Vec<SubagentState>,
     },
+    /// The agent's session name from its log (the user's, else Claude's), sent when it is
+    /// first known and whenever it changes.
+    AgentTitle {
+        id: String,
+        title: String,
+    },
     /// The agent's session ended, or its terminal exited.
     AgentRemoved {
         id: String,
@@ -1011,6 +1017,10 @@ mod tests {
             br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r"}]}"#
         );
         for message in [
+            Control::AgentTitle {
+                id: "s".into(),
+                title: "t".into(),
+            },
             Control::ListSessions,
             Control::DeleteSession { id: "s".into() },
             Control::SessionDeleted { id: "s".into() },

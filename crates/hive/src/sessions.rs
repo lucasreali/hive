@@ -274,6 +274,21 @@ impl Sessions {
         Ok(sessions.into_iter().map(|(session, _)| session).collect())
     }
 
+    /// The name of the session `id` that runs in `cwd` (the user's, else Claude's), from its
+    /// log in the folder Claude keeps for `cwd`.
+    pub fn title(&self, id: &str, cwd: &str) -> Option<String> {
+        let root = self.root.as_ref().filter(|_| valid_id(id))?;
+        let folder = normalized(cwd);
+        let log = std::fs::read_dir(root)
+            .ok()?
+            .flatten()
+            .filter(|dir| normalized(&dir.file_name().to_string_lossy()) == folder)
+            .map(|dir| dir.path().join(format!("{id}.jsonl")))
+            .find(|log| log.symlink_metadata().is_ok_and(|m| m.is_file()))?;
+        let meta = log.metadata().ok()?;
+        self.summary(&log, meta.modified().ok()?, meta.len())?.title
+    }
+
     /// The listed session `id`.
     pub fn find(&self, projects: &[Project], id: &str) -> io::Result<Session> {
         if !valid_id(id) {
@@ -464,6 +479,45 @@ not json
         for (end, running, expected) in table {
             assert_eq!(state(end, running), expected, "{end:?} {running}");
         }
+    }
+
+    #[test]
+    fn a_running_sessions_name_is_read_from_its_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("projects");
+        let folder = root.join(normalized("/r/x"));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("s.jsonl"),
+            r#"{"type":"ai-title","aiTitle":"Named"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("u.jsonl"),
+            r#"{"type":"user","message":{"content":"x"}}"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(folder.join("s.jsonl"), folder.join("l.jsonl")).unwrap();
+        // Another folder whose name starts the same does not count.
+        let other = root.join(normalized("/r/xy"));
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("o.jsonl"),
+            r#"{"type":"ai-title","aiTitle":"Other"}"#,
+        )
+        .unwrap();
+        let sessions = Sessions::new(Some(root.clone()));
+        assert_eq!(sessions.title("s", "/r/x"), Some("Named".into()));
+        assert_eq!(sessions.title("u", "/r/x"), None);
+        assert_eq!(sessions.title("l", "/r/x"), None);
+        assert_eq!(sessions.title("o", "/r/x"), None);
+        assert_eq!(sessions.title("s", "/r/elsewhere"), None);
+        assert_eq!(sessions.title("../s", "/r/x"), None);
+        assert_eq!(Sessions::new(None).title("s", "/r/x"), None);
+        assert_eq!(
+            Sessions::new(Some(tmp.path().join("none"))).title("s", "/r/x"),
+            None
+        );
     }
 
     #[test]

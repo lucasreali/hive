@@ -48,7 +48,7 @@ export const MaximizeIcon = () => (
 
 export const WindowCloseIcon = () => <XIcon size={14} weight="light" aria-hidden="true" />;
 
-export const CloseIcon = () => <XIcon size={12} weight="bold" aria-hidden="true" />;
+export const CloseIcon = () => <XIcon size={15} weight="bold" aria-hidden="true" />;
 
 export const PlusIcon = ({ size = 12 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 12 12" aria-hidden="true">

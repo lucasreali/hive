@@ -20,6 +20,7 @@ export type ServiceMessage =
   | { type: "unhooked_agent"; channel: number }
   | ({ type: "agent_detected"; channel: number } & Omit<Agent, "terminal">)
   | { type: "agent_removed"; channel: number; id: string }
+  | { type: "agent_title"; channel: number; id: string; title: string }
   | ({ type: "agent_state"; id: string } & AgentStatus)
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
@@ -331,6 +332,8 @@ export type HiveState = {
   agents: Record<string, Agent>;
   /** By session id; kept apart from `agents` so either message may arrive first. */
   agentStates: Record<string, AgentStatus>;
+  /** A running agent's session name (the user's, else Claude's), by session id. */
+  agentTitles: Record<string, string>;
   /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
@@ -383,6 +386,7 @@ export const initialState: HiveState = {
   terminals: {},
   agents: {},
   agentStates: {},
+  agentTitles: {},
   worktreeFiles: null,
   changes: {},
   file: null,
@@ -435,8 +439,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "agent_removed": {
       const { [m.id]: _, ...agents } = s.agents;
       const { [m.id]: __, ...agentStates } = s.agentStates;
-      return { agents, agentStates };
+      const { [m.id]: ___, ...agentTitles } = s.agentTitles;
+      return { agents, agentStates, agentTitles };
     }
+    case "agent_title":
+      return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
     case "agent_state": {
       const { type: _, id, ...status } = m;
       return { agentStates: { ...s.agentStates, [id]: status } };

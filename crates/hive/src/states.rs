@@ -29,6 +29,8 @@ pub struct Agent {
     pub worktree: Option<String>,
     /// The folder the agent runs in, from its `SessionStart`: where to resume it.
     pub cwd: Option<String>,
+    /// The session's name from its log (the user's, else Claude's), once known.
+    pub title: Option<String>,
     state: AgentState,
     /// In start order.
     subagents: Vec<SubagentState>,
@@ -45,6 +47,7 @@ impl Agent {
             channel,
             worktree: None,
             cwd: None,
+            title: None,
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),
