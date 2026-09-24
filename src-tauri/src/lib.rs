@@ -31,18 +31,25 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Runs inside WSL through `wsl.exe --exec`, so no login or interactive shell (and no fish
-/// config) runs first. `$1` is the `HIVE_BRIDGE` override and `$2` the Windows path of the
-/// `hive` the installer bundles, each passed as an argument (maybe empty). The bundled one is
-/// copied into Hive's bin dir when it differs from the copy there, through a temporary file and
-/// a rename, so a running `hive` keeps its file. Without either, `cargo install`'s (development).
+/// config) runs first; on macOS through `/bin/sh` directly. `$1` is the `HIVE_BRIDGE` override
+/// and `$2` the path of the `hive` the installer bundles (a Windows path under WSL, a POSIX one
+/// on macOS), each passed as an argument (maybe empty). The bundled one is copied into Hive's
+/// bin dir when it differs from the copy there, through a temporary file and a rename, so a
+/// running `hive` keeps its file, and hooks keep a stable path even when macOS runs the app
+/// from a translocated one. `xattr` (macOS) drops the copy's quarantine; where it is missing the
+/// failure is ignored. Without either, `cargo install`'s (development).
 const BRIDGE_SCRIPT: &str = r#"[ -n "$1" ] && exec "$1" bridge
 hive=$HOME/.cargo/bin/hive
 if [ -n "$2" ]; then
   hive=${XDG_DATA_HOME:-$HOME/.local/share}/hive/bin/hive
-  src=$(wslpath -u "${2#'\\?\'}") || exit 1
+  case "$2" in
+    /*) src=$2 ;;
+    *) src=$(wslpath -u "${2#'\\?\'}") || exit 1 ;;
+  esac
   if ! cmp -s "$src" "$hive"; then
-    mkdir -p "${hive%/*}" && cp "$src" "$hive.new" && chmod 755 "$hive.new" &&
-      mv -f "$hive.new" "$hive" || exit 1
+    mkdir -p "${hive%/*}" && cp "$src" "$hive.new" && chmod 755 "$hive.new" || exit 1
+    xattr -d com.apple.quarantine "$hive.new" 2>/dev/null
+    mv -f "$hive.new" "$hive" || exit 1
   fi
 fi
 exec "$hive" bridge"#;
@@ -54,20 +61,24 @@ const EXIT_WAIT: Duration = Duration::from_secs(2);
 
 const NOT_CONNECTED: &str = "not connected to the hive service";
 
-/// Program and arguments that start `hive bridge` from Windows (#14, 4.18).
-/// `HIVE_WSL_DISTRO` picks the WSL distribution and `HIVE_BRIDGE` the `hive` binary
-/// (an absolute Linux path, for development). `bundled` is where the installer put the Linux
-/// `hive`, used when that file exists. Nothing is ever spliced into the script.
+/// Program and arguments that start `hive bridge`: from Windows through WSL (#14, 4.18), or
+/// natively when `macos` (5.2). `HIVE_WSL_DISTRO` picks the WSL distribution (Windows only)
+/// and `HIVE_BRIDGE` the `hive` binary (an absolute path, for development). `bundled` is where
+/// the installer put `hive`, used when that file exists. Nothing is ever spliced into the script.
 pub fn bridge_command(
+    macos: bool,
     var: impl Fn(&str) -> Option<OsString>,
     bundled: Option<PathBuf>,
 ) -> (OsString, Vec<OsString>) {
     let var = |key| var(key).filter(|value| !value.is_empty());
     let mut args = Vec::new();
-    if let Some(distro) = var("HIVE_WSL_DISTRO") {
-        args.extend([OsString::from("-d"), distro]);
+    if !macos {
+        if let Some(distro) = var("HIVE_WSL_DISTRO") {
+            args.extend([OsString::from("-d"), distro]);
+        }
+        args.extend(["--exec", "/bin/sh"].map(OsString::from));
     }
-    args.extend(["--exec", "/bin/sh", "-c", BRIDGE_SCRIPT, "sh"].map(OsString::from));
+    args.extend(["-c", BRIDGE_SCRIPT, "sh"].map(OsString::from));
     args.push(var("HIVE_BRIDGE").unwrap_or_default());
     args.push(
         bundled
@@ -75,7 +86,8 @@ pub fn bridge_command(
             .unwrap_or_default()
             .into(),
     );
-    ("wsl.exe".into(), args)
+    let program = if macos { "/bin/sh" } else { "wsl.exe" };
+    (program.into(), args)
 }
 
 /// Tauri state: the bridge command and the live link to the service.
