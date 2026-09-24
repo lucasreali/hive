@@ -66,7 +66,7 @@ test("a removed agent no longer asks", () => {
   expect(closed()).toBe(true);
 });
 
-test("only working and waiting agents ask; a state change counts at once (#18)", () => {
+test("only working, with-subagents and waiting agents ask; a state change counts at once (#18)", () => {
   render(<App />);
   act(() => {
     apply({
@@ -77,7 +77,7 @@ test("only working and waiting agents ask; a state change counts at once (#18)",
       worktree: null,
       cwd: null,
     });
-    for (const state of ["idle", "error", "with_subagents", "ended"] as const) agent(state, state);
+    for (const state of ["idle", "error", "ended"] as const) agent(state, state);
   });
   fireEvent.click(screen.getByTitle("Close"));
   expect(closed()).toBe(true);
@@ -85,8 +85,9 @@ test("only working and waiting agents ask; a state change counts at once (#18)",
   act(() => {
     agent("idle", "waiting_permission");
     agent("error", "waiting_you");
+    agent("ended", "with_subagents");
   });
   fireEvent.click(screen.getByTitle("Close"));
   expect(closed()).toBe(false);
-  expect(dialog().textContent).toContain("2 agents are running.");
+  expect(dialog().textContent).toContain("3 agents are running.");
 });
