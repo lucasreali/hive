@@ -58,8 +58,6 @@
 
   --bar-h: 34px;
   --status-h: 24px;
-  --sidebar-w: 264px;
-  --right-w: 380px;
 }
 
 *,
@@ -185,7 +183,9 @@ button:disabled {
   height: 15px;
   padding: 0 4px;
   border-radius: 8px;
-  background: var(--state-permission);
+  /* A ring of the bar's color and a warmer tone set it apart from the bell. */
+  box-shadow: 0 0 0 2px var(--bar);
+  background: var(--state-you);
   color: var(--on-accent);
   font-size: 10px;
   font-weight: 700;
@@ -254,7 +254,7 @@ button:disabled {
 
 /* Sidebar */
 .sidebar {
-  width: var(--sidebar-w);
+  position: relative;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -459,7 +459,7 @@ button:disabled {
 
 /* Right panel */
 .right-panel {
-  width: var(--right-w);
+  position: relative;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -2028,4 +2028,35 @@ button.result-file:hover,
   background: var(--selected-hover);
   color: var(--text);
   outline: none;
+}
+
+/* The side panels' draggable edges (shell/resize.tsx) */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 5;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resize-handle[data-side="sidebar"] {
+  right: -3px;
+}
+
+.resize-handle[data-side="panel"] {
+  left: -3px;
+}
+
+.resize-handle:hover,
+.resize-handle:focus-visible,
+body[data-resizing] .resize-handle {
+  background: var(--focus);
+  outline: none;
+}
+
+body[data-resizing] {
+  cursor: col-resize;
+  user-select: none;
 }

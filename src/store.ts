@@ -300,6 +300,9 @@ export type HiveState = {
   rightPanel: RightPanel;
   /** What the right panel shows, for the shown worktree. */
   panelView: PanelView;
+  /** The left sidebar's and the right panel's widths, in pixels (see `shell/resize.tsx`). */
+  sidebarWidth: number;
+  panelWidth: number;
   openFile: OpenFile | null;
   /** The open file's tab is the one shown, in place of the active terminal. */
   fileShown: boolean;
@@ -363,6 +366,8 @@ export const initialState: HiveState = {
   notice: null,
   rightPanel: null,
   panelView: "files",
+  sidebarWidth: 264,
+  panelWidth: 380,
   openFile: null,
   fileShown: false,
   selectedLines: null,
@@ -399,7 +404,57 @@ export const initialState: HiveState = {
   gotoLine: null,
 };
 
-export const useHive = create<HiveState>()(() => initialState);
+// Side panel widths: UI preferences, kept in the window's storage between runs.
+/** How a side panel may be sized, in pixels. */
+export const LIMITS = {
+  sidebar: { min: 200, max: 480 },
+  panel: { min: 280, max: 640 },
+} as const;
+/** Dragged this narrow, the right panel closes instead. */
+export const PANEL_CLOSE_AT = 200;
+export type Side = keyof typeof LIMITS;
+export const widthKey = (side: Side) => (side === "sidebar" ? "sidebarWidth" : "panelWidth");
+
+/** A width kept within the side's limits. */
+export const clampWidth = (side: Side, width: number) =>
+  Math.round(Math.max(LIMITS[side].min, Math.min(LIMITS[side].max, width)));
+
+/** Where the widths are remembered between runs (a per-window preference, not service data). */
+const STORAGE = "hive.widths";
+
+/** The widths remembered from the last run, within the limits; the defaults otherwise. */
+export function savedWidths(storage: Pick<Storage, "getItem"> | null = safeStorage()) {
+  try {
+    const saved = JSON.parse(storage?.getItem(STORAGE) ?? "{}");
+    return {
+      sidebarWidth: clampWidth("sidebar", Number(saved.sidebarWidth) || 264),
+      panelWidth: clampWidth("panel", Number(saved.panelWidth) || 380),
+    };
+  } catch {
+    return { sidebarWidth: 264, panelWidth: 380 };
+  }
+}
+
+function safeStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Sets a side's width (kept within its limits) and remembers both. */
+export function setWidth(side: Side, width: number): void {
+  useHive.setState({ [widthKey(side)]: clampWidth(side, width) });
+  const { sidebarWidth, panelWidth } = useHive.getState();
+  try {
+    safeStorage()?.setItem(STORAGE, JSON.stringify({ sidebarWidth, panelWidth }));
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
+export const useHive = create<HiveState>()(() => ({ ...initialState, ...savedWidths() }));
 
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
   const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };

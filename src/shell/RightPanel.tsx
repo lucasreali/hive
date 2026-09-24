@@ -45,6 +45,7 @@ import {
   FolderIcon,
   TerminalIcon,
 } from "./icons";
+import { ResizeHandle } from "./resize";
 import { SessionsView } from "./SessionsView";
 
 /**
@@ -213,9 +214,11 @@ const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
 export function RightPanel() {
   const target = useShownWorktree();
   const view = useHive((s) => s.panelView);
+  const width = useHive((s) => s.panelWidth);
   const shown = VIEWS.find((v) => v.view === view) as (typeof VIEWS)[number];
   return (
-    <aside className="right-panel" aria-label="Side panel">
+    <aside className="right-panel" aria-label="Side panel" style={{ width }}>
+      <ResizeHandle side="panel" />
       <div className="bar">
         <div className="panel-views" role="tablist" aria-label="Panel">
           {VIEWS.map((v) => (

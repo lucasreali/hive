@@ -24,6 +24,7 @@ import {
   STATE_LABEL,
   StateIcon,
 } from "./icons";
+import { ResizeHandle } from "./resize";
 
 /**
  * Arrow keys in the tree (#35): up/down move between rows, left/right collapse and expand a
@@ -54,9 +55,11 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
 // ponytail: plain list, add TanStack Virtual when trees get long.
 export function Sidebar() {
   const projects = useHive((s) => s.projects);
+  const width = useHive((s) => s.sidebarWidth);
   const list = Object.values(projects ?? {});
   return (
-    <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree}>
+    <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree} style={{ width }}>
+      <ResizeHandle side="sidebar" />
       <div className="bar">
         <div className="sidebar-actions">
           <button
