@@ -1,6 +1,6 @@
 # Hive — Documento de Decisões do Projeto
 
-> Versão 3.3. Execução noturna autônoma abandonada; desenvolvimento incremental guiado pelo `TODO.md`. Substitui a versão 3.2.
+> Versão 3.4. Distribuição pelo GitHub com atualização no app, suporte a macOS, histórico de sessões e mudanças da Etapa 4/5 (2026-09-24). Substitui a versão 3.3.
 
 ---
 
@@ -18,7 +18,7 @@ Você vai me ajudar a **continuar o refinamento do projeto Hive**, uma ferrament
 6. **Verifique informações que mudam rápido.** Claude Code, hooks, flags de CLI e ferramentas mudam com frequência; confirme antes de afirmar.
 7. **Não reproponha decisões revogadas** (seção "Decisões revogadas") sem um motivo novo.
 
-**Contexto sobre mim:** sou desenvolvedor, uso Windows com WSL, meus projetos ficam no sistema de arquivos do WSL, uso **fish** como shell no WSL, tenho experiência com **React**, uso muito worktrees e costumo trabalhar com um agente que recebe várias tarefas e distribui cada uma para um subagente. Rodo **muitos agentes em paralelo, sem limite definido**: todos precisam funcionar. Este é um projeto pessoal, feito para minha satisfação como desenvolvedor, não um produto comercial.
+**Contexto sobre mim:** sou desenvolvedor, uso Windows com WSL (e também um Mac com Apple Silicon), meus projetos ficam no sistema de arquivos do WSL, uso **fish** como shell no WSL, tenho experiência com **React**, uso muito worktrees e costumo trabalhar com um agente que recebe várias tarefas e distribui cada uma para um subagente. Rodo **muitos agentes em paralelo, sem limite definido**: todos precisam funcionar. Este é um projeto pessoal, feito para minha satisfação como desenvolvedor, não um produto comercial.
 
 **Situação atual:** todas as decisões das Etapas 0 a 4 foram tomadas. O desenvolvimento é **incremental e guiado** (seção "Regras de desenvolvimento"): o agente segue o `TODO.md` do repositório, uma tarefa por vez, com checkpoints de revisão humana. O protótipo da Etapa 1 está em `docs/prototype/`; falta exportar as capturas das telas (ponto 13).
 
@@ -36,14 +36,14 @@ Você vai me ajudar a **continuar o refinamento do projeto Hive**, uma ferrament
 
 ## 🧭 Conceito central
 
-O Hive é **igual ao Orca neste ponto**: tem **terminais embutidos**, e eu rodo o `claude` interativo dentro deles. O Hive **apenas observa** os agentes abertos nos seus terminais e mostra o estado de cada um. Ele **não inicia, não controla e não conversa** com os agentes. Toda interação com o agente acontece no terminal.
+O Hive é **igual ao Orca neste ponto**: tem **terminais embutidos**, e eu rodo o `claude` interativo dentro deles. O Hive **observa** os agentes abertos nos seus terminais e mostra o estado de cada um. Ele **não controla e não conversa** com os agentes: toda interação com o agente acontece no terminal. Por conveniência, o Hive **pode iniciar** um `claude` digitando o comando num terminal novo (nova worktree com "Start claude", "+" de novo chat, retomar ou bifurcar uma sessão do histórico, reabrir as sessões que estavam abertas quando o app fechou) (Etapa 4, 4.7/4.8/4.11/4.12).
 
 Consequências:
 
 - **Sem Claude Agent SDK.** O uso é o `claude` normal, dentro dos limites da assinatura.
 - O Hive é um **companheiro do terminal**, não um substituto.
-- Só aparecem no Hive as sessões abertas **nos terminais do Hive**. Sessões no Windows Terminal ficam fora.
-- **Terminais e agentes vivem enquanto o app estiver aberto.** Fechar o app (ou um crash) encerra todos.
+- O **estado ao vivo** (barra lateral, pendências, notificações) vem só das sessões abertas **nos terminais do Hive**. O **histórico de sessões** (painel direito) lista também as sessões rodadas fora do Hive nos projetos seguidos, com um estado lido do log (4.11/4.12).
+- **Terminais e agentes vivem enquanto o app estiver aberto.** Fechar o app (ou um crash) encerra todos; ao reabrir, as sessões do `claude` que estavam abertas são retomadas (`claude --resume`, 4.12).
 - O Hive **pode editar arquivos** (Etapa 3b), mas nunca age sobre o agente.
 
 ---
@@ -51,7 +51,7 @@ Consequências:
 ## 🚫 Requisitos obrigatórios
 
 1. **App desktop.**
-2. **Conexão 100% funcional com WSL**: agentes, git e projetos rodando dentro do WSL.
+2. **Conexão 100% funcional com WSL** no Windows: agentes, git e projetos rodando dentro do WSL. **No macOS**, tudo roda nativo (#39).
 3. **Performance**: app leve e rápido, **com qualquer número de terminais abertos**. Motivação: o Orca (Electron + TypeScript) é pesado na minha máquina.
 4. **Worktrees**: cada agente trabalha isolado na sua própria git worktree.
 5. **CLI de worktrees**: toda worktree **criada nos terminais do Hive** (pelo app, pelo `claude -w` ou por subagentes) passa pela CLI do Hive. **A CLI não cria agentes.**
@@ -71,15 +71,15 @@ Consequências:
 
 1. **Árvore de arquivos em tempo real** *(decidido)*: atualiza conforme o agente trabalha.
 2. **Escolha da branch de origem** ao criar uma worktree.
-3. **Subagentes na barra lateral** *(decidido)*: indentados sob o agente pai, com estado próprio; quando o subagente tem worktree própria, ela aparece indentada sob ele (e não se repete no nível do projeto). Base técnica: hooks `SubagentStart`/`SubagentStop` e hooks `WorktreeCreate`/`WorktreeRemove`.
-4. **Estado propagado + contador de pendências** *(decidido)*: projeto ou worktree recolhido mostra o estado mais urgente dentro dele; contador "🚨 N pendentes" no topo leva ao próximo agente que precisa de ação. **Pendente = 🟡, 🔴 ou 🟠** (checkpoint 2); o serviço decide e manda `pending`/`urgency`. Nó recolhido mostra o **ícone do estado mais urgente**, sem o sino do protótipo. Compensa a ausência do kanban.
-5. **Notificação** *(decidido)*: som ao entrar em 🟡, 🟠 ou 🔴; notificação do sistema operacional quando o agente termina (🔵/🟣 → 🟠). **Sempre**, mesmo com a janela em foco, sem botão de mudo (checkpoint 2; rever se incomodar).
+3. **Subagentes na barra lateral** *(decidido)*: indentados sob o agente pai, com estado próprio; quando o subagente tem worktree própria, **a worktree vira a linha pai e o subagente fica indentado sob ela** (Projeto → Worktree → Agente em todos os níveis; decisão de 2026-09-24, tarefa 5.4, que substitui "a worktree indentada sob o subagente"). Base técnica: hooks `SubagentStart`/`SubagentStop` e hooks `WorktreeCreate`/`WorktreeRemove`.
+4. **Estado propagado + contador de pendências** *(decidido)*: projeto ou worktree recolhido mostra o estado mais urgente dentro dele; um **sino com o número de pendências na barra de título** (4.14) leva ao próximo agente que precisa de ação (F8). **Pendente = 🟡, 🔴 ou 🟠** (checkpoint 2); o serviço decide e manda `pending`/`urgency`. Nó recolhido mostra o **ícone do estado mais urgente**, sem o sino do protótipo. Compensa a ausência do kanban.
+5. **Notificação** *(decidido)*: som ao entrar em 🟡, 🟠 ou 🔴; notificação do sistema operacional quando o agente termina (🔵/🟣 → 🟠). Sempre, sem botão de mudo, **exceto** quando a janela do Hive está em foco e o terminal daquele agente é o que está à vista: aí não há notificação do sistema nem o agente entra no contador de pendências (já foi visto). O app informa ao serviço qual agente está à vista e se a janela tem foco; o serviço continua decidindo `pending` (#37) (decisão de 2026-09-24, tarefa 5.6).
 6. **Edição de arquivos** *(decidido)*: editar no visualizador, salvando pelo serviço com verificação de versão; sem LSP na v1; diff somente leitura. *(Etapa 3b)*
 
 ### ✨ Inspirado em outros apps
 
 1. **Edição ao vivo, estilo Zed**: ver qual arquivo o agente está alterando, no momento em que acontece. *(Fase 2)*
-2. **Histórico de sessões, estilo opcode**: ler `~/.claude/projects/` para ver conversas antigas. *(Fase 2)*
+2. **Histórico de sessões, estilo Orca/opcode** *(feito na Etapa 4, 4.11)*: lê `~/.claude/projects/` dos projetos seguidos; retomar, bifurcar, copiar comando/ID, abrir log, apagar.
 3. **Convenção de worktrees do Claude Code**: `.claude/worktrees/<nome>/` com branch `worktree-<nome>`, igual ao `claude -w <nome>`.
 4. **Seleção de trecho para o prompt, estilo plugin do Herdr** *(decidido)*: selecionar código no visualizador ou no diff e **escrever só a referência no terminal ativo**. Ex.: `@src/checkout/validators.ts (linhas 44–46)`.
 5. **Linguagem visual do Zed** *(decidido)*: tema escuro inicial, interface densa e minimalista, One Dark como referência de cores.
@@ -92,7 +92,7 @@ Consequências:
 
 1. **Kanban** do ponto de vista do usuário, como **tela separada** do terminal. Colunas: 🚨 Precisa de mim (aguardando permissão, erro) · 👀 Revisar (aguardando você) · ⚙️ Trabalhando (trabalhando, com subagentes) · 💤 Parados (ocioso, encerrado).
 2. **Interações ricas**: responder permissões pelo app (possível via hook `PermissionRequest`, a verificar), perguntas de múltipla escolha como botões, mockups em markdown renderizados.
-3. Edição ao vivo, histórico de sessões, integração com `gh`.
+3. Edição ao vivo, integração com `gh`.
 
 ---
 
@@ -220,25 +220,26 @@ Adaptadores futuros (Codex, Gemini...)
 | 17 | **Modelo interno independente do Claude** | Permite outros provedores |
 | 18 | **Terminal embutido**: PTY no serviço do WSL, xterm.js na interface; **terminais e agentes encerram quando o app fecha, inclusive em crash** (o serviço mata o grupo de processos de cada PTY); confirmação ao fechar se houver agente 🔵, 🟣, 🟡 ou 🟠 (🟣 incluído no checkpoint 2: subagentes trabalhando também se perdem) | Simplicidade; sem reconexão nem snapshot de tela |
 | 19 | **`HIVE_TERMINAL_ID`** (herdada pelos hooks) liga agente ↔ aba; a posição na hierarquia vem do `cwd` do payload | Um `cd` no terminal não coloca o agente na worktree errada |
-| 20 | **O Hive mostra apenas sessões abertas nos seus próprios terminais** | Escopo claro; nada muda no uso externo |
+| 20 | **O estado ao vivo vem só das sessões abertas nos terminais do Hive**; o histórico de sessões (4.11) também lista as rodadas fora do Hive nos projetos seguidos, sem retomá-las nem apagá-las enquanto rodam | Escopo claro; nada muda no uso externo |
 | 21 | **Hooks injetados só nos terminais do Hive**: um `claude` embrulhado no `PATH` desses terminais chama o real com `--settings <hooks-do-hive>` | Configuração global intocada; o `--settings` **mescla** hooks, então os hooks pessoais continuam valendo |
-| 22 | **Barra lateral como visão principal de estado**: Projeto → Worktree → Agente → Subagentes (indentados, com worktree própria quando houver), estado propagado | Acompanhar tudo sem sair do terminal |
+| 22 | **Barra lateral como visão principal de estado**: Projeto → Worktree → Agente → Subagentes, estado propagado; a worktree própria de um subagente é a linha pai dele (Projeto → Worktree → Agente em todos os níveis, 5.4) | Acompanhar tudo sem sair do terminal |
 | 23 | **Tema escuro inicial, linguagem visual do Zed** (One Dark como referência) | Preferência estética; interface densa para uso intenso |
 | 24 | **Protocolo em frames binários** `[tipo][canal][tamanho][payload]`: controle em JSON, terminal em bytes crus; handshake de versão; frames de controle com prioridade sobre os de terminal; formato isolado no crate `hive-protocol`. Entre o Rust do Tauri e a WebView, um `Channel` do Tauri por terminal (eventos do Tauri não servem para alto volume) | Performance sem perder a legibilidade do controle; reversível |
 | 25 | **`claude` embrulhado = script `sh` em `~/.local/share/hive/bin`**, colocado no início do `PATH` via `fish -C 'set -gx PATH …'`, depois da config do usuário; nunca `fish_add_path` sem flag (vazaria para o fish fora do Hive via variável universal); proteção contra recursão (`HIVE_WRAPPED=1`); o serviço avisa quando detecta `claude` no PTY sem eventos de hook | Funciona com fish sem tocar no `config.fish`; falha visível em vez de silenciosa |
 | 26 | **Binário único `hive`** em `~/.local/share/hive/bin`, com atalho em `~/.local/bin` para uso fora do Hive; hooks e app usam o caminho absoluto | Mesmo código; imune a colisão de nome |
 | 27 | **Hooks de observação síncronos**, com `timeout` curto no hook e timeout interno de ~200 ms na CLI, que sempre sai com 0 (exceto `WorktreeCreate`) | Mantém a ordem dos eventos por sessão; o `async` evitaria bloqueio, mas pode inverter eventos e fazer o estado piscar |
 | 28 | **Terminais ilimitados**: WebGL só nos terminais visíveis; histórico limitado e configurável por terminal; teste de carga como critério de saída da Etapa 1; se falhar, emulador headless no serviço com snapshot ao exibir a aba | Todos precisam funcionar sem degradar o terminal em foco |
-| 29 | **Binário Linux compilado por mim no WSL** (`cargo install`); o handshake compara versões e **bloqueia com aviso** se app e serviço divergirem | Zero infraestrutura na v1; sem erro silencioso |
+| 29 | **Distribuição pelo GitHub Releases** (4.17–4.19): uma tag `v*` gera no GitHub Actions o instalador Windows (NSIS) e o do macOS, assinados para o updater (minisign), com o `hive` do serviço **dentro do instalador**; ao conectar, o bridge copia esse `hive` para `~/.local/share/hive/bin/hive` quando difere e o executa (`cargo install` só em desenvolvimento). Ao abrir, o app consulta o `latest.json` da última release e mostra **"Update to vX" na barra de título**; o clique pergunta antes se há agentes rodando, instala e reinicia. O handshake continua comparando versões e **bloqueia com aviso** se divergirem | App e serviço sempre na mesma versão sem passo manual; sem erro silencioso |
 | 30 | **React + React Compiler**; estado dos agentes em store externo com assinatura por agente (`useSyncExternalStore` ou seletores do Zustand); xterm.js gerenciado fora do React; listas grandes virtualizadas (TanStack Virtual) | Experiência prévia; as regras neutralizam o custo de re-renderização |
 | 31 | **CodeMirror 6** para visualizar, editar e ver diff (`@codemirror/merge`); salvamento pelo serviço (temporário + rename) com verificação de versão; recarga automática com buffer limpo; aviso de conflito com buffer sujo; selo "agente trabalhando aqui"; botão "abrir no editor externo" | Leve, renderiza só o visível, fácil de deixar com cara de Zed; conflito com o agente nunca é silencioso |
 | 32 | **Protótipo do Claude Design como referência** de aparência, layout e interação (`docs/prototype/`), protegido como o `hive.md` | Os agentes implementam o que foi desenhado, sem reinventar a interface |
 | 33 | **Validação do nome de worktree idêntica na CLI e na interface** (`^[a-z0-9][a-z0-9._-]*$` + nome existente); `worktree create` aceita branch de origem local ou remota | Interface e CLI nunca discordam; a regra já entra na Etapa 0 |
 | 34 | **Interface em inglês** (D1); o protótipo, em português, vale como referência visual e de comportamento; os textos seguem o glossário em `docs/prototype/README.md` | Consistência com a N9; um só vocabulário em todas as telas |
-| 35 | **Atalhos do app com Ctrl+Shift+letra** (T novo terminal, N nova worktree, B painel de arquivos, O adicionar projeto; C/V copiar e colar no terminal), capturados mesmo com o foco no terminal; **F8** continua; o resto vai intocado para o terminal | Alt+B/Alt+T colidem com o fish e Ctrl+O com o Claude Code; Ctrl+Shift é a convenção do Windows Terminal |
+| 35 | **Atalhos do app com Ctrl+Shift+letra** (T novo terminal, N nova worktree, B painel de arquivos, O adicionar projeto; C/V copiar e colar no terminal), capturados mesmo com o foco no terminal; **F8** continua; o resto vai intocado para o terminal. **No macOS, Cmd no lugar de Ctrl** (Cmd+Shift+letra; Cmd+C/Cmd+V no terminal), e o Ctrl vai para o shell (#39) | Alt+B/Alt+T colidem com o fish e Ctrl+O com o Claude Code; Ctrl+Shift é a convenção do Windows Terminal |
 | 36 | **Pacotes só pela CLI**: Rust com `cargo add -p` / `cargo remove` (sem `[workspace.dependencies]`, que o `cargo add` não suporta); frontend **só com bun** (`bun add`, `bun add -d`, `bun remove`, `bunx`, `bun create`; nada de npm, pnpm, yarn ou npx). Nunca editar à mão as seções de dependências nem os lockfiles; portões `cargo check --locked` e `bun install --frozen-lockfile` | O gerenciador escolhe versões reais e mantém manifesto e lockfile coerentes; evita versões inventadas pelo agente |
 | 37 | **Toda a lógica em Rust; o frontend só apresenta.** Protocolo, PTYs, worktrees, git, hooks, estados dos agentes, observação e gravação de arquivos ficam no serviço. React/TypeScript renderiza o que o serviço manda, guarda estado de interface (seleção, painéis, diálogos, abas) e envia ações. **Bun** é gerenciador de pacotes, executor de scripts e test runner (`bun test` + `happy-dom`) do frontend; o app distribuído não tem runtime Bun nem Node | Uma única fonte de regras (sem duplicar lógica em duas linguagens); o Tauri empacota a interface como arquivos estáticos na WebView2 |
 | 38 | **Sem biblioteca de rotas** (nem TanStack Router nem React Router). O Hive é uma janela só (barra lateral, terminais, painel, diálogos); o que está visível é estado de interface no store (ex.: `view`, `modal`, `rightPanel`). Rever só se, na Fase 2, surgirem várias telas com parâmetros | Num app desktop não há barra de endereço, links diretos nem botão voltar, que é o que um router resolve; seria dependência e complexidade sem uso |
+| 39 | **macOS (Apple Silicon) como segunda plataforma** (Etapa 5): app e serviço `hive` rodam nativos, sem WSL; assinatura ad-hoc, sem conta Apple Developer (na primeira abertura é preciso liberar em Privacidade e Segurança); terminais abrem o shell de login do usuário (`$SHELL`) com o bin do Hive primeiro no `PATH`; processos via `libproc`, arquivos via `notify` (FSEvents); botões nativos da janela; textos sem WSL/Explorer. No Windows, o seletor `[Windows \| WSL]` ao adicionar projeto aceita pastas do Windows (`/mnt/c`, mais lentas e sem atualização ao vivo) | Uso o Hive também num Mac; mesmo código Rust, com as diferenças isoladas por plataforma |
 
 ### Detalhes importantes dos hooks de worktree (verificado)
 
@@ -366,5 +367,5 @@ Adaptadores futuros (Codex, Gemini...)
 | Gestão de consumo de IA | Pós-v1; a analisar (possível leitura de uso nas sessões) |
 | Alocação de RAM/processamento para agentes | Pós-v1; custo alto (cgroups no WSL), ganho duvidoso |
 | Orquestração de agentes | **Descartado**: conflita com o Hive como observador; a orquestração é feita pelos subagentes do Claude |
-| Notificação (som + SO) | **Incorporado** à Etapa 2 (som só em 🟡, 🟠 e 🔴) |
+| Notificação (som + SO) | **Incorporado** à Etapa 2 (som só em 🟡, 🟠 e 🔴); sem alerta para o agente à vista com a janela em foco (5.6) |
 | Edição de arquivos | **Incorporado** à Etapa 3b |
