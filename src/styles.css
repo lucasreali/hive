@@ -1230,6 +1230,13 @@ li:last-child > .tree-row.own-worktree::before {
   color: var(--text-3);
 }
 
+/* A worktree without terminals: short content, centered in the terminal area. */
+.empty-state-content.centered {
+  width: auto;
+  align-items: center;
+  text-align: center;
+}
+
 .empty-state h2 {
   margin: 0 0 6px;
   font-size: var(--fs-title);

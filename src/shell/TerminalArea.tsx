@@ -1,3 +1,4 @@
+import { TerminalWindowIcon } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -165,8 +166,8 @@ function NoTerminals({ worktree }: { worktree: string }) {
   const name = useHive((s) => find(s, worktree)?.worktree.name ?? worktree);
   return (
     <div className="empty-state">
-      <div className="empty-state-content">
-        <TerminalIcon />
+      <div className="empty-state-content centered">
+        <TerminalWindowIcon size={32} weight="light" aria-hidden="true" />
         <p>No terminal in {name}</p>
         <button type="button" className="primary" onClick={() => void openTerminal(worktree)}>
           New terminal
