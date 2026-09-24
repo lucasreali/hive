@@ -47,7 +47,10 @@ pub fn install(paths: &Paths, hive: &Path) -> io::Result<()> {
     std::fs::create_dir_all(&bin)?;
     let settings = paths.hooks_settings();
     write_atomic(&settings, format!("{:#}\n", hooks(hive)).as_bytes(), 0o644)?;
-    write_atomic(&bin.join("claude"), &script(&bin, &settings), 0o755)
+    write_atomic(&bin.join("claude"), &script(&bin, &settings), 0o755)?;
+    #[cfg(target_os = "macos")]
+    crate::terminal::login::install(&bin)?;
+    Ok(())
 }
 
 fn hooks(hive: &str) -> Value {
