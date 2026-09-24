@@ -188,6 +188,14 @@ pub enum Control {
         worktree: Option<String>,
         cwd: Option<String>,
     },
+    /// The agent's displayed state (after "the most urgent wins") and its live subagents.
+    /// Sent on the agent's terminal channel whenever it changes, and for every live agent
+    /// right after the app's `Welcome`.
+    AgentState {
+        id: String,
+        state: AgentState,
+        subagents: Vec<SubagentState>,
+    },
     /// The agent's session ended, or its terminal exited.
     AgentRemoved {
         id: String,
@@ -392,6 +400,27 @@ pub enum Notification {
     Other(String),
 }
 
+/// Visual state of an agent ("Mapeamento de estados" in `docs/hive.md`). Declared from least
+/// to most urgent, so the most urgent of several states is their `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentState {
+    Ended,
+    Idle,
+    Working,
+    WithSubagents,
+    WaitingYou,
+    Error,
+    WaitingPermission,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubagentState {
+    pub id: String,
+    pub agent_type: Option<String>,
+    pub state: AgentState,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +514,44 @@ mod tests {
         );
         let removed = Control::AgentRemoved { id: "s".into() };
         assert_eq!(Frame::control(1, &removed).to_control().unwrap(), removed);
+    }
+
+    #[test]
+    fn agent_state_is_tagged_json() {
+        let msg = Control::AgentState {
+            id: "s".into(),
+            state: AgentState::WaitingPermission,
+            subagents: vec![SubagentState {
+                id: "a".into(),
+                agent_type: None,
+                state: AgentState::WithSubagents,
+            }],
+        };
+        assert_eq!(
+            &Frame::control(1, &msg).payload[..],
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","subagents":[{"id":"a","agent_type":null,"state":"with_subagents"}]}"#
+        );
+        assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
+    }
+
+    #[test]
+    fn agent_states_are_ordered_by_urgency() {
+        use AgentState::*;
+        let most_urgent_first = [
+            WaitingPermission,
+            Error,
+            WaitingYou,
+            WithSubagents,
+            Working,
+            Idle,
+            Ended,
+        ];
+        assert!(most_urgent_first.windows(2).all(|w| w[0] > w[1]));
+        let json = serde_json::to_string(&most_urgent_first).unwrap();
+        assert_eq!(
+            json,
+            r#"["waiting_permission","error","waiting_you","with_subagents","working","idle","ended"]"#
+        );
     }
 
     #[test]
