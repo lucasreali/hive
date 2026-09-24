@@ -23,9 +23,9 @@ use crate::worktree;
 /// Most files sent in one list.
 pub const MAX_FILES: usize = 50_000;
 /// Most bytes of JSON strings in one list, well inside a frame (`MAX_PAYLOAD`, 4 MiB).
-pub const LIST_BUDGET: usize = 3 * 1024 * 1024;
+pub const LIST_BUDGET: usize = 3_145_728; // 3 MiB
 /// Most bytes read from one git command; the rest is cut off.
-const GIT_LIMIT: u64 = 32 * 1024 * 1024;
+const GIT_LIMIT: u64 = 33_554_432; // 32 MiB
 /// Most directories watched in one worktree.
 pub const MAX_WATCHES: usize = 8192;
 /// A re-list waits until events have stopped for this long…
@@ -149,7 +149,7 @@ impl Watcher {
     /// Blocks on git; must run inside the tokio runtime.
     pub fn new(root: &Path) -> io::Result<Self> {
         let inotify = Inotify::init(InitFlags::IN_NONBLOCK | InitFlags::IN_CLOEXEC)?;
-        let (out, _) = git(root, &["rev-parse", "--absolute-git-dir"], 64 * 1024)?;
+        let (out, _) = git(root, &["rev-parse", "--absolute-git-dir"], 65_536)?;
         let git_dir = String::from_utf8_lossy(&out);
         let git_dir = inotify.add_watch(git_dir.trim_end(), GIT_EVENTS).ok();
         Ok(Self {
