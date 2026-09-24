@@ -1,5 +1,10 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 
 export type WindowAction = "minimize" | "toggleMaximize" | "close";
 
@@ -35,4 +40,11 @@ export function closeWindow(): void {
 export function windowAction(action: WindowAction): void {
   if (isTauri()) void getCurrentWindow()[action]();
   else if (action === "close" && !keepOpen()) closeWindow();
+}
+
+/** An OS notification through Tauri's plugin; nothing outside Tauri (browser, mock transport). */
+export async function showNotification(title: string, body: string): Promise<void> {
+  if (!isTauri()) return;
+  if (!(await isPermissionGranted()) && (await requestPermission()) !== "granted") return;
+  sendNotification({ title, body });
 }

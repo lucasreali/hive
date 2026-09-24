@@ -3,7 +3,7 @@ import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TitleBar } from "./TitleBar";
-import { closeWindow, guardClose, windowAction } from "./window";
+import { closeWindow, guardClose, showNotification, windowAction } from "./window";
 
 const g = globalThis as { isTauri?: boolean };
 
@@ -93,6 +93,37 @@ test("every Tauri close request asks the guard; a confirmed close destroys the w
   await settle();
   expect(calls).toEqual(["plugin:window|destroy", "plugin:window|destroy"]);
   expect(closed()).toBe(false);
+});
+
+test("OS notifications go through Tauri's plugin, asking permission while undecided", async () => {
+  const w = window as unknown as Record<string, unknown>;
+  const shown: string[] = [];
+  let permission = "default";
+  let answer = "denied";
+  w.Notification = class {
+    static get permission() {
+      return permission;
+    }
+    static requestPermission = () => Promise.resolve(answer);
+    constructor(title: string, options: { body: string }) {
+      shown.push(`${title}: ${options.body}`);
+    }
+  };
+  let granted = false;
+  mockIPC((cmd) => (cmd === "plugin:notification|is_permission_granted" ? granted : undefined));
+  // Outside Tauri: nothing.
+  await showNotification("t", "outside");
+  g.isTauri = true;
+  await showNotification("t", "refused");
+  answer = "granted";
+  await showNotification("t", "asked");
+  granted = true;
+  await showNotification("t", "already");
+  permission = "denied";
+  answer = "denied";
+  await showNotification("t", "blocked");
+  expect(shown).toEqual(["t: asked", "t: already"]);
+  delete w.Notification;
 });
 
 test("the title bar drags the window", () => {

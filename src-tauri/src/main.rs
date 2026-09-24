@@ -9,6 +9,7 @@ fn main() {
     let (program, args) = hive_lib::bridge_command(|key| std::env::var_os(key));
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(hive_lib::Hive::new(program, args))
         .invoke_handler(tauri::generate_handler![
             commands::connect,
