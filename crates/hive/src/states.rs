@@ -145,6 +145,8 @@ fn state_of(kind: &EventKind) -> Option<AgentState> {
         | EventKind::Notification {
             notification: Notification::Other(_),
         }
+        | EventKind::WorktreeCreated { .. }
+        | EventKind::WorktreeRemoved { .. }
         | EventKind::Other { .. } => return None,
     })
 }

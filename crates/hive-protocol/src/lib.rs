@@ -365,6 +365,8 @@ pub enum FileStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectError {
+    /// Empty or only whitespace.
+    EmptyPath,
     NotAbsolute,
     /// Missing or unreadable.
     NotFound,
@@ -427,6 +429,15 @@ pub enum EventKind {
     SubagentStopped,
     SessionEnded {
         reason: Option<String>,
+    },
+    /// Hive created (or reused) the worktree `name` at `path` for the agent.
+    WorktreeCreated {
+        name: Option<String>,
+        path: Option<String>,
+    },
+    /// Hive removed the worktree at `path` for the agent.
+    WorktreeRemoved {
+        path: Option<String>,
     },
     /// Any provider event without an internal meaning yet.
     Other {

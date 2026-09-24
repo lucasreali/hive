@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { openModal, useHive } from "../store";
+import { clearAddProjectError, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { CloseIcon } from "./icons";
 
@@ -44,7 +44,10 @@ export function AddProjectDialog() {
             <span>Folder in WSL</span>
             <input
               value={path}
-              onChange={(e) => setPath(e.target.value)}
+              onChange={(e) => {
+                setPath(e.target.value);
+                clearAddProjectError();
+              }}
               placeholder="/home/user/projects/shop"
               spellCheck={false}
               aria-invalid={error !== null}
@@ -63,7 +66,7 @@ export function AddProjectDialog() {
           <button type="button" className="secondary" onClick={close}>
             Cancel <kbd>Esc</kbd>
           </button>
-          <button type="submit" className="primary" disabled={path === ""}>
+          <button type="submit" className="primary" disabled={path.trim() === ""}>
             Add project <kbd>Enter</kbd>
           </button>
         </footer>
