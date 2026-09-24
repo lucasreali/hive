@@ -84,8 +84,8 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     };
     let dirs = subfolders(folder)?;
     // The folder part of what was typed, and the one above it, in the same form.
-    let end = path.rfind(separators).map_or(0, |i| i + 1);
-    let above = path[..end].trim_end_matches(separators);
+    let above = path.rfind(separators).map_or("", |i| &path[..i]);
+    let above = above.trim_end_matches(separators);
     let parent = above.rfind(separators).map(|i| path[..=i].to_owned());
     Ok((path, linux, parent, dirs))
 }
@@ -169,19 +169,20 @@ mod tests {
     );
 
     fn ask(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> Answer {
-        let Control::Dirs {
-            path,
-            windows: w,
-            linux_path,
-            parent,
-            dirs,
-            error,
-        } = answer(path.into(), windows, home, programs)
-        else {
-            panic!("expected dirs")
-        };
-        assert_eq!(w, windows);
-        (path, linux_path, parent, dirs, error)
+        // Read as JSON: a `let … else` would leave a never-run line.
+        let got = serde_json::to_value(answer(path.into(), windows, home, programs)).unwrap();
+        assert_eq!(
+            (&got["type"], &got["windows"]),
+            (&"dirs".into(), &windows.into())
+        );
+        let field = |key: &str| got[key].clone();
+        (
+            serde_json::from_value(field("path")).unwrap(),
+            serde_json::from_value(field("linux_path")).unwrap(),
+            serde_json::from_value(field("parent")).unwrap(),
+            serde_json::from_value(field("dirs")).unwrap(),
+            serde_json::from_value(field("error")).unwrap(),
+        )
     }
 
     fn script(dir: &Path, name: &str, body: &str) -> String {
