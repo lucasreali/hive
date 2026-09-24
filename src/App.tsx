@@ -8,6 +8,7 @@ import { Sidebar } from "./shell/Sidebar";
 import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
+import { RemoveWorktreeDialog, RenameWorktreeDialog, WorktreeMenu } from "./shell/WorktreeMenu";
 import { WorktreePicker } from "./shell/WorktreePicker";
 import { installShortcuts } from "./shortcuts";
 import { useHive } from "./store";
@@ -35,7 +36,10 @@ export function App() {
         {modal === "add-project" && !blocked && <AddProjectDialog />}
         {modal === "new-worktree" && !blocked && hasProjects && <NewWorktreeDialog />}
         {modal === "worktree-picker" && !blocked && <WorktreePicker />}
+        {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
+        {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
         {modal === "close-app" && <CloseAppDialog />}
+        {!blocked && <WorktreeMenu />}
         <ConnectionBlock />
       </div>
       <StatusBar />

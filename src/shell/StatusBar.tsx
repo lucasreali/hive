@@ -1,4 +1,4 @@
-import { type Connection, useHive } from "../store";
+import { type Connection, setNotice, useHive } from "../store";
 
 const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
@@ -10,6 +10,7 @@ const LABEL: Record<Connection["status"], string> = {
 // The "N active agents" count on the right arrives with agent states (2.1).
 export function StatusBar() {
   const connection = useHive((s) => s.connection);
+  const notice = useHive((s) => s.notice);
   // The service reports its distribution in `welcome`; until then only "WSL" is known.
   const distro = connection.status === "connected" ? connection.distro : null;
   return (
@@ -19,6 +20,11 @@ export function StatusBar() {
         <span>{distro ? `WSL: ${distro}` : "WSL"}</span>
         <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
+      {notice && (
+        <button type="button" className="notice" title="Dismiss" onClick={() => setNotice(null)}>
+          {notice}
+        </button>
+      )}
     </footer>
   );
 }

@@ -491,3 +491,62 @@ test("a file's Windows path for an external editor, or why not", async () => {
     },
   ]);
 });
+
+test("the worktree menu: delete and rename as the service refuses or does them", async () => {
+  const { transport, messages } = await connected();
+  const [shop] = MOCK_REPOS;
+  const wt = (name: string) => `${shop.path}/.claude/worktrees/${name}`;
+  const answers = async (request: () => Promise<void>) => {
+    messages.length = 0;
+    await request();
+    await tick();
+    return messages.map((m) => ("message" in m ? m.message : m.type));
+  };
+  expect(await answers(() => transport.removeWorktree(shop.path, true))).toEqual([
+    `${shop.path} is the project's main worktree`,
+  ]);
+  expect(await answers(() => transport.renameWorktree("/nope", "x"))).toEqual([
+    "/nope is not a worktree of a followed project",
+  ]);
+  // fix-login has changes in the fake service: only forced.
+  const [dirty] = await answers(() => transport.removeWorktree(wt("fix-login"), false));
+  expect(dirty).toContain("use --force to delete it");
+  const id = await transport.openTerminal(`${wt("feat-checkout")}/src`, 80, 24, () => {});
+  await tick();
+  const busy = `in use by fish (${id}): close its terminals first`;
+  expect(await answers(() => transport.renameWorktree(wt("feat-checkout"), "x"))).toEqual([busy]);
+  expect(await answers(() => transport.removeWorktree(wt("feat-checkout"), false))).toEqual([busy]);
+  await transport.closeTerminal(id);
+  await tick();
+  expect(await answers(() => transport.renameWorktree(wt("feat-checkout"), "fix-login"))).toEqual([
+    `worktree "fix-login" already exists at ${wt("fix-login")}`,
+  ]);
+  expect(await answers(() => transport.renameWorktree(wt("feat-checkout"), "cart"))).toEqual([
+    "worktree_renamed",
+  ]);
+  expect(messages[0]).toMatchObject({ from: wt("feat-checkout"), path: wt("cart") });
+  expect(await answers(() => transport.removeWorktree(wt("fix-login"), true))).toEqual([
+    "worktree_removed",
+  ]);
+  const names = (messages[0] as { project: { worktrees: { name: string }[] } }).project.worktrees;
+  expect(names.map((w) => w.name)).toEqual(["main", "cart"]);
+  // The shared fake repositories are left alone.
+  expect(shop.worktrees.map((w) => w.name)).toEqual(["main", "fix-login", "feat-checkout"]);
+});
+
+test("an empty path locates the worktree's folder for the Explorer", async () => {
+  const { transport, messages } = await connected();
+  const [shop] = MOCK_REPOS;
+  messages.length = 0;
+  await transport.openInEditor(shop.path, "");
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "editor_target",
+      worktree: shop.path,
+      path: "",
+      windows_path: "\\\\wsl.localhost\\Ubuntu\\home\\user\\projects\\shop\\",
+      error: null,
+    },
+  ]);
+});

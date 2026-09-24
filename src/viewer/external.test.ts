@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { initialState, setOpenFile, useHive } from "../store";
-import { openExternal } from "./external";
+import { openExternal, openFolder } from "./external";
 
 afterEach(() => {
   clearMocks();
@@ -51,4 +51,26 @@ test("the service's refusal, the browser, and a file no longer open", async () =
   expect(notice()).toBe(`Only the Hive app opens an external editor: ${unc}`);
   await openExternal(target(unc));
   expect(calls).toEqual([]);
+});
+
+test("a worktree's folder opens in the Explorer, or the status bar says why not", async () => {
+  const calls: [string, unknown][] = [];
+  mockIPC((cmd, args) => {
+    calls.push([cmd, args]);
+  });
+  const folder = "\\\\wsl.localhost\\Ubuntu\\w\\";
+  await openFolder(target(folder, null, ""), true);
+  expect(calls).toEqual([["plugin:opener|open_path", { path: folder }]]);
+  const status = () => useHive.getState().notice;
+  expect(status()).toBeNull();
+  await openFolder(target(null, "wslpath failed: x", ""), true);
+  expect(status()).toBe("wslpath failed: x");
+  await openFolder(target(folder, null, ""), false);
+  expect(status()).toBe(`Only the Hive app opens the Explorer: ${folder}`);
+  mockIPC(() => {
+    throw new Error("no Explorer");
+  });
+  await openFolder(target(folder, null, ""), true);
+  expect(status()).toContain("no Explorer");
+  await openFolder(target(folder, null, ""));
 });

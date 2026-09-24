@@ -228,6 +228,7 @@ test("new-worktree answers are kept for the dialog until it opens again", () => 
     nameChecks: { x: check },
     created: null,
     createFailure: failure,
+    failure: null,
   });
   const path = `${shop.path}/.claude/worktrees/x`;
   const updated = { ...shop, worktrees: [...shop.worktrees, { ...shop.worktrees[1], id: path }] };

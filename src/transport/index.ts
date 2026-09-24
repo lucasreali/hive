@@ -30,6 +30,13 @@ export interface Transport {
   validateWorktreeName(project: string, name: string): Promise<void>;
   /** `hive worktree create`; answered by `worktree_created` or `create_worktree_failed`. */
   createWorktree(project: string, name: string, base: string | null): Promise<void>;
+  /**
+   * `git worktree remove` (with `--force` when `force`); the branch stays. Answered by
+   * `worktree_removed` or `remove_worktree_failed`.
+   */
+  removeWorktree(path: string, force: boolean): Promise<void>;
+  /** Renames a Claude worktree; answered by `worktree_renamed` or `rename_worktree_failed`. */
+  renameWorktree(path: string, name: string): Promise<void>;
   /** Watches one worktree instead of any other; its files arrive as `files`, again on every change. */
   watchWorktree(path: string): Promise<void>;
   /** Stops watching (the files panel closed). */
@@ -43,7 +50,10 @@ export interface Transport {
    * must not exist); answered by `file_saved` or `save_failed`.
    */
   saveFile(worktree: string, path: string, content: string, version: string | null): Promise<void>;
-  /** The file's Windows path for an external editor; answered by `editor_target`. */
+  /**
+   * The file's Windows path for an external editor (an empty `path`: the worktree's folder);
+   * answered by `editor_target`.
+   */
   openInEditor(worktree: string, path: string): Promise<void>;
 }
 

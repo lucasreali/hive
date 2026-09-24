@@ -5,6 +5,7 @@ import {
   type AgentState,
   activateTab,
   mostUrgent,
+  openMenu,
   openModal,
   type Project,
   pendingAgents,
@@ -198,7 +199,17 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
           type="button"
           className="row-main"
           aria-current={selected}
+          aria-haspopup="menu"
           onClick={() => select(w.id)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            // The keyboard's menu key gives no pointer position: open under the row.
+            const row = e.currentTarget.getBoundingClientRect();
+            const keyboard = e.clientX === 0 && e.clientY === 0;
+            const x = keyboard ? row.left + 24 : e.clientX;
+            const y = keyboard ? row.bottom : e.clientY;
+            openMenu({ worktree: w.id, x, y });
+          }}
         >
           <BranchIcon />
           <span className="label">{w.name}</span>

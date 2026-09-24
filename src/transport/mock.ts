@@ -356,6 +356,18 @@ export function createMockTransport(
     });
     later({ type: "projects", projects });
   };
+  const holder = (path: string) => projects.find((p) => p.worktrees.some((w) => w.path === path));
+  // As `Projects::linked`: only a linked worktree of a followed project.
+  const linkedRefusal = (path: string) => {
+    if (!holder(path)) return `${path} is not a worktree of a followed project`;
+    return worktreeAt(path)?.main ? `${path} is the project's main worktree` : null;
+  };
+  // A terminal's shell standing in a worktree, as the service finds it in `/proc`.
+  const inUse = (path: string) => {
+    const ids = [...terminals].filter(([, t]) => `${t.cwd}/`.startsWith(`${path}/`));
+    if (ids.length === 0) return null;
+    return `in use by ${ids.map(([id]) => `fish (${id})`).join(", ")}: close its terminals first`;
+  };
   const setState = (id: string, state: AgentState) =>
     later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
   // Files by worktree path, and the one watched.
@@ -443,6 +455,39 @@ export function createMockTransport(
       const path = worktree(id, name).path;
       later({ type: "worktree_created", project: updated, path, notes: [] });
     },
+    async removeWorktree(path, force) {
+      const failed = (message: string) =>
+        void later({ type: "remove_worktree_failed", path, message });
+      const refused = linkedRefusal(path);
+      if (refused) return failed(refused);
+      if (!force && inUse(path)) return failed(inUse(path) as string);
+      if (!force && MOCK_CHANGES[path]?.length) {
+        return failed(
+          `git worktree remove ${path} failed: fatal: '${path}' contains modified or untracked files, use --force to delete it`,
+        );
+      }
+      const project = holder(path) as Project;
+      const updated = { ...project, worktrees: project.worktrees.filter((w) => w.path !== path) };
+      projects[projects.indexOf(project)] = updated;
+      later({ type: "worktree_removed", project: updated, path });
+    },
+    async renameWorktree(path, name) {
+      const failed = (message: string) =>
+        void later({ type: "rename_worktree_failed", path, name, message });
+      const refused = linkedRefusal(path);
+      if (refused) return failed(refused);
+      if (inUse(path)) return failed(inUse(path) as string);
+      const project = holder(path) as Project;
+      const taken = nameError(project, name);
+      if (taken) return failed(taken);
+      const renamed = worktree(project.id, name);
+      const updated = {
+        ...project,
+        worktrees: project.worktrees.map((w) => (w.path === path ? renamed : w)),
+      };
+      projects[projects.indexOf(project)] = updated;
+      later({ type: "worktree_renamed", project: updated, from: path, path: renamed.path });
+    },
     async listChanges(path) {
       later(
         changes(
@@ -464,7 +509,8 @@ export function createMockTransport(
       later({ type: "file_saved", worktree, path, version: mockVersion(content) });
     },
     async openInEditor(worktree, path) {
-      const { error } = fileAt(worktree, path);
+      // An empty path is the worktree's folder.
+      const { error } = path ? fileAt(worktree, path) : { error: null };
       const unc = `\\\\wsl.localhost\\Ubuntu${`${worktree}/${path}`.replaceAll("/", "\\")}`;
       const windows_path = error ? null : unc;
       later({ type: "editor_target", worktree, path, error, windows_path });

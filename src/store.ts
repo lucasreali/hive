@@ -28,6 +28,10 @@ export type ServiceMessage =
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
   | ({ type: "create_worktree_failed" } & CreateFailure)
+  | { type: "worktree_removed"; project: Project; path: string }
+  | { type: "remove_worktree_failed"; path: string; message: string }
+  | { type: "worktree_renamed"; project: Project; from: string; path: string }
+  | { type: "rename_worktree_failed"; path: string; name: string; message: string }
   | ({ type: "files" } & WorktreeFiles)
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
@@ -36,6 +40,7 @@ export type ServiceMessage =
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
+  // An empty `path` is the worktree's folder (`openFolder`).
   | {
       type: "editor_target";
       worktree: string;
@@ -170,6 +175,8 @@ export type WorktreeDialog = {
   nameChecks: Record<string, NameCheck>;
   created: { project: string; path: string; notes: string[] } | null;
   createFailure: CreateFailure | null;
+  /** Why deleting (`name` null) or renaming (to `name`) the worktree `path` failed. */
+  failure: { path: string; name: string | null; message: string } | null;
 };
 
 /**
@@ -220,12 +227,24 @@ export type AgentStatus = {
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
 
-export type Modal = "new-worktree" | "add-project" | "worktree-picker" | "close-app" | null;
+export type Modal =
+  | "new-worktree"
+  | "add-project"
+  | "worktree-picker"
+  | "close-app"
+  | "remove-worktree"
+  | "rename-worktree"
+  | null;
+/** A worktree row's context menu, at the pointer. */
+export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type RightPanel = "files" | null;
 
 export type HiveState = {
   // UI state
   modal: Modal;
+  menu: WorktreeMenu | null;
+  /** A short message in the status bar, e.g. why the Explorer did not open. */
+  notice: string | null;
   rightPanel: RightPanel;
   /** The files panel shows only changed files ("Diff") instead of every file ("All"). */
   changedOnly: boolean;
@@ -254,6 +273,8 @@ export type HiveState = {
   addProjectError: string | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
+  /** The worktree a dialog opened for (its row's menu). */
+  modalWorktree: string | null;
   worktreeDialog: WorktreeDialog;
   terminals: Record<number, Terminal>;
   agents: Record<string, Agent>;
@@ -275,6 +296,8 @@ export type HiveState = {
 
 export const initialState: HiveState = {
   modal: null,
+  menu: null,
+  notice: null,
   rightPanel: null,
   changedOnly: false,
   openFile: null,
@@ -289,7 +312,14 @@ export const initialState: HiveState = {
   projects: null,
   addProjectError: null,
   modalProject: null,
-  worktreeDialog: { branches: null, nameChecks: {}, created: null, createFailure: null },
+  modalWorktree: null,
+  worktreeDialog: {
+    branches: null,
+    nameChecks: {},
+    created: null,
+    createFailure: null,
+    failure: null,
+  },
   terminals: {},
   agents: {},
   agentStates: {},
@@ -315,6 +345,10 @@ function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<Hive
 /** The project that is `id` or holds the worktree `id`. */
 export const owner = (projects: HiveState["projects"], id: string | null): Project | undefined =>
   Object.values(projects ?? {}).find((p) => p.id === id || p.worktrees.some((w) => w.id === id));
+
+/** The worktree `id` of any project. */
+export const findWorktree = (projects: HiveState["projects"], id: string | null) =>
+  owner(projects, id)?.worktrees.find((w) => w.id === id);
 
 function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
@@ -385,6 +419,29 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...patchDialog(s, { created: { project: project.id, path, notes } }),
       };
     }
+    case "worktree_removed":
+    case "worktree_renamed": {
+      // As a new list: a worktree that went away is dropped as `projects` drops it.
+      const list = Object.values(s.projects ?? {}).map((p) =>
+        p.id === m.project.id ? m.project : p,
+      );
+      const next = reduce(s, { type: "projects", projects: list });
+      const renamed = m.type === "worktree_renamed" && s.selection === m.from;
+      const dialog = m.type === "worktree_removed" ? "remove-worktree" : "rename-worktree";
+      const gone = m.type === "worktree_removed" ? m.path : m.from;
+      return {
+        ...next,
+        selection: renamed ? m.path : next.selection,
+        // Only the dialog opened for that worktree has done its job.
+        modal: s.modal === dialog && s.modalWorktree === gone ? null : s.modal,
+      };
+    }
+    case "remove_worktree_failed":
+      return patchDialog(s, { failure: { path: m.path, name: null, message: m.message } });
+    case "rename_worktree_failed": {
+      const { type: _, ...failure } = m;
+      return patchDialog(s, { failure });
+    }
     case "files": {
       const { type: _, ...worktreeFiles } = m;
       return { worktreeFiles };
@@ -429,13 +486,20 @@ export function apply(message: ServiceMessage): void {
   useHive.setState((s) => reduce(s, message));
 }
 
-export const openModal = (modal: Modal, modalProject: string | null = null) =>
+export const openModal = (
+  modal: Modal,
+  modalProject: string | null = null,
+  modalWorktree: string | null = null,
+) =>
   useHive.setState({
     modal,
     modalProject,
+    modalWorktree,
     addProjectError: null,
     worktreeDialog: initialState.worktreeDialog,
   });
+export const openMenu = (menu: WorktreeMenu | null) => useHive.setState({ menu });
+export const setNotice = (notice: string | null) => useHive.setState({ notice });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setChangedOnly = (changedOnly: boolean) => useHive.setState({ changedOnly });

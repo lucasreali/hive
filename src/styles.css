@@ -1612,3 +1612,67 @@ li:last-child > .tree-row.own-worktree::before {
 .dialog.picker::backdrop {
   background: transparent;
 }
+
+/* A worktree row's context menu */
+.context-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 180px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.context-menu [role="menuitem"] {
+  height: 26px;
+  padding: 0 10px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.context-menu [role="menuitem"]:hover:not(:disabled),
+.context-menu [role="menuitem"]:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.context-menu [role="menuitem"]:disabled {
+  color: var(--text-4);
+}
+
+.context-menu .danger:not(:disabled) {
+  color: var(--state-error);
+}
+
+.context-menu hr {
+  margin: 4px 0;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.primary.danger {
+  background: var(--state-error);
+}
+
+.primary.danger:hover {
+  background: #db8a8e;
+}
+
+.dialog-body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.statusbar .notice {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--fs-small);
+}
