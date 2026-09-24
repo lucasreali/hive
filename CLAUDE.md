@@ -73,6 +73,7 @@ Report: what was done, branch and commits, every gate with its result, anything 
 - **State:** Stage 0 is on `main` (merged on 2026-09-23). Every new task branch starts from `main`.
 - **Toolchain:** agent shells need `export PATH=$HOME/.cargo/bin:$PATH` (the human's shell is fish). `cargo fuzz` needs `+nightly --target x86_64-unknown-linux-gnu`.
 - **Gates:** `scripts/gates.sh` runs every Rust gate. Use `BASE=<previous task branch>` to limit mutants to your diff, and `MUTANTS=0` to skip them.
+  - It builds with `CARGO_BUILD_JOBS=3` and runs one mutant at a time with a memory watchdog: wider builds or a runaway mutant have taken the whole WSL VM down, with the human's terminals. Write loops that a mutated helper cannot make endless (bound them by the input).
   - `/tmp` is a small tmpfs, so mutant trees go to `/var/tmp/hive-mutants`. Never put a `TMPDIR` inside this repository: git in the tests would find this repo by walking up.
 - **Integration tests:** they live in one binary, `crates/hive/tests/integration/`. `common::Env` gives a temporary `HOME`/`XDG_*`; on drop it kills any process still carrying that environment.
   - Coverage of a spawned `hive` is recorded only when it exits normally: stop daemons with `common::stop` (SIGTERM) or by dropping the app connection, never SIGKILL.
