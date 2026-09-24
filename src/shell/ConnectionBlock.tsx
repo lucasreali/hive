@@ -54,8 +54,8 @@ export function ConnectionBlock() {
         <pre>{STOP}</pre>
         <p>Then reconnect, or restart Hive.</p>
         <p>
-          A development build runs the service from <code>{INSTALL}</code>: build both from the
-          same commit.
+          A development build runs the service from <code>{INSTALL}</code>: build both from the same
+          commit.
         </p>
       </Dialog>
     );
