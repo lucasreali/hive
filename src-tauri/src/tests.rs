@@ -702,7 +702,7 @@ async fn the_bridge_reads_the_hello_frame_on_stdin() {
     let hello = Frame::control(0, &Control::hello(Role::App, VERSION));
     let size = 9 + hello.payload.len();
     let hive = sh(&format!(
-        "[ \"$(head -c {size} | wc -c)\" = {size} ] && echo hello read >&2"
+        "[ $(head -c {size} | wc -c) -eq {size} ] && echo hello read >&2"
     ));
     assert_eq!(disconnect_reason(&hive).await, "hello read");
 }
@@ -916,10 +916,12 @@ async fn shutdown_closes_the_bridge_stdin_and_waits_for_the_bridge_to_end() {
 
 /// Whether the process is gone (or a zombie waiting to be reaped).
 fn gone(pid: &str) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat.contains(") Z "),
-        Err(_) => true,
-    }
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    stat.trim().is_empty() || stat.trim_start().starts_with('Z')
 }
 
 #[tokio::test]
@@ -988,7 +990,8 @@ fn release_server(version: &str) -> String {
     let manifest = json!({
         "version": version,
         "platforms": {
-            "linux-x86_64": {"url": format!("{base}/hive-setup"), "signature": "not signed"}
+            "linux-x86_64": {"url": format!("{base}/hive-setup"), "signature": "not signed"},
+            "darwin-aarch64": {"url": format!("{base}/hive-setup"), "signature": "not signed"}
         }
     })
     .to_string();

@@ -212,7 +212,11 @@ impl Conn {
     pub async fn output_until(&mut self, channel: u32, needle: &str) -> String {
         let mut seen = String::new();
         while !seen.contains(needle) {
-            let frame = self.next().await.expect("connection closed");
+            let next = tokio::time::timeout(TIMEOUT, self.reader.next()).await;
+            let Ok(frame) = next else {
+                panic!("no {needle:?} in the output: {seen:?}");
+            };
+            let frame = frame.expect("connection closed").unwrap();
             if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == channel {
                 seen.push_str(&String::from_utf8_lossy(&frame.payload));
             }
