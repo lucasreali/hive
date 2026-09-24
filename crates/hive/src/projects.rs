@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use hive_protocol::{Project, ProjectError, Worktree};
 
+use crate::git;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
 
@@ -126,7 +127,7 @@ pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
 }
 
 fn read(file: &Path) -> io::Result<Vec<String>> {
-    let bytes = worktree::read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
+    let bytes = git::read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
     serde_json::from_slice(&bytes).map_err(io::Error::other)
 }
 

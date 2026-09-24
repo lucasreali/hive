@@ -10,10 +10,8 @@ use std::path::Path;
 
 use hive_protocol::{ChangedFile, Control, FileStatus};
 
-use crate::worktree::{read_limited, run_git};
+use crate::git::{self, read_limited};
 
-/// Most bytes read from `git status` or `git diff`.
-const GIT_LIMIT: u64 = 16_777_216; // 16 MiB
 /// Untracked files larger than this are not counted (their lines show as unknown).
 const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
 /// Git's binary heuristic: a NUL byte in the first 8000 bytes.
@@ -42,7 +40,7 @@ pub fn list(dir: &Path) -> io::Result<Changes> {
         "--find-renames",
     ];
     let status = git(dir, &status)?;
-    let head = git_ok(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
+    let head = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
     let base = if head.is_empty() {
         git(dir, &["hash-object", "-t", "tree", "/dev/null"])?
     } else {
@@ -227,12 +225,7 @@ fn lossy(path: &[u8]) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
-    git_ok(dir, args, &[0])
-}
-
-pub(crate) fn git_ok(dir: &Path, args: &[&str], ok: &[i32]) -> io::Result<Vec<u8>> {
-    let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
-    run_git(dir, &args, &[], ok, GIT_LIMIT)
+    git::output(dir, args, &[0])
 }
 
 #[cfg(test)]

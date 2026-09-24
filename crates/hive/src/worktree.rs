@@ -3,12 +3,13 @@
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use serde_json::Value;
+
+use crate::git;
 
 /// Largest hook payload accepted on stdin.
 pub const HOOK_INPUT_LIMIT: u64 = 64 * 1024;
@@ -19,7 +20,7 @@ pub const WORKTREES_DIR: &str = ".claude/worktrees";
 const INCLUDE_FILE: &str = ".worktreeinclude";
 /// Most bytes of branch names listed for the app; a repository with more is cut short.
 const BRANCHES_LIMIT: usize = 1024 * 1024;
-/// Most bytes read from one git command's stdout, and separately from its stderr.
+/// Most bytes read from one git command's stdout.
 const OUTPUT_LIMIT: u64 = 67_108_864; // 64 MiB
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +198,7 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
         path.as_os_str(),
     ];
     args.extend(base.map(OsStr::new));
-    run_git(&root, &args, &[], &[0], OUTPUT_LIMIT)?;
+    git::run(&root, &args, &[], &[0], OUTPUT_LIMIT)?;
     match copy_included(&root, &path, &included) {
         Ok(0) => {}
         Ok(copied) => notes.push(copied_note(copied)),
@@ -209,7 +210,7 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
                 OsStr::new("--force"),
                 path.as_os_str(),
             ];
-            let _ = run_git(&root, &remove, &[], &[0], OUTPUT_LIMIT);
+            let _ = git::run(&root, &remove, &[], &[0], OUTPUT_LIMIT);
             let _ = git(&root, &["branch", "-D", &branch]);
             return Err(err);
         }
@@ -276,22 +277,12 @@ fn remove_path(root: &Path, path: &Path) -> io::Result<()> {
         OsStr::new("remove"),
         path.as_os_str(),
     ];
-    run_git(root, &args, &[], &[0], OUTPUT_LIMIT).map(drop)
-}
-
-/// Reads at most `limit` bytes; more is an error.
-pub fn read_limited(input: &mut dyn Read, limit: u64) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    input.take(limit + 1).read_to_end(&mut buf)?;
-    if buf.len() as u64 > limit {
-        return Err(io::Error::other(format!("input larger than {limit} bytes")));
-    }
-    Ok(buf)
+    git::run(root, &args, &[], &[0], OUTPUT_LIMIT).map(drop)
 }
 
 /// A worktree hook's JSON input, at most [`HOOK_INPUT_LIMIT`] bytes.
 pub fn read_payload(input: &mut dyn Read) -> io::Result<Value> {
-    serde_json::from_slice(&read_limited(input, HOOK_INPUT_LIMIT)?)
+    serde_json::from_slice(&git::read_limited(input, HOOK_INPUT_LIMIT)?)
         .map_err(|err| io::Error::other(format!("invalid hook input: {err}")))
 }
 
@@ -316,7 +307,7 @@ fn own_create_hooks(root: &Path) -> Vec<&'static str> {
         .into_iter()
         .filter(|file| {
             std::fs::File::open(root.join(file))
-                .and_then(|mut f| read_limited(&mut f, SETTINGS_LIMIT))
+                .and_then(|mut f| git::read_limited(&mut f, SETTINGS_LIMIT))
                 .is_ok_and(|settings| has_create_hook(&settings))
         })
         .collect()
@@ -344,7 +335,7 @@ fn included_files(root: &Path) -> io::Result<Vec<u8>> {
     let matching = git(root, &args)?;
     // Exit code 1 means none of them is ignored.
     let args = ["check-ignore", "-z", "--stdin"].map(OsStr::new);
-    run_git(root, &args, &matching, &[0, 1], OUTPUT_LIMIT)
+    git::run(root, &args, &matching, &[0, 1], OUTPUT_LIMIT)
 }
 
 /// Copies `included` (from [`included_files`]) from `root` into the new worktree. Only
@@ -382,65 +373,7 @@ fn unsafe_target(base: &Path, rel: &Path) -> bool {
 
 fn git(dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
-    run_git(dir, &args, &[], &[0], OUTPUT_LIMIT)
-}
-
-/// `git -C <dir>`, ready for its arguments.
-pub(crate) fn git_command(dir: &Path) -> Command {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(dir)
-        // Hive always names the repository with `-C`.
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        // Reads must not rewrite the index: the files watcher would see it as a change.
-        .env("GIT_OPTIONAL_LOCKS", "0");
-    command
-}
-
-/// Runs `git -C <dir> <args>` with `input` on stdin; any exit code outside `ok` is an error
-/// carrying git's stderr, and so is more than `limit` bytes on stdout (git then stops on a
-/// broken pipe).
-pub(crate) fn run_git(
-    dir: &Path,
-    args: &[&OsStr],
-    input: &[u8],
-    ok: &[i32],
-    limit: u64,
-) -> io::Result<Vec<u8>> {
-    let mut child = git_command(dir)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| io::Error::new(err.kind(), format!("cannot run git: {err}")))?;
-    let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
-    // Feed stdin and drain stderr from other threads, so no pipe can deadlock another.
-    let (out, err) = std::thread::scope(|scope| {
-        scope.spawn(move || stdin.map(|mut stdin| stdin.write_all(input)));
-        let err = scope.spawn(move || {
-            let mut buf = Vec::new();
-            stderr.map(|stderr| stderr.take(OUTPUT_LIMIT).read_to_end(&mut buf));
-            buf
-        });
-        let out = stdout.map_or(Ok(Vec::new()), |mut out| read_limited(&mut out, limit));
-        (out, err.join().unwrap_or_default())
-    });
-    let status = child.wait()?;
-    let command: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
-    let command = command.join(" ");
-    let out = out
-        .map_err(|_| io::Error::other(format!("git {command} printed more than {limit} bytes")))?;
-    if status.code().is_some_and(|code| ok.contains(&code)) {
-        return Ok(out);
-    }
-    Err(io::Error::other(format!(
-        "git {command} failed: {}",
-        String::from_utf8_lossy(&err).trim()
-    )))
+    git::run(dir, &args, &[], &[0], OUTPUT_LIMIT)
 }
 
 #[cfg(test)]
@@ -589,26 +522,5 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
     fn copied_files_are_counted() {
         assert_eq!(copied_note(1), "copied 1 file listed in .worktreeinclude");
         assert_eq!(copied_note(3), "copied 3 files listed in .worktreeinclude");
-    }
-
-    #[test]
-    fn input_is_size_limited() {
-        assert_eq!(read_limited(&mut &b"abcd"[..], 4).unwrap(), b"abcd");
-        let err = read_limited(&mut &b"abcde"[..], 4).unwrap_err();
-        assert_eq!(err.to_string(), "input larger than 4 bytes");
-    }
-
-    #[test]
-    fn git_output_is_size_limited() {
-        let tmp = tempfile::tempdir().unwrap();
-        let args = [OsStr::new("version")];
-        let out = run_git(tmp.path(), &args, &[], &[0], OUTPUT_LIMIT).unwrap();
-        let len = out.len() as u64;
-        assert_eq!(run_git(tmp.path(), &args, &[], &[0], len).unwrap(), out);
-        let err = run_git(tmp.path(), &args, &[], &[0], len - 1).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            format!("git version printed more than {} bytes", len - 1)
-        );
     }
 }

@@ -7,6 +7,7 @@ pub mod cli;
 pub mod daemon;
 pub mod file;
 pub mod files;
+pub mod git;
 pub mod hook;
 pub mod paths;
 pub mod procs;

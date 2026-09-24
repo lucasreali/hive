@@ -40,7 +40,8 @@ Windows                         WSL
 | `hive::wrapper` | Installs `<data>/hive/bin/claude` (sh wrapper) and `<data>/hive/hive-hooks.json` when the daemon starts. |
 | `hive::projects` | The projects the app follows: validation, `<data>/hive/projects.json`, worktrees per project for the sidebar, placing an agent's `cwd` in a worktree. |
 | `hive::files` | The files panel's worktree: `git ls-files` listing (sorted, capped), inotify watches on the listed directories and the git dir, debounce (the clock is passed in). |
-| `hive::worktree` | Worktrees in `.claude/worktrees/<name>` on branch `worktree-<name>`; git through the executable with separate arguments and an output limit; `.worktreeinclude` copy. |
+| `hive::git` | Every git call: `git -C <dir>` with separate arguments and `GIT_OPTIONAL_LOCKS=0`, stdout size-limited, stderr in the error; `read_limited` for any size-limited read. |
+| `hive::worktree` | Worktrees in `.claude/worktrees/<name>` on branch `worktree-<name>`; `.worktreeinclude` copy. |
 | `hive::changes` | A worktree's changes against `HEAD` for the files panel: `git status` and `git diff --numstat` parsers, untracked line counts, the `changes` message. |
 | `hive::file` | One file of a worktree for the viewer and diff: path checks, the text on disk and at `HEAD` (`git ls-tree`, `git cat-file`), the version token, the `file` message; saving it (temporary file + rename, version check) and its Windows path for an external editor. |
 

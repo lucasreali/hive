@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, SaveError};
 
-use crate::changes::{BINARY_PROBE, git_ok, parse_status};
+use crate::changes::{BINARY_PROBE, parse_status};
+use crate::git;
 
 /// Most bytes of each side (on disk, at `HEAD`) sent to the app.
 pub const TEXT_LIMIT: u64 = 1_048_576; // 1 MiB
@@ -226,7 +227,7 @@ pub fn limited(input: &mut dyn Read) -> io::Result<Side> {
 
 /// The blob at `HEAD`, looked up under the old path for a staged rename.
 fn at_head(dir: &Path, path: &str) -> io::Result<Side> {
-    if git_ok(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?.is_empty() {
+    if git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?.is_empty() {
         return Ok(Side::Missing);
     }
     let blob = match blob(dir, path)? {
@@ -242,7 +243,7 @@ fn at_head(dir: &Path, path: &str) -> io::Result<Side> {
     if size > TEXT_LIMIT {
         return Ok(Side::TooLarge);
     }
-    git_ok(dir, &["cat-file", "blob", &oid], &[0]).map(Side::Bytes)
+    git::output(dir, &["cat-file", "blob", &oid], &[0]).map(Side::Bytes)
 }
 
 /// The id and size of the blob at `path` in `HEAD`.
@@ -256,7 +257,7 @@ fn blob(dir: &Path, path: &str) -> io::Result<Option<(String, u64)>> {
         "--",
         path,
     ];
-    Ok(parse_ls_tree(&git_ok(dir, &args, &[0])?))
+    Ok(parse_ls_tree(&git::output(dir, &args, &[0])?))
 }
 
 /// The first entry of `git ls-tree -l -z` (`<mode> <type> <id> <size>\t<path>`) if it is a
@@ -280,7 +281,7 @@ fn renamed_from(dir: &Path, path: &str) -> io::Result<Option<String>> {
         "--untracked-files=no",
         "--find-renames",
     ];
-    let status = git_ok(dir, &args, &[0])?;
+    let status = git::output(dir, &args, &[0])?;
     Ok(parse_status(&status)
         .into_iter()
         .find(|(to, status, _)| to == path.as_bytes() && *status == FileStatus::Renamed)

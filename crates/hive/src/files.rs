@@ -18,7 +18,7 @@ use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify, InotifyEvent, WatchDe
 use tokio::io::unix::AsyncFd;
 use tokio::time::Instant;
 
-use crate::worktree;
+use crate::git;
 
 /// Most files sent in one list.
 pub const MAX_FILES: usize = 50_000;
@@ -269,7 +269,7 @@ fn parse_dirs(out: &[u8]) -> impl Iterator<Item = &str> {
 
 /// `git -C <root> <args>`'s output, at most `limit` bytes; true when it was cut off there.
 fn git(root: &Path, args: &[&str], limit: u64) -> io::Result<(Vec<u8>, bool)> {
-    let mut child = worktree::git_command(root)
+    let mut child = git::command(root)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
