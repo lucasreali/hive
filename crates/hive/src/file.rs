@@ -147,9 +147,8 @@ pub fn save_with(
     }
     saved?;
     // The rename itself is durable once the folder is synced; the text already is.
-    if let Some(folder) = target.parent() {
-        let _ = File::open(folder).and_then(|folder| folder.sync_all());
-    }
+    let folder = target.parent().unwrap_or(dir);
+    let _ = File::open(folder).and_then(|folder| folder.sync_all());
     Ok(self::version(content.as_bytes()))
 }
 
