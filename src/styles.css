@@ -1999,21 +1999,20 @@ button.result-file:hover,
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--panel);
   color: var(--text-2);
+  /* Only on the hovered (or focused) session; still reachable by the keyboard. */
+  opacity: 0;
 }
 
-.session:hover .session-more {
-  border-color: var(--text-4);
-  color: var(--text);
+.session:hover .session-more,
+.session:focus-within .session-more {
+  opacity: 1;
 }
 
 .session-more:hover,
 .session-more:focus-visible {
   background: var(--selected-hover);
-  border-color: var(--accent);
   color: var(--text);
   outline: none;
 }
