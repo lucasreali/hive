@@ -293,6 +293,22 @@ pub enum Control {
         /// The list stopped at the service's cap.
         truncated: bool,
     },
+    /// App → service: what changed in a worktree of a followed project, answered by
+    /// `Changes`.
+    ListChanges {
+        path: String,
+    },
+    /// Every file that differs from `HEAD` (staged, unstaged and untracked, as `git status`
+    /// shows them), sorted by path, with the line totals of all of them.
+    Changes {
+        /// The worktree, as asked.
+        path: String,
+        files: Vec<ChangedFile>,
+        added: u64,
+        removed: u64,
+        /// Why nothing could be listed, or why the list was cut short.
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -335,6 +351,30 @@ pub struct Worktree {
     pub main: bool,
     /// Follows Claude's convention: `<repo>/.claude/worktrees/<name>` (#7).
     pub claude: bool,
+}
+
+/// A file that differs from `HEAD` in a worktree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangedFile {
+    /// Relative to the worktree, `/`-separated.
+    pub path: String,
+    pub status: FileStatus,
+    /// Where a renamed file came from.
+    pub old_path: Option<String>,
+    /// Lines added and removed; `None` for a binary (or too large) file.
+    pub added: Option<u64>,
+    pub removed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    /// New and not yet added to git.
+    Untracked,
 }
 
 /// Why a folder cannot be added as a project.
@@ -677,6 +717,29 @@ mod tests {
             &Frame::control(0, &Control::UnwatchWorktree).payload[..],
             br#"{"type":"unwatch_worktree"}"#
         );
+    }
+
+    #[test]
+    fn changes_are_tagged_json() {
+        let changes = Control::Changes {
+            path: "/r".into(),
+            files: vec![ChangedFile {
+                path: "b".into(),
+                status: FileStatus::Renamed,
+                old_path: Some("a".into()),
+                added: Some(1),
+                removed: None,
+            }],
+            added: 1,
+            removed: 0,
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &changes).payload[..],
+            br#"{"type":"changes","path":"/r","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null}"#
+        );
+        let list = Control::ListChanges { path: "/r".into() };
+        assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
     }
 
     #[test]

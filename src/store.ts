@@ -30,6 +30,7 @@ export type ServiceMessage =
   | ({ type: "files" } & WorktreeFiles)
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
+  | ({ type: "changes" } & Changes)
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -105,6 +106,30 @@ export type CreateFailure = { project: string; name: string; message: string };
  */
 export type WorktreeFiles = { path: string; files: string[]; truncated: boolean };
 
+/** Mirrors `hive_protocol::FileStatus`: against HEAD, as `git status` shows it. */
+export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";
+
+/** Mirrors `hive_protocol::ChangedFile`; line counts are null for a binary file. */
+export type ChangedFile = {
+  path: string;
+  status: FileStatus;
+  old_path: string | null;
+  added: number | null;
+  removed: number | null;
+};
+
+/** A worktree's changes against HEAD, sorted by path, with the service's totals. */
+export type Changes = {
+  path: string;
+  files: ChangedFile[];
+  added: number;
+  removed: number;
+  error: string | null;
+};
+
+/** The file shown under the files tree (its viewer and diff are task 3.3). */
+export type OpenFile = { worktree: string; path: string };
+
 /** Answers for the new-worktree dialog; reset whenever a dialog opens. */
 export type WorktreeDialog = {
   branches: Branches | null;
@@ -170,8 +195,14 @@ export type HiveState = {
   view: "main";
   modal: Modal;
   rightPanel: RightPanel;
+  /** The files panel shows only changed files ("Changed") instead of every file ("All"). */
+  changedOnly: boolean;
+  openFile: OpenFile | null;
   selection: string | null;
-  /** Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree has its project's id). */
+  /**
+   * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
+   * has its project's id), a folder of the files panel by `folder:<worktree>/<path>`.
+   */
   collapsed: Record<string, boolean>;
   /** Terminal tabs in the order they opened, and the one shown. */
   tabs: Tab[];
@@ -193,12 +224,16 @@ export type HiveState = {
   agentStates: Record<string, AgentStatus>;
   /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
   worktreeFiles: WorktreeFiles | null;
+  /** By worktree path: the last `changes` the service sent for it. */
+  changes: Record<string, Changes>;
 };
 
 export const initialState: HiveState = {
   view: "main",
   modal: null,
   rightPanel: null,
+  changedOnly: false,
+  openFile: null,
   selection: null,
   collapsed: {},
   tabs: [],
@@ -213,6 +248,7 @@ export const initialState: HiveState = {
   agents: {},
   agentStates: {},
   worktreeFiles: null,
+  changes: {},
 };
 
 export const useHive = create<HiveState>()(() => initialState);
@@ -303,6 +339,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...worktreeFiles } = m;
       return { worktreeFiles };
     }
+    case "changes": {
+      const { type: _, ...changes } = m;
+      return { changes: { ...s.changes, [m.path]: changes } };
+    }
     case "disconnected":
       // The service is gone, and every agent and the watch with it.
       return {
@@ -331,6 +371,8 @@ export const openModal = (modal: Modal, modalProject: string | null = null) =>
   });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
+export const setChangedOnly = (changedOnly: boolean) => useHive.setState({ changedOnly });
+export const setOpenFile = (openFile: OpenFile | null) => useHive.setState({ openFile });
 export const select = (selection: string | null) => useHive.setState({ selection });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
@@ -348,6 +390,20 @@ export const removeTab = (id: number) =>
     const next = tabs[Math.min(i, tabs.length - 1)]?.id ?? null;
     return { tabs, activeTab: s.activeTab === id ? next : s.activeTab };
   });
+
+/**
+ * The worktree the files panel shows: the selected worktree (a selected project is its main
+ * worktree, which shares its id) or the selected agent's; else the shown terminal's.
+ */
+export function panelWorktree(s: HiveState): { project: Project; worktree: Worktree } | null {
+  const all = Object.values(s.projects ?? {}).flatMap((project) =>
+    project.worktrees.map((worktree) => ({ project, worktree })),
+  );
+  const find = (id: string | null | undefined) => all.find((e) => e.worktree.id === id);
+  const agent = s.agents[s.selection ?? ""];
+  const tab = s.tabs.find((t) => t.id === s.activeTab);
+  return find(agent ? agent.worktree : s.selection) ?? find(tab?.cwd) ?? null;
+}
 
 /** Agents in the sidebar's order (project, worktree, arrival); those outside the tree last. */
 export function treeAgents(s: HiveState): Agent[] {
@@ -371,17 +427,6 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
     if (status && (!top || status.urgency > top.urgency)) top = status;
   }
   return top?.state ?? null;
-}
-
-/**
- * The worktree the files panel shows while it is open: the selected worktree (a selected
- * project is its main worktree, which shares its id), or the selected agent's worktree.
- */
-export function panelWorktree(s: HiveState): string | null {
-  if (s.rightPanel !== "files" || s.selection === null) return null;
-  const projects = Object.values(s.projects ?? {});
-  if (projects.some((p) => p.worktrees.some((w) => w.id === s.selection))) return s.selection;
-  return s.agents[s.selection]?.worktree ?? null;
 }
 
 /** Re-renders only when this agent's entry changes. */

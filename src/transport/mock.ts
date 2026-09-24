@@ -1,4 +1,12 @@
-import type { AgentState, Project, ServiceMessage, Subagent, Worktree } from "../store";
+import type {
+  AgentState,
+  ChangedFile,
+  FileStatus,
+  Project,
+  ServiceMessage,
+  Subagent,
+  Worktree,
+} from "../store";
 import type { Transport } from ".";
 import { loadReplay, type ReplayEvent } from "./replay";
 
@@ -147,6 +155,56 @@ const mockFiles = (worktree: Worktree) =>
     ...(worktree.main ? Array.from({ length: 400 }, (_, i) => `src/icons/icon-${i}.tsx`) : []),
   ].sort();
 
+const change = (
+  path: string,
+  status: FileStatus,
+  added: number | null,
+  removed: number | null,
+  old_path: string | null = null,
+): ChangedFile => ({ path, status, old_path, added, removed });
+
+/** What differs from HEAD in the fake worktrees, by path (after the prototype's screen 1g). */
+export const MOCK_CHANGES: Record<string, ChangedFile[]> = {
+  "/home/user/projects/shop/.claude/worktrees/fix-login": [
+    change("src/auth/constants.ts", "modified", 1, 0),
+    change("src/auth/session.ts", "modified", 3, 1),
+  ],
+  "/home/user/projects/shop/.claude/worktrees/feat-checkout": [
+    change("src/checkout/CheckoutSummary.tsx", "modified", 6, 2),
+    change("src/checkout/shipping.ts", "untracked", 42, 0),
+  ],
+  "/home/user/projects/api": [
+    change("docs/api.md", "modified", 4, 2),
+    change("src/routes/orders.ts", "modified", 18, 5),
+    change("test/routes/orders.test.ts", "added", 22, 0),
+  ],
+  "/home/user/projects/api/.claude/worktrees/refactor-auth": [
+    change("assets/logo.png", "modified", null, null),
+    change("package.json", "modified", 1, 1),
+    change("src/auth/token.ts", "renamed", 2, 1, "src/auth/jwt-token.ts"),
+    change("src/legacy/jwt.ts", "deleted", 0, 30),
+    change("src/middleware/auth.ts", "modified", 21, 17),
+  ],
+};
+
+/** A stand-in for `hive::changes::list`: the fake worktree's changes, or why not. */
+function changes(worktrees: string[], path: string): ServiceMessage {
+  if (!worktrees.includes(path)) {
+    const error = `${path} is not a worktree of a followed project`;
+    return { type: "changes", path, files: [], added: 0, removed: 0, error };
+  }
+  const files = MOCK_CHANGES[path] ?? [];
+  const sum = (key: "added" | "removed") => files.reduce((n, f) => n + (f[key] ?? 0), 0);
+  return {
+    type: "changes",
+    path,
+    files,
+    added: sum("added"),
+    removed: sum("removed"),
+    error: null,
+  };
+}
+
 // A stand-in for `hive::worktree::check_name` and its CLI wording; the real rule lives in Rust.
 function nameError(project: Project, name: string): string | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) {
@@ -164,7 +222,8 @@ function nameError(project: Project, name: string): string | null {
  * Claude worktree as a `WorktreeRemove` hook would.
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project. A watched worktree lists
- * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list again.
+ * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list (and the
+ * changes) again.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
  * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
@@ -241,8 +300,11 @@ export function createMockTransport(
   let watched: string | null = null;
   const worktreeAt = (path: string) =>
     projects.flatMap((p) => p.worktrees).find((w) => w.path === path);
-  const sendFiles = (path: string) =>
+  // As the service does after every refresh of the watched worktree: its files, then its changes.
+  const sendFiles = (path: string) => {
     later({ type: "files", path, files: files.get(path) as string[], truncated: false });
+    later(changes([path], path));
+  };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
   const touch = (cwd: string, name: string) => {
     const worktree = worktreeAt(cwd);
@@ -302,6 +364,14 @@ export function createMockTransport(
       projects[projects.indexOf(project)] = updated;
       const path = worktree(id, name).path;
       later({ type: "worktree_created", project: updated, path, notes: [] });
+    },
+    async listChanges(path) {
+      later(
+        changes(
+          projects.flatMap((p) => p.worktrees.map((w) => w.path)),
+          path,
+        ),
+      );
     },
     async openTerminal(cwd, _cols, _rows, onData) {
       const id = ++last;

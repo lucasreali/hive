@@ -34,6 +34,8 @@ export interface Transport {
   watchWorktree(path: string): Promise<void>;
   /** Stops watching (the files panel closed). */
   unwatchWorktree(): Promise<void>;
+  /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
+  listChanges(path: string): Promise<void>;
 }
 
 /**

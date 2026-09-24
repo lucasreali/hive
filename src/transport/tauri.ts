@@ -21,4 +21,5 @@ export const tauriTransport: Transport = {
   createWorktree: (project, name, base) => invoke("create_worktree", { project, name, base }),
   watchWorktree: (path) => invoke("watch_worktree", { path }),
   unwatchWorktree: () => invoke("unwatch_worktree"),
+  listChanges: (path) => invoke("list_changes", { path }),
 };

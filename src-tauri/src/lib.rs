@@ -303,6 +303,11 @@ impl Hive {
     pub fn unwatch_worktree(&self) -> Result<(), String> {
         self.link().send(0, &Control::UnwatchWorktree)
     }
+
+    /// The answer arrives as `changes`.
+    pub fn list_changes(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListChanges { path })
+    }
 }
 
 /// A piped stdio handle of the bridge; always there, since every one is requested.
@@ -464,6 +469,11 @@ pub mod commands {
     #[tauri::command]
     pub fn unwatch_worktree(hive: State<'_, Hive>) -> Result<(), String> {
         hive.unwatch_worktree()
+    }
+
+    #[tauri::command]
+    pub fn list_changes(hive: State<'_, Hive>, path: String) -> Result<(), String> {
+        hive.list_changes(path)
     }
 }
 

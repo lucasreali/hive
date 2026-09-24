@@ -262,10 +262,8 @@ test("the files panel shows the selected worktree or the selected agent's", () =
   apply({ type: "projects", projects: MOCK_REPOS });
   const agent = { project: shop.id, worktree, cwd: `${worktree}/src` };
   apply({ type: "agent_detected", channel: 1, id: "s1", ...agent });
-  const shown = () => panelWorktree(useHive.getState());
+  const shown = () => panelWorktree(useHive.getState())?.worktree.id ?? null;
   select(worktree);
-  expect(shown()).toBeNull();
-  setRightPanel("files");
   expect(shown()).toBe(worktree);
   // A project is its main worktree.
   select(shop.id);

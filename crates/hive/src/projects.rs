@@ -91,13 +91,13 @@ impl Projects {
 
     /// `path` when it is a worktree of a followed project: the path comes from the app.
     pub fn worktree(&self, path: &str) -> io::Result<PathBuf> {
-        let projects = self.list();
-        let mut worktrees = projects.iter().flat_map(|p| &p.worktrees);
-        if worktrees.any(|w| w.id == path) {
+        let followed = self.list().into_iter().flat_map(|p| p.worktrees);
+        if followed.into_iter().any(|w| w.path == path) {
             return Ok(PathBuf::from(path));
         }
-        let message = format!("{path} is not a worktree of a followed project");
-        Err(io::Error::other(message))
+        Err(io::Error::other(format!(
+            "{path} is not a worktree of a followed project"
+        )))
     }
 
     /// Only followed projects are acted on: the id comes from the app.

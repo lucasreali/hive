@@ -50,6 +50,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.createWorktree("/r", "x", null);
   await tauriTransport.watchWorktree("/r");
   await tauriTransport.unwatchWorktree();
+  await tauriTransport.listChanges("/r");
   expect(calls).toEqual([
     ["write_terminal", { id: 7, data: "ls\r" }],
     ["resize_terminal", { id: 7, cols: 100, rows: 30 }],
@@ -61,5 +62,6 @@ test("terminal and project actions call their commands", async () => {
     ["create_worktree", { project: "/r", name: "x", base: null }],
     ["watch_worktree", { path: "/r" }],
     ["unwatch_worktree", {}],
+    ["list_changes", { path: "/r" }],
   ]);
 });

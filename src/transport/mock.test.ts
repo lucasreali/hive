@@ -7,6 +7,7 @@ import {
   LOAD_STAGGER_MS,
   LOAD_START_MS,
   MOCK_BRANCHES,
+  MOCK_CHANGES,
   MOCK_FILES,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
@@ -337,4 +338,34 @@ test("a watched worktree lists its files and again after a touch in its terminal
   const [, , , , again, main2] = filesOf();
   expect(again?.type === "files" && again.files).toEqual(["b.txt", ...touched].sort());
   expect(main2?.type === "files" && main2.files.includes("d.txt")).toBe(true);
+});
+
+test("changes of a followed worktree with their totals, or why not", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api, dotfiles] = MOCK_REPOS;
+  const refactor = api.worktrees[1].path;
+  messages.length = 0;
+  await transport.listChanges(refactor);
+  await transport.listChanges(shop.path);
+  await transport.listChanges(dotfiles.path);
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "changes",
+      path: refactor,
+      files: MOCK_CHANGES[refactor],
+      added: 24,
+      removed: 49,
+      error: null,
+    },
+    { type: "changes", path: shop.path, files: [], added: 0, removed: 0, error: null },
+    {
+      type: "changes",
+      path: dotfiles.path,
+      files: [],
+      added: 0,
+      removed: 0,
+      error: `${dotfiles.path} is not a worktree of a followed project`,
+    },
+  ]);
 });

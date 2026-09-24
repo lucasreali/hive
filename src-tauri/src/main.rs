@@ -24,6 +24,7 @@ fn main() {
             commands::create_worktree,
             commands::watch_worktree,
             commands::unwatch_worktree,
+            commands::list_changes,
         ])
         .build(tauri::generate_context!());
     match result {

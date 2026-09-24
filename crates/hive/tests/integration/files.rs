@@ -15,9 +15,9 @@ async fn watch(conn: &mut Conn, path: &str) {
     conn.send(0, Control::WatchWorktree { path }).await;
 }
 
-/// The next control message, which must be `files` for `path`.
+/// The next control messages, which must be `files` for `path` and then its `changes`.
 async fn files(conn: &mut Conn, path: &str) -> Vec<String> {
-    match conn.control().await {
+    let files = match conn.control().await {
         (
             0,
             Control::Files {
@@ -26,6 +26,24 @@ async fn files(conn: &mut Conn, path: &str) -> Vec<String> {
                 truncated: false,
             },
         ) if got == path => files,
+        other => panic!("{other:?}"),
+    };
+    changed(conn, path).await;
+    files
+}
+
+/// The next control message, which must be `changes` for `path`: the changed paths.
+async fn changed(conn: &mut Conn, path: &str) -> Vec<String> {
+    match conn.control().await {
+        (
+            0,
+            Control::Changes {
+                path: got,
+                files,
+                error: None,
+                ..
+            },
+        ) if got == path => files.into_iter().map(|f| f.path).collect(),
         other => panic!("{other:?}"),
     }
 }
@@ -109,10 +127,10 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
         files(&mut conn, &root).await,
         [".gitignore", "README", "src/c.rs"]
     );
-    // A change that lists the same files sends nothing.
-    repo.write("target/debug/other.o", "");
+    // A change that lists the same files sends only the changes.
     repo.write("src/c.rs", "edited");
-    tokio::time::sleep(SETTLE).await;
+    let untracked = [".gitignore", "src/c.rs"];
+    assert_eq!(changed(&mut conn, &root).await, untracked);
     repo.write("d.txt", "");
     let listed = [".gitignore", "README", "d.txt", "src/c.rs"];
     assert_eq!(files(&mut conn, &root).await, listed);
