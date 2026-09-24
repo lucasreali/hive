@@ -6,6 +6,7 @@ pub mod changes;
 pub mod cli;
 pub mod daemon;
 pub mod file;
+pub mod files;
 pub mod hook;
 pub mod paths;
 pub mod procs;

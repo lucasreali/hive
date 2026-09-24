@@ -25,6 +25,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::VERSION;
 use crate::adapter::{Adapter, ClaudeCode};
+use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
 use crate::states::Agent;
@@ -78,6 +79,7 @@ async fn serve(
         app: Mutex::new(None),
         terminals: Mutex::new(HashMap::new()),
         agents: Mutex::new(HashMap::new()),
+        watching: Mutex::new(None),
         bin_dir,
         projects,
     });
@@ -112,6 +114,8 @@ struct State {
     /// Detected agents by session id, with their terminal and state. Locked after `terminals`
     /// when both are needed.
     agents: Mutex<HashMap<String, Agent>>,
+    /// The task watching the worktree of the app's files panel.
+    watching: Mutex<Option<tokio::task::JoinHandle<()>>>,
     bin_dir: PathBuf,
     projects: Projects,
 }
@@ -241,6 +245,32 @@ impl State {
         });
     }
 
+    /// Watches `path` for the files panel instead of the worktree watched until now, if any.
+    async fn watch_worktree(self: &Arc<Self>, path: Option<String>) {
+        let mut watching = self.watching.lock().await;
+        if let Some(task) = watching.take() {
+            task.abort();
+        }
+        *watching = path.map(|path| tokio::spawn(watch_files(self.clone(), path)));
+    }
+
+    /// The one place a change in the watched worktree `path` is reported to the app, after
+    /// the debounce: `files` when the listing changed (`None` when it did not), then its
+    /// `changes` every time, since an edit changes the diff but not the list.
+    async fn worktree_changed(&self, path: &str, listing: Option<&Listing>) {
+        if let Some(listing) = listing {
+            let files = Control::Files {
+                path: path.to_owned(),
+                files: listing.files.clone(),
+                truncated: listing.truncated,
+            };
+            self.to_app(0, &files).await;
+        }
+        let listed = tokio::task::block_in_place(|| changes::list(Path::new(path)));
+        self.to_app(0, &changes::message(path.to_owned(), listed))
+            .await;
+    }
+
     /// Ends the terminal's processes; its exit is reported by [`pump`].
     async fn close(&self, channel: u32) {
         if let Some(terminal) = self.terminals.lock().await.get(&channel) {
@@ -290,6 +320,41 @@ async fn watch_terminals(state: Arc<State>) {
                 state.to_app(agent.channel, &message).await;
             }
         }
+    }
+}
+
+/// Lists the worktree `path` now and after every change, until aborted or the watch fails.
+/// Git and inotify run on a blocking thread, off the frame loop.
+async fn watch_files(state: Arc<State>, path: String) {
+    let started = tokio::task::block_in_place(|| {
+        let root = state.projects.worktree(&path)?;
+        Watcher::new(&root)
+    });
+    let mut watcher = match started {
+        Ok(watcher) => watcher,
+        Err(err) => return state.to_app(0, &error(err)).await,
+    };
+    let mut last = None;
+    let mut watching = Ok(());
+    while watching.is_ok() {
+        match tokio::task::block_in_place(|| watcher.list()) {
+            Ok(listing) => {
+                let changed = last.as_ref() != Some(&listing);
+                state
+                    .worktree_changed(&path, changed.then_some(&listing))
+                    .await;
+                last = Some(listing);
+            }
+            // E.g. the worktree was removed; it is listed again on the next change.
+            Err(err) => state.to_app(0, &error(err)).await,
+        }
+        watching = watcher.changed().await;
+    }
+}
+
+fn error(err: io::Error) -> Control {
+    Control::Error {
+        message: err.to_string(),
     }
 }
 
@@ -458,6 +523,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.input(channel, Input::Resize { cols, rows }).await
         }
         Ok(Control::CloseTerminal) => state.close(channel).await,
+        Ok(Control::WatchWorktree { path }) => state.watch_worktree(Some(path)).await,
+        Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
         Ok(Control::ListProjects) => state.projects(|projects| Control::Projects {
             projects: projects.list(),
         }),
@@ -597,6 +664,7 @@ mod tests {
                 "s".to_owned(),
                 Agent::new(4, Instant::now()),
             )])),
+            watching: Mutex::new(None),
             bin_dir: dir.path().into(),
             projects: Projects::load(dir.path().join("projects.json")),
         });

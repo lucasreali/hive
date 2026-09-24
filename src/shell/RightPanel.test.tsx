@@ -13,7 +13,7 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
-import { fileRows, RightPanel } from "./RightPanel";
+import { allFiles, fileRows, RightPanel } from "./RightPanel";
 
 beforeAll(() => {
   // happy-dom has no layout: give the tree its CSS size so the virtualizer shows rows.
@@ -314,4 +314,56 @@ test("All and Changed switch the mode; the header button closes the panel", () =
   expect(useHive.getState().changedOnly).toBe(false);
   fireEvent.click(screen.getByTitle("Collapse (Ctrl+Shift+B)"));
   expect(useHive.getState().rightPanel).toBeNull();
+});
+
+test("All lists every file with the changes' statuses, deleted files included", () => {
+  const changed = [file("b.ts", "added"), file("gone/x.ts", "deleted")];
+  const all = allFiles(["a.ts", "b.ts", "src/c.ts"], changed);
+  expect(all.map((f) => [f.path, f.status])).toEqual([
+    ["a.ts", null],
+    ["b.ts", "added"],
+    ["gone/x.ts", "deleted"],
+    ["src/c.ts", null],
+  ]);
+  // A folder with nothing changed inside has no status.
+  const folders = fileRows("/w", all, {}).filter((r) => r.kind === "folder");
+  expect(folders.map((r) => r.kind === "folder" && [r.name, r.status])).toEqual([
+    ["gone", "deleted"],
+    ["src", null],
+  ]);
+});
+
+test("the tree shows the watched worktree's files in All, only the changes in Changed", () => {
+  panel();
+  act(() => select(fixLogin.id));
+  const listed = ["README.md", "src/auth/session.ts", "src/main.ts"];
+  // Another worktree's list is not this one's.
+  act(() => apply({ type: "files", path: refactor.path, files: ["x"], truncated: false }));
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/auth/session.ts")]) }));
+  expect(rows()).toEqual([
+    ["src", "M"],
+    ["auth", "M"],
+    ["session.ts+1M", "M"],
+  ]);
+  act(() => apply({ type: "files", path: fixLogin.path, files: listed, truncated: false }));
+  expect(rows()).toEqual([
+    ["src", "M"],
+    ["auth", "M"],
+    ["session.ts+1M", "M"],
+    ["main.ts", undefined],
+    ["README.md", undefined],
+  ]);
+  expect(screen.queryByText(/cut short/)).toBeNull();
+  // A collapsed folder with nothing changed inside shows no dot.
+  act(() => apply({ type: "files", path: fixLogin.path, files: ["lib/x.ts"], truncated: true }));
+  fireEvent.click(screen.getByText("lib"));
+  expect(document.querySelectorAll(".status-dot")).toHaveLength(0);
+  expect(screen.getByText("Too many files: the list is cut short.")).toBeDefined();
+  act(() => useHive.setState({ changedOnly: true }));
+  expect(rows()).toEqual([
+    ["src", "M"],
+    ["auth", "M"],
+    ["session.ts+1M", "M"],
+  ]);
+  expect(screen.queryByText(/cut short/)).toBeNull();
 });

@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   type ChangedFile,
@@ -27,11 +27,41 @@ const STATUS: Record<FileStatus, { letter: string; rank: number }> = {
   deleted: { letter: "D", rank: 4 },
 };
 
-export type FileRow =
-  | { kind: "folder"; key: string; name: string; depth: number; open: boolean; status: FileStatus }
-  | { kind: "file"; key: string; name: string; depth: number; file: ChangedFile };
+/** A file of the tree: a changed one, or in "All" one git lists unchanged (`status` null). */
+export type TreeFile = Omit<ChangedFile, "status"> & { status: FileStatus | null };
 
-type Folder = { folders: Map<string, Folder>; files: ChangedFile[] };
+export type FileRow =
+  | {
+      kind: "folder";
+      key: string;
+      name: string;
+      depth: number;
+      open: boolean;
+      status: FileStatus | null;
+    }
+  | { kind: "file"; key: string; name: string; depth: number; file: TreeFile };
+
+type Folder = { folders: Map<string, Folder>; files: TreeFile[] };
+
+/**
+ * "All": every file the service lists (`files`, sorted), each with its status from the
+ * changes, plus the changed files it no longer lists (deleted ones), in path order.
+ */
+export function allFiles(listed: string[], changed: ChangedFile[]): TreeFile[] {
+  const byPath = new Map(changed.map((f) => [f.path, f]));
+  const listedPaths = new Set(listed);
+  const unchanged = (path: string): TreeFile => ({
+    path,
+    status: null,
+    old_path: null,
+    added: null,
+    removed: null,
+  });
+  return [
+    ...listed.map((path) => byPath.get(path) ?? unchanged(path)),
+    ...changed.filter((f) => !listedPaths.has(f.path)),
+  ].sort((a, b) => (a.path < b.path ? -1 : 1));
+}
 
 /**
  * The visible rows of the files tree: `files` (sorted by the service) grouped into folders,
@@ -40,7 +70,7 @@ type Folder = { folders: Map<string, Folder>; files: ChangedFile[] };
  */
 export function fileRows(
   worktree: string,
-  files: ChangedFile[],
+  files: TreeFile[],
   collapsed: Record<string, boolean>,
 ): FileRow[] {
   const root: Folder = { folders: new Map(), files: [] };
@@ -76,13 +106,16 @@ export function fileRows(
   return rows;
 }
 
-/** The status of highest rank inside a folder (every folder holds at least one file). */
-function strongest(folder: Folder): FileStatus {
+/** The status of highest rank inside a folder; null when nothing inside changed. */
+function strongest(folder: Folder): FileStatus | null {
   const inside = [
     ...folder.files.map((f) => f.status),
     ...[...folder.folders.values()].map(strongest),
   ];
-  return inside.reduce((a, b) => (STATUS[b].rank > STATUS[a].rank ? b : a));
+  return inside.reduce<FileStatus | null>(
+    (a, b) => (b && (!a || STATUS[b].rank > STATUS[a].rank) ? b : a),
+    null,
+  );
 }
 
 const plus = (n: number | null) => (n ? `+${n}` : "");
@@ -176,13 +209,20 @@ function Summary({ worktree }: { worktree: string }) {
 /**
  * The tree, virtualized (#30). It is one focusable element (#35): ↑/↓ move the active row,
  * ←/→ collapse and expand a folder, Enter opens a file or toggles a folder; a click does the
- * same. Until the whole file list arrives (task 3.1), "All" shows the changed files too.
+ * same. "All" shows every file the service lists for the watched worktree with the changes'
+ * statuses; until that list arrives, the changed files.
  */
 function FileTree({ worktree }: { worktree: string }) {
   const changes = useHive((s) => s.changes[worktree]);
+  const listing = useHive((s) => (s.worktreeFiles?.path === worktree ? s.worktreeFiles : null));
+  const all = useHive((s) => s.changedOnly) ? null : listing;
   const collapsed = useHive((s) => s.collapsed);
   const open = useHive((s) => (s.openFile?.worktree === worktree ? s.openFile.path : null));
-  const rows = fileRows(worktree, changes?.files ?? [], collapsed);
+  const files = useMemo(
+    () => (all ? allFiles(all.files, changes?.files ?? []) : (changes?.files ?? [])),
+    [all, changes],
+  );
+  const rows = fileRows(worktree, files, collapsed);
   const [active, setActive] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -215,6 +255,7 @@ function FileTree({ worktree }: { worktree: string }) {
   return (
     <div className="files-tree hive-scroll" ref={scroller}>
       {changes && rows.length === 0 && <div className="hint">No changes in this worktree.</div>}
+      {all?.truncated && <div className="hint">Too many files: the list is cut short.</div>}
       <div
         role="tree"
         aria-label="Files"
@@ -237,7 +278,7 @@ function FileTree({ worktree }: { worktree: string }) {
               aria-selected={row.kind === "file" && row.key === open}
               className="file-row"
               data-active={item.index === at}
-              data-status={STATUS[status].letter}
+              data-status={status ? STATUS[status].letter : undefined}
               data-deleted={status === "deleted"}
               title={row.kind === "file" ? row.key : undefined}
               style={{ transform: `translateY(${item.start}px)`, paddingLeft: 8 + row.depth * 14 }}
@@ -251,7 +292,7 @@ function FileTree({ worktree }: { worktree: string }) {
                   <ChevronIcon open={row.open} />
                   <FolderIcon />
                   <span className="name">{row.name}</span>
-                  {!row.open && <span className="status-dot" />}
+                  {!row.open && status && <span className="status-dot" />}
                 </>
               ) : (
                 <>
@@ -259,9 +300,11 @@ function FileTree({ worktree }: { worktree: string }) {
                   <FileIcon />
                   <span className="name">{row.name}</span>
                   <Counts added={row.file.added} removed={row.file.removed} />
-                  <span className="status-letter" title={row.file.status}>
-                    {STATUS[status].letter}
-                  </span>
+                  {status && (
+                    <span className="status-letter" title={status}>
+                      {STATUS[status].letter}
+                    </span>
+                  )}
                 </>
               )}
             </div>

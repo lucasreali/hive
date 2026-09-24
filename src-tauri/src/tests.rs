@@ -251,6 +251,11 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: Some("main".into()),
     };
     assert_eq!(service.control().await, (0, create));
+    hive.watch_worktree("/r".into()).unwrap();
+    let watch = Control::WatchWorktree { path: "/r".into() };
+    assert_eq!(service.control().await, (0, watch));
+    hive.unwatch_worktree().unwrap();
+    assert_eq!(service.control().await, (0, Control::UnwatchWorktree));
     hive.list_changes("/r".into()).unwrap();
     let changes = Control::ListChanges { path: "/r".into() };
     assert_eq!(service.control().await, (0, changes));
@@ -388,6 +393,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.create_worktree("/r".into(), "x".into(), None),
         not_connected
     );
+    assert_eq!(hive.watch_worktree("/r".into()), not_connected);
+    assert_eq!(hive.unwatch_worktree(), not_connected);
     assert_eq!(hive.list_changes("/r".into()), not_connected);
     assert_eq!(hive.open_file("/r".into(), "a".into()), not_connected);
     let (channel, _bytes) = output();
@@ -551,6 +558,8 @@ fn commands_reach_the_managed_hive() {
             list_branches,
             validate_worktree_name,
             create_worktree,
+            watch_worktree,
+            unwatch_worktree,
             list_changes,
             open_file
         ])
@@ -587,12 +596,15 @@ fn commands_reach_the_managed_hive() {
     let branches = json!({"project": "/r"});
     let validate = json!({"project": "/r", "name": "x"});
     let create = json!({"project": "/r", "name": "x", "base": null});
+    let watch = json!({"path": "/r"});
     let changes = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a"});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
         ("create_worktree", &create),
+        ("watch_worktree", &watch),
+        ("unwatch_worktree", &json!({})),
         ("list_changes", &changes),
         ("open_file", &file),
     ] {
@@ -621,6 +633,8 @@ fn commands_reach_the_managed_hive() {
         ("list_branches", branches),
         ("validate_worktree_name", validate),
         ("create_worktree", create),
+        ("watch_worktree", watch),
+        ("unwatch_worktree", json!({})),
         ("list_changes", changes),
         ("open_file", file),
     ] {

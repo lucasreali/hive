@@ -27,6 +27,9 @@ export type ServiceMessage =
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
   | ({ type: "create_worktree_failed" } & CreateFailure)
+  | ({ type: "files" } & WorktreeFiles)
+  // A refused request, e.g. watching a worktree that is not followed. Not stored.
+  | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
   | ({ type: "file" } & FileText)
   // Sent by the app side (Rust) when the bridge exits or its output closes.
@@ -97,6 +100,12 @@ export type NameCheck = {
 };
 
 export type CreateFailure = { project: string; name: string; message: string };
+
+/**
+ * Every file git lists in the watched worktree `path`: sorted `/`-separated relative paths,
+ * replaced as a whole on each `files`. `truncated` when the service's cap cut the list.
+ */
+export type WorktreeFiles = { path: string; files: string[]; truncated: boolean };
 
 /** Mirrors `hive_protocol::FileStatus`: against HEAD, as `git status` shows it. */
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";
@@ -229,6 +238,8 @@ export type HiveState = {
   agents: Record<string, Agent>;
   /** By session id; kept apart from `agents` so either message may arrive first. */
   agentStates: Record<string, AgentStatus>;
+  /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
+  worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
   changes: Record<string, Changes>;
   /** The last `file` the service sent; shown only while it is the open file. */
@@ -254,6 +265,7 @@ export const initialState: HiveState = {
   terminals: {},
   agents: {},
   agentStates: {},
+  worktreeFiles: null,
   changes: {},
   file: null,
 };
@@ -342,6 +354,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...patchDialog(s, { created: { project: project.id, path, notes } }),
       };
     }
+    case "files": {
+      const { type: _, ...worktreeFiles } = m;
+      return { worktreeFiles };
+    }
     case "changes": {
       const { type: _, ...changes } = m;
       return { changes: { ...s.changes, [m.path]: changes } };
@@ -351,11 +367,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { file };
     }
     case "disconnected":
-      // The service is gone, and every agent with it.
+      // The service is gone, and every agent and the watch with it.
       return {
         connection: { status: "disconnected", reason: m.reason },
         agents: {},
         agentStates: {},
+        worktreeFiles: null,
       };
     default:
       // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.

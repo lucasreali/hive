@@ -22,6 +22,8 @@ fn main() {
             commands::list_branches,
             commands::validate_worktree_name,
             commands::create_worktree,
+            commands::watch_worktree,
+            commands::unwatch_worktree,
             commands::list_changes,
             commands::open_file,
         ])

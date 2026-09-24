@@ -385,6 +385,21 @@ fn git(dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     run_git(dir, &args, &[], &[0], OUTPUT_LIMIT)
 }
 
+/// `git -C <dir>`, ready for its arguments.
+pub(crate) fn git_command(dir: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(dir)
+        // Hive always names the repository with `-C`.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        // Reads must not rewrite the index: the files watcher would see it as a change.
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    command
+}
+
 /// Runs `git -C <dir> <args>` with `input` on stdin; any exit code outside `ok` is an error
 /// carrying git's stderr, and so is more than `limit` bytes on stdout (git then stops on a
 /// broken pipe).
@@ -395,14 +410,8 @@ pub(crate) fn run_git(
     ok: &[i32],
     limit: u64,
 ) -> io::Result<Vec<u8>> {
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
+    let mut child = git_command(dir)
         .args(args)
-        // Hive always names the repository with `-C`.
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

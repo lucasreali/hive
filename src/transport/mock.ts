@@ -127,6 +127,34 @@ export const MOCK_BRANCHES: Record<string, { local: string[]; remote: string[] }
   "/home/user/dotfiles": { local: ["main"], remote: ["origin/main"] },
 };
 
+/**
+ * What the fake service lists in every worktree: a small web app, plus enough generated
+ * files in a project's main worktree to need scrolling.
+ */
+export const MOCK_FILES = [
+  ".gitignore",
+  "README.md",
+  "config/shipping.json",
+  "docs/api.md",
+  "package.json",
+  "src/App.tsx",
+  "src/auth/login.ts",
+  "src/auth/session.ts",
+  "src/checkout/Cart.tsx",
+  "src/checkout/CheckoutSummary.tsx",
+  "src/checkout/validators.ts",
+  "src/components/Button.tsx",
+  "src/components/Header.tsx",
+  "src/server.ts",
+  "tests/checkout.test.ts",
+  "tsconfig.json",
+];
+const mockFiles = (worktree: Worktree) =>
+  [
+    ...MOCK_FILES,
+    ...(worktree.main ? Array.from({ length: 400 }, (_, i) => `src/icons/icon-${i}.tsx`) : []),
+  ].sort();
+
 const change = (
   path: string,
   status: FileStatus,
@@ -193,7 +221,7 @@ const SESSION_BASE = [
 ].join("\n");
 
 /** Texts of the fake files by path (after the prototype's screen 1g): `[content, base]`. */
-export const MOCK_FILES: Record<string, [string, string]> = {
+export const MOCK_TEXTS: Record<string, [string, string]> = {
   "src/auth/session.ts": [
     SESSION_BASE.replace(
       "  const ttl = SESSION_TTL;",
@@ -221,7 +249,7 @@ function file(worktrees: string[], worktree: string, path: string): ServiceMessa
   const status = MOCK_CHANGES[worktree]?.find((f) => f.path === path)?.status;
   if (path.endsWith(".png")) return { ...answer, ...none, binary: true, error: null };
   const sample = `// ${path}\nexport const value = 1;\n`;
-  const [text, original] = MOCK_FILES[path] ?? [sample.replace("1", "2"), sample];
+  const [text, original] = MOCK_TEXTS[path] ?? [sample.replace("1", "2"), sample];
   const content = status === "deleted" ? null : status ? text : original;
   const base = status === "added" || status === "untracked" ? null : original;
   return { ...answer, content, base, version: content && `mock-${content.length}`, error: null };
@@ -243,7 +271,9 @@ function nameError(project: Project, name: string): string | null {
  * exits); every later line sets that agent working; `worktree-remove <name>` removes that
  * Claude worktree as a `WorktreeRemove` hook would.
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
- * `MOCK_BRANCHES`, and new worktrees are added to the fake project.
+ * `MOCK_BRANCHES`, and new worktrees are added to the fake project. A watched worktree lists
+ * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list (and the
+ * changes) again.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
  * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
@@ -315,6 +345,24 @@ export function createMockTransport(
   };
   const setState = (id: string, state: AgentState) =>
     later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
+  // Files by worktree path, and the one watched.
+  const files = new Map<string, string[]>();
+  let watched: string | null = null;
+  const worktreeAt = (path: string) =>
+    projects.flatMap((p) => p.worktrees).find((w) => w.path === path);
+  // As the service does after every refresh of the watched worktree: its files, then its changes.
+  const sendFiles = (path: string) => {
+    later({ type: "files", path, files: files.get(path) as string[], truncated: false });
+    later(changes([path], path));
+  };
+  // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
+  const touch = (cwd: string, name: string) => {
+    const worktree = worktreeAt(cwd);
+    if (!worktree) return;
+    const listed = files.get(cwd) ?? mockFiles(worktree);
+    files.set(cwd, [...new Set([...listed, name])].sort());
+    if (watched === cwd) sendFiles(cwd);
+  };
 
   return {
     async connect(onMessage) {
@@ -407,6 +455,7 @@ export function createMockTransport(
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
         if (terminal.agent && line) setState(terminal.agent, "working");
         if (line === "claude") detect(id, terminal);
+        if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);
@@ -415,6 +464,19 @@ export function createMockTransport(
         print(id, `\r\n${line ? `${line}\r\n` : ""}${PROMPT}`);
       }
       if (scenario === "load") print(id, ECHO_MARK);
+    },
+    async watchWorktree(path) {
+      const worktree = worktreeAt(path);
+      watched = worktree ? path : null;
+      if (!worktree) {
+        const message = `${path} is not a worktree of a followed project`;
+        return void later({ type: "error", message });
+      }
+      if (!files.has(path)) files.set(path, mockFiles(worktree));
+      sendFiles(path);
+    },
+    async unwatchWorktree() {
+      watched = null;
     },
     async resizeTerminal() {},
     async closeTerminal(id) {

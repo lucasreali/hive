@@ -30,6 +30,10 @@ export interface Transport {
   validateWorktreeName(project: string, name: string): Promise<void>;
   /** `hive worktree create`; answered by `worktree_created` or `create_worktree_failed`. */
   createWorktree(project: string, name: string, base: string | null): Promise<void>;
+  /** Watches one worktree instead of any other; its files arrive as `files`, again on every change. */
+  watchWorktree(path: string): Promise<void>;
+  /** Stops watching (the files panel closed). */
+  unwatchWorktree(): Promise<void>;
   /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
   listChanges(path: string): Promise<void>;
   /** A file of a followed worktree on disk and at HEAD; answered by `file`. */

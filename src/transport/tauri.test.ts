@@ -48,6 +48,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
   await tauriTransport.createWorktree("/r", "x", null);
+  await tauriTransport.watchWorktree("/r");
+  await tauriTransport.unwatchWorktree();
   await tauriTransport.listChanges("/r");
   await tauriTransport.openFile("/r", "a.ts");
   expect(calls).toEqual([
@@ -59,6 +61,8 @@ test("terminal and project actions call their commands", async () => {
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],
     ["create_worktree", { project: "/r", name: "x", base: null }],
+    ["watch_worktree", { path: "/r" }],
+    ["unwatch_worktree", {}],
     ["list_changes", { path: "/r" }],
     ["open_file", { worktree: "/r", path: "a.ts" }],
   ]);
