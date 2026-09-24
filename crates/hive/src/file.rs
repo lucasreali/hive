@@ -241,11 +241,8 @@ pub fn windows(path: &Path, wslpath: &OsStr) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_owned())
 }
 
-/// On macOS the app runs beside the service: `path` itself.
 #[cfg(target_os = "macos")]
-pub fn windows(path: &Path, _wslpath: &OsStr) -> io::Result<String> {
-    Ok(path.to_string_lossy().into_owned())
-}
+pub use crate::macos::native_path as windows;
 
 /// At most [`TEXT_LIMIT`] bytes, else [`Side::TooLarge`].
 pub fn limited(input: &mut dyn Read) -> io::Result<Side> {

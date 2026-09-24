@@ -9,6 +9,8 @@ pub mod file;
 pub mod files;
 pub mod git;
 pub mod hook;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod paths;
 pub mod procs;
 pub mod projects;

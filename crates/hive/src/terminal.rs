@@ -86,16 +86,8 @@ fn shell(bin_dir: &Path) -> pty_process::Command {
         .arg(path_command(bin_dir))
 }
 
-/// The user's login shell (`$SHELL`), with `bin_dir` put first on `PATH` after its startup
-/// files (macOS).
 #[cfg(target_os = "macos")]
-fn shell(bin_dir: &Path) -> pty_process::Command {
-    let var = |key| std::env::var_os(key).filter(|value| !value.is_empty());
-    let launch = login::launch(var("SHELL"), var("ZDOTDIR"), var("PATH"), bin_dir);
-    pty_process::Command::new(launch.program)
-        .args(launch.args)
-        .envs(launch.env)
-}
+use crate::macos::shell;
 
 /// fish command run after the user's config: puts `bin_dir` first on `PATH` for this shell only.
 /// Never `fish_add_path` without flags: it would persist through a universal variable.
@@ -109,8 +101,7 @@ fn path_command(bin_dir: &Path) -> String {
 
 /// How a login shell starts on macOS so that Hive's bin dir stays first on `PATH`: a GUI
 /// app gets only `/usr/bin:/bin`, and the login files (`path_helper` among them) reorder
-/// `PATH`, so the bin dir goes first only after they ran.
-#[cfg(target_os = "macos")]
+/// `PATH`, so the bin dir goes first only after they ran. Portable, so tested everywhere.
 pub mod login {
     use std::ffi::OsString;
     use std::io;
@@ -142,6 +133,9 @@ pub mod login {
         path: Option<OsString>,
         bin_dir: &Path,
     ) -> Launch {
+        // The service's environment: empty counts as unset.
+        let set = |value: Option<OsString>| value.filter(|value| !value.is_empty());
+        let (shell, zdotdir, path) = (set(shell), set(zdotdir), set(path));
         let program = shell.unwrap_or_else(|| DEFAULT_SHELL.into());
         let name = Path::new(&program).file_name().unwrap_or_default();
         let startup = startup_dir(bin_dir);
@@ -269,8 +263,10 @@ pub mod login {
                 other.env,
                 vec![("PATH", "/d/hive/bin:/usr/bin:/bin".into())]
             );
-            let bare = launch(Some("sh".into()), None, None, bin);
+            let bare = launch(Some("sh".into()), None, Some("".into()), bin);
             assert_eq!(bare.env, vec![("PATH", "/d/hive/bin".into())]);
+            let empty = launch(Some("".into()), Some("".into()), None, bin);
+            assert_eq!(empty, zsh);
         }
 
         #[test]
@@ -284,6 +280,32 @@ pub mod login {
             }
             let zshrc = std::fs::read_to_string(dir.path().join("shell/.zshrc")).unwrap();
             assert!(zshrc.contains("builtin source $ZDOTDIR/.zshrc"), "{zshrc}");
+        }
+
+        #[test]
+        fn bash_runs_the_login_profile_then_puts_the_bin_dir_first() {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            install(&bin).unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let profile = "export PATH=/user/first:$PATH\nexport HIVE_TEST_RC=read\n";
+            std::fs::write(home.join(".bash_profile"), profile).unwrap();
+            let bash = launch(Some("bash".into()), None, None, &bin);
+            let echo = "echo \"rc=$HIVE_TEST_RC first=${PATH%%:*} left=$HIVE_BIN_DIR.\"";
+            let out = std::process::Command::new(&bash.program)
+                .args(&bash.args)
+                .args(["-i", "-c", echo])
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin")
+                .envs(bash.env)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let want = format!("rc=read first={} left=.", bin.display());
+            assert!(stdout.contains(&want), "{out:?}");
         }
     }
 }

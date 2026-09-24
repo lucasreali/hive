@@ -27,7 +27,7 @@ impl Source<'_> {
             #[cfg(target_os = "linux")]
             Source::System => read_dir(Path::new("/proc")),
             #[cfg(target_os = "macos")]
-            Source::System => macos::list(),
+            Source::System => crate::macos::list(),
         }
     }
 
@@ -37,7 +37,7 @@ impl Source<'_> {
             #[cfg(target_os = "linux")]
             Source::System => Source::Dir(Path::new("/proc")).cwd(pid),
             #[cfg(target_os = "macos")]
-            Source::System => macos::cwd(pid),
+            Source::System => crate::macos::cwd(pid),
         }
     }
 }
@@ -98,110 +98,6 @@ fn parse_stat(stat: &str) -> Option<Proc> {
         session: number()?,
         comm: comm.to_owned(),
     })
-}
-
-/// The kernel's process table, through `libproc`.
-#[cfg(target_os = "macos")]
-mod macos {
-    use std::ffi::{CStr, c_char};
-    use std::path::PathBuf;
-
-    use libproc::bsd_info::BSDInfo;
-    use libproc::proc_pid::{PIDInfo, PidInfoFlavor, pidinfo};
-    use libproc::processes::{ProcFilter, pids_by_type};
-    use nix::unistd::{Pid, getsid};
-
-    use super::Proc;
-
-    /// `SZOMB` in `<sys/proc.h>`.
-    const ZOMBIE: u32 = 5;
-    /// `MAXPATHLEN`.
-    const PATH_MAX: usize = 1024;
-
-    pub fn list() -> Vec<Proc> {
-        let pids = pids_by_type(ProcFilter::All).unwrap_or_default();
-        pids.into_iter()
-            .filter_map(|pid| process(pid as i32))
-            .collect()
-    }
-
-    fn process(pid: i32) -> Option<Proc> {
-        let info = pidinfo::<BSDInfo>(pid, 0).ok()?;
-        if info.pbi_status == ZOMBIE {
-            return None;
-        }
-        Some(Proc {
-            pid,
-            pgrp: info.pbi_pgid as i32,
-            session: getsid(Some(Pid::from_raw(pid))).ok()?.as_raw(),
-            comm: text(&info.pbi_comm)?,
-        })
-    }
-
-    /// `struct vnode_info_path`: a `struct vnode_info` (152 bytes) and a path.
-    #[repr(C)]
-    struct VnodeInfoPath {
-        info: [u8; 152],
-        path: [c_char; PATH_MAX],
-    }
-
-    /// `struct proc_vnodepathinfo`, which `libproc` does not bind (its `pidcwd` is a stub
-    /// on macOS).
-    #[repr(C)]
-    struct VnodePathInfo {
-        cdir: VnodeInfoPath,
-        rdir: VnodeInfoPath,
-    }
-
-    impl PIDInfo for VnodePathInfo {
-        fn flavor() -> PidInfoFlavor {
-            PidInfoFlavor::VNodePathInfo
-        }
-    }
-
-    pub fn cwd(pid: i32) -> Option<PathBuf> {
-        let info = pidinfo::<VnodePathInfo>(pid, 0).ok()?;
-        text(&info.cdir.path).map(PathBuf::from)
-    }
-
-    /// A NUL-terminated C string from a fixed buffer.
-    fn text(buf: &[c_char]) -> Option<String> {
-        let bytes: Vec<u8> = buf.iter().map(|&c| c as u8).collect();
-        let text = CStr::from_bytes_until_nul(&bytes).ok()?;
-        Some(text.to_string_lossy().into_owned())
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn this_process_is_listed_with_its_group_session_and_folder() {
-            let me = std::process::id() as i32;
-            let found = list().into_iter().find(|p| p.pid == me).unwrap();
-            assert_eq!(found.pgrp, nix::unistd::getpgrp().as_raw());
-            assert_eq!(found.session, getsid(None).unwrap().as_raw());
-            let exe = std::env::current_exe().unwrap();
-            let name: String = exe
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .chars()
-                .take(15)
-                .collect();
-            assert_eq!(found.comm, name);
-            assert_eq!(cwd(me), Some(std::env::current_dir().unwrap()));
-            assert_eq!(cwd(-1), None);
-            assert_eq!(process(-1), None);
-        }
-
-        #[test]
-        fn c_strings_end_at_the_first_nul() {
-            let buf = [b'a' as c_char, b'b' as c_char, 0, b'c' as c_char];
-            assert_eq!(text(&buf), Some("ab".to_owned()));
-            assert_eq!(text(&[b'a' as c_char]), None);
-        }
-    }
 }
 
 #[cfg(test)]
