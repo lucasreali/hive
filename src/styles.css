@@ -21,6 +21,7 @@
   --focus: #47679e;
   --accent: #74ade8; /* primary action */
   --accent-hover: #8bbbee;
+  --accent-light: #b8d6f5; /* the title bar logo's hollow cells */
   --on-accent: #1f2329;
   --text: #dce0e5;
   --text-2: #a9afbc;
