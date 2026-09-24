@@ -33,7 +33,7 @@ use crate::projects::{self, Projects};
 use crate::sessions::{self, Sessions};
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{changes, file, procs, search, watch, worktree, wrapper};
+use crate::{changes, dirs, file, procs, search, watch, worktree, wrapper};
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
@@ -748,6 +748,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 }
             })
         }
+        Ok(Control::ListDirs { path, windows }) => state.projects(move |_| {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            dirs::answer(path, windows, home.as_deref(), &dirs::WINDOWS)
+        }),
         Ok(Control::SearchFiles { worktree, query }) => state.projects(move |projects| {
             let found = projects
                 .worktree(&worktree)

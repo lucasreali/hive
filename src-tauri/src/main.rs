@@ -42,6 +42,7 @@ fn main() {
             commands::list_changes,
             commands::open_file,
             commands::search_files,
+            commands::list_dirs,
             commands::list_sessions,
             commands::locate_session,
             commands::delete_session,
