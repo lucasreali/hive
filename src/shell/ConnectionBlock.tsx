@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { apply, useHive } from "../store";
-import { transport } from "../transport";
+import { connect } from "../connect";
+import { useHive } from "../store";
 
 // How the service is installed (#29). `pkill` ends an old service still waiting for an app:
 // a refused handshake does not stop it.
@@ -9,7 +9,7 @@ const STOP = "pkill -f 'hive daemon'";
 
 function reconnect() {
   useHive.setState({ connection: { status: "connecting" } });
-  void transport.connect(apply);
+  void connect();
 }
 
 function Dialog({ title, children }: { title: string; children: ReactNode }) {

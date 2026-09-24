@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
-import { apply, initialState, useHive } from "../store";
+import { apply, initialState, setOpenFile, useHive } from "../store";
+import { transport } from "../transport";
+import { MOCK_REPOS } from "../transport/mock";
 
 afterEach(() => {
   cleanup();
@@ -57,4 +59,20 @@ test("a disconnect shows the reason, and reconnect connects again", async () => 
   // Tests run outside Tauri, so the mock transport answers with `welcome`.
   await waitFor(() => expect(useHive.getState().connection.status).toBe("connected"));
   expect(workspace().inert).toBe(false);
+});
+
+test("after a reconnect, messages reach the same handler as at startup", async () => {
+  render(<App />);
+  act(() => apply({ type: "disconnected", reason: "gone" }));
+  fireEvent.click(screen.getByText("Reconnect"));
+  await waitFor(() => expect(useHive.getState().connection.status).toBe("connected"));
+  // `editor_target` is handled outside the store: only the full handler shows the notice.
+  const [shop] = MOCK_REPOS;
+  act(() => setOpenFile({ worktree: shop.path, path: "README.md" }));
+  await transport.openInEditor(shop.path, "README.md");
+  await waitFor(() =>
+    expect(useHive.getState().editorNotice).toStartWith(
+      "Only the Hive app opens an external editor",
+    ),
+  );
 });
