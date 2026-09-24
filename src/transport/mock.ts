@@ -153,7 +153,8 @@ function nameError(project: Project, name: string): string | null {
  * A fake service for the browser (`bun run dev`, Playwright): it welcomes the UI, and each
  * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`;
  * `cd <dir>` moves it and `claude` detects an idle agent there (removed when the terminal
- * exits); every later line sets that agent working.
+ * exits); every later line sets that agent working; `worktree-remove <name>` removes that
+ * Claude worktree as a `WorktreeRemove` hook would.
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project. A watched worktree lists
  * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list again.
@@ -213,6 +214,14 @@ export function createMockTransport(
     const placed = { project: project?.id ?? null, worktree, cwd };
     later({ type: "agent_detected", channel: id, id: terminal.agent, ...placed });
     setState(terminal.agent, "idle");
+  };
+  // A stand-in for a `WorktreeRemove` hook: the Claude worktree `name` goes, and the service
+  // sends the new list.
+  const removeWorktree = (name: string) => {
+    projects.forEach((p, i) => {
+      projects[i] = { ...p, worktrees: p.worktrees.filter((w) => !w.claude || w.name !== name) };
+    });
+    later({ type: "projects", projects });
   };
   const setState = (id: string, state: AgentState) =>
     later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
@@ -307,6 +316,7 @@ export function createMockTransport(
         if (terminal.agent && line) setState(terminal.agent, "working");
         if (line === "claude") detect(id, terminal);
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
+        if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;

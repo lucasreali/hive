@@ -30,6 +30,14 @@ pub const EVENTS: [&str; 12] = [
 /// bounds a stuck process, and stays within the 1.5 s budget Claude Code gives `SessionEnd`.
 const HOOK_TIMEOUT_SECS: u64 = 1;
 
+/// Worktree hooks (#15): event, `hive worktree` subcommand and timeout in seconds. Creating
+/// runs `git worktree add` and copies the `.worktreeinclude` files; removing deletes the
+/// worktree's files. Both then report to the service within ~200 ms.
+const WORKTREE_HOOKS: [(&str, &str, u64); 2] = [
+    ("WorktreeCreate", "hook-create", 60),
+    ("WorktreeRemove", "hook-remove", 10),
+];
+
 /// Writes the hooks settings and the `claude` wrapper, replacing earlier versions.
 pub fn install(paths: &Paths, hive: &Path) -> io::Result<()> {
     let hive = hive
@@ -43,16 +51,22 @@ pub fn install(paths: &Paths, hive: &Path) -> io::Result<()> {
 }
 
 fn hooks(hive: &str) -> Value {
-    let events: Map<String, Value> = EVENTS
+    let observed = EVENTS
         .iter()
-        .map(|event| {
+        .map(|&event| (event, ["hook", event], HOOK_TIMEOUT_SECS));
+    let worktree = WORKTREE_HOOKS
+        .iter()
+        .map(|&(event, command, timeout)| (event, ["worktree", command], timeout));
+    let events: Map<String, Value> = observed
+        .chain(worktree)
+        .map(|(event, args, timeout)| {
             let hook = json!({
                 "type": "command",
                 "command": hive,
-                "args": ["hook", event],
-                "timeout": HOOK_TIMEOUT_SECS,
+                "args": args,
+                "timeout": timeout,
             });
-            (event.to_string(), json!([{ "hooks": [hook] }]))
+            (event.to_owned(), json!([{ "hooks": [hook] }]))
         })
         .collect();
     json!({ "hooks": events })
@@ -281,13 +295,13 @@ mod tests {
     }
 
     #[test]
-    fn hooks_settings_run_hive_hook_for_every_observed_event() {
+    fn hooks_settings_run_hive_for_every_observed_event_and_worktree_hook() {
         let s = Setup::new();
         let text = std::fs::read_to_string(s.paths.hooks_settings()).unwrap();
         let settings: Value = serde_json::from_str(&text).unwrap();
         let hooks = settings.as_object().unwrap()["hooks"].as_object().unwrap();
         assert_eq!(settings.as_object().unwrap().len(), 1);
-        assert_eq!(hooks.len(), 12);
+        assert_eq!(hooks.len(), 14);
         for event in EVENTS {
             let expected = json!([{ "hooks": [{
                 "type": "command",
@@ -297,8 +311,16 @@ mod tests {
             }]}]);
             assert_eq!(hooks[event], expected, "{event}");
         }
-        assert!(!hooks.contains_key("WorktreeCreate"));
-        assert!(!hooks.contains_key("WorktreeRemove"));
+        let worktree = |command: &str, timeout: u64| {
+            json!([{ "hooks": [{
+                "type": "command",
+                "command": "/opt/it's hive/hive",
+                "args": ["worktree", command],
+                "timeout": timeout,
+            }]}])
+        };
+        assert_eq!(hooks["WorktreeCreate"], worktree("hook-create", 60));
+        assert_eq!(hooks["WorktreeRemove"], worktree("hook-remove", 10));
     }
 
     #[test]

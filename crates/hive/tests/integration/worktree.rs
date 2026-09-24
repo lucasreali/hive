@@ -2,9 +2,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use hive_protocol::{AgentEvent, Control, EventKind, Project, Role};
 use serde_json::json;
 
-use crate::common::Env;
+use crate::common::{Conn, Env};
 
 /// A throwaway repository with one commit on `main`; git never sees the real user config.
 pub(crate) struct Repo {
@@ -517,4 +518,108 @@ fn missing_git_is_reported() {
         .output()
         .unwrap();
     assert_fails(&out, "cannot run git");
+}
+
+/// Runs a worktree hook as Claude Code does in the Hive terminal 9, and returns its output
+/// with the `agent` event and the `projects` the app gets (in either order).
+async fn hook_from_terminal(
+    repo: &Repo,
+    app: &mut Conn,
+    event: &str,
+    input: serde_json::Value,
+) -> (Output, AgentEvent, Vec<Project>) {
+    let mut child = repo
+        .hive_cmd(&repo.env.path("home"), &[event])
+        .env("HIVE_TERMINAL_ID", "9")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = input.to_string();
+    let mut pipe = child.stdin.take().unwrap();
+    pipe.write_all(stdin.as_bytes()).unwrap();
+    drop(pipe);
+    let out = child.wait_with_output().unwrap();
+    let (mut agent, mut projects) = (None, None);
+    while agent.is_none() || projects.is_none() {
+        match app.control().await {
+            (0, Control::Agent(event)) => agent = Some(event),
+            (0, Control::Projects { projects: list }) => projects = Some(list),
+            other => panic!("{other:?}"),
+        }
+    }
+    (out, agent.unwrap(), projects.unwrap())
+}
+
+fn worktree_names(projects: &[Project]) -> Vec<String> {
+    assert_eq!(projects.len(), 1);
+    projects[0]
+        .worktrees
+        .iter()
+        .map(|w| w.name.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn worktree_hooks_update_the_apps_projects() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let root = repo.root.display().to_string();
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+
+    let input = json!({"session_id": "s", "cwd": root, "name": "sub-1", "agent_id": "a1"});
+    let (out, event, projects) = hook_from_terminal(&repo, &mut app, "hook-create", input).await;
+    let path = repo.path("sub-1").display().to_string();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{path}\n"));
+    assert_eq!(stderr(&out), "");
+    assert_eq!(
+        event.kind,
+        EventKind::WorktreeCreated {
+            name: Some("sub-1".into()),
+            path: Some(path.clone()),
+        }
+    );
+    assert_eq!(event.terminal_id.as_deref(), Some("9"));
+    assert_eq!(event.subagent.map(|s| s.id).as_deref(), Some("a1"));
+    assert_eq!(worktree_names(&projects), ["main", "sub-1"]);
+
+    let input = json!({"session_id": "s", "cwd": path, "worktree_path": path});
+    let (out, event, projects) = hook_from_terminal(&repo, &mut app, "hook-remove", input).await;
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert_eq!(event.kind, EventKind::WorktreeRemoved { path: Some(path) });
+    assert_eq!(worktree_names(&projects), ["main"]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn worktrees_whose_directory_is_gone_are_not_sent_to_the_app() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let path = repo.root.display().to_string();
+    app.send(0, Control::AddProject { path }).await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    // Deleted without `git worktree remove`: git still lists it, as prunable.
+    std::fs::remove_dir_all(repo.create(&["gone"])).unwrap();
+    assert!(stdout(&repo.hive(&["list"])).contains("gone"));
+    app.send(0, Control::ListProjects).await;
+    let (0, Control::Projects { projects }) = app.control().await else {
+        panic!("expected projects");
+    };
+    assert_eq!(worktree_names(&projects), ["main"]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
 }

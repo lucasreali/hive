@@ -51,7 +51,7 @@ impl Projects {
     /// Follows the git repository containing `path`. Adding one already followed changes
     /// nothing and answers the same project.
     pub fn add(&self, path: &str) -> Result<Project, (ProjectError, String)> {
-        let id = validate(Path::new(path))?.to_string_lossy().into_owned();
+        let id = validate(path)?.to_string_lossy().into_owned();
         {
             let mut paths = self.paths();
             if !paths.contains(&id) {
@@ -136,9 +136,13 @@ fn save(file: &Path, paths: &[String]) -> io::Result<()> {
     write_atomic(file, &json, 0o600)
 }
 
-/// The main worktree of the repository containing `path`: absolute, an existing directory,
-/// inside a git repository with a working tree.
-fn validate(path: &Path) -> Result<PathBuf, (ProjectError, String)> {
+/// The main worktree of the repository containing `path`: not blank, absolute, an existing
+/// directory, inside a git repository with a working tree.
+fn validate(path: &str) -> Result<PathBuf, (ProjectError, String)> {
+    if path.trim().is_empty() {
+        return Err((ProjectError::EmptyPath, "Enter a folder".to_owned()));
+    }
+    let path = Path::new(path);
     let shown = path.display();
     if !path.is_absolute() {
         let message = format!("{shown} is not an absolute path");
@@ -175,11 +179,12 @@ fn project(path: &str) -> Project {
     }
 }
 
-/// Describes `git worktree list` for the sidebar, skipping bare entries.
+/// Describes `git worktree list` for the sidebar, skipping bare entries and worktrees whose
+/// directory is gone (git lists them as prunable until `git worktree prune`).
 fn worktrees(root: &Path, list: Vec<worktree::Worktree>) -> Vec<Worktree> {
     let claude_dir = root.join(WORKTREES_DIR);
     list.into_iter()
-        .filter(|wt| !wt.bare)
+        .filter(|wt| !wt.bare && !wt.prunable)
         .enumerate()
         .map(|(i, wt)| {
             let path = wt.path.to_string_lossy().into_owned();
@@ -216,6 +221,7 @@ mod tests {
             path: path.into(),
             branch: branch.map(Into::into),
             bare,
+            prunable: false,
         }
     }
 
@@ -273,6 +279,20 @@ mod tests {
     }
 
     #[test]
+    fn worktrees_whose_directory_is_gone_are_skipped() {
+        let gone = worktree::Worktree {
+            prunable: true,
+            ..wt("/r/.claude/worktrees/gone", None, false)
+        };
+        let list = vec![wt("/r", None, false), gone, wt("/r/x", None, false)];
+        let got: Vec<String> = worktrees(Path::new("/r"), list)
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(got, ["/r", "/r/x"]);
+    }
+
+    #[test]
     fn an_agent_is_placed_in_the_deepest_worktree_containing_its_cwd() {
         let project = |root: &str, list| Project {
             id: root.into(),
@@ -316,6 +336,8 @@ mod tests {
         let file = tmp.path().join("f");
         std::fs::write(&file, "").unwrap();
         let cases = [
+            ("".to_owned(), ProjectError::EmptyPath, "Enter a folder"),
+            (" \t ".to_owned(), ProjectError::EmptyPath, "Enter a folder"),
             (
                 "relative/dir".to_owned(),
                 ProjectError::NotAbsolute,

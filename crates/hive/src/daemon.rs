@@ -444,7 +444,7 @@ where
 /// A hook connection carries exactly one event; the connection is closed after it.
 async fn hook_connection<R: AsyncRead + Unpin>(
     mut reader: FramedRead<R, FrameCodec>,
-    state: &State,
+    state: &Arc<State>,
 ) {
     if let Some(Ok(frame)) = reader.next().await
         && let Ok(Control::Hook {
@@ -454,6 +454,12 @@ async fn hook_connection<R: AsyncRead + Unpin>(
         }) = frame.to_control()
     {
         let event = ClaudeCode.translate(&event, terminal_id, payload);
+        if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } = event.kind {
+            // The app's worktrees follow a `claude -w` or a subagent's worktree.
+            state.projects(|projects| Control::Projects {
+                projects: projects.list(),
+            });
+        }
         state.saw(&event).await;
         state.to_app(0, &Control::Agent(event)).await;
     }

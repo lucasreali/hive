@@ -4,11 +4,16 @@ import { closeWindow } from "./window";
 
 const cancel = () => openModal(null);
 
-const AT_RISK = new Set<AgentState>(["working", "waiting_permission", "waiting_you"]);
+const AT_RISK = new Set<AgentState>([
+  "working",
+  "with_subagents",
+  "waiting_permission",
+  "waiting_you",
+]);
 
 /**
- * The agents that make closing ask first (#18): working, waiting for permission or waiting
- * for you, as the service last said. An agent with no state yet is idle.
+ * The agents that make closing ask first (#18): working, with subagents, waiting for permission
+ * or waiting for you, as the service last said. An agent with no state yet is idle.
  */
 export const agentsAtRisk = (s: HiveState) =>
   Object.values(s.agents).filter((a) => AT_RISK.has(s.agentStates[a.id]?.state ?? "idle"));

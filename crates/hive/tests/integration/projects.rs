@@ -121,6 +121,7 @@ async fn folders_that_are_not_projects_are_refused() {
     let mut conn = env.connect(Role::App).await;
     let home = env.path("home").display().to_string();
     let cases = [
+        ("  ".to_owned(), ProjectError::EmptyPath),
         ("home".to_owned(), ProjectError::NotAbsolute),
         (format!("{home}/missing"), ProjectError::NotFound),
         (file.display().to_string(), ProjectError::NotADirectory),
