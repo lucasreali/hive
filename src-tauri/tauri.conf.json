@@ -31,6 +31,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/lucasreali/hive/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIwMERDNzk0MDQ2Q0NEQzAKUldUQXpXd0VsTWNOSUxGRjRZd1VtTDlCbjVhWWNrdGJoMmxJbTJSby9FUmltRll0elBPVENHR2cK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

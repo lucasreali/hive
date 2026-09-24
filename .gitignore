@@ -25,3 +25,6 @@ dist-ssr
 /target/
 mutants.out*/
 .claude/worktrees/
+
+# The Linux hive the release bundles (4.18); CI puts it here.
+src-tauri/resources/

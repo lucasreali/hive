@@ -1,0 +1,52 @@
+# A tag `v*` (made by scripts/release.sh) publishes a GitHub release: the Windows installer
+# with the Linux `hive` inside it, its updater signature and `latest.json`, which the app's
+# updater reads (TODO 4.17–4.19).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # The oldest supported runner: a glibc this old runs on any recent WSL distribution.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked -p hive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hive-linux
+          path: target/release/hive
+          if-no-files-found: error
+
+  windows:
+    needs: linux
+    runs-on: windows-latest
+    env:
+      # Static CRT: stock Windows has no VC++ redistributable (as in scripts/win-dev.sh).
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: hive-linux
+          path: src-tauri/resources
+      - run: bun install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: bun tauri
+          args: --config src-tauri/tauri.release.conf.json
+          tagName: ${{ github.ref_name }}
+          releaseName: Hive ${{ github.ref_name }}
+          releaseDraft: false
