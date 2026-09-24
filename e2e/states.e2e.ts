@@ -74,7 +74,9 @@ test("states: collapsed nodes show the most urgent state inside; F8 walks the pe
   await expect(selected).toHaveText("waiting for you");
 });
 
-test("states: a subagent's own worktree shows under it, not at project level", async ({ page }) => {
+test("states: a subagent's own worktree is its parent row, not at project level", async ({
+  page,
+}) => {
   await page.goto("/?mock=states");
   const tree = page.getByRole("navigation", { name: "Projects" });
   const own = tree.locator(".tree-row.own-worktree");
@@ -84,15 +86,21 @@ test("states: a subagent's own worktree shows under it, not at project level", a
     "title",
     "/home/user/projects/shop/.claude/worktrees/tests-login",
   );
-  const owner = own.locator("xpath=preceding-sibling::div[1]");
-  await expect(owner).toHaveText(/subagent: general-purpose/);
+  const owned = own.locator("xpath=following-sibling::ul[1]").locator(".tree-row.subagent");
+  await expect(owned).toHaveCount(1);
+  await expect(owned).toHaveText(/subagent: general-purpose/);
   await expect(tree.locator(".tree-row.worktree", { hasText: "tests-login" })).toHaveCount(0);
-  // Prototype: 22px under the subagent, indented past its icon; the tree line goes on to the
-  // next subagent.
+  // 22px, at the subagents' indent; its subagent one step (16px) further in. The agent's tree
+  // line goes on past both to the next subagent.
   const [height, padding, line] = await own.evaluate((el) => [
     el.getBoundingClientRect().height,
     getComputedStyle(el).paddingLeft,
     getComputedStyle(el, "::before").height,
   ]);
-  expect([height, padding, line]).toEqual([22, "63px", "22px"]);
+  expect([height, padding, line]).toEqual([22, "56px", "22px"]);
+  const [subPadding, through] = await owned.evaluate((el) => [
+    getComputedStyle(el).paddingLeft,
+    getComputedStyle(el.closest("ul") as Element, "::before").left,
+  ]);
+  expect([subPadding, through]).toEqual(["72px", "45px"]);
 });

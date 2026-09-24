@@ -8,6 +8,7 @@ import {
   openMenu,
   openModal,
   type Project,
+  type Subagent,
   select,
   toggleCollapsed,
   useHive,
@@ -101,7 +102,7 @@ function ProjectNode({ project }: { project: Project }) {
   const selection = useHive((s) => s.selection);
   const agents = Object.values(useHive((s) => s.agents));
   const states = Object.values(useHive((s) => s.agentStates));
-  // A subagent's own worktree shows under it instead (#22), unless an agent runs there.
+  // A subagent's own worktree shows as its parent row instead (#22), unless an agent runs there.
   const owned = new Set(states.flatMap((st) => st.subagents.map((sub) => sub.worktree)));
   const shown = project.worktrees.filter(
     (w) => !owned.has(w.id) || agents.some((a) => a.worktree === w.id),
@@ -265,22 +266,7 @@ function AgentRow({ agent }: { agent: Agent }) {
       {status && status.subagents.length > 0 && (
         <ul>
           {status.subagents.map((sub) => (
-            <li key={sub.id}>
-              <div className="tree-row subagent">
-                <button type="button" className="row-main" onClick={show}>
-                  <StateLines
-                    state={sub.state}
-                    title={
-                      <>
-                        <span className="prefix">subagent: </span>
-                        {sub.agent_type ?? "unknown"}
-                      </>
-                    }
-                  />
-                </button>
-              </div>
-              {sub.worktree && <OwnWorktree id={sub.worktree} show={show} />}
-            </li>
+            <SubagentNode key={sub.id} sub={sub} show={show} />
           ))}
         </ul>
       )}
@@ -288,21 +274,44 @@ function AgentRow({ agent }: { agent: Agent }) {
   );
 }
 
-/** A subagent's own worktree, under it as in the prototype; clicking it is clicking the subagent. */
-function OwnWorktree({ id, show }: { id: string; show: () => void }) {
+/**
+ * A subagent; with a worktree of its own, that worktree is its parent row (Project → Worktree →
+ * Agent at every level, #22). Clicking either row shows the agent's terminal.
+ */
+function SubagentNode({ sub, show }: { sub: Subagent; show: () => void }) {
   const w = useHive((s) =>
     Object.values(s.projects ?? {})
       .flatMap((p) => p.worktrees)
-      .find((w) => w.id === id),
+      .find((w) => w.id === sub.worktree),
   );
-  // Until the service's next `projects` lists it.
-  if (!w) return null;
-  return (
-    <div className="tree-row own-worktree" title={w.path}>
-      <button type="button" className="row-own" tabIndex={-1} onClick={show}>
-        <BranchIcon />
-        <span className="label">{w.name}</span>
+  const row = (
+    <div className="tree-row subagent">
+      <button type="button" className="row-main" onClick={show}>
+        <StateLines
+          state={sub.state}
+          title={
+            <>
+              <span className="prefix">subagent: </span>
+              {sub.agent_type ?? "unknown"}
+            </>
+          }
+        />
       </button>
     </div>
+  );
+  // Until the service's next `projects` lists its worktree, the subagent stays in place.
+  if (!w) return <li>{row}</li>;
+  return (
+    <li>
+      <div className="tree-row own-worktree" title={w.path}>
+        <button type="button" className="row-own" tabIndex={-1} onClick={show}>
+          <BranchIcon />
+          <span className="label">{w.name}</span>
+        </button>
+      </div>
+      <ul className="owned">
+        <li>{row}</li>
+      </ul>
+    </li>
   );
 }

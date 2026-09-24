@@ -297,7 +297,7 @@ test("arrow keys move in the tree and collapse or expand a project", () => {
   expect(document.activeElement).toBe(row("shop"));
 });
 
-test("a subagent's own worktree shows under it, not at project level", () => {
+test("a subagent's own worktree is its parent row, not at project level", () => {
   render(<App />);
   const [main, , featCheckout] = shop.worktrees;
   const sub = (id: string, worktree: string | null) =>
@@ -320,13 +320,16 @@ test("a subagent's own worktree shows under it, not at project level", () => {
     ["tree-row project", "shop"],
     ["tree-row worktree", "main"],
     ["tree-row agent", "Claude"],
-    ["tree-row subagent", "subagent: Explore"],
     ["tree-row own-worktree", "feat-checkout"],
+    ["tree-row subagent", "subagent: Explore"],
     ["tree-row subagent", "subagent: Explore"],
     ["tree-row worktree", "fix-login"],
   ]);
   const own = tree().querySelector(".own-worktree") as HTMLElement;
   expect(own.title).toBe(featCheckout.path);
+  // Project → Worktree → Agent at every level: the subagent is indented under it.
+  expect(own.nextElementSibling?.matches("ul.owned")).toBe(true);
+  expect(tree().querySelectorAll(".owned .tree-row.subagent")).toHaveLength(1);
   // It is out of the arrow keys' way; clicking it shows the agent's terminal.
   const button = within(own).getByRole("button");
   expect(button.tabIndex).toBe(-1);
@@ -340,9 +343,12 @@ test("a subagent's own worktree shows under it, not at project level", () => {
   expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(2);
   act(() => apply({ type: "agent_removed", channel: 2, id: "s2" }));
   expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(1);
-  // A worktree the projects do not list yet shows nowhere; unlinked, it is back in place.
+  // A worktree the projects do not list yet shows nowhere and its subagent stays in place;
+  // unlinked, the worktree is back at project level.
   act(() => subagents(sub("a1", "/elsewhere"), sub("a2", null)));
   expect(tree().querySelector(".own-worktree")).toBeNull();
+  expect(tree().querySelector(".owned")).toBeNull();
+  expect(tree().querySelectorAll(".tree-row.subagent")).toHaveLength(2);
   act(() => subagents(sub("a1", null), sub("a2", null)));
   expect(rows().map(([, label]) => label)).toContain("feat-checkout");
   expect(tree().querySelector(".own-worktree")).toBeNull();

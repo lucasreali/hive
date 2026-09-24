@@ -1127,45 +1127,60 @@ button.chevron:hover {
   padding: 4px 8px 5px 40px;
 }
 
-.tree-row.subagent {
+.tree-row.subagent,
+.tree-row.own-worktree {
+  --line: 45px;
   position: relative;
   padding-left: 56px;
 }
 
-/* Tree lines from the agent down to each subagent; the last one stops at its row. */
+.tree-row.own-worktree {
+  height: 22px;
+  padding-right: 8px;
+}
+
+/* A subagent's own worktree is its parent row (#22): the subagent goes one step further in. */
+.owned .tree-row.subagent {
+  --line: 61px;
+  padding-left: 72px;
+}
+
+/* Tree lines from the parent down to each child row; the last one stops at its row. */
 .tree-row.subagent::before,
-.tree-row.subagent::after {
+.tree-row.subagent::after,
+.tree-row.own-worktree::before,
+.tree-row.own-worktree::after {
   content: "";
   position: absolute;
-  left: 45px;
+  left: var(--line);
   background: var(--tree-line);
 }
 
-.tree-row.subagent::before {
+.tree-row.subagent::before,
+.tree-row.own-worktree::before {
   top: 0;
   width: 1px;
   height: 100%;
 }
 
-li:last-child > .tree-row.subagent::before {
+li:last-child > .tree-row.subagent::before,
+li:last-child > .tree-row.own-worktree::before {
   height: 12px;
 }
 
-.tree-row.subagent::after {
+.tree-row.subagent::after,
+.tree-row.own-worktree::after {
   top: 11px;
   width: 8px;
   height: 1px;
 }
 
-/* A subagent's own worktree, under it; the agent's tree line goes on past it to the next one. */
-.tree-row.own-worktree {
+/* The agent's line goes on past an own worktree's subagent to the next sibling. */
+.owned {
   position: relative;
-  height: 22px;
-  margin-top: -2px;
-  padding: 0 8px 0 63px;
 }
 
-.tree-row.own-worktree::before {
+li:not(:last-child) > .owned::before {
   content: "";
   position: absolute;
   left: 45px;
@@ -1173,10 +1188,6 @@ li:last-child > .tree-row.subagent::before {
   width: 1px;
   height: 100%;
   background: var(--tree-line);
-}
-
-li:last-child > .tree-row.own-worktree::before {
-  display: none;
 }
 
 .row-own {
