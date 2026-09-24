@@ -21,6 +21,9 @@
   --focus: #47679e;
   --accent: #74ade8; /* primary action */
   --accent-hover: #8bbbee;
+  /* The title bar logo: the focus and accent blues, half-way to the interface's greys. */
+  --logo-cell: #526586;
+  --logo-lit: #8eaed2;
   --on-accent: #1f2329;
   --text: #dce0e5;
   --text-2: #a9afbc;
