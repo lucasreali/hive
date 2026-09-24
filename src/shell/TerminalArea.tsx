@@ -1,6 +1,8 @@
 import { type ReactNode, useEffect, useRef } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   activateTab,
+  fileVisible,
   type HiveState,
   openModal,
   selectedPlace,
@@ -9,6 +11,7 @@ import {
   type Tab,
   useHive,
   useTerminal,
+  visibleTabs,
 } from "../store";
 import { closeTerminal, mountTerminals, openTerminal, showTerminal } from "../terminals";
 import { isDirty } from "../viewer/buffer";
@@ -125,7 +128,7 @@ function TerminalTab({ tab }: { tab: Tab }) {
 
 /** The open file's tab, after the terminals; closing it asks first when edits are unsaved. */
 function FileTab() {
-  const open = useHive((s) => s.openFile);
+  const open = useHive((s) => (fileVisible(s) ? s.openFile : null));
   const active = useHive((s) => s.fileShown);
   const dirty = useHive((s) => !!s.edit && isDirty(s.edit));
   if (!open) return null;
@@ -157,12 +160,29 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
   return <div className="terminal-host" ref={ref} hidden={hidden} />;
 }
 
-// "+" opens a terminal in the selected worktree; Ctrl+Shift+T opens the worktree picker.
+/** A worktree without terminals yet: its tab bar is empty. */
+function NoTerminals({ worktree }: { worktree: string }) {
+  const name = useHive((s) => find(s, worktree)?.worktree.name ?? worktree);
+  return (
+    <div className="empty-state">
+      <div className="empty-state-content">
+        <TerminalIcon />
+        <p>No terminal in {name}</p>
+        <button type="button" className="primary" onClick={() => void openTerminal(worktree)}>
+          New terminal
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// "+" opens a terminal in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
+// the selected worktree's tabs show (a project's are its main worktree's).
 export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
   const empty = useHive((s) => s.projects !== null && Object.keys(s.projects).length === 0);
-  const tabs = useHive((s) => s.tabs);
-  const file = useHive((s) => (s.fileShown ? s.openFile : null));
+  const tabs = useHive(useShallow(visibleTabs));
+  const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
   return (
     <section className="terminals" aria-label="Terminals">
@@ -196,6 +216,9 @@ export function TerminalArea() {
       </div>
       <div className="terminal-body">
         {empty && tabs.length === 0 && !file && <EmptyState />}
+        {!empty && selected !== null && tabs.length === 0 && !file && (
+          <NoTerminals worktree={selected} />
+        )}
         <TerminalHost hidden={tabs.length === 0 || !!file} />
         {file && <FileView worktree={file.worktree} />}
       </div>

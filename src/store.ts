@@ -521,7 +521,22 @@ export const setEdit = (edit: EditBuffer | null) => useHive.setState({ edit });
 export const setEditorNotice = (editorNotice: string | null) => useHive.setState({ editorNotice });
 export const setSelectedLines = (selectedLines: Lines | null) =>
   useHive.setState({ selectedLines });
-export const select = (selection: string | null) => useHive.setState({ selection });
+/**
+ * Selects a project, worktree or agent. The tab bar then shows that place's tabs: the shown
+ * terminal stays when it is one of them, else the last of them is shown (none when it has
+ * none), and the open file stays shown only when it belongs there.
+ */
+export const select = (selection: string | null) =>
+  useHive.setState((s) => {
+    const next = { ...s, selection };
+    const tabs = visibleTabs(next);
+    const keep = tabs.some((t) => t.id === s.activeTab);
+    return {
+      selection,
+      activeTab: keep ? s.activeTab : (tabs.at(-1)?.id ?? null),
+      fileShown: s.fileShown && fileVisible(next),
+    };
+  });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
 
@@ -534,15 +549,57 @@ export const addTab = (id: number, cwd: string) =>
     selection: cwd,
   }));
 export const activateTab = (tab: Tab) =>
-  useHive.setState({ activeTab: tab.id, fileShown: false, selection: tab.cwd });
-/** Removes the tab; when it was shown, its right neighbour (or the new last tab) is. */
+  useHive.setState((s) => ({
+    activeTab: tab.id,
+    fileShown: false,
+    selection: tabPlace(s, tab.cwd),
+  }));
+/** Removes the tab; when it was shown, its right neighbour among the shown place's tabs is. */
 export const removeTab = (id: number) =>
   useHive.setState((s) => {
-    const i = s.tabs.findIndex((t) => t.id === id);
-    const tabs = s.tabs.filter((t) => t.id !== id);
-    const next = tabs[Math.min(i, tabs.length - 1)]?.id ?? null;
-    return { tabs, activeTab: s.activeTab === id ? next : s.activeTab };
+    const shown = visibleTabs(s);
+    const i = shown.findIndex((t) => t.id === id);
+    const rest = shown.filter((t) => t.id !== id);
+    const next = rest[Math.min(i, rest.length - 1)]?.id ?? null;
+    return {
+      tabs: s.tabs.filter((t) => t.id !== id),
+      activeTab: s.activeTab === id ? next : s.activeTab,
+    };
   });
+
+/**
+ * The worktree a tab (or the open file) at `path` belongs to: the worktree it opened in. When
+ * that worktree is gone, the project whose folder holds the path (its main worktree, which
+ * shares its id); else the path itself.
+ */
+export function tabPlace(s: HiveState, path: string): string {
+  if (owner(s.projects, path)) return path;
+  const project = Object.values(s.projects ?? {}).find((p) => path.startsWith(`${p.path}/`));
+  return project?.id ?? path;
+}
+
+/**
+ * Whose tabs the tab bar shows: the selected worktree (a selected project stands for its main
+ * worktree); a selected agent's terminal's worktree. Null (nothing selected) shows every tab.
+ */
+export function tabsPlace(s: HiveState): string | null {
+  const agent = s.agents[s.selection ?? ""];
+  if (!agent) return s.selection;
+  const tab = s.tabs.find((t) => t.id === agent.terminal);
+  return tab ? tabPlace(s, tab.cwd) : agent.worktree;
+}
+
+/** The terminal tabs of the place the tab bar shows, in the order they opened. */
+export function visibleTabs(s: HiveState): Tab[] {
+  const place = tabsPlace(s);
+  return place === null ? s.tabs : s.tabs.filter((t) => tabPlace(s, t.cwd) === place);
+}
+
+/** Whether the open file's tab belongs to the place the tab bar shows. */
+export function fileVisible(s: HiveState): boolean {
+  const place = tabsPlace(s);
+  return !!s.openFile && (place === null || tabPlace(s, s.openFile.worktree) === place);
+}
 
 /**
  * The selected project or worktree id (a path). A selected agent (F8) stands for the worktree

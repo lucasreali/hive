@@ -23,6 +23,7 @@ export function NewWorktreeDialog() {
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [openTerminal, setOpenTerminal] = useState(true);
+  const [startClaude, setStartClaude] = useState(true);
 
   useEffect(() => void transport.listBranches(project), [project]);
   useEffect(() => void transport.validateWorktreeName(project, name), [project, name]);
@@ -61,10 +62,15 @@ export function NewWorktreeDialog() {
   useEffect(() => {
     if (!created || handled.current === created) return;
     handled.current = created;
-    if (openTerminal) void openTerminalIn(created.path);
+    if (openTerminal) {
+      // Typed into the new shell as the user would; from then on Hive only observes it.
+      void openTerminalIn(created.path).then((id) => {
+        if (startClaude) void transport.writeTerminal(id, "claude\r");
+      });
+    }
     select(created.path);
     if (created.notes.length === 0) close();
-  }, [created, openTerminal]);
+  }, [created, openTerminal, startClaude]);
 
   const move = (step: number) => {
     const next = shown[Math.max(0, Math.min(shown.length - 1, shown.indexOf(base ?? "") + step))];
@@ -212,6 +218,15 @@ export function NewWorktreeDialog() {
                 onChange={(e) => setOpenTerminal(e.target.checked)}
               />
               Open a terminal in the new worktree
+            </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={openTerminal && startClaude}
+                disabled={!openTerminal}
+                onChange={(e) => setStartClaude(e.target.checked)}
+              />
+              Start claude in the terminal
             </label>
             <div className="plan">
               <div>

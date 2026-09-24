@@ -164,6 +164,7 @@ test("arrow keys and clicks pick the base branch", async () => {
 test("create asks the service, opens a terminal in the new worktree and updates the tree", async () => {
   const createWorktree = spyOn(transport, "createWorktree");
   const openTerminal = spyOn(transport, "openTerminal");
+  const write = spyOn(transport, "writeTerminal");
   open();
   await waitFor(() => expect(picked()).toBe("main"));
   fireEvent.click(screen.getByRole("button", { name: "develop" }));
@@ -180,9 +181,33 @@ test("create asks the service, opens a terminal in the new worktree and updates 
   // Its tab is shown, with the worktree's name.
   await waitFor(() => expect(screen.getByRole("tab", { name: "fix-cart" })).toBeDefined());
   expect(useHive.getState().tabs.map((t) => t.cwd)).toEqual([path]);
-  closeTerminal(useHive.getState().tabs[0].id);
+  // Claude is started in it, typed as the user would.
+  const id = useHive.getState().tabs[0].id;
+  await waitFor(() => expect(write).toHaveBeenCalledWith(id, "claude\r"));
+  closeTerminal(id);
   createWorktree.mockRestore();
   openTerminal.mockRestore();
+  write.mockRestore();
+});
+
+test("unticking Start claude opens a plain terminal; it needs the terminal option", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  open();
+  const claude = screen.getByLabelText("Start claude in the terminal") as HTMLInputElement;
+  expect(claude.checked).toBe(true);
+  fireEvent.click(screen.getByLabelText("Open a terminal in the new worktree"));
+  expect([claude.checked, claude.disabled]).toEqual([false, true]);
+  fireEvent.click(screen.getByLabelText("Open a terminal in the new worktree"));
+  fireEvent.click(claude);
+  expect([claude.checked, claude.disabled]).toEqual([false, false]);
+  type("plain-shell");
+  await waitFor(() => expect(create().disabled).toBe(false));
+  fireEvent.click(create());
+  await waitFor(() => expect(useHive.getState().tabs).toHaveLength(1));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(write).not.toHaveBeenCalled();
+  closeTerminal(useHive.getState().tabs[0].id);
+  write.mockRestore();
 });
 
 test("without the terminal option no terminal opens", async () => {

@@ -6,6 +6,7 @@ import {
   addTab,
   agentWorkingIn,
   apply,
+  fileVisible,
   initialState,
   openModal,
   panelWorktree,
@@ -18,9 +19,11 @@ import {
   setEditorNotice,
   setOpenFile,
   setRightPanel,
+  tabsPlace,
   toggleCollapsed,
   useHive,
   useTerminal,
+  visibleTabs,
 } from "./store";
 import { MOCK_REPOS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";
@@ -91,13 +94,71 @@ test("tabs open shown, switch with the selection and close to their neighbour", 
   expect([active(), useHive.getState().selection]).toEqual([1, "/a"]);
   removeTab(2); // not shown: the shown tab stays
   expect([tabs(), active()]).toEqual([[1, 3], 1]);
-  removeTab(1); // shown: its right neighbour takes over
-  expect([tabs(), active()]).toEqual([[3], 3]);
-  addTab(4, "/d");
-  removeTab(4); // shown and last: the new last tab takes over
-  expect([tabs(), active()]).toEqual([[3], 3]);
+  removeTab(1); // shown and alone in its place: none is shown
+  expect([tabs(), active()]).toEqual([[3], null]);
+  select(null); // every tab: the last one is shown
+  expect(active()).toBe(3);
   removeTab(3);
   expect([tabs(), active()]).toEqual([[], null]);
+});
+
+test("tabs belong to the worktree they opened in; a project shows its main worktree's", () => {
+  const [shop] = MOCK_REPOS;
+  const [main, login, checkout] = shop.worktrees;
+  apply({ type: "projects", projects: [shop] });
+  const shown = () => visibleTabs(useHive.getState()).map((t) => t.id);
+  const active = () => useHive.getState().activeTab;
+  addTab(1, main.path);
+  addTab(2, main.path);
+  addTab(3, login.path);
+  addTab(4, `${shop.path}/.claude/worktrees/gone`); // a removed worktree's: its project's
+  addTab(5, "/outside");
+  select(shop.id);
+  expect([shown(), active()]).toEqual([[1, 2, 4], 4]);
+  select(login.id);
+  expect([shown(), active()]).toEqual([[3], 3]);
+  activateTab({ id: 4, cwd: `${shop.path}/.claude/worktrees/gone` });
+  expect([useHive.getState().selection, active()]).toEqual([shop.id, 4]);
+  removeTab(4); // its right neighbour among the shown ones
+  expect(active()).toBe(2);
+  removeTab(2); // the last shown: the new last one
+  expect(active()).toBe(1);
+  select(checkout.id);
+  expect([shown(), active()]).toEqual([[], null]);
+  select("/outside");
+  expect(shown()).toEqual([5]);
+
+  // A selected agent shows its terminal's worktree, else the one it was placed in.
+  apply({
+    type: "agent_detected",
+    channel: 3,
+    id: "s",
+    project: shop.id,
+    worktree: main.id,
+    cwd: null,
+  });
+  select("s");
+  expect(tabsPlace(useHive.getState())).toBe(login.path);
+  apply({
+    type: "agent_detected",
+    channel: 9,
+    id: "t",
+    project: shop.id,
+    worktree: checkout.id,
+    cwd: null,
+  });
+  select("t");
+  expect(tabsPlace(useHive.getState())).toBe(checkout.id);
+
+  // The open file's tab goes with its worktree.
+  setOpenFile({ worktree: login.path, path: "a.ts" });
+  expect(fileVisible(useHive.getState())).toBe(false);
+  select(login.id);
+  expect(fileVisible(useHive.getState())).toBe(true);
+  select(null);
+  expect(fileVisible(useHive.getState())).toBe(true);
+  setOpenFile(null);
+  expect(fileVisible(useHive.getState())).toBe(false);
 });
 
 const agent = (id: string, terminal = 1) => ({

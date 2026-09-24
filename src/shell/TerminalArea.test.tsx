@@ -64,14 +64,18 @@ test("tabs switch, tell same-named worktrees apart, and show exit and missing ho
     addTab(2, apiMain.path);
     addTab(3, "/somewhere/else");
   });
-  // Both are "main": the project tells them apart. An unknown path shows as is.
+  // Only the selected worktree's tabs show: the last one opened selected its own place.
   const tabs = () => screen.getAllByRole("tab");
+  expect(tabs().map((t) => t.textContent)).toEqual(["/somewhere/else"]);
+  // With nothing selected every tab shows. Both are "main": the project tells them apart.
+  act(() => select(null));
   expect(tabs().map((t) => t.textContent)).toEqual(["mainshop", "mainapi", "/somewhere/else"]);
   expect(tabs().map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "false", "true"]);
 
   fireEvent.click(tabs()[0]);
-  expect(tabs()[0].getAttribute("aria-selected")).toBe("true");
+  expect(tabs().map((t) => t.getAttribute("aria-selected"))).toEqual(["true"]);
   expect(useHive.getState().selection).toBe(shopMain.path);
+  act(() => select(null));
 
   act(() => apply({ type: "unhooked_agent", channel: 1 }));
   act(() => apply({ type: "terminal_exited", channel: 2, code: 3 }));
@@ -115,9 +119,32 @@ test("the open file has its tab after the terminals, shown in place of the termi
 
   fireEvent.click(tab("app.ts"));
   expect(tabs()).toEqual(["false", "true"]);
-  // A new terminal is shown in front of the file.
+  // A terminal in another worktree selects it: only its tab shows, the file's goes with main.
   act(() => addTab(2, fixLogin.path));
-  expect(tabs()).toEqual(["false", "true", "false"]);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["fix-login"]);
+  expect(screen.queryByRole("region", { name: "src/app.ts" })).toBeNull();
+  act(() => select(shopMain.id));
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["main", "app.ts"]);
+  expect(tabs()).toEqual(["true", "false"]);
+  // Leaving the worktree while its file is shown hides the file; coming back shows a terminal.
+  fireEvent.click(tab("app.ts"));
+  act(() => select(fixLogin.id));
+  expect(useHive.getState().fileShown).toBe(false);
+  act(() => select(shopMain.id));
+  expect(tabs()).toEqual(["true", "false"]);
+});
+
+test("a worktree without terminals says so and opens one", () => {
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(5);
+  show();
+  act(() => addTab(1, shopMain.path));
+  act(() => select(fixLogin.id));
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(screen.getByText("No terminal in fix-login")).toBeDefined();
+  expect((document.querySelector(".terminal-host") as HTMLElement).hidden).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
+  expect(open.mock.calls[0]?.[0]).toBe(fixLogin.path);
+  open.mockRestore();
 });
 
 test("unsaved edits put a dot in place of the file tab's ×, named for screen readers", () => {

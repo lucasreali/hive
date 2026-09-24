@@ -60,10 +60,13 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   expect(await page.evaluate(() => document.fonts.check("13px 'IBM Plex Mono'"))).toBe(true);
   await page.screenshot({ path: "target/e2e/terminals.png" });
 
-  // Back to the first tab: its output is still there and its worktree is selected again.
-  await tabs.getByRole("tab", { name: "fix-login" }).click();
-  await expect(tree.getByRole("button", { name: "fix-login" })).toHaveAttribute(
-    "aria-current",
+  // Tabs belong to their worktree: only refactor-auth's shows now.
+  await expect(tabs.getByRole("tab")).toHaveText(["refactor-auth"]);
+  // Back to fix-login: its tab shows again, with its output still there.
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await expect(tabs.getByRole("tab")).toHaveText(["fix-login"]);
+  await expect(tabs.getByRole("tab", { name: "fix-login" })).toHaveAttribute(
+    "aria-selected",
     "true",
   );
   expect(await screen(page, 1)).toBe("mock$ echo one\necho one\nmock$");
@@ -80,13 +83,16 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   await expect.poll(() => screen(page, 1)).toBe("mock$ echo one\necho one\nmock$ echo one");
 
   // `exit` ends the shell: the tab stays, marked exited, until it is closed.
-  await tabs.getByRole("tab", { name: "refactor-auth" }).click();
+  await tree.getByRole("button", { name: "refactor-auth" }).click();
   await page.keyboard.press("Enter");
   await page.keyboard.type("exit");
   await page.keyboard.press("Enter");
   await expect(tabs.getByRole("tab", { name: "refactor-auth exited" })).toBeVisible();
 
   await page.getByRole("button", { name: "Close terminal refactor-auth" }).click();
+  await expect(tabs.getByRole("tab")).toHaveCount(0);
+  await expect(page.getByText("No terminal in refactor-auth")).toBeVisible();
+  await tree.getByRole("button", { name: "fix-login" }).click();
   await expect(tabs.getByRole("tab")).toHaveText(["fix-login"]);
   await expect(tabs.getByRole("tab", { name: "fix-login" })).toHaveAttribute(
     "aria-selected",
