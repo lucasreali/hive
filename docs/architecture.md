@@ -39,6 +39,7 @@ Windows                         WSL
 | `hive::bridge` | Relay plus detached daemon start (`setsid --fork`, stderr to `daemon.log`). |
 | `hive::wrapper` | Installs `<data>/hive/bin/claude` (sh wrapper) and `<data>/hive/hive-hooks.json` when the daemon starts. |
 | `hive::projects` | The projects the app follows: validation, `<data>/hive/projects.json`, worktrees per project for the sidebar, placing an agent's `cwd` in a worktree. |
+| `hive::files` | The files panel's worktree: `git ls-files` listing (sorted, capped), inotify watches on the listed directories and the git dir, debounce (the clock is passed in). |
 | `hive::worktree` | Worktrees in `.claude/worktrees/<name>` on branch `worktree-<name>`; git through the executable with separate arguments; `.worktreeinclude` copy. |
 
 ## Wire protocol
@@ -88,6 +89,9 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `create_worktree {project, name, base}` | app → service | 0 | `hive worktree create` in a followed project, from `base` (null: the main worktree's HEAD). |
 | `worktree_created {project, path, notes}` | service → app | 0 | The project with its updated worktrees, the new path, and what the CLI prints on stderr (a competing `WorktreeCreate` hook, the files copied from `.worktreeinclude`). |
 | `create_worktree_failed {project, name, message}` | service → app | 0 | The CLI's error, shown as is. |
+| `watch_worktree {path}` | app → service | 0 | Watch this worktree of a followed project for the files panel, instead of any other (one at a time). Refused with `error` ("<path> is not a worktree of a followed project"). |
+| `unwatch_worktree` | app → service | 0 | Stop watching (the files panel closed). |
+| `files {path, files, truncated}` | service → app | 0 | Every file git lists in the watched worktree `path` (tracked, and untracked but not ignored), sorted `/`-separated relative paths. Sent right after `watch_worktree` and after every change that alters the list (debounced). `truncated` when the list hit the cap (50 000 files or 3 MiB of names). A listing that fails (e.g. the worktree was removed) is sent as `error`. |
 | `error {message}` | service → client | 0 or n | A refused request, e.g. channel 0, a channel already open, a bad cwd, an unexpected message, or a second app. |
 
 Between the app's Rust side and the WebView (#24), control messages travel on one Tauri `Channel` (given by the `connect` command) as the service's JSON plus a `channel` field, e.g. `{"type":"terminal_opened","channel":1}`. Terminal output travels as raw bytes on a separate `Channel` per terminal (given by `open_terminal`). No Tauri events are used. The Rust side adds `app_version` and `app_protocol` (its own values) to `version_mismatch`, so the UI can show both sides, and one message of its own:
@@ -153,7 +157,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 3. Working or with subagents → waiting for you is "agent finished": `showNotification` (`src/shell/window.ts`) sends an OS notification through `tauri-plugin-notification` ("Agent finished", "project · worktree: waiting for you"). The capability allows only `is_permission_granted`, `request_permission` and `notify`. Outside Tauri nothing is shown.
 
 ### Projects
-1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. Worktrees are not watched yet (Stage 3).
+1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. The worktree list itself is not watched (only the files panel's worktree is, see below).
 2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare entries skipped.
 3. `add_project {path}` (the add-project dialog): the path must be absolute, an existing directory and inside a git repository with a working tree. It is normalised to the main worktree (the first entry of `git worktree list`), so a subfolder or a linked worktree adds its repository. A new project is appended to `<data>/hive/projects.json`; if that write fails the list is unchanged and the answer is `add_project_failed {error: storage}`.
 4. Project requests run on a blocking thread, off the app's frame loop, because git can be slow.
@@ -166,6 +170,14 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 4. `create_worktree` runs `worktree::create`, the CLI's code. On `worktree_created` the UI selects the new worktree, opens a terminal tab in it if asked (`openTerminal` of `src/terminals.ts` with its path), and closes the dialog; with notes, the dialog stays open to show them.
 
 The list is a JSON array of paths, written through a temporary file (mode 0600) renamed over it. A missing file is an empty list. An unreadable or corrupt one is moved to `projects.json.corrupt` with a warning on stderr (`daemon.log`), and the service starts with an empty list.
+
+### Files panel watch (3.1, #31)
+1. `followPanel` (`src/files.ts`) keeps the service watching `panelWorktree`: while the files panel is open, the selected worktree (a selected project is its main worktree, which has the same id) or the selected agent's worktree. It sends `watch_worktree` when that changes, `unwatch_worktree` when the panel closes, and `watch_worktree` again after a new `welcome` (a new service has no watch). The store keeps the last `files` as `worktreeFiles` (`{path, files, truncated}`); the panel shows it only when `path` matches.
+2. The service checks the path against the followed projects' worktrees, stops the previous watch task, and starts one (`hive::files::Watcher`, git on a blocking thread). The worktree's git dir comes from `git rev-parse --absolute-git-dir` (a linked worktree's is under the main repository's `.git/worktrees/<name>`).
+3. Listing: `git ls-files --cached --others --exclude-standard -z` (at most 32 MiB read; names that are not UTF-8 and nested repositories `dir/` skipped; duplicates from conflicts merged; sorted; capped). Every git command Hive runs has `GIT_OPTIONAL_LOCKS=0`, so reading never rewrites the index the watcher sees.
+4. Watches (inotify, `nix`): the directory of every listed file, every untracked directory (`git ls-files --others --directory`, so a new empty folder is watched), at most 8192; never inside ignored trees such as `node_modules` or `target`. In the git dir only `HEAD` and `index` count. Each re-list removes the watches of directories no longer listed before adding new ones (a renamed directory keeps its inotify watch, which must not be reused).
+5. Any other event, an inotify queue overflow included, starts a burst; 200 ms after its last event (at most 1 s after its first) the worktree is listed again from scratch. `State::worktree_changed` (`hive::daemon`) is the single point that reports the change: it sends `files` when the list differs from the last one sent.
+6. Known limit: in a chain of new empty untracked directories (`mkdir -p a/b/c`) only the top one is watched until a file appears; a file created deep inside it later shows up on the next re-list.
 
 ### Daemon start
 1. Prepare the runtime dir (0700, owned by the user).
