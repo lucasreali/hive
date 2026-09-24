@@ -87,7 +87,7 @@
 
 ## Stage 4 — Subagents and worktrees
 
-- [ ] **4.1** Register `WorktreeCreate` / `WorktreeRemove` in the generated hooks settings. *(#15)*
+- [x] **4.1** Register `WorktreeCreate` / `WorktreeRemove` in the generated hooks settings. *(#15)* `task/4.1-worktree-hooks` — *built without the hooks spike; defaults pending human review: timeouts 60 s (create) and 10 s (remove); after succeeding, `hook-create`/`hook-remove` forward the call like `hive hook` (200 ms, `HIVE_TERMINAL_ID`; create adds `worktree_path`), never changing stdout or the exit code; new events `worktree_created {name, path}` / `worktree_removed {path}` keep `agent_id`/`agent_type` for 4.2; the service then sends an unasked `projects`. Payload fields (`name`, `cwd`, `worktree_path`, `agent_id`) to confirm by spike 1.12.*
 - [ ] **4.2** Link subagents to their parent (using what the spike found); a subagent's own worktree appears nested under it, not at project level. *(#22)*
 - [ ] **4.3** Worktrees removed by `WorktreeRemove` disappear from the sidebar.
 
