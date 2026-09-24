@@ -14,6 +14,7 @@ import {
   MOCK_SESSIONS,
   MOCK_STATES,
   MOCK_TEXTS,
+  mockDirs,
   mockVersion,
 } from "./mock";
 
@@ -649,4 +650,47 @@ test("?mock=update offers an update whose install fails; otherwise none is offer
     { type: "update_available", version: "9.9.9" },
     { type: "update_failed", error: "mock: nothing to install" },
   ]);
+});
+
+test("folders are browsed on both sides of the fake machine", async () => {
+  const { transport, messages } = await connected();
+  messages.length = 0;
+  await transport.listDirs("", false);
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "dirs",
+      path: "/home/user/",
+      windows: false,
+      linux_path: "/home/user/",
+      parent: "/home/",
+      dirs: [
+        { name: "dotfiles", git: true },
+        { name: "Downloads", git: false },
+        { name: "projects", git: false },
+      ],
+      error: null,
+    },
+  ]);
+  const windows = mockDirs("", true);
+  expect(windows.path).toBe("C:\\Users\\user\\");
+  expect(windows.linux_path).toBe("/mnt/c/Users/user/");
+  expect(windows.dirs.map((d) => d.name)).toEqual(["Documents", "source"]);
+  const site = mockDirs("C:/Users\\user\\source\\si", true);
+  expect([site.linux_path, site.parent, site.dirs]).toEqual([
+    "/mnt/c/Users/user/source/si",
+    "C:/Users\\user\\",
+    [{ name: "site", git: true }],
+  ]);
+  expect(mockDirs("/", false).parent).toBeNull();
+  expect(mockDirs("/home/user/dotfiles/", false).dirs).toEqual([]);
+  expect(mockDirs("x", true).error).toBe("type a full path");
+  expect(mockDirs("/nowhere/x", false)).toEqual({
+    path: "/nowhere/x",
+    windows: false,
+    linux_path: null,
+    parent: null,
+    dirs: [],
+    error: "cannot open /nowhere/: No such file or directory (os error 2)",
+  });
 });

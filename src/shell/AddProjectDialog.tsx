@@ -11,9 +11,10 @@ export const LIST_DELAY_MS = 150;
 /** Where the last Windows | WSL choice is remembered (a UI preference, not service data). */
 const SIDE = "hive.folderSide";
 
-const savedWindows = () => {
+/** Whether the last choice was Windows. */
+export const savedWindows = (storage: Pick<Storage, "getItem"> | null = safeStorage()) => {
   try {
-    return safeStorage()?.getItem(SIDE) === "windows";
+    return storage?.getItem(SIDE) === "windows";
   } catch {
     return false;
   }
@@ -37,7 +38,7 @@ const saveWindows = (windows: boolean) => {
 export function AddProjectDialog() {
   const error = useHive((s) => s.addProjectError);
   const wsl = useHive((s) => s.connection.status === "connected" && s.connection.distro !== null);
-  const [side, setSide] = useState(savedWindows);
+  const [side, setSide] = useState(() => savedWindows());
   const windows = wsl && side;
   const [path, setPath] = useState("");
   // The field shows the home folder once it is listed, until the user types.
@@ -125,7 +126,9 @@ export function AddProjectDialog() {
                     setFill(false);
                     clearAddProjectError();
                   }}
-                  placeholder={windows ? "C:\\Users\\you\\projects\\shop" : "/home/you/projects/shop"}
+                  placeholder={
+                    windows ? "C:\\Users\\you\\projects\\shop" : "/home/you/projects/shop"
+                  }
                   spellCheck={false}
                   autoComplete="off"
                   aria-invalid={error !== null}

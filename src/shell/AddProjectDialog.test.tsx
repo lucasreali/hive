@@ -4,6 +4,7 @@ import { App } from "../App";
 import { apply, initialState, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
+import { savedWindows } from "./AddProjectDialog";
 
 beforeAll(async () => {
   // The mock service answers listings and adds.
@@ -68,7 +69,9 @@ test("typing filters the typed folder's subfolders; a click enters one and ↑ g
   await waitFor(() => expect(folders()).toEqual(["/home/user/", "api", "notes", "shop"]));
   // A folder that does not exist says so.
   type("/nowhere/x");
-  await waitFor(() => expect(folders()).toEqual([expect.stringContaining("cannot open /nowhere/")]));
+  await waitFor(() =>
+    expect(folders()).toEqual([expect.stringContaining("cannot open /nowhere/")]),
+  );
   expect(submit().disabled).toBe(true);
 });
 
@@ -136,14 +139,27 @@ test("a blocked storage only loses the remembered choice", async () => {
   const fail = () => {
     throw new Error("blocked");
   };
-  const get = spyOn(Storage.prototype, "getItem").mockImplementation(fail);
-  const set = spyOn(Storage.prototype, "setItem").mockImplementation(fail);
-  open("Ubuntu");
-  expect(kind()?.value).toBe("wsl");
-  fireEvent.change(kind() as HTMLSelectElement, { target: { value: "windows" } });
-  expect(kind()?.value).toBe("windows");
-  get.mockRestore();
-  set.mockRestore();
+  expect(savedWindows({ getItem: fail })).toBe(false);
+  expect(savedWindows(null)).toBe(false);
+  const real = Object.getOwnPropertyDescriptor(window, "localStorage") as PropertyDescriptor;
+  let writes = 0;
+  const blocked = {
+    getItem: () => null,
+    setItem: () => {
+      writes++;
+      fail();
+    },
+  };
+  Object.defineProperty(window, "localStorage", { configurable: true, get: () => blocked });
+  try {
+    open("Ubuntu");
+    expect(kind()?.value).toBe("wsl");
+    fireEvent.change(kind() as HTMLSelectElement, { target: { value: "windows" } });
+    expect(kind()?.value).toBe("windows");
+    expect(writes).toBe(1);
+  } finally {
+    Object.defineProperty(window, "localStorage", real);
+  }
 });
 
 test("editing the field clears the refusal", () => {
