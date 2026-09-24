@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
-import { addTab, apply, initialState, useHive } from "../store";
+import { addTab, apply, initialState, select, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
@@ -33,6 +33,26 @@ test("New terminal opens one in the selected worktree, shown in its tab", async 
   expect(open.mock.calls[0][0]).toBe(fixLogin.path);
   await waitFor(() => expect(tab("fix-login").getAttribute("aria-selected")).toBe("true"));
   expect(tab("fix-login").closest(".tab")?.getAttribute("title")).toBe(fixLogin.path);
+  open.mockRestore();
+});
+
+test("with an agent selected (F8), New terminal opens one in the agent's worktree", () => {
+  const open = spyOn(transport, "openTerminal");
+  show();
+  const button = screen.getByTitle("New terminal (Ctrl+Shift+T)") as HTMLButtonElement;
+  const agent = { type: "agent_detected", channel: 9, cwd: "/x" } as const;
+  act(() => {
+    apply({ ...agent, id: "s", project: shop.id, worktree: fixLogin.id });
+    select("s");
+  });
+  fireEvent.click(button);
+  expect(open.mock.calls.map((call) => call[0])).toEqual([fixLogin.path]);
+  // An agent outside every project has no worktree to open one in.
+  act(() => {
+    apply({ ...agent, id: "out", project: null, worktree: null });
+    select("out");
+  });
+  expect(button.disabled).toBe(true);
   open.mockRestore();
 });
 
