@@ -2,6 +2,7 @@ import {
   type Agent,
   type HiveState,
   openModal,
+  owner,
   pendingAgents,
   setRightPanel,
   useHive,
@@ -13,11 +14,7 @@ import { interceptKeys } from "./terminals";
 
 /** The selected project, the project of the selected worktree, or else the first project. */
 function currentProject(s: HiveState): string | null {
-  const list = Object.values(s.projects ?? {});
-  const selected = list.find(
-    (p) => p.id === s.selection || p.worktrees.some((w) => w.id === s.selection),
-  );
-  return (selected ?? list[0])?.id ?? null;
+  return (owner(s.projects, s.selection) ?? Object.values(s.projects ?? {})[0])?.id ?? null;
 }
 
 /**
