@@ -313,6 +313,29 @@ impl Hive {
     pub fn open_file(&self, worktree: String, path: String) -> Result<(), String> {
         self.link().send(0, &Control::OpenFile { worktree, path })
     }
+
+    /// The answer arrives as `file_saved` or `save_failed`.
+    pub fn save_file(
+        &self,
+        worktree: String,
+        path: String,
+        content: String,
+        version: Option<String>,
+    ) -> Result<(), String> {
+        let save = Control::SaveFile {
+            worktree,
+            path,
+            content,
+            version,
+        };
+        self.link().send(0, &save)
+    }
+
+    /// The answer arrives as `editor_target`.
+    pub fn open_in_editor(&self, worktree: String, path: String) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::OpenInEditor { worktree, path })
+    }
 }
 
 /// A piped stdio handle of the bridge; always there, since every one is requested.
@@ -484,6 +507,26 @@ pub mod commands {
     #[tauri::command]
     pub fn open_file(hive: State<'_, Hive>, worktree: String, path: String) -> Result<(), String> {
         hive.open_file(worktree, path)
+    }
+
+    #[tauri::command]
+    pub fn save_file(
+        hive: State<'_, Hive>,
+        worktree: String,
+        path: String,
+        content: String,
+        version: Option<String>,
+    ) -> Result<(), String> {
+        hive.save_file(worktree, path, content, version)
+    }
+
+    #[tauri::command]
+    pub fn open_in_editor(
+        hive: State<'_, Hive>,
+        worktree: String,
+        path: String,
+    ) -> Result<(), String> {
+        hive.open_in_editor(worktree, path)
     }
 }
 

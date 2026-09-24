@@ -26,6 +26,8 @@ fn main() {
             commands::unwatch_worktree,
             commands::list_changes,
             commands::open_file,
+            commands::save_file,
+            commands::open_in_editor,
         ])
         .build(tauri::generate_context!());
     match result {

@@ -11,6 +11,7 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "opener:default",
+    { "identifier": "opener:allow-open-path", "allow": [{ "path": "**" }] },
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
     "notification:allow-notify"

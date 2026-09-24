@@ -1,5 +1,5 @@
 use hive::file::{TEXT_LIMIT, version};
-use hive_protocol::{Control, Role};
+use hive_protocol::{Control, Role, SaveError};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
@@ -119,6 +119,78 @@ async fn a_file_is_read_on_disk_and_at_head() {
     follow(&mut conn, &fresh).await;
     let staged = (text("s\n"), None, false, None);
     assert_eq!(sides(&mut conn, &fresh, "staged.txt").await, staged);
+    drop(conn);
+    stop(daemon);
+}
+
+async fn save(conn: &mut Conn, worktree: &str, content: &str, version: Option<String>) -> Control {
+    let save = Control::SaveFile {
+        worktree: worktree.to_owned(),
+        path: "a.txt".to_owned(),
+        content: content.to_owned(),
+        version,
+    };
+    conn.send(0, save).await;
+    conn.control().await.1
+}
+
+#[tokio::test]
+async fn a_save_writes_only_over_the_version_the_app_read() {
+    let repo = Repo::new();
+    repo.commit("a.txt", "one\n");
+    std::fs::write(repo.root.join("run.cmd"), "").unwrap();
+    let root = repo.root.display().to_string();
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    let refused = save(&mut conn, &root, "x", None).await;
+    assert!(matches!(
+        refused,
+        Control::SaveFailed {
+            error: SaveError::InvalidPath,
+            ..
+        }
+    ));
+    follow(&mut conn, &root).await;
+
+    let two = version(b"two\n");
+    assert_eq!(
+        save(&mut conn, &root, "two\n", Some(version(b"one\n"))).await,
+        Control::FileSaved {
+            worktree: root.clone(),
+            path: "a.txt".to_owned(),
+            version: two.clone(),
+        }
+    );
+    assert_eq!(sides(&mut conn, &root, "a.txt").await.0, text("two\n"));
+
+    // An agent wrote meanwhile: the app's version is stale and nothing is written.
+    repo.write("a.txt", "agent\n");
+    assert_eq!(
+        save(&mut conn, &root, "mine\n", Some(two)).await,
+        Control::SaveFailed {
+            worktree: root.clone(),
+            path: "a.txt".to_owned(),
+            error: SaveError::Conflict,
+            message: "a.txt changed on disk".to_owned(),
+        }
+    );
+    assert_eq!(sides(&mut conn, &root, "a.txt").await.0, text("agent\n"));
+
+    // Windows would run a .cmd file, so it is not handed to the app.
+    let open = Control::OpenInEditor {
+        worktree: root.clone(),
+        path: "run.cmd".to_owned(),
+    };
+    conn.send(0, open).await;
+    assert_eq!(
+        conn.control().await.1,
+        Control::EditorTarget {
+            worktree: root.clone(),
+            path: "run.cmd".to_owned(),
+            windows_path: None,
+            error: Some("Windows would run a .cmd file instead of opening it in an editor".into()),
+        }
+    );
     drop(conn);
     stop(daemon);
 }

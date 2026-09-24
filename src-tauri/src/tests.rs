@@ -265,6 +265,21 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         path: "a".into(),
     };
     assert_eq!(service.control().await, (0, open));
+    hive.save_file("/r".into(), "a".into(), "x".into(), Some("v".into()))
+        .unwrap();
+    let save = Control::SaveFile {
+        worktree: "/r".into(),
+        path: "a".into(),
+        content: "x".into(),
+        version: Some("v".into()),
+    };
+    assert_eq!(service.control().await, (0, save));
+    hive.open_in_editor("/r".into(), "a".into()).unwrap();
+    let editor = Control::OpenInEditor {
+        worktree: "/r".into(),
+        path: "a".into(),
+    };
+    assert_eq!(service.control().await, (0, editor));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -397,6 +412,11 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.unwatch_worktree(), not_connected);
     assert_eq!(hive.list_changes("/r".into()), not_connected);
     assert_eq!(hive.open_file("/r".into(), "a".into()), not_connected);
+    assert_eq!(
+        hive.save_file("/r".into(), "a".into(), "x".into(), None),
+        not_connected
+    );
+    assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
     let (channel, _bytes) = output();
     assert_eq!(
         hive.open_terminal("/".into(), 1, 1, channel),
@@ -561,7 +581,9 @@ fn commands_reach_the_managed_hive() {
             watch_worktree,
             unwatch_worktree,
             list_changes,
-            open_file
+            open_file,
+            save_file,
+            open_in_editor
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -599,6 +621,7 @@ fn commands_reach_the_managed_hive() {
     let watch = json!({"path": "/r"});
     let changes = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a"});
+    let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
@@ -607,6 +630,8 @@ fn commands_reach_the_managed_hive() {
         ("unwatch_worktree", &json!({})),
         ("list_changes", &changes),
         ("open_file", &file),
+        ("save_file", &save),
+        ("open_in_editor", &file),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
@@ -636,7 +661,9 @@ fn commands_reach_the_managed_hive() {
         ("watch_worktree", watch),
         ("unwatch_worktree", json!({})),
         ("list_changes", changes),
-        ("open_file", file),
+        ("open_file", file.clone()),
+        ("save_file", save),
+        ("open_in_editor", file),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

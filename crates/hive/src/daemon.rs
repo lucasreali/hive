@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::ffi::OsStr;
 use std::fs::{File, Permissions};
 use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -13,7 +14,7 @@ use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameType, PROTOCOL_VERSION, Role,
+    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameType, PROTOCOL_VERSION, Role, SaveError,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -589,6 +590,41 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 .worktree(&worktree)
                 .and_then(|dir| file::read(&dir, &path));
             file::message(worktree, path, read)
+        }),
+        Ok(Control::SaveFile {
+            worktree,
+            path,
+            content,
+            version,
+        }) => state.projects(move |projects| {
+            let saved = match projects.worktree(&worktree) {
+                Ok(dir) => file::save(&dir, &path, &content, version.as_deref()),
+                Err(err) => Err((SaveError::InvalidPath, err.to_string())),
+            };
+            match saved {
+                Ok(version) => Control::FileSaved {
+                    worktree,
+                    path,
+                    version,
+                },
+                Err((error, message)) => Control::SaveFailed {
+                    worktree,
+                    path,
+                    error,
+                    message,
+                },
+            }
+        }),
+        Ok(Control::OpenInEditor { worktree, path }) => state.projects(move |projects| {
+            let located = projects
+                .worktree(&worktree)
+                .and_then(|dir| file::windows_path(&dir, &path, OsStr::new("wslpath")));
+            Control::EditorTarget {
+                worktree,
+                path,
+                error: located.as_ref().err().map(ToString::to_string),
+                windows_path: located.ok(),
+            }
         }),
         _ => {
             let message = "unexpected message from the app".to_owned();
