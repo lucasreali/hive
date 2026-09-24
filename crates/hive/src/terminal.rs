@@ -1,7 +1,7 @@
 //! PTY-backed terminals running fish. Pass-through only: no scrollback is kept here.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use nix::sys::signal::{Signal, killpg};
@@ -23,6 +23,8 @@ pub struct Terminal {
     pub session: i32,
     /// Unhooked-`claude` detector for this terminal.
     pub watch: Watch,
+    /// When the PTY last printed something (the silence rule of agent states).
+    pub last_output: Instant,
     input: mpsc::UnboundedSender<Input>,
 }
 
@@ -70,6 +72,7 @@ pub fn spawn(
         Terminal {
             session,
             watch: Watch::default(),
+            last_output: Instant::now(),
             input,
         },
         output,
