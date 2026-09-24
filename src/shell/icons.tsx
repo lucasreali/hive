@@ -15,7 +15,7 @@ import type { AgentState } from "../store";
 // Inline SVG icons from the prototype (docs/prototype/HiveApp.dc.html).
 
 // The title bar's Hive logo: a honeycomb of hollow cells with one lit, solid cell (the human's
-// drawing), in the system's blues toned down to its greys (`--logo-cell`, `--logo-lit`).
+// drawing), in the color of the text beside it.
 const HEX = "M0-20L17.32-10V10L0 20L-17.32 10V-10Z";
 const HOLE = "M0-13L11.26-6.5V6.5L0 13L-11.26 6.5V-6.5Z";
 const CELLS = [
@@ -35,10 +35,10 @@ export const HiveIcon = () => (
         d={`${HEX} ${HOLE}`}
         fillRule="evenodd"
         transform={`translate(${x} ${y})`}
-        fill="var(--logo-cell)"
+        fill="currentColor"
       />
     ))}
-    <path d={HEX} transform="translate(19.32 -33.46)" fill="var(--logo-lit)" />
+    <path d={HEX} transform="translate(19.32 -33.46)" fill="currentColor" />
   </svg>
 );
 
