@@ -27,6 +27,9 @@ export type ServiceMessage =
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
   | ({ type: "create_worktree_failed" } & CreateFailure)
+  | ({ type: "files" } & WorktreeFiles)
+  // A refused request, e.g. watching a worktree that is not followed. Not stored.
+  | { type: "error"; message: string }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -94,6 +97,12 @@ export type NameCheck = {
 };
 
 export type CreateFailure = { project: string; name: string; message: string };
+
+/**
+ * Every file git lists in the watched worktree `path`: sorted `/`-separated relative paths,
+ * replaced as a whole on each `files`. `truncated` when the service's cap cut the list.
+ */
+export type WorktreeFiles = { path: string; files: string[]; truncated: boolean };
 
 /** Answers for the new-worktree dialog; reset whenever a dialog opens. */
 export type WorktreeDialog = {
@@ -173,6 +182,8 @@ export type HiveState = {
   agents: Record<string, Agent>;
   /** By session id; kept apart from `agents` so either message may arrive first. */
   agentStates: Record<string, AgentStatus>;
+  /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
+  worktreeFiles: WorktreeFiles | null;
 };
 
 export const initialState: HiveState = {
@@ -192,6 +203,7 @@ export const initialState: HiveState = {
   terminals: {},
   agents: {},
   agentStates: {},
+  worktreeFiles: null,
 };
 
 export const useHive = create<HiveState>()(() => initialState);
@@ -262,12 +274,17 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...patchDialog(s, { created: { project: project.id, path, notes } }),
       };
     }
+    case "files": {
+      const { type: _, ...worktreeFiles } = m;
+      return { worktreeFiles };
+    }
     case "disconnected":
-      // The service is gone, and every agent with it.
+      // The service is gone, and every agent and the watch with it.
       return {
         connection: { status: "disconnected", reason: m.reason },
         agents: {},
         agentStates: {},
+        worktreeFiles: null,
       };
     default:
       // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.
@@ -328,6 +345,17 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
     if (status && (!top || status.urgency > top.urgency)) top = status;
   }
   return top?.state ?? null;
+}
+
+/**
+ * The worktree the files panel shows while it is open: the selected worktree (a selected
+ * project is its main worktree, which shares its id), or the selected agent's worktree.
+ */
+export function panelWorktree(s: HiveState): string | null {
+  if (s.rightPanel !== "files" || s.selection === null) return null;
+  const projects = Object.values(s.projects ?? {});
+  if (projects.some((p) => p.worktrees.some((w) => w.id === s.selection))) return s.selection;
+  return s.agents[s.selection]?.worktree ?? null;
 }
 
 /** Re-renders only when this agent's entry changes. */

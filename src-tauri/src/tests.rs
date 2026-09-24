@@ -251,6 +251,11 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: Some("main".into()),
     };
     assert_eq!(service.control().await, (0, create));
+    hive.watch_worktree("/r".into()).unwrap();
+    let watch = Control::WatchWorktree { path: "/r".into() };
+    assert_eq!(service.control().await, (0, watch));
+    hive.unwatch_worktree().unwrap();
+    assert_eq!(service.control().await, (0, Control::UnwatchWorktree));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -379,6 +384,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.create_worktree("/r".into(), "x".into(), None),
         not_connected
     );
+    assert_eq!(hive.watch_worktree("/r".into()), not_connected);
+    assert_eq!(hive.unwatch_worktree(), not_connected);
     let (channel, _bytes) = output();
     assert_eq!(
         hive.open_terminal("/".into(), 1, 1, channel),
@@ -539,7 +546,9 @@ fn commands_reach_the_managed_hive() {
             add_project,
             list_branches,
             validate_worktree_name,
-            create_worktree
+            create_worktree,
+            watch_worktree,
+            unwatch_worktree
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -574,10 +583,13 @@ fn commands_reach_the_managed_hive() {
     let branches = json!({"project": "/r"});
     let validate = json!({"project": "/r", "name": "x"});
     let create = json!({"project": "/r", "name": "x", "base": null});
+    let watch = json!({"path": "/r"});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
         ("create_worktree", &create),
+        ("watch_worktree", &watch),
+        ("unwatch_worktree", &json!({})),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
@@ -604,6 +616,8 @@ fn commands_reach_the_managed_hive() {
         ("list_branches", branches),
         ("validate_worktree_name", validate),
         ("create_worktree", create),
+        ("watch_worktree", watch),
+        ("unwatch_worktree", json!({})),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

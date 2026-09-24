@@ -6,6 +6,7 @@ import {
   apply,
   initialState,
   openModal,
+  panelWorktree,
   removeTab,
   type ServiceMessage,
   select,
@@ -213,4 +214,35 @@ test("new-worktree answers are kept for the dialog until it opens again", () => 
   openModal("new-worktree");
   expect(useHive.getState().modalProject).toBeNull();
   expect(useHive.getState().worktreeDialog).toEqual(initialState.worktreeDialog);
+});
+
+test("files replace the watched worktree's list; a disconnect drops it", () => {
+  apply({ type: "files", path: "/a", files: ["x"], truncated: false });
+  apply({ type: "files", path: "/b", files: ["y", "z"], truncated: true });
+  const files = { path: "/b", files: ["y", "z"], truncated: true };
+  expect(useHive.getState().worktreeFiles).toEqual(files);
+  apply({ type: "disconnected", reason: "gone" });
+  expect(useHive.getState().worktreeFiles).toBeNull();
+});
+
+test("the files panel shows the selected worktree or the selected agent's", () => {
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  const worktree = (shop.worktrees[1] as { id: string }).id;
+  apply({ type: "projects", projects: MOCK_REPOS });
+  const agent = { project: shop.id, worktree, cwd: `${worktree}/src` };
+  apply({ type: "agent_detected", channel: 1, id: "s1", ...agent });
+  const shown = () => panelWorktree(useHive.getState());
+  select(worktree);
+  expect(shown()).toBeNull();
+  setRightPanel("files");
+  expect(shown()).toBe(worktree);
+  // A project is its main worktree.
+  select(shop.id);
+  expect(shown()).toBe(shop.id);
+  select("s1");
+  expect(shown()).toBe(worktree);
+  select("unknown");
+  expect(shown()).toBeNull();
+  select(null);
+  expect(shown()).toBeNull();
 });

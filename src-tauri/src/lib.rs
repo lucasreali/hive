@@ -294,6 +294,15 @@ impl Hive {
         };
         self.link().send(0, &create)
     }
+
+    /// Answered by `files` now and after every change in the worktree.
+    pub fn watch_worktree(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::WatchWorktree { path })
+    }
+
+    pub fn unwatch_worktree(&self) -> Result<(), String> {
+        self.link().send(0, &Control::UnwatchWorktree)
+    }
 }
 
 /// A piped stdio handle of the bridge; always there, since every one is requested.
@@ -445,6 +454,16 @@ pub mod commands {
         base: Option<String>,
     ) -> Result<(), String> {
         hive.create_worktree(project, name, base)
+    }
+
+    #[tauri::command]
+    pub fn watch_worktree(hive: State<'_, Hive>, path: String) -> Result<(), String> {
+        hive.watch_worktree(path)
+    }
+
+    #[tauri::command]
+    pub fn unwatch_worktree(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.unwatch_worktree()
     }
 }
 

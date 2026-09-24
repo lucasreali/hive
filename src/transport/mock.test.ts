@@ -7,6 +7,7 @@ import {
   LOAD_STAGGER_MS,
   LOAD_START_MS,
   MOCK_BRANCHES,
+  MOCK_FILES,
   MOCK_REPOS,
   MOCK_STATES,
 } from "./mock";
@@ -255,4 +256,45 @@ test("?mock=load replays a recording into each terminal and marks every echo", a
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("a watched worktree lists its files and again after a touch in its terminal", async () => {
+  const { transport, messages } = await connected();
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  const fix = (shop.worktrees[1] as { path: string }).path;
+  const filesOf = () => messages.filter((m) => m.type === "files" || m.type === "error");
+  await transport.watchWorktree("/nowhere");
+  await transport.watchWorktree(shop.path);
+  await tick();
+  const [refused, main] = filesOf();
+  const message = "/nowhere is not a worktree of a followed project";
+  expect(refused).toEqual({ type: "error", message });
+  expect(main).toMatchObject({ type: "files", path: shop.path, truncated: false });
+  // The main worktree has enough files to scroll.
+  expect(main?.type === "files" && main.files.length).toBe(MOCK_FILES.length + 400);
+  await transport.watchWorktree(fix);
+  await tick();
+  expect(filesOf()[2]).toEqual({ type: "files", path: fix, files: MOCK_FILES, truncated: false });
+
+  const id = await transport.openTerminal(fix, 80, 24, () => {});
+  await transport.writeTerminal(id, "touch a.txt\r");
+  await tick();
+  const touched = ["a.txt", ...MOCK_FILES].sort();
+  expect(filesOf()[3]).toEqual({ type: "files", path: fix, files: touched, truncated: false });
+  // Unwatched, or outside a worktree, a touch sends nothing.
+  await transport.unwatchWorktree();
+  await transport.writeTerminal(id, "touch b.txt\r");
+  await transport.writeTerminal(id, "cd src\r");
+  await transport.writeTerminal(id, "touch c.txt\r");
+  // A worktree touched before it is watched keeps the file.
+  const other = await transport.openTerminal(shop.path, 80, 24, () => {});
+  await transport.writeTerminal(other, "touch d.txt\r");
+  await tick();
+  expect(filesOf()).toHaveLength(4);
+  await transport.watchWorktree(fix);
+  await transport.watchWorktree(shop.path);
+  await tick();
+  const [, , , , again, main2] = filesOf();
+  expect(again?.type === "files" && again.files).toEqual(["b.txt", ...touched].sort());
+  expect(main2?.type === "files" && main2.files.includes("d.txt")).toBe(true);
 });

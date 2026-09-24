@@ -112,6 +112,34 @@ export const MOCK_BRANCHES: Record<string, { local: string[]; remote: string[] }
   "/home/user/dotfiles": { local: ["main"], remote: ["origin/main"] },
 };
 
+/**
+ * What the fake service lists in every worktree: a small web app, plus enough generated
+ * files in a project's main worktree to need scrolling.
+ */
+export const MOCK_FILES = [
+  ".gitignore",
+  "README.md",
+  "config/shipping.json",
+  "docs/api.md",
+  "package.json",
+  "src/App.tsx",
+  "src/auth/login.ts",
+  "src/auth/session.ts",
+  "src/checkout/Cart.tsx",
+  "src/checkout/CheckoutSummary.tsx",
+  "src/checkout/validators.ts",
+  "src/components/Button.tsx",
+  "src/components/Header.tsx",
+  "src/server.ts",
+  "tests/checkout.test.ts",
+  "tsconfig.json",
+];
+const mockFiles = (worktree: Worktree) =>
+  [
+    ...MOCK_FILES,
+    ...(worktree.main ? Array.from({ length: 400 }, (_, i) => `src/icons/icon-${i}.tsx`) : []),
+  ].sort();
+
 // A stand-in for `hive::worktree::check_name` and its CLI wording; the real rule lives in Rust.
 function nameError(project: Project, name: string): string | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) {
@@ -127,7 +155,8 @@ function nameError(project: Project, name: string): string | null {
  * `cd <dir>` moves it and `claude` detects an idle agent there (removed when the terminal
  * exits); every later line sets that agent working.
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
- * `MOCK_BRANCHES`, and new worktrees are added to the fake project.
+ * `MOCK_BRANCHES`, and new worktrees are added to the fake project. A watched worktree lists
+ * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list again.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
  * "empty" starts with no projects; "states" adds `MOCK_STATES`' agents. "load" (1.11) replays a recording into every terminal right
@@ -187,6 +216,21 @@ export function createMockTransport(
   };
   const setState = (id: string, state: AgentState) =>
     later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
+  // Files by worktree path, and the one watched.
+  const files = new Map<string, string[]>();
+  let watched: string | null = null;
+  const worktreeAt = (path: string) =>
+    projects.flatMap((p) => p.worktrees).find((w) => w.path === path);
+  const sendFiles = (path: string) =>
+    later({ type: "files", path, files: files.get(path) as string[], truncated: false });
+  // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
+  const touch = (cwd: string, name: string) => {
+    const worktree = worktreeAt(cwd);
+    if (!worktree) return;
+    const listed = files.get(cwd) ?? mockFiles(worktree);
+    files.set(cwd, [...new Set([...listed, name])].sort());
+    if (watched === cwd) sendFiles(cwd);
+  };
 
   return {
     async connect(onMessage) {
@@ -262,6 +306,7 @@ export function createMockTransport(
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
         if (terminal.agent && line) setState(terminal.agent, "working");
         if (line === "claude") detect(id, terminal);
+        if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;
@@ -269,6 +314,19 @@ export function createMockTransport(
         print(id, `\r\n${line ? `${line}\r\n` : ""}${PROMPT}`);
       }
       if (scenario === "load") print(id, ECHO_MARK);
+    },
+    async watchWorktree(path) {
+      const worktree = worktreeAt(path);
+      watched = worktree ? path : null;
+      if (!worktree) {
+        const message = `${path} is not a worktree of a followed project`;
+        return void later({ type: "error", message });
+      }
+      if (!files.has(path)) files.set(path, mockFiles(worktree));
+      sendFiles(path);
+    },
+    async unwatchWorktree() {
+      watched = null;
     },
     async resizeTerminal() {},
     async closeTerminal(id) {
