@@ -20,7 +20,7 @@ const INCLUDE_FILE: &str = ".worktreeinclude";
 /// Most bytes of branch names listed for the app; a repository with more is cut short.
 const BRANCHES_LIMIT: usize = 1024 * 1024;
 /// Most bytes read from one git command's stdout, and separately from its stderr.
-const OUTPUT_LIMIT: u64 = 64 * 1024 * 1024;
+const OUTPUT_LIMIT: u64 = 67_108_864; // 64 MiB
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {

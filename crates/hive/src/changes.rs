@@ -13,13 +13,13 @@ use hive_protocol::{ChangedFile, Control, FileStatus};
 use crate::worktree::{read_limited, run_git};
 
 /// Most bytes read from `git status` or `git diff`.
-const GIT_LIMIT: u64 = 16 * 1024 * 1024;
+const GIT_LIMIT: u64 = 16_777_216; // 16 MiB
 /// Untracked files larger than this are not counted (their lines show as unknown).
-const UNTRACKED_LIMIT: u64 = 8 * 1024 * 1024;
+const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
 /// Git's binary heuristic: a NUL byte in the first 8000 bytes.
 const BINARY_PROBE: usize = 8000;
 /// Most bytes of JSON for the files of one `changes` message, well under `MAX_PAYLOAD`.
-const MESSAGE_BUDGET: usize = 3 * 1024 * 1024;
+const MESSAGE_BUDGET: usize = 3_145_728; // 3 MiB
 
 /// A worktree's changes; `files` may be cut short (`truncated`), the totals never are.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -34,16 +34,14 @@ pub struct Changes {
 /// The changes of the worktree at `dir` against `HEAD` (the empty tree before the first
 /// commit).
 pub fn list(dir: &Path) -> io::Result<Changes> {
-    let status = git(
-        dir,
-        &[
-            "status",
-            "--porcelain=v2",
-            "-z",
-            "--untracked-files=all",
-            "--find-renames",
-        ],
-    )?;
+    let status = [
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=all",
+        "--find-renames",
+    ];
+    let status = git(dir, &status)?;
     let head = git_ok(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
     let base = if head.is_empty() {
         git(dir, &["hash-object", "-t", "tree", "/dev/null"])?
@@ -51,19 +49,17 @@ pub fn list(dir: &Path) -> io::Result<Changes> {
         head
     };
     let base = String::from_utf8_lossy(&base).trim().to_owned();
-    let numstat = git(
-        dir,
-        &[
-            "diff",
-            "--numstat",
-            "-z",
-            "--find-renames",
-            "--no-ext-diff",
-            "--no-textconv",
-            &base,
-            "--",
-        ],
-    )?;
+    let diff = [
+        "diff",
+        "--numstat",
+        "-z",
+        "--find-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        &base,
+        "--",
+    ];
+    let numstat = git(dir, &diff)?;
     Ok(collect(
         dir,
         parse_status(&status),
@@ -402,6 +398,13 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         .len()
             + 1;
         assert!(json + next > MESSAGE_BUDGET, "the next file did not fit");
+    }
+
+    #[test]
+    fn a_folder_outside_git_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = list(dir.path()).unwrap_err().to_string();
+        assert!(err.starts_with("git status --porcelain=v2"), "{err}");
     }
 
     #[test]
