@@ -1,16 +1,21 @@
-import type { KeyboardEvent, ReactNode } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
+import { nextPending } from "../shortcuts";
 import {
   type Agent,
   type AgentState,
   activateTab,
+  mostUrgent,
   openModal,
   type Project,
+  pendingAgents,
   select,
   toggleCollapsed,
   useHive,
+  type Worktree,
 } from "../store";
 import { transport } from "../transport";
 import {
+  BellIcon,
   BranchIcon,
   ChevronIcon,
   FolderIcon,
@@ -40,14 +45,38 @@ function moveInTree(event: KeyboardEvent<HTMLElement>): void {
   event.preventDefault();
 }
 
-// The pending counter joins in 2.3. ponytail: plain list, add TanStack Virtual when trees get long.
+/** "N pending" (agents the service marks pending); clicking it is F8. */
+function PendingCounter() {
+  const count = useHive((s) => pendingAgents(s).length);
+  if (count === 0) return <span className="sidebar-pending">Nothing pending</span>;
+  return (
+    <button
+      type="button"
+      className="pending-chip"
+      title="Go to the next pending agent (F8)"
+      onClick={nextPending}
+    >
+      <BellIcon />
+      <span>{count} pending</span>
+      <kbd>F8</kbd>
+    </button>
+  );
+}
+
+/** A collapsed node's most urgent state inside (rule 1), by the service's urgency. */
+function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
+  const state = useHive((s) => mostUrgent(s, Object.values(s.agents).filter(agents)));
+  return state && <StateIcon state={state} />;
+}
+
+// ponytail: plain list, add TanStack Virtual when trees get long.
 export function Sidebar() {
   const projects = useHive((s) => s.projects);
   const list = Object.values(projects ?? {});
   return (
     <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree}>
       <div className="bar">
-        <span className="sidebar-pending">Nothing pending</span>
+        <PendingCounter />
         <div className="sidebar-actions">
           <button
             type="button"
@@ -111,6 +140,7 @@ function ProjectNode({ project }: { project: Project }) {
         >
           <FolderIcon />
           <span className="label">{project.name}</span>
+          {!open && <Rollup agents={(a) => project.worktrees.some((w) => w.id === a.worktree)} />}
         </button>
         <button
           type="button"
@@ -126,27 +156,53 @@ function ProjectNode({ project }: { project: Project }) {
         <ul>
           {project.error && <li className="tree-error">{project.error}</li>}
           {project.worktrees.map((w) => (
-            <li key={w.id}>
-              <div className="tree-row worktree" title={w.path} data-selected={selection === w.id}>
-                <span className="chevron" />
-                <button
-                  type="button"
-                  className="row-main"
-                  aria-current={selection === w.id}
-                  onClick={() => select(w.id)}
-                >
-                  <BranchIcon />
-                  <span className="label">{w.name}</span>
-                </button>
-              </div>
-              <ul>
-                {agents
-                  .filter((a) => a.worktree === w.id)
-                  .map((a) => (
-                    <AgentRow key={a.id} agent={a} />
-                  ))}
-              </ul>
-            </li>
+            <WorktreeNode
+              key={w.id}
+              worktree={w}
+              agents={agents.filter((a) => a.worktree === w.id)}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+/** A worktree and its agents; it collapses only when it has agents, as in the prototype. */
+function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Agent[] }) {
+  const open = useHive((s) => !s.collapsed[`worktree:${w.id}`]);
+  const selected = useHive((s) => s.selection === w.id);
+  return (
+    <li>
+      <div className="tree-row worktree" title={w.path} data-selected={selected}>
+        {agents.length > 0 ? (
+          <button
+            type="button"
+            className="chevron"
+            aria-label={`${open ? "Collapse" : "Expand"} ${w.name}`}
+            aria-expanded={open}
+            onClick={() => toggleCollapsed(`worktree:${w.id}`)}
+          >
+            <ChevronIcon open={open} />
+          </button>
+        ) : (
+          <span className="chevron" />
+        )}
+        <button
+          type="button"
+          className="row-main"
+          aria-current={selected}
+          onClick={() => select(w.id)}
+        >
+          <BranchIcon />
+          <span className="label">{w.name}</span>
+          {!open && <Rollup agents={(a) => a.worktree === w.id} />}
+        </button>
+      </div>
+      {open && (
+        <ul>
+          {agents.map((a) => (
+            <AgentRow key={a.id} agent={a} />
           ))}
         </ul>
       )}
@@ -176,12 +232,23 @@ function StateLines({ state, title }: { state: AgentState; title: ReactNode }) {
  */
 function AgentRow({ agent }: { agent: Agent }) {
   const tab = useHive((s) => s.tabs.find((t) => t.id === agent.terminal));
-  const shown = useHive((s) => s.activeTab === agent.terminal);
+  const picked = useHive((s) => s.selection === agent.id);
+  const shown = useHive((s) => s.activeTab === agent.terminal) || picked;
   const status = useHive((s) => s.agentStates[agent.id]);
   const show = () => tab && activateTab(tab);
+  const row = useRef<HTMLDivElement>(null);
+  // F8 picks an agent that may be out of view.
+  useEffect(() => {
+    if (picked) row.current?.scrollIntoView({ block: "nearest" });
+  }, [picked]);
   return (
     <li>
-      <div className="tree-row agent" title={agent.cwd ?? undefined} data-selected={shown}>
+      <div
+        ref={row}
+        className="tree-row agent"
+        title={agent.cwd ?? undefined}
+        data-selected={shown}
+      >
         <button type="button" className="row-main" aria-current={shown} onClick={show}>
           <StateLines state={status?.state ?? "idle"} title="Claude" />
         </button>

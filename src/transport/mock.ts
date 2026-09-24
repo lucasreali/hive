@@ -27,6 +27,21 @@ const sub = (id: string, agent_type: string | null, state: AgentState): Subagent
   agent_type,
   state,
 });
+/** A stand-in for `AgentState::urgency`/`pending`, least urgent first; the real rule lives in Rust. */
+const URGENCY: AgentState[] = [
+  "ended",
+  "idle",
+  "working",
+  "with_subagents",
+  "waiting_you",
+  "error",
+  "waiting_permission",
+];
+export const agentStatus = (state: AgentState) => {
+  const urgency = URGENCY.indexOf(state);
+  return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you") };
+};
+
 /**
  * `?mock=states`: agents without a terminal in every state, by worktree path (relative to
  * `/home/user/projects`), as the service would resolve them ("the most urgent wins").
@@ -53,7 +68,7 @@ function mockStates(): ServiceMessage[] {
     const place = { project, worktree: path, cwd: path };
     return [
       { type: "agent_detected", channel: 1000 + i, id, ...place },
-      { type: "agent_state", id, state, subagents },
+      { type: "agent_state", id, ...agentStatus(state), subagents },
     ];
   });
 }
@@ -171,7 +186,7 @@ export function createMockTransport(
     setState(terminal.agent, "idle");
   };
   const setState = (id: string, state: AgentState) =>
-    later({ type: "agent_state", id, state, subagents: [] });
+    later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
 
   return {
     async connect(onMessage) {

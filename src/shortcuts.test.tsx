@@ -2,10 +2,10 @@ import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { App } from "./App";
 import { nextPending, shortcut } from "./shortcuts";
-import { apply, initialState, openModal, select, useHive } from "./store";
+import { type AgentState, apply, initialState, openModal, select, useHive } from "./store";
 import { closeTerminal, openTerminal, terminal } from "./terminals";
 import { transport } from "./transport";
-import { MOCK_REPOS } from "./transport/mock";
+import { agentStatus, MOCK_REPOS } from "./transport/mock";
 
 beforeAll(async () => {
   await transport.connect(apply);
@@ -74,12 +74,71 @@ test("Ctrl+Shift+B toggles the files panel and Ctrl+Shift+O opens add project", 
   expect(useHive.getState().modal).toBe("add-project");
 });
 
-test("F8 goes to the next pending agent, which no agent is before Stage 2", () => {
+test("F8 does nothing while no agent is pending", () => {
   app();
   expect(shortcut(new KeyboardEvent("keydown", { key: "F8" }))).toBe(nextPending);
+  act(() => {
+    apply({
+      type: "agent_detected",
+      channel: 1,
+      id: "s1",
+      project: null,
+      worktree: null,
+      cwd: null,
+    });
+    apply({ type: "agent_state", id: "s1", ...agentStatus("working"), subagents: [] });
+  });
   const before = useHive.getState();
   expect(press({ key: "F8" })).toBe(true);
   expect(useHive.getState()).toBe(before);
+});
+
+test("F8 cycles through pending agents in tree order, revealing and showing each", () => {
+  app();
+  const agent = (id: string, terminal: number, worktree: string | null, state: AgentState) => {
+    const project = [shop, api].find((p) => p.worktrees.some((w) => w.id === worktree));
+    const placed = { project: project?.id ?? null, worktree, cwd: worktree };
+    apply({ type: "agent_detected", channel: terminal, id, ...placed });
+    apply({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
+  };
+  const fixLogin = shop.worktrees[1].id;
+  act(() => {
+    useHive.setState({
+      tabs: [
+        { id: 1, cwd: fixLogin },
+        { id: 2, cwd: shop.path },
+      ],
+      collapsed: { [shop.id]: true, [api.id]: true, [`worktree:${api.worktrees[0].id}`]: true },
+    });
+    // Arrival order is not tree order.
+    agent("s1", 1, fixLogin, "waiting_you");
+    agent("s2", 5, api.worktrees[0].id, "error");
+    agent("s3", 2, shop.path, "waiting_permission");
+    agent("s4", 3, null, "waiting_you");
+    agent("s5", 4, api.worktrees[1].id, "idle");
+  });
+  const step = () => {
+    press({ key: "F8" });
+    const { selection, activeTab } = useHive.getState();
+    return [selection, activeTab];
+  };
+  expect(step()).toEqual(["s3", 2]);
+  expect(useHive.getState().collapsed[shop.id]).toBe(false);
+  expect(step()).toEqual(["s1", 1]);
+  // No tab: the shown terminal stays.
+  expect(step()).toEqual(["s2", 1]);
+  expect(useHive.getState().collapsed).toMatchObject({
+    [api.id]: false,
+    [`worktree:${api.worktrees[0].id}`]: false,
+  });
+  expect(step()).toEqual(["s4", 1]);
+  expect(step()).toEqual(["s3", 2]);
+  // With a worktree selected, the agent whose terminal is shown is the current one.
+  act(() => {
+    select(fixLogin);
+    useHive.setState({ activeTab: 1 });
+  });
+  expect(step()).toEqual(["s2", 1]);
 });
 
 test("other keys are not shortcuts", () => {

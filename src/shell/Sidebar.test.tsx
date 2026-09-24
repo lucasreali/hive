@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { App } from "../App";
 import { type AgentState, apply, initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_REPOS } from "../transport/mock";
+import { agentStatus, MOCK_REPOS } from "../transport/mock";
 import { STATE_LABEL } from "./icons";
 
 afterEach(() => {
@@ -143,13 +143,13 @@ test("agents and their subagents show the state the service sent, named for scre
     apply({
       type: "agent_state",
       id: "s1",
-      state: "waiting_permission",
+      ...agentStatus("waiting_permission"),
       subagents: [
         { id: "a1", agent_type: "Explore", state: "working" },
         { id: "a2", agent_type: null, state: "waiting_permission" },
       ],
     });
-    apply({ type: "agent_state", id: "s2", state: "ended", subagents: [] });
+    apply({ type: "agent_state", id: "s2", ...agentStatus("ended"), subagents: [] });
   });
   const rows = [...tree().querySelectorAll(".tree-row.agent, .tree-row.subagent")].map((r) => [
     r.className,
@@ -166,7 +166,7 @@ test("agents and their subagents show the state the service sent, named for scre
   // Every state has its own shape.
   const shapes = new Set<string>();
   for (const state of Object.keys(STATE_LABEL) as AgentState[]) {
-    act(() => apply({ type: "agent_state", id: "s2", state, subagents: [] }));
+    act(() => apply({ type: "agent_state", id: "s2", ...agentStatus(state), subagents: [] }));
     // s2 is the first agent (main comes before fix-login).
     const icon = within(tree().querySelector(".tree-row.agent") as HTMLElement).getByRole("img", {
       name: STATE_LABEL[state],
@@ -179,8 +179,81 @@ test("agents and their subagents show the state the service sent, named for scre
   fireEvent.click(screen.getByRole("button", { name: /subagent: Explore/ }));
   expect(useHive.getState().activeTab).toBe(1);
   // Subagents that ended leave the tree.
-  act(() => apply({ type: "agent_state", id: "s1", state: "idle", subagents: [] }));
+  act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("idle"), subagents: [] }));
   expect(tree().querySelector(".tree-row.subagent")).toBeNull();
+});
+
+test("a collapsed node shows the most urgent state inside; the counter counts pending agents", () => {
+  render(<App />);
+  const [main, fixLogin] = shop.worktrees;
+  const agent = (id: string, worktree: (typeof main)["id"] | null, state?: AgentState) => {
+    const project = MOCK_REPOS.find((p) => p.worktrees.some((w) => w.id === worktree));
+    const placed = { project: project?.id ?? null, worktree, cwd: worktree };
+    apply({ type: "agent_detected", channel: 1, id, ...placed });
+    if (state) apply({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
+  };
+  const counter = () => tree().querySelector(".bar > :first-child") as HTMLElement;
+  act(() => apply({ type: "projects", projects: [shop, api] }));
+  expect(counter().textContent).toBe("Nothing pending");
+  act(() => {
+    agent("s1", main.id, "working");
+    agent("s2", fixLogin.id, "idle");
+    agent("s3", api.worktrees[0].id, "error");
+    agent("s4", api.worktrees[1].id);
+  });
+  expect(counter().textContent).toBe("1 pendingF8");
+  act(() => {
+    agent("s2", fixLogin.id, "waiting_you");
+    agent("s5", null, "waiting_permission");
+  });
+  // An agent outside every project still counts.
+  expect(counter().textContent).toBe("3 pendingF8");
+  expect(counter().title).toBe("Go to the next pending agent (F8)");
+
+  const rollup = (name: string) =>
+    screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }).querySelector(".state-icon");
+  // Expanded nodes show nothing; a worktree without agents has nothing to collapse.
+  expect(rollup("shop")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Collapse feat-checkout" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Collapse fix-login" }));
+  expect(rollup("fix-login")?.getAttribute("data-state")).toBe("waiting_you");
+  expect(screen.getAllByRole("button", { name: /Claude/ })).toHaveLength(3);
+  // A main worktree collapses apart from its project (they share an id).
+  fireEvent.click(screen.getAllByRole("button", { name: "Collapse main" })[1]);
+  expect(screen.getByRole("button", { name: "main error" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "refactor-auth" })).toBeDefined();
+  // No state yet: nothing to show.
+  fireEvent.click(screen.getByRole("button", { name: "Collapse refactor-auth" }));
+  expect(rollup("refactor-auth")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Collapse shop" }));
+  fireEvent.click(screen.getByRole("button", { name: "Collapse api" }));
+  expect(rollup("shop")?.getAttribute("aria-label")).toBe("waiting for you");
+  expect(rollup("api")?.getAttribute("data-state")).toBe("error");
+  // The service's urgency decides, not the order the agents came in.
+  act(() => agent("s1", main.id, "waiting_permission"));
+  expect(rollup("shop")?.getAttribute("data-state")).toBe("waiting_permission");
+
+  // The counter is F8.
+  fireEvent.click(counter());
+  expect(useHive.getState().selection).toBe("s1");
+  expect(screen.getByRole("button", { name: /^shop/ }).querySelector(".state-icon")).toBeNull();
+});
+
+test("the agent F8 picks is selected and scrolled into view", () => {
+  const scroll = spyOn(HTMLElement.prototype, "scrollIntoView");
+  render(<App />);
+  const placed = { project: shop.id, worktree: shop.worktrees[1].id, cwd: null };
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    apply({ type: "agent_detected", channel: 7, id: "s1", ...placed });
+  });
+  const row = tree().querySelector(".tree-row.agent") as HTMLElement;
+  expect(row.dataset.selected).toBe("false");
+  expect(scroll).not.toHaveBeenCalled();
+  act(() => useHive.setState({ selection: "s1" }));
+  expect(row.dataset.selected).toBe("true");
+  expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+  scroll.mockRestore();
 });
 
 test("arrow keys move in the tree and collapse or expand a project", () => {

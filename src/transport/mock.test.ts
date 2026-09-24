@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AgentState, ServiceMessage } from "../store";
 import {
+  agentStatus,
   createMockTransport,
   ECHO_MARK,
   LOAD_STAGGER_MS,
@@ -133,7 +134,7 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   const state = (state: AgentState): ServiceMessage => ({
     type: "agent_state",
     id: agent.id,
-    state,
+    ...agentStatus(state),
     subagents: [],
   });
   expect(messages.filter((m) => m.type.startsWith("agent"))).toEqual([
@@ -150,6 +151,20 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   expect(messages.slice(-2)).toEqual([
     { type: "agent_removed", channel: id, id: "mock-session-1" },
     { type: "terminal_exited", channel: id, code: 0 },
+  ]);
+});
+
+test("agent states carry the service's urgency and pending flag", () => {
+  const calm = ["ended", "idle", "working", "with_subagents"] as const;
+  const pending = ["waiting_you", "error", "waiting_permission"] as const;
+  expect([...calm, ...pending].map(agentStatus)).toEqual([
+    { state: "ended", urgency: 0, pending: false },
+    { state: "idle", urgency: 1, pending: false },
+    { state: "working", urgency: 2, pending: false },
+    { state: "with_subagents", urgency: 3, pending: false },
+    { state: "waiting_you", urgency: 4, pending: true },
+    { state: "error", urgency: 5, pending: true },
+    { state: "waiting_permission", urgency: 6, pending: true },
   ]);
 });
 

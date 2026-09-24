@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
 import { type AgentState, apply, initialState, useHive } from "../store";
+import { agentStatus } from "../transport/mock";
 
 afterEach(() => {
   cleanup();
@@ -12,7 +13,7 @@ afterEach(() => {
 const closed = () => document.documentElement.dataset.closed !== undefined;
 const agent = (id: string, state: AgentState = "working") => {
   apply({ type: "agent_detected", channel: 1, id, project: null, worktree: null, cwd: null });
-  apply({ type: "agent_state", id, state, subagents: [] });
+  apply({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
 };
 
 function closeWith(agents: string[]) {

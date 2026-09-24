@@ -218,6 +218,24 @@ button:disabled {
   color: var(--text-3);
 }
 
+.pending-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px 0 7px;
+  border: 1px solid rgba(222, 193, 132, 0.28);
+  border-radius: var(--radius);
+  background: rgba(222, 193, 132, 0.1);
+  color: var(--state-permission);
+  font-size: var(--fs-small);
+  font-weight: 500;
+}
+
+.pending-chip:hover {
+  background: rgba(222, 193, 132, 0.18);
+}
+
 .sidebar-tree {
   flex: 1;
   overflow: auto;
@@ -549,6 +567,11 @@ kbd {
 
 .primary kbd {
   border-color: rgba(31, 35, 41, 0.35);
+  color: inherit;
+}
+
+.pending-chip kbd {
+  border-color: rgba(222, 193, 132, 0.35);
   color: inherit;
 }
 

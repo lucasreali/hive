@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { notify, TONE_GAP_MS } from "./notify";
 import { type AgentState, apply, type HiveState, initialState, useHive } from "./store";
+import { agentStatus } from "./transport/mock";
 
 const g = globalThis as Record<string, unknown>;
 let tones = 0;
@@ -49,7 +50,7 @@ afterEach(() => {
 const state = (id: string, s: AgentState) => ({
   type: "agent_state" as const,
   id,
-  state: s,
+  ...agentStatus(s),
   subagents: [],
 });
 

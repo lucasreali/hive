@@ -130,8 +130,16 @@ export type AgentState =
 /** A live subagent (`id` = its `agent_id`) with its own state. */
 export type Subagent = { id: string; agent_type: string | null; state: AgentState };
 
-/** What `agent_state` says about an agent, stored by its session id. */
-export type AgentStatus = { state: AgentState; subagents: Subagent[] };
+/**
+ * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins)
+ * and `pending` (needs the user) are the service's, so the app keeps no table of its own.
+ */
+export type AgentStatus = {
+  state: AgentState;
+  urgency: number;
+  pending: boolean;
+  subagents: Subagent[];
+};
 
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
@@ -145,7 +153,7 @@ export type HiveState = {
   modal: Modal;
   rightPanel: RightPanel;
   selection: string | null;
-  /** Collapsed tree nodes, by id. */
+  /** Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree has its project's id). */
   collapsed: Record<string, boolean>;
   /** Terminal tabs in the order they opened, and the one shown. */
   tabs: Tab[];
@@ -297,6 +305,30 @@ export const removeTab = (id: number) =>
     const next = tabs[Math.min(i, tabs.length - 1)]?.id ?? null;
     return { tabs, activeTab: s.activeTab === id ? next : s.activeTab };
   });
+
+/** Agents in the sidebar's order (project, worktree, arrival); those outside the tree last. */
+export function treeAgents(s: HiveState): Agent[] {
+  const worktrees = Object.values(s.projects ?? {}).flatMap((p) => p.worktrees.map((w) => w.id));
+  const place = (a: Agent) => {
+    const i = worktrees.indexOf(a.worktree ?? "");
+    return i < 0 ? worktrees.length : i;
+  };
+  return Object.values(s.agents).sort((a, b) => place(a) - place(b));
+}
+
+/** Agents that need the user, in tree order: the "N pending" counter and F8's cycle. */
+export const pendingAgents = (s: HiveState): Agent[] =>
+  treeAgents(s).filter((a) => s.agentStates[a.id]?.pending);
+
+/** The state of highest `urgency` among `agents` (rule 1, for a collapsed node), or null. */
+export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
+  let top: AgentStatus | undefined;
+  for (const a of agents) {
+    const status = s.agentStates[a.id];
+    if (status && (!top || status.urgency > top.urgency)) top = status;
+  }
+  return top?.state ?? null;
+}
 
 /** Re-renders only when this agent's entry changes. */
 export const useAgent = (id: string) => useHive((s) => s.agents[id]);

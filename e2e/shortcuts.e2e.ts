@@ -57,7 +57,7 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
   await page.keyboard.press("Control+Shift+B");
   await expect(panel).toBeHidden();
 
-  // F8: no agent is pending before Stage 2, so nothing happens and nothing reaches the shell.
+  // F8: no agent is pending, so nothing happens and nothing reaches the shell.
   await input.focus();
   await page.keyboard.press("F8");
 

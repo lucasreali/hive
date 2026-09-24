@@ -137,9 +137,9 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 
 ### Shortcuts (#35)
 `src/shortcuts.ts` has one `keydown` listener on the window. A focused terminal gives each key to `interceptKeys` first: a shortcut is kept from xterm, which leaves it unhandled, so it bubbles up to the window listener and runs once; every other key (Ctrl+Shift+C/V included) is the terminal's.
-1. Ctrl+Shift+T opens the worktree picker (every worktree of every project, filtered by worktree or project name; ↑/↓, Enter or a click opens a terminal in its path; Esc or a click outside closes). Ctrl+Shift+N opens the new worktree dialog for the selected project, the project of the selected worktree, or the first project (add project when there is none). Ctrl+Shift+B toggles the files panel. Ctrl+Shift+O opens add project. F8 (no modifiers) goes to the next pending agent: a no-op until pending states exist (2.3).
+1. Ctrl+Shift+T opens the worktree picker (every worktree of every project, filtered by worktree or project name; ↑/↓, Enter or a click opens a terminal in its path; Esc or a click outside closes). Ctrl+Shift+N opens the new worktree dialog for the selected project, the project of the selected worktree, or the first project (add project when there is none). Ctrl+Shift+B toggles the files panel. Ctrl+Shift+O opens add project. F8 (no modifiers, or a click on the "N pending" counter) selects the pending agent after the selected one (else after the one whose terminal is shown) in tree order, wrapping; it expands the agent's project and worktree, shows its terminal when it has a tab and scrolls it into view. Agents outside every project come last. With nothing pending it does nothing.
 2. Nothing runs under the connection block (`version_mismatch`, `disconnected`) or while a dialog is open; the key then goes on as usual.
-3. The tree (sidebar): ↑/↓ move between rows, ←/→ collapse and expand a project, Enter selects (rows are buttons).
+3. The tree (sidebar): ↑/↓ move between rows, ←/→ collapse and expand a project or a worktree with agents, Enter selects (rows are buttons).
 
 ### Closing the app (#18)
 1. The title bar Close, Alt+F4 and the taskbar all become one Tauri close request. `guardClose` (`src/shell/window.ts`) listens to it with `onCloseRequested` and asks `confirmClose` (`src/shell/CloseAppDialog.tsx`).

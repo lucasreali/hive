@@ -118,12 +118,21 @@ test("agents are stored as the service places them and removed by id", () => {
 
 test("agent states are stored as sent, before or after the agent, and go with it", () => {
   const sub = { id: "s1", agent_type: "Explore", state: "waiting_permission" } as const;
-  apply({ type: "agent_state", id: "a", state: "working", subagents: [] });
-  apply({ type: "agent_state", id: "b", state: "idle", subagents: [] });
-  apply({ type: "agent_state", id: "a", state: "waiting_permission", subagents: [sub] });
+  const permission = { state: "waiting_permission", urgency: 6, pending: true } as const;
+  const idle = { state: "idle", urgency: 1, pending: false } as const;
+  apply({
+    type: "agent_state",
+    id: "a",
+    state: "working",
+    urgency: 2,
+    pending: false,
+    subagents: [],
+  });
+  apply({ type: "agent_state", id: "b", ...idle, subagents: [] });
+  apply({ type: "agent_state", id: "a", ...permission, subagents: [sub] });
   expect(useHive.getState().agentStates).toEqual({
-    a: { state: "waiting_permission", subagents: [sub] },
-    b: { state: "idle", subagents: [] },
+    a: { ...permission, subagents: [sub] },
+    b: { ...idle, subagents: [] },
   });
   apply({ type: "agent_removed", channel: 1, id: "a" });
   expect(Object.keys(useHive.getState().agentStates)).toEqual(["b"]);

@@ -40,3 +40,35 @@ test("states: every agent and subagent shows the state icon the service sent", a
   const pulse = tree.locator(".tree-row.agent .state-icon[data-state=working] .pulse");
   await expect(pulse).toHaveCSS("animation-name", "hive-pulse");
 });
+
+test("states: collapsed nodes show the most urgent state inside; F8 walks the pending agents", async ({
+  page,
+}) => {
+  await page.goto("/?mock=states");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  const chip = tree.getByRole("button", { name: "3 pending F8" });
+  await expect(chip).toBeVisible();
+  await expect(chip).toHaveCSS("color", "rgb(222, 193, 132)");
+
+  // Collapsed: the project shows waiting for permission (a subagent's, via its agent).
+  await tree.getByRole("button", { name: "Collapse shop" }).click();
+  const shop = tree.locator(".tree-row.project").first();
+  const icon = shop.locator(".state-icon");
+  await expect(icon).toHaveAttribute("data-state", "waiting_permission");
+  expect(await icon.boundingBox()).toMatchObject({ width: 12, height: 12 });
+  await tree.getByRole("button", { name: "Collapse refactor-auth" }).click();
+  const refactor = tree.locator(".tree-row.worktree", { hasText: "refactor-auth" });
+  await expect(refactor.locator(".state-icon")).toHaveAttribute("data-state", "working");
+
+  // F8 opens the collapsed project and selects each pending agent in tree order, wrapping.
+  const selected = tree.locator(".tree-row.agent[data-selected=true] .state-label");
+  const expected = ["waiting for permission", "waiting for you", "error", "waiting for permission"];
+  for (const label of expected) {
+    await page.keyboard.press("F8");
+    await expect(selected).toHaveText(label);
+  }
+  await expect(icon).toHaveCount(0);
+  // Clicking the counter is F8.
+  await chip.click();
+  await expect(selected).toHaveText("waiting for you");
+});

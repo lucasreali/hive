@@ -1,4 +1,11 @@
-import { type HiveState, openModal, setRightPanel, useHive } from "./store";
+import {
+  type Agent,
+  type HiveState,
+  openModal,
+  pendingAgents,
+  setRightPanel,
+  useHive,
+} from "./store";
 import { interceptKeys } from "./terminals";
 
 // App shortcuts (#35): Ctrl+Shift+letter and F8, taken even with the focus in a terminal.
@@ -14,10 +21,28 @@ function currentProject(s: HiveState): string | null {
 }
 
 /**
- * F8: shows the next agent waiting on the user. Pending states arrive with Stage 2 (2.1, 2.3);
- * until then no agent is ever pending, so this does nothing.
+ * F8: selects the pending agent after the current one (the selected agent, else the one whose
+ * terminal is shown) in tree order, wrapping; expands its project and worktree and shows its
+ * terminal. Does nothing when no agent is pending.
  */
-export function nextPending(): void {}
+export function nextPending(): void {
+  const s = useHive.getState();
+  const pending = pendingAgents(s);
+  if (pending.length === 0) return;
+  const selected = pending.findIndex((a) => a.id === s.selection);
+  const at = selected >= 0 ? selected : pending.findIndex((a) => a.terminal === s.activeTab);
+  const agent = pending[(at + 1) % pending.length] as Agent;
+  const tab = s.tabs.find((t) => t.id === agent.terminal);
+  useHive.setState({
+    collapsed: {
+      ...s.collapsed,
+      [agent.project ?? ""]: false,
+      [`worktree:${agent.worktree}`]: false,
+    },
+    selection: agent.id,
+    activeTab: tab?.id ?? s.activeTab,
+  });
+}
 
 /** What `event` does as an app shortcut, or null when it is not one (or nothing may run). */
 export function shortcut(event: KeyboardEvent): (() => void) | null {
