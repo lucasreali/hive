@@ -19,26 +19,27 @@ test("states: every agent and subagent shows the state icon the service sent", a
     }),
   );
   expect(shown).toEqual([
-    ["tree-row agent", "running subagents", "Claude", 12, 12],
-    ["tree-row subagent", "working", "subagent: Explore", 12, 12],
-    ["tree-row subagent", "working", "subagent: unknown", 12, 12],
-    ["tree-row agent", "waiting for permission", "Claude", 12, 12],
-    ["tree-row subagent", "waiting for permission", "subagent: general-purpose", 12, 12],
-    ["tree-row subagent", "idle", "subagent: Explore", 12, 12],
-    ["tree-row agent", "waiting for you", "Claude", 12, 12],
-    ["tree-row agent", "error", "Claude", 12, 12],
-    ["tree-row agent", "ended", "Claude", 12, 12],
-    ["tree-row agent", "working", "Claude", 12, 12],
-    ["tree-row agent", "idle", "Claude", 12, 12],
+    ["tree-row agent", "running subagents", "Claude", 14, 14],
+    ["tree-row subagent", "working", "subagent: Explore", 14, 14],
+    ["tree-row subagent", "working", "subagent: unknown", 14, 14],
+    ["tree-row agent", "waiting for permission", "Claude", 14, 14],
+    ["tree-row subagent", "waiting for permission", "subagent: general-purpose", 14, 14],
+    ["tree-row subagent", "idle", "subagent: Explore", 14, 14],
+    ["tree-row agent", "waiting for you", "Claude", 14, 14],
+    ["tree-row agent", "error", "Claude", 14, 14],
+    ["tree-row agent", "ended", "Claude", 14, 14],
+    ["tree-row agent", "working", "Claude", 14, 14],
+    ["tree-row agent", "idle", "Claude", 14, 14],
   ]);
   // Colors come from the state tokens; only alerting states color the agent's state name.
   const permission = tree.locator(".tree-row.agent .state-label[data-state=waiting_permission]");
   await expect(permission).toHaveCSS("color", "rgb(222, 193, 132)");
   const working = tree.locator(".tree-row.agent .state-label[data-state=working]");
   await expect(working).toHaveCSS("color", "rgb(169, 175, 188)");
-  // Working pulses.
-  const pulse = tree.locator(".tree-row.agent .state-icon[data-state=working] .pulse");
-  await expect(pulse).toHaveCSS("animation-name", "hive-pulse");
+  // Working spins, in its state's color.
+  const spinning = tree.locator(".tree-row.agent .state-icon[data-state=working]");
+  await expect(spinning).toHaveCSS("animation-name", "hive-spin");
+  await expect(spinning).toHaveCSS("color", "rgb(116, 173, 232)");
 });
 
 test("states: collapsed nodes show the most urgent state inside; F8 walks the pending agents", async ({

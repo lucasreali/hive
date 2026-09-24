@@ -1137,32 +1137,41 @@ li:last-child > .tree-row.own-worktree::before {
 
 .state-icon {
   flex: none;
-  margin-top: 2px;
-  overflow: visible;
+  margin-top: 1px;
 }
 
-.state-icon .pulse {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: hive-pulse 2.4s ease-out infinite;
+.state-icon[data-state="waiting_permission"] {
+  color: var(--state-permission);
+}
+.state-icon[data-state="error"] {
+  color: var(--state-error);
+}
+.state-icon[data-state="waiting_you"] {
+  color: var(--state-you);
+}
+.state-icon[data-state="working"] {
+  color: var(--state-working);
+  animation: hive-spin 3s linear infinite;
+}
+.state-icon[data-state="with_subagents"] {
+  color: var(--state-subagents);
+}
+.state-icon[data-state="idle"] {
+  color: var(--state-idle);
+}
+.state-icon[data-state="ended"] {
+  color: var(--state-ended);
 }
 
-@keyframes hive-pulse {
-  0% {
-    transform: scale(1);
-    opacity: 0.6;
-  }
-  70%,
-  100% {
-    transform: scale(2.3);
-    opacity: 0;
+@keyframes hive-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .state-icon .pulse {
+  .state-icon[data-state="working"] {
     animation: none;
-    opacity: 0;
   }
 }
 

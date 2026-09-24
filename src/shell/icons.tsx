@@ -1,4 +1,14 @@
-import type { ReactNode } from "react";
+import {
+  ChatCircleDotsIcon,
+  CheckCircleIcon,
+  CircleDashedIcon,
+  CircleHalfIcon,
+  CirclesThreeIcon,
+  type Icon as PhosphorIcon,
+  StopCircleIcon,
+  XCircleIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import type { AgentState } from "../store";
 
 // Inline SVG icons from the prototype (docs/prototype/HiveApp.dc.html).
@@ -35,17 +45,9 @@ export const MaximizeIcon = () => (
   </svg>
 );
 
-export const WindowCloseIcon = () => (
-  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-    <path d="M.5.5l9 9M9.5.5l-9 9" stroke="currentColor" />
-  </svg>
-);
+export const WindowCloseIcon = () => <XIcon size={14} weight="light" aria-hidden="true" />;
 
-export const CloseIcon = () => (
-  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-    <path d="M2 2l6 6M8 2 2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-  </svg>
-);
+export const CloseIcon = () => <XIcon size={12} weight="bold" aria-hidden="true" />;
 
 export const PlusIcon = ({ size = 12 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 12 12" aria-hidden="true">
@@ -157,81 +159,32 @@ export const STATE_LABEL: Record<AgentState, string> = {
   ended: "ended",
 };
 
-const STATE_SHAPE: Record<AgentState, ReactNode> = {
-  waiting_permission: (
-    <>
-      <path
-        d="M6 1.3 11.2 10.5H.8z"
-        fill="var(--state-permission)"
-        stroke="var(--state-permission)"
-        strokeLinejoin="round"
-      />
-      <rect x="5.35" y="4.2" width="1.3" height="3.3" rx=".6" fill="var(--bg)" />
-      <circle cx="6" cy="8.9" r=".75" fill="var(--bg)" />
-    </>
-  ),
-  error: (
-    <>
-      <circle cx="6" cy="6" r="5.2" fill="var(--state-error)" />
-      <path d="M4 4 8 8M8 4 4 8" stroke="var(--bg)" strokeWidth="1.5" strokeLinecap="round" />
-    </>
-  ),
-  waiting_you: (
-    <>
-      <circle cx="6" cy="6" r="4.4" fill="none" stroke="var(--state-you)" strokeWidth="1.6" />
-      <circle cx="6" cy="6" r="1.7" fill="var(--state-you)" />
-    </>
-  ),
-  working: (
-    <>
-      <circle className="pulse" cx="6" cy="6" r="3.1" fill="var(--state-working)" />
-      <circle cx="6" cy="6" r="3.1" fill="var(--state-working)" />
-    </>
-  ),
-  with_subagents: (
-    <>
-      <path
-        d="M6 3v3M6 6 2.8 9M6 6l3.2 3"
-        fill="none"
-        stroke="var(--state-subagents)"
-        strokeWidth="1.2"
-      />
-      <circle cx="6" cy="2.6" r="2" fill="var(--state-subagents)" />
-      <circle cx="2.6" cy="9.3" r="2" fill="var(--state-subagents)" />
-      <circle cx="9.4" cy="9.3" r="2" fill="var(--state-subagents)" />
-    </>
-  ),
-  idle: (
-    <>
-      <circle cx="6" cy="6" r="5.2" fill="var(--state-idle)" />
-      <path
-        d="M3.6 6.2 5.3 7.8 8.5 4.4"
-        fill="none"
-        stroke="var(--bg)"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </>
-  ),
-  ended: <rect x="2" y="2" width="8" height="8" rx="1.5" fill="var(--state-ended)" />,
+// Phosphor icons (outlined), each in its state's color token.
+const STATE_ICON: Record<AgentState, PhosphorIcon> = {
+  waiting_permission: CircleHalfIcon,
+  error: XCircleIcon,
+  waiting_you: ChatCircleDotsIcon,
+  working: CircleDashedIcon,
+  with_subagents: CirclesThreeIcon,
+  idle: CheckCircleIcon,
+  ended: StopCircleIcon,
 };
 
-/** `StateIcon.dc.html`: a state's color and shape, named for screen readers. */
-export const StateIcon = ({ state }: { state: AgentState }) => (
-  <svg
-    className="state-icon"
-    width="12"
-    height="12"
-    viewBox="0 0 12 12"
-    role="img"
-    aria-label={STATE_LABEL[state]}
-    data-state={state}
-  >
-    <title>{STATE_LABEL[state]}</title>
-    {STATE_SHAPE[state]}
-  </svg>
-);
+/** A state's icon and color (`--state-*`), named for screen readers; working spins. */
+export const StateIcon = ({ state }: { state: AgentState }) => {
+  const Shape = STATE_ICON[state];
+  return (
+    <Shape
+      className="state-icon"
+      size={14}
+      weight="bold"
+      role="img"
+      aria-label={STATE_LABEL[state]}
+      alt={STATE_LABEL[state]}
+      data-state={state}
+    />
+  );
+};
 
 // Not in the prototype: the sidebar's "Refresh worktrees" button (worktrees are not watched yet).
 export const RefreshIcon = () => (
