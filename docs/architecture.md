@@ -74,7 +74,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `agent {…AgentEvent}` | service → app | 0 | A translated hook event. |
 | `unhooked_agent` | service → app | n | A `claude` runs in terminal n without sending hook events. |
 | `agent_detected {id, project, worktree, cwd}` | service → app | n | An agent (`id` = its session id) started in terminal n. `project`/`worktree` are the ids of the followed worktree containing `cwd`, both null outside every followed project. |
-| `agent_state {id, state, subagents}` | service → app | n | The agent's displayed state and its live subagents `[{id, agent_type, state}]` (see [Agent states](#agent-states)). Sent when it changes, after `agent_detected`, and for every live agent right after `welcome`. |
+| `agent_state {id, state, urgency, pending, subagents}` | service → app | n | The agent's displayed state, its urgency (0 ended … 6 waiting for permission; higher wins), whether it is pending (needs the user), and its live subagents `[{id, agent_type, state}]` (see [Agent states](#agent-states)). Sent when it changes, after `agent_detected`, and for every live agent right after `welcome`. |
 | `agent_removed {id}` | service → app | n | The agent's session ended, or terminal n exited (sent before `terminal_exited`). |
 | `list_projects` | app → service | 0 | Asks for every project; answered by `projects`. |
 | `projects {projects}` | service → app | 0 | Every project with its worktrees, in the order they were added. |
@@ -208,7 +208,8 @@ See [Handshake](#handshake). A refused client is not the app, so the daemon keep
 2. A subagent joins the list on its first event with a state and leaves it on `SubagentStop` (or a `SessionEnd` carrying its `agent_id`). At most 32 are kept per agent, and ids or types over 256 bytes are ignored, so a message always fits in a frame.
 3. Rule 1: `state` is the most urgent of the agent's own state, its subagents' states and "with subagents" when any subagent is live. Urgency, highest first: `waiting_permission`, `error`, `waiting_you`, `with_subagents`, `working`, `idle`, `ended`.
 4. Rule 2: every second (the unhooked-claude tick) the service checks each agent: when its terminal has printed nothing for 5 s (`states::SILENCE`), counted from the later of the last output and the last hook event, the agent and each subagent in working or waiting for permission go to waiting for you. Output alone never moves a state back; only hook events do.
-5. `agent_state` is sent on the agent's terminal channel only when the message changes.
+5. Pending (the "N pending" counter and F8): waiting for permission, error and waiting for you. `urgency` is the state's rank in the order above; the app shows a collapsed project or worktree with the state of highest `urgency` inside and counts agents with `pending`, so it keeps no table of its own.
+6. `agent_state` is sent on the agent's terminal channel only when the message changes.
 
 ### App disconnect (or SIGTERM)
 1. The accept loop stops and the watcher stops.

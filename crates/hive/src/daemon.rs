@@ -598,6 +598,8 @@ mod tests {
             Control::AgentState {
                 id: "s".into(),
                 state: hive_protocol::AgentState::Idle,
+                urgency: 1,
+                pending: false,
                 subagents: vec![],
             }
         );

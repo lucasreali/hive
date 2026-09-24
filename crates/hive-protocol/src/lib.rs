@@ -189,11 +189,15 @@ pub enum Control {
         cwd: Option<String>,
     },
     /// The agent's displayed state (after "the most urgent wins") and its live subagents.
+    /// `urgency` and `pending` are `state`'s (`AgentState::urgency`/`pending`), so the app
+    /// can roll agents up and count them without its own table.
     /// Sent on the agent's terminal channel whenever it changes, and for every live agent
     /// right after the app's `Welcome`.
     AgentState {
         id: String,
         state: AgentState,
+        urgency: u8,
+        pending: bool,
         subagents: Vec<SubagentState>,
     },
     /// The agent's session ended, or its terminal exited.
@@ -414,6 +418,19 @@ pub enum AgentState {
     WaitingPermission,
 }
 
+impl AgentState {
+    /// Higher is more urgent: the declaration order, 0 (ended) to 6 (waiting for permission).
+    pub fn urgency(self) -> u8 {
+        self as u8
+    }
+
+    /// Needs the user (the "N pending" counter and F8): waiting for permission, error
+    /// (urgency "alta") and waiting for you ("média").
+    pub fn pending(self) -> bool {
+        self >= AgentState::WaitingYou
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubagentState {
     pub id: String,
@@ -521,6 +538,8 @@ mod tests {
         let msg = Control::AgentState {
             id: "s".into(),
             state: AgentState::WaitingPermission,
+            urgency: 6,
+            pending: true,
             subagents: vec![SubagentState {
                 id: "a".into(),
                 agent_type: None,
@@ -529,7 +548,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","subagents":[{"id":"a","agent_type":null,"state":"with_subagents"}]}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents"}]}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
     }
@@ -547,6 +566,10 @@ mod tests {
             Ended,
         ];
         assert!(most_urgent_first.windows(2).all(|w| w[0] > w[1]));
+        let urgency: Vec<u8> = most_urgent_first.iter().map(|s| s.urgency()).collect();
+        assert_eq!(urgency, [6, 5, 4, 3, 2, 1, 0]);
+        let pending: Vec<bool> = most_urgent_first.iter().map(|s| s.pending()).collect();
+        assert_eq!(pending, [true, true, true, false, false, false, false]);
         let json = serde_json::to_string(&most_urgent_first).unwrap();
         assert_eq!(
             json,

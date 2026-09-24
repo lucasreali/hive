@@ -93,9 +93,12 @@ impl Agent {
     /// The `agent_state` message. Rule 1: the most urgent of the agent, its subagents and
     /// "with subagents" (when any is live) is shown.
     pub fn message(&self, id: &str) -> Control {
+        let state = self.displayed();
         Control::AgentState {
             id: id.to_owned(),
-            state: self.displayed(),
+            state,
+            urgency: state.urgency(),
+            pending: state.pending(),
             subagents: self.subagents.clone(),
         }
     }
@@ -251,6 +254,8 @@ mod tests {
             Some(Control::AgentState {
                 id: "s".into(),
                 state: Working,
+                urgency: 2,
+                pending: false,
                 subagents: vec![],
             })
         );
@@ -267,6 +272,8 @@ mod tests {
             Some(Control::AgentState {
                 id: "s".into(),
                 state: WithSubagents,
+                urgency: 3,
+                pending: false,
                 subagents: vec![SubagentState {
                     id: "a".into(),
                     agent_type: Some("Explore".into()),

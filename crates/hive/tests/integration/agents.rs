@@ -49,6 +49,8 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
     Control::AgentState {
         id: id.into(),
         state,
+        urgency: state.urgency(),
+        pending: state.pending(),
         subagents,
     }
 }
