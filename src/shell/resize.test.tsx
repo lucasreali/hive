@@ -83,7 +83,8 @@ test("dragging sizes a panel; dragging the right one much too narrow closes it",
     target.dispatchEvent(new PointerEvent("pointermove", { clientX, bubbles: true }));
   const left = handle("Resize the sidebar");
   fireEvent.pointerDown(left, { pointerId: 1, clientX: 264 });
-  expect(document.body.dataset.resizing).toBe("true");
+  // Only the dragged edge is named, so only it is lit.
+  expect(document.body.dataset.resizing).toBe("sidebar");
   move(left, 350);
   expect(useHive.getState().sidebarWidth).toBe(350);
   move(left, 10);
@@ -95,6 +96,7 @@ test("dragging sizes a panel; dragging the right one much too narrow closes it",
 
   const right = handle("Resize the side panel");
   fireEvent.pointerDown(right, { pointerId: 2 });
+  expect(document.body.dataset.resizing).toBe("panel");
   move(right, window.innerWidth - 500);
   expect(useHive.getState().panelWidth).toBe(500);
   // Narrower than its minimum, it stays at the minimum...
