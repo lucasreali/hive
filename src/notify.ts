@@ -1,5 +1,5 @@
-import { showNotification } from "./shell/window";
 import { type AgentState, type HiveState, type ServiceMessage, useHive } from "./store";
+import { showNotification } from "./window";
 
 // Presentation of state changes the service sent (hive.md item 5, #37): a tone when an agent
 // enters an alerting state, an OS notification when it finishes. Nothing here computes a state.

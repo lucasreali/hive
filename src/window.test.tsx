@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { TitleBar } from "./TitleBar";
+import { TitleBar } from "./shell/TitleBar";
 import { closeWindow, guardClose, showNotification, windowAction } from "./window";
 
 const g = globalThis as { isTauri?: boolean };

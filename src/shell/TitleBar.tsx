@@ -1,5 +1,5 @@
+import { windowAction } from "../window";
 import { HiveIcon, MaximizeIcon, MinimizeIcon, WindowCloseIcon } from "./icons";
-import { windowAction } from "./window";
 
 // The window has no native decorations; this bar drags it and holds the window buttons.
 // ponytail: no "project / worktree" breadcrumb yet; it shows the active tab once tabs exist (1.7).

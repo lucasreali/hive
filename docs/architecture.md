@@ -158,7 +158,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 3. The tree (sidebar): ↑/↓ move between rows, ←/→ collapse and expand a project or a worktree with agents, Enter selects (rows are buttons).
 
 ### Closing the app (#18)
-1. The title bar Close, Alt+F4 and the taskbar all become one Tauri close request. `guardClose` (`src/shell/window.ts`) listens to it with `onCloseRequested` and asks `confirmClose` (`src/shell/CloseAppDialog.tsx`).
+1. The title bar Close, Alt+F4 and the taskbar all become one Tauri close request. `guardClose` (`src/window.ts`) listens to it with `onCloseRequested` and asks `confirmClose` (`src/shell/CloseAppDialog.tsx`).
 2. When `agentsAtRisk` is empty the window is destroyed at once. Otherwise the request is cancelled and the "Close Hive?" dialog opens: Cancel/Esc keeps the app, "Close Hive" (focused, Enter) calls `closeWindow`, which destroys the window without asking again. Stage 1 counts every detected agent; Stage 2 narrows `agentsAtRisk` to working, waiting for permission and waiting for you.
 3. The last window gone, Tauri emits `RunEvent::Exit`; `on_run_event` runs `Hive::shutdown`: the frame queue closes, so the bridge's stdin closes, the bridge exits and the daemon runs "App disconnect" below. Shutdown waits up to 2 s for the bridge to end, then kills it (no `wsl.exe` left behind). A crashed app closes the same pipe through the OS.
 4. Outside Tauri (browser, mock transport) only the title bar Close requests a close, and a close that goes through sets `data-closed` on `<html>` for the browser checks.
@@ -166,7 +166,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 ### Notifications (hive.md item 5)
 1. `src/connect.ts` passes every service message to `notify` (`src/notify.ts`) before `apply`, so the store still holds the agent's previous state. Only a change the service sent counts: an agent's first state is silent, and so is the snapshot after `welcome` (it always lands in an empty store: a fresh page, or after `disconnected` cleared it).
 2. Entering waiting for permission, waiting for you or error plays a short tone synthesized with Web Audio (no audio file); changes within 500 ms share one tone.
-3. Working or with subagents → waiting for you is "agent finished": `showNotification` (`src/shell/window.ts`) sends an OS notification through `tauri-plugin-notification` ("Agent finished", "project · worktree: waiting for you"). The capability allows only `is_permission_granted`, `request_permission` and `notify`. Outside Tauri nothing is shown.
+3. Working or with subagents → waiting for you is "agent finished": `showNotification` (`src/window.ts`) sends an OS notification through `tauri-plugin-notification` ("Agent finished", "project · worktree: waiting for you"). The capability allows only `is_permission_granted`, `request_permission` and `notify`. Outside Tauri nothing is shown.
 
 ### Projects
 1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. The service also sends `projects` after each worktree hook (see [Worktree hooks](#worktree-hooks)); other worktree changes are not watched (only the files panel's worktree is, see [Files panel watch](#files-panel-watch-31-31)).

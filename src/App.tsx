@@ -9,9 +9,9 @@ import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
 import { WorktreePicker } from "./shell/WorktreePicker";
-import { guardClose } from "./shell/window";
 import { installShortcuts } from "./shortcuts";
 import { useHive } from "./store";
+import { guardClose } from "./window";
 
 export function App() {
   const rightPanel = useHive((s) => s.rightPanel);

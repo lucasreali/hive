@@ -1,6 +1,6 @@
 import { type AgentState, type HiveState, openModal, useHive } from "../store";
+import { closeWindow } from "../window";
 import { CloseIcon } from "./icons";
-import { closeWindow } from "./window";
 
 const cancel = () => openModal(null);
 
