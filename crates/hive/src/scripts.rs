@@ -21,6 +21,7 @@ use crate::wrapper::write_atomic;
 pub const BLOCK: u16 = 10;
 /// The first block starts here; below Linux's ephemeral range (32768 and up).
 const FIRST: u16 = 20_000;
+const _: () = assert!(FIRST.is_multiple_of(BLOCK));
 /// How many blocks there are (20000 to 29999).
 const BLOCKS: u16 = 1000;
 /// Largest ports file read.
@@ -78,8 +79,8 @@ impl Ports {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         let last = FIRST + (BLOCKS - 1) * BLOCK;
-        let valid =
-            |port: &u16| (FIRST..=last).contains(port) && (port - FIRST).is_multiple_of(BLOCK);
+        // FIRST is a multiple of BLOCK, so every block starts at one.
+        let valid = |port: &u16| (FIRST..=last).contains(port) && port.is_multiple_of(BLOCK);
         blocks.into_iter().filter(|(_, p)| valid(p)).collect()
     }
 }
