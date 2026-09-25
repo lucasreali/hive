@@ -18,7 +18,7 @@ import { commandKey } from "./window";
 // Every other key goes to the terminal untouched.
 
 /** The selected project, the project of the selected worktree (or agent), else the first one. */
-function currentProject(s: HiveState): string | null {
+export function currentProject(s: HiveState): string | null {
   return (owner(s.projects, selectedPlace(s)) ?? Object.values(s.projects ?? {})[0])?.id ?? null;
 }
 
@@ -33,7 +33,12 @@ export function nextPending(): void {
   if (pending.length === 0) return;
   const selected = pending.findIndex((a) => a.id === s.selection);
   const at = selected >= 0 ? selected : pending.findIndex((a) => a.terminal === s.activeTab);
-  const agent = pending[(at + 1) % pending.length] as Agent;
+  goToAgent(pending[(at + 1) % pending.length] as Agent);
+}
+
+/** Selects `agent`, expands its project and worktree and shows its terminal. */
+export function goToAgent(agent: Agent): void {
+  const s = useHive.getState();
   const tab = s.tabs.find((t) => t.id === agent.terminal);
   useHive.setState({
     collapsed: {
@@ -56,6 +61,12 @@ export type Command = { id: string; label: string; keys: string; run: () => void
  * lists them, and the command palette (6.3) offers them.
  */
 export const COMMANDS: readonly Command[] = [
+  {
+    id: "palette",
+    label: "Command palette",
+    keys: "Ctrl+Shift+P",
+    run: () => openModal("palette"),
+  },
   { id: "settings", label: "Open settings", keys: "Ctrl+,", run: () => openModal("settings") },
   {
     id: "worktree-picker",

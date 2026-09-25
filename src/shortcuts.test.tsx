@@ -50,6 +50,12 @@ test("Ctrl+Shift+T opens the worktree picker", () => {
   expect(useHive.getState().modal).toBe("worktree-picker");
 });
 
+test("Ctrl+Shift+P opens the command palette", () => {
+  app();
+  expect(press(ctrlShift("P"))).toBe(true);
+  expect(useHive.getState().modal).toBe("palette");
+});
+
 test("Ctrl+Shift+N opens the new worktree dialog for the current project", () => {
   app();
   // Nothing selected: the first project.
