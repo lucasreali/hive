@@ -110,6 +110,19 @@ mod tests {
     }
 
     #[test]
+    fn zombies_are_not_listed() {
+        // Never waited for: once it exits it stays a zombie.
+        let child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        let start = std::time::Instant::now();
+        while pidinfo::<BSDInfo>(pid, 0).unwrap().pbi_status != ZOMBIE {
+            assert!(start.elapsed().as_secs() < 10, "the child never exited");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(process(pid), None);
+    }
+
+    #[test]
     fn c_strings_end_at_the_first_nul() {
         let buf = [b'a' as c_char, b'b' as c_char, 0, b'c' as c_char];
         assert_eq!(text(&buf), Some("ab".to_owned()));

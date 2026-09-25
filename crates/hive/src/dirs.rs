@@ -217,7 +217,7 @@ mod tests {
             names
                 .iter()
                 .any(|name| name == "a")
-                .then(|| dir("a", false)),
+                .then_some(dir("a", false)),
         );
         expected.extend([
             dir("b", false),
