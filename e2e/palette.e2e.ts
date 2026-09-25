@@ -15,8 +15,12 @@ test("palette: Ctrl+Shift+P runs commands, goes to worktrees and opens files", a
   await page.keyboard.type("opset");
   await page.keyboard.press("Enter");
   await expect(palette).toBeHidden();
-  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await expect(settings).toBeVisible();
+  // The dialog's `close` event comes as a later task: until it has, the settings are the open
+  // dialog and app shortcuts are its own.
   await page.keyboard.press("Escape");
+  await expect(settings).toBeHidden();
 
   // A worktree: Enter selects it.
   await page.keyboard.press("Control+Shift+P");
