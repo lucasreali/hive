@@ -239,6 +239,9 @@ export const TRANSCRIPT_LIMIT = 1000;
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
 
+/** A review comment (6.7) on lines of a worktree's file (new-file numbers). */
+export type ReviewComment = Lines & { path: string; text: string };
+
 /**
  * Mirrors `Control::File`: a file's text on disk (`content`, null when gone) and at HEAD
  * (`base`, null when new), both null when `binary` or `too_large`; `version` is opaque.
@@ -350,6 +353,10 @@ export type HiveState = {
   selectedLines: Lines | null;
   /** The subagent whose conversation shows in place of the terminals (6.10), or null. */
   transcriptShown: SubagentRef | null;
+  /** Review comments not sent yet, by worktree path (6.7). */
+  comments: Record<string, ReviewComment[]>;
+  /** The lines the comment input is open for, in the open file of `worktree`, or null. */
+  commenting: (Lines & OpenFile) | null;
   selection: string | null;
   /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
@@ -421,6 +428,8 @@ export const initialState: HiveState = {
   fileShown: false,
   selectedLines: null,
   transcriptShown: null,
+  comments: {},
+  commenting: null,
   selection: null,
   collapsed: {},
   tabs: [],

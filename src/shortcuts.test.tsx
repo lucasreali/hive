@@ -246,6 +246,14 @@ test("Ctrl+Shift+L writes the selected lines' reference into the terminal and fo
   write.mockRestore();
 });
 
+test("Ctrl+Shift+M opens the comment input for the selected lines of the shown file", () => {
+  app();
+  const openFile = { worktree: shop.worktrees[1].path, path: "src/auth/session.ts" };
+  act(() => useHive.setState({ openFile, fileShown: true, selectedLines: { from: 4, to: 6 } }));
+  expect(press(ctrlShift("M"))).toBe(true);
+  expect(useHive.getState().commenting).toEqual({ ...openFile, from: 4, to: 6 });
+});
+
 test("the app stops listening when it unmounts", () => {
   app();
   cleanup();

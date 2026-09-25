@@ -10,6 +10,7 @@ import {
 } from "./store";
 import { interceptKeys } from "./terminals";
 import { sendReference } from "./viewer/reference";
+import { startComment } from "./viewer/review";
 import { commandKey } from "./window";
 
 // App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS) and F8, taken even with
@@ -71,6 +72,8 @@ export function shortcut(event: KeyboardEvent): (() => void) | null {
       return () => openModal("add-project");
     case "L":
       return sendReference;
+    case "M":
+      return startComment;
     default:
       return null;
   }

@@ -17,22 +17,29 @@ export function reference(path: string, { from, to }: Lines): string {
 }
 
 /**
- * Where and what "Send to terminal" writes, or why it cannot: it needs selected lines and a
- * live active terminal in the open file's worktree (the one its agent is placed in by the
- * service, else the one it opened in), since the path is relative to that worktree.
+ * The terminal that may take references to `worktree`'s files, or why there is none: the live
+ * active terminal, in that worktree (the one its agent is placed in by the service, else the
+ * one it opened in), since the paths are relative to that worktree.
  */
-export function referenceTarget(
-  s: HiveState,
-): { terminal: number; text: string } | { why: string } {
-  if (!s.openFile || !s.selectedLines) return { why: "Select lines to send their reference" };
+export function terminalIn(s: HiveState, worktree: string): { terminal: number } | { why: string } {
   const tab = s.tabs.find((t) => t.id === s.activeTab);
   if (!tab) return { why: "No terminal open" };
   if (s.terminals[tab.id]?.exited) return { why: "The terminal has exited" };
   const agent = Object.values(s.agents).find((a) => a.terminal === tab.id);
-  if ((agent ? agent.worktree : tab.cwd) !== s.openFile.worktree) {
+  if ((agent ? agent.worktree : tab.cwd) !== worktree) {
     return { why: "The active terminal is in another worktree" };
   }
-  return { terminal: tab.id, text: reference(s.openFile.path, s.selectedLines) };
+  return { terminal: tab.id };
+}
+
+/** Where and what "Send to terminal" writes, or why it cannot: it needs selected lines. */
+export function referenceTarget(
+  s: HiveState,
+): { terminal: number; text: string } | { why: string } {
+  if (!s.openFile || !s.selectedLines) return { why: "Select lines to send their reference" };
+  const target = terminalIn(s, s.openFile.worktree);
+  if ("why" in target) return target;
+  return { ...target, text: reference(s.openFile.path, s.selectedLines) };
 }
 
 /**
