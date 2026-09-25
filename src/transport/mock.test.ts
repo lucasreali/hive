@@ -204,6 +204,14 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
     { ...agent, project: null, worktree: null, cwd: "/tmp" },
     state("idle"),
   ]);
+  // `state <state>` moves it there after the line set it working; an unknown state does not.
+  await transport.writeTerminal(id, "state error\rstate bogus\r");
+  await tick();
+  expect(messages.slice(-3).map((m) => m.type === "agent_state" && m.state)).toEqual([
+    "working",
+    "error",
+    "working",
+  ]);
   await transport.writeTerminal(id, "exit\r");
   await tick();
   expect(messages.slice(-2)).toEqual([
