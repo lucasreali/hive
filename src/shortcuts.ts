@@ -36,7 +36,7 @@ export function nextPending(): void {
   goToAgent(pending[(at + 1) % pending.length] as Agent);
 }
 
-/** Selects `agent`, expands its project and worktree and shows its terminal. */
+/** Selects `agent`, opening its project and worktree, and shows its terminal. */
 export function goToAgent(agent: Agent): void {
   const s = useHive.getState();
   const tab = s.tabs.find((t) => t.id === agent.terminal);

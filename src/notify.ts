@@ -1,4 +1,4 @@
-import { type AgentState, type HiveState, type ServiceMessage, useHive } from "./store";
+import { type AgentState, addToInbox, type HiveState, type ServiceMessage, useHive } from "./store";
 import { showNotification } from "./window";
 
 // Presentation of state changes the service sent (hive.md item 5, #37): a tone when an agent
@@ -8,6 +8,12 @@ import { showNotification } from "./window";
 
 const ALERTING: AgentState[] = ["waiting_permission", "waiting_you", "error"];
 const BUSY: AgentState[] = ["working", "with_subagents"];
+/** What an alert says after the agent's name; "finished" when it stops working. */
+const ALERT_TEXT: Partial<Record<AgentState, string>> = {
+  waiting_permission: "is waiting for permission",
+  waiting_you: "is waiting for you",
+  error: "failed",
+};
 /** Agents changing within this window share one tone. */
 export const TONE_GAP_MS = 500;
 
@@ -46,11 +52,17 @@ export function notify(
   message: ServiceMessage,
   s: HiveState = useHive.getState(),
   now = performance.now(),
+  wall = Date.now(),
 ): void {
   if (message.type !== "agent_state") return;
   const before = s.agentStates[message.id]?.state;
   const after = message.state;
   if (before === undefined || before === after) return;
+  if (ALERTING.includes(after)) {
+    const name = s.agentTitles[message.id] ?? "Claude";
+    const what = after === "waiting_you" && BUSY.includes(before) ? "finished" : ALERT_TEXT[after];
+    addToInbox({ agent: message.id, state: after, at: wall, text: `${name} ${what}` });
+  }
   const volume = s.settings.notifications.volume;
   if (volume > 0 && ALERTING.includes(after) && now - lastTone >= TONE_GAP_MS) {
     lastTone = now;
