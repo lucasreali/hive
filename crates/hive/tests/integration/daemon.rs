@@ -136,6 +136,7 @@ async fn hook_events_are_translated_and_sent_to_the_app() {
         subagent: None,
         cwd: Some("/w".into()),
         kind: EventKind::TurnFinished,
+        activity: None,
         raw: payload,
     };
     assert_eq!(app.control().await, (0, Control::Agent(expected)));

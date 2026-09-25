@@ -2,6 +2,10 @@
 
 use hive_protocol::{AgentEvent, EventKind, Notification, Subagent};
 use serde_json::Value;
+use std::path::Path;
+
+/// Longest activity kept, in characters.
+const MAX_ACTIVITY: usize = 120;
 
 /// One adapter per agent provider (Claude Code today).
 pub trait Adapter {
@@ -47,6 +51,13 @@ impl Adapter for ClaudeCode {
                 event: other.to_owned(),
             },
         };
+        let activity = match &kind {
+            EventKind::ToolStarted { tool: Some(tool) }
+            | EventKind::PermissionRequested { tool: Some(tool) } => {
+                Some(activity(tool, &payload))
+            }
+            _ => None,
+        };
         AgentEvent {
             provider: "claude-code".to_owned(),
             terminal_id,
@@ -57,9 +68,50 @@ impl Adapter for ClaudeCode {
             }),
             cwd: field("cwd"),
             kind,
+            activity,
             raw: payload,
         }
     }
+}
+
+/// What a tool call does, from its untrusted `tool_input`: a file relative to the payload's
+/// `cwd` when inside it, a Bash call's description (else its command's first line), a search
+/// pattern, a subagent's description, else the tool's name. Control characters are dropped
+/// and the text is cut at [`MAX_ACTIVITY`] characters.
+fn activity(tool: &str, payload: &Value) -> String {
+    let input = |name: &str| {
+        let value = payload.get("tool_input")?.get(name)?.as_str()?;
+        Some(value).filter(|v| !v.trim().is_empty())
+    };
+    let text = match tool {
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Read" => {
+            let path = input("file_path").or_else(|| input("notebook_path"));
+            let cwd = payload.get("cwd").and_then(Value::as_str);
+            path.map(|path| {
+                let short = cwd
+                    .and_then(|cwd| Path::new(path).strip_prefix(cwd).ok())
+                    .and_then(Path::to_str)
+                    .filter(|p| !p.is_empty())
+                    .unwrap_or(path);
+                let verb = if tool == "Read" { "Reading" } else { "Editing" };
+                format!("{verb} {short}")
+            })
+        }
+        "Bash" => input("description")
+            .or_else(|| input("command").and_then(|c| c.lines().find(|l| !l.trim().is_empty())))
+            .map(str::to_owned),
+        "Grep" | "Glob" => input("pattern").map(|p| format!("Searching {p}")),
+        "Agent" | "Task" => input("description").map(str::to_owned),
+        _ => None,
+    };
+    let text = text.unwrap_or_else(|| tool.to_owned());
+    let mut clean = text.chars().filter(|c| !c.is_control());
+    let mut out: String = clean.by_ref().take(MAX_ACTIVITY).collect();
+    if clean.next().is_some() {
+        out.pop();
+        out.push('…');
+    }
+    out.trim().to_owned()
 }
 
 fn notification(kind: String) -> Notification {
@@ -97,6 +149,7 @@ mod tests {
                 subagent: None,
                 cwd: Some("/repo/.claude/worktrees/x".into()),
                 kind: EventKind::SessionStarted,
+                activity: None,
                 raw: payload,
             }
         );
@@ -145,6 +198,90 @@ mod tests {
             kind("PermissionRequest", p),
             EventKind::PermissionRequested { tool: bash() }
         );
+    }
+
+    fn activity_of(event: &str, tool: &str, input: Value) -> Option<String> {
+        let payload = json!({"tool_name": tool, "tool_input": input, "cwd": "/repo/w"});
+        ClaudeCode.translate(event, None, payload).activity
+    }
+
+    fn doing(tool: &str, input: Value) -> String {
+        activity_of("PreToolUse", tool, input).unwrap()
+    }
+
+    #[test]
+    fn tool_calls_describe_their_files_relative_to_cwd() {
+        assert_eq!(
+            doing("Edit", json!({"file_path": "/repo/w/src/x.ts"})),
+            "Editing src/x.ts"
+        );
+        for tool in ["Write", "MultiEdit"] {
+            assert_eq!(doing(tool, json!({"file_path": "/repo/w/a"})), "Editing a");
+        }
+        assert_eq!(
+            doing("NotebookEdit", json!({"notebook_path": "/repo/w/n.ipynb"})),
+            "Editing n.ipynb"
+        );
+        assert_eq!(
+            doing("Read", json!({"file_path": "/repo/wx/a"})),
+            "Reading /repo/wx/a"
+        );
+        assert_eq!(doing("Read", json!({"file_path": "/repo/w"})), "Reading /repo/w");
+        let no_cwd = json!({"tool_name": "Read", "tool_input": {"file_path": "/repo/w/a"}});
+        let event = ClaudeCode.translate("PreToolUse", None, no_cwd);
+        assert_eq!(event.activity.as_deref(), Some("Reading /repo/w/a"));
+    }
+
+    #[test]
+    fn tool_calls_describe_commands_searches_and_subagents() {
+        let bash = |input| doing("Bash", input);
+        assert_eq!(
+            bash(json!({"command": "cargo test", "description": "Run tests"})),
+            "Run tests"
+        );
+        assert_eq!(
+            bash(json!({"command": "\n  cargo test\necho", "description": " "})),
+            "cargo test"
+        );
+        assert_eq!(doing("Grep", json!({"pattern": "fn main"})), "Searching fn main");
+        assert_eq!(doing("Glob", json!({"pattern": "**/*.rs"})), "Searching **/*.rs");
+        assert_eq!(doing("Agent", json!({"description": "Find bugs"})), "Find bugs");
+        assert_eq!(doing("Task", json!({"description": "Plan"})), "Plan");
+    }
+
+    #[test]
+    fn other_or_malformed_tool_calls_show_the_tool_name() {
+        assert_eq!(doing("WebFetch", json!({"url": "https://x"})), "WebFetch");
+        assert_eq!(doing("Bash", json!({"command": 3})), "Bash");
+        assert_eq!(doing("Edit", json!("not an object")), "Edit");
+        for tool in ["Read", "Grep", "Agent"] {
+            assert_eq!(doing(tool, json!({})), tool);
+        }
+    }
+
+    #[test]
+    fn activity_is_cleaned_and_limited() {
+        let long = "x".repeat(500);
+        let text = doing("Bash", json!({ "description": long }));
+        assert_eq!(text.chars().count(), 120);
+        assert!(text.ends_with("x…"));
+        let exact = "y".repeat(120);
+        assert_eq!(doing("Bash", json!({ "description": exact.clone() })), exact);
+        assert_eq!(
+            doing("Bash", json!({"description": "a\u{1b}[31mb\tc\r"})),
+            "a[31mbc"
+        );
+    }
+
+    #[test]
+    fn only_tool_starts_and_permission_requests_have_an_activity() {
+        let input = json!({"description": "Run"});
+        assert_eq!(activity_of("PermissionRequest", "Bash", input.clone()).as_deref(), Some("Run"));
+        for event in ["PostToolUse", "PostToolUseFailure", "Stop"] {
+            assert_eq!(activity_of(event, "Bash", input.clone()), None, "{event}");
+        }
+        let nameless = ClaudeCode.translate("PreToolUse", None, json!({"tool_input": input}));
+        assert_eq!(nameless.activity, None);
     }
 
     #[test]

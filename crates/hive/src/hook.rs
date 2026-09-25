@@ -55,6 +55,13 @@ async fn read_payload(input: impl AsyncRead + Unpin) -> Value {
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&buf).into_owned()))
 }
 
+/// The wall clock, in ms since the Unix epoch (0 before it).
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |t| t.as_millis() as u64)
+}
+
 /// Appends one JSON line: time, event, terminal and the raw payload.
 fn append_record(
     file: &Path,
@@ -62,11 +69,8 @@ fn append_record(
     terminal_id: Option<&str>,
     payload: &Value,
 ) -> io::Result<()> {
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |t| t.as_millis() as u64);
     let line =
-        json!({ "ts_ms": ts_ms, "event": event, "terminal_id": terminal_id, "payload": payload });
+        json!({ "ts_ms": now_ms(), "event": event, "terminal_id": terminal_id, "payload": payload });
     let mut out = std::fs::File::options()
         .create(true)
         .append(true)

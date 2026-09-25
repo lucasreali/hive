@@ -200,6 +200,10 @@ pub enum Control {
         urgency: u8,
         pending: bool,
         subagents: Vec<SubagentState>,
+        /// What the agent itself is doing (its current tool call), cleared when its turn ends.
+        activity: Option<String>,
+        /// Wall clock (ms since the Unix epoch) when the displayed `state` began.
+        since_ms: u64,
     },
     /// The agent's session name from its log (the user's, else Claude's), sent when it is
     /// first known and whenever it changes.
@@ -671,6 +675,9 @@ pub struct AgentEvent {
     /// Working directory reported by the agent; places it under a worktree.
     pub cwd: Option<String>,
     pub kind: EventKind,
+    /// A short description of the tool call a `ToolStarted`/`PermissionRequested` is about
+    /// (e.g. "Editing src/x.ts"), for the sidebar.
+    pub activity: Option<String>,
     /// The provider payload, unchanged.
     pub raw: serde_json::Value,
 }
@@ -772,6 +779,10 @@ pub struct SubagentState {
     /// The worktree it works in when that is its own (not its agent's): the worktree's id,
     /// shown nested under the subagent instead of at project level (#22).
     pub worktree: Option<String>,
+    /// What it is doing (its current tool call), cleared when it stops.
+    pub activity: Option<String>,
+    /// Wall clock (ms since the Unix epoch) when its `state` began.
+    pub since_ms: u64,
 }
 
 #[cfg(test)]
@@ -847,6 +858,7 @@ mod tests {
             kind: EventKind::Notification {
                 notification: Notification::Other("x".into()),
             },
+            activity: None,
             raw: serde_json::json!({"k": [1, 2]}),
         });
         let frame = Frame::control(0, &msg);
@@ -881,11 +893,15 @@ mod tests {
                 agent_type: None,
                 state: AgentState::WithSubagents,
                 worktree: Some("/r/.claude/worktrees/w".into()),
+                activity: Some("Reading a.rs".into()),
+                since_ms: 7,
             }],
+            activity: None,
+            since_ms: 5,
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w"}]}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
     }

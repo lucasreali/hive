@@ -39,7 +39,8 @@ const sub = (
   agent_type: string | null,
   state: AgentState,
   worktree: string | null = null,
-): Subagent => ({ id, agent_type, state, worktree });
+  activity: string | null = null,
+): Subagent => ({ id, agent_type, state, worktree, activity, since_ms: Date.now() - 42_000 });
 /** A stand-in for `AgentState::urgency`/`pending`, least urgent first; the real rule lives in Rust. */
 const URGENCY: AgentState[] = [
   "ended",
@@ -50,9 +51,9 @@ const URGENCY: AgentState[] = [
   "error",
   "waiting_permission",
 ];
-export const agentStatus = (state: AgentState) => {
+export const agentStatus = (state: AgentState, activity: string | null = null, since_ms = 0) => {
   const urgency = URGENCY.indexOf(state);
-  return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you") };
+  return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you"), activity, since_ms };
 };
 
 /** `?mock=states`: shop's worktree that subagent a3 works in, shown as its parent row (#22). */
@@ -60,34 +61,49 @@ export const MOCK_OWN_WORKTREE = "/home/user/projects/shop/.claude/worktrees/tes
 
 /**
  * `?mock=states`: agents without a terminal in every state, by worktree path (relative to
- * `/home/user/projects`), as the service would resolve them ("the most urgent wins").
+ * `/home/user/projects`), as the service would resolve them ("the most urgent wins"), with
+ * what they are doing.
  */
-export const MOCK_STATES: [string, AgentState, Subagent[]][] = [
-  ["shop", "with_subagents", [sub("a1", "Explore", "working"), sub("a2", null, "working")]],
+export const MOCK_STATES: [string, AgentState, Subagent[], string | null][] = [
+  [
+    "shop",
+    "with_subagents",
+    [
+      sub("a1", "Explore", "working", null, "Searching useSession"),
+      sub("a2", null, "working", null, "Reading src/auth/session.ts"),
+    ],
+    "Find where sessions expire",
+  ],
   [
     "shop/.claude/worktrees/fix-login",
     "waiting_permission",
     [
-      sub("a3", "general-purpose", "waiting_permission", MOCK_OWN_WORKTREE),
+      sub("a3", "general-purpose", "waiting_permission", MOCK_OWN_WORKTREE, "bun test src/auth"),
       sub("a4", "Explore", "idle"),
     ],
+    "Editing src/auth/login.ts",
   ],
-  ["shop/.claude/worktrees/feat-checkout", "waiting_you", []],
-  ["api", "error", []],
-  ["api", "ended", []],
-  ["api/.claude/worktrees/refactor-auth", "working", []],
-  ["api/.claude/worktrees/refactor-auth", "idle", []],
+  ["shop/.claude/worktrees/feat-checkout", "waiting_you", [], null],
+  ["api", "error", [], null],
+  ["api", "ended", [], null],
+  ["api/.claude/worktrees/refactor-auth", "working", [], "Run the API tests"],
+  ["api/.claude/worktrees/refactor-auth", "idle", [], null],
 ];
 
 function mockStates(): ServiceMessage[] {
-  return MOCK_STATES.flatMap(([dir, state, subagents], i) => {
+  return MOCK_STATES.flatMap(([dir, state, subagents, activity], i) => {
     const path = `/home/user/projects/${dir}`;
     const id = `mock-state-${i + 1}`;
     const project = `/home/user/projects/${dir.split("/")[0]}`;
     const place = { project, worktree: path, cwd: path };
     return [
       { type: "agent_detected", channel: 1000 + i, id, ...place },
-      { type: "agent_state", id, ...agentStatus(state), subagents },
+      {
+        type: "agent_state",
+        id,
+        ...agentStatus(state, activity, Date.now() - (i + 1) * 97_000),
+        subagents,
+      },
     ];
   });
 }
@@ -489,8 +505,9 @@ export function createMockTransport(
     return `in use by ${ids.map(([id]) => `fish (${id})`).join(", ")}: close its terminals first`;
   };
   let sessions = MOCK_SESSIONS;
-  const setState = (id: string, state: AgentState) =>
-    later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
+  // The typed line stands in for the tool call it is doing.
+  const setState = (id: string, state: AgentState, activity: string | null = null) =>
+    later({ type: "agent_state", id, ...agentStatus(state, activity, Date.now()), subagents: [] });
   // Files by worktree path, and the one watched.
   const files = new Map<string, string[]>();
   let watched: string | null = null;
@@ -702,7 +719,7 @@ export function createMockTransport(
         terminal.line = "";
         if (line === "exit") return exit(id, 0);
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
-        if (terminal.agent && line) setState(terminal.agent, "working");
+        if (terminal.agent && line) setState(terminal.agent, "working", line);
         if (line === "claude") detect(id, terminal);
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));

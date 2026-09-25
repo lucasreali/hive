@@ -229,7 +229,7 @@ impl State {
             projects::place(&self.projects.list(), cwd)
         });
         let (project, worktree) = place.unzip();
-        let mut agent = Agent::new(channel, Instant::now());
+        let mut agent = Agent::new(channel, Instant::now(), crate::hook::now_ms());
         agent.worktree = worktree.clone();
         agent.cwd = cwd.clone();
         let state = agent.message(&id);
@@ -900,14 +900,14 @@ mod tests {
         // Agents outlive an app connection only in principle (the service exits with the
         // app), so the snapshot is checked here rather than through a real daemon.
         let dir = tempfile::tempdir().unwrap();
-        let mut named = Agent::new(4, Instant::now());
+        let mut named = Agent::new(4, Instant::now(), 0);
         named.title = Some("Named".into());
         let state = Arc::new(State {
             app: Mutex::new(None),
             terminals: Mutex::new(HashMap::new()),
             agents: Mutex::new(HashMap::from([
                 ("s".to_owned(), named),
-                ("u".to_owned(), Agent::new(5, Instant::now())),
+                ("u".to_owned(), Agent::new(5, Instant::now(), 0)),
             ])),
             watching: Mutex::new(None),
             watched: AtomicU32::new(0),
@@ -942,6 +942,8 @@ mod tests {
             urgency: 1,
             pending: false,
             subagents: vec![],
+            activity: None,
+            since_ms: 0,
         };
         // Each agent's state; the named one's name too, and only after its state.
         let named = Control::AgentTitle {

@@ -52,6 +52,8 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         urgency: state.urgency(),
         pending: state.pending(),
         subagents,
+        activity: None,
+        since_ms: 0,
     }
 }
 
@@ -61,6 +63,8 @@ fn sub(id: &str, state: AgentState) -> SubagentState {
         agent_type: Some("Explore".into()),
         state,
         worktree: None,
+        activity: None,
+        since_ms: 0,
     }
 }
 
@@ -359,6 +363,8 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             urgency: WaitingYou.urgency(),
             pending,
             subagents: vec![],
+            activity: None,
+            since_ms: 0,
         };
         vec![(1, message)]
     };
