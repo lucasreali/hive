@@ -10,7 +10,13 @@ import { Sidebar } from "./shell/Sidebar";
 import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
-import { RemoveWorktreeDialog, RenameWorktreeDialog, WorktreeMenu } from "./shell/WorktreeMenu";
+import {
+  ProjectMenu,
+  RemoveMergedDialog,
+  RemoveWorktreeDialog,
+  RenameWorktreeDialog,
+  WorktreeMenu,
+} from "./shell/WorktreeMenu";
 import { WorktreePicker } from "./shell/WorktreePicker";
 import { installShortcuts } from "./shortcuts";
 import { useHive } from "./store";
@@ -46,9 +52,11 @@ export function App() {
         {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
         {modal === "settings" && !blocked && <SettingsDialog />}
+        {modal === "remove-merged" && !blocked && <RemoveMergedDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {!blocked && <WorktreeMenu />}
+        {!blocked && <ProjectMenu />}
         {!blocked && <SessionMenu />}
         <ConnectionBlock />
       </div>

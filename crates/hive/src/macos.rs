@@ -110,11 +110,12 @@ mod tests {
         // Not waited for yet: once it exits it stays a zombie.
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id() as i32;
-        let start = std::time::Instant::now();
-        while process(pid).is_some() {
-            assert!(start.elapsed().as_secs() < 10, "the child never exited");
+        // Every line runs however fast the child exits, so coverage does not depend on timing.
+        let exited = (0..1000).any(|_| {
             std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+            process(pid).is_none()
+        });
+        assert!(exited, "the child never exited");
         // Still there, as a zombie, until it is waited for.
         assert_eq!(nix::sys::signal::kill(Pid::from_raw(pid), None), Ok(()));
         assert!(child.wait().unwrap().success());

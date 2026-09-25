@@ -28,3 +28,4 @@ mutants.out*/
 
 # The Linux hive the release bundles (4.18); CI puts it here.
 src-tauri/resources/
+/test-results/
