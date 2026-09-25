@@ -5,6 +5,7 @@ import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { RightPanel } from "./shell/RightPanel";
 import { SessionMenu } from "./shell/SessionsView";
+import { SettingsDialog } from "./shell/SettingsDialog";
 import { Sidebar } from "./shell/Sidebar";
 import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
@@ -26,10 +27,15 @@ export function App() {
   const status = useHive((s) => s.connection.status);
   const modal = useHive((s) => s.modal);
   const hasProjects = useHive((s) => Object.keys(s.projects ?? {}).length > 0);
+  const theme = useHive((s) => s.settings.appearance.theme);
   // Nothing works without the service: the workspace is inert under the block (#29).
   // The title bar stays usable, so the window can still be closed.
   useEffect(installShortcuts, []);
   useEffect(() => guardClose(confirmClose), []);
+  // The theme's CSS variables hang off this attribute (src/styles.css).
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
   const blocked = status === "version_mismatch" || status === "disconnected";
   return (
     <div className="app">
@@ -45,6 +51,7 @@ export function App() {
         {modal === "worktree-picker" && !blocked && <WorktreePicker />}
         {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
+        {modal === "settings" && !blocked && <SettingsDialog />}
         {modal === "remove-merged" && !blocked && <RemoveMergedDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}

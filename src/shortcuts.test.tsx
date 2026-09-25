@@ -187,6 +187,27 @@ test("on macOS the shortcuts are Cmd+Shift+letter and Ctrl+Shift+letter is the t
   expect(useHive.getState().modal).toBe("worktree-picker");
 });
 
+test("Ctrl+, (Cmd+, on macOS) opens the settings; with Shift or Alt it is not a shortcut", () => {
+  app();
+  expect(press({ key: ",", ctrlKey: true, shiftKey: true })).toBe(false);
+  expect(press({ key: ",", ctrlKey: true, altKey: true })).toBe(false);
+  expect(press({ key: "," })).toBe(false);
+  expect(useHive.getState().modal).toBeNull();
+  expect(press({ key: ",", ctrlKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("settings");
+  act(() => openModal(null));
+  asMac();
+  expect(press({ key: ",", ctrlKey: true })).toBe(false);
+  expect(press({ key: ",", metaKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("settings");
+});
+
+test("F8 with a modifier is not a shortcut", () => {
+  app();
+  expect(shortcut(new KeyboardEvent("keydown", { key: "F8", metaKey: true }))).toBeNull();
+  expect(shortcut(new KeyboardEvent("keydown", { key: "F8", shiftKey: true }))).toBeNull();
+});
+
 test("nothing runs under the connection block or while a dialog is open", () => {
   app();
   act(() => openModal("add-project"));

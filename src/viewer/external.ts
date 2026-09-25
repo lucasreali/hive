@@ -32,8 +32,10 @@ export async function openExternal(target: EditorTarget, tauri = isTauri()): Pro
  */
 export async function openFolder(target: EditorTarget, tauri = isTauri()): Promise<void> {
   if (!target.windows_path) return setNotice(target.error);
-  const finder = isMac() ? "the Finder" : "the Explorer";
-  if (!tauri) return setNotice(`Only the Hive app opens ${finder}: ${target.windows_path}`);
+  // No worktree: the settings file ("Open settings file"), opened the same way.
+  const what =
+    target.worktree === "" ? "the settings file" : isMac() ? "the Finder" : "the Explorer";
+  if (!tauri) return setNotice(`Only the Hive app opens ${what}: ${target.windows_path}`);
   try {
     await openPath(target.windows_path);
   } catch (error) {

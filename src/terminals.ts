@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { type ITheme, Terminal } from "@xterm/xterm";
-import { addTab, removeTab, useHive } from "./store";
+import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
+import { addTab, removeTab, type Settings, useHive } from "./store";
 import { transport } from "./transport";
 import { commandKey, isMac } from "./window";
 
@@ -11,7 +11,7 @@ import { commandKey, isMac } from "./window";
 // ones keep parsing output into their buffer and cost no rendering.
 
 /** Colors from the design tokens in `src/styles.css`; cyan is One Dark's. */
-const THEME: ITheme = {
+const ONE_DARK: ITheme = {
   background: "#282c33",
   foreground: "#dce0e5",
   cursor: "#dce0e5",
@@ -37,6 +37,46 @@ const THEME: ITheme = {
   brightCyan: "#6eb4bf",
   brightWhite: "#dce0e5",
 };
+
+/** Zed's One Light terminal colors, beside the `one-light` tokens in `src/styles.css`. */
+const ONE_LIGHT: ITheme = {
+  background: "#fafafa",
+  foreground: "#2a2c33",
+  cursor: "#5c78e2",
+  cursorAccent: "#fafafa",
+  selectionBackground: "#5c78e23d",
+  scrollbarSliderBackground: "#383a414c",
+  scrollbarSliderHoverBackground: "#383a4180",
+  scrollbarSliderActiveBackground: "#383a4180",
+  black: "#000000",
+  red: "#de3e35",
+  green: "#3f953a",
+  yellow: "#d2b67c",
+  blue: "#2f5af3",
+  magenta: "#950095",
+  cyan: "#0997b3",
+  white: "#bbbbbb",
+  brightBlack: "#000000",
+  brightRed: "#de3e35",
+  brightGreen: "#3f953a",
+  brightYellow: "#d2b67c",
+  brightBlue: "#2f5af3",
+  brightMagenta: "#a00095",
+  brightCyan: "#0bbcd6",
+  brightWhite: "#ffffff",
+};
+
+/** The xterm options the settings give (6.2): used by new terminals and live by open ones. */
+export function termOptions({ terminal: t, appearance }: Settings): ITerminalOptions {
+  return {
+    fontFamily: t.font_family,
+    fontSize: t.font_size,
+    scrollback: t.scrollback,
+    cursorStyle: t.cursor_style,
+    cursorBlink: t.cursor_blink,
+    theme: appearance.theme === "one-light" ? ONE_LIGHT : ONE_DARK,
+  };
+}
 
 /** How long the host must keep its size before terminals are refitted and the PTY resized. */
 export const RESIZE_DEBOUNCE_MS = 50;
@@ -70,13 +110,7 @@ export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste
  * before the service is asked, so no output is lost before the tab appears.
  */
 export async function openTerminal(cwd: string): Promise<number> {
-  const term = new Terminal({
-    scrollback: useHive.getState().settings.terminal.scrollback,
-    fontFamily: '"IBM Plex Mono", monospace',
-    fontSize: 13,
-    lineHeight: 1.2,
-    theme: THEME,
-  });
+  const term = new Terminal({ lineHeight: 1.2, ...termOptions(useHive.getState().settings) });
   let id: number;
   try {
     id = await transport.openTerminal(cwd, term.cols, term.rows, (bytes) => term.write(bytes));
@@ -91,6 +125,10 @@ export async function openTerminal(cwd: string): Promise<number> {
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
   term.attachCustomKeyEventHandler((event) => keys(term, event));
+  term.onSelectionChange(() => {
+    const copy = useHive.getState().settings.terminal.copy_on_select;
+    if (copy && term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
+  });
   const el = document.createElement("div");
   el.className = "terminal-pane";
   el.hidden = true;
@@ -175,11 +213,23 @@ function webgl(entry: Entry): WebglAddon | null {
   }
 }
 
+/** New settings apply to every open terminal at once; the shown one refits to the new font. */
+function applySettings(settings: Settings): void {
+  const options = termOptions(settings);
+  for (const entry of entries.values()) entry.term.options = options;
+  const entry = shown === null ? undefined : entries.get(shown);
+  entry?.fit.fit();
+}
+
 /**
- * Makes `element` the place terminals render in and follows its size. Returns the cleanup.
+ * Makes `element` the place terminals render in, follows its size and applies new settings.
+ * Returns the cleanup.
  */
 export function mountTerminals(element: HTMLElement): () => void {
   host = element;
+  const unsubscribe = useHive.subscribe((s, prev) => {
+    if (s.settings !== prev.settings) applySettings(s.settings);
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const observer = new ResizeObserver(() => {
     clearTimeout(timer);
@@ -193,6 +243,7 @@ export function mountTerminals(element: HTMLElement): () => void {
   return () => {
     clearTimeout(timer);
     observer.disconnect();
+    unsubscribe();
     if (host === element) host = null;
   };
 }

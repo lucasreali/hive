@@ -76,6 +76,12 @@ test("a worktree's folder opens in the Explorer, or the status bar says why not"
   await openFolder(target(folder, null, ""));
 });
 
+test("the settings file (no worktree) opens the same way", async () => {
+  const file = "\\\\wsl.localhost\\Ubuntu\\home\\you\\.config\\hive\\settings.json";
+  await openFolder({ ...target(file, null, ""), worktree: "" }, false);
+  expect(useHive.getState().notice).toBe(`Only the Hive app opens the settings file: ${file}`);
+});
+
 test("on macOS the folder opens in the Finder", async () => {
   asMac();
   await openFolder(target("/Users/you/w", null, ""), false);

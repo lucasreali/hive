@@ -35,6 +35,12 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
 /** `?mock=load`: when the first terminal's replay starts, and how much later each next one does. */
 export const LOAD_START_MS = 500;
 export const LOAD_STAGGER_MS = 100;
+export const MOCK_DIAGNOSTICS = {
+  settings_file: "/home/mock/.config/hive/settings.json",
+  wrapper: "/home/mock/.local/share/hive/bin/claude",
+  claude: "/home/mock/.local/bin/claude",
+};
+
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
 
 const sub = (
@@ -598,6 +604,13 @@ export function createMockTransport(
     async setSettings(next) {
       settings = next;
       later({ type: "settings", settings });
+    },
+    async openSettingsFile() {
+      const windows_path = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.config\\hive\\settings.json";
+      later({ type: "editor_target", worktree: "", path: "", windows_path, error: null });
+    },
+    async getDiagnostics() {
+      later({ type: "diagnostics", ...MOCK_DIAGNOSTICS });
     },
     async checkUpdate() {
       if (scenario === "update") later({ type: "update_ready", version: "9.9.9" });

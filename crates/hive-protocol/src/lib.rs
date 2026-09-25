@@ -533,6 +533,20 @@ pub enum Control {
     SettingsFailed {
         message: String,
     },
+    /// App → service: open the settings file in the user's editor, first writing the settings
+    /// in use when there is no file yet. Answered by `EditorTarget` with an empty `worktree`
+    /// and `path`.
+    OpenSettingsFile,
+    /// App → service: what the settings' About section shows. Answered by `Diagnostics`.
+    GetDiagnostics,
+    Diagnostics {
+        /// The settings file (`$XDG_CONFIG_HOME/hive/settings.json`).
+        settings_file: String,
+        /// The `claude` wrapper Hive terminals run first.
+        wrapper: String,
+        /// The `claude` the wrapper runs, as found on the service's `PATH`; `None` when none is.
+        claude: Option<String>,
+    },
     /// App → service: follow a subagent's conversation (6.10), read from its transcript
     /// beside its agent's. Answered by `Transcript` now and `TranscriptAppended` as it grows.
     /// Only one is followed: this replaces the previous one.
@@ -1553,6 +1567,23 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &failed).payload[..],
             br#"{"type":"settings_failed","message":"m"}"#
+        );
+        assert_eq!(
+            &Frame::control(0, &Control::OpenSettingsFile).payload[..],
+            br#"{"type":"open_settings_file"}"#
+        );
+        assert_eq!(
+            &Frame::control(0, &Control::GetDiagnostics).payload[..],
+            br#"{"type":"get_diagnostics"}"#
+        );
+        let diagnostics = Control::Diagnostics {
+            settings_file: "/c/settings.json".into(),
+            wrapper: "/d/bin/claude".into(),
+            claude: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &diagnostics).payload[..],
+            br#"{"type":"diagnostics","settings_file":"/c/settings.json","wrapper":"/d/bin/claude","claude":null}"#
         );
         let underline: CursorStyle = serde_json::from_str(r#""underline""#).unwrap();
         assert_eq!(underline, CursorStyle::Underline);
