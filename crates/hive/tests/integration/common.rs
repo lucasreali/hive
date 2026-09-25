@@ -127,8 +127,13 @@ impl Env {
             .stdin(Stdio::null())
             .spawn()
             .unwrap();
-        let daemon = Daemon(child);
-        wait_until(|| std::os::unix::net::UnixStream::connect(self.socket()).is_ok());
+        let mut daemon = Daemon(child);
+        // A daemon that exits early fails the test now, not after the timeout.
+        wait_until(|| {
+            let exited = daemon.0.try_wait().unwrap();
+            assert!(exited.is_none(), "the daemon exited: {exited:?}");
+            std::os::unix::net::UnixStream::connect(self.socket()).is_ok()
+        });
         daemon
     }
 
