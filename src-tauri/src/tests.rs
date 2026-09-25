@@ -617,10 +617,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.watch_worktree("/r".into()), not_connected);
     assert_eq!(hive.unwatch_worktree(), not_connected);
-    assert_eq!(
-        hive.watch_transcript("s".into(), "a".into()),
-        not_connected
-    );
+    assert_eq!(hive.watch_transcript("s".into(), "a".into()), not_connected);
     assert_eq!(
         hive.unwatch_transcript("s".into(), "a".into()),
         not_connected
