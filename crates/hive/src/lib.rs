@@ -19,6 +19,7 @@ pub mod search;
 pub mod sessions;
 pub mod states;
 pub mod terminal;
+pub mod transcript;
 pub mod watch;
 pub mod worktree;
 pub mod wrapper;
