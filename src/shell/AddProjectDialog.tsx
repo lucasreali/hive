@@ -2,6 +2,7 @@ import { ArrowUpIcon, GitBranchIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { clearAddProjectError, openModal, safeStorage, useHive } from "../store";
 import { transport } from "../transport";
+import { Select } from "../ui/Select";
 import { CloseIcon, FolderIcon } from "./icons";
 
 const close = () => openModal(null);
@@ -10,6 +11,11 @@ const close = () => openModal(null);
 export const LIST_DELAY_MS = 150;
 /** Where the last Windows | WSL choice is remembered (a UI preference, not service data). */
 const SIDE = "hive.folderSide";
+
+const SIDES = [
+  { value: "windows", label: "Windows" },
+  { value: "wsl", label: "WSL" },
+];
 
 /** Whether the last choice was Windows. */
 export const savedWindows = (storage: Pick<Storage, "getItem"> | null = safeStorage()) => {
@@ -101,21 +107,19 @@ export function AddProjectDialog() {
             <div className="folder-picker">
               <div className="folder-path">
                 {wsl && (
-                  <select
+                  <Select
                     aria-label="Folder kind"
                     value={windows ? "windows" : "wsl"}
-                    onChange={(e) => {
-                      const next = e.target.value === "windows";
+                    options={SIDES}
+                    onChange={(value) => {
+                      const next = value === "windows";
                       setSide(next);
                       saveWindows(next);
                       setPath("");
                       setFill(true);
                       clearAddProjectError();
                     }}
-                  >
-                    <option value="windows">Windows</option>
-                    <option value="wsl">WSL</option>
-                  </select>
+                  />
                 )}
                 <input
                   id="add-project-path"

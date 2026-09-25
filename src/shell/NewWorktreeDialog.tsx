@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { openModal, select, useHive } from "../store";
 import { openClaude, openTerminal as openTerminalIn } from "../terminals";
 import { transport } from "../transport";
+import { Select } from "../ui/Select";
 import { BranchIcon, CheckIcon, CloseIcon } from "./icons";
 
 const close = () => openModal(null);
@@ -115,23 +116,19 @@ export function NewWorktreeDialog() {
           </div>
         ) : (
           <div className="dialog-body wide">
-            <label className="field">
-              <span>Project</span>
-              <select
+            <div className="field">
+              <span id="new-worktree-project">Project</span>
+              <Select
+                aria-labelledby="new-worktree-project"
                 value={project}
-                onChange={(e) => {
-                  setProject(e.target.value);
+                options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                onChange={(value) => {
+                  setProject(value);
                   setPicked(null);
                   setQuery("");
                 }}
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+              />
+            </div>
             <div className="field">
               <label htmlFor="new-worktree-name">Worktree name</label>
               <input

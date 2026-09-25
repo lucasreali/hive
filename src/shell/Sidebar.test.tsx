@@ -119,10 +119,9 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
     ["tree-row worktree", "feat-checkout"],
   ]);
   const [agent, orphan] = screen.getAllByRole("button", { name: "idle Claude" });
-  // Claude's mark sits before the title, hidden from screen readers.
-  await waitFor(() =>
-    expect(agent.querySelector("svg.agent-icon")?.getAttribute("aria-hidden")).toBe("true"),
-  );
+  // Just the state and the name: no provider icon before the title.
+  expect(agent.querySelectorAll("svg")).toHaveLength(1);
+  expect(agent.querySelector("svg")?.classList.contains("state-icon")).toBe(true);
   expect(agent.parentElement?.getAttribute("title")).toBe(`${fixLogin.path}/src`);
   expect(agent.getAttribute("aria-current")).toBe("false");
   fireEvent.click(agent);
