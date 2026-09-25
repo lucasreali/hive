@@ -7,7 +7,9 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type KeyboardEvent,
+  lazy,
   type ReactNode,
+  Suspense,
   useEffect,
   useId,
   useMemo,
@@ -36,15 +38,7 @@ import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { isMac, keyText } from "../window";
-import {
-  BranchIcon,
-  ChevronIcon,
-  CloseIcon,
-  ExternalIcon,
-  FileIcon,
-  FolderIcon,
-  TerminalIcon,
-} from "./icons";
+import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
 import { ResizeHandle } from "./resize";
 import { SessionsView } from "./SessionsView";
 
@@ -310,12 +304,62 @@ export function FilesView({ worktree }: { worktree: string }) {
   );
 }
 
+/** The tree's icons: monochrome through CSS (`.tree-icon`), at the size of the panel's other icons. */
+const TREE_ICON = { className: "tree-icon", width: 14, height: 14, "aria-hidden": true } as const;
+
+/**
+ * The icon library maps every name it knows, so it cannot be tree-shaken: it loads in its own chunk the first time
+ * the tree shows, and each row keeps the icon's place until then.
+ */
+const symbols = () => import("@react-symbols/icons/utils");
+
+/** A file's icon by its name, from the library's own name and extension mapping (its default for unknown ones). */
+const LazyFileIcon = lazy(async () => {
+  const { getIconForFile } = await symbols();
+  return {
+    default: ({ name }: { name: string }) =>
+      getIconForFile({ fileName: name, autoAssign: true, ...TREE_ICON }),
+  };
+});
+
+/**
+ * A folder's icon by its name; the library has an open variant only for its default folder, so a named folder keeps
+ * its icon open or closed.
+ */
+const LazyFolderIcon = lazy(async () => {
+  const { DefaultFolderIcon, DefaultFolderOpenedIcon, getIconForFolder } = await symbols();
+  return {
+    default: ({ name, open }: { name: string; open: boolean }) => {
+      const icon = getIconForFolder({ folderName: name, ...TREE_ICON });
+      return open && icon.type === DefaultFolderIcon ? (
+        <DefaultFolderOpenedIcon {...TREE_ICON} />
+      ) : (
+        icon
+      );
+    },
+  };
+});
+
+const iconSpace = <span className="tree-icon-space" />;
+
+const TreeFileIcon = ({ name }: { name: string }) => (
+  <Suspense fallback={iconSpace}>
+    <LazyFileIcon name={name} />
+  </Suspense>
+);
+
+const TreeFolderIcon = ({ name, open }: { name: string; open: boolean }) => (
+  <Suspense fallback={iconSpace}>
+    <LazyFolderIcon name={name} open={open} />
+  </Suspense>
+);
+
 /** A file of the search results: its name, then its folder, then its status letter. */
 function ResultFile({ file }: { file: TreeFile }) {
   const slash = file.path.lastIndexOf("/");
   return (
     <>
-      <FileIcon />
+      <TreeFileIcon name={file.path.slice(slash + 1)} />
       <span className="result-name">{file.path.slice(slash + 1)}</span>
       <span className="result-folder">{file.path.slice(0, Math.max(slash, 0))}</span>
       {file.status && (
@@ -546,14 +590,14 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
               {row.kind === "folder" ? (
                 <>
                   <ChevronIcon open={row.open} />
-                  <FolderIcon />
+                  <TreeFolderIcon name={row.name} open={row.open} />
                   <span className="name">{row.name}</span>
                   {!row.open && status && <span className="status-dot" />}
                 </>
               ) : (
                 <>
                   <span className="chevron-space" />
-                  <FileIcon />
+                  <TreeFileIcon name={row.name} />
                   <span className="name">{row.name}</span>
                   <Counts added={row.file.added} removed={row.file.removed} />
                   {status && (
