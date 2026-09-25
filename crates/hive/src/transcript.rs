@@ -15,7 +15,7 @@ pub const MAX_ENTRIES: usize = 200;
 /// even when every character needs escaping.
 const TEXT_LIMIT: usize = 2000;
 /// Most bytes read at once: the tail when watching starts, then the new bytes of each poll.
-const READ_LIMIT: u64 = 8 * 1024 * 1024;
+const READ_LIMIT: u64 = 8_388_608; // 8 MiB
 /// Longest `transcript_path` kept from a hook payload.
 const PATH_LIMIT: usize = 4096;
 /// Longest subagent id accepted.
@@ -180,7 +180,7 @@ impl Watch {
         let skipped = start > self.offset;
         file.seek(SeekFrom::Start(start))?;
         let mut bytes = Vec::new();
-        file.take(len - start).read_to_end(&mut bytes)?;
+        file.take(READ_LIMIT).read_to_end(&mut bytes)?;
         // A line still being written waits for the next read; one longer than the limit is
         // skipped (what is left of it does not parse).
         let whole = match bytes.iter().rposition(|&b| b == b'\n') {
@@ -355,6 +355,8 @@ mod tests {
         assert_eq!(watch.poll(), None);
         append(&f.log, &said("one"));
         assert_eq!(watch.poll(), appended(&["one"]));
+        // Read up to the end of the line, its line end included.
+        assert_eq!(watch.offset, said("one").len() as u64);
         assert_eq!(watch.poll(), None);
         // A line still being written waits for its end.
         let two = said("two");
@@ -375,21 +377,12 @@ mod tests {
         let f = fixture();
         let all: Vec<String> = (0..=MAX_ENTRIES).map(|i| i.to_string()).collect();
         append(&f.log, &all.iter().map(|t| said(t)).collect::<String>());
-        let Control::Transcript {
-            entries, truncated, ..
-        } = watch(&f).start()
-        else {
-            panic!("expected a transcript")
-        };
-        assert!(truncated);
-        assert_eq!(entries.len(), MAX_ENTRIES);
-        assert_eq!(entries[0].text, "1");
+        let user = |t: &String| entry(TranscriptRole::User, t, None);
+        let last: Vec<TranscriptEntry> = all[1..].iter().map(user).collect();
+        assert_eq!(watch(&f).start(), transcript(last.clone(), true));
         // Exactly the cap is not truncated.
         std::fs::write(&f.log, all[1..].iter().map(|t| said(t)).collect::<String>()).unwrap();
-        let Control::Transcript { truncated, .. } = watch(&f).start() else {
-            panic!("expected a transcript")
-        };
-        assert!(!truncated);
+        assert_eq!(watch(&f).start(), transcript(last, false));
     }
 
     #[test]
@@ -405,8 +398,10 @@ mod tests {
             transcript(vec![entry(TranscriptRole::User, "last", None)], true)
         );
         // The tail of a line longer than the limit, with no line end, is skipped at once.
+        let before = watch.offset;
         append(&f.log, &"y".repeat(READ_LIMIT as usize));
         assert_eq!(watch.poll(), None);
+        assert_eq!(watch.offset, before + READ_LIMIT);
         append(&f.log, &format!("\n{}", said("after")));
         assert_eq!(watch.poll(), appended(&["after"]));
     }
@@ -418,35 +413,24 @@ mod tests {
         std::fs::write(&outside, said("secret")).unwrap();
         std::os::unix::fs::symlink(&outside, &f.log).unwrap();
         let mut watch = watch(&f);
-        let Control::Error { message } = watch.start() else {
-            panic!("expected an error")
+        let error = |m: &str| Control::Error {
+            message: format!("cannot read the subagent's transcript: {m}"),
         };
+        let not_a_file = error("the transcript is not a file");
         assert_eq!(
-            message,
-            "cannot read the subagent's transcript: the transcript is outside Claude's projects folder"
+            watch.start(),
+            error("the transcript is outside Claude's projects folder")
         );
         assert_eq!(watch.poll(), None);
         // A folder is not a transcript.
         std::fs::remove_file(&f.log).unwrap();
         std::fs::create_dir(&f.log).unwrap();
-        let Control::Error { message } = watch.start() else {
-            panic!("expected an error")
-        };
-        assert!(
-            message.ends_with("the transcript is not a file"),
-            "{message}"
-        );
+        assert_eq!(watch.start(), not_a_file);
         // Nor is a FIFO, which is refused without being opened (that would block).
         std::fs::remove_dir(&f.log).unwrap();
         let made = std::process::Command::new("mkfifo").arg(&f.log).status();
         assert!(made.unwrap().success());
-        let Control::Error { message } = watch.start() else {
-            panic!("expected an error")
-        };
-        assert!(
-            message.ends_with("the transcript is not a file"),
-            "{message}"
-        );
+        assert_eq!(watch.start(), not_a_file);
         std::fs::remove_file(&f.log).unwrap();
         // Without the root, nothing is inside it: nothing is read.
         append(&f.log, &said("x"));
