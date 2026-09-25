@@ -41,13 +41,15 @@ impl Terminal {
 }
 
 /// Starts the shell (see [`shell`]) on a new PTY in `cwd`, with `bin_dir` first on `PATH`
-/// and `HIVE_TERMINAL_ID` set. Returns the registry entry, the output side and the child.
+/// and `HIVE_TERMINAL_ID` set, plus `env` (its worktree's `HIVE_*`, 6.8). Returns the
+/// registry entry, the output side and the child.
 pub fn spawn(
     id: u32,
     cwd: &str,
     cols: u16,
     rows: u16,
     bin_dir: &Path,
+    env: &[(&'static str, String)],
 ) -> Result<(Terminal, OwnedReadPty, Child), String> {
     let start = || -> pty_process::Result<_> {
         let (pty, pts) = pty_process::open()?;
@@ -55,6 +57,7 @@ pub fn spawn(
         let child = shell(bin_dir)
             .env("HIVE_TERMINAL_ID", id.to_string())
             .env("TERM", "xterm-256color")
+            .envs(env.iter().cloned())
             .current_dir(cwd)
             .spawn(pts)?;
         Ok((pty, child))

@@ -95,15 +95,22 @@ impl Projects {
     /// Removes the linked worktree `path` of a followed project, with `--force` when `force`;
     /// answers the project with its updated worktrees. Without `force`, a worktree that a
     /// process (as `proc` lists them) works in is kept, as git keeps one with changes.
+    /// `before` (given the project's id) runs once those checks passed; its failure keeps the
+    /// worktree unless `force`.
     pub fn remove_worktree(
         &self,
         path: &str,
         force: bool,
         proc: procs::Source,
+        before: impl FnOnce(&str) -> io::Result<()>,
     ) -> io::Result<Project> {
         let (owner, _) = self.linked(path)?;
         if !force {
             unused(proc, path)?;
+        }
+        let ran = before(&owner.id);
+        if !force {
+            ran?;
         }
         worktree::remove_path(Path::new(&owner.id), Path::new(path), force)?;
         Ok(project(&owner.id))

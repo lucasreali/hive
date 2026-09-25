@@ -70,6 +70,11 @@ impl Paths {
         self.data.join("projects.json")
     }
 
+    /// The block of ports of each worktree (`hive::scripts`).
+    pub fn ports(&self) -> PathBuf {
+        self.data.join("ports.json")
+    }
+
     /// The Claude sessions that ran in Hive's terminals when the app last closed.
     pub fn open_sessions(&self) -> PathBuf {
         self.data.join("open-sessions.json")
@@ -137,6 +142,7 @@ mod tests {
             PathBuf::from("/d/hive/hive-hooks.json")
         );
         assert_eq!(paths.projects(), PathBuf::from("/d/hive/projects.json"));
+        assert_eq!(paths.ports(), PathBuf::from("/d/hive/ports.json"));
         assert_eq!(
             paths.open_sessions(),
             PathBuf::from("/d/hive/open-sessions.json")
