@@ -58,6 +58,8 @@ fn main() {
             commands::open_in_editor,
             commands::get_settings,
             commands::set_settings,
+            commands::open_settings_file,
+            commands::get_diagnostics,
         ])
         .build(tauri::generate_context!());
     match result {

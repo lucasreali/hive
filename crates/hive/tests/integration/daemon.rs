@@ -285,3 +285,66 @@ async fn settings_are_read_checked_and_saved_by_the_service() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn the_settings_file_is_written_to_be_opened_and_diagnostics_name_it() {
+    let env = Env::new();
+    // A `wslpath` and a `claude` of the test's own, first on the service's `PATH`.
+    let tools = env.path("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    for (name, script) in [("wslpath", "#!/bin/sh\necho \"W:$2\"\n"), ("claude", "")] {
+        std::fs::write(tools.join(name), script).unwrap();
+        std::fs::set_permissions(tools.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let child = env
+        .hive()
+        .env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+        .arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut daemon = common::Daemon(child);
+    common::wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+    let mut app = env.connect(Role::App).await;
+    let file = env.path("config/hive/settings.json");
+    app.send(0, Control::OpenSettingsFile).await;
+    #[cfg(target_os = "linux")]
+    let windows_path = format!("W:{}", file.display());
+    #[cfg(target_os = "macos")]
+    let windows_path = file.display().to_string();
+    let target = Control::EditorTarget {
+        worktree: String::new(),
+        path: String::new(),
+        windows_path: Some(windows_path),
+        error: None,
+    };
+    assert_eq!(app.control().await, (0, target));
+    let written: Settings = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(written, Settings::default());
+    app.send(0, Control::GetDiagnostics).await;
+    let diagnostics = Control::Diagnostics {
+        settings_file: file.display().to_string(),
+        wrapper: env.path("data/hive/bin/claude").display().to_string(),
+        claude: Some(tools.join("claude").display().to_string()),
+    };
+    assert_eq!(app.control().await, (0, diagnostics));
+    // No directory for the file: why it cannot be opened.
+    std::fs::remove_file(&file).unwrap();
+    std::fs::remove_dir(env.path("config/hive")).unwrap();
+    std::fs::write(env.path("config/hive"), "").unwrap();
+    app.send(0, Control::OpenSettingsFile).await;
+    let (_, failed) = app.control().await;
+    assert!(
+        matches!(
+            &failed,
+            Control::EditorTarget {
+                windows_path: None,
+                error: Some(_),
+                ..
+            }
+        ),
+        "{failed:?}"
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

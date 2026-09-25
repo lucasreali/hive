@@ -479,6 +479,10 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.set_settings(settings.clone()).unwrap();
     let set = Control::SetSettings { settings };
     assert_eq!(service.control().await, (0, set));
+    hive.open_settings_file().unwrap();
+    assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
+    hive.get_diagnostics().unwrap();
+    assert_eq!(service.control().await, (0, Control::GetDiagnostics));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -640,6 +644,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
     assert_eq!(hive.get_settings(), not_connected);
     assert_eq!(hive.set_settings(Settings::default()), not_connected);
+    assert_eq!(hive.open_settings_file(), not_connected);
+    assert_eq!(hive.get_diagnostics(), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
     assert_eq!(hive.list_dirs(String::new(), false), not_connected);
     assert_eq!(hive.list_sessions(), not_connected);
@@ -831,7 +837,9 @@ fn commands_reach_the_managed_hive() {
             save_file,
             open_in_editor,
             get_settings,
-            set_settings
+            set_settings,
+            open_settings_file,
+            get_diagnostics
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -901,6 +909,8 @@ fn commands_reach_the_managed_hive() {
         ("open_in_editor", &file),
         ("get_settings", &json!({})),
         ("set_settings", &settings),
+        ("open_settings_file", &json!({})),
+        ("get_diagnostics", &json!({})),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }

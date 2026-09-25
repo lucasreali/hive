@@ -64,6 +64,21 @@ impl Store {
         Ok(settings)
     }
 
+    /// The settings file.
+    pub fn file(&self) -> &Path {
+        &self.file
+    }
+
+    /// The settings file, written with the settings in use when there is none yet (to be
+    /// opened in an editor). An existing file is left alone, even an ignored one.
+    pub fn ensure_file(&self) -> io::Result<&Path> {
+        let current = self.current();
+        if !self.file.exists() {
+            save(&self.file, &current.0)?;
+        }
+        Ok(&self.file)
+    }
+
     /// Rule 2's silence (`hive::states`): how long a working agent's terminal stays quiet
     /// before the agent waits for you.
     pub fn silence(&self) -> Duration {
@@ -202,6 +217,23 @@ mod tests {
             store.set(Settings::default()).unwrap();
             assert_eq!(store.get().1, None);
         }
+    }
+
+    #[test]
+    fn ensuring_the_file_writes_it_only_when_missing() {
+        let (tmp, store) = store();
+        let file = tmp.path().join("hive/settings.json");
+        assert_eq!(store.file(), file);
+        assert_eq!(store.ensure_file().unwrap(), file);
+        assert_eq!(Store::load(file.clone()).get(), (Settings::default(), None));
+        std::fs::write(&file, "{").unwrap();
+        assert_eq!(store.ensure_file().unwrap(), file);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{");
+        // No directory for it: the error is returned.
+        let blocked = tempfile::tempdir().unwrap();
+        std::fs::write(blocked.path().join("hive"), "").unwrap();
+        let store = Store::load(blocked.path().join("hive/settings.json"));
+        assert!(store.ensure_file().is_err());
     }
 
     #[test]
