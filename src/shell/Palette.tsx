@@ -3,6 +3,7 @@ import { COMMANDS, currentProject, goToAgent } from "../shortcuts";
 import { type HiveState, openModal, panelWorktree, select, treeAgents, useHive } from "../store";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
+import { keyText } from "../window";
 import { SearchIcon, STATE_LABEL } from "./icons";
 import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
 
@@ -188,7 +189,7 @@ export function Palette() {
                 >
                   <span className="picker-name">{item.label}</span>
                   <span className="picker-path">{item.detail}</span>
-                  {item.keys && <kbd>{item.keys}</kbd>}
+                  {item.keys && <kbd>{keyText(item.keys)}</kbd>}
                 </button>
               );
             })}
