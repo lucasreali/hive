@@ -1,5 +1,13 @@
 import { TerminalWindowIcon } from "@phosphor-icons/react";
-import { type ReactNode, useEffect, useRef } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   activateTab,
@@ -9,12 +17,20 @@ import {
   selectedPlace,
   setRightPanel,
   showFile,
+  shownSplit,
+  shownTerminals,
   type Tab,
   useHive,
   useTerminal,
   visibleTabs,
 } from "../store";
-import { closeTerminal, mountTerminals, openTerminal, showTerminal } from "../terminals";
+import {
+  closeTerminal,
+  mountTerminals,
+  openTerminal,
+  showTerminals,
+  splitTerminal,
+} from "../terminals";
 import { isDirty } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
 import {
@@ -27,7 +43,9 @@ import {
   TerminalIcon,
 } from "./icons";
 import { FileView, leaveFile } from "./RightPanel";
+import { ResizeHandle } from "./resize";
 import { TranscriptView } from "./TranscriptView";
+import { ContextMenu } from "./WorktreeMenu";
 
 /** Screen 1e: shown once the service said there are no projects. */
 function EmptyState() {
@@ -68,6 +86,9 @@ function find(s: HiveState, path: string) {
  */
 function TabItem(props: {
   active: boolean;
+  /** Shown beside the active tab, in a split. */
+  split?: boolean;
+  onMenu?: (event: MouseEvent) => void;
   title: string;
   onShow: () => void;
   close: string;
@@ -76,13 +97,19 @@ function TabItem(props: {
   children: ReactNode;
 }) {
   return (
-    <div className="tab" data-active={props.active} title={props.title}>
+    <div
+      className="tab"
+      data-active={props.active}
+      data-split={props.split || undefined}
+      title={props.title}
+    >
       <button
         type="button"
         role="tab"
         aria-selected={props.active}
         className="tab-label"
         onClick={props.onShow}
+        onContextMenu={props.onMenu}
       >
         {props.children}
       </button>
@@ -105,8 +132,12 @@ function TabItem(props: {
  * A terminal's tab: the worktree's name, or, while a Claude agent runs in it, the agent's
  * state and its session's name (as in Orca). Tabs show only their worktree's, so no project.
  */
-function TerminalTab({ tab }: { tab: Tab }) {
+function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => void }) {
   const active = useHive((s) => s.activeTab === tab.id && !s.fileShown && !s.transcriptShown);
+  const split = useHive((s) => {
+    const shown = !s.fileShown && !s.transcriptShown && shownSplit(s);
+    return !!shown && s.activeTab !== tab.id && (shown.left === tab.id || shown.right === tab.id);
+  });
   const state = useTerminal(tab.id);
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
@@ -115,6 +146,11 @@ function TerminalTab({ tab }: { tab: Tab }) {
   return (
     <TabItem
       active={active}
+      split={split}
+      onMenu={(event) => {
+        event.preventDefault();
+        onMenu({ tab: tab.id, x: event.clientX, y: event.clientY });
+      }}
       title={title ? `${title}\n${tab.cwd}` : tab.cwd}
       onShow={() => activateTab(tab)}
       close={`Close terminal ${title ?? name}`}
@@ -163,16 +199,50 @@ function FileTab() {
   );
 }
 
-/** Where xterm.js renders; the terminal manager owns everything inside it. */
+type TabMenu = { tab: number; x: number; y: number };
+
+/** A terminal tab's context menu (right click): split it, or close it. */
+function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void }) {
+  const split = useHive((s) => {
+    const shown = shownSplit(s);
+    return !!shown && (shown.left === menu.tab || shown.right === menu.tab);
+  });
+  const act = (action: () => void) => () => {
+    onClose();
+    action();
+  };
+  return (
+    <ContextMenu at={menu} label="Terminal" onClose={onClose}>
+      <button type="button" role="menuitem" onClick={act(() => void splitTerminal(menu.tab))}>
+        {split ? "Unsplit" : "Split right"}
+      </button>
+      <button type="button" role="menuitem" onClick={act(() => closeTerminal(menu.tab))}>
+        Close terminal
+      </button>
+    </ContextMenu>
+  );
+}
+
+/**
+ * Where xterm.js renders; the terminal manager owns everything inside it. Split, the two panes
+ * sit side by side with a divider between them (its position is a UI preference).
+ */
 function TerminalHost({ hidden }: { hidden: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const active = useHive((s) => s.activeTab);
+  const panes = useHive(useShallow(shownTerminals));
   useEffect(() => mountTerminals(ref.current as HTMLDivElement), []);
-  // Shown again after the file's tab: the terminal takes the focus back.
+  // Shown again after the file's tab: the focused terminal takes the focus back.
   useEffect(() => {
-    if (!hidden) showTerminal(active);
-  }, [active, hidden]);
-  return <div className="terminal-host" ref={ref} hidden={hidden} />;
+    if (!hidden) showTerminals(panes, active);
+  }, [panes, active, hidden]);
+  const split = panes.length > 1 && !hidden;
+  return (
+    <>
+      <div className="terminal-host" ref={ref} hidden={hidden} data-split={split || undefined} />
+      {split && <ResizeHandle side="split" />}
+    </>
+  );
 }
 
 /** A worktree without terminals yet: its tab bar is empty. */
@@ -200,12 +270,15 @@ export function TerminalArea() {
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
   const transcript = useHive((s) => s.transcriptShown);
+  const percent = useHive((s) => s.splitPercent);
+  const [menu, setMenu] = useState<TabMenu | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   return (
     <section className="terminals" aria-label="Terminals">
       <div className="bar">
         <div className="tabs" role="tablist" aria-label="Open terminals and files">
           {tabs.map((tab) => (
-            <TerminalTab key={tab.id} tab={tab} />
+            <TerminalTab key={tab.id} tab={tab} onMenu={setMenu} />
           ))}
           <FileTab />
           <button
@@ -230,7 +303,8 @@ export function TerminalArea() {
           </button>
         </div>
       </div>
-      <div className="terminal-body">
+      {menu && <TerminalTabMenu menu={menu} onClose={closeMenu} />}
+      <div className="terminal-body" style={{ "--split": percent / 100 } as CSSProperties}>
         {empty && tabs.length === 0 && !file && <EmptyState />}
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />

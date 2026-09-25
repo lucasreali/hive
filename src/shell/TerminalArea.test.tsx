@@ -226,3 +226,47 @@ test("unsaved edits put a dot in place of the file tab's ×, named for screen re
   // The dot is on the × only, not a second marker in the label.
   expect(tab("app.ts").querySelector(".dirty")).toBeNull();
 });
+
+test("a tab's menu splits it right, marks both tabs and shows a divider; Unsplit and Close end it", async () => {
+  const close = spyOn(transport, "closeTerminal");
+  show();
+  act(() => {
+    addTab(1, fixLogin.path);
+    addTab(2, fixLogin.path);
+    addTab(3, fixLogin.path);
+  });
+  const menu = () => screen.getByRole("menu", { name: "Terminal" });
+  const tabs = () => bar().getAllByRole("tab");
+  fireEvent.contextMenu(tabs()[0] as HTMLElement);
+  fireEvent.click(within(menu()).getByRole("menuitem", { name: "Split right" }));
+  await waitFor(() => expect(useHive.getState().split).toEqual({ left: 1, right: 2 }));
+  expect(screen.queryByRole("menu")).toBeNull();
+  // The focused pane's tab is the active one; the other pane's is marked beside it.
+  expect(tabs().map((t) => t.closest(".tab")?.getAttribute("data-split") ?? null)).toEqual([
+    "true",
+    null,
+    null,
+  ]);
+  expect(tabs()[1]?.getAttribute("aria-selected")).toBe("true");
+  const divider = screen.getByRole("separator", { name: "Resize the split terminals" });
+  expect(divider.getAttribute("aria-valuenow")).toBe("50");
+  fireEvent.keyDown(divider, { key: "ArrowLeft" });
+  expect(useHive.getState().splitPercent).toBe(48);
+  const body = screen.getByRole("region", { name: "Terminals" }).querySelector(".terminal-body");
+  expect((body as HTMLElement).style.getPropertyValue("--split")).toBe("0.48");
+
+  fireEvent.contextMenu(tabs()[0] as HTMLElement);
+  fireEvent.click(within(menu()).getByRole("menuitem", { name: "Unsplit" }));
+  await waitFor(() => expect(useHive.getState().split).toBeNull());
+  expect(screen.queryByRole("separator", { name: "Resize the split terminals" })).toBeNull();
+
+  fireEvent.contextMenu(tabs()[2] as HTMLElement);
+  fireEvent.click(within(menu()).getByRole("menuitem", { name: "Close terminal" }));
+  expect(close).toHaveBeenCalledWith(3);
+  expect(tabs()).toHaveLength(2);
+  // Esc closes the menu without doing anything.
+  fireEvent.contextMenu(tabs()[0] as HTMLElement);
+  fireEvent.keyDown(menu(), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  close.mockRestore();
+});
