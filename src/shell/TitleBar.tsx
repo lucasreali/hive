@@ -119,19 +119,17 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   const states = useHive((s) => s.agentStates);
   const titles = useHive((s) => s.agentTitles);
   const now = useNow();
-  const box = bell.getBoundingClientRect();
+  // Placed once: a new position would move the focus back to the first item on every tick.
+  const [at] = useState(() => {
+    const box = bell.getBoundingClientRect();
+    return { x: box.right, y: box.bottom + 4 };
+  });
   const go = (agent: Agent | undefined) => () => {
     onClose();
     if (agent) goToAgent(agent);
   };
   return (
-    <ContextMenu
-      at={{ x: box.right, y: box.bottom + 4 }}
-      label="Notifications"
-      onClose={onClose}
-      anchor={bell}
-      className="inbox"
-    >
+    <ContextMenu at={at} label="Notifications" onClose={onClose} anchor={bell} className="inbox">
       {pending.map((a) => {
         const state = states[a.id]?.state ?? "idle";
         return (

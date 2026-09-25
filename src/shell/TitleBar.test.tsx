@@ -110,6 +110,9 @@ test("the bell's inbox: pending agents, then the alerts; unread dot; going to an
   expect(document.activeElement).toBe(items()[0] as HTMLElement);
   fireEvent.keyDown(menu, { key: "ArrowDown" });
   expect(document.activeElement).toBe(items()[1] as HTMLElement);
+  // A re-render (here a new title) keeps the focus where it is.
+  act(() => apply({ type: "agent_title", channel: 1, id: "a", title: "fix login 2" }));
+  expect(document.activeElement).toBe(items()[1] as HTMLElement);
   fireEvent.scroll(menu);
   expect(screen.queryByRole("menu")).not.toBeNull();
   // A history item goes to its agent and closes the inbox.
