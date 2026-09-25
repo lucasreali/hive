@@ -200,6 +200,10 @@ pub enum Control {
         urgency: u8,
         pending: bool,
         subagents: Vec<SubagentState>,
+        /// What the agent itself is doing (its current tool call), cleared when its turn ends.
+        activity: Option<String>,
+        /// Wall clock (ms since the Unix epoch) when the displayed `state` began.
+        since_ms: u64,
     },
     /// The agent's session name from its log (the user's, else Claude's), sent when it is
     /// first known and whenever it changes.
@@ -498,9 +502,54 @@ pub enum Control {
         windows_path: Option<String>,
         error: Option<String>,
     },
+    /// App → service: follow a subagent's conversation (6.10), read from its transcript
+    /// beside its agent's. Answered by `Transcript` now and `TranscriptAppended` as it grows.
+    /// Only one is followed: this replaces the previous one.
+    WatchTranscript {
+        /// The agent's session id.
+        agent: String,
+        /// The subagent's `agent_id`.
+        subagent: String,
+    },
+    /// App → service: stop following it (the view closed).
+    UnwatchTranscript {
+        agent: String,
+        subagent: String,
+    },
+    /// The last entries of the conversation (read-only, text cut at the service's cap).
+    Transcript {
+        agent: String,
+        subagent: String,
+        entries: Vec<TranscriptEntry>,
+        /// Earlier entries were left out.
+        truncated: bool,
+    },
+    /// Entries written to the conversation since the last message.
+    TranscriptAppended {
+        agent: String,
+        subagent: String,
+        entries: Vec<TranscriptEntry>,
+    },
     Error {
         message: String,
     },
+}
+
+/// One message of a conversation, or one tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptEntry {
+    pub role: TranscriptRole,
+    pub text: String,
+    /// The tool's name, for a tool call.
+    pub tool: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptRole {
+    User,
+    Assistant,
+    Tool,
 }
 
 impl Control {
@@ -694,6 +743,9 @@ pub struct AgentEvent {
     /// Working directory reported by the agent; places it under a worktree.
     pub cwd: Option<String>,
     pub kind: EventKind,
+    /// A short description of the tool call a `ToolStarted`/`PermissionRequested` is about
+    /// (e.g. "Editing src/x.ts"), for the sidebar.
+    pub activity: Option<String>,
     /// The provider payload, unchanged.
     pub raw: serde_json::Value,
 }
@@ -795,6 +847,10 @@ pub struct SubagentState {
     /// The worktree it works in when that is its own (not its agent's): the worktree's id,
     /// shown nested under the subagent instead of at project level (#22).
     pub worktree: Option<String>,
+    /// What it is doing (its current tool call), cleared when it stops.
+    pub activity: Option<String>,
+    /// Wall clock (ms since the Unix epoch) when its `state` began.
+    pub since_ms: u64,
 }
 
 #[cfg(test)]
@@ -870,6 +926,7 @@ mod tests {
             kind: EventKind::Notification {
                 notification: Notification::Other("x".into()),
             },
+            activity: None,
             raw: serde_json::json!({"k": [1, 2]}),
         });
         let frame = Frame::control(0, &msg);
@@ -904,11 +961,15 @@ mod tests {
                 agent_type: None,
                 state: AgentState::WithSubagents,
                 worktree: Some("/r/.claude/worktrees/w".into()),
+                activity: Some("Reading a.rs".into()),
+                since_ms: 7,
             }],
+            activity: None,
+            since_ms: 5,
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w"}]}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
     }
@@ -1015,6 +1076,49 @@ mod tests {
             &Frame::control(0, &view).payload[..],
             br#"{"type":"view","terminal":3,"focused":true}"#
         );
+    }
+
+    #[test]
+    fn transcript_messages_are_tagged_json() {
+        let transcript = Control::Transcript {
+            agent: "s".into(),
+            subagent: "a1".into(),
+            entries: vec![TranscriptEntry {
+                role: TranscriptRole::Tool,
+                text: "ls".into(),
+                tool: Some("Bash".into()),
+            }],
+            truncated: true,
+        };
+        assert_eq!(
+            &Frame::control(0, &transcript).payload[..],
+            br#"{"type":"transcript","agent":"s","subagent":"a1","entries":[{"role":"tool","text":"ls","tool":"Bash"}],"truncated":true}"#
+        );
+        let watch = Control::WatchTranscript {
+            agent: "s".into(),
+            subagent: "a1".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &watch).payload[..],
+            br#"{"type":"watch_transcript","agent":"s","subagent":"a1"}"#
+        );
+        for message in [
+            Control::UnwatchTranscript {
+                agent: "s".into(),
+                subagent: "a1".into(),
+            },
+            Control::TranscriptAppended {
+                agent: "s".into(),
+                subagent: "a1".into(),
+                entries: vec![TranscriptEntry {
+                    role: TranscriptRole::User,
+                    text: "hi".into(),
+                    tool: None,
+                }],
+            },
+        ] {
+            assert_eq!(Frame::control(0, &message).to_control().unwrap(), message);
+        }
     }
 
     #[test]

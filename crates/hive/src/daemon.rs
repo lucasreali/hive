@@ -34,7 +34,7 @@ use crate::projects::{self, Projects};
 use crate::sessions::{self, Sessions};
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{changes, dirs, file, health, procs, search, watch, worktree, wrapper};
+use crate::{changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper};
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
@@ -136,6 +136,8 @@ struct State {
     agents: Mutex<HashMap<String, Agent>>,
     /// The task watching the worktree of the app's files panel.
     watching: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The subagent transcript the app shows, polled every [`watch::INTERVAL`].
+    transcript: Mutex<Option<transcript::Watch>>,
     /// The terminal in view in the focused app window (the app's `view`); 0 when none, since
     /// terminal channels start at 1.
     watched: AtomicU32,
@@ -163,6 +165,7 @@ impl State {
             terminals: Mutex::new(HashMap::new()),
             agents: Mutex::new(HashMap::new()),
             watching: Mutex::new(None),
+            transcript: Mutex::new(None),
             watched: AtomicU32::new(0),
             bin_dir,
             projects,
@@ -286,9 +289,10 @@ impl State {
             projects::place(&self.projects.list(), cwd)
         });
         let (project, worktree) = place.unzip();
-        let mut agent = Agent::new(channel, Instant::now());
+        let mut agent = Agent::new(channel, Instant::now(), crate::hook::now_ms());
         agent.worktree = worktree.clone();
         agent.cwd = cwd.clone();
+        agent.transcript = transcript::transcript_path(&event.raw);
         let state = agent.message(&id);
         let detected = Control::AgentDetected {
             id: id.clone(),
@@ -437,6 +441,37 @@ impl State {
         self.refresh_health(Some(path)).await;
     }
 
+    /// Follows the subagent's transcript instead of any other: sends what it holds now, then
+    /// (from [`watch_terminals`]) what is appended. Only a detected agent's subagent, with a
+    /// transcript inside Claude's projects folder, is followed.
+    async fn watch_transcript(&self, agent: String, subagent: String) {
+        let agents = self.agents.lock().await;
+        let parent = agents.get(&agent).and_then(|a| a.transcript.clone());
+        drop(agents);
+        let mut watching = self.transcript.lock().await;
+        let path = parent.and_then(|p| transcript::subagent_path(&p, &subagent));
+        let (Some(path), Some(root)) = (path, self.sessions.root()) else {
+            *watching = None;
+            let message = "no transcript is known for this subagent".to_owned();
+            return self.to_app(0, &Control::Error { message }).await;
+        };
+        let mut watch = transcript::Watch::new(agent, subagent, path, root.to_owned());
+        let first = tokio::task::block_in_place(|| watch.start());
+        *watching = Some(watch);
+        self.to_app(0, &first).await;
+    }
+
+    /// Stops following the subagent's transcript, unless another one replaced it meanwhile.
+    async fn unwatch_transcript(&self, agent: &str, subagent: &str) {
+        let mut watching = self.transcript.lock().await;
+        if watching
+            .as_ref()
+            .is_some_and(|w| w.agent == agent && w.subagent == subagent)
+        {
+            *watching = None;
+        }
+    }
+
     /// Ends the terminal's processes; its exit is reported by [`pump`].
     async fn close(&self, channel: u32) {
         if let Some(terminal) = self.terminals.lock().await.get(&channel) {
@@ -486,6 +521,14 @@ async fn watch_terminals(state: Arc<State>) {
             if let Some(message) = output.and_then(|&output| agent.reconcile(id, output, now)) {
                 state.to_app(agent.channel, &message).await;
             }
+        }
+        let mut transcript = state.transcript.lock().await;
+        let appended = transcript.as_mut().and_then(|watch| {
+            // A bounded read (see `transcript::Watch`), off the other tasks' threads.
+            tokio::task::block_in_place(|| watch.poll())
+        });
+        if let Some(message) = appended {
+            state.to_app(0, &message).await;
         }
     }
 }
@@ -707,6 +750,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         Ok(Control::CloseTerminal) => state.close(channel).await,
         Ok(Control::WatchWorktree { path }) => state.watch_worktree(Some(path)).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
+        Ok(Control::WatchTranscript { agent, subagent }) => {
+            state.watch_transcript(agent, subagent).await
+        }
+        Ok(Control::UnwatchTranscript { agent, subagent }) => {
+            state.unwatch_transcript(&agent, &subagent).await
+        }
         Ok(Control::View { terminal, focused }) => {
             let watched = terminal.filter(|_| focused).unwrap_or(0);
             state.watched.store(watched, Ordering::Relaxed);
@@ -1040,12 +1089,12 @@ mod tests {
         // Agents outlive an app connection only in principle (the service exits with the
         // app), so the snapshot is checked here rather than through a real daemon.
         let dir = tempfile::tempdir().unwrap();
-        let mut named = Agent::new(4, Instant::now());
+        let mut named = Agent::new(4, Instant::now(), 0);
         named.title = Some("Named".into());
         let state = test_state(dir.path());
         *state.agents.lock().await = HashMap::from([
             ("s".to_owned(), named),
-            ("u".to_owned(), Agent::new(5, Instant::now())),
+            ("u".to_owned(), Agent::new(5, Instant::now(), 0)),
         ]);
         // The same stream types as the daemon, so no second instantiation skews line coverage.
         let (client, server) = UnixStream::pair().unwrap();
@@ -1070,6 +1119,8 @@ mod tests {
             urgency: 1,
             pending: false,
             subagents: vec![],
+            activity: None,
+            since_ms: 0,
         };
         // Each agent's state; the named one's name too, and only after its state.
         let named = Control::AgentTitle {

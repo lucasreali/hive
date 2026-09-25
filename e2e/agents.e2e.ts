@@ -24,7 +24,8 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
     "shopNew worktree",
     "main",
     "fix-login↑3↓1●2",
-    "idleClaudeidle",
+    // The icon's name, the title, the state's name and the time in it.
+    expect.stringMatching(/^idleClaudeidle\ds$/),
     "feat-checkout↑1●2",
   ]);
 

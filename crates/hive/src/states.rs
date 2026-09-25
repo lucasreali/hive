@@ -35,6 +35,9 @@ pub struct Agent {
     pub cwd: Option<String>,
     /// The session's name from its log (the user's, else Claude's), once known.
     pub title: Option<String>,
+    /// Its transcript, from its `SessionStart`'s `transcript_path` (unchecked: it is checked
+    /// to lie in Claude's projects folder when read). Its subagents' lie beside it.
+    pub transcript: Option<std::path::PathBuf>,
     state: AgentState,
     /// In start order.
     subagents: Vec<SubagentState>,
@@ -53,16 +56,25 @@ pub struct Agent {
     pub watched: bool,
     /// It finished while watched: already seen, so not pending until its state changes.
     seen: bool,
+    /// What the agent itself is doing, from its last tool call; cleared when its turn ends.
+    activity: Option<String>,
+    /// Wall clock (ms since the epoch) when the displayed state began.
+    since_ms: u64,
+    /// A moment and its wall clock time: wall times are counted from here with the monotonic
+    /// clock, so the caller's clocks are the only ones used.
+    origin: (Instant, u64),
 }
 
 impl Agent {
-    /// An agent that just sent `SessionStart`.
-    pub fn new(channel: u32, now: Instant) -> Self {
+    /// An agent that just sent `SessionStart`, `now` being `wall_ms` on the wall clock (ms
+    /// since the epoch).
+    pub fn new(channel: u32, now: Instant, wall_ms: u64) -> Self {
         Self {
             channel,
             worktree: None,
             cwd: None,
             title: None,
+            transcript: None,
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),
@@ -71,7 +83,16 @@ impl Agent {
             last_event: now,
             watched: false,
             seen: false,
+            activity: None,
+            since_ms: wall_ms,
+            origin: (now, wall_ms),
         }
+    }
+
+    /// `now` on the wall clock.
+    fn wall(&self, now: Instant) -> u64 {
+        let (at, ms) = self.origin;
+        ms + now.saturating_duration_since(at).as_millis() as u64
     }
 
     /// Applies one hook event of this agent (or of one of its subagents). `place` answers the
@@ -96,7 +117,7 @@ impl Agent {
         now: Instant,
         place: &dyn Fn(&str) -> Option<String>,
     ) -> Option<Control> {
-        self.changed(id, |agent| {
+        self.changed(id, now, |agent| {
             agent.last_event = now;
             if let EventKind::WorktreeRemoved { path: Some(path) } = &event.kind {
                 let gone = agent
@@ -128,13 +149,16 @@ impl Agent {
                 if let Some(state) = state {
                     agent.state = state;
                 }
-                return;
+                return follow(&mut agent.activity, event);
             };
             // `SubagentStop` has no state: a kept subagent is left as `prune` set it below.
             if let EventKind::SessionEnded { .. } = event.kind {
                 return agent.leave(&sub.id);
             }
             let known = agent.subagents.iter().position(|s| s.id == sub.id);
+            if let Some(i) = known {
+                follow(&mut agent.subagents[i].activity, event);
+            }
             if let EventKind::WorktreeCreated {
                 path: Some(path), ..
             } = &event.kind
@@ -159,6 +183,8 @@ impl Agent {
                         agent_type: sub.agent_type.clone(),
                         state,
                         worktree: None,
+                        activity: event.activity.clone(),
+                        since_ms: 0,
                     });
                     agent.subagents.len() - 1
                 }
@@ -220,15 +246,18 @@ impl Agent {
         if now.saturating_duration_since(last_output.max(self.last_event)) < SILENCE {
             return None;
         }
-        self.changed(id, |agent| {
+        self.changed(id, now, |agent| {
             let waiting = &agent.waiting;
             let subagents = agent.subagents.iter_mut();
             let subagents = subagents
                 .filter(|s| !waiting.contains(&s.id))
-                .map(|s| &mut s.state);
-            for state in std::iter::once(&mut agent.state).chain(subagents) {
+                .map(|s| (&mut s.state, &mut s.activity));
+            let own = (&mut agent.state, &mut agent.activity);
+            for (state, activity) in std::iter::once(own).chain(subagents) {
                 if matches!(state, AgentState::Working | AgentState::WaitingPermission) {
+                    // Interrupted: the tool call it was on is over.
                     *state = AgentState::WaitingYou;
+                    *activity = None;
                 }
             }
         })
@@ -244,6 +273,8 @@ impl Agent {
             urgency: state.urgency(),
             pending: state.pending() && !self.seen,
             subagents: self.subagents.clone(),
+            activity: self.activity.clone(),
+            since_ms: self.since_ms,
         }
     }
 
@@ -258,17 +289,50 @@ impl Agent {
 
     /// Applies `update`; when the displayed state changed, the agent is seen only if it just
     /// finished (working or with subagents → waiting for you) while watched (hive.md item 5).
-    fn changed(&mut self, id: &str, update: impl FnOnce(&mut Self)) -> Option<Control> {
+    /// A state that changed (the displayed one, or a subagent's) begins at `now`.
+    fn changed(
+        &mut self,
+        id: &str,
+        now: Instant,
+        update: impl FnOnce(&mut Self),
+    ) -> Option<Control> {
         let before = self.message(id);
         let was = self.displayed();
+        let subagents: HashMap<String, AgentState> = self
+            .subagents
+            .iter()
+            .map(|s| (s.id.clone(), s.state))
+            .collect();
         update(self);
-        let now = self.displayed();
-        if now != was {
+        let shown = self.displayed();
+        let wall = self.wall(now);
+        if shown != was {
             let busy = matches!(was, AgentState::Working | AgentState::WithSubagents);
-            self.seen = self.watched && busy && now == AgentState::WaitingYou;
+            self.seen = self.watched && busy && shown == AgentState::WaitingYou;
+            self.since_ms = wall;
+        }
+        for sub in &mut self.subagents {
+            if subagents.get(&sub.id) != Some(&sub.state) {
+                sub.since_ms = wall;
+            }
         }
         let after = self.message(id);
         (after != before).then_some(after)
+    }
+}
+
+/// Keeps the activity an event brings; the end of a turn, a session or a subagent clears it.
+fn follow(activity: &mut Option<String>, event: &AgentEvent) {
+    match event.kind {
+        EventKind::TurnFinished
+        | EventKind::TurnFailed { .. }
+        | EventKind::SessionEnded { .. }
+        | EventKind::SubagentStopped => *activity = None,
+        _ => {
+            if let Some(doing) = &event.activity {
+                *activity = Some(doing.clone());
+            }
+        }
     }
 }
 
@@ -351,14 +415,14 @@ mod tests {
 
     fn after(event: &AgentEvent) -> AgentState {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.feed("s", event, now);
         shown(&agent).0
     }
 
     #[test]
     fn a_new_agent_is_idle_on_its_channel() {
-        let agent = Agent::new(3, Instant::now());
+        let agent = Agent::new(3, Instant::now(), 0);
         assert_eq!(agent.channel, 3);
         assert_eq!(shown(&agent), (Idle, vec![]));
     }
@@ -393,7 +457,7 @@ mod tests {
     #[test]
     fn session_start_makes_an_agent_idle_again() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("Stop", None, json!({})), now);
         let idle = agent.feed("s", &hook("SessionStart", None, json!({})), now);
         assert_eq!(idle, Some(agent.message("s")));
@@ -403,7 +467,7 @@ mod tests {
     #[test]
     fn events_without_a_state_change_nothing_and_send_nothing() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
         for event in [
             notification("auth_success"),
@@ -419,8 +483,9 @@ mod tests {
     #[test]
     fn a_change_returns_the_new_message() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
-        let sent = agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+        let mut agent = Agent::new(1, now, 1_000);
+        let later = now + Duration::from_millis(5);
+        let sent = agent.feed("s", &hook("UserPromptSubmit", None, json!({})), later);
         assert_eq!(
             sent,
             Some(Control::AgentState {
@@ -429,14 +494,127 @@ mod tests {
                 urgency: 2,
                 pending: false,
                 subagents: vec![],
+                activity: None,
+                since_ms: 1_005,
             })
         );
+    }
+
+    fn tool(name: &str, agent: Option<&str>, description: &str) -> AgentEvent {
+        let input = json!({"tool_name": "Bash", "tool_input": {"description": description}});
+        hook(name, agent, input)
+    }
+
+    fn activities(agent: &Agent) -> (Option<&str>, Vec<Option<&str>>) {
+        let subs = agent.subagents.iter().map(|s| s.activity.as_deref());
+        (agent.activity.as_deref(), subs.collect())
+    }
+
+    #[test]
+    fn the_agent_keeps_its_last_activity_until_its_turn_ends() {
+        let now = Instant::now();
+        for end in ["Stop", "StopFailure", "SessionEnd"] {
+            let mut agent = Agent::new(1, now, 0);
+            let sent = agent.feed("s", &tool("PreToolUse", None, "Run tests"), now);
+            let doing = Some("Run tests".to_owned());
+            assert!(
+                matches!(sent, Some(Control::AgentState { activity, .. }) if activity == doing)
+            );
+            // A tool that finishes, or an event without one, keeps it; a new one replaces it.
+            agent.feed("s", &tool("PostToolUse", None, "x"), now);
+            agent.feed("s", &notification("idle_prompt"), now);
+            assert_eq!(activities(&agent), (Some("Run tests"), vec![]));
+            let asking = agent.feed("s", &tool("PermissionRequest", None, "Deploy"), now);
+            assert!(asking.is_some());
+            assert_eq!(activities(&agent), (Some("Deploy"), vec![]));
+            agent.feed("s", &hook(end, None, json!({})), now);
+            assert_eq!(activities(&agent), (None, vec![]), "{end}");
+        }
+    }
+
+    #[test]
+    fn a_subagent_keeps_its_own_activity_until_it_stops() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &tool("PreToolUse", None, "Main"), now);
+        agent.feed("s", &tool("PreToolUse", Some("a"), "First"), now);
+        agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), now);
+        agent.feed("s", &tool("PreToolUse", Some("b"), "Second"), now);
+        agent.feed("s", &tool("PermissionRequest", Some("a"), "Third"), now);
+        let all = (Some("Main"), vec![Some("Third"), Some("Second")]);
+        assert_eq!(activities(&agent), all);
+        agent.feed("s", &hook("Stop", Some("b"), json!({})), now);
+        assert_eq!(
+            activities(&agent),
+            (Some("Main"), vec![Some("Third"), None])
+        );
+        // Kept listed while its background task runs, its own turn is over.
+        agent.feed("s", &launched("a", "taskId", "t1"), now);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &["t1"]), now);
+        assert_eq!(activities(&agent), (Some("Main"), vec![None, None]));
+    }
+
+    #[test]
+    fn silence_clears_the_activity_of_what_it_interrupts() {
+        let start = Instant::now();
+        let mut agent = Agent::new(1, start, 0);
+        agent.feed("s", &tool("PreToolUse", None, "Main"), start);
+        agent.feed("s", &tool("PreToolUse", Some("a"), "Sub"), start);
+        agent.feed("s", &tool("PreToolUse", Some("b"), "Busy"), start);
+        agent.feed("s", &launched("b", "taskId", "t1"), start);
+        agent.feed("s", &stop_with("SubagentStop", Some("b"), &["t1"]), start);
+        agent.feed("s", &hook("SubagentStart", Some("c"), json!({})), start);
+        agent.feed("s", &tool("PreToolUse", Some("c"), "Done"), start);
+        agent.feed("s", &hook("SessionStart", Some("c"), json!({})), start);
+        assert_eq!(
+            activities(&agent),
+            (Some("Main"), vec![Some("Sub"), None, Some("Done")])
+        );
+        assert!(agent.reconcile("s", start, start + SILENCE).is_some());
+        // An idle subagent is not interrupted, so it keeps what it last did.
+        assert_eq!(activities(&agent), (None, vec![None, None, Some("Done")]));
+    }
+
+    fn since(agent: &Agent) -> (u64, Vec<u64>) {
+        let subs = agent.subagents.iter().map(|s| s.since_ms);
+        (agent.since_ms, subs.collect())
+    }
+
+    #[test]
+    fn each_state_begins_on_the_wall_clock_when_it_changes() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut agent = Agent::new(1, start, 50_000);
+        assert_eq!(since(&agent), (50_000, vec![]));
+        agent.feed("s", &hook("UserPromptSubmit", None, json!({})), at(10));
+        // Still working: the state goes on.
+        agent.feed("s", &hook("PreToolUse", None, json!({})), at(20));
+        assert_eq!(since(&agent), (50_010, vec![]));
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), at(30));
+        agent.feed("s", &hook("PreToolUse", Some("a"), json!({})), at(40));
+        agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), at(50));
+        assert_eq!(since(&agent), (50_030, vec![50_030, 50_050]));
+        agent.feed(
+            "s",
+            &hook("PermissionRequest", Some("b"), json!({})),
+            at(60),
+        );
+        assert_eq!(since(&agent), (50_060, vec![50_030, 50_060]));
+        // A clock going back never makes a time before the agent began.
+        agent.feed(
+            "s",
+            &hook("PostToolUse", Some("b"), json!({})),
+            start - Duration::from_millis(1),
+        );
+        assert_eq!(since(&agent), (50_000, vec![50_030, 50_000]));
+        assert!(agent.reconcile("s", at(60), at(60) + SILENCE).is_some());
+        assert_eq!(since(&agent), (55_060, vec![55_060, 55_060]));
     }
 
     #[test]
     fn subagents_are_listed_until_they_stop() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
         let sent = agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
         assert_eq!(
@@ -451,7 +629,11 @@ mod tests {
                     agent_type: Some("Explore".into()),
                     state: Working,
                     worktree: None,
+                    activity: None,
+                    since_ms: 0,
                 }],
+                activity: None,
+                since_ms: 0,
             })
         );
         agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), now);
@@ -467,7 +649,7 @@ mod tests {
     #[test]
     fn the_most_urgent_state_wins() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
         agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), now);
         agent.feed("s", &hook("PermissionRequest", Some("b"), json!({})), now);
@@ -485,7 +667,7 @@ mod tests {
     #[test]
     fn subagent_events_without_a_state_keep_it() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("PermissionRequest", Some("a"), json!({})), now);
         let other = hook("Notification", Some("a"), json!({"notification_type": "x"}));
         assert_eq!(agent.feed("s", &other, now), None);
@@ -501,7 +683,7 @@ mod tests {
     #[test]
     fn subagents_are_limited_in_number_and_id_length() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         let long = "x".repeat(MAX_ID + 1);
         let at_limit = "y".repeat(MAX_ID);
         let start =
@@ -528,7 +710,7 @@ mod tests {
     fn silence_turns_working_and_waiting_permission_into_waiting_you() {
         let start = Instant::now();
         let at = |ms| start + Duration::from_millis(ms);
-        let mut agent = Agent::new(1, start);
+        let mut agent = Agent::new(1, start, 0);
         agent.feed("s", &hook("PreToolUse", None, json!({})), at(1_000));
         agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), at(1_000));
         agent.feed(
@@ -560,13 +742,13 @@ mod tests {
             ("StopFailure", Error),
             ("SessionEnd", Ended),
         ] {
-            let mut agent = Agent::new(1, start);
+            let mut agent = Agent::new(1, start, 0);
             agent.feed("s", &hook(name, None, json!({})), start);
             assert_eq!(agent.reconcile("s", start, late), None, "{name}");
             assert_eq!(shown(&agent).0, state);
         }
         // Output newer than `now` (clock races) counts as no silence.
-        let mut agent = Agent::new(1, start);
+        let mut agent = Agent::new(1, start, 0);
         agent.feed("s", &hook("PreToolUse", None, json!({})), start);
         assert_eq!(agent.reconcile("s", late, start), None);
     }
@@ -581,7 +763,7 @@ mod tests {
     #[test]
     fn finishing_while_watched_is_seen_until_the_state_changes() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.watched = true;
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
         let sent = agent.feed("s", &hook("Stop", None, json!({})), now);
@@ -603,7 +785,7 @@ mod tests {
     fn only_finishing_while_watched_is_seen() {
         let now = Instant::now();
         let watched = |events: &[AgentEvent]| {
-            let mut agent = Agent::new(1, now);
+            let mut agent = Agent::new(1, now, 0);
             agent.watched = true;
             for event in events {
                 agent.feed("s", event, now);
@@ -620,7 +802,7 @@ mod tests {
         let tool = hook("PreToolUse", None, json!({}));
         assert_eq!(watched(&[tool, ask, stop]), (WaitingYou, true));
         // Interrupted (silence) while watched is finishing too.
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.watched = true;
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
         assert!(agent.reconcile("s", now, now + SILENCE).is_some());
@@ -636,7 +818,7 @@ mod tests {
     #[test]
     fn a_worktree_hook_naming_a_subagent_gives_it_that_worktree_until_removed() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         let create = |sub: &str, path: &str| {
             hook("WorktreeCreate", Some(sub), json!({"worktree_path": path}))
         };
@@ -676,7 +858,7 @@ mod tests {
     #[test]
     fn a_subagent_working_in_another_worktree_owns_it() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         let at = |cwd: &str| hook("PreToolUse", Some("a"), json!({"cwd": cwd}));
         let asked = std::cell::Cell::new(0);
         let place = |cwd: &str| {
@@ -741,7 +923,7 @@ mod tests {
     #[test]
     fn a_subagent_waiting_on_its_background_task_stays_listed_until_it_is_done() {
         let start = Instant::now();
-        let mut agent = Agent::new(1, start);
+        let mut agent = Agent::new(1, start, 0);
         agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
         let bash = json!({"tool_name": "Bash", "tool_input": {"run_in_background": true}});
         agent.feed("s", &hook("PreToolUse", Some("a"), bash), start);
@@ -782,7 +964,7 @@ mod tests {
     #[test]
     fn a_waiting_subagent_leaves_when_its_tasks_end_its_worktree_goes_or_it_ends() {
         let now = Instant::now();
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         for sub in ["a", "b", "c", "d"] {
             agent.feed("s", &hook("SubagentStart", Some(sub), json!({})), now);
             let task = format!("t{sub}");
@@ -817,7 +999,7 @@ mod tests {
     fn background_launches_are_limited_in_number_and_id_length() {
         let now = Instant::now();
         let kept = |launches: usize, live: &str| {
-            let mut agent = Agent::new(1, now);
+            let mut agent = Agent::new(1, now, 0);
             agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
             for n in 0..launches {
                 let task = format!("t{n}");
@@ -829,7 +1011,7 @@ mod tests {
         assert!(kept(MAX_LAUNCHED, "t0"));
         assert!(!kept(MAX_LAUNCHED + 1, "t0"));
         assert!(kept(MAX_LAUNCHED + 1, &format!("t{MAX_LAUNCHED}")));
-        let mut agent = Agent::new(1, now);
+        let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
         let long = "x".repeat(MAX_ID + 1);
         agent.feed("s", &launched("a", "taskId", &long), now);

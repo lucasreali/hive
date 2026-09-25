@@ -112,6 +112,8 @@ test("a click resumes a session; a running one shows its state and its terminal"
       urgency: 2,
       pending: false,
       subagents: [],
+      activity: null,
+      since_ms: 0,
     });
     select(shop.id);
   });

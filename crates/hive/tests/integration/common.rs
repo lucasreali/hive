@@ -128,7 +128,8 @@ impl Env {
             .spawn()
             .unwrap();
         let mut daemon = Daemon(child);
-        // A daemon that exits early fails the test now, not after the timeout.
+        // A daemon that already exited fails the test at once, not after the timeout (a
+        // mutant that returns early would otherwise make every test wait it out).
         wait_until(|| {
             let exited = daemon.0.try_wait().unwrap();
             assert!(exited.is_none(), "the daemon exited: {exited:?}");
@@ -251,7 +252,10 @@ impl Conn {
             let frame = self.next().await.expect("connection closed");
             match frame.to_control() {
                 Ok(Control::WorktreeStatus { .. }) | Err(_) => {}
-                Ok(message) => return (frame.channel, message),
+                Ok(mut message) => {
+                    timeless(&mut message);
+                    return (frame.channel, message);
+                }
             }
         }
     }
@@ -307,4 +311,29 @@ pub fn wait_exit(child: &mut Child) -> ExitStatus {
         status.is_some()
     });
     status.unwrap()
+}
+
+/// Checks that an `agent_state`'s times are recent wall clock times, then zeroes them so
+/// messages compare exactly.
+fn timeless(message: &mut Control) {
+    let Control::AgentState {
+        since_ms,
+        subagents,
+        ..
+    } = message
+    else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let times = subagents.iter_mut().map(|s| &mut s.since_ms);
+    for since in std::iter::once(since_ms).chain(times) {
+        assert!(
+            now - 60_000 < *since && *since <= now,
+            "since_ms {since} is not a recent time"
+        );
+        *since = 0;
+    }
 }

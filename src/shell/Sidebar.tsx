@@ -1,9 +1,17 @@
 import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
-import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useRef } from "react";
+import {
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import {
   type Agent,
   type AgentState,
   activateTab,
+  type Doing,
   mostUrgent,
   openMenu,
   openModal,
@@ -11,6 +19,7 @@ import {
   type Project,
   type Subagent,
   select,
+  showTranscript,
   toggleCollapsed,
   useHive,
   type Worktree,
@@ -249,15 +258,64 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
   );
 }
 
-/** The icon and the state's name under the row's title; the icon names it for screen readers. */
-function StateLines({ state, title }: { state: AgentState; title: ReactNode }) {
+/** How long a state has lasted, from its start and now (ms): "12s", "3m", "1h". */
+export function elapsed(since: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
+}
+
+/** One clock for every row: a single 1 s timer, running while any row shows a time. */
+const clock = { now: Date.now(), rows: new Set<() => void>(), timer: 0 as unknown };
+function onTick(row: () => void) {
+  if (clock.rows.size === 0) {
+    clock.now = Date.now();
+    clock.timer = setInterval(() => {
+      clock.now = Date.now();
+      for (const r of clock.rows) r();
+    }, 1000);
+  }
+  clock.rows.add(row);
+  return () => {
+    clock.rows.delete(row);
+    if (clock.rows.size === 0) clearInterval(clock.timer as number);
+  };
+}
+const useNow = () => useSyncExternalStore(onTick, () => clock.now);
+
+/** The time in the state and what it is doing (muted, after the state's name). */
+function Meta({ doing }: { doing: Doing }) {
+  const now = useNow();
+  const time = elapsed(doing.since_ms, now);
+  return (
+    <span className="state-meta">{doing.activity ? `${time} · ${doing.activity}` : time}</span>
+  );
+}
+
+/**
+ * The icon and the state's name under the row's title; the icon names it for screen readers.
+ * Once the service sent it, the time in the state and the activity follow the name.
+ */
+function StateLines({
+  state,
+  doing,
+  title,
+}: {
+  state: AgentState;
+  doing?: Doing;
+  title: ReactNode;
+}) {
   return (
     <>
       <StateIcon state={state} />
       <span className="agent-lines">
         <span className="label">{title}</span>
-        <span className="state-label" data-state={state} aria-hidden="true">
-          {STATE_LABEL[state]}
+        <span className="state-line">
+          <span className="state-label" data-state={state} aria-hidden="true">
+            {STATE_LABEL[state]}
+          </span>
+          {doing && <Meta doing={doing} />}
         </span>
       </span>
     </>
@@ -265,14 +323,16 @@ function StateLines({ state, title }: { state: AgentState; title: ReactNode }) {
 }
 
 /**
- * An agent, under the worktree the service placed it in, with its live subagents; clicking
- * either shows the agent's terminal. States are the service's (#37); until the first
+ * An agent, under the worktree the service placed it in, with its live subagents; clicking the
+ * agent shows its terminal, clicking a subagent its conversation (6.10). States are the service's (#37); until the first
  * `agent_state` arrives the agent shows as idle, as `SessionStart` leaves it.
  */
 function AgentRow({ agent }: { agent: Agent }) {
   const tab = useHive((s) => s.tabs.find((t) => t.id === agent.terminal));
   const picked = useHive((s) => s.selection === agent.id);
-  const shown = useHive((s) => s.activeTab === agent.terminal) || picked;
+  // While a subagent's conversation shows, its row is the selected one.
+  const covered = useHive((s) => s.transcriptShown !== null);
+  const shown = (useHive((s) => s.activeTab === agent.terminal) || picked) && !covered;
   const status = useHive((s) => s.agentStates[agent.id]);
   // The session's name, as on its tab; until Claude names it, just "Claude".
   const name = useHive((s) => s.agentTitles[agent.id]) ?? "Claude";
@@ -291,13 +351,13 @@ function AgentRow({ agent }: { agent: Agent }) {
         data-selected={shown}
       >
         <button type="button" className="row-main" aria-current={shown} onClick={show}>
-          <StateLines state={status?.state ?? "idle"} title={name} />
+          <StateLines state={status?.state ?? "idle"} doing={status} title={name} />
         </button>
       </div>
       {status && status.subagents.length > 0 && (
         <ul>
           {status.subagents.map((sub) => (
-            <SubagentNode key={sub.id} sub={sub} show={show} />
+            <SubagentNode key={sub.id} agent={agent.id} sub={sub} />
           ))}
         </ul>
       )}
@@ -307,19 +367,24 @@ function AgentRow({ agent }: { agent: Agent }) {
 
 /**
  * A subagent; with a worktree of its own, that worktree is its parent row (Project → Worktree →
- * Agent at every level, #22). Clicking either row shows the agent's terminal.
+ * Agent at every level, #22). Clicking either row shows the subagent's conversation.
  */
-function SubagentNode({ sub, show }: { sub: Subagent; show: () => void }) {
+function SubagentNode({ agent, sub }: { agent: string; sub: Subagent }) {
   const w = useHive((s) =>
     Object.values(s.projects ?? {})
       .flatMap((p) => p.worktrees)
       .find((w) => w.id === sub.worktree),
   );
+  const shown = useHive(
+    (s) => s.transcriptShown?.agent === agent && s.transcriptShown.subagent === sub.id,
+  );
+  const show = () => showTranscript(agent, sub.id);
   const row = (
-    <div className="tree-row subagent">
-      <button type="button" className="row-main" onClick={show}>
+    <div className="tree-row subagent" data-selected={shown}>
+      <button type="button" className="row-main" aria-current={shown} onClick={show}>
         <StateLines
           state={sub.state}
+          doing={sub}
           title={
             <>
               <span className="prefix">subagent: </span>

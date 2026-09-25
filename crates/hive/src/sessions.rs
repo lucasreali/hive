@@ -235,6 +235,11 @@ impl Sessions {
         }
     }
 
+    /// Claude's projects folder, when known.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
     /// Every session whose `cwd` lies in a followed worktree, the most recent first. `running`
     /// holds the folder of each `claude` process: in each folder, that many of the most recent
     /// sessions count as running (a `claude` writes the newest log of its folder).
