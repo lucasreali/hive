@@ -138,9 +138,13 @@ pub fn check(settings: &Settings) -> Result<(), String> {
                 .as_deref()
                 .map_or(Ok(()), |v| script(&name(what), v))?;
         }
-        for run in &scripts.run {
+        for (i, run) in scripts.run.iter().enumerate() {
             text(&name("run.name"), &run.name)?;
             script(&name("run.command"), &run.command)?;
+            if scripts.run[..i].iter().any(|r| r.name == run.name) {
+                let run = &run.name;
+                return Err(format!("{} {run:?} is used twice", name("run.name")));
+            }
         }
     }
     Ok(())
@@ -437,6 +441,14 @@ mod tests {
         assert_eq!(
             refused(runs(run("dev", ""))),
             "projects./r.scripts.run.command must not be empty"
+        );
+        let twice = ProjectScripts {
+            run: vec![run("dev", "a"), run("test", "b"), run("dev", "c")],
+            ..Default::default()
+        };
+        assert_eq!(
+            refused(twice),
+            "projects./r.scripts.run.name \"dev\" is used twice"
         );
     }
 }

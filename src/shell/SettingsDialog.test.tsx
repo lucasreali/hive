@@ -5,7 +5,7 @@ import { App } from "../App";
 import { COMMANDS } from "../shortcuts";
 import { apply, DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_DIAGNOSTICS } from "../transport/mock";
+import { MOCK_DIAGNOSTICS, MOCK_REPOS } from "../transport/mock";
 import { SECTIONS } from "./SettingsDialog";
 
 beforeAll(async () => {
@@ -129,6 +129,43 @@ test("selects save the cursor style and the theme", async () => {
   expect(document.documentElement.dataset.theme).toBe("one-light");
 });
 
+test("the projects section edits each project's scripts", async () => {
+  open();
+  section("Projects");
+  expect(screen.getByText("Add a project to give it scripts.")).toBeDefined();
+  const [shop, api] = MOCK_REPOS;
+  act(() => apply({ type: "projects", projects: [shop, api] }));
+  expect(screen.getByRole("combobox", { name: "Project" }).textContent).toBe(shop.name);
+  const scripts = () => settings().projects[shop.id]?.scripts;
+
+  fireEvent.change(input("Setup script"), { target: { value: "bun install" } });
+  await waitFor(() => expect(scripts()?.setup).toBe("bun install"));
+  fireEvent.change(input("Archive script"), { target: { value: "make clean" } });
+  await waitFor(() => expect(scripts()?.archive).toBe("make clean"));
+  fireEvent.change(input("Setup script"), { target: { value: " " } });
+  await waitFor(() => expect(scripts()?.setup).toBeNull());
+
+  const add = screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
+  expect(add.disabled).toBe(true);
+  fireEvent.change(input("New run script name"), { target: { value: " dev " } });
+  fireEvent.change(input("New run script command"), { target: { value: "bun dev" } });
+  fireEvent.click(add);
+  await waitFor(() => expect(scripts()?.run).toEqual([{ name: "dev", command: "bun dev" }]));
+  expect(input("New run script name").value).toBe("");
+  fireEvent.change(input("Command of dev"), { target: { value: "bun run dev" } });
+  await waitFor(() => expect(scripts()?.run[0].command).toBe("bun run dev"));
+  fireEvent.change(input("Name"), { target: { value: "serve " } });
+  await waitFor(() => expect(scripts()?.run[0].name).toBe("serve"));
+  fireEvent.click(screen.getByTitle("Remove serve"));
+  await waitFor(() => expect(scripts()?.run).toEqual([]));
+  expect(scripts()?.archive).toBe("make clean");
+
+  // Another project has its own.
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Project" }));
+  fireEvent.click(screen.getByRole("option", { name: api.name }));
+  expect(input("Archive script").value).toBe("");
+});
+
 test("the service's refusal shows inline, and the typed text stays", async () => {
   open();
   fireEvent.change(input("Font size"), { target: { value: "99" } });
@@ -154,13 +191,11 @@ test("the search lists every matching field across sections", () => {
   expect(labels()).toHaveLength(2);
 });
 
-test("shortcuts are the command table, read-only; projects has nothing yet", () => {
+test("shortcuts are the command table, read-only", () => {
   open();
   section("Shortcuts");
   const rows = [...document.querySelectorAll(".settings-keys tr")].map((r) => r.textContent);
   expect(rows).toEqual(COMMANDS.map((c) => `${c.label}${c.keys}`));
-  section("Projects");
-  expect(screen.getByText("No per-project settings yet.")).toBeTruthy();
 });
 
 test("about shows both versions, the service's diagnostics and terminals without hooks", async () => {

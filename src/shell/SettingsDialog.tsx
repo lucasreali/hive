@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { version as appVersion } from "../../package.json";
 import { COMMANDS } from "../shortcuts";
-import { openModal, type Settings, useHive } from "../store";
+import { openModal, type ProjectScripts, type Settings, scriptsOf, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { keyText } from "../window";
@@ -39,10 +39,11 @@ function Typed(props: {
   id: string;
   value: string;
   onSave: (text: string) => void;
-  type?: "text" | "number" | "range";
+  type?: "text" | "number" | "range" | "multiline";
   min?: number;
   max?: number;
   placeholder?: string;
+  "aria-label"?: string;
 }) {
   const { value, onSave } = props;
   const [draft, setDraft] = useState(value);
@@ -52,6 +53,19 @@ function Typed(props: {
     const later = setTimeout(() => onSave(draft), SAVE_DELAY_MS);
     return () => clearTimeout(later);
   }, [draft, value, onSave]);
+  if (props.type === "multiline") {
+    return (
+      <textarea
+        id={props.id}
+        aria-label={props["aria-label"]}
+        value={draft}
+        placeholder={props.placeholder}
+        spellCheck={false}
+        rows={3}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+    );
+  }
   return (
     <input
       id={props.id}
@@ -60,6 +74,7 @@ function Typed(props: {
       max={props.max}
       value={draft}
       placeholder={props.placeholder}
+      aria-label={props["aria-label"]}
       spellCheck={false}
       autoComplete="off"
       onChange={(e) => setDraft(e.target.value)}
@@ -383,6 +398,160 @@ function About() {
   );
 }
 
+/** Saves `change` made to the scripts of the project `id`. */
+function saveScripts(id: string, change: (scripts: ProjectScripts) => void): void {
+  save((s) => {
+    const scripts = structuredClone(scriptsOf(s, id));
+    change(scripts);
+    s.projects[id] = { ...s.projects[id], scripts };
+  });
+}
+
+/** Blank text is no script. */
+const script = (text: string) => (text.trim() === "" ? null : text);
+
+/**
+ * Per-project scripts (6.8), the user's own: they live in the settings only, never in the
+ * repository. The service checks them.
+ */
+function ProjectScriptsSection() {
+  const projects = Object.values(useHive((s) => s.projects) ?? {});
+  const [picked, setPicked] = useState<string | null>(null);
+  const id = projects.find((p) => p.id === picked)?.id ?? projects[0]?.id;
+  if (id === undefined) return <p className="field-help">Add a project to give it scripts.</p>;
+  return (
+    <>
+      <div className="field">
+        <label id="setting-project-label" htmlFor="setting-project">
+          Project
+        </label>
+        <Select
+          aria-labelledby="setting-project-label"
+          value={id}
+          options={projects.map((p) => ({ value: p.id, label: p.name }))}
+          onChange={setPicked}
+        />
+        <p className="field-help">
+          Scripts are kept in Hive's settings, never read from the repository. Hive's terminals in a
+          worktree have <code>$HIVE_PORT</code> (the first of 10 ports kept for it),{" "}
+          <code>$HIVE_WORKTREE_PATH</code> and <code>$HIVE_ROOT_PATH</code>.
+        </p>
+      </div>
+      <ScriptFields key={id} id={id} />
+    </>
+  );
+}
+
+function ScriptFields({ id }: { id: string }) {
+  const scripts = useHive((s) => scriptsOf(s.settings, id));
+  const [name, setName] = useState("");
+  const [command, setCommand] = useState("");
+  const add = () => {
+    saveScripts(id, (s) => void s.run.push({ name: name.trim(), command }));
+    setName("");
+    setCommand("");
+  };
+  return (
+    <>
+      <div className="field">
+        <label htmlFor="setting-setup">Setup script</label>
+        <Typed
+          id="setting-setup"
+          type="multiline"
+          value={scripts.setup ?? ""}
+          placeholder="bun install"
+          onSave={(text) =>
+            saveScripts(id, (s) => {
+              s.setup = script(text);
+            })
+          }
+        />
+        <p className="field-help">Typed into a new terminal in each worktree Hive creates.</p>
+      </div>
+      <div className="field">
+        <span>Run scripts</span>
+        {scripts.run.map((run, i) => (
+          <div className="script-run" key={run.name}>
+            <Typed
+              id={`setting-run-${i}`}
+              aria-label="Name"
+              value={run.name}
+              onSave={(text) =>
+                saveScripts(id, (s) => {
+                  s.run[i].name = text.trim();
+                })
+              }
+            />
+            <Typed
+              id={`setting-run-${i}-command`}
+              aria-label={`Command of ${run.name}`}
+              value={run.command}
+              onSave={(text) =>
+                saveScripts(id, (s) => {
+                  s.run[i].command = text;
+                })
+              }
+            />
+            <button
+              type="button"
+              className="ghost"
+              title={`Remove ${run.name}`}
+              onClick={() => saveScripts(id, (s) => void s.run.splice(i, 1))}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        ))}
+        <form
+          className="script-run"
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
+          }}
+        >
+          <input
+            aria-label="New run script name"
+            placeholder="dev"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            aria-label="New run script command"
+            placeholder="bun run dev --port $HIVE_PORT"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+          />
+          <button type="submit" className="secondary" disabled={!name.trim() || !command.trim()}>
+            Add
+          </button>
+        </form>
+        <p className="field-help">
+          Each is a "Run" item in the worktree's menu: a new terminal with the command typed in.
+        </p>
+      </div>
+      <div className="field">
+        <label htmlFor="setting-archive">Archive script</label>
+        <Typed
+          id="setting-archive"
+          type="multiline"
+          value={scripts.archive ?? ""}
+          placeholder="docker compose down"
+          onSave={(text) =>
+            saveScripts(id, (s) => {
+              s.archive = script(text);
+            })
+          }
+        />
+        <p className="field-help">
+          Run by the service with <code>sh -c</code> in the worktree before removing it, for at most
+          60 s. If it fails, the worktree stays (unless the removal is forced) and its output is
+          shown.
+        </p>
+      </div>
+    </>
+  );
+}
+
 function Content({ section, query }: { section: Section; query: string }) {
   if (query) {
     const found = FIELDS.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
@@ -391,7 +560,7 @@ function Content({ section, query }: { section: Section; query: string }) {
   }
   if (section === "Shortcuts") return <Shortcuts />;
   if (section === "About") return <About />;
-  if (section === "Projects") return <p className="field-help">No per-project settings yet.</p>;
+  if (section === "Projects") return <ProjectScriptsSection />;
   return <Fields fields={FIELDS.filter((f) => f.section === section)} />;
 }
 

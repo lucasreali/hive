@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
-import { apply, initialState, openModal, useHive } from "../store";
+import { apply, DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
@@ -220,6 +220,24 @@ test("without the terminal option no terminal opens", async () => {
   await waitFor(() => expect(useHive.getState().modal).toBeNull());
   expect(openTerminal).not.toHaveBeenCalled();
   openTerminal.mockRestore();
+});
+
+test("the project's setup script is typed into a terminal of its own", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  open();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.projects[shop.id] = { scripts: { ...NO_SCRIPTS, setup: "bun install" } };
+  act(() => apply({ type: "settings", settings }));
+  fireEvent.click(screen.getByLabelText("Open a terminal in the new worktree"));
+  type("with-setup");
+  await waitFor(() => expect(create().disabled).toBe(false));
+  fireEvent.click(create());
+  await waitFor(() => expect(useHive.getState().tabs).toHaveLength(1));
+  const tab = useHive.getState().tabs[0];
+  expect(tab.cwd).toBe(`${shop.path}/.claude/worktrees/with-setup`);
+  await waitFor(() => expect(write).toHaveBeenCalledWith(tab.id, "bun install\r"));
+  closeTerminal(tab.id);
+  write.mockRestore();
 });
 
 test("the service's notes keep the dialog open until it is closed", async () => {

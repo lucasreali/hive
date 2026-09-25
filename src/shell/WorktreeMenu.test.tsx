@@ -1,8 +1,17 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
 import { App } from "../App";
-import { apply, initialState, openModal, type Project, select, useHive } from "../store";
+import {
+  apply,
+  DEFAULT_SETTINGS,
+  initialState,
+  NO_SCRIPTS,
+  openModal,
+  type Project,
+  select,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
 
@@ -140,6 +149,29 @@ test("new terminal, copy path and Explorer act on the worktree", async () => {
   open.mockRestore();
   explorer.mockRestore();
   writeText.mockRestore();
+});
+
+test("each run script of the project is a menu item typing it into a new terminal", async () => {
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(8);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  show();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  const run = [
+    { name: "dev", command: "bun dev --port $HIVE_PORT" },
+    { name: "test", command: "bun test" },
+  ];
+  settings.projects[shop.id] = { scripts: { ...NO_SCRIPTS, run } };
+  act(() => apply({ type: "settings", settings }));
+  rightClick("fix-login");
+  const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+  expect(items.slice(0, 4)).toEqual(["New terminal here", "Run: dev", "Run: test", "Copy path"]);
+  expect(item("Run: dev").title).toBe("bun dev --port $HIVE_PORT");
+  fireEvent.click(item("Run: dev"));
+  expect(menu()).toBeNull();
+  expect(open.mock.calls[0]?.[0]).toBe(login.path);
+  await waitFor(() => expect(write).toHaveBeenCalledWith(8, "bun dev --port $HIVE_PORT\r"));
+  open.mockRestore();
+  write.mockRestore();
 });
 
 test("on macOS the folder is revealed in the Finder", () => {
