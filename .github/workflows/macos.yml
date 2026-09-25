@@ -31,8 +31,11 @@ jobs:
           ln -s /tmp/probe/versions/2.1.0 /tmp/probe/claude
           /tmp/probe/claude 5 & sleep 1
           ps -o pid,ucomm,comm,args -p $!
-          python3 -c 'import os,subprocess; c=subprocess.Popen(["sleep","3"],start_new_session=True); print("sid of child", c.pid, os.getsid(c.pid))' || true
-          python3 -c 'import os; print("sid of launchd", os.getsid(1))' || true
+          cp /bin/dash /tmp/probe/claude2
+          /tmp/probe/claude2 -c 'sleep 5' & sleep 1
+          ps -o pid,ucomm,args -p $!
+          /tmp/probe/claude2 -c 'sleep 5; :' & sleep 1
+          ps -o pid,ucomm,args -p $!
       - run: bun install --frozen-lockfile
       # `tauri::generate_context!` needs the built frontend.
       - run: bun run build
