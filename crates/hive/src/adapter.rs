@@ -102,14 +102,20 @@ fn activity(tool: &str, payload: &Value) -> String {
         "Agent" | "Task" => input("description").map(str::to_owned),
         _ => None,
     };
-    let text = text.unwrap_or_else(|| tool.to_owned());
-    let mut clean = text.chars().filter(|c| !c.is_control());
-    let mut out: String = clean.by_ref().take(MAX_ACTIVITY).collect();
-    if clean.next().is_some() {
+    clip(&text.unwrap_or_else(|| tool.to_owned()), MAX_ACTIVITY)
+}
+
+/// Untrusted text made fit to show: control characters dropped, trimmed, and cut at `max`
+/// characters (the last one becomes "…" when cut).
+pub fn clip(text: &str, max: usize) -> String {
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let mut chars = clean.trim().chars();
+    let mut out: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() {
         out.pop();
         out.push('…');
     }
-    out.trim().to_owned()
+    out
 }
 
 fn notification(kind: String) -> Notification {
@@ -284,6 +290,13 @@ mod tests {
             doing("Bash", json!({"description": "a\u{1b}[31mb\tc\r"})),
             "a[31mbc"
         );
+    }
+
+    #[test]
+    fn clip_trims_before_counting() {
+        assert_eq!(clip("  \u{7}ab  ", 2), "ab");
+        assert_eq!(clip(" abc ", 2), "a…");
+        assert_eq!(clip("\t\n", 5), "");
     }
 
     #[test]

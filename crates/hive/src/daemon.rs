@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::VERSION;
-use crate::adapter::{Adapter, ClaudeCode};
+use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
@@ -39,6 +39,9 @@ use crate::{changes, dirs, file, health, procs, search, transcript, watch, workt
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
+
+/// Longest `hive badge` label, in characters.
+const MAX_BADGE: usize = 40;
 
 pub async fn run(paths: &Paths) -> io::Result<()> {
     // Started by `hive bridge`: leave its session, so the service outlives nothing but the
@@ -693,27 +696,41 @@ where
     role
 }
 
-/// A hook connection carries exactly one event; the connection is closed after it.
+/// A hook connection carries exactly one event (or one `hive badge`); the connection is
+/// closed after it.
 async fn hook_connection<R: AsyncRead + Unpin>(
     mut reader: FramedRead<R, FrameCodec>,
     state: &Arc<State>,
 ) {
-    if let Some(Ok(frame)) = reader.next().await
-        && let Ok(Control::Hook {
+    let Some(Ok(frame)) = reader.next().await else {
+        return;
+    };
+    match frame.to_control() {
+        Ok(Control::Badge { text }) => {
+            let channel = frame.channel;
+            if state.terminals.lock().await.contains_key(&channel) {
+                let text = adapter::clip(&text, MAX_BADGE);
+                state.to_app(channel, &Control::Badge { text }).await;
+            }
+        }
+        Ok(Control::Hook {
             event,
             terminal_id,
             payload,
-        }) = frame.to_control()
-    {
-        let event = ClaudeCode.translate(&event, terminal_id, payload);
-        if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } = event.kind {
-            // The app's worktrees follow a `claude -w` or a subagent's worktree.
-            state.projects(|projects| Control::Projects {
-                projects: projects.list(),
-            });
+        }) => {
+            let event = ClaudeCode.translate(&event, terminal_id, payload);
+            if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } =
+                event.kind
+            {
+                // The app's worktrees follow a `claude -w` or a subagent's worktree.
+                state.projects(|projects| Control::Projects {
+                    projects: projects.list(),
+                });
+            }
+            state.saw(&event).await;
+            state.to_app(0, &Control::Agent(event)).await;
         }
-        state.saw(&event).await;
-        state.to_app(0, &Control::Agent(event)).await;
+        _ => {}
     }
 }
 

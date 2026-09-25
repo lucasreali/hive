@@ -176,6 +176,13 @@ pub enum Control {
         terminal_id: Option<String>,
         payload: serde_json::Value,
     },
+    /// `hive badge` → service (on a hook connection) → app: a short label for the terminal on
+    /// the frame channel (its `HIVE_TERMINAL_ID`); empty clears it. The service drops control
+    /// characters, trims and cuts it at 40 characters, and forwards it only while that
+    /// terminal is open.
+    Badge {
+        text: String,
+    },
     /// A provider event translated to the internal model.
     Agent(AgentEvent),
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
@@ -1037,6 +1044,8 @@ mod tests {
             &frame.payload[..],
             br#"{"type":"resize","cols":80,"rows":24}"#
         );
+        let badge = Frame::control(2, &Control::Badge { text: "db".into() });
+        assert_eq!(&badge.payload[..], br#"{"type":"badge","text":"db"}"#);
     }
 
     #[test]
