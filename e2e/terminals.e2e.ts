@@ -19,7 +19,7 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
-  const tabs = page.getByRole("tablist");
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
   const newTerminal = page.getByTitle("New terminal (Ctrl+Shift+T)");
   await expect(tree.getByRole("button", { name: "fix-login" })).toBeVisible();
   // Nothing selected, so there is no worktree to open a terminal in.

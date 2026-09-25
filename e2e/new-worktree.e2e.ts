@@ -45,7 +45,8 @@ test("create a worktree from a project row: name check, branch filter, tree upda
   const created = tree.getByRole("button", { name: "fix-cart", exact: true });
   await expect(created).toBeVisible();
   await expect(created).toHaveAttribute("aria-current", "true");
-  // Its terminal opened as a shown tab, with claude started in it (the dialog's default).
+  // Its terminal opened as a shown tab, with claude started in it (the dialog's default):
+  // typed at once, so the mock echoes it before its first prompt.
   await expect(page.getByRole("tab", { name: "fix-cart" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -58,7 +59,7 @@ test("create a worktree from a project row: name check, branch filter, tree upda
         return terminal(1).buffer.active.getLine(0).translateToString(true);
       }),
     )
-    .toBe("mock$ claude");
+    .toBe("claude");
   await expect(tree.locator(".tree-row.agent")).toHaveCount(1);
   await page.screenshot({ path: "target/e2e/new-worktree-created.png" });
 });

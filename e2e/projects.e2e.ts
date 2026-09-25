@@ -9,14 +9,25 @@ test("add a project from the empty state and see its worktrees", async ({ page }
 
   await terminals.getByRole("button", { name: "Add project" }).click();
   const dialog = page.getByRole("dialog", { name: "Add project" });
-  const field = dialog.getByLabel("Folder in WSL");
+  const field = dialog.getByLabel("Folder", { exact: true });
+  const add = dialog.getByRole("button", { name: /^Add project/ });
   await expect(field).toBeFocused();
+  // The field starts at the home folder, its subfolders listed under it; a click enters one.
+  await expect(field).toHaveValue("/home/user/");
+  const folders = dialog.getByRole("list", { name: "Folders" });
+  await folders.getByText("projects", { exact: true }).click();
+  await expect(field).toHaveValue("/home/user/projects/");
+  await expect(folders.getByRole("button", { name: "Repository shop" })).toBeVisible();
+
+  // Enter adds once the typed folder is listed.
   await field.fill("/home/user/nowhere");
+  await expect(add).toBeEnabled();
   await field.press("Enter");
   await expect(dialog.getByRole("alert")).toContainText("cannot open /home/user/nowhere");
   await page.screenshot({ path: "target/e2e/add-project-error.png" });
 
   await field.fill("/home/user/projects/shop");
+  await expect(add).toBeEnabled();
   await field.press("Enter");
   await expect(dialog).toHaveCount(0);
   await expect(terminals).not.toContainText("No project open");

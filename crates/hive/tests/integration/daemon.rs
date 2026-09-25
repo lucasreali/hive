@@ -174,7 +174,9 @@ async fn a_hook_connection_is_closed_after_one_message() {
 async fn a_second_app_is_rejected() {
     let env = Env::new();
     let mut daemon = env.daemon();
-    let app = env.connect(Role::App).await;
+    // `Welcome` ends the handshake before the daemon takes the app's place, so wait for an
+    // answer from the app connection itself: then the second one is surely the second.
+    let app = env.app().await;
     let mut second = env.connect(Role::App).await;
     assert_eq!(
         second.control().await,

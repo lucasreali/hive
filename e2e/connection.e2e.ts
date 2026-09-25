@@ -8,9 +8,9 @@ test("a version mismatch blocks the workspace", async ({ page }) => {
   await expect(page.getByTitle("WSL connection")).toHaveText("WSLversion mismatch");
   await expect(page.getByRole("button", { name: "Reconnect" })).toBeFocused();
   await page.screenshot({ path: "target/e2e/version-mismatch.png" });
-  // The workspace under the block takes no clicks.
+  // The workspace under the block takes no clicks: the side panel (open by default) stays open.
   await page.getByTitle("Files, diff and sessions (Ctrl+Shift+B)").click({ force: true });
-  await expect(page.getByRole("complementary")).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
 });
 
 test("a disconnect shows the reason and can reconnect", async ({ page }) => {

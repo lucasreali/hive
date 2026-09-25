@@ -198,9 +198,16 @@ impl ScriptHome {
     fn write(&self, path: &str, text: &str) {
         let path = self.0.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, text).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Written by a child shell, never through a descriptor of this process: a child that
+        // another test thread forks while this process holds the file open for writing keeps
+        // that descriptor until it execs, and running the script meanwhile fails with ETXTBSY.
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", "printf %s \"$2\" > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(&path)
+            .arg(text)
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     /// Runs the bridge script as `wsl.exe` would, with the given `$1` and `$2`.

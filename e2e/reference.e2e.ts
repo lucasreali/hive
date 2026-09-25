@@ -19,7 +19,6 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
   await expect.poll(() => screen(page, 1)).toBe("mock$");
 
-  await page.keyboard.press("Control+Shift+B");
   const panel = page.getByRole("complementary", { name: "Side panel" });
   for (const name of ["src", "auth"]) {
     await panel.getByRole("treeitem", { name, exact: true }).click();
@@ -52,7 +51,8 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
     .toBe("mock$ @src/auth/session.ts (lines 39–41) why?@src/auth/session.ts (line 39)");
   await page.screenshot({ path: "target/e2e/reference.png" });
 
-  // A file of another worktree cannot go to this terminal.
+  // In another worktree, fix-login's terminal is not shown (tabs belong to their worktree, 4.7):
+  // there is no terminal to send to.
   await tree.getByRole("button", { name: "refactor-auth" }).click();
   for (const name of ["src", "auth"]) {
     await panel.getByRole("treeitem", { name, exact: true }).click();
@@ -63,5 +63,5 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await page.keyboard.press("Shift+Home");
   const blocked = other.getByRole("button", { name: "Send to terminal" });
   await expect(blocked).toBeDisabled();
-  await expect(blocked).toHaveAttribute("title", "The active terminal is in another worktree");
+  await expect(blocked).toHaveAttribute("title", "No terminal open");
 });

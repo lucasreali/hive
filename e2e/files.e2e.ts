@@ -7,12 +7,14 @@ async function open(files: Locator, ...names: string[]) {
   }
 }
 
-test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({ page }) => {
+test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles it", async ({
+  page,
+}) => {
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "refactor-auth" }).click();
 
-  await page.keyboard.press("Control+Shift+B");
+  // The side panel starts open (4.21).
   const panel = page.getByRole("complementary", { name: "Side panel" });
   await expect(panel).toBeVisible();
   await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
@@ -33,10 +35,15 @@ test("files panel: Ctrl+Shift+B shows the selected worktree's changes", async ({
   );
   await page.screenshot({ path: "target/e2e/files-panel.png" });
 
-  // Selecting another worktree asks the service again; the file's tab stays.
+  // Selecting another worktree asks the service again; the file's tab goes with its worktree.
   await tree.getByRole("button", { name: "fix-login" }).click();
   await expect(panel.locator(".files-summary")).toHaveText("2 files changed+4−1");
-  await expect(view).toBeVisible();
+  await expect(view).toBeHidden();
+  const tab = page.getByRole("tab", { name: "token.ts" });
+  await expect(tab).toHaveCount(0);
+  await tree.getByRole("button", { name: "refactor-auth" }).click();
+  await expect(tab).toBeVisible();
+  await tree.getByRole("button", { name: "fix-login" }).click();
 
   await page.keyboard.press("Control+Shift+B");
   await expect(panel).toBeHidden();
@@ -54,7 +61,6 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.keyboard.press("Control+Shift+B");
   const panel = page.getByRole("complementary", { name: "Side panel" });
   const files = panel.getByRole("tree", { name: "Files" });
 
