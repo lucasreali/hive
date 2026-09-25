@@ -1,0 +1,43 @@
+#!/bin/sh
+# Push the current task branch and follow its CI, with the personal account's token (CLAUDE.md
+# rule 4): the active gh account is the work one and is never switched. Only task/* branches.
+#   scripts/ci.sh push          push the branch (sets upstream)
+#   scripts/ci.sh watch         wait for every run of HEAD (ci, macos); exit 1 if one failed
+#   scripts/ci.sh logs <run-id> the failed steps' logs
+set -eu
+branch=$(git rev-parse --abbrev-ref HEAD)
+case "$branch" in
+  task/*) ;;
+  *) echo "ci.sh: only task/* branches (on $branch)" >&2; exit 2 ;;
+esac
+GH_TOKEN=$(gh auth token -u lucasreali)
+export GH_TOKEN
+
+runs() {
+  gh run list --branch "$branch" --commit "$(git rev-parse HEAD)" --json databaseId,url \
+    -q '.[] | "\(.databaseId) \(.url)"'
+}
+
+case "${1:-}" in
+  push) git push -u origin "$branch" ;;
+  watch)
+    # Runs show up a few seconds after the push; ci and macos both run on task/*.
+    tries=0
+    while [ "$(runs | wc -l)" -lt 2 ] && [ "$tries" -lt 30 ]; do
+      tries=$((tries + 1))
+      sleep 5
+    done
+    failed=0
+    runs | while read -r id url; do
+      if gh run watch "$id" --exit-status >/dev/null; then
+        echo "green $url"
+      else
+        echo "FAILED $url (scripts/ci.sh logs $id)"
+        exit 1
+      fi
+    done || failed=1
+    exit "$failed"
+    ;;
+  logs) gh run view "${2:?run id}" --log-failed ;;
+  *) echo "usage: scripts/ci.sh push | watch | logs <run-id>" >&2; exit 2 ;;
+esac
