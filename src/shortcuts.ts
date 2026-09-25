@@ -129,8 +129,11 @@ export function shortcut(event: KeyboardEvent): (() => void) | null {
   const s = useHive.getState();
   const blocked =
     s.connection.status === "version_mismatch" || s.connection.status === "disconnected";
-  // Under the connection block nothing works; with a dialog open its keys are its own.
-  if (blocked || s.modal !== null) return null;
+  // Under the connection block nothing works; with a dialog open its keys are its own. A dialog
+  // closed by Esc clears `modal` only on its `close` event, which the browser sends in a later
+  // task: the shortcuts count it closed as soon as it is.
+  const dialog = s.modal !== null && document.querySelector("dialog[open]") !== null;
+  if (blocked || dialog) return null;
   return COMMANDS.find((c) => presses(c.keys, event))?.run ?? null;
 }
 
