@@ -234,6 +234,24 @@ mod tests {
     }
 
     #[test]
+    fn settings_exactly_as_large_as_the_file_limit_are_saved() {
+        let (_tmp, store) = store();
+        let sized = |key: String| {
+            let mut settings = Settings::default();
+            settings.projects.insert(key, ProjectSettings::default());
+            settings
+        };
+        let base = serde_json::to_vec_pretty(&sized("/".into())).unwrap().len();
+        let key = format!("/{}", "a".repeat(FILE_LIMIT as usize - base));
+        let settings = sized(key);
+        assert_eq!(
+            serde_json::to_vec_pretty(&settings).unwrap().len() as u64,
+            FILE_LIMIT
+        );
+        assert_eq!(store.set(settings.clone()), Ok(settings));
+    }
+
+    #[test]
     fn a_failed_write_is_reported_and_nothing_changes() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("hive"), "").unwrap();
