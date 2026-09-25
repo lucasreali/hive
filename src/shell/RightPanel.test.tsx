@@ -236,7 +236,9 @@ test("clicking a file opens it in a tab; folders collapse; the tab's close close
   );
   expect(screen.getByRole("tab", { name: "token.ts" }).getAttribute("aria-selected")).toBe("true");
   const view = screen.getByRole("region", { name: "src/auth/token.ts" });
-  expect(view.querySelector(".file-view-bar")?.textContent).toBe("Rsrc/auth/token.ts+2−1Edit");
+  expect(view.querySelector(".file-view-bar")?.textContent).toBe(
+    "Rsrc/auth/token.ts+2−1EditComment",
+  );
   expect(view.textContent).not.toContain("No changes in this file.");
   // Nothing selected yet: the reference cannot be sent, and the button says why.
   const send = screen.getByRole("button", { name: "Send to terminal" }) as HTMLButtonElement;
@@ -313,6 +315,45 @@ test("the open file's text shows as a diff when changed, else as is, or why not"
     expect(body().textContent).toBe(`No changes in this file.${why}`);
     expect(editor()).toBeNull();
   }
+});
+
+test("review comments on the open file mark its lines and are listed under it", () => {
+  panel();
+  act(() => select(refactor.id));
+  act(() => setOpenFile({ worktree: refactor.path, path: "README.md" }));
+  const content = "one\ntwo\nthree\n";
+  act(() =>
+    apply({
+      type: "file",
+      worktree: refactor.path,
+      path: "README.md",
+      content,
+      base: content,
+      version: "v",
+      binary: false,
+      too_large: false,
+      error: null,
+    }),
+  );
+  const view = screen.getByRole("region", { name: "README.md" });
+  const marked = () =>
+    [...view.querySelectorAll(".cm-line.cm-commented")].map((line) => line.textContent);
+  expect(marked()).toEqual([]);
+  expect(screen.queryByRole("region", { name: "Review comments" })).toBeNull();
+  const comment = { from: 2, to: 3, text: "why?" };
+  act(() =>
+    useHive.setState({
+      comments: {
+        [refactor.path]: [
+          { path: "README.md", ...comment },
+          { path: "b.ts", ...comment },
+        ],
+      },
+    }),
+  );
+  // Only this file's comment marks lines; the list has the worktree's.
+  expect(marked()).toEqual(["two", "three"]);
+  expect(screen.getByRole("button", { name: "Send review (2)" })).toBeTruthy();
 });
 
 test("rows show the library's icon for their name, its defaults for unknown ones, open or closed", async () => {
