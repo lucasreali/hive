@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# CI is the authoritative gate run (.github/workflows/ci.yml and macos.yml, TODO 5.11): a task
+# merges only with green CI on its branch tip. This script is for optional local use.
 # Runs every Rust quality gate from CLAUDE.md and prints one line per gate.
 #   BASE=<rev>   diff base for cargo mutants (default: main)
 #   MUTANTS=0    skip mutation testing
