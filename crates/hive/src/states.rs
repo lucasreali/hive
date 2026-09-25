@@ -294,8 +294,11 @@ impl Agent {
     ) -> Option<Control> {
         let before = self.message(id);
         let was = self.displayed();
-        let subagents: HashMap<String, AgentState> =
-            self.subagents.iter().map(|s| (s.id.clone(), s.state)).collect();
+        let subagents: HashMap<String, AgentState> = self
+            .subagents
+            .iter()
+            .map(|s| (s.id.clone(), s.state))
+            .collect();
         update(self);
         let shown = self.displayed();
         let wall = self.wall(now);
@@ -537,7 +540,10 @@ mod tests {
         let all = (Some("Main"), vec![Some("Third"), Some("Second")]);
         assert_eq!(activities(&agent), all);
         agent.feed("s", &hook("Stop", Some("b"), json!({})), now);
-        assert_eq!(activities(&agent), (Some("Main"), vec![Some("Third"), None]));
+        assert_eq!(
+            activities(&agent),
+            (Some("Main"), vec![Some("Third"), None])
+        );
         // Kept listed while its background task runs, its own turn is over.
         agent.feed("s", &launched("a", "taskId", "t1"), now);
         agent.feed("s", &stop_with("SubagentStop", Some("a"), &["t1"]), now);
@@ -591,10 +597,18 @@ mod tests {
         agent.feed("s", &hook("PreToolUse", Some("a"), json!({})), at(40));
         agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), at(50));
         assert_eq!(since(&agent), (50_030, vec![50_030, 50_050]));
-        agent.feed("s", &hook("PermissionRequest", Some("b"), json!({})), at(60));
+        agent.feed(
+            "s",
+            &hook("PermissionRequest", Some("b"), json!({})),
+            at(60),
+        );
         assert_eq!(since(&agent), (50_060, vec![50_030, 50_060]));
         // A clock going back never makes a time before the agent began.
-        agent.feed("s", &hook("PostToolUse", Some("b"), json!({})), start - Duration::from_millis(1));
+        agent.feed(
+            "s",
+            &hook("PostToolUse", Some("b"), json!({})),
+            start - Duration::from_millis(1),
+        );
         assert_eq!(since(&agent), (50_000, vec![50_030, 50_000]));
         assert!(agent.reconcile("s", at(60), at(60) + SILENCE).is_some());
         assert_eq!(since(&agent), (55_060, vec![55_060, 55_060]));

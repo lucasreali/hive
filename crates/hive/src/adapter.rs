@@ -53,9 +53,7 @@ impl Adapter for ClaudeCode {
         };
         let activity = match &kind {
             EventKind::ToolStarted { tool: Some(tool) }
-            | EventKind::PermissionRequested { tool: Some(tool) } => {
-                Some(activity(tool, &payload))
-            }
+            | EventKind::PermissionRequested { tool: Some(tool) } => Some(activity(tool, &payload)),
             _ => None,
         };
         AgentEvent {
@@ -226,7 +224,10 @@ mod tests {
             doing("Read", json!({"file_path": "/repo/wx/a"})),
             "Reading /repo/wx/a"
         );
-        assert_eq!(doing("Read", json!({"file_path": "/repo/w"})), "Reading /repo/w");
+        assert_eq!(
+            doing("Read", json!({"file_path": "/repo/w"})),
+            "Reading /repo/w"
+        );
         let no_cwd = json!({"tool_name": "Read", "tool_input": {"file_path": "/repo/w/a"}});
         let event = ClaudeCode.translate("PreToolUse", None, no_cwd);
         assert_eq!(event.activity.as_deref(), Some("Reading /repo/w/a"));
@@ -243,9 +244,18 @@ mod tests {
             bash(json!({"command": "\n  cargo test\necho", "description": " "})),
             "cargo test"
         );
-        assert_eq!(doing("Grep", json!({"pattern": "fn main"})), "Searching fn main");
-        assert_eq!(doing("Glob", json!({"pattern": "**/*.rs"})), "Searching **/*.rs");
-        assert_eq!(doing("Agent", json!({"description": "Find bugs"})), "Find bugs");
+        assert_eq!(
+            doing("Grep", json!({"pattern": "fn main"})),
+            "Searching fn main"
+        );
+        assert_eq!(
+            doing("Glob", json!({"pattern": "**/*.rs"})),
+            "Searching **/*.rs"
+        );
+        assert_eq!(
+            doing("Agent", json!({"description": "Find bugs"})),
+            "Find bugs"
+        );
         assert_eq!(doing("Task", json!({"description": "Plan"})), "Plan");
     }
 
@@ -266,7 +276,10 @@ mod tests {
         assert_eq!(text.chars().count(), 120);
         assert!(text.ends_with("x…"));
         let exact = "y".repeat(120);
-        assert_eq!(doing("Bash", json!({ "description": exact.clone() })), exact);
+        assert_eq!(
+            doing("Bash", json!({ "description": exact.clone() })),
+            exact
+        );
         assert_eq!(
             doing("Bash", json!({"description": "a\u{1b}[31mb\tc\r"})),
             "a[31mbc"
@@ -276,7 +289,10 @@ mod tests {
     #[test]
     fn only_tool_starts_and_permission_requests_have_an_activity() {
         let input = json!({"description": "Run"});
-        assert_eq!(activity_of("PermissionRequest", "Bash", input.clone()).as_deref(), Some("Run"));
+        assert_eq!(
+            activity_of("PermissionRequest", "Bash", input.clone()).as_deref(),
+            Some("Run")
+        );
         for event in ["PostToolUse", "PostToolUseFailure", "Stop"] {
             assert_eq!(activity_of(event, "Bash", input.clone()), None, "{event}");
         }

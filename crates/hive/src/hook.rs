@@ -69,8 +69,7 @@ fn append_record(
     terminal_id: Option<&str>,
     payload: &Value,
 ) -> io::Result<()> {
-    let line =
-        json!({ "ts_ms": now_ms(), "event": event, "terminal_id": terminal_id, "payload": payload });
+    let line = json!({ "ts_ms": now_ms(), "event": event, "terminal_id": terminal_id, "payload": payload });
     let mut out = std::fs::File::options()
         .create(true)
         .append(true)
