@@ -36,6 +36,7 @@ export type ServiceMessage =
   | { type: "remove_worktree_failed"; path: string; message: string }
   | { type: "worktree_renamed"; project: Project; from: string; path: string }
   | { type: "rename_worktree_failed"; path: string; name: string; message: string }
+  | { type: "worktree_status"; path: string; status: WorktreeStatus | null }
   | ({ type: "files" } & WorktreeFiles)
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
@@ -97,6 +98,20 @@ export type Worktree = {
   branch: string | null;
   main: boolean;
   claude: boolean;
+  /** Null when git could not tell. */
+  status: WorktreeStatus | null;
+};
+
+/**
+ * Mirrors `hive_protocol::WorktreeStatus`: files changed, commits ahead of and behind the main
+ * worktree's branch (null for the main worktree), all merged there, and the last commit's time.
+ */
+export type WorktreeStatus = {
+  changes: number;
+  ahead: number | null;
+  behind: number | null;
+  merged: boolean;
+  last_commit_ms: number;
 };
 
 /** Mirrors `hive_protocol::Project`; `error` says why its worktrees could not be listed. */
@@ -246,6 +261,8 @@ export type WorktreeDialog = {
   createFailure: CreateFailure | null;
   /** Why deleting (`name` null) or renaming (to `name`) the worktree `path` failed. */
   failure: { path: string; name: string | null; message: string } | null;
+  /** Why deleting each worktree failed, by path (removing merged worktrees sends several). */
+  removeFailures: Record<string, string>;
 };
 
 /**
@@ -304,9 +321,12 @@ export type Modal =
   | "update-app"
   | "remove-worktree"
   | "rename-worktree"
+  | "remove-merged"
   | null;
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
+/** A project row's context menu, at the pointer. */
+export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
 export type PanelView = "files" | "changes" | "sessions";
@@ -315,6 +335,7 @@ export type HiveState = {
   // UI state
   modal: Modal;
   menu: WorktreeMenu | null;
+  projectMenu: ProjectMenu | null;
   sessionMenu: SessionMenu | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
@@ -393,6 +414,7 @@ export type HiveState = {
 export const initialState: HiveState = {
   modal: null,
   menu: null,
+  projectMenu: null,
   sessionMenu: null,
   notice: null,
   update: null,
@@ -422,6 +444,7 @@ export const initialState: HiveState = {
     created: null,
     createFailure: null,
     failure: null,
+    removeFailures: {},
   },
   terminals: {},
   agents: {},
@@ -606,7 +629,19 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     }
     case "remove_worktree_failed":
-      return patchDialog(s, { failure: { path: m.path, name: null, message: m.message } });
+      return patchDialog(s, {
+        failure: { path: m.path, name: null, message: m.message },
+        removeFailures: { ...s.worktreeDialog.removeFailures, [m.path]: m.message },
+      });
+    case "worktree_status": {
+      if (!s.projects) return {};
+      const patch = (w: Worktree) => (w.path === m.path ? { ...w, status: m.status } : w);
+      const projects = Object.values(s.projects).map((p) => ({
+        ...p,
+        worktrees: p.worktrees.map(patch),
+      }));
+      return { projects: Object.fromEntries(projects.map((p) => [p.id, p])) };
+    }
     case "rename_worktree_failed": {
       const { type: _, ...failure } = m;
       return patchDialog(s, { failure });
@@ -682,6 +717,8 @@ export const openModal = (
     worktreeDialog: initialState.worktreeDialog,
   });
 export const openMenu = (menu: WorktreeMenu | null) => useHive.setState({ menu });
+export const openProjectMenu = (projectMenu: ProjectMenu | null) =>
+  useHive.setState({ projectMenu });
 export const openSessionMenu = (sessionMenu: SessionMenu | null) =>
   useHive.setState({ sessionMenu });
 export const setNotice = (notice: string | null) => useHive.setState({ notice });

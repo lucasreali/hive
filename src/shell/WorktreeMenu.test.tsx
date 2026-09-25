@@ -278,3 +278,80 @@ test("a dialog for a worktree that is gone shows nothing", () => {
   act(() => openModal("rename-worktree", null, "/gone"));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+test("the project menu removes merged worktrees without changes, each with its result", () => {
+  const remove = spyOn(transport, "removeWorktree").mockResolvedValue();
+  const health = (merged: boolean, changes: number) => ({
+    changes,
+    ahead: merged ? 0 : 1,
+    behind: 0,
+    merged,
+    last_commit_ms: 0,
+  });
+  const wt = (name: string, status: ReturnType<typeof health> | null) => ({
+    ...login,
+    id: `/r/${name}`,
+    path: `/r/${name}`,
+    name,
+    status,
+  });
+  const [a, b] = [wt("a", health(true, 0)), wt("b", health(true, 0))];
+  const others = [wt("dirty", health(true, 1)), wt("ahead", health(false, 0)), wt("x", null)];
+  const merged = { ...shop, worktrees: [{ ...main, status: health(false, 0) }, a, b, ...others] };
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [merged] }));
+  fireEvent.contextMenu(row("shop"), { clientX: 10, clientY: 20 });
+  expect(useHive.getState().projectMenu).toEqual({ project: shop.id, x: 10, y: 20 });
+  fireEvent.keyDown(screen.getByRole("menu", { name: "Project" }), { key: "Escape" });
+  expect(menu()).toBeNull();
+  fireEvent.contextMenu(row("shop"), { clientX: 10, clientY: 20 });
+  fireEvent.click(item("Remove merged worktrees…"));
+  expect(menu()).toBeNull();
+  expect(useHive.getState().modalProject).toBe(shop.id);
+
+  const dialog = screen.getByRole("dialog", { name: "Remove merged worktrees" });
+  const box = (name: string) =>
+    within(dialog).getByRole("checkbox", { name: new RegExp(`^${name}`) });
+  const submit = () => within(dialog).getByRole("button", { name: /^Remove/ }) as HTMLButtonElement;
+  expect(within(dialog).getAllByRole("checkbox")).toHaveLength(2);
+  expect([box("a"), box("b")].map((c) => (c as HTMLInputElement).checked)).toEqual([true, true]);
+  expect(submit().textContent).toBe("Remove (2) Enter");
+  fireEvent.click(box("b"));
+  fireEvent.click(box("a"));
+  fireEvent.click(box("a"));
+  expect(submit().textContent).toBe("Remove (1) Enter");
+  fireEvent.click(submit());
+  expect(remove.mock.calls).toEqual([[a.path, false]]);
+  expect((box("a") as HTMLInputElement).disabled).toBe(true);
+  expect(within(dialog).getByRole("status").textContent).toBe("Removing…");
+
+  // Each answer shows next to its worktree; the dialog stays open.
+  const without = { ...merged, worktrees: merged.worktrees.filter((w) => w.path !== a.path) };
+  act(() => apply({ type: "worktree_removed", project: without, path: a.path }));
+  expect(within(dialog).getByRole("status").textContent).toBe("Removed");
+  fireEvent.click(box("b"));
+  fireEvent.click(submit());
+  expect(remove.mock.calls).toEqual([
+    [a.path, false],
+    [b.path, false],
+  ]);
+  act(() => apply({ type: "remove_worktree_failed", path: b.path, message: "in use by fish (1)" }));
+  const results = within(dialog).getAllByRole("status");
+  expect(results.map((r) => [r.textContent, r.className])).toEqual([
+    ["Removed", "field-help"],
+    ["in use by fish (1)", "field-error"],
+  ]);
+  expect(submit().disabled).toBe(true);
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Close Esc/ }));
+  expect(useHive.getState().modal).toBeNull();
+});
+
+test("with no merged worktree the dialog says so", () => {
+  show();
+  act(() => openModal("remove-merged", shop.id));
+  const dialog = screen.getByRole("dialog", { name: "Remove merged worktrees" });
+  expect(dialog.textContent).toContain("No merged worktrees without changes.");
+  expect(
+    (within(dialog).getByRole("button", { name: /^Remove/ }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+});

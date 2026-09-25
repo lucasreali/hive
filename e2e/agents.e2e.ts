@@ -23,9 +23,9 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
   expect((await rows()).slice(0, 5)).toEqual([
     "shopNew worktree",
     "main",
-    "fix-login",
+    "fix-login↑3↓1●2",
     "idleClaudeidle",
-    "feat-checkout",
+    "feat-checkout↑1●2",
   ]);
 
   await tree.getByRole("button", { name: "refactor-auth" }).click();
