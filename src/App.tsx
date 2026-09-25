@@ -6,6 +6,7 @@ import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { RightPanel } from "./shell/RightPanel";
 import { SessionMenu } from "./shell/SessionsView";
 import { Sidebar } from "./shell/Sidebar";
+import { SpaceDialog } from "./shell/SpaceDialog";
 import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
@@ -39,6 +40,8 @@ export function App() {
         {modal === "worktree-picker" && !blocked && <WorktreePicker />}
         {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
+        {modal === "new-space" && !blocked && <SpaceDialog editing={false} />}
+        {modal === "edit-space" && !blocked && <SpaceDialog editing />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {!blocked && <WorktreeMenu />}

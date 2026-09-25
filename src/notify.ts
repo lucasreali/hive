@@ -1,4 +1,4 @@
-import { type AgentState, type HiveState, type ServiceMessage, useHive } from "./store";
+import { type AgentState, type HiveState, type ServiceMessage, spaceOf, useHive } from "./store";
 import { showNotification } from "./window";
 
 // Presentation of state changes the service sent (hive.md item 5, #37): a tone when an agent
@@ -29,12 +29,16 @@ function tone(volume: number): void {
   osc.stop(t + 0.2);
 }
 
-/** "project · worktree" for the agent, as far as the service placed it. */
-function place(s: HiveState, id: string): string {
+/**
+ * "space · project · worktree" for the agent, as far as the service placed it; the space is
+ * named only when there are several (6.14: agents of every space alert).
+ */
+export function agentPlace(s: HiveState, id: string): string {
   const agent = s.agents[id];
   const project = agent?.project ? s.projects?.[agent.project] : undefined;
   const worktree = project?.worktrees.find((w) => w.id === agent?.worktree);
-  return [project?.name, worktree?.name].filter(Boolean).join(" · ");
+  const space = (s.spaces?.length ?? 0) > 1 ? spaceOf(s, agent?.project ?? null) : undefined;
+  return [space?.name, project?.name, worktree?.name].filter(Boolean).join(" · ");
 }
 
 /**
@@ -57,7 +61,7 @@ export function notify(
     tone(volume);
   }
   if (after === "waiting_you" && BUSY.includes(before) && message.pending) {
-    const where = place(s, message.id);
+    const where = agentPlace(s, message.id);
     void showNotification(
       "Agent finished",
       where ? `${where}: waiting for you` : "Waiting for you",

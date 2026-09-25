@@ -1677,6 +1677,30 @@ li:not(:last-child) > .owned::before {
   color: var(--accent);
 }
 
+/* The space select (6.14), at the left of the sidebar header: quiet until hovered. */
+.space-select {
+  flex: 1;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.space-select .select-trigger {
+  height: 24px;
+  cursor: pointer;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-small);
+}
+
+.space-select .select-trigger:hover {
+  background: var(--hover);
+}
+
+.dialog footer .space-delete {
+  margin-right: auto;
+}
+
 .branch-picker {
   display: grid;
   grid-template-columns: 1fr auto;

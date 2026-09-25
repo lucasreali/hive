@@ -6,9 +6,12 @@ import {
   pendingAgents,
   selectedPlace,
   setRightPanel,
+  spaceOf,
+  spaceProjects,
   useHive,
 } from "./store";
 import { interceptKeys } from "./terminals";
+import { transport } from "./transport";
 import { sendReference } from "./viewer/reference";
 import { startComment } from "./viewer/review";
 import { commandKey } from "./window";
@@ -17,9 +20,9 @@ import { commandKey } from "./window";
 // the focus in a terminal.
 // Every other key goes to the terminal untouched.
 
-/** The selected project, the project of the selected worktree (or agent), else the first one. */
+/** The selected project, the project of the selected worktree (or agent), else the current space's first. */
 function currentProject(s: HiveState): string | null {
-  return (owner(s.projects, selectedPlace(s)) ?? Object.values(s.projects ?? {})[0])?.id ?? null;
+  return (owner(s.projects, selectedPlace(s)) ?? spaceProjects(s)[0])?.id ?? null;
 }
 
 /**
@@ -33,7 +36,17 @@ export function nextPending(): void {
   if (pending.length === 0) return;
   const selected = pending.findIndex((a) => a.id === s.selection);
   const at = selected >= 0 ? selected : pending.findIndex((a) => a.terminal === s.activeTab);
-  const agent = pending[(at + 1) % pending.length] as Agent;
+  goToAgent(pending[(at + 1) % pending.length] as Agent);
+}
+
+/**
+ * Selects `agent`, expands its project and worktree and shows its terminal; when it runs in
+ * another space, that space becomes the current one (6.14).
+ */
+export function goToAgent(agent: Agent): void {
+  const s = useHive.getState();
+  const space = spaceOf(s, agent.project);
+  if (space && space.id !== s.currentSpace) void transport.selectSpace(space.id);
   const tab = s.tabs.find((t) => t.id === agent.terminal);
   useHive.setState({
     collapsed: {

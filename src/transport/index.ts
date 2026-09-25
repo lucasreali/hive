@@ -1,5 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
-import type { ServiceMessage, SessionTarget, Settings } from "../store";
+import type { ServiceMessage, SessionTarget, Settings, SpaceEnv } from "../store";
 import { createMockTransport } from "./mock";
 import { tauriTransport } from "./tauri";
 
@@ -24,6 +24,17 @@ export interface Transport {
   listProjects(): Promise<void>;
   /** Asks the service to follow `path`; answered by `project_added` or `add_project_failed`. */
   addProject(path: string): Promise<void>;
+  /**
+   * A new, empty space (6.14), made the current one. Answered by `spaces` or `space_failed`,
+   * as are the three below.
+   */
+  createSpace(name: string, env: SpaceEnv): Promise<void>;
+  /** Renames a space and replaces its terminals' environment (new terminals only). */
+  updateSpace(id: string, name: string, env: SpaceEnv): Promise<void>;
+  /** Removes a space without projects (never the last one). */
+  deleteSpace(id: string): Promise<void>;
+  /** Makes `id` the current space: the sidebar and the Sessions panel show its projects. */
+  selectSpace(id: string): Promise<void>;
   /**
    * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
    * empty); answered by `dirs`.
