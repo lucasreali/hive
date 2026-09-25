@@ -13,7 +13,7 @@ import { sendReference } from "./viewer/reference";
 import { startComment } from "./viewer/review";
 import { commandKey } from "./window";
 
-// App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS) and F8, taken even with
+// App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS), Ctrl+, and F8, taken even with
 // the focus in a terminal.
 // Every other key goes to the terminal untouched.
 
@@ -53,6 +53,71 @@ export function goToAgent(agent: Agent): void {
   });
 }
 
+/** An app command: its shortcut (`keys`, written for Windows: Ctrl stands for Cmd on macOS). */
+export type Command = { id: string; label: string; keys: string; run: () => void };
+
+/**
+ * Every app command with a shortcut: `shortcut()` runs them, the settings' Shortcuts section
+ * lists them, and the command palette (6.3) offers them.
+ */
+export const COMMANDS: readonly Command[] = [
+  { id: "settings", label: "Open settings", keys: "Ctrl+,", run: () => openModal("settings") },
+  {
+    id: "worktree-picker",
+    label: "New terminal in a worktree",
+    keys: "Ctrl+Shift+T",
+    run: () => openModal("worktree-picker"),
+  },
+  {
+    id: "new-worktree",
+    label: "New worktree",
+    keys: "Ctrl+Shift+N",
+    run: () => {
+      const project = currentProject(useHive.getState());
+      // No project to add a worktree to: adding a project is the step before.
+      if (project) openModal("new-worktree", project);
+      else openModal("add-project");
+    },
+  },
+  {
+    id: "toggle-panel",
+    label: "Show or hide files, diff and sessions",
+    keys: "Ctrl+Shift+B",
+    run: () => setRightPanel(useHive.getState().rightPanel ? null : "files"),
+  },
+  {
+    id: "add-project",
+    label: "Add project",
+    keys: "Ctrl+Shift+O",
+    run: () => openModal("add-project"),
+  },
+  {
+    id: "send-reference",
+    label: "Send the selected lines' reference to the terminal",
+    keys: "Ctrl+Shift+L",
+    run: sendReference,
+  },
+  {
+    id: "comment",
+    label: "Comment on the selected lines",
+    keys: "Ctrl+Shift+M",
+    run: startComment,
+  },
+  { id: "next-pending", label: "Go to the next pending agent", keys: "F8", run: nextPending },
+];
+
+/** Whether `event` presses `keys` ("F8", "Ctrl+,", "Ctrl+Shift+T"), with no other modifier. */
+function presses(keys: string, event: KeyboardEvent): boolean {
+  const parts = keys.split("+");
+  const command = parts.includes("Ctrl") ? commandKey(event) : !event.ctrlKey && !event.metaKey;
+  return (
+    command &&
+    event.shiftKey === parts.includes("Shift") &&
+    !event.altKey &&
+    event.key.toUpperCase() === parts.at(-1)?.toUpperCase()
+  );
+}
+
 /** What `event` does as an app shortcut, or null when it is not one (or nothing may run). */
 export function shortcut(event: KeyboardEvent): (() => void) | null {
   const s = useHive.getState();
@@ -60,28 +125,7 @@ export function shortcut(event: KeyboardEvent): (() => void) | null {
     s.connection.status === "version_mismatch" || s.connection.status === "disconnected";
   // Under the connection block nothing works; with a dialog open its keys are its own.
   if (blocked || s.modal !== null) return null;
-  const plain = !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
-  if (plain && event.key === "F8") return nextPending;
-  if (!commandKey(event) || !event.shiftKey || event.altKey) return null;
-  switch (event.key.toUpperCase()) {
-    case "T":
-      return () => openModal("worktree-picker");
-    case "N": {
-      const project = currentProject(s);
-      // No project to add a worktree to: adding a project is the step before.
-      return () => (project ? openModal("new-worktree", project) : openModal("add-project"));
-    }
-    case "B":
-      return () => setRightPanel(s.rightPanel ? null : "files");
-    case "O":
-      return () => openModal("add-project");
-    case "L":
-      return sendReference;
-    case "M":
-      return startComment;
-    default:
-      return null;
-  }
+  return COMMANDS.find((c) => presses(c.keys, event))?.run ?? null;
 }
 
 function onKeyDown(event: KeyboardEvent): void {

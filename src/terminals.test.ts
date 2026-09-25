@@ -105,6 +105,69 @@ test("the scrollback setting applies to new terminals", async () => {
   expect(term.options.scrollback).toBe(42);
 });
 
+test("new settings apply at once to open terminals, and the shown one refits", async () => {
+  const { id, term } = await open();
+  showTerminal(id);
+  const hidden = (await open()).term;
+  const fit = spyOn(FitAddon.prototype, "fit");
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal = {
+    font_family: "Fira Code",
+    font_size: 20,
+    scrollback: 1234,
+    cursor_style: "bar",
+    cursor_blink: true,
+    copy_on_select: false,
+  };
+  settings.appearance.theme = "one-light";
+  apply({ type: "settings", settings });
+  for (const t of [term, hidden]) {
+    expect(t.options).toMatchObject({
+      fontFamily: "Fira Code",
+      fontSize: 20,
+      scrollback: 1234,
+      cursorStyle: "bar",
+      cursorBlink: true,
+    });
+    expect(t.options.theme?.background).toBe("#fafafa");
+  }
+  expect(fit).toHaveBeenCalledTimes(1);
+  // Anything else changing in the store leaves them alone.
+  useHive.setState({ notice: "x" });
+  expect(fit).toHaveBeenCalledTimes(1);
+  settings.appearance.theme = "one-dark";
+  apply({ type: "settings", settings: structuredClone(settings) });
+  expect(term.options.theme?.background).toBe("#282c33");
+  fit.mockRestore();
+  // No terminal shown: nothing to refit.
+  showTerminal(null);
+  apply({ type: "settings", settings: DEFAULT_SETTINGS });
+  expect(hidden.options.fontSize).toBe(13);
+  // Unmounted, the settings no longer reach them.
+  unmount();
+  apply({ type: "settings", settings });
+  expect(hidden.options.fontSize).toBe(13);
+  unmount = mountTerminals(host);
+});
+
+test("copy on select copies a new selection, only when set", async () => {
+  const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const { id, term } = await open();
+  showTerminal(id);
+  term.write("hello");
+  await written(term);
+  term.selectAll();
+  expect(copy).not.toHaveBeenCalled();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.copy_on_select = true;
+  apply({ type: "settings", settings });
+  term.clearSelection();
+  expect(copy).not.toHaveBeenCalled();
+  term.selectAll();
+  expect(copy).toHaveBeenCalledWith(term.getSelection());
+  copy.mockRestore();
+});
+
 test("a refused open leaves no terminal and no tab", async () => {
   const openSpy = spyOn(transport, "openTerminal").mockRejectedValue(new Error("disconnected"));
   await expect(openTerminal("/w")).rejects.toThrow("disconnected");

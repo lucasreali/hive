@@ -469,6 +469,16 @@ impl Hive {
     pub fn set_settings(&self, settings: Settings) -> Result<(), String> {
         self.link().send(0, &Control::SetSettings { settings })
     }
+
+    /// The answer arrives as `editor_target` with an empty `worktree`.
+    pub fn open_settings_file(&self) -> Result<(), String> {
+        self.link().send(0, &Control::OpenSettingsFile)
+    }
+
+    /// The answer arrives as `diagnostics`.
+    pub fn get_diagnostics(&self) -> Result<(), String> {
+        self.link().send(0, &Control::GetDiagnostics)
+    }
 }
 
 impl Hive {
@@ -812,6 +822,16 @@ pub mod commands {
     #[tauri::command]
     pub fn set_settings(hive: State<'_, Hive>, settings: Settings) -> Result<(), String> {
         hive.set_settings(settings)
+    }
+
+    #[tauri::command]
+    pub fn open_settings_file(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.open_settings_file()
+    }
+
+    #[tauri::command]
+    pub fn get_diagnostics(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.get_diagnostics()
     }
 }
 

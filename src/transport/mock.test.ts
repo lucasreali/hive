@@ -8,6 +8,7 @@ import {
   LOAD_START_MS,
   MOCK_BRANCHES,
   MOCK_CHANGES,
+  MOCK_DIAGNOSTICS,
   MOCK_FILES,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
@@ -66,6 +67,21 @@ test("keeps the settings it is given in memory", async () => {
   expect(messages.slice(-2)).toEqual([
     { type: "settings", settings },
     { type: "settings", settings },
+  ]);
+});
+
+test("answers the settings file's path and the diagnostics", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  await transport.openSettingsFile();
+  await transport.getDiagnostics();
+  await tick();
+  const windows_path = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.config\\hive\\settings.json";
+  expect(messages.slice(-2)).toEqual([
+    { type: "editor_target", worktree: "", path: "", windows_path, error: null },
+    { type: "diagnostics", ...MOCK_DIAGNOSTICS },
   ]);
 });
 
