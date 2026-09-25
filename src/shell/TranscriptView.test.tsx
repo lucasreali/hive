@@ -47,7 +47,16 @@ function shown() {
       type: "agent_state",
       id: "s",
       ...agentStatus("with_subagents"),
-      subagents: [{ id: "a1", agent_type: "Explore", state: "working", worktree: null }],
+      subagents: [
+        {
+          id: "a1",
+          agent_type: "Explore",
+          state: "working",
+          worktree: null,
+          activity: null,
+          since_ms: 0,
+        },
+      ],
     });
     showTranscript("s", "a1");
   });
