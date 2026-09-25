@@ -134,6 +134,9 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   expect(useHive.getState().activeTab).toBe(1);
   act(() => apply({ type: "agent_removed", channel: 1, id: "s1" }));
   expect(screen.getAllByRole("button", { name: "idle Claude" })).toHaveLength(1);
+  // Once the agent names its session, the row shows that name instead.
+  act(() => apply({ type: "agent_title", channel: 9, id: "s2", title: "Fix the login redirect" }));
+  expect(screen.getByRole("button", { name: "idle Fix the login redirect" })).toBeTruthy();
 });
 
 test("agents and their subagents show the state the service sent, named for screen readers", () => {

@@ -254,6 +254,8 @@ function AgentRow({ agent }: { agent: Agent }) {
   const picked = useHive((s) => s.selection === agent.id);
   const shown = useHive((s) => s.activeTab === agent.terminal) || picked;
   const status = useHive((s) => s.agentStates[agent.id]);
+  // The session's name, as on its tab; until Claude names it, just "Claude".
+  const name = useHive((s) => s.agentTitles[agent.id]) ?? "Claude";
   const show = () => tab && activateTab(tab);
   const row = useRef<HTMLDivElement>(null);
   // F8 picks an agent that may be out of view.
@@ -276,7 +278,7 @@ function AgentRow({ agent }: { agent: Agent }) {
                 <Suspense fallback={<span className="agent-icon" />}>
                   <ClaudeIcon />
                 </Suspense>
-                Claude
+                {name}
               </>
             }
           />
