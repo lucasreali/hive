@@ -7,15 +7,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use hive_protocol::Settings;
+use hive_protocol::{ProjectScripts, Settings};
 
 use crate::git::read_limited;
 use crate::wrapper::write_atomic;
 
 /// Largest settings file read or written.
 const FILE_LIMIT: u64 = 256 * 1024;
-/// Longest font family or branch name kept.
+/// Longest font family, branch or script name kept.
 const TEXT_LIMIT: usize = 256;
+/// Longest script kept.
+const SCRIPT_LIMIT: usize = 16 * 1024;
 
 pub struct Store {
     file: PathBuf,
@@ -84,6 +86,13 @@ impl Store {
     pub fn silence(&self) -> Duration {
         Duration::from_secs(self.current().0.agents.silence_secs.into())
     }
+
+    /// The scripts of the project `id` (none when it has no settings).
+    pub fn scripts(&self, id: &str) -> ProjectScripts {
+        let current = self.current();
+        let project = current.0.projects.get(id);
+        project.map(|p| p.scripts.clone()).unwrap_or_default()
+    }
 }
 
 fn read(file: &Path) -> io::Result<Settings> {
@@ -117,9 +126,43 @@ pub fn check(settings: &Settings) -> Result<(), String> {
     )?;
     range("agents.silence_secs", settings.agents.silence_secs, 2, 60)?;
     text("terminal.font_family", &terminal.font_family)?;
-    match &settings.worktrees.default_base {
-        Some(base) => text("worktrees.default_base", base),
-        None => Ok(()),
+    if let Some(base) = &settings.worktrees.default_base {
+        text("worktrees.default_base", base)?;
+    }
+    for (id, project) in &settings.projects {
+        let scripts = &project.scripts;
+        let name = |what: &str| format!("projects.{id}.scripts.{what}");
+        let optional = [("setup", &scripts.setup), ("archive", &scripts.archive)];
+        for (what, value) in optional {
+            value
+                .as_deref()
+                .map_or(Ok(()), |v| script(&name(what), v))?;
+        }
+        for (i, run) in scripts.run.iter().enumerate() {
+            text(&name("run.name"), &run.name)?;
+            script(&name("run.command"), &run.command)?;
+            if scripts.run[..i].iter().any(|r| r.name == run.name) {
+                let run = &run.name;
+                return Err(format!("{} {run:?} is used twice", name("run.name")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Not blank, at most [`SCRIPT_LIMIT`] bytes, no control characters but newlines and tabs.
+fn script(name: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        Err(format!("{name} must not be empty"))
+    } else if value.len() > SCRIPT_LIMIT {
+        Err(format!("{name} must be at most {SCRIPT_LIMIT} bytes"))
+    } else if value
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        Err(format!("{name} must not hold control characters"))
+    } else {
+        Ok(())
     }
 }
 
@@ -342,6 +385,70 @@ mod tests {
         assert_eq!(
             check(&settings),
             Err("worktrees.default_base must not be empty".into())
+        );
+    }
+
+    fn with_scripts(scripts: ProjectScripts) -> Settings {
+        let mut settings = Settings::default();
+        let project = ProjectSettings { scripts };
+        settings.projects.insert("/r".into(), project);
+        settings
+    }
+
+    #[test]
+    fn scripts_are_checked_and_read_by_project() {
+        let run = |name: &str, command: &str| hive_protocol::RunScript {
+            name: name.into(),
+            command: command.into(),
+        };
+        let scripts = ProjectScripts {
+            setup: Some("bun install\n\tmake".into()),
+            run: vec![run("dev", "bun dev")],
+            archive: Some("a".repeat(SCRIPT_LIMIT)),
+        };
+        let (_tmp, store) = store();
+        store.set(with_scripts(scripts.clone())).unwrap();
+        assert_eq!(store.scripts("/r"), scripts);
+        assert_eq!(store.scripts("/other"), ProjectScripts::default());
+        let refused = |scripts: ProjectScripts| check(&with_scripts(scripts)).unwrap_err();
+        let setup = |text: &str| ProjectScripts {
+            setup: Some(text.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            refused(setup(" \n")),
+            "projects./r.scripts.setup must not be empty"
+        );
+        assert_eq!(
+            refused(setup("a\u{1b}[2J")),
+            "projects./r.scripts.setup must not hold control characters"
+        );
+        assert_eq!(
+            refused(ProjectScripts {
+                archive: Some("a".repeat(SCRIPT_LIMIT + 1)),
+                ..Default::default()
+            }),
+            "projects./r.scripts.archive must be at most 16384 bytes"
+        );
+        let runs = |r| ProjectScripts {
+            run: vec![r],
+            ..Default::default()
+        };
+        assert_eq!(
+            refused(runs(run("a\nb", "x"))),
+            "projects./r.scripts.run.name must not hold control characters"
+        );
+        assert_eq!(
+            refused(runs(run("dev", ""))),
+            "projects./r.scripts.run.command must not be empty"
+        );
+        let twice = ProjectScripts {
+            run: vec![run("dev", "a"), run("test", "b"), run("dev", "c")],
+            ..Default::default()
+        };
+        assert_eq!(
+            refused(twice),
+            "projects./r.scripts.run.name \"dev\" is used twice"
         );
     }
 }

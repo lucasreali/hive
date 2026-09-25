@@ -12,11 +12,12 @@ import {
   openModal,
   openProjectMenu,
   owner,
+  scriptsOf,
   setNotice,
   useHive,
   type Worktree,
 } from "../store";
-import { openTerminal } from "../terminals";
+import { openTerminal, openWith } from "../terminals";
 import { transport } from "../transport";
 import { isMac } from "../window";
 import { CloseIcon } from "./icons";
@@ -96,6 +97,7 @@ export function ContextMenu(props: {
 export function WorktreeMenu() {
   const menu = useHive((s) => s.menu);
   const w = useHive((s) => findWorktree(s.projects, s.menu?.worktree ?? null));
+  const runs = useHive((s) => scriptsOf(s.settings, owner(s.projects, w?.id ?? null)?.id).run);
 
   if (!menu || !w) return null;
   const act = (action: () => void) => () => {
@@ -117,6 +119,17 @@ export function WorktreeMenu() {
       <button type="button" role="menuitem" onClick={act(() => void openTerminal(w.path))}>
         New terminal here
       </button>
+      {runs.map((run) => (
+        <button
+          type="button"
+          role="menuitem"
+          key={run.name}
+          title={run.command}
+          onClick={act(() => void openWith(w.path, run.command))}
+        >
+          Run: {run.name}
+        </button>
+      ))}
       <button type="button" role="menuitem" onClick={act(copy)}>
         Copy path
       </button>

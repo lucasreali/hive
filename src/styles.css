@@ -1833,6 +1833,39 @@ li:not(:last-child) > .owned::before {
   margin-right: auto;
 }
 
+/* Project scripts (6.8): multi-line scripts and one row per run script */
+.settings-body .field textarea {
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  outline: none;
+  resize: vertical;
+}
+
+.settings-body .field textarea:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.script-run {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.script-run input:first-child {
+  width: 120px;
+}
+
+.script-run input:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Select (src/ui/Select.tsx): a trigger like a field, a list like the context menu */
 .select {
   display: flex;

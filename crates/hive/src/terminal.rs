@@ -44,8 +44,8 @@ impl Terminal {
 }
 
 /// Starts the shell (see [`shell`]) on a new PTY in `cwd`, with `bin_dir` first on `PATH`
-/// and `HIVE_TERMINAL_ID` set, plus `env` (its space's, 6.14). Returns the registry entry,
-/// the output side and the child.
+/// and `HIVE_TERMINAL_ID` set, plus `env` (its space's, 6.14, and its worktree's `HIVE_*`,
+/// 6.8). Returns the registry entry, the output side and the child.
 pub fn spawn(
     id: u32,
     cwd: &str,

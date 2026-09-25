@@ -16,6 +16,7 @@ pub mod macos;
 pub mod paths;
 pub mod procs;
 pub mod projects;
+pub mod scripts;
 pub mod search;
 pub mod sessions;
 pub mod settings;

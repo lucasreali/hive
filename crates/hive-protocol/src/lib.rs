@@ -747,10 +747,31 @@ pub struct WorktreeSettings {
     pub default_base: Option<String>,
 }
 
-/// One project's settings; none yet.
+/// One project's settings.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ProjectSettings {}
+pub struct ProjectSettings {
+    pub scripts: ProjectScripts,
+}
+
+/// The user's scripts for a project's worktrees. They live only in the settings, never in the
+/// repository, so a cloned repository cannot run code on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectScripts {
+    /// Typed into a new terminal in each worktree the app creates.
+    pub setup: Option<String>,
+    /// Typed into a new terminal when the user runs one.
+    pub run: Vec<RunScript>,
+    /// Run by the service (`sh -c`, in the worktree) before removing a worktree.
+    pub archive: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunScript {
+    pub name: String,
+    pub command: String,
+}
 
 /// A group of projects (6.14) with an optional identity for the terminals opened in them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1650,6 +1671,26 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &target).payload[..],
             br#"{"type":"editor_target","worktree":"/r","path":"a","windows_path":"w","error":null}"#
+        );
+    }
+
+    #[test]
+    fn project_scripts_read_partial_and_write_whole() {
+        let read: ProjectSettings =
+            serde_json::from_str(r#"{"scripts":{"run":[{"name":"dev","command":"bun dev"}]}}"#)
+                .unwrap();
+        let scripts = ProjectScripts {
+            setup: None,
+            run: vec![RunScript {
+                name: "dev".into(),
+                command: "bun dev".into(),
+            }],
+            archive: None,
+        };
+        assert_eq!(read, ProjectSettings { scripts });
+        assert_eq!(
+            serde_json::to_string(&read).unwrap(),
+            r#"{"scripts":{"setup":null,"run":[{"name":"dev","command":"bun dev"}],"archive":null}}"#
         );
     }
 

@@ -141,9 +141,13 @@ export async function openTerminal(cwd: string): Promise<number> {
  * A new "chat": a terminal in `cwd` with `claude` (and `args`, e.g. `--resume <id>`) typed
  * into it as the user would; from then on Hive only observes it.
  */
-export async function openClaude(cwd: string, args = ""): Promise<number> {
+export const openClaude = (cwd: string, args = ""): Promise<number> =>
+  openWith(cwd, `claude${args && ` ${args}`}`);
+
+/** A terminal in `cwd` with `command` typed into it and Enter pressed, as the user would. */
+export async function openWith(cwd: string, command: string): Promise<number> {
   const id = await openTerminal(cwd);
-  await transport.writeTerminal(id, `claude${args && ` ${args}`}\r`);
+  await transport.writeTerminal(id, `${command}\r`);
   return id;
 }
 

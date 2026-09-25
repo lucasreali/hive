@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
-import { openModal, select, useHive } from "../store";
-import { openClaude, openTerminal as openTerminalIn } from "../terminals";
+import { openModal, scriptsOf, select, useHive } from "../store";
+import { openClaude, openTerminal as openTerminalIn, openWith } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { BranchIcon, CheckIcon, CloseIcon } from "./icons";
@@ -57,12 +57,15 @@ export function NewWorktreeDialog() {
     overscan: 6,
   });
 
-  // The service created the worktree: open its terminal, select it, and close unless the
-  // service had something to say about it.
+  // The service created the worktree: run the project's setup script in a terminal of its
+  // own (6.8), open its terminal, select it, and close unless the service had something to
+  // say about it.
   const handled = useRef(created);
   useEffect(() => {
     if (!created || handled.current === created) return;
     handled.current = created;
+    const setup = scriptsOf(useHive.getState().settings, created.project).setup;
+    if (setup) void openWith(created.path, setup);
     if (openTerminal) void (startClaude ? openClaude : openTerminalIn)(created.path);
     select(created.path);
     if (created.notes.length === 0) close();

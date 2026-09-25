@@ -31,6 +31,7 @@ use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
+use crate::scripts::{self, Ports};
 use crate::sessions::{self, Sessions};
 use crate::settings;
 use crate::spaces::Spaces;
@@ -61,20 +62,20 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
+    let ports = Ports::new(paths.ports());
     let restore = Restore {
         file: paths.open_sessions(),
         pending: Mutex::new(sessions::take_open(&paths.open_sessions())),
     };
-    let result = serve(
-        listener,
-        terminate,
+    let state = State::new(
         paths.bin_dir(),
         projects,
         sessions,
         settings,
+        ports,
         restore,
-    )
-    .await;
+    );
+    let result = serve(listener, terminate, Arc::new(state)).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -96,16 +97,7 @@ fn lock(paths: &Paths) -> io::Result<File> {
     Ok(file)
 }
 
-async fn serve(
-    listener: UnixListener,
-    mut terminate: Signal,
-    bin_dir: PathBuf,
-    projects: Projects,
-    sessions: Sessions,
-    settings: settings::Store,
-    restore: Restore,
-) -> io::Result<()> {
-    let state = Arc::new(State::new(bin_dir, projects, sessions, settings, restore));
+async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>) -> io::Result<()> {
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
@@ -154,6 +146,7 @@ struct State {
     /// Claude Code's session logs of the followed projects.
     sessions: Sessions,
     settings: settings::Store,
+    ports: Ports,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -173,6 +166,7 @@ impl State {
         projects: Projects,
         sessions: Sessions,
         settings: settings::Store,
+        ports: Ports,
         restore: Restore,
     ) -> Self {
         Self {
@@ -186,6 +180,7 @@ impl State {
             projects,
             sessions,
             settings,
+            ports,
             restore,
             sent: Default::default(),
         }
@@ -409,8 +404,10 @@ impl State {
         rows: u16,
         output: mpsc::Sender<Frame>,
     ) {
-        // Its space's environment (6.14), placed before the lock since placing lists worktrees.
-        let (env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
+        // Its space's environment (6.14) and its worktree's `HIVE_*` (6.8), placed before the
+        // lock since placing lists worktrees.
+        let (mut env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
+        env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {
@@ -432,6 +429,27 @@ impl State {
             Err(message) => Control::Error { message },
         };
         self.to_app(channel, &reply).await;
+    }
+
+    /// The `HIVE_*` environment (6.8) of a process in `cwd`: none outside the followed
+    /// worktrees, and no `HIVE_PORT` when its block cannot be given.
+    fn hive_env(&self, cwd: &str) -> Vec<(&'static str, String)> {
+        let Some((root, worktree)) = projects::place(&self.projects.list(), cwd) else {
+            return Vec::new();
+        };
+        let port = self.ports.port(&worktree).inspect_err(|err| {
+            eprintln!("hive: warning: no ports for {worktree}: {err}");
+        });
+        scripts::env(&root, &worktree, port.ok())
+    }
+
+    /// Runs the archive script of the project `root`, if it has one, in `worktree` (6.8).
+    fn archive(&self, root: &str, worktree: &str) -> io::Result<()> {
+        let Some(script) = self.settings.scripts(root).archive else {
+            return Ok(());
+        };
+        let env = self.hive_env(worktree);
+        scripts::run(&script, Path::new(worktree), &env, scripts::ARCHIVE_TIME)
     }
 
     /// Answers a project request off the frame loop, since git can take a while.
@@ -964,8 +982,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             }
         }),
         Ok(Control::RemoveWorktree { path, force }) => {
+            let archiving = state.clone();
             state.projects(move |projects| {
-                match projects.remove_worktree(&path, force, procs::Source::System) {
+                let archive = |root: &str| archiving.archive(root, &path);
+                match projects.remove_worktree(&path, force, procs::Source::System, archive) {
                     Ok(project) => Control::WorktreeRemoved { project, path },
                     Err(err) => Control::RemoveWorktreeFailed {
                         path,
@@ -1174,6 +1194,7 @@ mod tests {
             projects,
             Sessions::new(None),
             settings::Store::load(dir.join("settings.json")),
+            Ports::new(dir.join("ports.json")),
             restore,
         ))
     }

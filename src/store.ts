@@ -401,9 +401,25 @@ export type Settings = {
   notifications: { volume: number };
   agents: { silence_secs: number; confirm_close: boolean };
   worktrees: { default_base: string | null };
-  /** By project id; no per-project settings yet. */
-  projects: Record<string, Record<string, never>>;
+  /** By project id. */
+  projects: Record<string, { scripts: ProjectScripts }>;
 };
+
+/** A project's scripts (6.8): the user's own, kept only in the settings. */
+export type ProjectScripts = {
+  /** Typed into a new terminal in each worktree the app creates. */
+  setup: string | null;
+  /** Typed into a new terminal when chosen. */
+  run: { name: string; command: string }[];
+  /** Run by the service before it removes a worktree. */
+  archive: string | null;
+};
+
+export const NO_SCRIPTS: ProjectScripts = { setup: null, run: [], archive: null };
+
+/** The scripts of the project `id`, none when it has no settings. */
+export const scriptsOf = (settings: Settings, id: string | undefined): ProjectScripts =>
+  (id !== undefined && settings.projects[id]?.scripts) || NO_SCRIPTS;
 
 /** The service's defaults, used until its `settings` arrive. */
 export const DEFAULT_SETTINGS: Settings = {
