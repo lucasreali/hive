@@ -479,6 +479,30 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.set_settings(settings.clone()).unwrap();
     let set = Control::SetSettings { settings };
     assert_eq!(service.control().await, (0, set));
+    let env = SpaceEnv {
+        git_name: Some("Me".into()),
+        ..SpaceEnv::default()
+    };
+    hive.create_space("Work".into(), env.clone()).unwrap();
+    let create = Control::CreateSpace {
+        name: "Work".into(),
+        env: env.clone(),
+    };
+    assert_eq!(service.control().await, (0, create));
+    hive.update_space("w".into(), "Job".into(), env.clone())
+        .unwrap();
+    let update = Control::UpdateSpace {
+        id: "w".into(),
+        name: "Job".into(),
+        env,
+    };
+    assert_eq!(service.control().await, (0, update));
+    hive.delete_space("w".into()).unwrap();
+    let delete = Control::DeleteSpace { id: "w".into() };
+    assert_eq!(service.control().await, (0, delete));
+    hive.select_space("w".into()).unwrap();
+    let select = Control::SelectSpace { id: "w".into() };
+    assert_eq!(service.control().await, (0, select));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -640,6 +664,14 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
     assert_eq!(hive.get_settings(), not_connected);
     assert_eq!(hive.set_settings(Settings::default()), not_connected);
+    let env = SpaceEnv::default();
+    assert_eq!(hive.create_space("W".into(), env.clone()), not_connected);
+    assert_eq!(
+        hive.update_space("w".into(), "W".into(), env),
+        not_connected
+    );
+    assert_eq!(hive.delete_space("w".into()), not_connected);
+    assert_eq!(hive.select_space("w".into()), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
     assert_eq!(hive.list_dirs(String::new(), false), not_connected);
     assert_eq!(hive.list_sessions(), not_connected);
@@ -831,7 +863,11 @@ fn commands_reach_the_managed_hive() {
             save_file,
             open_in_editor,
             get_settings,
-            set_settings
+            set_settings,
+            create_space,
+            update_space,
+            delete_space,
+            select_space
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -879,6 +915,9 @@ fn commands_reach_the_managed_hive() {
     let delete = json!({"id": "s"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
     let settings = json!({"settings": {"notifications": {"volume": 0}}});
+    let new_space = json!({"name": "W", "env": {}});
+    let update = json!({"id": "w", "name": "W", "env": {"git_name": "Me"}});
+    let space = json!({"id": "w"});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
@@ -901,6 +940,10 @@ fn commands_reach_the_managed_hive() {
         ("open_in_editor", &file),
         ("get_settings", &json!({})),
         ("set_settings", &settings),
+        ("create_space", &new_space),
+        ("update_space", &update),
+        ("delete_space", &space),
+        ("select_space", &space),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
@@ -945,6 +988,10 @@ fn commands_reach_the_managed_hive() {
         ("open_in_editor", file),
         ("get_settings", json!({})),
         ("set_settings", settings),
+        ("create_space", new_space),
+        ("update_space", update),
+        ("delete_space", space.clone()),
+        ("select_space", space),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

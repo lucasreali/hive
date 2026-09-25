@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    Control, Frame, FrameCodec, FrameError, FrameType, Role, SessionTarget, Settings, MAX_PAYLOAD,
-    PROTOCOL_VERSION,
+    Control, Frame, FrameCodec, FrameError, FrameType, Role, SessionTarget, Settings, SpaceEnv,
+    MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -469,6 +469,23 @@ impl Hive {
     pub fn set_settings(&self, settings: Settings) -> Result<(), String> {
         self.link().send(0, &Control::SetSettings { settings })
     }
+
+    /// The answer to each space request arrives as `spaces` or `space_failed`.
+    pub fn create_space(&self, name: String, env: SpaceEnv) -> Result<(), String> {
+        self.link().send(0, &Control::CreateSpace { name, env })
+    }
+
+    pub fn update_space(&self, id: String, name: String, env: SpaceEnv) -> Result<(), String> {
+        self.link().send(0, &Control::UpdateSpace { id, name, env })
+    }
+
+    pub fn delete_space(&self, id: String) -> Result<(), String> {
+        self.link().send(0, &Control::DeleteSpace { id })
+    }
+
+    pub fn select_space(&self, id: String) -> Result<(), String> {
+        self.link().send(0, &Control::SelectSpace { id })
+    }
 }
 
 impl Hive {
@@ -812,6 +829,31 @@ pub mod commands {
     #[tauri::command]
     pub fn set_settings(hive: State<'_, Hive>, settings: Settings) -> Result<(), String> {
         hive.set_settings(settings)
+    }
+
+    #[tauri::command]
+    pub fn create_space(hive: State<'_, Hive>, name: String, env: SpaceEnv) -> Result<(), String> {
+        hive.create_space(name, env)
+    }
+
+    #[tauri::command]
+    pub fn update_space(
+        hive: State<'_, Hive>,
+        id: String,
+        name: String,
+        env: SpaceEnv,
+    ) -> Result<(), String> {
+        hive.update_space(id, name, env)
+    }
+
+    #[tauri::command]
+    pub fn delete_space(hive: State<'_, Hive>, id: String) -> Result<(), String> {
+        hive.delete_space(id)
+    }
+
+    #[tauri::command]
+    pub fn select_space(hive: State<'_, Hive>, id: String) -> Result<(), String> {
+        hive.select_space(id)
     }
 }
 

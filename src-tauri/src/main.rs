@@ -58,6 +58,10 @@ fn main() {
             commands::open_in_editor,
             commands::get_settings,
             commands::set_settings,
+            commands::create_space,
+            commands::update_space,
+            commands::delete_space,
+            commands::select_space,
         ])
         .build(tauri::generate_context!());
     match result {
