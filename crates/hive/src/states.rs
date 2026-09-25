@@ -31,6 +31,9 @@ pub struct Agent {
     pub cwd: Option<String>,
     /// The session's name from its log (the user's, else Claude's), once known.
     pub title: Option<String>,
+    /// Its transcript, from its `SessionStart`'s `transcript_path` (unchecked: it is checked
+    /// to lie in Claude's projects folder when read). Its subagents' lie beside it.
+    pub transcript: Option<std::path::PathBuf>,
     state: AgentState,
     /// In start order.
     subagents: Vec<SubagentState>,
@@ -67,6 +70,7 @@ impl Agent {
             worktree: None,
             cwd: None,
             title: None,
+            transcript: None,
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),

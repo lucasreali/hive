@@ -184,9 +184,18 @@ test("agents and their subagents show the state the service sent, named for scre
     shapes.add(icon.innerHTML.replace(/<title>.*<\/title>/, ""));
   }
   expect(shapes.size).toBe(7);
-  // A subagent row shows its agent's terminal.
-  fireEvent.click(screen.getByRole("button", { name: /subagent: Explore/ }));
-  expect(useHive.getState().activeTab).toBe(1);
+  // A subagent row shows its conversation (6.10), selected in place of its agent.
+  const explore = screen.getByRole("button", { name: /subagent: Explore/ });
+  fireEvent.click(explore);
+  expect(useHive.getState().transcriptShown).toEqual({ agent: "s1", subagent: "a1" });
+  expect(useHive.getState().selection).toBe("s1");
+  expect(explore.getAttribute("aria-current")).toBe("true");
+  const s1 = tree().querySelectorAll(".tree-row.agent")[1] as HTMLElement;
+  expect(s1.dataset.selected).toBe("false");
+  // Its agent's row shows the terminal again.
+  fireEvent.click(within(s1).getByRole("button"));
+  expect(useHive.getState().transcriptShown).toBeNull();
+  expect(explore.getAttribute("aria-current")).toBe("false");
   // Subagents that ended leave the tree.
   act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("idle"), subagents: [] }));
   expect(tree().querySelector(".tree-row.subagent")).toBeNull();

@@ -647,3 +647,76 @@ async fn an_agent_gets_its_session_name_and_its_renames() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn a_subagents_transcript_is_sent_and_followed_while_watched() {
+    use hive_protocol::{TranscriptEntry, TranscriptRole};
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let parent = repo.env.path("home/.claude/projects/-repo/s.jsonl");
+    let log = parent.with_extension("").join("subagents/agent-a.jsonl");
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let said = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type": "user", "message": {"content": text}})
+        )
+    };
+    std::fs::write(&log, said("first")).unwrap();
+    let append = |text: &str| {
+        let mut file = std::fs::File::options().append(true).open(&log).unwrap();
+        file.write_all(said(text).as_bytes()).unwrap();
+    };
+    let user = |text: &str| TranscriptEntry {
+        role: TranscriptRole::User,
+        text: text.into(),
+        tool: None,
+    };
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let start = json!({"session_id": "s", "cwd": root, "transcript_path": parent});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let watch = |agent: &str, subagent: &str| Control::WatchTranscript {
+        agent: agent.into(),
+        subagent: subagent.into(),
+    };
+    let unwatch = |agent: &str, subagent: &str| Control::UnwatchTranscript {
+        agent: agent.into(),
+        subagent: subagent.into(),
+    };
+
+    app.send(0, watch("s", "a")).await;
+    let first = Control::Transcript {
+        agent: "s".into(),
+        subagent: "a".into(),
+        entries: vec![user("first")],
+        truncated: false,
+    };
+    assert_eq!(app.control().await, (0, first));
+    // Unwatching another subagent leaves this one followed.
+    app.send(0, unwatch("s", "b")).await;
+    app.send(0, unwatch("t", "a")).await;
+    append("second");
+    let appended = Control::TranscriptAppended {
+        agent: "s".into(),
+        subagent: "a".into(),
+        entries: vec![user("second")],
+    };
+    assert_eq!(app.control().await, (0, appended));
+
+    // Once unwatched, nothing more is sent.
+    app.send(0, unwatch("s", "a")).await;
+    append("third");
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    // Neither an unknown agent nor a bad subagent id has a transcript.
+    let unknown = Control::Error {
+        message: "no transcript is known for this subagent".into(),
+    };
+    for (agent, subagent) in [("nope", "a"), ("s", "../x")] {
+        app.send(0, watch(agent, subagent)).await;
+        assert_eq!(app.control().await, (0, unknown.clone()));
+    }
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

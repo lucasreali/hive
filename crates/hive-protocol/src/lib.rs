@@ -516,9 +516,54 @@ pub enum Control {
     SettingsFailed {
         message: String,
     },
+    /// App → service: follow a subagent's conversation (6.10), read from its transcript
+    /// beside its agent's. Answered by `Transcript` now and `TranscriptAppended` as it grows.
+    /// Only one is followed: this replaces the previous one.
+    WatchTranscript {
+        /// The agent's session id.
+        agent: String,
+        /// The subagent's `agent_id`.
+        subagent: String,
+    },
+    /// App → service: stop following it (the view closed).
+    UnwatchTranscript {
+        agent: String,
+        subagent: String,
+    },
+    /// The last entries of the conversation (read-only, text cut at the service's cap).
+    Transcript {
+        agent: String,
+        subagent: String,
+        entries: Vec<TranscriptEntry>,
+        /// Earlier entries were left out.
+        truncated: bool,
+    },
+    /// Entries written to the conversation since the last message.
+    TranscriptAppended {
+        agent: String,
+        subagent: String,
+        entries: Vec<TranscriptEntry>,
+    },
     Error {
         message: String,
     },
+}
+
+/// One message of a conversation, or one tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptEntry {
+    pub role: TranscriptRole,
+    pub text: String,
+    /// The tool's name, for a tool call.
+    pub tool: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptRole {
+    User,
+    Assistant,
+    Tool,
 }
 
 impl Control {
@@ -1134,6 +1179,49 @@ mod tests {
             &Frame::control(0, &view).payload[..],
             br#"{"type":"view","terminal":3,"focused":true}"#
         );
+    }
+
+    #[test]
+    fn transcript_messages_are_tagged_json() {
+        let transcript = Control::Transcript {
+            agent: "s".into(),
+            subagent: "a1".into(),
+            entries: vec![TranscriptEntry {
+                role: TranscriptRole::Tool,
+                text: "ls".into(),
+                tool: Some("Bash".into()),
+            }],
+            truncated: true,
+        };
+        assert_eq!(
+            &Frame::control(0, &transcript).payload[..],
+            br#"{"type":"transcript","agent":"s","subagent":"a1","entries":[{"role":"tool","text":"ls","tool":"Bash"}],"truncated":true}"#
+        );
+        let watch = Control::WatchTranscript {
+            agent: "s".into(),
+            subagent: "a1".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &watch).payload[..],
+            br#"{"type":"watch_transcript","agent":"s","subagent":"a1"}"#
+        );
+        for message in [
+            Control::UnwatchTranscript {
+                agent: "s".into(),
+                subagent: "a1".into(),
+            },
+            Control::TranscriptAppended {
+                agent: "s".into(),
+                subagent: "a1".into(),
+                entries: vec![TranscriptEntry {
+                    role: TranscriptRole::User,
+                    text: "hi".into(),
+                    tool: None,
+                }],
+            },
+        ] {
+            assert_eq!(Frame::control(0, &message).to_control().unwrap(), message);
+        }
     }
 
     #[test]

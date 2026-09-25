@@ -756,6 +756,66 @@ button:disabled {
   flex-direction: column;
 }
 
+/* A subagent's conversation (6.10), read-only, in place of the terminals. */
+.transcript-view .file-view-bar .path {
+  direction: ltr;
+  font-family: var(--font-sans);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.transcript {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.transcript > ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-entry {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-body);
+}
+
+.transcript-role {
+  flex: none;
+  width: 80px;
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transcript-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.transcript-entry[data-role="user"] .transcript-role {
+  color: var(--accent);
+}
+
+.transcript-entry[data-role="tool"] .transcript-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text-2);
+}
+
 /* CodeMirror scrolls inside it (src/viewer/editor.ts). */
 .code-view {
   flex: 1;

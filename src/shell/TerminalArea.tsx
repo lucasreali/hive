@@ -27,6 +27,7 @@ import {
   TerminalIcon,
 } from "./icons";
 import { FileView, leaveFile } from "./RightPanel";
+import { TranscriptView } from "./TranscriptView";
 
 /** Screen 1e: shown once the service said there are no projects. */
 function EmptyState() {
@@ -105,7 +106,7 @@ function TabItem(props: {
  * state and its session's name (as in Orca). Tabs show only their worktree's, so no project.
  */
 function TerminalTab({ tab }: { tab: Tab }) {
-  const active = useHive((s) => s.activeTab === tab.id && !s.fileShown);
+  const active = useHive((s) => s.activeTab === tab.id && !s.fileShown && !s.transcriptShown);
   const state = useTerminal(tab.id);
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
@@ -198,6 +199,7 @@ export function TerminalArea() {
   const tabs = useHive(useShallow(visibleTabs));
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
+  const transcript = useHive((s) => s.transcriptShown);
   return (
     <section className="terminals" aria-label="Terminals">
       <div className="bar">
@@ -233,8 +235,15 @@ export function TerminalArea() {
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file} />
+        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript} />
         {file && <FileView worktree={file.worktree} />}
+        {transcript && (
+          <TranscriptView
+            key={`${transcript.agent}\n${transcript.subagent}`}
+            agent={transcript.agent}
+            subagent={transcript.subagent}
+          />
+        )}
       </div>
     </section>
   );

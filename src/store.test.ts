@@ -8,6 +8,7 @@ import {
   apply,
   DEFAULT_SETTINGS,
   fileVisible,
+  hideTranscript,
   initialState,
   openModal,
   panelWorktree,
@@ -20,6 +21,10 @@ import {
   setEditorNotice,
   setOpenFile,
   setRightPanel,
+  showFile,
+  showTranscript,
+  TRANSCRIPT_LIMIT,
+  type TranscriptEntry,
   tabPlace,
   tabsPlace,
   toggleCollapsed,
@@ -474,4 +479,79 @@ test("a tab belongs to the deepest worktree holding its folder", () => {
   // A sibling folder whose name starts the same is not inside.
   expect(tabPlace(s, `${login.path}-copy`)).toBe(main.id);
   expect(tabPlace(s, "/elsewhere")).toBe("/elsewhere");
+});
+
+test("a subagent's conversation is kept as sent, grown by what is appended, and capped", () => {
+  const entry = (text: string): TranscriptEntry => ({ role: "user", text, tool: null });
+  const at = { agent: "s", subagent: "a" };
+  apply({ type: "transcript", ...at, entries: [entry("1")], truncated: false });
+  // Another subagent's entries are not this conversation's.
+  apply({ type: "transcript_appended", agent: "s", subagent: "b", entries: [entry("x")] });
+  apply({ type: "transcript_appended", agent: "t", subagent: "a", entries: [entry("x")] });
+  apply({ type: "transcript_appended", ...at, entries: [entry("2")] });
+  expect(useHive.getState().transcript).toEqual({
+    ...at,
+    entries: [entry("1"), entry("2")],
+    truncated: false,
+  });
+  // Past the cap the oldest go, and the conversation says so.
+  const many = Array.from({ length: TRANSCRIPT_LIMIT - 2 }, (_, i) => entry(`n${i}`));
+  apply({ type: "transcript_appended", ...at, entries: many });
+  expect(useHive.getState().transcript?.truncated).toBe(false);
+  apply({ type: "transcript_appended", ...at, entries: [entry("last")] });
+  const t = useHive.getState().transcript;
+  expect([t?.entries.length, t?.entries[0]?.text, t?.entries.at(-1)?.text, t?.truncated]).toEqual([
+    TRANSCRIPT_LIMIT,
+    "2",
+    "last",
+    true,
+  ]);
+  apply({ type: "disconnected", reason: "gone" });
+  expect(useHive.getState().transcript).toBeNull();
+});
+
+test("a shown conversation selects its agent and gives way to any terminal or file shown", () => {
+  addTab(1, "/w");
+  addTab(2, "/w");
+  apply({ type: "agent_detected", channel: 1, id: "s", project: null, worktree: "/w", cwd: "/w" });
+  showTranscript("s", "a");
+  const s = useHive.getState();
+  expect([s.transcriptShown, s.selection, s.activeTab]).toEqual([
+    { agent: "s", subagent: "a" },
+    "s",
+    1,
+  ]);
+  hideTranscript();
+  expect(useHive.getState().transcriptShown).toBeNull();
+  // An agent without a tab keeps the shown one.
+  activateTab({ id: 2, cwd: "/w" });
+  apply({ type: "agent_detected", channel: 5, id: "u", project: null, worktree: "/w", cwd: "/w" });
+  showTranscript("u", "a");
+  expect(useHive.getState().activeTab).toBe(2);
+  const shown = { agent: "s", subagent: "a" };
+  const hides = [
+    () => select("/w"),
+    () => activateTab({ id: 1, cwd: "/w" }),
+    () => addTab(3, "/w"),
+    showFile,
+    () => setOpenFile({ worktree: "/w", path: "a" }),
+    () => setOpenFile({ worktree: "/w", path: "a" }),
+  ];
+  for (const hide of hides) {
+    useHive.setState({ transcriptShown: shown });
+    hide();
+    expect(useHive.getState().transcriptShown).toBeNull();
+  }
+  // Closing the file leaves a shown conversation.
+  useHive.setState({ transcriptShown: shown });
+  setOpenFile(null);
+  expect(useHive.getState().transcriptShown).toEqual(shown);
+  // Its agent leaving takes it away; another agent leaving does not.
+  apply({ type: "agent_removed", channel: 9, id: "other" });
+  expect(useHive.getState().transcriptShown).toEqual(shown);
+  apply({ type: "agent_removed", channel: 1, id: "s" });
+  expect(useHive.getState().transcriptShown).toBeNull();
+  useHive.setState({ transcriptShown: shown });
+  apply({ type: "disconnected", reason: "gone" });
+  expect(useHive.getState().transcriptShown).toBeNull();
 });

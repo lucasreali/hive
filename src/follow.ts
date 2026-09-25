@@ -24,14 +24,15 @@ export function followPanel(transport: Transport): () => void {
 }
 
 /**
- * Tells the service which terminal is in view (none while a file is shown) and whether the
+ * Tells the service which terminal is in view (none while a file or a conversation is shown) and whether the
  * window has the focus, whenever either changes and after a new `welcome`: the service decides
  * that an agent finishing there was already seen (hive.md item 5). Returns the unsubscribe.
  */
 export function followView(transport: Transport): () => void {
   let sent: unknown[] = [];
   const sync = (s: HiveState) => {
-    const view = [s.connection, s.fileShown ? null : s.activeTab, s.focused] as const;
+    const covered = s.fileShown || s.transcriptShown !== null;
+    const view = [s.connection, covered ? null : s.activeTab, s.focused] as const;
     if (s.connection.status !== "connected" || view.every((v, i) => v === sent[i])) return;
     sent = [...view];
     void transport.setView(view[1], view[2]);
