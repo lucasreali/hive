@@ -84,7 +84,7 @@ test("refresh asks the service for the projects again", () => {
   list.mockRestore();
 });
 
-test("an agent shows under the worktree it was placed in and shows its tab when clicked", () => {
+test("an agent shows under the worktree it was placed in and shows its tab when clicked", async () => {
   render(<App />);
   const fixLogin = shop.worktrees[1];
   act(() => {
@@ -119,6 +119,10 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
     ["tree-row worktree", "feat-checkout"],
   ]);
   const [agent, orphan] = screen.getAllByRole("button", { name: "idle Claude" });
+  // Claude's mark sits before the title, hidden from screen readers.
+  await waitFor(() =>
+    expect(agent.querySelector("svg.agent-icon")?.getAttribute("aria-hidden")).toBe("true"),
+  );
   expect(agent.parentElement?.getAttribute("title")).toBe(`${fixLogin.path}/src`);
   expect(agent.getAttribute("aria-current")).toBe("false");
   fireEvent.click(agent);
