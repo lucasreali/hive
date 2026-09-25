@@ -4,7 +4,15 @@ import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { asMac } from "../test/mac";
 import { TitleBar } from "./shell/TitleBar";
-import { closeWindow, guardClose, isMac, keyText, showNotification, windowAction } from "./window";
+import {
+  closeWindow,
+  guardClose,
+  isMac,
+  keyText,
+  showNotification,
+  watchFocus,
+  windowAction,
+} from "./window";
 
 const g = globalThis as { isTauri?: boolean };
 
@@ -139,4 +147,30 @@ test("OS notifications go through Tauri's plugin, asking permission while undeci
 test("the title bar drags the window", () => {
   render(<TitleBar />);
   expect(screen.getByText("Hive").parentElement?.hasAttribute("data-tauri-drag-region")).toBe(true);
+});
+
+test("window focus: the page's focus and blur outside Tauri", () => {
+  const seen: boolean[] = [];
+  const stop = watchFocus((f) => seen.push(f));
+  window.dispatchEvent(new Event("blur"));
+  window.dispatchEvent(new Event("focus"));
+  stop();
+  window.dispatchEvent(new Event("blur"));
+  expect(seen).toEqual([document.hasFocus(), false, true]);
+});
+
+test("window focus: Tauri's focus events in the app", async () => {
+  g.isTauri = true;
+  mockWindows("main");
+  mockIPC(() => {}, { shouldMockEvents: true });
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  const seen: boolean[] = [];
+  const stop = watchFocus((f) => seen.push(f));
+  await settle();
+  await emit("tauri://blur");
+  await emit("tauri://focus");
+  stop();
+  await settle();
+  await emit("tauri://blur");
+  expect(seen).toEqual([document.hasFocus(), false, true]);
 });

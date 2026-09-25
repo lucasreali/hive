@@ -369,6 +369,11 @@ impl Hive {
         self.link().send(0, &Control::UnwatchWorktree)
     }
 
+    /// The terminal shown and whether the window has the focus.
+    pub fn set_view(&self, terminal: Option<u32>, focused: bool) -> Result<(), String> {
+        self.link().send(0, &Control::View { terminal, focused })
+    }
+
     /// The answer arrives as `changes`.
     pub fn list_changes(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::ListChanges { path })
@@ -689,6 +694,15 @@ pub mod commands {
     #[tauri::command]
     pub fn unwatch_worktree(hive: State<'_, Hive>) -> Result<(), String> {
         hive.unwatch_worktree()
+    }
+
+    #[tauri::command]
+    pub fn set_view(
+        hive: State<'_, Hive>,
+        terminal: Option<u32>,
+        focused: bool,
+    ) -> Result<(), String> {
+        hive.set_view(terminal, focused)
     }
 
     #[tauri::command]
