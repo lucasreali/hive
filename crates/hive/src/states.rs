@@ -512,10 +512,10 @@ mod tests {
         for end in ["Stop", "StopFailure", "SessionEnd"] {
             let mut agent = Agent::new(1, now, 0);
             let sent = agent.feed("s", &tool("PreToolUse", None, "Run tests"), now);
-            let Some(Control::AgentState { activity, .. }) = sent else {
-                panic!("{sent:?}")
-            };
-            assert_eq!(activity.as_deref(), Some("Run tests"));
+            let doing = Some("Run tests".to_owned());
+            assert!(
+                matches!(sent, Some(Control::AgentState { activity, .. }) if activity == doing)
+            );
             // A tool that finishes, or an event without one, keeps it; a new one replaces it.
             agent.feed("s", &tool("PostToolUse", None, "x"), now);
             agent.feed("s", &notification("idle_prompt"), now);
@@ -572,15 +572,8 @@ mod tests {
     }
 
     fn since(agent: &Agent) -> (u64, Vec<u64>) {
-        let Control::AgentState {
-            since_ms,
-            subagents,
-            ..
-        } = agent.message("s")
-        else {
-            unreachable!()
-        };
-        (since_ms, subagents.iter().map(|s| s.since_ms).collect())
+        let subs = agent.subagents.iter().map(|s| s.since_ms);
+        (agent.since_ms, subs.collect())
     }
 
     #[test]
