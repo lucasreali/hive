@@ -13,6 +13,9 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 | `docs/prototype/` | The human's prototype: look, layout, states, glossary. Read-only. Shortcuts follow `docs/hive.md` #35, not the prototype |
 | `COVERAGE_EXCLUSIONS.md` | Approved coverage exclusions (created when the first one is approved) |
 | `.claude/skills/stage/` | How to develop a whole stage: the orchestrator procedure (`SKILL.md`, `/stage <N>`) and the brief every task agent follows (`task-brief.md`) |
+| `.claude/skills/gates/`, `release/` | `/gates` runs every gate safely; `/release <version>` tags a release (the human pushes) |
+| `.claude/agents/` | `gate-integrity-reviewer` (run before merging a task) and `security-reviewer` (trust boundaries in the service/app) |
+| `.claude/settings.json` + `hooks/` | Hooks: `guard.py` blocks edits to read-only files, npm/npx/pnpm/yarn, push, rebase, force and global git config; `format.sh` runs `cargo fmt` / biome after each edit |
 
 ## Hard rules
 
