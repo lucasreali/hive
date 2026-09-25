@@ -460,6 +460,8 @@ mod tests {
         let listing = watcher.list().unwrap();
         assert_eq!(names(&listing), [".gitignore", "src/a.rs"]);
         assert_eq!(watched(&watcher), ["", "empty", "src"]);
+        // FSEvents (macOS) may still report the writes made just before the watch began.
+        changes(&mut watcher, NEVER).await;
         // Nothing happens, and nothing in an ignored tree counts.
         assert!(!changes(&mut watcher, NEVER).await);
         write(&root, "ignored/deep/y.txt");

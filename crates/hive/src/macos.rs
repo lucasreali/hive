@@ -13,8 +13,6 @@ use nix::unistd::{Pid, getsid};
 use crate::procs::Proc;
 use crate::terminal::login;
 
-/// `SZOMB` in `<sys/proc.h>`.
-const ZOMBIE: u32 = 5;
 /// `MAXPATHLEN`.
 const PATH_MAX: usize = 1024;
 
@@ -26,10 +24,8 @@ pub fn list() -> Vec<Proc> {
 }
 
 fn process(pid: i32) -> Option<Proc> {
+    // Fails for a zombie too (ESRCH), so zombies are skipped.
     let info = pidinfo::<BSDInfo>(pid, 0).ok()?;
-    if info.pbi_status == ZOMBIE {
-        return None;
-    }
     Some(Proc {
         pid,
         pgrp: info.pbi_pgid as i32,
@@ -115,11 +111,12 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id() as i32;
         let start = std::time::Instant::now();
-        while pidinfo::<BSDInfo>(pid, 0).unwrap().pbi_status != ZOMBIE {
+        while process(pid).is_some() {
             assert!(start.elapsed().as_secs() < 10, "the child never exited");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(process(pid), None);
+        // Still there, as a zombie, until it is waited for.
+        assert_eq!(nix::sys::signal::kill(Pid::from_raw(pid), None), Ok(()));
         assert!(child.wait().unwrap().success());
     }
 
