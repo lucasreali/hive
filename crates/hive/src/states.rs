@@ -99,9 +99,10 @@ impl Agent {
         self.changed(id, |agent| {
             agent.last_event = now;
             if let EventKind::WorktreeRemoved { path: Some(path) } = &event.kind {
-                let gone = agent.subagents.iter().filter(|s| {
-                    agent.waiting.contains(&s.id) && s.worktree.as_ref() == Some(path)
-                });
+                let gone = agent
+                    .subagents
+                    .iter()
+                    .filter(|s| agent.waiting.contains(&s.id) && s.worktree.as_ref() == Some(path));
                 for id in gone.map(|s| s.id.clone()).collect::<Vec<_>>() {
                     agent.leave(&id);
                 }
@@ -129,10 +130,9 @@ impl Agent {
                 }
                 return;
             };
-            match event.kind {
-                EventKind::SubagentStopped => return,
-                EventKind::SessionEnded { .. } => return agent.leave(&sub.id),
-                _ => {}
+            // `SubagentStop` has no state: a kept subagent is left as `prune` set it below.
+            if let EventKind::SessionEnded { .. } = event.kind {
+                return agent.leave(&sub.id);
             }
             let known = agent.subagents.iter().position(|s| s.id == sub.id);
             if let EventKind::WorktreeCreated {
@@ -722,7 +722,11 @@ mod tests {
 
     /// `PostToolUse` of a subagent's tool that started background task `task` under `key`.
     fn launched(sub: &str, key: &str, task: &str) -> AgentEvent {
-        hook("PostToolUse", Some(sub), json!({"tool_response": {key: task}}))
+        hook(
+            "PostToolUse",
+            Some(sub),
+            json!({"tool_response": {key: task}}),
+        )
     }
 
     /// A stop carrying Claude Code's list of the session's running background tasks.
@@ -764,7 +768,11 @@ mod tests {
         // Another subagent's running tasks do not keep one; neither does a stop without a list.
         agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), late);
         agent.feed("s", &launched("b", "agentId", "x"), late);
-        agent.feed("s", &stop_with("SubagentStop", Some("b"), &["b1", "m1"]), late);
+        agent.feed(
+            "s",
+            &stop_with("SubagentStop", Some("b"), &["b1", "m1"]),
+            late,
+        );
         agent.feed("s", &hook("SubagentStart", Some("c"), json!({})), late);
         agent.feed("s", &launched("c", "backgroundTaskId", "b2"), late);
         agent.feed("s", &hook("SubagentStop", Some("c"), json!({})), late);
@@ -780,7 +788,13 @@ mod tests {
             let task = format!("t{sub}");
             agent.feed("s", &launched(sub, "backgroundTaskId", &task), now);
         }
-        let create = |sub| hook("WorktreeCreate", Some(sub), json!({"worktree_path": "/r/w"}));
+        let create = |sub| {
+            hook(
+                "WorktreeCreate",
+                Some(sub),
+                json!({"worktree_path": "/r/w"}),
+            )
+        };
         agent.feed("s", &create("b"), now);
         agent.feed("s", &create("c"), now);
         let all = ["ta", "tb", "tc", "td"];
@@ -823,7 +837,11 @@ mod tests {
         assert!(shown(&agent).1.is_empty());
         agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
         agent.feed("s", &launched("a", "taskId", &long[1..]), now);
-        agent.feed("s", &stop_with("SubagentStop", Some("a"), &[&long[1..]]), now);
+        agent.feed(
+            "s",
+            &stop_with("SubagentStop", Some("a"), &[&long[1..]]),
+            now,
+        );
         assert_eq!(shown(&agent).1.len(), 1);
     }
 }
