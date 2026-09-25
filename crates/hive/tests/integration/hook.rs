@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{Control, EventKind};
+use hive_protocol::{Control, EventKind, Role};
 use serde_json::{Value, json};
 
 use crate::common::Env;
@@ -125,6 +125,11 @@ async fn badge_reaches_the_app_on_its_terminal_cleaned_and_cut() {
     let mut daemon = env.daemon();
     let mut app = env.app().await;
     app.open_terminal(1, &env.path("home")).await;
+    // A hook connection that closes after its hello, or sends garbage, forwards nothing.
+    drop(env.connect(Role::Hook).await);
+    let mut garbage = env.connect(Role::Hook).await;
+    garbage.send(1, Control::TerminalOpened).await;
+    drop(garbage);
     // Not an open terminal: dropped.
     assert!(badge(&env, Some("9"), &["ignored"]).status.success());
     let out = badge(&env, Some("1"), &["  fixing\u{1b}", "tests  "]);
