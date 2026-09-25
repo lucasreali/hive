@@ -1,5 +1,5 @@
 import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
-import { type KeyboardEvent, lazy, type ReactNode, Suspense, useEffect, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
 import {
   type Agent,
   type AgentState,
@@ -221,14 +221,6 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
   );
 }
 
-/** Claude's mark from the icon library, which cannot be tree-shaken: it loads in its own chunk, shared with the file tree. */
-const ClaudeIcon = lazy(async () => {
-  const { Claude } = await import("@react-symbols/icons/files");
-  return {
-    default: () => <Claude className="agent-icon" width={13} height={13} aria-hidden="true" />,
-  };
-});
-
 /** The icon and the state's name under the row's title; the icon names it for screen readers. */
 function StateLines({ state, title }: { state: AgentState; title: ReactNode }) {
   return (
@@ -271,17 +263,7 @@ function AgentRow({ agent }: { agent: Agent }) {
         data-selected={shown}
       >
         <button type="button" className="row-main" aria-current={shown} onClick={show}>
-          <StateLines
-            state={status?.state ?? "idle"}
-            title={
-              <>
-                <Suspense fallback={<span className="agent-icon" />}>
-                  <ClaudeIcon />
-                </Suspense>
-                {name}
-              </>
-            }
-          />
+          <StateLines state={status?.state ?? "idle"} title={name} />
         </button>
       </div>
       {status && status.subagents.length > 0 && (
