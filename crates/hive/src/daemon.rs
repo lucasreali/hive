@@ -1017,11 +1017,12 @@ mod tests {
                 .unwrap()
                 .to_control()
                 .unwrap();
-            let Control::WorktreeStatus { path: got, status } = control else {
-                panic!("{control:?}")
-            };
-            assert_eq!(got, path);
-            status.unwrap().changes
+            let json = serde_json::to_value(control).unwrap();
+            assert_eq!(
+                (&json["type"], &json["path"]),
+                (&"worktree_status".into(), &path.as_str().into())
+            );
+            json["status"]["changes"].as_u64().unwrap()
         };
         // Sent when first seen, then only when it changed.
         assert_eq!(next(&mut sent).await, 0);
