@@ -97,7 +97,12 @@ pub struct Hive {
     link: Arc<Mutex<Link>>,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
     restart: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs a downloaded update's installer; given by `main.rs` (`with_install`).
+    install: Option<Box<Installer>>,
 }
+
+/// Runs the installer of a downloaded update.
+type Installer = dyn Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync;
 
 #[derive(Default)]
 struct Link {
@@ -112,8 +117,9 @@ struct Link {
     last_channel: u32,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
-    /// The newer release `check_update` found, for `install_update` (4.19).
-    update: Option<Update>,
+    /// The newer release `check_update` found and downloaded, for `install_update` or the
+    /// app's exit (4.19).
+    update: Option<(Update, Vec<u8>)>,
 }
 
 impl Link {
@@ -160,11 +166,20 @@ impl Hive {
             args,
             link: Arc::default(),
             restart: None,
+            install: None,
         }
     }
 
     pub fn with_restart(mut self, restart: impl Fn() + Send + Sync + 'static) -> Self {
         self.restart = Some(Box::new(restart));
+        self
+    }
+
+    pub fn with_install(
+        mut self,
+        install: impl Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.install = Some(Box::new(install));
         self
     }
 
@@ -435,30 +450,41 @@ impl Hive {
 }
 
 impl Hive {
-    /// Asks the release endpoint for a newer version (4.19). A newer one is kept for
-    /// `install_update` and goes to the UI as `update_available {version}`. No newer version,
-    /// or a failed check (offline, GitHub down), sends nothing: it is not worth a notice.
+    /// Asks the release endpoint for a newer version (4.19) and downloads it at once. No newer
+    /// version, or a failed check (offline, GitHub down), sends nothing: it is not worth a notice.
     pub async fn check_update(&self, updater: tauri_plugin_updater::Result<Updater>) {
         let Ok(Some(update)) = async { updater?.check().await }.await else {
             return;
         };
-        let mut link = self.link();
-        link.to_ui(json!({"type": "update_available", "version": update.version}));
-        link.update = Some(update);
+        let bytes = update.download(|_, _| {}, || {}).await;
+        self.downloaded(update, bytes.map_err(|error| error.to_string()));
     }
 
-    /// Downloads, checks the signature of and runs the installer of the update `check_update`
-    /// found, then restarts. On Windows the installer ends the app itself.
+    /// A downloaded update, its signature checked, waits for `install_update` or the app's exit
+    /// and goes to the UI as `update_ready {version}`. A failed download sends nothing, like a
+    /// failed check: the next start tries again.
+    fn downloaded(&self, update: Update, bytes: Result<Vec<u8>, String>) {
+        let Ok(bytes) = bytes else { return };
+        let mut link = self.link();
+        link.to_ui(json!({"type": "update_ready", "version": update.version}));
+        link.update = Some((update, bytes));
+    }
+
+    /// Runs the installer of the downloaded update, then restarts. On Windows the installer
+    /// ends the app itself.
     pub async fn install_update(&self) {
-        let update = self.link().update.clone();
-        let result = match update {
-            Some(update) => update
-                .download_and_install(|_, _| {}, || {})
-                .await
-                .map_err(|error| error.to_string()),
-            None => Err("no update to install".to_owned()),
-        };
+        let result = self
+            .install_pending()
+            .unwrap_or_else(|| Err("no update to install".to_owned()));
         self.installed(result);
+    }
+
+    /// Installs the downloaded update, if any, so the next start runs it. Taken once: the exit
+    /// that follows `install_update`'s restart does not install it again.
+    pub fn install_pending(&self) -> Option<Result<(), String>> {
+        let (update, bytes) = self.link().update.take()?;
+        let install = self.install.as_ref()?;
+        Some(install(&update, &bytes))
     }
 
     /// Restarts once installed; a failure goes to the UI as `update_failed {error}`.
@@ -540,7 +566,10 @@ fn disconnected(link: &mut Link, reason: String) {
 /// Closing the window goes through the UI first, which confirms when agents are running.
 pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: RunEvent) {
     if let RunEvent::Exit = event {
-        tauri::async_runtime::block_on(app.state::<Hive>().shutdown(EXIT_WAIT));
+        let hive = app.state::<Hive>();
+        tauri::async_runtime::block_on(hive.shutdown(EXIT_WAIT));
+        // An update downloaded but not applied is installed now: the next start runs it.
+        let _ = hive.install_pending();
     }
 }
 

@@ -10,7 +10,7 @@ afterEach(() => {
   useHive.setState(initialState, true);
 });
 
-const button = () => screen.queryByTitle("Install the new version and restart Hive");
+const button = () => screen.queryByTitle("Restart Hive to finish the update");
 
 function offered(agents: string[] = []) {
   const install = spyOn(transport, "installUpdate").mockResolvedValue();
@@ -22,7 +22,7 @@ function offered(agents: string[] = []) {
       apply({ type: "agent_state", id, ...agentStatus("working"), subagents: [] });
     });
   }
-  act(() => apply({ type: "update_available", version: "0.2.0" }));
+  act(() => apply({ type: "update_ready", version: "0.2.0" }));
   return install;
 }
 
@@ -33,11 +33,11 @@ test("no update, no button", () => {
 
 test("the update button installs at once when no agent would end", () => {
   const install = offered();
-  expect(button()?.textContent).toBe("Update to v0.2.0");
+  expect(button()?.textContent).toBe("Restart to update to v0.2.0");
   fireEvent.click(button() as HTMLElement);
   expect(install).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(button()?.textContent).toBe("Updating…");
+  expect(button()?.textContent).toBe("Restarting…");
   expect((button() as HTMLButtonElement).disabled).toBe(true);
 
   // A failure says why and lets the update be tried again.
@@ -56,7 +56,7 @@ test("with agents running the update asks first, like closing", () => {
   fireEvent.click(screen.getByRole("button", { name: "Update and restart Enter" }));
   expect(install).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(button()?.textContent).toBe("Updating…");
+  expect(button()?.textContent).toBe("Restarting…");
   install.mockRestore();
 });
 

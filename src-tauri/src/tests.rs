@@ -1002,7 +1002,15 @@ fn the_app_exit_ends_the_connection() {
 /// A GitHub stand-in: serves `/latest.json` announcing `version`, with an installer on this
 /// server that carries no valid signature, until the test process ends. Returns its URL.
 fn release_server(version: &str) -> String {
+    counted_release_server(version).0
+}
+
+/// `release_server`, also returning how many times its installer was downloaded.
+fn counted_release_server(version: &str) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
+    let downloads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = downloads.clone();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let manifest = json!({
@@ -1020,6 +1028,7 @@ fn release_server(version: &str) -> String {
             let body = if request[..read].starts_with(b"GET /latest.json ") {
                 manifest.as_str()
             } else {
+                counter.fetch_add(1, Ordering::SeqCst);
                 "not an installer"
             };
             let head = format!(
@@ -1029,7 +1038,7 @@ fn release_server(version: &str) -> String {
             let _ = socket.write_all(format!("{head}{body}").as_bytes());
         }
     });
-    format!("{base}/latest.json")
+    (format!("{base}/latest.json"), downloads)
 }
 
 /// An app with the updater plugin reading `endpoint`, managing `hive`.
@@ -1057,25 +1066,51 @@ fn hive_with_ui() -> (Hive, mpsc::UnboundedReceiver<Value>) {
     (hive, rx)
 }
 
+/// The update a check against a release server announcing 99.0.0 finds.
+async fn newer_update(app: &tauri::App<tauri::test::MockRuntime>) -> Update {
+    use tauri_plugin_updater::UpdaterExt;
+    app.updater().unwrap().check().await.unwrap().unwrap()
+}
+
+/// A `Hive` whose installer records the bytes it gets and answers `result`.
+fn hive_installing(
+    result: Result<(), String>,
+) -> (
+    Hive,
+    mpsc::UnboundedReceiver<Value>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    let (hive, rx) = hive_with_ui();
+    let (tx, installed) = std::sync::mpsc::channel();
+    let hive = hive.with_install(move |_, bytes| {
+        tx.send(bytes.to_vec()).unwrap();
+        result.clone()
+    });
+    (hive, rx, installed)
+}
+
 #[tokio::test]
-async fn a_newer_release_is_offered_and_an_unsigned_one_is_not_installed() {
-    let (hive, mut rx) = hive_with_ui();
-    let app = updater_app(&release_server("99.0.0"), hive);
+async fn an_unsigned_release_is_neither_offered_nor_installed() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let (endpoint, downloads) = counted_release_server("99.0.0");
+    let app = updater_app(&endpoint, hive);
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
+    use tauri_plugin_updater::UpdaterExt;
+    app.state::<Hive>().check_update(app.updater()).await;
+    // Downloaded at once, but its signature fails the check.
+    assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(invoke(&webview, "check_update", json!({})), Ok(Value::Null));
-    assert_eq!(
-        next(&mut rx).await,
-        json!({"type": "update_available", "version": "99.0.0"})
-    );
     assert_eq!(
         invoke(&webview, "install_update", json!({})),
         Ok(Value::Null)
     );
-    let failed = next(&mut rx).await;
-    assert_eq!(failed["type"], "update_failed");
-    assert_ne!(failed["error"], "no update to install", "{failed}");
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_failed", "error": "no update to install"})
+    );
+    assert!(installed.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -1097,6 +1132,65 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
         next(&mut rx).await,
         json!({"type": "update_failed", "error": "no update to install"})
     );
+}
+
+#[tokio::test]
+async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let (tx, restarted) = std::sync::mpsc::channel();
+    let hive = hive.with_restart(move || tx.send(()).unwrap());
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_ready", "version": "99.0.0"})
+    );
+    hive.install_update().await;
+    assert_eq!(installed.try_recv(), Ok(b"setup".to_vec()));
+    assert_eq!(restarted.try_recv(), Ok(()));
+    // The exit after the restart has nothing left to install.
+    assert_eq!(hive.install_pending(), None);
+    assert!(installed.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_failed_download_offers_nothing() {
+    let (hive, mut rx, _installed) = hive_installing(Ok(()));
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Err("offline".into()));
+    assert_eq!(hive.install_pending(), None);
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_failed_install_says_why_and_does_not_restart() {
+    let (hive, mut rx, _installed) = hive_installing(Err("installer refused".into()));
+    let (tx, restarted) = std::sync::mpsc::channel();
+    let hive = hive.with_restart(move || tx.send(()).unwrap());
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    next(&mut rx).await;
+    hive.install_update().await;
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_failed", "error": "installer refused"})
+    );
+    assert!(restarted.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_downloaded_update_is_installed_when_the_app_exits() {
+    let (hive, _rx, installed) = hive_installing(Ok(()));
+    let app = updater_app(&release_server("99.0.0"), hive);
+    let update = newer_update(&app).await;
+    app.state::<Hive>()
+        .downloaded(update, Ok(b"setup".to_vec()));
+    // `on_run_event` blocks on the runtime, which a Tokio test cannot do from its own thread.
+    let handle = app.handle().clone();
+    std::thread::spawn(move || on_run_event(&handle, RunEvent::Exit))
+        .join()
+        .unwrap();
+    assert_eq!(installed.try_recv(), Ok(b"setup".to_vec()));
 }
 
 #[test]

@@ -538,7 +538,7 @@ export function createMockTransport(
       later({ type: "projects", projects });
     },
     async checkUpdate() {
-      if (scenario === "update") later({ type: "update_available", version: "9.9.9" });
+      if (scenario === "update") later({ type: "update_ready", version: "9.9.9" });
     },
     async installUpdate() {
       later({ type: "update_failed", error: "mock: nothing to install" });

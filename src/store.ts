@@ -8,7 +8,7 @@ import { type EditBuffer, failed, fromDisk, isFor, saved, startEdit } from "./vi
 export type ServiceMessage =
   | { type: "welcome"; version: string; distro: string | null }
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
-  | { type: "update_available"; version: string }
+  | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
   // `protocol`/`version` are the service's; `app_*` are added by the app side (Rust).
   | {
@@ -315,7 +315,7 @@ export type HiveState = {
   sessionMenu: SessionMenu | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
-  /** A newer release, shown as the title bar's update button; `installing` once clicked. */
+  /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
   update: { version: string; installing: boolean } | null;
   rightPanel: RightPanel;
   /** What the right panel shows, for the shown worktree. */
@@ -504,7 +504,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
     case "welcome":
       return { connection: { status: "connected", version: m.version, distro: m.distro } };
-    case "update_available":
+    case "update_ready":
       return { update: { version: m.version, installing: false } };
     case "update_failed":
       return {

@@ -40,7 +40,7 @@ function WindowControls() {
   );
 }
 
-/** A newer release found at startup (4.19): a click installs it and restarts Hive. */
+/** A newer release, downloaded at startup (4.19): a click installs it and restarts Hive. */
 function UpdateButton() {
   const update = useHive((s) => s.update);
   if (!update) return null;
@@ -48,12 +48,12 @@ function UpdateButton() {
     <button
       type="button"
       className="update-button"
-      title="Install the new version and restart Hive"
+      title="Restart Hive to finish the update"
       disabled={update.installing}
       onClick={requestUpdate}
     >
       <ArrowCircleUpIcon size={16} weight="bold" aria-hidden="true" />
-      {update.installing ? "Updating…" : `Update to v${update.version}`}
+      {update.installing ? "Restarting…" : `Restart to update to v${update.version}`}
     </button>
   );
 }

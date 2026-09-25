@@ -640,7 +640,7 @@ test("?mock=update offers an update whose install fails; otherwise none is offer
   const { transport, messages } = await connected();
   await transport.checkUpdate();
   await tick();
-  expect(messages.some((m) => m.type === "update_available")).toBe(false);
+  expect(messages.some((m) => m.type === "update_ready")).toBe(false);
 
   const update = createMockTransport("update");
   const offered: ServiceMessage[] = [];
@@ -649,7 +649,7 @@ test("?mock=update offers an update whose install fails; otherwise none is offer
   await update.installUpdate();
   await tick();
   expect(offered.slice(-2)).toEqual([
-    { type: "update_available", version: "9.9.9" },
+    { type: "update_ready", version: "9.9.9" },
     { type: "update_failed", error: "mock: nothing to install" },
   ]);
 });

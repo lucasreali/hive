@@ -70,9 +70,9 @@ export interface Transport {
    * answered by `editor_target`.
    */
   openInEditor(worktree: string, path: string): Promise<void>;
-  /** Asks GitHub for a newer release; answered by `update_available` only when there is one. */
+  /** Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is downloaded. */
   checkUpdate(): Promise<void>;
-  /** Installs that release and restarts the app; answered by `update_failed` on a failure. */
+  /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */
   installUpdate(): Promise<void>;
 }
 
