@@ -124,6 +124,11 @@ function TerminalTab({ tab }: { tab: Tab }) {
       <span className="tab-name" data-agent={title ? true : undefined}>
         {title ?? name}
       </span>
+      {state?.badge && (
+        <span className="tab-badge label-badge" title="Set with hive badge">
+          {state.badge}
+        </span>
+      )}
       {state?.unhooked && (
         <span
           className="tab-badge warn"

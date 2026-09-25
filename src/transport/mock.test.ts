@@ -220,6 +220,19 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   ]);
 });
 
+test("hive badge sets and clears the terminal's badge", async () => {
+  const { transport, messages } = await connected();
+  const id = await transport.openTerminal("/w", 80, 24, () => {});
+  await tick();
+  messages.length = 0;
+  await transport.writeTerminal(id, "hive badge  db tests \rhive badge --clear\r");
+  await tick();
+  expect(messages).toEqual([
+    { type: "badge", channel: id, text: "db tests" },
+    { type: "badge", channel: id, text: "" },
+  ]);
+});
+
 test("worktree-remove drops that Claude worktree and sends the new list", async () => {
   const { transport, messages } = await connected();
   const [shop, api] = MOCK_REPOS;

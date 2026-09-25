@@ -41,7 +41,12 @@ pub async fn run(event: &str, record: Option<&Path>, paths: &Paths, input: impl 
 /// Sends one hook call to the service, giving up after [`SEND_TIMEOUT`]; errors are ignored.
 /// `hive worktree hook-create`/`hook-remove` also report their work through here.
 pub async fn forward(paths: &Paths, event: &str, terminal_id: Option<String>, payload: Value) {
-    let _ = tokio::time::timeout(SEND_TIMEOUT, send(paths, event, terminal_id, payload)).await;
+    let hook = Control::Hook {
+        event: event.to_owned(),
+        terminal_id,
+        payload,
+    };
+    let _ = send(paths, 0, &hook).await;
 }
 
 /// The hook JSON; invalid JSON is kept as a string, oversized input is replaced by a marker.
@@ -79,24 +84,28 @@ fn append_record(
     out.write_all(format!("{line}\n").as_bytes())
 }
 
-async fn send(
-    paths: &Paths,
-    event: &str,
-    terminal_id: Option<String>,
-    payload: Value,
-) -> Option<()> {
-    let stream = UnixStream::connect(paths.socket()).await.ok()?;
-    let mut writer = FramedWrite::new(stream, FrameCodec);
-    writer
-        .send(Frame::control(0, &Control::hello(Role::Hook, VERSION)))
+/// `hive badge`: sets (or, with an empty text, clears) the label of the terminal `terminal`.
+/// Unlike a hook, a failure is the user's to see.
+pub async fn badge(paths: &Paths, terminal: u32, text: String) -> io::Result<()> {
+    send(paths, terminal, &Control::Badge { text })
         .await
-        .ok()?;
-    let hook = Control::Hook {
-        event: event.to_owned(),
-        terminal_id,
-        payload,
+        .map_err(|err| io::Error::other(format!("cannot reach the Hive service: {err}")))
+}
+
+/// Opens a hook-role connection and sends one message on `channel`, giving up after
+/// [`SEND_TIMEOUT`].
+async fn send(paths: &Paths, channel: u32, message: &Control) -> io::Result<()> {
+    let sent = async {
+        let stream = UnixStream::connect(paths.socket()).await?;
+        let mut writer = FramedWrite::new(stream, FrameCodec);
+        let hello = Control::hello(Role::Hook, VERSION);
+        writer.send(Frame::control(0, &hello)).await?;
+        writer.send(Frame::control(channel, message)).await
     };
-    writer.send(Frame::control(0, &hook)).await.ok()
+    match tokio::time::timeout(SEND_TIMEOUT, sent).await {
+        Ok(result) => result.map_err(io::Error::other),
+        Err(elapsed) => Err(io::Error::new(io::ErrorKind::TimedOut, elapsed)),
+    }
 }
 
 #[cfg(test)]

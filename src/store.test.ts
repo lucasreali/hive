@@ -84,9 +84,11 @@ test("terminal messages update only their terminal", () => {
   apply({ type: "terminal_opened", channel: 1 });
   apply({ type: "terminal_opened", channel: 2 });
   apply({ type: "unhooked_agent", channel: 1 });
+  apply({ type: "badge", channel: 1, text: "db" });
+  expect(useHive.getState().terminals[1]?.badge).toBe("db");
   apply({ type: "terminal_exited", channel: 1, code: 3 });
   const { terminals } = useHive.getState();
-  expect(terminals[1]).toEqual({ id: 1, exited: true, code: 3, unhooked: true });
+  expect(terminals[1]).toEqual({ id: 1, exited: true, code: 3, unhooked: true, badge: "" });
   expect(terminals[2]).toEqual({ id: 2, exited: false, code: null, unhooked: false });
   apply({ type: "terminal_opened", channel: 1 });
   expect(useHive.getState().terminals[1]).toEqual({
@@ -94,6 +96,7 @@ test("terminal messages update only their terminal", () => {
     exited: false,
     code: null,
     unhooked: false,
+    badge: "",
   });
 });
 

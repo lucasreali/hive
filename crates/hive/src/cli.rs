@@ -34,6 +34,16 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         record: Option<std::path::PathBuf>,
     },
+    /// Show a short label on this terminal's tab and agent row in the app (run inside a Hive
+    /// terminal). At most 40 characters are kept.
+    Badge {
+        /// The label; several words are joined with spaces.
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        text: Vec<String>,
+        /// Remove the label.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Manage git worktrees in `.claude/worktrees/` (Claude Code's convention).
     Worktree {
         #[command(subcommand)]
@@ -77,6 +87,14 @@ pub fn run() -> ExitCode {
             });
             Ok(())
         }
+        Command::Badge { text, .. } => {
+            let Some(terminal) = terminal_id(std::env::var("HIVE_TERMINAL_ID").ok()) else {
+                eprintln!("hive: not in a Hive terminal (HIVE_TERMINAL_ID is missing or invalid)");
+                return ExitCode::from(2);
+            };
+            // `--clear` leaves `text` empty, which clears the badge.
+            block_on(crate::hook::badge(&paths, terminal, text.join(" ")))
+        }
         Command::Worktree { command } => run_worktree(command, &paths),
     };
     match result {
@@ -86,6 +104,11 @@ pub fn run() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// A Hive terminal's id: its channel number, from 1.
+fn terminal_id(value: Option<String>) -> Option<u32> {
+    value?.parse().ok().filter(|&id| id != 0)
 }
 
 fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
@@ -148,4 +171,18 @@ fn block_on(task: impl Future<Output = std::io::Result<()>>) -> std::io::Result<
     let result = runtime.block_on(task);
     runtime.shutdown_background();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_ids_are_positive_numbers() {
+        assert_eq!(terminal_id(Some("7".into())), Some(7));
+        for bad in ["0", "-1", "x", ""] {
+            assert_eq!(terminal_id(Some(bad.into())), None, "{bad}");
+        }
+        assert_eq!(terminal_id(None), None);
+    }
 }

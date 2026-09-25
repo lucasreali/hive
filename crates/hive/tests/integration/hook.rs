@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{Control, EventKind};
+use hive_protocol::{Control, EventKind, Role};
 use serde_json::{Value, json};
 
 use crate::common::Env;
@@ -106,6 +106,70 @@ fn record_failure_is_reported_on_stderr_but_still_exits_zero() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.starts_with(&format!("hive: cannot record the hook call in {dir}: ")),
+        "{stderr}"
+    );
+}
+
+fn badge(env: &Env, terminal: Option<&str>, args: &[&str]) -> Output {
+    let mut cmd = env.hive();
+    cmd.arg("badge").args(args);
+    if let Some(id) = terminal {
+        cmd.env("HIVE_TERMINAL_ID", id);
+    }
+    run(cmd, b"")
+}
+
+#[tokio::test]
+async fn badge_reaches_the_app_on_its_terminal_cleaned_and_cut() {
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let mut app = env.app().await;
+    app.open_terminal(1, &env.path("home")).await;
+    // A hook connection that closes after its hello, or sends garbage, forwards nothing.
+    drop(env.connect(Role::Hook).await);
+    let mut garbage = env.connect(Role::Hook).await;
+    garbage.send(1, Control::TerminalOpened).await;
+    drop(garbage);
+    // Not an open terminal: dropped.
+    assert!(badge(&env, Some("9"), &["ignored"]).status.success());
+    let out = badge(&env, Some("1"), &["  fixing\u{1b}", "tests  "]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    let text = "fixing tests".to_owned();
+    assert_eq!(app.control().await, (1, Control::Badge { text }));
+    let long = "x".repeat(60);
+    assert!(badge(&env, Some("1"), &[&long]).status.success());
+    let text = format!("{}…", "x".repeat(39));
+    assert_eq!(app.control().await, (1, Control::Badge { text }));
+    assert!(badge(&env, Some("1"), &["--clear"]).status.success());
+    let text = String::new();
+    assert_eq!(app.control().await, (1, Control::Badge { text }));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[test]
+fn badge_outside_a_hive_terminal_is_a_usage_error() {
+    let env = Env::new();
+    for terminal in [None, Some("0"), Some("x")] {
+        let out = badge(&env, terminal, &["x"]);
+        assert_eq!(out.status.code(), Some(2), "{terminal:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("HIVE_TERMINAL_ID"), "{stderr}");
+    }
+    assert_eq!(badge(&env, Some("1"), &[]).status.code(), Some(2));
+    let both = badge(&env, Some("1"), &["x", "--clear"]);
+    assert_eq!(both.status.code(), Some(2));
+}
+
+#[test]
+fn badge_without_a_service_fails() {
+    let env = Env::new();
+    let out = badge(&env, Some("1"), &["x"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.starts_with("hive: cannot reach the Hive service: "),
         "{stderr}"
     );
 }

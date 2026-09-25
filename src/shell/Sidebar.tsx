@@ -336,6 +336,7 @@ function AgentRow({ agent }: { agent: Agent }) {
   const status = useHive((s) => s.agentStates[agent.id]);
   // The session's name, as on its tab; until Claude names it, just "Claude".
   const name = useHive((s) => s.agentTitles[agent.id]) ?? "Claude";
+  const badge = useHive((s) => s.terminals[agent.terminal]?.badge);
   const show = () => tab && activateTab(tab);
   const row = useRef<HTMLDivElement>(null);
   // F8 picks an agent that may be out of view.
@@ -352,6 +353,11 @@ function AgentRow({ agent }: { agent: Agent }) {
       >
         <button type="button" className="row-main" aria-current={shown} onClick={show}>
           <StateLines state={status?.state ?? "idle"} doing={status} title={name} />
+          {badge && (
+            <span className="tab-badge label-badge" title="Set with hive badge">
+              {badge}
+            </span>
+          )}
         </button>
       </div>
       {status && status.subagents.length > 0 && (

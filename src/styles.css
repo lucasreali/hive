@@ -492,6 +492,19 @@ button:disabled {
   color: var(--text-3);
 }
 
+/* `hive badge`: the user's label for a terminal, on its tab and its agent's row. */
+.tab-badge.label-badge {
+  flex: none;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-main > .label-badge {
+  align-self: center;
+}
+
 .tab-badge.warn {
   border-color: var(--state-permission);
   color: var(--state-permission);

@@ -141,6 +141,11 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   // Once the agent names its session, the row shows that name instead.
   act(() => apply({ type: "agent_title", channel: 9, id: "s2", title: "Fix the login redirect" }));
   expect(screen.getByRole("button", { name: "idle Fix the login redirect" })).toBeTruthy();
+  // `hive badge` in its terminal shows on the row.
+  act(() => apply({ type: "badge", channel: 9, text: "db" }));
+  const badge = screen.getByText("db");
+  expect(badge.className).toBe("tab-badge label-badge");
+  expect(badge.parentElement?.getAttribute("aria-current")).toBe("false");
 });
 
 test("agents and their subagents show the state the service sent, named for screen readers", () => {

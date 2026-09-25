@@ -20,6 +20,7 @@ Windows                         WSL
 | `hive daemon` | The service. It owns the PTYs, receives hook events and lives exactly as long as the app connection. |
 | `hive bridge` | stdio ↔ socket relay run by the app through `wsl.exe`. It starts the daemon when needed. |
 | `hive hook <event> [--record FILE]` | Called by Claude Code hooks. Forwards one event and always exits 0. |
+| `hive badge <text…>` / `hive badge --clear` | Run inside a Hive terminal: sets or clears that terminal's label on its tab and agent row. Exits 2 without a valid `HIVE_TERMINAL_ID`, 1 when the service cannot be reached. |
 | `hive worktree create/list/remove/hook-create/hook-remove` | Worktrees following Claude's convention. |
 
 ## Module map
@@ -35,7 +36,7 @@ Windows                         WSL
 | `hive::watch` | Pure state machine for the unhooked-`claude` warning. |
 | `hive::states` | Pure agent state machine: hook events → state per agent and subagent, "the most urgent wins", PTY-silence reconciliation (the clock is passed in). |
 | `hive::adapter` | `Adapter` trait and `ClaudeCode` adapter: raw hook payload → `AgentEvent` (raw payload kept). |
-| `hive::hook` | `hive hook`: reads stdin (512 KiB limit), optionally records JSONL, sends with a 200 ms timeout. |
+| `hive::hook` | `hive hook`: reads stdin (512 KiB limit), optionally records JSONL, sends with a 200 ms timeout. `hive badge` sends through the same hook-role connection. |
 | `hive::bridge` | Relay plus detached daemon start (`setsid --fork`, stderr to `daemon.log`). |
 | `hive::wrapper` | Installs `<data>/hive/bin/claude` (sh wrapper) and `<data>/hive/hive-hooks.json` when the daemon starts. |
 | `hive::settings` | The user's settings (`<config>/hive/settings.json`): read at start (256 KiB limit; missing: the defaults; invalid: the defaults plus a warning, the file left alone), range checks, saved whole (temporary file + rename, 0600). |
@@ -78,6 +79,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `close_terminal` | app → service | n | End the terminal's processes. |
 | `terminal_exited {code}` | service → app | n | The shell exited; `code` is null when it was killed by a signal. The channel is free again. |
 | `hook {event, terminal_id, payload}` | `hive hook` → service | 0 | One raw hook call. The service closes the connection after it. |
+| `badge {text}` | `hive badge` → service → app | n | Terminal n's label (`hive badge`); empty clears it. The service drops control and invisible (zero-width, bidi) characters, trims, cuts it at 40 characters (the last one becomes "…") and forwards it only while terminal n is open; `hive badge` sends it on a hook-role connection, which closes after it. The app drops the label when the terminal exits. |
 | `agent {…AgentEvent}` | service → app | 0 | A translated hook event. |
 | `unhooked_agent` | service → app | n | A `claude` runs in terminal n without sending hook events. |
 | `agent_detected {id, project, worktree, cwd}` | service → app | n | An agent (`id` = its session id) started in terminal n. `project`/`worktree` are the ids of the followed worktree containing `cwd`, both null outside every followed project. |
@@ -282,6 +284,12 @@ See [Handshake](#handshake). A refused client is not the app, so the daemon keep
 6. Agents (see [Agent detection](#agent-detection)) are updated.
 7. The service forwards `agent` to the app (used by tests and the latency bench; the UI ignores it). With no app connected, the event is dropped.
 
+### Badge (6.12)
+1. `hive badge <text…>` (words joined with spaces) or `hive badge --clear` reads `HIVE_TERMINAL_ID` (a number from 1; otherwise an error and exit 2).
+2. It connects, sends `hello` (role `hook`) and `badge {text}` on channel `HIVE_TERMINAL_ID` within 200 ms; on failure it prints `hive: cannot reach the Hive service: …` and exits 1.
+3. The service cleans the text (control and invisible characters dropped, trimmed, at most 40 characters) and forwards `badge` to the app on that channel if the terminal is open.
+4. The app shows a non-empty label as a muted pill on the terminal's tab and on its agent's row; `terminal_exited` clears it.
+
 ### Agent detection
 1. A `SessionStart` with a `session_id`, no `agent_id` (a subagent belongs to its agent, see [Agent states](#agent-states)) and a `HIVE_TERMINAL_ID` naming an open terminal registers the agent: session id → terminal.
 2. The service places it by the payload's `cwd`, never the terminal's (#19): the followed worktree whose path contains `cwd`, by whole path components, the deepest one winning (Claude worktrees live inside the main one). Placement runs git (`projects.list()`) on a blocking thread, and is done once; a project followed later does not move an agent already detected.
@@ -371,7 +379,7 @@ Integration tests run the real `hive` binary with a temporary `HOME` and `XDG_*`
 
 ### Frontend without Tauri
 
-Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu"), `settings` (the defaults; `set_settings` keeps new ones in memory, unchecked) and `projects` (two of three fake repositories under `/home/user`; `?mock=empty` starts with none, and `add_project` accepts only the fake paths; branches, name checks and new worktrees follow the CLI's wording, with a long remote branch list in `shop`; `list_changes` answers `MOCK_CHANGES`, sample changes after screen 1g, and `open_file` a sample text shaped by the file's status there, `MOCK_TEXTS` for `src/auth/session.ts`, a `.png` as binary), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`; `cd <dir>` moves it and `claude` sends `agent_detected` placed at the worktree whose path is exactly that directory, then `agent_state` idle; every later line sets that agent working (`agent_removed` when the terminal exits); `worktree-remove <name>` stands in for a `WorktreeRemove` hook, dropping that Claude worktree and sending `projects`. `?mock=states` adds, without terminals, agents in every state, two of them with subagents, one subagent owning a worktree (`tests-login` in `shop`, shown under it), with fake activities and times. `?mock=load` replays a recording into every terminal (see Load test below). `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
+Outside Tauri (a plain browser, `bun run dev`, Playwright) or with `?mock` in the URL, `src/transport/mock.ts` stands in for the service: it answers `welcome` (distribution "Ubuntu"), `settings` (the defaults; `set_settings` keeps new ones in memory, unchecked) and `projects` (two of three fake repositories under `/home/user`; `?mock=empty` starts with none, and `add_project` accepts only the fake paths; branches, name checks and new worktrees follow the CLI's wording, with a long remote branch list in `shop`; `list_changes` answers `MOCK_CHANGES`, sample changes after screen 1g, and `open_file` a sample text shaped by the file's status there, `MOCK_TEXTS` for `src/auth/session.ts`, a `.png` as binary), or with `?mock=mismatch` / `?mock=disconnected` a `version_mismatch` / `disconnected` instead, and each terminal prints `mock$ `, echoes input, repeats the line on Enter and exits on `exit`; `cd <dir>` moves it and `claude` sends `agent_detected` placed at the worktree whose path is exactly that directory, then `agent_state` idle; every later line sets that agent working (`agent_removed` when the terminal exits); `worktree-remove <name>` stands in for a `WorktreeRemove` hook, dropping that Claude worktree and sending `projects`; `hive badge <text>` / `hive badge --clear` sends `badge`. `?mock=states` adds, without terminals, agents in every state, two of them with subagents, one subagent owning a worktree (`tests-login` in `shop`, shown under it), with fake activities and times. `?mock=load` replays a recording into every terminal (see Load test below). `bun run e2e` needs `libnss3` and `libnspr4`; without root, extract them with `apt-get download` + `dpkg -x` and point `LD_LIBRARY_PATH` at them.
 
 ### Load test (1.11, #28)
 

@@ -777,6 +777,10 @@ export function createMockTransport(
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
+        if (line.startsWith("hive badge ")) {
+          const text = line.slice(11).trim();
+          later({ type: "badge", channel: id, text: text === "--clear" ? "" : text });
+        }
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;

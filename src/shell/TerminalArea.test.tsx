@@ -79,6 +79,8 @@ test("tabs switch and show exit and missing hooks", () => {
   expect(useHive.getState().selection).toBe(shopMain.path);
   act(() => select(null));
 
+  act(() => apply({ type: "badge", channel: 2, text: "db" }));
+  expect(tabs()[1].textContent).toBe("maindb");
   act(() => apply({ type: "unhooked_agent", channel: 1 }));
   act(() => apply({ type: "terminal_exited", channel: 2, code: 3 }));
   act(() => apply({ type: "terminal_exited", channel: 3, code: null }));
