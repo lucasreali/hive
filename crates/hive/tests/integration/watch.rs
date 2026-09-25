@@ -4,14 +4,15 @@ use std::time::Duration;
 
 use hive_protocol::{Control, Role};
 
-use crate::common::{Env, wait_until};
+use crate::common::{Env, TIMEOUT};
 
-/// Command line running a stand-in named `claude` (a copy of `dash` that sleeps),
+/// Command line running a stand-in named `claude` (a copy of `dash` that sleeps; the
+/// trailing `:` keeps dash from replacing itself with `sleep`, as macOS's does),
 /// so no real Claude Code runs.
 fn fake_claude(env: &Env) -> String {
     let path = env.path("home/claude");
     std::fs::copy("/bin/dash", &path).unwrap();
-    format!("{} -c 'sleep 30'\r", path.display())
+    format!("{} -c 'sleep 30; :'\r", path.display())
 }
 
 #[tokio::test]
@@ -33,7 +34,12 @@ async fn claude_that_sent_session_start_is_not_reported() {
     let mut app = env.connect(Role::App).await;
     app.open_terminal(6, &env.path("home")).await;
     app.input(6, &fake_claude(&env)).await;
-    wait_until(|| env.processes().iter().any(|p| p.comm == "claude"));
+    // Reading the output answers the shell's terminal queries (`Conn::next`).
+    let start = std::time::Instant::now();
+    while !env.processes().iter().any(|p| p.comm == "claude") {
+        assert!(start.elapsed() < TIMEOUT, "claude did not start");
+        let _ = tokio::time::timeout(Duration::from_millis(50), app.next()).await;
+    }
     let mut hook = env
         .hive()
         .args(["hook", "SessionStart"])

@@ -180,10 +180,26 @@ impl Conn {
     }
 
     pub async fn next(&mut self) -> Option<Frame> {
-        tokio::time::timeout(TIMEOUT, self.reader.next())
+        self.next_in_time().await.expect("timed out")
+    }
+
+    /// The next frame (`None` once the connection closes), or `None` after [`TIMEOUT`].
+    async fn next_in_time(&mut self) -> Option<Option<Frame>> {
+        let frame = tokio::time::timeout(TIMEOUT, self.reader.next())
             .await
-            .unwrap()
-            .map(Result::unwrap)
+            .ok()?;
+        let Some(frame) = frame.map(Result::unwrap) else {
+            return Some(None);
+        };
+        // fish 4 asks the terminal for its primary device attributes and waits for the
+        // answer before reading input: answer as xterm.js does.
+        let query = b"\x1b[0c";
+        if frame.kind == hive_protocol::FrameType::Terminal
+            && frame.payload.windows(query.len()).any(|w| w == query)
+        {
+            self.input(frame.channel, "\x1b[?1;2c").await;
+        }
+        Some(Some(frame))
     }
 
     pub async fn input(&mut self, channel: u32, text: &str) {
@@ -212,7 +228,10 @@ impl Conn {
     pub async fn output_until(&mut self, channel: u32, needle: &str) -> String {
         let mut seen = String::new();
         while !seen.contains(needle) {
-            let frame = self.next().await.expect("connection closed");
+            let Some(frame) = self.next_in_time().await else {
+                panic!("no {needle:?} in the output: {seen:?}");
+            };
+            let frame = frame.expect("connection closed");
             if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == channel {
                 seen.push_str(&String::from_utf8_lossy(&frame.payload));
             }

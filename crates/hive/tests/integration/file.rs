@@ -138,7 +138,13 @@ async fn save(conn: &mut Conn, worktree: &str, content: &str, version: Option<St
 async fn a_save_writes_only_over_the_version_the_app_read() {
     let repo = Repo::new();
     repo.commit("a.txt", "one\n");
-    std::fs::write(repo.root.join("run.cmd"), "").unwrap();
+    // A file the system would run instead of opening in an editor.
+    let (program, system) = if cfg!(target_os = "macos") {
+        ("run.command", "macOS")
+    } else {
+        ("run.cmd", "Windows")
+    };
+    std::fs::write(repo.root.join(program), "").unwrap();
     let root = repo.root.display().to_string();
     let daemon = repo.env.daemon();
     let mut conn = repo.env.connect(Role::App).await;
@@ -176,19 +182,22 @@ async fn a_save_writes_only_over_the_version_the_app_read() {
     );
     assert_eq!(sides(&mut conn, &root, "a.txt").await.0, text("agent\n"));
 
-    // Windows would run a .cmd file, so it is not handed to the app.
+    // The system would run it, so it is not handed to the app.
     let open = Control::OpenInEditor {
         worktree: root.clone(),
-        path: "run.cmd".to_owned(),
+        path: program.to_owned(),
     };
     conn.send(0, open).await;
     assert_eq!(
         conn.control().await.1,
         Control::EditorTarget {
             worktree: root.clone(),
-            path: "run.cmd".to_owned(),
+            path: program.to_owned(),
             windows_path: None,
-            error: Some("Windows would run a .cmd file instead of opening it in an editor".into()),
+            error: Some(format!(
+                "{system} would run a .{} file instead of opening it in an editor",
+                program.rsplit('.').next().unwrap()
+            )),
         }
     );
     drop(conn);
