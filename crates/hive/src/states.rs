@@ -490,7 +490,10 @@ mod tests {
     }
 
     fn pending(agent: &Agent) -> bool {
-        matches!(agent.message("s"), Control::AgentState { pending: true, .. })
+        matches!(
+            agent.message("s"),
+            Control::AgentState { pending: true, .. }
+        )
     }
 
     #[test]
