@@ -599,6 +599,18 @@ not json
         path
     }
 
+    /// Sets `path`'s modification time `secs` seconds after a fixed time: files written one
+    /// after the other can share an mtime, so the order under test is set, not raced.
+    fn touched(path: &Path, secs: u64) {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+    }
+
     #[test]
     fn sessions_of_followed_projects_are_listed_newest_first_and_deleted() {
         let tmp = tempfile::tempdir().unwrap();
@@ -607,9 +619,9 @@ not json
         let repo = repo.to_str().unwrap();
         let folder = root.join(normalized(repo));
         let older = log(&folder, "a.jsonl", repo);
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        touched(&older, 0);
         let wt = format!("{repo}/.claude/worktrees/w");
-        log(&root.join(normalized(&wt)), "b.jsonl", &format!("{wt}/src"));
+        touched(&log(&root.join(normalized(&wt)), "b.jsonl", &format!("{wt}/src")), 1);
         // Not a session: a bad id, not a log, a symlink, a folder, a cwd elsewhere, a
         // project that is not followed.
         log(&folder, "bad id.jsonl", repo);
@@ -649,6 +661,7 @@ not json
         // A `claude` in a folder runs the newest session of that folder; one in a folder
         // with no session runs none.
         let second = log(&folder, "h.jsonl", repo);
+        touched(&second, 2);
         let running = [PathBuf::from(repo), PathBuf::from("/nowhere")];
         let list = sessions.list(&followed, &running).unwrap();
         let got: Vec<_> = list
