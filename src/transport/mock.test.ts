@@ -15,6 +15,7 @@ import {
   MOCK_STATES,
   MOCK_TEXTS,
   mockDirs,
+  mockTranscript,
   mockVersion,
 } from "./mock";
 
@@ -695,4 +696,38 @@ test("folders are browsed on both sides of the fake machine", async () => {
     dirs: [],
     error: "cannot open /nowhere/: No such file or directory (os error 2)",
   });
+});
+
+test("states: each subagent of MOCK_STATES has a conversation; others have none", async () => {
+  const none = { type: "error", message: "no transcript is known for this subagent" };
+  const answers = async (scenario: string | null, asked: [string, string][]) => {
+    const messages: ServiceMessage[] = [];
+    const transport = createMockTransport(scenario);
+    await transport.connect((m) => messages.push(m));
+    await tick();
+    messages.length = 0;
+    for (const [agent, subagent] of asked) await transport.watchTranscript(agent, subagent);
+    await transport.unwatchTranscript("mock-state-2", "a3");
+    await tick();
+    return messages;
+  };
+  expect(
+    await answers("states", [
+      ["mock-state-2", "a3"],
+      ["mock-state-2", "a1"],
+      ["other", "a1"],
+    ]),
+  ).toEqual([
+    {
+      type: "transcript",
+      agent: "mock-state-2",
+      subagent: "a3",
+      entries: mockTranscript("a3"),
+      truncated: false,
+    },
+    none,
+    none,
+  ] as ServiceMessage[]);
+  // Without the states scenario there are no subagents.
+  expect(await answers(null, [["mock-state-2", "a3"]])).toEqual([none] as ServiceMessage[]);
 });

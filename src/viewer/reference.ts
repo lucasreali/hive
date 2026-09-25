@@ -43,6 +43,6 @@ export function sendReference(): void {
   const target = referenceTarget(useHive.getState());
   if ("why" in target) return;
   void transport.writeTerminal(target.terminal, target.text);
-  useHive.setState({ fileShown: false });
+  useHive.setState({ fileShown: false, transcriptShown: null });
   terminal(target.terminal)?.focus();
 }

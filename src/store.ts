@@ -67,6 +67,13 @@ export type ServiceMessage =
       windows_path: string | null;
       error: string | null;
     }
+  | ({ type: "transcript" } & Transcript)
+  | {
+      type: "transcript_appended";
+      agent: string;
+      subagent: string;
+      entries: TranscriptEntry[];
+    }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -216,6 +223,19 @@ export type Dirs = {
 /** Mirrors `hive_protocol::SaveError`. */
 export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";
 
+/** Mirrors `hive_protocol::TranscriptEntry`: a message, or a tool call (`tool` is its name). */
+export type TranscriptEntry = {
+  role: "user" | "assistant" | "tool";
+  text: string;
+  tool: string | null;
+};
+/** A subagent: its agent's session id and its own `agent_id`. */
+export type SubagentRef = { agent: string; subagent: string };
+/** A subagent's conversation as the service read it, then grown by `transcript_appended`. */
+export type Transcript = SubagentRef & { entries: TranscriptEntry[]; truncated: boolean };
+/** Entries kept of a followed conversation; older ones are dropped. */
+export const TRANSCRIPT_LIMIT = 1000;
+
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
 
@@ -328,6 +348,8 @@ export type HiveState = {
   fileShown: boolean;
   /** The lines selected in the open file's viewer (new-file numbers, 1-based), or null. */
   selectedLines: Lines | null;
+  /** The subagent whose conversation shows in place of the terminals (6.10), or null. */
+  transcriptShown: SubagentRef | null;
   selection: string | null;
   /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
@@ -381,6 +403,8 @@ export type HiveState = {
   sessionsError: string | null;
   /** A line to show once the open file's text is there (a search result), then cleared. */
   gotoLine: (OpenFile & { line: number }) | null;
+  /** The followed subagent's conversation; check `agent` and `subagent`. */
+  transcript: Transcript | null;
 };
 
 export const initialState: HiveState = {
@@ -396,6 +420,7 @@ export const initialState: HiveState = {
   openFile: null,
   fileShown: false,
   selectedLines: null,
+  transcriptShown: null,
   selection: null,
   collapsed: {},
   tabs: [],
@@ -429,6 +454,7 @@ export const initialState: HiveState = {
   sessions: null,
   sessionsError: null,
   gotoLine: null,
+  transcript: null,
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -529,7 +555,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { [m.id]: _, ...agents } = s.agents;
       const { [m.id]: __, ...agentStates } = s.agentStates;
       const { [m.id]: ___, ...agentTitles } = s.agentTitles;
-      return { agents, agentStates, agentTitles };
+      const shown = s.transcriptShown?.agent === m.id ? null : s.transcriptShown;
+      return { agents, agentStates, agentTitles, transcriptShown: shown };
     }
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
@@ -632,13 +659,32 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return s.edit && isFor(s.edit, m) ? { edit: saved(s.edit, m.version) } : {};
     case "save_failed":
       return s.edit && isFor(s.edit, m) ? { edit: failed(s.edit, m.error, m.message) } : {};
+    case "transcript": {
+      const { type: _, ...transcript } = m;
+      return { transcript };
+    }
+    case "transcript_appended": {
+      const t = s.transcript;
+      if (t?.agent !== m.agent || t.subagent !== m.subagent) return {};
+      const entries = [...t.entries, ...m.entries];
+      const over = entries.length > TRANSCRIPT_LIMIT;
+      return {
+        transcript: {
+          ...t,
+          entries: entries.slice(-TRANSCRIPT_LIMIT),
+          truncated: t.truncated || over,
+        },
+      };
+    }
     case "disconnected":
-      // The service is gone, and every agent and the watch with it.
+      // The service is gone, and every agent and the watches with it.
       return {
         connection: { status: "disconnected", reason: m.reason },
         agents: {},
         agentStates: {},
         worktreeFiles: null,
+        transcriptShown: null,
+        transcript: null,
       };
     default:
       // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.
@@ -687,10 +733,11 @@ export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: n
   useHive.setState((s) => {
     const gotoLine = openFile && line ? { ...openFile, line } : null;
     return openFile && s.openFile && isFor(openFile, s.openFile)
-      ? { fileShown: true, gotoLine }
+      ? { fileShown: true, gotoLine, transcriptShown: null }
       : {
           openFile,
           fileShown: openFile !== null,
+          transcriptShown: openFile ? null : s.transcriptShown,
           editing,
           edit: null,
           editorNotice: null,
@@ -699,7 +746,7 @@ export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: n
   });
 /** The line asked for was shown. */
 export const clearGotoLine = () => useHive.setState({ gotoLine: null });
-export const showFile = () => useHive.setState({ fileShown: true });
+export const showFile = () => useHive.setState({ fileShown: true, transcriptShown: null });
 /** Shows the open file as editable text (its buffer starts from the last answer) or not. */
 export const setEditing = (editing: boolean) =>
   useHive.setState((s) => ({ editing, edit: editing ? editFor({ ...s, editing }, s.file) : null }));
@@ -721,8 +768,26 @@ export const select = (selection: string | null) =>
       selection,
       activeTab: keep ? s.activeTab : (tabs.at(-1)?.id ?? null),
       fileShown: s.fileShown && fileVisible(next),
+      transcriptShown: null,
     };
   });
+/**
+ * Shows a subagent's conversation in place of the terminals (6.10): its agent is selected, and
+ * the agent's terminal is the one "Back to terminal" returns to.
+ */
+export const showTranscript = (agent: string, subagent: string) => {
+  select(agent);
+  useHive.setState((s) => {
+    const tab = s.tabs.find((t) => t.id === s.agents[agent]?.terminal);
+    return {
+      transcriptShown: { agent, subagent },
+      fileShown: false,
+      activeTab: tab?.id ?? s.activeTab,
+    };
+  });
+};
+/** Back to the terminal from a subagent's conversation. */
+export const hideTranscript = () => useHive.setState({ transcriptShown: null });
 export const setFocused = (focused: boolean) => useHive.setState({ focused });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
@@ -733,12 +798,14 @@ export const addTab = (id: number, cwd: string) =>
     tabs: [...s.tabs, { id, cwd }],
     activeTab: id,
     fileShown: false,
+    transcriptShown: null,
     selection: cwd,
   }));
 export const activateTab = (tab: Tab) =>
   useHive.setState((s) => ({
     activeTab: tab.id,
     fileShown: false,
+    transcriptShown: null,
     selection: tabPlace(s, tab.cwd),
   }));
 /** Removes the tab; when it was shown, its right neighbour among the shown place's tabs is. */

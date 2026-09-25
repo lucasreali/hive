@@ -10,6 +10,7 @@ import {
   type Project,
   type Subagent,
   select,
+  showTranscript,
   toggleCollapsed,
   useHive,
   type Worktree,
@@ -245,14 +246,16 @@ function StateLines({ state, title }: { state: AgentState; title: ReactNode }) {
 }
 
 /**
- * An agent, under the worktree the service placed it in, with its live subagents; clicking
- * either shows the agent's terminal. States are the service's (#37); until the first
+ * An agent, under the worktree the service placed it in, with its live subagents; clicking the
+ * agent shows its terminal, clicking a subagent its conversation (6.10). States are the service's (#37); until the first
  * `agent_state` arrives the agent shows as idle, as `SessionStart` leaves it.
  */
 function AgentRow({ agent }: { agent: Agent }) {
   const tab = useHive((s) => s.tabs.find((t) => t.id === agent.terminal));
   const picked = useHive((s) => s.selection === agent.id);
-  const shown = useHive((s) => s.activeTab === agent.terminal) || picked;
+  // While a subagent's conversation shows, its row is the selected one.
+  const covered = useHive((s) => s.transcriptShown !== null);
+  const shown = (useHive((s) => s.activeTab === agent.terminal) || picked) && !covered;
   const status = useHive((s) => s.agentStates[agent.id]);
   // The session's name, as on its tab; until Claude names it, just "Claude".
   const name = useHive((s) => s.agentTitles[agent.id]) ?? "Claude";
@@ -287,7 +290,7 @@ function AgentRow({ agent }: { agent: Agent }) {
       {status && status.subagents.length > 0 && (
         <ul>
           {status.subagents.map((sub) => (
-            <SubagentNode key={sub.id} sub={sub} show={show} />
+            <SubagentNode key={sub.id} agent={agent.id} sub={sub} />
           ))}
         </ul>
       )}
@@ -297,17 +300,21 @@ function AgentRow({ agent }: { agent: Agent }) {
 
 /**
  * A subagent; with a worktree of its own, that worktree is its parent row (Project → Worktree →
- * Agent at every level, #22). Clicking either row shows the agent's terminal.
+ * Agent at every level, #22). Clicking either row shows the subagent's conversation.
  */
-function SubagentNode({ sub, show }: { sub: Subagent; show: () => void }) {
+function SubagentNode({ agent, sub }: { agent: string; sub: Subagent }) {
   const w = useHive((s) =>
     Object.values(s.projects ?? {})
       .flatMap((p) => p.worktrees)
       .find((w) => w.id === sub.worktree),
   );
+  const shown = useHive(
+    (s) => s.transcriptShown?.agent === agent && s.transcriptShown.subagent === sub.id,
+  );
+  const show = () => showTranscript(agent, sub.id);
   const row = (
-    <div className="tree-row subagent">
-      <button type="button" className="row-main" onClick={show}>
+    <div className="tree-row subagent" data-selected={shown}>
+      <button type="button" className="row-main" aria-current={shown} onClick={show}>
         <StateLines
           state={sub.state}
           title={

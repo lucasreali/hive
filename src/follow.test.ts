@@ -113,18 +113,23 @@ test("tells the service the terminal in view and the window focus, when either c
   setFocused(false);
   addTab(2, "/w");
   useHive.setState({ fileShown: true });
+  useHive.setState({ fileShown: false, transcriptShown: { agent: "s", subagent: "a" } });
   expect(setView.mock.calls.slice(1)).toEqual([
     [1, false],
     [2, false],
     [null, false],
   ]);
+  // A subagent's conversation covers the terminal too.
+  useHive.setState({ transcriptShown: null });
+  expect(setView.mock.calls.at(-1)).toEqual([2, false]);
+  useHive.setState({ fileShown: true });
   // A new service is told again once connected.
   apply({ type: "disconnected", reason: "gone" });
   setFocused(true);
-  expect(setView).toHaveBeenCalledTimes(4);
+  expect(setView).toHaveBeenCalledTimes(6);
   welcome();
   expect(setView.mock.calls.at(-1)).toEqual([null, true]);
   stop();
   setFocused(false);
-  expect(setView).toHaveBeenCalledTimes(5);
+  expect(setView).toHaveBeenCalledTimes(7);
 });
