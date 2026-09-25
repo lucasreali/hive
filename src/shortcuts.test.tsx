@@ -260,3 +260,23 @@ test("the app stops listening when it unmounts", () => {
   press(ctrlShift("B"));
   expect(useHive.getState().rightPanel).toBe("files");
 });
+
+test("the WebView's context menu is off except in text fields and the editor", () => {
+  app();
+  // fireEvent returns false when the default was prevented.
+  const menu = (target: Element) => fireEvent.contextMenu(target);
+  const editor = document.createElement("div");
+  editor.className = "cm-editor";
+  const line = editor.appendChild(document.createElement("span"));
+  const input = document.createElement("input");
+  const textarea = document.createElement("textarea");
+  document.body.append(editor, input, textarea);
+  expect(menu(document.body)).toBe(false);
+  expect(menu(line)).toBe(true);
+  expect(menu(input)).toBe(true);
+  expect(menu(textarea)).toBe(true);
+  for (const node of [editor, input, textarea]) node.remove();
+  // Uninstalled with the app.
+  cleanup();
+  expect(menu(document.body)).toBe(true);
+});

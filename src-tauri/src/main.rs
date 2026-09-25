@@ -23,6 +23,8 @@ fn main() {
                 .with_restart(move || handle.request_restart())
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()));
             app.manage(hive);
+            #[cfg(windows)]
+            disable_browser_keys(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,5 +62,36 @@ fn main() {
             eprintln!("hive-app: {error}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Turns off WebView2's browser keys (Ctrl+P print, F5/Ctrl+R reload, Ctrl+F find, F12, Alt+←/→…).
+/// Tauri does not expose wry's `with_browser_accelerator_keys`, so this sets it on the WebView2
+/// settings directly. Editing keys and the page's own key handlers keep working.
+#[cfg(windows)]
+fn disable_browser_keys(app: &tauri::App) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows_core::Interface;
+
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("hive-app: no main window to turn browser keys off");
+        return;
+    };
+    let result = window.with_webview(|webview| {
+        // SAFETY: COM calls on the live controller, on the webview's own thread.
+        let result = unsafe {
+            webview
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| core.Settings())
+                .and_then(|settings| settings.cast::<ICoreWebView2Settings3>())
+                .and_then(|settings| settings.SetAreBrowserAcceleratorKeysEnabled(false))
+        };
+        if let Err(error) = result {
+            eprintln!("hive-app: could not turn browser keys off: {error}");
+        }
+    });
+    if let Err(error) = result {
+        eprintln!("hive-app: could not turn browser keys off: {error}");
     }
 }

@@ -86,6 +86,16 @@ function onKeyDown(event: KeyboardEvent): void {
 }
 
 /**
+ * The WebView's own context menu (reload, print, inspect…) is off everywhere except in text
+ * fields and the editor, where it gives copy and paste. Rows with their own menu open it anyway.
+ */
+function onContextMenu(event: MouseEvent): void {
+  const target = event.target;
+  if (target instanceof Element && target.closest("input, textarea, .cm-editor")) return;
+  event.preventDefault();
+}
+
+/**
  * Listens on the window, where every key ends up, including a terminal's: the terminal only
  * lets shortcuts through (xterm leaves them unhandled, so they bubble up) and the window runs
  * them, once. Returns the cleanup.
@@ -93,8 +103,10 @@ function onKeyDown(event: KeyboardEvent): void {
 export function installShortcuts(): () => void {
   interceptKeys((event) => shortcut(event) !== null);
   window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("contextmenu", onContextMenu);
   return () => {
     interceptKeys(() => false);
     window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("contextmenu", onContextMenu);
   };
 }
