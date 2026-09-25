@@ -33,7 +33,12 @@ export function nextPending(): void {
   if (pending.length === 0) return;
   const selected = pending.findIndex((a) => a.id === s.selection);
   const at = selected >= 0 ? selected : pending.findIndex((a) => a.terminal === s.activeTab);
-  const agent = pending[(at + 1) % pending.length] as Agent;
+  goToAgent(pending[(at + 1) % pending.length] as Agent);
+}
+
+/** Selects `agent`, opening its project and worktree, and shows its terminal. */
+export function goToAgent(agent: Agent): void {
+  const s = useHive.getState();
   const tab = s.tabs.find((t) => t.id === agent.terminal);
   useHive.setState({
     collapsed: {
