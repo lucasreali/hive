@@ -162,6 +162,7 @@ mod tests {
             let paths = Paths {
                 runtime: tmp.path().join("run"),
                 data: tmp.path().join("it's data"),
+                config: tmp.path().join("config"),
             };
             install(&paths, Path::new("/opt/it's hive/hive")).unwrap();
             Self { tmp, paths }
@@ -355,6 +356,7 @@ mod tests {
         let paths = Paths {
             runtime: tmp.path().join("run"),
             data: tmp.path().join("data"),
+            config: tmp.path().join("config"),
         };
         let hive = Path::new(OsStr::from_bytes(b"/bad\xff/hive"));
         let err = install(&paths, hive).unwrap_err();
@@ -369,6 +371,7 @@ mod tests {
         let paths = Paths {
             runtime: tmp.path().join("run"),
             data: file,
+            config: tmp.path().join("config"),
         };
         assert!(install(&paths, Path::new("/hive")).is_err());
     }

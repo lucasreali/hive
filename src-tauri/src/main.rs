@@ -52,6 +52,8 @@ fn main() {
             commands::delete_session,
             commands::save_file,
             commands::open_in_editor,
+            commands::get_settings,
+            commands::set_settings,
         ])
         .build(tauri::generate_context!());
     match result {

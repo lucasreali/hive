@@ -11,6 +11,8 @@ pub struct Paths {
     pub runtime: PathBuf,
     /// `$XDG_DATA_HOME/hive`, or `~/.local/share/hive`.
     pub data: PathBuf,
+    /// `$XDG_CONFIG_HOME/hive`, or `~/.config/hive`.
+    pub config: PathBuf,
 }
 
 impl Paths {
@@ -28,10 +30,16 @@ impl Paths {
             || PathBuf::from(format!("/tmp/hive-{uid}")),
             |dir| dir.join("hive"),
         );
-        let data = var("XDG_DATA_HOME")
-            .or_else(|| var("HOME").map(|home| home.join(".local/share")))
+        let home = |xdg, under| var(xdg).or_else(|| var("HOME").map(|home| home.join(under)));
+        let data = home("XDG_DATA_HOME", ".local/share")
             .map_or_else(|| runtime.join("data"), |dir| dir.join("hive"));
-        Self { runtime, data }
+        let config = home("XDG_CONFIG_HOME", ".config")
+            .map_or_else(|| runtime.join("config"), |dir| dir.join("hive"));
+        Self {
+            runtime,
+            data,
+            config,
+        }
     }
 
     pub fn socket(&self) -> PathBuf {
@@ -65,6 +73,11 @@ impl Paths {
     /// The Claude sessions that ran in Hive's terminals when the app last closed.
     pub fn open_sessions(&self) -> PathBuf {
         self.data.join("open-sessions.json")
+    }
+
+    /// The user's settings (`hive::settings`).
+    pub fn settings(&self) -> PathBuf {
+        self.config.join("settings.json")
     }
 
     /// Creates the runtime directory with mode `0700` and refuses one that
@@ -104,9 +117,11 @@ mod tests {
         let paths = resolve(&[
             ("XDG_RUNTIME_DIR", "/run/user/1000"),
             ("XDG_DATA_HOME", "/d"),
+            ("XDG_CONFIG_HOME", "/c"),
         ]);
         assert_eq!(paths.runtime, PathBuf::from("/run/user/1000/hive"));
         assert_eq!(paths.data, PathBuf::from("/d/hive"));
+        assert_eq!(paths.settings(), PathBuf::from("/c/hive/settings.json"));
         assert_eq!(
             paths.socket(),
             PathBuf::from("/run/user/1000/hive/hive.sock")
@@ -133,17 +148,21 @@ mod tests {
         let paths = resolve(&[("XDG_RUNTIME_DIR", ""), ("HOME", "/home/me")]);
         assert_eq!(paths.runtime, PathBuf::from("/tmp/hive-1000"));
         assert_eq!(paths.data, PathBuf::from("/home/me/.local/share/hive"));
+        assert_eq!(paths.config, PathBuf::from("/home/me/.config/hive"));
     }
 
     #[test]
     fn without_home_data_goes_under_runtime() {
-        assert_eq!(resolve(&[]).data, PathBuf::from("/tmp/hive-1000/data"));
+        let paths = resolve(&[]);
+        assert_eq!(paths.data, PathBuf::from("/tmp/hive-1000/data"));
+        assert_eq!(paths.config, PathBuf::from("/tmp/hive-1000/config"));
     }
 
     fn paths_in(dir: &std::path::Path) -> Paths {
         Paths {
             runtime: dir.join("run"),
             data: dir.join("data"),
+            config: dir.join("config"),
         }
     }
 

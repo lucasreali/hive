@@ -17,6 +17,7 @@ pub mod procs;
 pub mod projects;
 pub mod search;
 pub mod sessions;
+pub mod settings;
 pub mod states;
 pub mod terminal;
 pub mod watch;

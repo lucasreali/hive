@@ -7,10 +7,6 @@ use std::time::{Duration, Instant};
 use hive_protocol::{AgentEvent, AgentState, Control, EventKind, Notification, SubagentState};
 use serde_json::Value;
 
-/// Rule 2: an agent working or waiting for permission whose terminal prints nothing for this
-/// long was interrupted (Esc/Ctrl+C fire no `Stop`), so it waits for you.
-pub const SILENCE: Duration = Duration::from_secs(5);
-
 /// Subagents kept per agent; later ones are ignored, so a message always fits in a frame.
 const MAX_SUBAGENTS: usize = 32;
 
@@ -212,12 +208,19 @@ impl Agent {
         self.waiting.remove(id);
     }
 
-    /// Rule 2, checked periodically: after [`SILENCE`] without terminal output (nor hook
-    /// events), working and waiting-for-permission become waiting for you. Output alone never
-    /// moves a state back; only hook events do. A subagent waiting on a background task is
-    /// silent by design and keeps working.
-    pub fn reconcile(&mut self, id: &str, last_output: Instant, now: Instant) -> Option<Control> {
-        if now.saturating_duration_since(last_output.max(self.last_event)) < SILENCE {
+    /// Rule 2, checked periodically: after `silence` (the `agents.silence_secs` setting)
+    /// without terminal output (nor hook events), working and waiting-for-permission become
+    /// waiting for you: the agent was interrupted (Esc/Ctrl+C fire no `Stop`). Output alone
+    /// never moves a state back; only hook events do. A subagent waiting on a background task
+    /// is silent by design and keeps working.
+    pub fn reconcile(
+        &mut self,
+        id: &str,
+        silence: Duration,
+        last_output: Instant,
+        now: Instant,
+    ) -> Option<Control> {
+        if now.saturating_duration_since(last_output.max(self.last_event)) < silence {
             return None;
         }
         self.changed(id, |agent| {
@@ -320,6 +323,9 @@ mod tests {
     use crate::adapter::{Adapter, ClaudeCode};
     use AgentState::*;
     use serde_json::json;
+
+    /// The `agents.silence_secs` default.
+    const SILENCE: Duration = Duration::from_secs(5);
 
     /// A hook call as Claude Code sends it; `agent` makes it a subagent's.
     fn hook(name: &str, agent: Option<&str>, extra: serde_json::Value) -> AgentEvent {
@@ -537,17 +543,20 @@ mod tests {
             at(1_000),
         );
         agent.feed("s", &hook("Stop", Some("c"), json!({})), at(1_000));
-        // Counted from the later of the last output and the last hook event.
-        assert_eq!(agent.reconcile("s", at(2_000), at(6_999)), None);
-        assert_eq!(agent.reconcile("s", start, at(5_999)), None);
-        let sent = agent.reconcile("s", at(2_000), at(7_000));
+        // Counted from the later of the last output and the last hook event, for as long as
+        // the setting says.
+        let longer = Duration::from_secs(10);
+        assert_eq!(agent.reconcile("s", longer, at(2_000), at(7_000)), None);
+        assert_eq!(agent.reconcile("s", SILENCE, at(2_000), at(6_999)), None);
+        assert_eq!(agent.reconcile("s", SILENCE, start, at(5_999)), None);
+        let sent = agent.reconcile("s", SILENCE, at(2_000), at(7_000));
         assert_eq!(sent, Some(agent.message("s")));
         let all_waiting = ["a", "b", "c"]
             .map(|id| (id.to_owned(), WaitingYou))
             .to_vec();
         assert_eq!(shown(&agent), (WaitingYou, all_waiting));
         // Nothing left to change; output alone does not move it back.
-        assert_eq!(agent.reconcile("s", at(7_000), at(20_000)), None);
+        assert_eq!(agent.reconcile("s", SILENCE, at(7_000), at(20_000)), None);
         assert_eq!(shown(&agent).0, WaitingYou);
     }
 
@@ -562,13 +571,13 @@ mod tests {
         ] {
             let mut agent = Agent::new(1, start);
             agent.feed("s", &hook(name, None, json!({})), start);
-            assert_eq!(agent.reconcile("s", start, late), None, "{name}");
+            assert_eq!(agent.reconcile("s", SILENCE, start, late), None, "{name}");
             assert_eq!(shown(&agent).0, state);
         }
         // Output newer than `now` (clock races) counts as no silence.
         let mut agent = Agent::new(1, start);
         agent.feed("s", &hook("PreToolUse", None, json!({})), start);
-        assert_eq!(agent.reconcile("s", late, start), None);
+        assert_eq!(agent.reconcile("s", SILENCE, late, start), None);
     }
 
     fn pending(agent: &Agent) -> bool {
@@ -623,7 +632,7 @@ mod tests {
         let mut agent = Agent::new(1, now);
         agent.watched = true;
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
-        assert!(agent.reconcile("s", now, now + SILENCE).is_some());
+        assert!(agent.reconcile("s", SILENCE, now, now + SILENCE).is_some());
         assert_eq!((shown(&agent).0, pending(&agent)), (WaitingYou, false));
     }
 
@@ -747,13 +756,16 @@ mod tests {
         agent.feed("s", &hook("PreToolUse", Some("a"), bash), start);
         agent.feed("s", &launched("a", "backgroundTaskId", "b1"), start);
         // Silence before it stops makes it waiting for you; stopping to wait makes it working.
-        agent.reconcile("s", start, start + SILENCE);
+        agent.reconcile("s", SILENCE, start, start + SILENCE);
         let late = start + SILENCE;
         let stop = stop_with("SubagentStop", Some("a"), &["a", "b1"]);
         assert!(agent.feed("s", &stop, late).is_some());
         assert_eq!(shown(&agent), (WithSubagents, vec![("a".into(), Working)]));
         // It stays working through silence, the agent's own events and tasks listed again.
-        assert_eq!(agent.reconcile("s", late, late + SILENCE * 2), None);
+        assert_eq!(
+            agent.reconcile("s", SILENCE, late, late + SILENCE * 2),
+            None
+        );
         agent.feed("s", &hook("PreToolUse", None, json!({})), late);
         agent.feed("s", &stop_with("Stop", None, &["b1"]), late);
         assert_eq!(shown(&agent).1, [("a".into(), Working)]);

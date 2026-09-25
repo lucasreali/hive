@@ -154,7 +154,19 @@ impl Env {
         app
     }
 
+    /// Completes the handshake; an app then also gets the settings (the defaults here).
     pub async fn connect(&self, role: Role) -> Conn {
+        let mut conn = self.handshake(role).await;
+        if role == Role::App {
+            let settings = Control::Settings {
+                settings: Default::default(),
+            };
+            assert_eq!(conn.control().await, (0, settings));
+        }
+        conn
+    }
+
+    pub async fn handshake(&self, role: Role) -> Conn {
         let mut conn = self.raw().await;
         conn.send(0, Control::hello(role, hive::VERSION)).await;
         assert_eq!(
