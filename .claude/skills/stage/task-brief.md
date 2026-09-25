@@ -13,9 +13,11 @@ You implement **one** task of `TODO.md`, launched by the orchestrator (`.claude/
 - E2E: pick a free port and always set it, e.g. `E2E_PORT=$((1430 + RANDOM % 500))`; the Playwright config reuses any server already on its port, so the default 1420 may be another worktree's server.
 
 ## Gates (all green before ticking)
-- Rust: `BASE=main scripts/gates.sh` (no MISSED/TIMEOUT mutants). Agent shells need `export PATH=$HOME/.cargo/bin:$PATH`.
+Heavy gates run in CI, not on this machine (parallel local builds have restarted the WSL VM).
+- Local, fast only: `cargo fmt --all --check`, `CARGO_BUILD_JOBS=3 cargo clippy --workspace --all-targets -- -D warnings`, `CARGO_BUILD_JOBS=3 cargo test -p <crate you touched>`. Agent shells need `export PATH=$HOME/.cargo/bin:$PATH`. Never run `scripts/gates.sh`, `cargo llvm-cov` or `cargo mutants` locally.
+- CI: `GH_TOKEN=$(gh auth token -u lucasreali) git push -u origin task/<id>-<slug>`, then find the runs for your tip (`GH_TOKEN=... gh run list --branch task/<id>-<slug> --commit $(git rev-parse HEAD)`) and wait on each (`GH_TOKEN=... gh run watch <run-id> --exit-status`): `ci` (Rust fmt/clippy/test/deny/machete/llvm-cov 100%/mutants on the diff, frontend, e2e) and `macos`. On a failure read `gh run view <id> --log-failed`, fix, push again. Report the green run URLs.
 - Frontend: `bun install --frozen-lockfile && bun run lint && bun run typecheck && bun test --coverage` (100% lines). Bun only counts files some test imports: **every new TS file needs its own test**.
-- E2E: `E2E_PORT=<port> bun run e2e`. If Chromium lacks `libnss3`/`libnspr4` (not installed system-wide), prefix `LD_LIBRARY_PATH=/var/tmp/hive-e2e-libs/root/usr/lib/x86_64-linux-gnu`.
+- E2E (CI runs it; locally only the specs you touch): `E2E_PORT=<port> bun run e2e`. If Chromium lacks `libnss3`/`libnspr4` (not installed system-wide), prefix `LD_LIBRARY_PATH=/var/tmp/hive-e2e-libs/root/usr/lib/x86_64-linux-gnu`.
 - If you changed `src-tauri`: `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C target-feature=+crt-static" cargo xwin build -p hive-app --target x86_64-pc-windows-msvc`. Never launch the Windows GUI.
 - Parallel gates load the machine: re-run a timing failure before concluding it is real, and report flaky tests.
 - Never weaken a gate; no new coverage exclusions without the human.
@@ -28,7 +30,7 @@ You implement **one** task of `TODO.md`, launched by the orchestrator (`.claude/
 
 ## Finishing (CLAUDE.md rule 4: you own your work, conflicts included)
 1. Tick the task in `TODO.md` (branch name + a short italic note, same style as earlier entries) and commit (small Conventional Commits throughout).
-2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, and re-run **all** gates.
+2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, and run the fast checks, push and wait for green CI again.
 3. Leave the worktree clean on your branch and report. You cannot run git in the main checkout; the orchestrator fast-forwards `main` to your branch. If `main` moved meanwhile, it sends you back to step 2.
 
 ## Stop instead of guessing
