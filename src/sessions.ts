@@ -108,6 +108,18 @@ export function remove(session: Session): void {
   if (sure) void transport.deleteSession(session.id);
 }
 
+/** A token count, short: "950", "84k", "1.2M". */
+export function tokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  // Below what would round to "1000k".
+  if (n < 999_500) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** A session's tokens for its card ("84k ctx · 12k out"); null before any usage. */
+export const sessionTokens = (x: Session) =>
+  x.context_tokens > 0 ? `${tokens(x.context_tokens)} ctx · ${tokens(x.output_tokens)} out` : null;
+
 /** "now", "5m ago", "3h ago", "2d ago", else the date. */
 export function ago(ms: number, now = Date.now()): string {
   const minutes = Math.floor((now - ms) / 60_000);

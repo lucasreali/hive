@@ -12,6 +12,8 @@ import {
   resumeArgs,
   resumeCommand,
   sessionName,
+  sessionTokens,
+  tokens,
 } from "./sessions";
 import { apply, initialState, useHive } from "./store";
 import { closeTerminal } from "./terminals";
@@ -154,6 +156,20 @@ test("deleting asks first", () => {
   expect(deleted).toHaveBeenCalledWith(session.id);
   deleted.mockRestore();
   confirm.mockRestore();
+});
+
+test("token counts are short, and a session without usage shows none", () => {
+  expect([999, 1000, 84_400, 999_499, 999_500, 1_250_000].map(tokens)).toEqual([
+    "999",
+    "1k",
+    "84k",
+    "999k",
+    "1.0M",
+    "1.3M",
+  ]);
+  const used = { ...session, context_tokens: 84_000, output_tokens: 12_300 };
+  expect(sessionTokens(used)).toBe("84k ctx · 12k out");
+  expect(sessionTokens({ ...session, context_tokens: 0 })).toBeNull();
 });
 
 test("how long ago, in the largest unit", () => {

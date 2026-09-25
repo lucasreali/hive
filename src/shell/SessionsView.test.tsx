@@ -55,7 +55,7 @@ test("Sessions lists the shown worktree's sessions only, searched", () => {
     "You: [Request interrupted by user]",
   );
   expect(first.querySelector(".session-meta")?.textContent).toBe(
-    "7 msgs · 55m ago · claude-opus-5-5",
+    "7 msgs · 14k ctx · 2k out · 55m ago · claude-opus-5-5",
   );
 
   act(() => select(shop.worktrees[1].id));

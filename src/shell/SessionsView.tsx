@@ -9,6 +9,7 @@ import {
   resume,
   resumeCommand,
   sessionName,
+  sessionTokens,
 } from "../sessions";
 import { openSessionMenu, type Session, useHive } from "../store";
 import { transport } from "../transport";
@@ -112,7 +113,9 @@ function SessionRow({ session: x, live }: { session: Session; live: boolean }) {
           </span>
         )}
         <span className="session-meta">
-          {[`${x.messages} msgs`, ago(x.updated_ms), x.model].filter(Boolean).join(" · ")}
+          {[`${x.messages} msgs`, sessionTokens(x), ago(x.updated_ms), x.model]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
       </button>
       <button
