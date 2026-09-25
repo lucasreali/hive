@@ -39,5 +39,10 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
     revealLine(view, goto.line);
     clearGotoLine();
   }, [goto, text, path]);
+  // Review comments on this file (6.7), marked on their lines.
+  const comments = useHive((s) => s.comments[text.worktree]);
+  useEffect(() => {
+    viewer.current?.mark((comments ?? []).filter((c) => c.path === path));
+  }, [comments, path]);
   return <div className="code-view" ref={parent} />;
 }

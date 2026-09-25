@@ -223,6 +223,9 @@ export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
 
+/** A review comment (6.7) on lines of a worktree's file (new-file numbers). */
+export type ReviewComment = Lines & { path: string; text: string };
+
 /**
  * Mirrors `Control::File`: a file's text on disk (`content`, null when gone) and at HEAD
  * (`base`, null when new), both null when `binary` or `too_large`; `version` is opaque.
@@ -371,6 +374,10 @@ export type HiveState = {
   fileShown: boolean;
   /** The lines selected in the open file's viewer (new-file numbers, 1-based), or null. */
   selectedLines: Lines | null;
+  /** Review comments not sent yet, by worktree path (6.7). */
+  comments: Record<string, ReviewComment[]>;
+  /** The lines the comment input is open for, in the open file of `worktree`, or null. */
+  commenting: (Lines & OpenFile) | null;
   selection: string | null;
   /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
@@ -441,6 +448,8 @@ export const initialState: HiveState = {
   openFile: null,
   fileShown: false,
   selectedLines: null,
+  comments: {},
+  commenting: null,
   selection: null,
   collapsed: {},
   tabs: [],

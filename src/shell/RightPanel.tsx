@@ -37,6 +37,7 @@ import { isDirty, isFor } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { referenceTarget, sendReference } from "../viewer/reference";
+import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
 import { isMac, keyText } from "../window";
 import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
 import { ResizeHandle } from "./resize";
@@ -697,6 +698,7 @@ export function FileView({ worktree }: { worktree: string }) {
               Edit
             </button>
           ))}
+        <CommentButton />
         <button
           type="button"
           className="ghost"
@@ -720,6 +722,7 @@ export function FileView({ worktree }: { worktree: string }) {
           <TerminalIcon />
         </button>
       </div>
+      <CommentInput worktree={worktree} path={openFile.path} />
       {editorNotice && <div className="files-error">{editorNotice}</div>}
       <div className="file-view-body">
         {edit ? (
@@ -734,6 +737,7 @@ export function FileView({ worktree }: { worktree: string }) {
           </>
         )}
       </div>
+      <ReviewList worktree={worktree} />
     </section>
   );
 }

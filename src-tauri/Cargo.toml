@@ -36,3 +36,7 @@ workspace = true
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread"] }
+
+[target."cfg(windows)".dependencies]
+webview2-com = "0.38.2"
+windows-core = "0.61.2"

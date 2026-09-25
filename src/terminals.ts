@@ -60,6 +60,12 @@ export function interceptKeys(handler: (event: KeyboardEvent) => boolean): void 
 export const terminal = (id: number): Terminal | undefined => entries.get(id)?.term;
 
 /**
+ * Pastes `text` into terminal `id` (one that was shown) as Ctrl+Shift+V does: bracketed when
+ * the program in it asked for that, so its newlines do not submit a prompt.
+ */
+export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste(text);
+
+/**
  * Opens a terminal in `cwd` (a worktree path) and adds its tab, shown. The Terminal exists
  * before the service is asked, so no output is lost before the tab appears.
  */

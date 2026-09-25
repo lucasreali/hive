@@ -77,6 +77,30 @@ test("the selected lines: none when empty, a line ending the range only when ent
   expect(selectedLines(view.state)).toBeNull();
 });
 
+test("commented lines are marked, only those the text has, and kept across shows", () => {
+  viewer = createViewer(document.body, "a.txt");
+  const { view } = viewer;
+  const marked = () =>
+    [...view.contentDOM.querySelectorAll(".cm-line")].map((l) =>
+      l.classList.contains("cm-commented") ? l.textContent : null,
+    );
+  // Marked before the first show: taken by it.
+  viewer.mark([{ from: 2, to: 2 }]);
+  viewer.show({ content: "one\ntwo\nthree\nfour", original: null });
+  expect(marked()).toEqual([null, "two", null, null]);
+  // Overlapping and out-of-range ranges: each line once, lines past the end ignored.
+  viewer.mark([
+    { from: 3, to: 9 },
+    { from: 0, to: 1 },
+    { from: 1, to: 1 },
+  ]);
+  expect(marked()).toEqual(["one", null, "three", "four"]);
+  viewer.show({ content: "one\ntwo", original: null });
+  expect(marked()).toEqual(["one", null]);
+  viewer.mark([]);
+  expect(marked()).toEqual([null, null]);
+});
+
 /** An editor on `content` that records what it tells its owner. */
 function editing(content: string, path = "a.txt") {
   const heard = { changes: [] as string[], saves: 0, selections: [] as unknown[] };

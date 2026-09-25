@@ -246,9 +246,37 @@ test("Ctrl+Shift+L writes the selected lines' reference into the terminal and fo
   write.mockRestore();
 });
 
+test("Ctrl+Shift+M opens the comment input for the selected lines of the shown file", () => {
+  app();
+  const openFile = { worktree: shop.worktrees[1].path, path: "src/auth/session.ts" };
+  act(() => useHive.setState({ openFile, fileShown: true, selectedLines: { from: 4, to: 6 } }));
+  expect(press(ctrlShift("M"))).toBe(true);
+  expect(useHive.getState().commenting).toEqual({ ...openFile, from: 4, to: 6 });
+});
+
 test("the app stops listening when it unmounts", () => {
   app();
   cleanup();
   press(ctrlShift("B"));
   expect(useHive.getState().rightPanel).toBe("files");
+});
+
+test("the WebView's context menu is off except in text fields and the editor", () => {
+  app();
+  // fireEvent returns false when the default was prevented.
+  const menu = (target: Element) => fireEvent.contextMenu(target);
+  const editor = document.createElement("div");
+  editor.className = "cm-editor";
+  const line = editor.appendChild(document.createElement("span"));
+  const input = document.createElement("input");
+  const textarea = document.createElement("textarea");
+  document.body.append(editor, input, textarea);
+  expect(menu(document.body)).toBe(false);
+  expect(menu(line)).toBe(true);
+  expect(menu(input)).toBe(true);
+  expect(menu(textarea)).toBe(true);
+  for (const node of [editor, input, textarea]) node.remove();
+  // Uninstalled with the app.
+  cleanup();
+  expect(menu(document.body)).toBe(true);
 });
