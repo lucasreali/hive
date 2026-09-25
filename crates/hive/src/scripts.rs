@@ -95,8 +95,8 @@ pub fn env(root: &str, worktree: &str, port: Option<u16>) -> Vec<(&'static str, 
     env
 }
 
-/// Runs the user's `script` with `sh -c` in `dir` with `env` added, within `time`: then the
-/// script and everything it started in its process group are killed. A failure (an exit code
+/// Runs the user's `script` with `sh -c` in `dir` with `env` added, within `time`. Once it
+/// ended or its time is up, everything left in its process group is killed. A failure (an exit code
 /// other than 0, a signal, the time limit) is an error ending with the end of its output.
 pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> io::Result<()> {
     let (reader, writer) = io::pipe()?;
@@ -117,18 +117,21 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
     // Not waited for: a process left in the background may hold the output open.
     std::thread::spawn(move || output.send(last_bytes(reader)));
     let deadline = Instant::now() + time;
-    // Only this thread reaps the script, so its pid still names its group when killed.
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break Some(status);
+    let waited = loop {
+        match child.try_wait() {
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
+            Ok(None) => break Ok(None),
+            done => break done,
         }
-        if Instant::now() >= deadline {
-            let _ = killpg(group, Signal::SIGKILL);
-            child.wait()?;
-            break None;
-        }
-        std::thread::sleep(POLL);
     };
+    // Whatever the script left running in its group ends with it: its worktree is about to
+    // go. A group with members keeps its id, so this cannot reach another process's group;
+    // an empty one (everything already ended) has no one to reach but for a pid reused in the
+    // moment since, as a group leader.
+    let _ = killpg(group, Signal::SIGKILL);
+    // Reaps it when it was killed (an exited script keeps its status).
+    let _ = child.wait();
+    let status = waited?;
     let output = tail.recv_timeout(OUTPUT_GRACE).unwrap_or_default();
     let output = String::from_utf8_lossy(&output);
     let output = output.trim();
@@ -296,17 +299,20 @@ mod tests {
             err.to_string(),
             "the archive script took longer than 0.3 s:\nstarted"
         );
-        let pid: i32 = std::fs::read_to_string(&pid_file)
+        assert!(gone(&pid_file));
+    }
+
+    /// Whether the process whose pid is in `file` ended (killed, then reaped by init).
+    fn gone(file: &Path) -> bool {
+        let pid: i32 = std::fs::read_to_string(file)
             .unwrap()
             .trim()
             .parse()
             .unwrap();
-        // The background sleep was in the group: killed, then reaped by init.
-        let gone = (0..250).any(|_| {
+        (0..250).any(|_| {
             std::thread::sleep(POLL);
             nix::sys::signal::kill(Pid::from_raw(pid), None).is_err()
-        });
-        assert!(gone);
+        })
     }
 
     #[test]
@@ -316,12 +322,19 @@ mod tests {
     }
 
     #[test]
-    fn a_background_process_holding_the_output_does_not_hold_the_script() {
+    fn what_a_script_leaves_running_is_killed_when_it_ends() {
         let tmp = tempfile::tempdir().unwrap();
         let start = Instant::now();
-        // Only the grace period is waited for the output the sleep keeps open.
-        let err = run("sleep 3 & exit 2", tmp.path(), &[], ARCHIVE_TIME).unwrap_err();
+        // The sleep holds the output open: it ends with the script, not 30 s later.
+        let script = "sleep 30 & echo $! > pid";
+        run(script, tmp.path(), &[], ARCHIVE_TIME).unwrap();
         assert!(start.elapsed() < Duration::from_secs(2));
-        assert!(err.to_string().starts_with("the archive script failed"));
+        assert!(gone(&tmp.path().join("pid")));
+        let err = run("sleep 30 & exit 2", tmp.path(), &[], ARCHIVE_TIME).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "the archive script failed (exit status: 2)"
+        );
+        assert!(start.elapsed() < Duration::from_secs(4));
     }
 }
