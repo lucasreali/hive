@@ -572,7 +572,11 @@ mod tests {
             activities(&agent),
             (Some("Main"), vec![Some("Sub"), None, Some("Done")])
         );
-        assert!(agent.reconcile("s", start, start + SILENCE).is_some());
+        assert!(
+            agent
+                .reconcile("s", SILENCE, start, start + SILENCE)
+                .is_some()
+        );
         // An idle subagent is not interrupted, so it keeps what it last did.
         assert_eq!(activities(&agent), (None, vec![None, None, Some("Done")]));
     }
@@ -609,7 +613,11 @@ mod tests {
             start - Duration::from_millis(1),
         );
         assert_eq!(since(&agent), (50_000, vec![50_030, 50_000]));
-        assert!(agent.reconcile("s", at(60), at(60) + SILENCE).is_some());
+        assert!(
+            agent
+                .reconcile("s", SILENCE, at(60), at(60) + SILENCE)
+                .is_some()
+        );
         assert_eq!(since(&agent), (55_060, vec![55_060, 55_060]));
     }
 
