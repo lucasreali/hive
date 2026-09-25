@@ -46,8 +46,12 @@ async fn a_worktree_lists_what_differs_from_head() {
     repo.write("img.bin", "\0\x02");
     repo.write("u dir/u.txt", "u1\nu2");
     repo.write("x.log", "ignored\n");
-    let odd = std::ffi::OsStr::from_bytes(b"odd\xff");
-    std::fs::write(repo.root.join(odd), "z\n").unwrap();
+    // A name that is not UTF-8 (macOS refuses to create one).
+    let not_utf8 = cfg!(target_os = "linux");
+    if not_utf8 {
+        let odd = std::ffi::OsStr::from_bytes(b"odd\xff");
+        std::fs::write(repo.root.join(odd), "z\n").unwrap();
+    }
     let root = repo.root.display().to_string();
 
     let daemon = repo.env.daemon();
@@ -81,8 +85,11 @@ async fn a_worktree_lists_what_differs_from_head() {
                 renamed,
                 file("odd\u{fffd}", FileStatus::Untracked, Some(1), Some(0)),
                 file("u dir/u.txt", FileStatus::Untracked, Some(2), Some(0)),
-            ],
-            added: 6,
+            ]
+            .into_iter()
+            .filter(|f| not_utf8 || f.path != "odd\u{fffd}")
+            .collect(),
+            added: 5 + u64::from(not_utf8),
             removed: 2,
             error: None,
         }

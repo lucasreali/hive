@@ -42,7 +42,8 @@ async fn terminal_runs_fish_with_hive_bin_first_on_path_and_its_id() {
     let expected = format!(
         "id=5 first={} cwd={}",
         env.path("data/hive/bin").display(),
-        env.path("home").display()
+        // fish resolves its folder (on macOS the temp dir is under a symlink).
+        env.path("home").canonicalize().unwrap().display()
     );
     app.output_until(5, &expected).await;
     drop(app);

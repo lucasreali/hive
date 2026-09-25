@@ -339,7 +339,8 @@ async fn the_menu_removes_and_renames_worktrees() {
         "out",
         outside.to_str().unwrap(),
     ]);
-    let outside = outside.display().to_string();
+    // Canonical, as the service lists it (on macOS the temp dir is under a symlink).
+    let outside = outside.canonicalize().unwrap().display().to_string();
 
     let remove = |path: &str, force: bool| Control::RemoveWorktree {
         path: path.into(),

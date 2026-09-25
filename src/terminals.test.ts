@@ -61,11 +61,15 @@ beforeEach(async () => {
   addons.length = 0;
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const id of opened.splice(0)) closeTerminal(id);
   unmount();
   host.remove();
   interceptKeys(() => false);
+  // The mock's answers to `connect` (welcome, projects) arrive on later ticks: let them land
+  // now, then reset, so none leaks into the next test file.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  useHive.setState(initialState, true);
 });
 
 async function open(cwd = "/w") {
