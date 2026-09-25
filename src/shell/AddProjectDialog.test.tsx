@@ -31,7 +31,12 @@ function open(distro: string | null = null) {
 }
 
 const field = () => screen.getByLabelText("Folder") as HTMLInputElement;
-const kind = () => screen.queryByLabelText("Folder kind") as HTMLSelectElement | null;
+const kind = () => screen.queryByRole("combobox", { name: "Folder kind" });
+/** Picks a side in the Folder kind select, as a user does: open it, click the option. */
+const pick = (side: string) => {
+  fireEvent.mouseDown(kind() as HTMLElement);
+  fireEvent.click(screen.getByRole("option", { name: side }));
+};
 const submit = () => screen.getByRole("button", { name: "Add project Enter" }) as HTMLButtonElement;
 const folders = () =>
   [...screen.getByRole("list", { name: "Folders" }).querySelectorAll("li")].map(
@@ -104,9 +109,9 @@ test("the typed path's Linux form goes to the service, and the answer closes the
 test("in WSL, Windows folders are browsed as Windows paths and the choice is remembered", async () => {
   const add = spyOn(transport, "addProject");
   const dialog = open("Ubuntu");
-  expect(kind()?.value).toBe("wsl");
+  expect(kind()?.textContent).toBe("WSL");
   await waitFor(() => expect(field().value).toBe("/home/user/"));
-  fireEvent.change(kind() as HTMLSelectElement, { target: { value: "windows" } });
+  pick("Windows");
   expect(localStorage.getItem("hive.folderSide")).toBe("windows");
   expect(field().placeholder).toBe("C:\\Users\\you\\projects\\shop");
   await waitFor(() => expect(field().value).toBe("C:\\Users\\user\\"));
@@ -128,9 +133,9 @@ test("in WSL, Windows folders are browsed as Windows paths and the choice is rem
   cleanup();
   useHive.setState(initialState, true);
   open("Ubuntu");
-  expect(kind()?.value).toBe("windows");
+  expect(kind()?.textContent).toBe("Windows");
   await waitFor(() => expect(field().value).toBe("C:\\Users\\user\\"));
-  fireEvent.change(kind() as HTMLSelectElement, { target: { value: "wsl" } });
+  pick("WSL");
   expect(localStorage.getItem("hive.folderSide")).toBe("wsl");
   await waitFor(() => expect(field().value).toBe("/home/user/"));
 });
@@ -153,9 +158,9 @@ test("a blocked storage only loses the remembered choice", async () => {
   Object.defineProperty(window, "localStorage", { configurable: true, get: () => blocked });
   try {
     open("Ubuntu");
-    expect(kind()?.value).toBe("wsl");
-    fireEvent.change(kind() as HTMLSelectElement, { target: { value: "windows" } });
-    expect(kind()?.value).toBe("windows");
+    expect(kind()?.textContent).toBe("WSL");
+    pick("Windows");
+    expect(kind()?.textContent).toBe("Windows");
     expect(writes).toBe(1);
   } finally {
     Object.defineProperty(window, "localStorage", real);

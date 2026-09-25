@@ -67,7 +67,7 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
   await page.keyboard.press("Control+Shift+N");
   const dialog = page.getByRole("dialog", { name: "New worktree" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByLabel("Project")).toHaveValue(/shop/);
+  await expect(dialog.getByRole("combobox", { name: "Project" })).toHaveText("shop");
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 
