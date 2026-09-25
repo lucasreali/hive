@@ -8,6 +8,7 @@ use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -101,6 +102,7 @@ async fn serve(
         terminals: Mutex::new(HashMap::new()),
         agents: Mutex::new(HashMap::new()),
         watching: Mutex::new(None),
+        watched: AtomicU32::new(0),
         bin_dir,
         projects,
         sessions,
@@ -142,6 +144,9 @@ struct State {
     agents: Mutex<HashMap<String, Agent>>,
     /// The task watching the worktree of the app's files panel.
     watching: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The terminal in view in the focused app window (the app's `view`); 0 when none, since
+    /// terminal channels start at 1.
+    watched: AtomicU32,
     bin_dir: PathBuf,
     projects: Projects,
     /// Claude Code's session logs of the followed projects.
@@ -165,6 +170,11 @@ impl State {
         }
     }
 
+    /// Whether the terminal `channel` is in view in the focused app window.
+    fn watches(&self, channel: u32) -> bool {
+        self.watched.load(Ordering::Relaxed) == channel
+    }
+
     /// Tracks agents: a `SessionStart` from one of our terminals marks its `claude` as hooked
     /// and detects the agent; any other event of a detected agent (or of its subagents)
     /// updates its state; its own `SessionEnd` removes it.
@@ -185,6 +195,7 @@ impl State {
             let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), cwd));
             place.map(|(_, worktree)| worktree)
         };
+        agent.watched = self.watches(channel);
         if let Some(state) = agent.apply(id, event, Instant::now(), &place) {
             self.to_app(channel, &state).await;
         }
@@ -409,6 +420,7 @@ async fn watch_terminals(state: Arc<State>) {
         // Not under the terminals lock: placing a new agent holds the agents lock while git runs.
         for (id, agent) in state.agents.lock().await.iter_mut() {
             let output = last_output.get(&agent.channel);
+            agent.watched = state.watches(agent.channel);
             if let Some(message) = output.and_then(|&output| agent.reconcile(id, output, now)) {
                 state.to_app(agent.channel, &message).await;
             }
@@ -624,6 +636,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         Ok(Control::CloseTerminal) => state.close(channel).await,
         Ok(Control::WatchWorktree { path }) => state.watch_worktree(Some(path)).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
+        Ok(Control::View { terminal, focused }) => {
+            let watched = terminal.filter(|_| focused).unwrap_or(0);
+            state.watched.store(watched, Ordering::Relaxed);
+        }
         Ok(Control::ListProjects) => state.projects(|projects| Control::Projects {
             projects: projects.list(),
         }),
@@ -894,6 +910,7 @@ mod tests {
                 ("u".to_owned(), Agent::new(5, Instant::now())),
             ])),
             watching: Mutex::new(None),
+            watched: AtomicU32::new(0),
             bin_dir: dir.path().into(),
             projects: Projects::load(dir.path().join("projects.json")),
             sessions: Sessions::new(None),

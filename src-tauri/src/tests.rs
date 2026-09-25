@@ -407,6 +407,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     assert_eq!(service.control().await, (0, watch));
     hive.unwatch_worktree().unwrap();
     assert_eq!(service.control().await, (0, Control::UnwatchWorktree));
+    hive.set_view(Some(2), true).unwrap();
+    let view = Control::View {
+        terminal: Some(2),
+        focused: true,
+    };
+    assert_eq!(service.control().await, (0, view));
     hive.list_changes("/r".into()).unwrap();
     let changes = Control::ListChanges { path: "/r".into() };
     assert_eq!(service.control().await, (0, changes));
@@ -599,6 +605,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.watch_worktree("/r".into()), not_connected);
     assert_eq!(hive.unwatch_worktree(), not_connected);
+    assert_eq!(hive.set_view(None, false), not_connected);
     assert_eq!(hive.list_changes("/r".into()), not_connected);
     assert_eq!(hive.open_file("/r".into(), "a".into()), not_connected);
     assert_eq!(
@@ -784,6 +791,7 @@ fn commands_reach_the_managed_hive() {
             rename_worktree,
             watch_worktree,
             unwatch_worktree,
+            set_view,
             list_changes,
             open_file,
             search_files,
@@ -830,6 +838,7 @@ fn commands_reach_the_managed_hive() {
     let remove = json!({"path": "/r/w", "force": false});
     let rename = json!({"path": "/r/w", "name": "x"});
     let watch = json!({"path": "/r"});
+    let view = json!({"terminal": 1, "focused": true});
     let changes = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a"});
     let search = json!({"worktree": "/r", "query": "q"});
@@ -845,6 +854,7 @@ fn commands_reach_the_managed_hive() {
         ("rename_worktree", &rename),
         ("watch_worktree", &watch),
         ("unwatch_worktree", &json!({})),
+        ("set_view", &view),
         ("list_changes", &changes),
         ("open_file", &file),
         ("search_files", &search),
@@ -884,6 +894,7 @@ fn commands_reach_the_managed_hive() {
         ("rename_worktree", rename),
         ("watch_worktree", watch),
         ("unwatch_worktree", json!({})),
+        ("set_view", view),
         ("list_changes", changes),
         ("open_file", file.clone()),
         ("search_files", search),

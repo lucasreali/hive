@@ -24,6 +24,23 @@ export function followPanel(transport: Transport): () => void {
 }
 
 /**
+ * Tells the service which terminal is in view (none while a file is shown) and whether the
+ * window has the focus, whenever either changes and after a new `welcome`: the service decides
+ * that an agent finishing there was already seen (hive.md item 5). Returns the unsubscribe.
+ */
+export function followView(transport: Transport): () => void {
+  let sent: unknown[] = [];
+  const sync = (s: HiveState) => {
+    const view = [s.connection, s.fileShown ? null : s.activeTab, s.focused] as const;
+    if (s.connection.status !== "connected" || view.every((v, i) => v === sent[i])) return;
+    sent = [...view];
+    void transport.setView(view[1], view[2]);
+  };
+  sync(useHive.getState());
+  return useHive.subscribe(sync);
+}
+
+/**
  * Keeps the open file's text current: asks the service for it when it opens, whenever a new
  * list of its worktree's changes arrives (the file may have changed with it), after a new
  * `welcome`, and when a save found a newer version on disk. Returns the unsubscribe.

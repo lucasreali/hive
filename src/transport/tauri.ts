@@ -24,6 +24,7 @@ export const tauriTransport: Transport = {
   renameWorktree: (path, name) => invoke("rename_worktree", { path, name }),
   watchWorktree: (path) => invoke("watch_worktree", { path }),
   unwatchWorktree: () => invoke("unwatch_worktree"),
+  setView: (terminal, focused) => invoke("set_view", { terminal, focused }),
   listChanges: (path) => invoke("list_changes", { path }),
   listSessions: () => invoke("list_sessions"),
   locateSession: (id, target) => invoke("locate_session", { id, target }),

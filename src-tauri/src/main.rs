@@ -41,6 +41,7 @@ fn main() {
             commands::rename_worktree,
             commands::watch_worktree,
             commands::unwatch_worktree,
+            commands::set_view,
             commands::list_changes,
             commands::open_file,
             commands::search_files,

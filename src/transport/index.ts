@@ -46,6 +46,8 @@ export interface Transport {
   watchWorktree(path: string): Promise<void>;
   /** Stops watching (the files panel closed). */
   unwatchWorktree(): Promise<void>;
+  /** The terminal shown (null: none, or a file is) and whether the window has the focus. */
+  setView(terminal: number | null, focused: boolean): Promise<void>;
   /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
   listChanges(path: string): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */
