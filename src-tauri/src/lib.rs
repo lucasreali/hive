@@ -384,6 +384,17 @@ impl Hive {
         self.link().send(0, &Control::UnwatchWorktree)
     }
 
+    /// Answered by `transcript` now and `transcript_appended` as the conversation grows.
+    pub fn watch_transcript(&self, agent: String, subagent: String) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::WatchTranscript { agent, subagent })
+    }
+
+    pub fn unwatch_transcript(&self, agent: String, subagent: String) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::UnwatchTranscript { agent, subagent })
+    }
+
     /// The terminal shown and whether the window has the focus.
     pub fn set_view(&self, terminal: Option<u32>, focused: bool) -> Result<(), String> {
         self.link().send(0, &Control::View { terminal, focused })
@@ -723,6 +734,24 @@ pub mod commands {
     #[tauri::command]
     pub fn unwatch_worktree(hive: State<'_, Hive>) -> Result<(), String> {
         hive.unwatch_worktree()
+    }
+
+    #[tauri::command]
+    pub fn watch_transcript(
+        hive: State<'_, Hive>,
+        agent: String,
+        subagent: String,
+    ) -> Result<(), String> {
+        hive.watch_transcript(agent, subagent)
+    }
+
+    #[tauri::command]
+    pub fn unwatch_transcript(
+        hive: State<'_, Hive>,
+        agent: String,
+        subagent: String,
+    ) -> Result<(), String> {
+        hive.unwatch_transcript(agent, subagent)
     }
 
     #[tauri::command]
