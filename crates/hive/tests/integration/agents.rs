@@ -757,6 +757,11 @@ async fn an_agents_tokens_are_read_from_its_transcript_after_its_events() {
     let tool = json!({"session_id": "s", "cwd": root, "tool_name": "Bash"});
     hook(&repo, &mut app, "1", "PostToolUse", tool).await;
     assert_eq!(next_usage(&mut app).await, usage(100, 200_000, 10));
+    // Another event with nothing new in the transcript sends nothing (the next usage below
+    // is the appended one's).
+    let tool = json!({"session_id": "s", "cwd": root, "tool_name": "Read"});
+    hook(&repo, &mut app, "1", "PostToolUse", tool).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
     // Past 200k, the window is taken as 1M; the output adds up.
     let mut file = std::fs::File::options().append(true).open(&log).unwrap();
     file.write_all(turn("m2", 250_000, 5).as_bytes()).unwrap();

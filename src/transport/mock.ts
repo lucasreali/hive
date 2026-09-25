@@ -126,9 +126,23 @@ function mockStates(): ServiceMessage[] {
   });
 }
 
+/** A stand-in for `hive::health`: `[changes, ahead, behind]` of a linked worktree, by name. */
+const HEALTH: Record<string, [number, number, number]> = {
+  "fix-login": [2, 3, 1],
+  "feat-checkout": [2, 1, 0],
+  "refactor-auth": [6, 0, 2],
+};
+/** The mock's last commits: 2026-09-20. */
+const LAST_COMMIT_MS = Date.UTC(2026, 8, 20);
+
 const worktree = (root: string, name: string, main = false): Worktree => {
   const path = main ? root : `${root}/.claude/worktrees/${name}`;
-  return { id: path, name, path, branch: main ? name : `worktree-${name}`, main, claude: !main };
+  const [changes, ahead, behind] = HEALTH[name] ?? [0, 0, 0];
+  const status = main
+    ? { changes: 0, ahead: null, behind: null, merged: false, last_commit_ms: LAST_COMMIT_MS }
+    : { changes, ahead, behind, merged: ahead === 0, last_commit_ms: LAST_COMMIT_MS };
+  const branch = main ? name : `worktree-${name}`;
+  return { id: path, name, path, branch, main, claude: !main, status };
 };
 const project = (path: string, name: string, worktrees: string[]): Project => ({
   id: path,

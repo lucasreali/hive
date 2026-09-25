@@ -326,6 +326,7 @@ test("new-worktree answers are kept for the dialog until it opens again", () => 
     created: null,
     createFailure: failure,
     failure: null,
+    removeFailures: {},
   });
   const path = `${shop.path}/.claude/worktrees/x`;
   const updated = { ...shop, worktrees: [...shop.worktrees, { ...shop.worktrees[1], id: path }] };
@@ -488,6 +489,21 @@ test("a tab belongs to the deepest worktree holding its folder", () => {
   // A sibling folder whose name starts the same is not inside.
   expect(tabPlace(s, `${login.path}-copy`)).toBe(main.id);
   expect(tabPlace(s, "/elsewhere")).toBe("/elsewhere");
+});
+
+test("a worktree status replaces only that worktree's; before any projects it is dropped", () => {
+  const [shop, api] = MOCK_REPOS;
+  const [, login] = shop.worktrees;
+  const status = { changes: 0, ahead: 0, behind: 4, merged: true, last_commit_ms: 1 };
+  apply({ type: "worktree_status", path: login.path, status });
+  expect(useHive.getState().projects).toBeNull();
+  apply({ type: "projects", projects: [shop, api] });
+  apply({ type: "worktree_status", path: login.path, status });
+  const { projects } = useHive.getState();
+  expect(projects?.[shop.id].worktrees[1]).toEqual({ ...login, status });
+  expect(projects?.[shop.id].worktrees[2]).toBe(shop.worktrees[2]);
+  expect(projects?.[api.id]).toEqual(api);
+  expect(Object.keys(projects ?? {})).toEqual([shop.id, api.id]);
 });
 
 test("a subagent's conversation is kept as sent, grown by what is appended, and capped", () => {

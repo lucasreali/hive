@@ -5,7 +5,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
-use hive_protocol::{Control, Frame, FrameCodec, Role};
+use hive_protocol::{Control, Frame, FrameCodec, Role, WorktreeStatus};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio_util::codec::{FramedRead, FramedWrite};
@@ -257,13 +257,29 @@ impl Conn {
         seen
     }
 
-    /// Next control frame, skipping terminal output.
+    /// Next control frame, skipping terminal output and `worktree_status` (sent whenever a
+    /// status changes, see [`Conn::worktree_status`]).
     pub async fn control(&mut self) -> (u32, Control) {
         loop {
             let frame = self.next().await.expect("connection closed");
-            if let Ok(mut message) = frame.to_control() {
-                timeless(&mut message);
-                return (frame.channel, message);
+            match frame.to_control() {
+                Ok(Control::WorktreeStatus { .. }) | Err(_) => {}
+                Ok(mut message) => {
+                    timeless(&mut message);
+                    return (frame.channel, message);
+                }
+            }
+        }
+    }
+
+    /// The next `worktree_status` for `path`, skipping every other frame.
+    pub async fn worktree_status(&mut self, path: &str) -> Option<WorktreeStatus> {
+        loop {
+            let frame = self.next().await.expect("connection closed");
+            if let Ok(Control::WorktreeStatus { path: got, status }) = frame.to_control()
+                && got == path
+            {
+                return status;
             }
         }
     }

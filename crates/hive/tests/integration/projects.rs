@@ -549,3 +549,89 @@ async fn folders_are_browsed_from_home() {
     drop(conn);
     assert!(daemon.wait_exit().success());
 }
+
+/// `(name, ahead, behind, merged, changes)` of each worktree, sorted by name.
+type Health = (String, Option<u64>, Option<u64>, bool, u64);
+
+fn health(project: &Project) -> Vec<Health> {
+    let mut got: Vec<_> = project
+        .worktrees
+        .iter()
+        .map(|w| {
+            let s = w.status.clone().expect("a status");
+            assert!(s.last_commit_ms > 1_600_000_000_000, "{s:?}");
+            (w.name.clone(), s.ahead, s.behind, s.merged, s.changes)
+        })
+        .collect();
+    got.sort();
+    got
+}
+
+#[tokio::test]
+async fn worktrees_carry_their_health() {
+    let repo = Repo::new();
+    // The linked worktrees are ignored, so the main one has no changes.
+    repo.commit(".gitignore", ".claude/\n");
+    let root = repo.root.display().to_string();
+    let wt = |name: &str| format!("{root}/.claude/worktrees/{name}");
+    for name in ["a", "b"] {
+        assert!(repo.hive(&["create", name]).status.success());
+    }
+    let a = std::path::PathBuf::from(wt("a"));
+    repo.git_in(&a, &["commit", "-q", "--allow-empty", "-m", "a"]);
+    let mut daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+
+    let row = |name: &str, ahead, behind, merged, changes| {
+        (name.to_owned(), ahead, behind, merged, changes)
+    };
+    let expected = vec![
+        row("a", Some(1), Some(0), false, 0),
+        row("b", Some(0), Some(0), true, 0),
+        row("main", None, None, false, 0),
+    ];
+    assert_eq!(health(&added(&mut conn, &root).await), expected);
+    assert_eq!(health(&list(&mut conn).await[0]), expected);
+
+    // A change in the watched worktree sends its new status.
+    conn.send(0, Control::WatchWorktree { path: wt("b") }).await;
+    std::fs::write(format!("{}/new.txt", wt("b")), "x").unwrap();
+    let status = loop {
+        let status = conn.worktree_status(&wt("b")).await.expect("a status");
+        if status.changes == 1 {
+            break status;
+        }
+    };
+    assert!(status.merged);
+
+    // Every answer carrying a project carries the statuses.
+    let create = Control::CreateWorktree {
+        project: root.clone(),
+        name: "c".into(),
+        base: None,
+    };
+    let Control::WorktreeCreated { project, .. } = request(&mut conn, create).await else {
+        panic!("expected a new worktree")
+    };
+    assert!(health(&project).contains(&row("c", Some(0), Some(0), true, 0)));
+    let rename = Control::RenameWorktree {
+        path: wt("c"),
+        name: "d".into(),
+    };
+    let Control::WorktreeRenamed { project, .. } = request(&mut conn, rename).await else {
+        panic!("expected a rename")
+    };
+    assert!(health(&project).contains(&row("d", Some(0), Some(0), true, 0)));
+    let remove = Control::RemoveWorktree {
+        path: wt("d"),
+        force: false,
+    };
+    let Control::WorktreeRemoved { project, .. } = request(&mut conn, remove).await else {
+        panic!("expected a removal")
+    };
+    let mut expected = expected;
+    expected[1].4 = 1;
+    assert_eq!(health(&project), expected);
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}

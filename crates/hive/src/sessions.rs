@@ -590,6 +590,7 @@ not json
             branch: None,
             main,
             claude: !main,
+            status: None,
         };
         Project {
             id: path.into(),

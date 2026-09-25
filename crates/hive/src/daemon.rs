@@ -35,7 +35,7 @@ use crate::sessions::{self, Sessions};
 use crate::settings;
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{changes, dirs, file, procs, search, transcript, watch, worktree, wrapper};
+use crate::{changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper};
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
@@ -101,21 +101,10 @@ async fn serve(
     settings: settings::Store,
     restore: Restore,
 ) -> io::Result<()> {
-    let state = Arc::new(State {
-        app: Mutex::new(None),
-        terminals: Mutex::new(HashMap::new()),
-        agents: Mutex::new(HashMap::new()),
-        watching: Mutex::new(None),
-        transcript: Mutex::new(None),
-        watched: AtomicU32::new(0),
-        bin_dir,
-        projects,
-        sessions,
-        settings,
-        restore,
-    });
+    let state = Arc::new(State::new(bin_dir, projects, sessions, settings, restore));
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
+    let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -127,6 +116,7 @@ async fn serve(
         }
     }
     watcher.abort();
+    health.abort();
     // Before the terminals end (and their sessions with them): what to resume next time.
     state.save_open().await;
     let sessions: Vec<i32> = state
@@ -161,6 +151,8 @@ struct State {
     sessions: Sessions,
     settings: settings::Store,
     restore: Restore,
+    /// The worktree statuses the app has, so only changes are sent.
+    sent: std::sync::Mutex<health::Sent>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -172,6 +164,77 @@ struct Restore {
 }
 
 impl State {
+    fn new(
+        bin_dir: PathBuf,
+        projects: Projects,
+        sessions: Sessions,
+        settings: settings::Store,
+        restore: Restore,
+    ) -> Self {
+        Self {
+            app: Mutex::new(None),
+            terminals: Mutex::new(HashMap::new()),
+            agents: Mutex::new(HashMap::new()),
+            watching: Mutex::new(None),
+            transcript: Mutex::new(None),
+            watched: AtomicU32::new(0),
+            bin_dir,
+            projects,
+            sessions,
+            settings,
+            restore,
+            sent: Default::default(),
+        }
+    }
+
+    fn sent(&self) -> std::sync::MutexGuard<'_, health::Sent> {
+        self.sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Gives the worktrees of the projects in a reply their status (git, so on a blocking
+    /// thread), remembered as sent.
+    fn with_health(&self, reply: &mut Control) {
+        let projects = match reply {
+            Control::Projects { projects } => projects.as_mut_slice(),
+            Control::ProjectAdded { project }
+            | Control::WorktreeCreated { project, .. }
+            | Control::WorktreeRemoved { project, .. }
+            | Control::WorktreeRenamed { project, .. } => std::slice::from_mut(project),
+            _ => return,
+        };
+        for project in projects {
+            health::fill(project);
+            let mut sent = self.sent();
+            for w in &project.worktrees {
+                sent.changed(&w.path, &w.status);
+            }
+        }
+    }
+
+    /// Sends `worktree_status` for every followed worktree (only the one at `only`, when
+    /// given) whose status is not the one the app has.
+    async fn refresh_health(&self, only: Option<&str>) {
+        let changed = tokio::task::block_in_place(|| {
+            let mut changed = Vec::new();
+            for project in self.projects.list() {
+                let chosen = project.worktrees.iter();
+                for w in chosen.filter(|w| only.is_none_or(|path| path == w.path)) {
+                    let status = health::of(&project, w);
+                    if self.sent().changed(&w.path, &status) {
+                        let path = w.path.clone();
+                        changed.push(Control::WorktreeStatus { path, status });
+                    }
+                }
+            }
+            changed
+        });
+        for message in changed {
+            self.to_app(0, &message).await;
+        }
+    }
+
     /// Sends a control message to the app, if one is connected.
     async fn to_app(&self, channel: u32, message: &Control) {
         if let Some(app) = &*self.app.lock().await {
@@ -372,7 +435,11 @@ impl State {
         let state = self.clone();
         tokio::spawn(async move {
             // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
-            let reply = tokio::task::block_in_place(|| request(&state.projects, &state.sessions));
+            let reply = tokio::task::block_in_place(|| {
+                let mut reply = request(&state.projects, &state.sessions);
+                state.with_health(&mut reply);
+                reply
+            });
             state.to_app(0, &reply).await;
         });
     }
@@ -401,6 +468,7 @@ impl State {
         let listed = tokio::task::block_in_place(|| changes::list(Path::new(path)));
         self.to_app(0, &changes::message(path.to_owned(), listed))
             .await;
+        self.refresh_health(Some(path)).await;
     }
 
     /// Follows the subagent's transcript instead of any other: sends what it holds now, then
@@ -505,6 +573,15 @@ async fn watch_terminals(state: Arc<State>) {
         if let Some(message) = appended {
             state.to_app(0, &message).await;
         }
+    }
+}
+
+/// Sends the worktree statuses that changed, every `interval` (first right away).
+async fn watch_health(state: Arc<State>, interval: std::time::Duration) {
+    let mut ticks = tokio::time::interval(interval);
+    loop {
+        ticks.tick().await;
+        state.refresh_health(None).await;
     }
 }
 
@@ -990,6 +1067,76 @@ mod tests {
         );
     }
 
+    fn test_state(dir: &Path) -> Arc<State> {
+        let restore = Restore {
+            file: dir.join("open-sessions.json"),
+            pending: Mutex::new(Vec::new()),
+        };
+        let projects = Projects::load(dir.join("projects.json"));
+        Arc::new(State::new(
+            dir.into(),
+            projects,
+            Sessions::new(None),
+            settings::Store::load(dir.join("settings.json")),
+            restore,
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn changed_worktree_statuses_are_sent_on_every_tick() {
+        // Through a real daemon this would take the 30 s interval.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap().join("r");
+        std::fs::create_dir(&root).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "a"]);
+        let state = test_state(dir.path());
+        let path = root.display().to_string();
+        state.projects.add(&path).unwrap();
+        let (app, mut sent) = mpsc::unbounded_channel();
+        *state.app.lock().await = Some(app);
+        let ticking = tokio::spawn(watch_health(
+            state.clone(),
+            std::time::Duration::from_millis(50),
+        ));
+        let next = async |sent: &mut mpsc::UnboundedReceiver<Frame>| {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(10), sent.recv());
+            let control = frame
+                .await
+                .expect("no status")
+                .unwrap()
+                .to_control()
+                .unwrap();
+            let json = serde_json::to_value(control).unwrap();
+            assert_eq!(
+                (&json["type"], &json["path"]),
+                (&"worktree_status".into(), &path.as_str().into())
+            );
+            json["status"]["changes"].as_u64().unwrap()
+        };
+        // Sent when first seen, then only when it changed.
+        assert_eq!(next(&mut sent).await, 0);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(sent.try_recv().is_err(), "sent again unchanged");
+        std::fs::write(root.join("new"), "").unwrap();
+        assert_eq!(next(&mut sent).await, 1);
+        std::fs::remove_file(root.join("new")).unwrap();
+        assert_eq!(next(&mut sent).await, 0);
+        ticking.abort();
+    }
+
     #[tokio::test]
     async fn a_connecting_app_gets_the_state_of_every_live_agent() {
         // Agents outlive an app connection only in principle (the service exits with the
@@ -1008,25 +1155,11 @@ mod tests {
             output_tokens: 2,
         };
         assert_eq!(named.usage.read("s", dir.path(), &log), Some(usage.clone()));
-        let state = Arc::new(State {
-            app: Mutex::new(None),
-            terminals: Mutex::new(HashMap::new()),
-            agents: Mutex::new(HashMap::from([
-                ("s".to_owned(), named),
-                ("u".to_owned(), Agent::new(5, Instant::now(), 0)),
-            ])),
-            watching: Mutex::new(None),
-            transcript: Mutex::new(None),
-            watched: AtomicU32::new(0),
-            bin_dir: dir.path().into(),
-            projects: Projects::load(dir.path().join("projects.json")),
-            sessions: Sessions::new(None),
-            settings: settings::Store::load(dir.path().join("settings.json")),
-            restore: Restore {
-                file: dir.path().join("open-sessions.json"),
-                pending: Mutex::new(Vec::new()),
-            },
-        });
+        let state = test_state(dir.path());
+        *state.agents.lock().await = HashMap::from([
+            ("s".to_owned(), named),
+            ("u".to_owned(), Agent::new(5, Instant::now(), 0)),
+        ]);
         // The same stream types as the daemon, so no second instantiation skews line coverage.
         let (client, server) = UnixStream::pair().unwrap();
         let (read, write) = server.into_split();
