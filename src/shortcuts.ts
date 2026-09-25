@@ -21,7 +21,7 @@ import { commandKey } from "./window";
 // Every other key goes to the terminal untouched.
 
 /** The selected project, the project of the selected worktree (or agent), else the current space's first. */
-function currentProject(s: HiveState): string | null {
+export function currentProject(s: HiveState): string | null {
   return (owner(s.projects, selectedPlace(s)) ?? spaceProjects(s)[0])?.id ?? null;
 }
 
@@ -69,6 +69,12 @@ export type Command = { id: string; label: string; keys: string; run: () => void
  * lists them, and the command palette (6.3) offers them.
  */
 export const COMMANDS: readonly Command[] = [
+  {
+    id: "palette",
+    label: "Command palette",
+    keys: "Ctrl+Shift+P",
+    run: () => openModal("palette"),
+  },
   { id: "settings", label: "Open settings", keys: "Ctrl+,", run: () => openModal("settings") },
   {
     id: "worktree-picker",
@@ -137,8 +143,11 @@ export function shortcut(event: KeyboardEvent): (() => void) | null {
   const s = useHive.getState();
   const blocked =
     s.connection.status === "version_mismatch" || s.connection.status === "disconnected";
-  // Under the connection block nothing works; with a dialog open its keys are its own.
-  if (blocked || s.modal !== null) return null;
+  // Under the connection block nothing works; with a dialog open its keys are its own. A dialog
+  // closed by Esc clears `modal` only on its `close` event, which the browser sends in a later
+  // task: the shortcuts count it closed as soon as it is.
+  const dialog = s.modal !== null && document.querySelector("dialog[open]") !== null;
+  if (blocked || dialog) return null;
   return COMMANDS.find((c) => presses(c.keys, event))?.run ?? null;
 }
 

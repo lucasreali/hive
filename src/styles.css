@@ -2197,6 +2197,34 @@ li:not(:last-child) > .owned::before {
   border-color: var(--border);
 }
 
+/* Command palette (Ctrl+Shift+P): the picker's look, rows in named groups */
+.dialog.palette {
+  width: 640px;
+}
+
+.palette .picker-list {
+  max-height: 420px;
+}
+
+.palette-group {
+  margin: 0;
+  padding: 8px 8px 4px;
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.palette .picker-name {
+  font-family: inherit;
+  font-size: var(--fs-body);
+}
+
+.palette .picker-row kbd {
+  flex: none;
+  color: var(--text-2);
+  border-color: var(--border);
+}
+
 .dialog.picker::backdrop {
   background: transparent;
 }

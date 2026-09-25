@@ -50,6 +50,26 @@ test("Ctrl+Shift+T opens the worktree picker", () => {
   expect(useHive.getState().modal).toBe("worktree-picker");
 });
 
+test("Ctrl+Shift+P opens the command palette", () => {
+  app();
+  expect(press(ctrlShift("P"))).toBe(true);
+  expect(useHive.getState().modal).toBe("palette");
+});
+
+test("Esc then Ctrl+Shift+P at once opens the palette, before the dialog's `close` event", () => {
+  app();
+  press({ key: ",", ctrlKey: true });
+  const settings = document.querySelector("dialog") as HTMLDialogElement;
+  expect(useHive.getState().modal).toBe("settings");
+  // A dialog open in the store and on screen keeps the shortcuts.
+  expect(press(ctrlShift("P"))).toBe(false);
+  // Esc in the browser: the dialog is closed now, its `close` event comes in a later task.
+  settings.removeAttribute("open");
+  expect(useHive.getState().modal).toBe("settings");
+  expect(press(ctrlShift("P"))).toBe(true);
+  expect(useHive.getState().modal).toBe("palette");
+});
+
 test("Ctrl+Shift+N opens the new worktree dialog for the current project", () => {
   app();
   // Nothing selected: the first project.

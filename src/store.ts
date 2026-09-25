@@ -464,6 +464,7 @@ export type Modal =
   | "edit-space"
   | "settings"
   | "remove-merged"
+  | "palette"
   | null;
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };

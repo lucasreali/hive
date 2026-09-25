@@ -244,6 +244,7 @@ Terminal content in the prototype (Claude Code output, sample code) is sample da
 | Action | Shortcut | Prototype had |
 |---|---|---|
 | Next pending agent | F8 | F8 |
+| Command palette | Ctrl+Shift+P | — |
 | Worktree picker → new terminal | Ctrl+Shift+T | Alt+T |
 | New worktree | Ctrl+Shift+N | Alt+N |
 | Files and diff panel | Ctrl+Shift+B | Alt+B |

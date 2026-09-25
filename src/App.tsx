@@ -3,6 +3,7 @@ import { AddProjectDialog } from "./shell/AddProjectDialog";
 import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
+import { Palette } from "./shell/Palette";
 import { RightPanel } from "./shell/RightPanel";
 import { SessionMenu } from "./shell/SessionsView";
 import { SettingsDialog } from "./shell/SettingsDialog";
@@ -56,6 +57,7 @@ export function App() {
         {modal === "edit-space" && !blocked && <SpaceDialog editing />}
         {modal === "settings" && !blocked && <SettingsDialog />}
         {modal === "remove-merged" && !blocked && <RemoveMergedDialog />}
+        {modal === "palette" && !blocked && <Palette />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {!blocked && <WorktreeMenu />}
