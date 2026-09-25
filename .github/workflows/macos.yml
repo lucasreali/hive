@@ -5,7 +5,7 @@ name: macos
 
 on:
   push:
-    branches: [main, task/5.3-macos-release]  # TEMP: remove before merging
+    branches: [main]
   workflow_dispatch:
 
 jobs:
