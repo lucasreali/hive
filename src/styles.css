@@ -1542,20 +1542,79 @@ li:not(:last-child) > .owned::before {
   gap: 14px;
 }
 
-.field select {
+/* Select (src/ui/Select.tsx): a trigger like a field, a list like the context menu */
+.select {
+  display: flex;
+}
+
+.select-trigger {
+  flex: 1;
   height: 30px;
-  padding: 0 10px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
   font-size: var(--fs-body);
-  outline: none;
+  text-align: left;
 }
 
-.field select:focus {
+.select-trigger:focus-visible,
+.select-trigger[aria-expanded="true"] {
   border-color: var(--focus);
   box-shadow: 0 0 0 1px var(--focus);
+}
+
+.select-caret {
+  flex: none;
+  color: var(--text-3);
+}
+
+.select-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-list {
+  position: fixed;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: var(--fs-body);
+}
+
+.select-list [role="option"] {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.select-list [role="option"][data-active="true"] {
+  background: var(--hover);
+}
+
+.select-check {
+  display: flex;
+  flex: none;
+  color: var(--accent);
 }
 
 .branch-picker {
@@ -2146,11 +2205,13 @@ body[data-resizing] {
   display: flex;
 }
 
-.field .folder-path select {
-  height: 30px;
+.folder-path .select-trigger,
+.folder-path .select-trigger:focus-visible,
+.folder-path .select-trigger[aria-expanded="true"] {
   border: none;
   border-right: 1px solid var(--border-subtle);
   border-radius: 0;
+  box-shadow: none;
 }
 
 .field .folder-path input,

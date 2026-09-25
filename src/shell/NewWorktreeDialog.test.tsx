@@ -58,7 +58,7 @@ test("the project row opens the dialog for that project, with its branches", asy
   const dialog = screen.getByRole("dialog", { name: "New worktree" }) as HTMLDialogElement;
   expect(dialog.open).toBe(true);
   expect(document.activeElement).toBe(nameField());
-  expect((screen.getByLabelText("Project") as HTMLSelectElement).value).toBe(api.id);
+  expect(screen.getByRole("combobox", { name: "Project" }).textContent).toBe(api.name);
   expect(create().disabled).toBe(true);
   await waitFor(() => expect(picked()).toBe("main"));
   expect(branchNames()).toEqual([
@@ -257,9 +257,10 @@ test("a refused create is explained under the name until it changes", async () =
 test("another project asks for its branches; a failure to list them is shown", async () => {
   const listBranches = spyOn(transport, "listBranches");
   open(null);
-  const project = screen.getByLabelText("Project") as HTMLSelectElement;
-  expect(project.value).toBe(shop.id);
-  fireEvent.change(project, { target: { value: api.id } });
+  const project = screen.getByRole("combobox", { name: "Project" });
+  expect(project.textContent).toBe(shop.name);
+  fireEvent.mouseDown(project);
+  fireEvent.click(screen.getByRole("option", { name: api.name }));
   expect(listBranches).toHaveBeenLastCalledWith(api.id);
   listBranches.mockRestore();
   const error = "git for-each-ref failed";
