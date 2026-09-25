@@ -8,9 +8,11 @@ import type {
   SaveError,
   ServiceMessage,
   Session,
+  Settings,
   Subagent,
   Worktree,
 } from "../store";
+import { DEFAULT_SETTINGS } from "../store";
 import type { Transport } from ".";
 import { loadReplay, type ReplayEvent } from "./replay";
 
@@ -489,6 +491,8 @@ export function createMockTransport(
     return `in use by ${ids.map(([id]) => `fish (${id})`).join(", ")}: close its terminals first`;
   };
   let sessions = MOCK_SESSIONS;
+  // Kept in memory; the real service checks the ranges and saves them.
+  let settings: Settings = DEFAULT_SETTINGS;
   const setState = (id: string, state: AgentState) =>
     later({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
   // Files by worktree path, and the one watched.
@@ -531,11 +535,19 @@ export function createMockTransport(
       const failure = HANDSHAKE[scenario ?? ""];
       later(failure ?? WELCOME);
       if (failure) return;
+      later({ type: "settings", settings });
       later({ type: "projects", projects });
       if (scenario === "states") for (const m of mockStates()) later(m);
     },
     async listProjects() {
       later({ type: "projects", projects });
+    },
+    async getSettings() {
+      later({ type: "settings", settings });
+    },
+    async setSettings(next) {
+      settings = next;
+      later({ type: "settings", settings });
     },
     async checkUpdate() {
       if (scenario === "update") later({ type: "update_ready", version: "9.9.9" });

@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
-import { type AgentState, apply, initialState, useHive } from "../store";
+import { type AgentState, apply, DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { agentStatus } from "../transport/mock";
 
 afterEach(() => {
@@ -41,6 +41,15 @@ test("with agents the close waits for a confirmation, focused on it", () => {
   act(() => agent("b"));
   expect(dialog().textContent).toContain("2 agents are running.");
   fireEvent.click(confirm());
+  expect(closed()).toBe(true);
+});
+
+test("with confirm_close off the app closes at once, agents or not", () => {
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.agents.confirm_close = false;
+  apply({ type: "settings", settings });
+  closeWith(["a"]);
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(closed()).toBe(true);
 });
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
-import { apply, initialState, useHive } from "./store";
+import { apply, DEFAULT_SETTINGS, initialState, useHive } from "./store";
 import { transport } from "./transport";
 
 // happy-dom has no WebGL: a fake addon records what the manager does with the renderer.
@@ -97,8 +97,10 @@ test("output written before the tab is shown is kept, and the tab opens shown", 
   ]);
 });
 
-test("the scrollback in the store applies to new terminals", async () => {
-  useHive.setState({ scrollback: 42 });
+test("the scrollback setting applies to new terminals", async () => {
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.scrollback = 42;
+  useHive.setState({ settings });
   const { term } = await open();
   expect(term.options.scrollback).toBe(42);
 });

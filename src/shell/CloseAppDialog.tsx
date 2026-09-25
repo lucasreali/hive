@@ -19,9 +19,13 @@ const AT_RISK = new Set<AgentState>([
 export const agentsAtRisk = (s: HiveState) =>
   Object.values(s.agents).filter((a) => AT_RISK.has(s.agentStates[a.id]?.state ?? "idle"));
 
-/** The close guard: asks when agents would end with the app. True keeps the window open. */
+/**
+ * The close guard: asks when agents would end with the app, unless the `confirm_close` setting
+ * is off. True keeps the window open.
+ */
 export function confirmClose(): boolean {
-  if (agentsAtRisk(useHive.getState()).length === 0) return false;
+  const s = useHive.getState();
+  if (!s.settings.agents.confirm_close || agentsAtRisk(s).length === 0) return false;
   openModal("close-app");
   return true;
 }

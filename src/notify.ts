@@ -14,15 +14,15 @@ export const TONE_GAP_MS = 500;
 let lastTone = Number.NEGATIVE_INFINITY;
 let audio: AudioContext | undefined;
 
-/** A short synthesized beep; no audio file. */
-function tone(): void {
+/** A short synthesized beep at `volume` percent; no audio file. */
+function tone(volume: number): void {
   audio ??= new AudioContext();
   void audio.resume();
   const t = audio.currentTime;
   const osc = audio.createOscillator();
   const gain = audio.createGain();
   osc.frequency.value = 880;
-  gain.gain.setValueAtTime(0.15, t);
+  gain.gain.setValueAtTime((0.15 * volume) / 100, t);
   gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
   osc.connect(gain).connect(audio.destination);
   osc.start(t);
@@ -51,9 +51,10 @@ export function notify(
   const before = s.agentStates[message.id]?.state;
   const after = message.state;
   if (before === undefined || before === after) return;
-  if (ALERTING.includes(after) && now - lastTone >= TONE_GAP_MS) {
+  const volume = s.settings.notifications.volume;
+  if (volume > 0 && ALERTING.includes(after) && now - lastTone >= TONE_GAP_MS) {
     lastTone = now;
-    tone();
+    tone(volume);
   }
   if (after === "waiting_you" && BUSY.includes(before) && message.pending) {
     const where = place(s, message.id);

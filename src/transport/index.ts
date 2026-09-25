@@ -1,5 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
-import type { ServiceMessage, SessionTarget } from "../store";
+import type { ServiceMessage, SessionTarget, Settings } from "../store";
 import { createMockTransport } from "./mock";
 import { tauriTransport } from "./tauri";
 
@@ -70,6 +70,10 @@ export interface Transport {
    * answered by `editor_target`.
    */
   openInEditor(worktree: string, path: string): Promise<void>;
+  /** Answered by `settings` (also sent after every `welcome`). */
+  getSettings(): Promise<void>;
+  /** Saves the whole settings; answered by `settings`, or `settings_failed` with nothing saved. */
+  setSettings(settings: Settings): Promise<void>;
   /** Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is downloaded. */
   checkUpdate(): Promise<void>;
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */

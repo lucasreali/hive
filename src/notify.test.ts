@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { notify, TONE_GAP_MS } from "./notify";
-import { type AgentState, apply, type HiveState, initialState, useHive } from "./store";
+import {
+  type AgentState,
+  apply,
+  DEFAULT_SETTINGS,
+  type HiveState,
+  initialState,
+  useHive,
+} from "./store";
 import { agentStatus } from "./transport/mock";
 
 const g = globalThis as Record<string, unknown>;
 let tones = 0;
+/** The gain each tone started at. */
+let gains: number[] = [];
 let shown: { title: string; body?: string }[] = [];
 // Advances past the rate limit between tests; each test moves its own clock from here.
 let clock = 1_000_000;
@@ -14,7 +23,7 @@ class FakeAudio {
   destination = {};
   resume = () => Promise.resolve();
   createGain = () => ({
-    gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+    gain: { setValueAtTime: (v: number) => gains.push(v), exponentialRampToValueAtTime() {} },
     connect: (d: unknown) => d,
   });
   createOscillator = () => ({
@@ -34,6 +43,7 @@ class FakeNotification {
 
 beforeEach(() => {
   tones = 0;
+  gains = [];
   shown = [];
   clock += 10 * TONE_GAP_MS;
   g.AudioContext = FakeAudio;
@@ -88,6 +98,21 @@ test("an agent's first state and the snapshot after welcome stay silent", async 
   await settle();
   expect(tones).toBe(0);
   expect(shown).toEqual([]);
+});
+
+test("the tone follows the volume setting; 0 plays none", () => {
+  feed("a", "working");
+  feed("a", "error");
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.notifications.volume = 40;
+  apply({ type: "settings", settings });
+  feed("a", "working", TONE_GAP_MS);
+  feed("a", "error", TONE_GAP_MS);
+  settings.notifications.volume = 0;
+  apply({ type: "settings", settings: structuredClone(settings) });
+  feed("a", "working", 2 * TONE_GAP_MS);
+  feed("a", "error", 2 * TONE_GAP_MS);
+  expect([tones, gains]).toEqual([2, [0.15, 0.06]]);
 });
 
 test("several agents changing at once play one tone", () => {

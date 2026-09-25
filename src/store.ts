@@ -7,6 +7,10 @@ import { type EditBuffer, failed, fromDisk, isFor, saved, startEdit } from "./vi
 /** Service → app messages the store understands. Mirrors `hive_protocol::Control`. */
 export type ServiceMessage =
   | { type: "welcome"; version: string; distro: string | null }
+  | { type: "settings"; settings: Settings }
+  // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
+  // the defaults).
+  | { type: "settings_failed"; message: string }
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
@@ -290,6 +294,45 @@ export type AgentStatus = {
   subagents: Subagent[];
 };
 
+/**
+ * Mirrors `hive_protocol::Settings`: the service's settings file, read and saved whole. The
+ * service checks the ranges (#37).
+ */
+export type Settings = {
+  terminal: {
+    font_family: string;
+    font_size: number;
+    scrollback: number;
+    cursor_style: "block" | "bar" | "underline";
+    cursor_blink: boolean;
+    copy_on_select: boolean;
+  };
+  appearance: { theme: "one-dark" | "one-light" };
+  /** `volume`: the alert tone's, in percent; 0 mutes it. */
+  notifications: { volume: number };
+  agents: { silence_secs: number; confirm_close: boolean };
+  worktrees: { default_base: string | null };
+  /** By project id; no per-project settings yet. */
+  projects: Record<string, Record<string, never>>;
+};
+
+/** The service's defaults, used until its `settings` arrive. */
+export const DEFAULT_SETTINGS: Settings = {
+  terminal: {
+    font_family: '"IBM Plex Mono", monospace',
+    font_size: 13,
+    scrollback: 5000,
+    cursor_style: "block",
+    cursor_blink: false,
+    copy_on_select: false,
+  },
+  appearance: { theme: "one-dark" },
+  notifications: { volume: 100 },
+  agents: { silence_secs: 5, confirm_close: true },
+  worktrees: { default_base: null },
+  projects: {},
+};
+
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
 
@@ -340,10 +383,12 @@ export type HiveState = {
   activeTab: number | null;
   /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
   focused: boolean;
-  /** Lines of history each new terminal keeps (#28). Not persisted yet. */
-  scrollback: number;
   // Service data
   connection: Connection;
+  /** The service's settings (the defaults until they arrive). */
+  settings: Settings;
+  /** Why the last `set_settings` was refused, or the settings file was ignored. */
+  settingsError: string | null;
   /** In the service's order; `null` until the service sent the list. */
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
@@ -401,8 +446,9 @@ export const initialState: HiveState = {
   tabs: [],
   activeTab: null,
   focused: false,
-  scrollback: 5000,
   connection: { status: "connecting" },
+  settings: DEFAULT_SETTINGS,
+  settingsError: null,
   projects: null,
   addProjectError: null,
   modalProject: null,
@@ -504,6 +550,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
     case "welcome":
       return { connection: { status: "connected", version: m.version, distro: m.distro } };
+    case "settings":
+      return { settings: m.settings, settingsError: null };
+    case "settings_failed":
+      return { settingsError: m.message, notice: m.message };
     case "update_ready":
       return { update: { version: m.version, installing: false } };
     case "update_failed":

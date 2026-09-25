@@ -6,6 +6,7 @@ import {
   addTab,
   agentWorkingIn,
   apply,
+  DEFAULT_SETTINGS,
   fileVisible,
   initialState,
   openModal,
@@ -36,6 +37,22 @@ test("starts connecting with no data", () => {
   expect(s.connection).toEqual({ status: "connecting" });
   expect(s.terminals).toEqual({});
   expect(s.modal).toBeNull();
+});
+
+test("settings replace the defaults; a failure keeps them and says why", () => {
+  expect(useHive.getState().settings).toEqual(DEFAULT_SETTINGS);
+  apply({ type: "settings_failed", message: "Ignoring settings.json" });
+  let s = useHive.getState();
+  expect([s.settings, s.settingsError, s.notice]).toEqual([
+    DEFAULT_SETTINGS,
+    "Ignoring settings.json",
+    "Ignoring settings.json",
+  ]);
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.notifications.volume = 0;
+  apply({ type: "settings", settings });
+  s = useHive.getState();
+  expect([s.settings, s.settingsError]).toEqual([settings, null]);
 });
 
 test("welcome and version_mismatch set the connection", () => {
@@ -86,7 +103,6 @@ test("ui actions set ui state", () => {
 test("tabs open shown, switch with the selection and close to their neighbour", () => {
   const tabs = () => useHive.getState().tabs.map((t) => t.id);
   const active = () => useHive.getState().activeTab;
-  expect(useHive.getState().scrollback).toBe(5000);
   addTab(1, "/a");
   addTab(2, "/b");
   addTab(3, "/c");

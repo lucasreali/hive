@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { AgentState, ServiceMessage } from "../store";
+import { type AgentState, DEFAULT_SETTINGS, type ServiceMessage } from "../store";
 import {
   agentStatus,
   createMockTransport,
@@ -48,7 +48,23 @@ test("welcomes the UI asynchronously", async () => {
   await tick();
   expect(messages).toEqual([
     { type: "welcome", version: "mock", distro: "Ubuntu" },
+    { type: "settings", settings: DEFAULT_SETTINGS },
     { type: "projects", projects: MOCK_REPOS.slice(0, 2) },
+  ]);
+});
+
+test("keeps the settings it is given in memory", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.font_size = 20;
+  await transport.setSettings(settings);
+  await transport.getSettings();
+  await tick();
+  expect(messages.slice(-2)).toEqual([
+    { type: "settings", settings },
+    { type: "settings", settings },
   ]);
 });
 
@@ -56,10 +72,15 @@ test("a scenario fails the connection instead", async () => {
   for (const [scenario, types] of [
     ["mismatch", ["version_mismatch"]],
     ["disconnected", ["disconnected"]],
-    ["", ["welcome", "projects"]],
+    ["", ["welcome", "settings", "projects"]],
     [
       "states",
-      ["welcome", "projects", ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state"])],
+      [
+        "welcome",
+        "settings",
+        "projects",
+        ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state"]),
+      ],
     ],
   ] as const) {
     const messages: ServiceMessage[] = [];
@@ -73,7 +94,7 @@ test("states: shop also lists the worktree a subagent owns", async () => {
   const messages: ServiceMessage[] = [];
   await createMockTransport("states").connect((m) => messages.push(m));
   await tick();
-  const [, listed] = messages;
+  const [, , listed] = messages;
   const shop = listed?.type === "projects" ? listed.projects[0] : undefined;
   expect(shop?.worktrees.map((w) => w.id).at(-1)).toBe(MOCK_OWN_WORKTREE);
   const owners = MOCK_STATES.flatMap(([, , subs]) => subs).filter((s) => s.worktree);
@@ -95,7 +116,7 @@ test("projects are added from the fake repositories only", async () => {
   await transport.addProject("/nope");
   await transport.listProjects();
   await tick();
-  expect(messages.slice(2)).toEqual([
+  expect(messages.slice(3)).toEqual([
     { type: "project_added", project: shop },
     { type: "project_added", project: shop },
     {

@@ -65,7 +65,7 @@ export const terminal = (id: number): Terminal | undefined => entries.get(id)?.t
  */
 export async function openTerminal(cwd: string): Promise<number> {
   const term = new Terminal({
-    scrollback: useHive.getState().scrollback,
+    scrollback: useHive.getState().settings.terminal.scrollback,
     fontFamily: '"IBM Plex Mono", monospace',
     fontSize: 13,
     lineHeight: 1.2,
