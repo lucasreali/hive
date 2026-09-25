@@ -11,7 +11,7 @@ import {
   type Text,
 } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { drawSelection, EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { Decoration, drawSelection, EditorView, keymap, lineNumbers } from "@codemirror/view";
 import type { Lines } from "../store";
 
 /** What the viewer shows: `content`, and as a unified diff against `original` when given. */
@@ -33,6 +33,8 @@ const theme = Prec.highest(
       ".cm-deletedChunk .cm-deletedText": { background: "rgba(208, 114, 119, 0.25)" },
       "&.cm-merge-b .cm-changedLineGutter": { background: "var(--state-idle)" },
       ".cm-deletedLineGutter": { background: "var(--state-error)" },
+      // Lines with a review comment (6.7): a bar on the left, over any diff color.
+      ".cm-commented": { boxShadow: "inset 3px 0 0 var(--accent)" },
       ".cm-collapsedLines": {
         color: "var(--accent)",
         background: "rgba(116, 173, 232, 0.08)",
@@ -88,8 +90,30 @@ function replaceState(view: EditorView, state: EditorState) {
   view.scrollDOM.scrollTop = top;
 }
 
-/** A read-only CodeMirror view for one open file; `show` replaces what it shows. */
-export type Viewer = { view: EditorView; show(doc: Doc): void; destroy(): void };
+const commented = Decoration.line({ class: "cm-commented" });
+
+/** Marks every line of `ranges` that the document has (the text may have changed since). */
+export function commentMarks(ranges: Lines[]): Extension {
+  return EditorView.decorations.of(({ state: { doc } }) => {
+    const lines = new Set<number>();
+    for (const { from, to } of ranges) {
+      for (let n = Math.max(1, from); n <= Math.min(to, doc.lines); n++) lines.add(n);
+    }
+    const sorted = [...lines].sort((a, b) => a - b);
+    return Decoration.set(sorted.map((n) => commented.range(doc.line(n).from)));
+  });
+}
+
+/**
+ * A read-only CodeMirror view for one open file; `show` replaces what it shows, `mark` the
+ * lines marked as commented.
+ */
+export type Viewer = {
+  view: EditorView;
+  show(doc: Doc): void;
+  mark(lines: Lines[]): void;
+  destroy(): void;
+};
 
 /**
  * Creates the view in `parent` for the file at `path`, highlighted by its name's language
@@ -104,6 +128,8 @@ export function createViewer(
 ): Viewer {
   const view = new EditorView({ parent });
   const language = highlighting(view, path);
+  const marks = new Compartment();
+  let marked: Lines[] = [];
   return {
     view,
     show({ content, original }) {
@@ -126,11 +152,16 @@ export function createViewer(
             theme,
             language.extension(),
             diff,
+            marks.of(commentMarks(marked)),
             EditorView.updateListener.of((u) => u.selectionSet && onSelect(selectedLines(u.state))),
           ],
         }),
       );
       onSelect(null);
+    },
+    mark(lines) {
+      marked = lines;
+      view.dispatch({ effects: marks.reconfigure(commentMarks(lines)) });
     },
     destroy: language.destroy,
   };
