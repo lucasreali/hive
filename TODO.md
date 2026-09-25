@@ -167,6 +167,14 @@ Human decisions (2026-09-25), from a review of Orca, Conductor, Zed, Warp, Wave 
 
 ---
 
+## Stage 7 — Next release (v0.3.0)
+
+Created 2026-09-25 at the human's request, for a later release. Tasks come only from the human, added here as they are asked for; nothing starts before Checkpoint 6. Run with `/stage 7` (heavy gates in CI via `scripts/ci.sh`).
+
+**⏸ Checkpoint 7 — v0.3.0.** The human reviews the defaults the agents took, updates `docs/hive.md` and runs `scripts/release.sh 0.3.0`.
+
+---
+
 ## Not now (Fase 2)
 
 Kanban screen, rich interactions (permissions and choices answered in the app), live edit view, session history, GitHub CLI integration. Do not build any of it during v1.
