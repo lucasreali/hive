@@ -14,6 +14,7 @@ import {
   LOAD_START_MS,
   MOCK_BRANCHES,
   MOCK_CHANGES,
+  MOCK_DIAGNOSTICS,
   MOCK_FILES,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
@@ -73,6 +74,21 @@ test("keeps the settings it is given in memory", async () => {
   expect(messages.slice(-2)).toEqual([
     { type: "settings", settings },
     { type: "settings", settings },
+  ]);
+});
+
+test("answers the settings file's path and the diagnostics", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  await transport.openSettingsFile();
+  await transport.getDiagnostics();
+  await tick();
+  const windows_path = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.config\\hive\\settings.json";
+  expect(messages.slice(-2)).toEqual([
+    { type: "editor_target", worktree: "", path: "", windows_path, error: null },
+    { type: "diagnostics", ...MOCK_DIAGNOSTICS },
   ]);
 });
 
@@ -203,6 +219,14 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
     state("working", "claude"),
     { ...agent, project: null, worktree: null, cwd: "/tmp" },
     state("idle"),
+  ]);
+  // `state <state>` moves it there after the line set it working; an unknown state does not.
+  await transport.writeTerminal(id, "state error\rstate bogus\r");
+  await tick();
+  expect(messages.slice(-3).map((m) => m.type === "agent_state" && m.state)).toEqual([
+    "working",
+    "error",
+    "working",
   ]);
   await transport.writeTerminal(id, "exit\r");
   await tick();

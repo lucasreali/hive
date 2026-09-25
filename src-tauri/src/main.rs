@@ -62,6 +62,8 @@ fn main() {
             commands::update_space,
             commands::delete_space,
             commands::select_space,
+            commands::open_settings_file,
+            commands::get_diagnostics,
         ])
         .build(tauri::generate_context!());
     match result {

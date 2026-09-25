@@ -821,6 +821,28 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             };
             state.to_app(0, &reply).await;
         }
+        Ok(Control::OpenSettingsFile) => {
+            let located = tokio::task::block_in_place(|| {
+                file::windows(state.settings.ensure_file()?, OsStr::new("wslpath"))
+            });
+            let target = Control::EditorTarget {
+                worktree: String::new(),
+                path: String::new(),
+                error: located.as_ref().err().map(ToString::to_string),
+                windows_path: located.ok(),
+            };
+            state.to_app(0, &target).await;
+        }
+        Ok(Control::GetDiagnostics) => {
+            let path = std::env::var_os("PATH");
+            let claude = wrapper::real_claude(path.as_deref(), &state.bin_dir);
+            let diagnostics = Control::Diagnostics {
+                settings_file: state.settings.file().display().to_string(),
+                wrapper: state.bin_dir.join("claude").display().to_string(),
+                claude: claude.map(|c| c.display().to_string()),
+            };
+            state.to_app(0, &diagnostics).await;
+        }
         Ok(Control::ListProjects) => {
             state.to_app(0, &state.projects.spaces_message()).await;
             state.projects(|projects| Control::Projects {

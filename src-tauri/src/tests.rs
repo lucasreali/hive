@@ -503,6 +503,10 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.select_space("w".into()).unwrap();
     let select = Control::SelectSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, select));
+    hive.open_settings_file().unwrap();
+    assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
+    hive.get_diagnostics().unwrap();
+    assert_eq!(service.control().await, (0, Control::GetDiagnostics));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -672,6 +676,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.delete_space("w".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
+    assert_eq!(hive.open_settings_file(), not_connected);
+    assert_eq!(hive.get_diagnostics(), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
     assert_eq!(hive.list_dirs(String::new(), false), not_connected);
     assert_eq!(hive.list_sessions(), not_connected);
@@ -867,7 +873,9 @@ fn commands_reach_the_managed_hive() {
             create_space,
             update_space,
             delete_space,
-            select_space
+            select_space,
+            open_settings_file,
+            get_diagnostics
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -944,6 +952,8 @@ fn commands_reach_the_managed_hive() {
         ("update_space", &update),
         ("delete_space", &space),
         ("select_space", &space),
+        ("open_settings_file", &json!({})),
+        ("get_diagnostics", &json!({})),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }

@@ -486,6 +486,16 @@ impl Hive {
     pub fn select_space(&self, id: String) -> Result<(), String> {
         self.link().send(0, &Control::SelectSpace { id })
     }
+
+    /// The answer arrives as `editor_target` with an empty `worktree`.
+    pub fn open_settings_file(&self) -> Result<(), String> {
+        self.link().send(0, &Control::OpenSettingsFile)
+    }
+
+    /// The answer arrives as `diagnostics`.
+    pub fn get_diagnostics(&self) -> Result<(), String> {
+        self.link().send(0, &Control::GetDiagnostics)
+    }
 }
 
 impl Hive {
@@ -854,6 +864,16 @@ pub mod commands {
     #[tauri::command]
     pub fn select_space(hive: State<'_, Hive>, id: String) -> Result<(), String> {
         hive.select_space(id)
+    }
+
+    #[tauri::command]
+    pub fn open_settings_file(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.open_settings_file()
+    }
+
+    #[tauri::command]
+    pub fn get_diagnostics(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.get_diagnostics()
     }
 }
 

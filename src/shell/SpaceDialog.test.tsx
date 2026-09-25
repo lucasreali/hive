@@ -1,11 +1,18 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
-import { agentPlace } from "../notify";
+import { agentPlace, notify } from "../notify";
 import { goToAgent } from "../shortcuts";
-import { apply, initialState, type Space, useHive } from "../store";
+import {
+  type AgentState,
+  apply,
+  initialState,
+  type ServiceMessage,
+  type Space,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
-import { MOCK_REPOS } from "../transport/mock";
+import { agentStatus, MOCK_REPOS } from "../transport/mock";
 
 afterEach(() => {
   cleanup();
@@ -124,4 +131,28 @@ test("an alert names the agent's space when there are several", () => {
   expect(agentPlace(useHive.getState(), "a")).toBe("api · main");
   act(() => apply({ type: "spaces", spaces: [home, work], current: "default" }));
   expect(agentPlace(useHive.getState(), "a")).toBe("Work · api · main");
+});
+
+test("inbox items name their agent's space when there are several", () => {
+  show([home, work], "default");
+  const agent = { id: "a", terminal: 1, project: api.id, worktree: api.id, cwd: api.path };
+  act(() => apply({ type: "agent_detected", channel: 1, ...agent }));
+  const status = (state: AgentState): ServiceMessage => ({
+    type: "agent_state",
+    id: "a",
+    ...agentStatus(state),
+    subagents: [],
+  });
+  act(() => apply(status("working")));
+  // Muted: no tone in the test DOM.
+  useHive.setState((s) => ({ settings: { ...s.settings, notifications: { volume: 0 } } }));
+  act(() => {
+    notify(status("waiting_permission"));
+    apply(status("waiting_permission"));
+  });
+  expect(useHive.getState().inbox[0]?.space).toBe("Work");
+  fireEvent.click(screen.getByRole("button", { name: /pending/ }));
+  const texts = screen.getAllByRole("menuitem").map((i) => i.textContent);
+  expect(texts[0]).toContain("Work · waiting for permission");
+  expect(texts[1]).toMatch(/Work · \d+s ago$/);
 });

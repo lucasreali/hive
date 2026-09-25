@@ -92,6 +92,13 @@ export interface Transport {
   getSettings(): Promise<void>;
   /** Saves the whole settings; answered by `settings`, or `settings_failed` with nothing saved. */
   setSettings(settings: Settings): Promise<void>;
+  /**
+   * The settings file's Windows path, the file written first when missing; answered by
+   * `editor_target` with an empty `worktree`.
+   */
+  openSettingsFile(): Promise<void>;
+  /** What the settings' About section shows; answered by `diagnostics`. */
+  getDiagnostics(): Promise<void>;
   /** Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is downloaded. */
   checkUpdate(): Promise<void>;
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */

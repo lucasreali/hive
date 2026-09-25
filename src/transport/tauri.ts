@@ -42,6 +42,8 @@ export const tauriTransport: Transport = {
   openInEditor: (worktree, path) => invoke("open_in_editor", { worktree, path }),
   getSettings: () => invoke("get_settings"),
   setSettings: (settings) => invoke("set_settings", { settings }),
+  openSettingsFile: () => invoke("open_settings_file"),
+  getDiagnostics: () => invoke("get_diagnostics"),
   checkUpdate: () => invoke("check_update"),
   installUpdate: () => invoke("install_update"),
 };

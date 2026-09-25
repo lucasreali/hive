@@ -1,10 +1,11 @@
 //! The `claude` wrapper put first on `PATH` in Hive terminals, and the hooks settings it injects.
 
+use std::ffi::OsStr;
 use std::fs::Permissions;
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
@@ -111,6 +112,20 @@ fi
 export HIVE_WRAPPED=1
 exec "$real" --settings "$hive_settings" "$@"
 "#;
+
+/// The `claude` the wrapper in `bin` would run with `path` as `PATH`: the first executable
+/// `claude` file outside `bin`, as the script looks for it (relative entries skipped too).
+/// ponytail: the service's `PATH`, not the terminals' login shell one; ask a terminal if they differ.
+pub fn real_claude(path: Option<&OsStr>, bin: &Path) -> Option<PathBuf> {
+    std::env::split_paths(path?)
+        .filter(|dir| dir.is_absolute() && dir != bin)
+        .map(|dir| dir.join("claude"))
+        .find(|claude| {
+            claude
+                .metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+}
 
 /// Single-quotes `path` for `sh`.
 fn sh_quote(path: &Path) -> Vec<u8> {
@@ -221,6 +236,23 @@ mod tests {
     fn stdout(out: &Output) -> String {
         assert!(out.status.success(), "{out:?}");
         String::from_utf8(out.stdout.clone()).unwrap()
+    }
+
+    #[test]
+    fn the_real_claude_is_the_first_executable_one_outside_the_bin_dir() {
+        let s = Setup::new();
+        let bin = s.paths.bin_dir();
+        let fake = s.fake();
+        // A folder named claude, and a claude that cannot run.
+        let folder = s.tmp.path().join("folder");
+        std::fs::create_dir_all(folder.join("claude")).unwrap();
+        let plain = s.claude_dir("plain", "");
+        std::fs::set_permissions(plain.join("claude"), Permissions::from_mode(0o644)).unwrap();
+        let rel = Path::new("relative");
+        let path = path_var(&[rel, &bin, &folder, &plain, &fake]);
+        assert_eq!(real_claude(Some(&path), &bin), Some(fake.join("claude")));
+        assert_eq!(real_claude(Some(&path_var(&[&bin, &plain])), &bin), None);
+        assert_eq!(real_claude(None, &bin), None);
     }
 
     #[test]

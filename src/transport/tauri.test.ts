@@ -69,6 +69,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.openInEditor("/r", "a.ts");
   await tauriTransport.getSettings();
   await tauriTransport.setSettings(DEFAULT_SETTINGS);
+  await tauriTransport.openSettingsFile();
+  await tauriTransport.getDiagnostics();
   await tauriTransport.checkUpdate();
   await tauriTransport.installUpdate();
   expect(calls).toEqual([
@@ -100,6 +102,8 @@ test("terminal and project actions call their commands", async () => {
     ["open_in_editor", { worktree: "/r", path: "a.ts" }],
     ["get_settings", {}],
     ["set_settings", { settings: DEFAULT_SETTINGS }],
+    ["open_settings_file", {}],
+    ["get_diagnostics", {}],
     ["check_update", {}],
     ["install_update", {}],
   ]);

@@ -11,6 +11,7 @@ export type ServiceMessage =
   // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
   // the defaults).
   | { type: "settings_failed"; message: string }
+  | ({ type: "diagnostics" } & Diagnostics)
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
@@ -66,7 +67,8 @@ export type ServiceMessage =
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
-  // An empty `path` is the worktree's folder (`openFolder`).
+  // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
+  // settings file.
   | {
       type: "editor_target";
       worktree: string;
@@ -351,6 +353,22 @@ export type AgentStatus = {
   subagents: Subagent[];
 } & Doing;
 
+/** One alert `notify` raised, kept for the bell's inbox (6.5). `id` grows with each alert. */
+export type InboxItem = {
+  id: number;
+  /** The agent's session id: clicking the item goes to it while it runs. */
+  agent: string;
+  state: AgentState;
+  /** Wall clock, ms since the epoch. */
+  at: number;
+  /** E.g. "fix login is waiting for permission". */
+  text: string;
+  /** The agent's space, once the store knows spaces (6.14): the item names it. */
+  space?: string;
+};
+/** At most this many alerts are kept, the newest first. */
+export const INBOX_LIMIT = 100;
+
 /**
  * Mirrors `hive_protocol::Settings`: the service's settings file, read and saved whole. The
  * service checks the ranges (#37).
@@ -390,6 +408,15 @@ export const DEFAULT_SETTINGS: Settings = {
   projects: {},
 };
 
+/** What the settings' About section shows (the service's `diagnostics`). */
+export type Diagnostics = {
+  settings_file: string;
+  /** The `claude` wrapper Hive terminals run first. */
+  wrapper: string;
+  /** The `claude` it runs, as found on the service's `PATH`; null when none is. */
+  claude: string | null;
+};
+
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
 
@@ -403,6 +430,7 @@ export type Modal =
   | "rename-worktree"
   | "new-space"
   | "edit-space"
+  | "settings"
   | "remove-merged"
   | null;
 /** A worktree row's context menu, at the pointer. */
@@ -450,6 +478,9 @@ export type HiveState = {
   /** Terminal tabs in the order they opened, and the one shown. */
   tabs: Tab[];
   activeTab: number | null;
+  /** The alerts raised, the newest first (at most `INBOX_LIMIT`), and the newest id seen. */
+  inbox: InboxItem[];
+  inboxSeen: number;
   /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
   focused: boolean;
   // Service data
@@ -458,6 +489,8 @@ export type HiveState = {
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
   settingsError: string | null;
+  /** The last `diagnostics`, or null until asked. */
+  diagnostics: Diagnostics | null;
   /** In the service's order; `null` until the service sent the list. */
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
@@ -525,10 +558,13 @@ export const initialState: HiveState = {
   collapsed: {},
   tabs: [],
   activeTab: null,
+  inbox: [],
+  inboxSeen: 0,
   focused: false,
   connection: { status: "connecting" },
   settings: DEFAULT_SETTINGS,
   settingsError: null,
+  diagnostics: null,
   projects: null,
   addProjectError: null,
   spaces: null,
@@ -639,6 +675,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { settings: m.settings, settingsError: null };
     case "settings_failed":
       return { settingsError: m.message, notice: m.message };
+    case "diagnostics": {
+      const { type: _, ...diagnostics } = m;
+      return { diagnostics };
+    }
     case "update_ready":
       return { update: { version: m.version, installing: false } };
     case "update_failed":
@@ -855,6 +895,13 @@ export const openProjectMenu = (projectMenu: ProjectMenu | null) =>
   useHive.setState({ projectMenu });
 export const openSessionMenu = (sessionMenu: SessionMenu | null) =>
   useHive.setState({ sessionMenu });
+/** Keeps an alert in the inbox, the newest first. */
+export const addToInbox = (item: Omit<InboxItem, "id">) =>
+  useHive.setState((s) => ({
+    inbox: [{ ...item, id: (s.inbox[0]?.id ?? 0) + 1 }, ...s.inbox].slice(0, INBOX_LIMIT),
+  }));
+/** Opening the inbox marks every alert read. */
+export const markInboxRead = () => useHive.setState((s) => ({ inboxSeen: s.inbox[0]?.id ?? 0 }));
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });

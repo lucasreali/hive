@@ -314,7 +314,7 @@ function onTick(row: () => void) {
     if (clock.rows.size === 0) clearInterval(clock.timer as number);
   };
 }
-const useNow = () => useSyncExternalStore(onTick, () => clock.now);
+export const useNow = () => useSyncExternalStore(onTick, () => clock.now);
 
 /** The time in the state and what it is doing (muted, after the state's name). */
 function Meta({ doing }: { doing: Doing }) {
