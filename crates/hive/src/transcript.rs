@@ -57,11 +57,13 @@ fn open_inside(root: &Path, path: &Path) -> io::Result<File> {
             "the transcript is outside Claude's projects folder",
         ));
     }
-    let file = File::open(&real)?;
-    if !file.metadata()?.is_file() {
+    // Checked before opening: opening a FIFO would block the service until a writer came.
+    // ponytail: a swap between this check and the open needs write access to Claude's
+    // folder (the same user); open with O_NONBLOCK | O_NOFOLLOW if that ever matters.
+    if !real.metadata()?.is_file() {
         return Err(io::Error::other("the transcript is not a file"));
     }
-    Ok(file)
+    File::open(&real)
 }
 
 /// The entries of JSONL `records`: the text of user and assistant messages and each tool
@@ -434,8 +436,19 @@ mod tests {
             message.ends_with("the transcript is not a file"),
             "{message}"
         );
-        // Without the root, nothing is inside it: nothing is read.
+        // Nor is a FIFO, which is refused without being opened (that would block).
         std::fs::remove_dir(&f.log).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&f.log).status();
+        assert!(made.unwrap().success());
+        let Control::Error { message } = watch.start() else {
+            panic!("expected an error")
+        };
+        assert!(
+            message.ends_with("the transcript is not a file"),
+            "{message}"
+        );
+        std::fs::remove_file(&f.log).unwrap();
+        // Without the root, nothing is inside it: nothing is read.
         append(&f.log, &said("x"));
         let mut rootless = Watch::new("s".into(), "a".into(), f.log.clone(), "/nope".into());
         assert_eq!(rootless.start(), transcript(vec![], false));
