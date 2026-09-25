@@ -1,5 +1,3 @@
-use std::os::unix::fs::MetadataExt;
-use std::path::Path;
 use std::time::Duration;
 
 use hive_protocol::{Control, Role};
@@ -48,28 +46,6 @@ async fn changed(conn: &mut Conn, path: &str) -> Vec<String> {
     }
 }
 
-/// Inodes of the directories the process `pid` watches with inotify.
-fn watched_inodes(pid: u32) -> Vec<u64> {
-    let fdinfo = std::fs::read_dir(format!("/proc/{pid}/fdinfo")).unwrap();
-    fdinfo
-        .flat_map(|entry| {
-            std::fs::read_to_string(entry.unwrap().path())
-                .unwrap_or_default()
-                .lines()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter_map(|line| {
-            let ino = line.strip_prefix("inotify wd:")?.split(" ino:").nth(1)?;
-            u64::from_str_radix(ino.split_whitespace().next()?, 16).ok()
-        })
-        .collect()
-}
-
-fn inode(path: &Path) -> u64 {
-    std::fs::metadata(path).unwrap().ino()
-}
-
 #[tokio::test]
 async fn a_watched_worktree_sends_its_files_after_every_change() {
     let repo = Repo::new();
@@ -108,11 +84,10 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
     watch(&mut conn, &root).await;
     let listed = [".gitignore", "README", "src/a.rs"];
     assert_eq!(files(&mut conn, &root).await, listed);
-    // Ignored trees cost no watch.
-    let inodes = watched_inodes(daemon.0.id());
-    assert!(inodes.contains(&inode(&repo.root.join("src"))));
-    assert!(!inodes.contains(&inode(&repo.root.join("target"))));
-    assert!(!inodes.contains(&inode(&repo.root.join("target/debug"))));
+    // Ignored trees are not watched: a change in one sends nothing.
+    repo.write("target/debug/other.o", "");
+    let quiet = tokio::time::timeout(SETTLE, conn.control()).await;
+    assert!(quiet.is_err(), "{quiet:?}");
 
     repo.write("b.txt", "");
     let listed = [".gitignore", "README", "b.txt", "src/a.rs"];

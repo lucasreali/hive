@@ -1,21 +1,22 @@
-//! The files of the worktree the app's files panel shows, kept current with inotify (#31).
+//! The files of the worktree the app's files panel shows, kept current with the `notify`
+//! crate (#31): inotify on Linux, FSEvents on macOS.
 //!
 //! What a worktree holds is what git lists: tracked files and untracked ones that are not
 //! ignored, so `node_modules` or `target` never show up. Watches go only on the directories
 //! of those files (plus empty untracked ones) and on the worktree's git dir, where `HEAD` and
 //! `index` change what git reports; ignored trees never cost a watch. Every relevant event
-//! (an inotify queue overflow included) leads, after a short debounce, to a full re-list.
+//! (a queue overflow included) leads, after a short debounce, to a full re-list.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::{self, Read};
-use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify, InotifyEvent, WatchDescriptor};
-use tokio::io::unix::AsyncFd;
+use notify::event::ModifyKind;
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::git;
@@ -33,21 +34,8 @@ pub const QUIET: Duration = Duration::from_millis(200);
 /// …but never longer than this after the first one, so a busy worktree still updates.
 pub const MAX_DELAY: Duration = Duration::from_secs(1);
 
-const DIR_EVENTS: AddWatchFlags = AddWatchFlags::IN_CREATE
-    .union(AddWatchFlags::IN_DELETE)
-    .union(AddWatchFlags::IN_MOVE)
-    .union(AddWatchFlags::IN_MODIFY)
-    .union(AddWatchFlags::IN_ATTRIB)
-    .union(AddWatchFlags::IN_DELETE_SELF)
-    .union(AddWatchFlags::IN_MOVE_SELF)
-    .union(AddWatchFlags::IN_ONLYDIR)
-    .union(AddWatchFlags::IN_DONT_FOLLOW);
-/// Git replaces `HEAD` and `index` by renaming a lock file over them.
-const GIT_EVENTS: AddWatchFlags = AddWatchFlags::IN_CREATE
-    .union(AddWatchFlags::IN_MOVED_TO)
-    .union(AddWatchFlags::IN_MODIFY)
-    .union(AddWatchFlags::IN_DELETE)
-    .union(AddWatchFlags::IN_ONLYDIR);
+/// Events waiting to be seen; more are dropped, as a burst is already pending.
+const EVENT_QUEUE: usize = 4096;
 
 /// What git lists in a worktree.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -137,26 +125,40 @@ impl Debounce {
 
 /// Watches one worktree.
 pub struct Watcher {
+    /// Canonical, as the paths of events are.
     root: PathBuf,
-    inotify: AsyncFd<Fd>,
-    git_dir: Option<WatchDescriptor>,
+    watcher: RecommendedWatcher,
+    events: mpsc::Receiver<notify::Result<Event>>,
+    git_dir: Option<PathBuf>,
     /// Watched directories, relative to `root`.
-    dirs: BTreeMap<String, WatchDescriptor>,
+    dirs: BTreeSet<String>,
 }
 
 impl Watcher {
     /// Starts watching the worktree at `root`'s git dir; [`Watcher::list`] adds the rest.
     /// Blocks on git; must run inside the tokio runtime.
     pub fn new(root: &Path) -> io::Result<Self> {
-        let inotify = Inotify::init(InitFlags::IN_NONBLOCK | InitFlags::IN_CLOEXEC)?;
         let (out, _) = git(root, &["rev-parse", "--absolute-git-dir"], 65_536)?;
-        let git_dir = String::from_utf8_lossy(&out);
-        let git_dir = inotify.add_watch(git_dir.trim_end(), GIT_EVENTS).ok();
+        let (tx, events) = mpsc::channel(EVENT_QUEUE);
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+            // Git reads the worktree on every re-list: reads never count.
+            if !matches!(&event, Ok(event) if event.kind.is_access()) {
+                // Full: a burst is already waiting to be seen.
+                let _ = tx.try_send(event);
+            }
+        })
+        .map_err(io::Error::other)?;
+        let git_dir = PathBuf::from(String::from_utf8_lossy(&out).trim_end());
+        let git_dir = git_dir
+            .canonicalize()
+            .ok()
+            .filter(|dir| watcher.watch(dir, RecursiveMode::NonRecursive).is_ok());
         Ok(Self {
-            root: root.to_owned(),
-            inotify: AsyncFd::new(Fd(inotify))?,
+            root: root.canonicalize()?,
+            watcher,
+            events,
             git_dir,
-            dirs: BTreeMap::new(),
+            dirs: BTreeSet::new(),
         })
     }
 
@@ -188,23 +190,28 @@ impl Watcher {
             .into_iter()
             .take(MAX_WATCHES)
             .collect();
-        let inotify = &self.inotify.get_ref().0;
+        // ponytail: on macOS every re-list restarts the FSEvents stream, even when no watch
+        // moves; skip the restart if its cost or its short blind spot shows.
+        let mut paths = self.watcher.paths_mut();
         // Removed first: a renamed directory keeps its watch, which must not be reused.
-        self.dirs.retain(|dir, wd| {
+        self.dirs.retain(|dir| {
             let keep = wanted.contains(dir.as_str());
             if !keep {
                 // Fails when the directory is gone, which removed its watch already.
-                let _ = inotify.rm_watch(*wd);
+                let _ = paths.remove(&self.root.join(dir));
             }
             keep
         });
         for dir in wanted {
-            if !self.dirs.contains_key(dir)
-                && let Ok(wd) = inotify.add_watch(&self.root.join(dir), DIR_EVENTS)
+            if !self.dirs.contains(dir)
+                && paths
+                    .add(&self.root.join(dir), RecursiveMode::NonRecursive)
+                    .is_ok()
             {
-                self.dirs.insert(dir.to_owned(), wd);
+                self.dirs.insert(dir.to_owned());
             }
         }
+        paths.commit().map_err(io::Error::other)?;
         Ok(listing)
     }
 
@@ -216,11 +223,10 @@ impl Watcher {
             let deadline = burst.map(|burst| burst.deadline());
             let settled = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now));
             tokio::select! {
-                ready = self.inotify.readable() => {
-                    let read = ready?.try_io(|fd| Ok(fd.get_ref().0.read_events()?));
-                    // Nothing to read after all: wait again.
-                    let Ok(events) = read else { continue };
-                    if self.relevant(&events?) {
+                event = self.events.recv() => {
+                    // No event ever again: the watcher's thread is gone.
+                    let event = event.ok_or(io::ErrorKind::BrokenPipe)?;
+                    if self.saw(event) {
                         let now = Instant::now();
                         burst.get_or_insert(Debounce::new(now)).event(now);
                     }
@@ -230,33 +236,33 @@ impl Watcher {
         }
     }
 
-    /// Whether any of `events` may change what git lists.
-    fn relevant(&mut self, events: &[InotifyEvent]) -> bool {
-        // Every event is seen: some only update the watches.
-        let seen: Vec<bool> = events.iter().map(|e| self.saw(e)).collect();
-        seen.contains(&true)
+    /// Whether `event` may change what git lists.
+    fn saw(&mut self, event: notify::Result<Event>) -> bool {
+        // A watcher error may have lost events: a full re-list is safe.
+        let Ok(event) = event else { return true };
+        if matches!(
+            event.kind,
+            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+        ) {
+            // A directory gone or moved lost its watch.
+            for path in &event.paths {
+                if let Some(dir) = path.strip_prefix(&self.root).ok().and_then(Path::to_str) {
+                    self.dirs.remove(dir);
+                }
+            }
+        }
+        // No path: an overflow, which calls for a full re-list.
+        event.paths.is_empty() || event.paths.iter().any(|path| self.counts(path))
     }
 
-    fn saw(&mut self, event: &InotifyEvent) -> bool {
-        if event.mask.contains(AddWatchFlags::IN_IGNORED) {
-            // The directory is gone, and its watch with it.
-            self.dirs.retain(|_, wd| *wd != event.wd);
-            return false;
+    /// Whether a change to `path` counts: in the git dir, only `HEAD` and `index` do.
+    fn counts(&self, path: &Path) -> bool {
+        match &self.git_dir {
+            Some(git_dir) if path.starts_with(git_dir) => {
+                path.parent() == Some(git_dir) && git_state(path.file_name())
+            }
+            _ => true,
         }
-        if Some(event.wd) == self.git_dir {
-            return git_state(event.name.as_deref());
-        }
-        // Anything else, an overflow included, calls for a full re-list.
-        true
-    }
-}
-
-/// What tokio needs to poll the inotify descriptor.
-struct Fd(Inotify);
-
-impl AsRawFd for Fd {
-    fn as_raw_fd(&self) -> RawFd {
-        self.0.as_fd().as_raw_fd()
     }
 }
 
@@ -431,7 +437,7 @@ mod tests {
     }
 
     fn watched(watcher: &Watcher) -> Vec<&str> {
-        watcher.dirs.keys().map(String::as_str).collect()
+        watcher.dirs.iter().map(String::as_str).collect()
     }
 
     /// Whether the watcher reports a change within `wait`.
@@ -497,6 +503,21 @@ mod tests {
         write(&root, "d/c.txt");
         assert!(changes(&mut watcher, SOON).await);
         assert_eq!(names(&watcher.list().unwrap()), ["d/b.txt", "d/c.txt"]);
+    }
+
+    #[tokio::test]
+    async fn a_directory_that_becomes_ignored_loses_its_watch() {
+        let (_dir, root) = repo();
+        write(&root, "d/a.txt");
+        let mut watcher = Watcher::new(&root).unwrap();
+        watcher.list().unwrap();
+        assert_eq!(watched(&watcher), ["", "d"]);
+        std::fs::write(root.join(".gitignore"), "d/\n").unwrap();
+        assert!(changes(&mut watcher, SOON).await);
+        assert_eq!(names(&watcher.list().unwrap()), [".gitignore"]);
+        assert_eq!(watched(&watcher), [""]);
+        write(&root, "d/b.txt");
+        assert!(!changes(&mut watcher, NEVER).await);
     }
 
     #[tokio::test]

@@ -70,6 +70,11 @@ async fn bridge_starts_the_service_and_forwards_frames() {
     let mut bridge = bridge(&env);
     bridge.send(Control::hello(Role::App, hive::VERSION)).await;
     assert_eq!(bridge.next().await, Some(welcome()));
+    // The service leads its own session, apart from the bridge's.
+    let bridge_pid = bridge.child.id().unwrap() as i32;
+    let processes = env.processes();
+    let daemon = processes.iter().find(|p| p.pid != bridge_pid).unwrap();
+    assert_eq!(daemon.session, daemon.pid, "{processes:?}");
     let log = env.path("run/hive/daemon.log");
     assert_eq!(
         std::fs::metadata(&log).unwrap().permissions().mode() & 0o777,

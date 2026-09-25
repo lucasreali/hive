@@ -47,7 +47,10 @@ pub fn install(paths: &Paths, hive: &Path) -> io::Result<()> {
     std::fs::create_dir_all(&bin)?;
     let settings = paths.hooks_settings();
     write_atomic(&settings, format!("{:#}\n", hooks(hive)).as_bytes(), 0o644)?;
-    write_atomic(&bin.join("claude"), &script(&bin, &settings), 0o755)
+    write_atomic(&bin.join("claude"), &script(&bin, &settings), 0o755)?;
+    #[cfg(target_os = "macos")]
+    crate::terminal::login::install(&bin)?;
+    Ok(())
 }
 
 fn hooks(hive: &str) -> Value {
@@ -143,7 +146,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
     use std::path::PathBuf;
-    use std::process::{Command, Output};
+    use std::process::{Command, Output, Stdio};
 
     const FAKE_CLAUDE: &str = "#!/bin/sh\nprintf 'wrapped=%s\\n' \"${HIVE_WRAPPED-unset}\"\nfor a in \"$@\"; do printf '[%s]\\n' \"$a\"; done\n";
 
@@ -195,17 +198,23 @@ mod tests {
     }
 
     /// Runs `program` with only `PATH` (and `extra`) set; the real `claude` is never on it.
-    /// Killed after 10 s (exit 124), so a wrapper that execs itself fails instead of hanging.
+    /// Killed after 10 s, so a wrapper that execs itself fails instead of hanging.
     fn run(program: &Path, path: &OsStr, extra: &[(&str, &str)], args: &[&str]) -> Output {
-        Command::new("/usr/bin/timeout")
-            .arg("10")
-            .arg(program)
+        let mut child = Command::new(program)
             .args(args)
             .env_clear()
             .env("PATH", path)
             .envs(extra.iter().copied())
-            .output()
-            .unwrap()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = child.kill();
+        child.wait_with_output().unwrap()
     }
 
     fn stdout(out: &Output) -> String {

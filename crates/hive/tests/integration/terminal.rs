@@ -26,7 +26,7 @@ async fn printed_pid(app: &mut crate::common::Conn, channel: u32) -> i32 {
 }
 
 fn gone(pid: i32) -> bool {
-    !hive::procs::list(std::path::Path::new("/proc"))
+    !hive::procs::list(hive::procs::Source::System)
         .iter()
         .any(|p| p.pid == pid)
 }
@@ -230,4 +230,34 @@ async fn processes_ignoring_sighup_are_killed_after_the_grace_period() {
     drop(app);
     assert!(daemon.wait_exit().success());
     wait_until(|| gone(pid));
+}
+
+/// On macOS the terminal runs `$SHELL` as a login shell: the user's startup files run and
+/// Hive's bin dir still comes first on `PATH`.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn login_shells_run_the_user_files_and_keep_hive_bin_first() {
+    for (shell, file) in [("/bin/zsh", ".zshrc"), ("/bin/bash", ".bash_profile")] {
+        let env = Env::new();
+        let rc = "export PATH=/user/first:$PATH\nexport HIVE_TEST_RC=read\n";
+        std::fs::write(env.path("home").join(file), rc).unwrap();
+        let child = env
+            .hive()
+            .env("SHELL", shell)
+            .arg("daemon")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut daemon = crate::common::Daemon(child);
+        wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+        let mut app = env.connect(Role::App).await;
+        app.open_terminal(1, &env.path("home")).await;
+        app.input(1, "echo \"rc=$HIVE_TEST_RC first=${PATH%%:*}\"\r")
+            .await;
+        let bin = env.path("data/hive/bin");
+        app.output_until(1, &format!("rc=read first={}", bin.display()))
+            .await;
+        drop(app);
+        assert!(daemon.wait_exit().success(), "{shell}");
+    }
 }
