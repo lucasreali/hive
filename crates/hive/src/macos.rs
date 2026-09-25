@@ -111,8 +111,8 @@ mod tests {
 
     #[test]
     fn zombies_are_not_listed() {
-        // Never waited for: once it exits it stays a zombie.
-        let child = std::process::Command::new("true").spawn().unwrap();
+        // Not waited for yet: once it exits it stays a zombie.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id() as i32;
         let start = std::time::Instant::now();
         while pidinfo::<BSDInfo>(pid, 0).unwrap().pbi_status != ZOMBIE {
@@ -120,6 +120,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(process(pid), None);
+        assert!(child.wait().unwrap().success());
     }
 
     #[test]
