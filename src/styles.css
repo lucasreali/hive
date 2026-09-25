@@ -7,7 +7,7 @@
 @import "@fontsource/ibm-plex-mono/600.css";
 @import "@xterm/xterm/css/xterm.css";
 
-/* Design tokens: docs/ui-reference.md. Dark theme only (#23). */
+/* Design tokens: docs/ui-reference.md. One Dark by default (#23); One Light below. */
 :root {
   --bg: #282c33; /* terminal / background */
   --panel: #2f343e;
@@ -58,6 +58,42 @@
 
   --bar-h: 34px;
   --status-h: 24px;
+}
+
+/* The `appearance.theme` setting (6.2): Zed's One Light, from its `one.json`. */
+:root[data-theme="one-light"] {
+  --bg: #fafafa;
+  --panel: #ebebec;
+  --bar: #dcdcdd;
+  --hover: #dfdfe0;
+  --selected: #cacaca;
+  --selected-hover: #bfbfc0;
+  --border: #c9c9ca;
+  --border-subtle: #dfdfe0;
+  --tree-line: #c9c9ca;
+  --focus: #7d82e8;
+  --accent: #5c78e2;
+  --accent-hover: #4a67d6;
+  --on-accent: #fafafa;
+  --text: #242529;
+  --text-2: #58585a;
+  --text-3: #7e8086;
+  --text-4: #b4b4bb;
+
+  --state-permission: #a48819;
+  --state-error: #d36151;
+  --state-you: #ad6e25;
+  --state-working: #5c78e2;
+  --state-subagents: #a449ab;
+  --state-idle: #669f59;
+  --state-ended: #7e8086;
+
+  --git-modified: #a48819;
+  --git-added: #669f59;
+  --git-deleted: #d36151;
+  --git-renamed: #5c78e2;
+
+  color-scheme: light;
 }
 
 *,
@@ -1600,6 +1636,116 @@ li:not(:last-child) > .owned::before {
 
 .dialog-body.wide {
   gap: 14px;
+}
+
+/* Settings (6.2): sections on the left, the fields of one (or the search's) on the right. */
+.dialog.settings {
+  width: 760px;
+  margin-top: 80px;
+}
+
+.settings-main {
+  display: flex;
+  height: min(520px, calc(100vh - 240px));
+}
+
+.settings-nav {
+  flex: none;
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.settings-nav input {
+  height: 28px;
+  margin-bottom: 8px;
+  padding: 0 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-small);
+  outline: none;
+}
+
+.settings-nav input:focus {
+  border-color: var(--focus);
+}
+
+.settings-section {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  text-align: left;
+  font-size: var(--fs-body);
+}
+
+.settings-section:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.settings-section[aria-current="page"] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.settings-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  gap: 14px;
+}
+
+.settings-body .field input[type="range"] {
+  height: auto;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  background: none;
+  accent-color: var(--accent);
+}
+
+.settings-keys {
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+}
+
+.settings-keys td {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-keys td:last-child {
+  text-align: right;
+}
+
+.settings-about {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+  font-size: var(--fs-body);
+}
+
+.settings-about dt {
+  color: var(--text-3);
+  font-size: var(--fs-small);
+}
+
+.settings-about dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  overflow-wrap: anywhere;
+}
+
+.dialog footer .settings-file {
+  margin-right: auto;
 }
 
 /* Select (src/ui/Select.tsx): a trigger like a field, a list like the context menu */

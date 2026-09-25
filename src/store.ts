@@ -11,6 +11,7 @@ export type ServiceMessage =
   // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
   // the defaults).
   | { type: "settings_failed"; message: string }
+  | ({ type: "diagnostics" } & Diagnostics)
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
@@ -63,7 +64,8 @@ export type ServiceMessage =
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
-  // An empty `path` is the worktree's folder (`openFolder`).
+  // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
+  // settings file.
   | {
       type: "editor_target";
       worktree: string;
@@ -359,6 +361,15 @@ export const DEFAULT_SETTINGS: Settings = {
   projects: {},
 };
 
+/** What the settings' About section shows (the service's `diagnostics`). */
+export type Diagnostics = {
+  settings_file: string;
+  /** The `claude` wrapper Hive terminals run first. */
+  wrapper: string;
+  /** The `claude` it runs, as found on the service's `PATH`; null when none is. */
+  claude: string | null;
+};
+
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
 
@@ -370,6 +381,7 @@ export type Modal =
   | "update-app"
   | "remove-worktree"
   | "rename-worktree"
+  | "settings"
   | null;
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
@@ -421,6 +433,8 @@ export type HiveState = {
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
   settingsError: string | null;
+  /** The last `diagnostics`, or null until asked. */
+  diagnostics: Diagnostics | null;
   /** In the service's order; `null` until the service sent the list. */
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
@@ -486,6 +500,7 @@ export const initialState: HiveState = {
   connection: { status: "connecting" },
   settings: DEFAULT_SETTINGS,
   settingsError: null,
+  diagnostics: null,
   projects: null,
   addProjectError: null,
   modalProject: null,
@@ -592,6 +607,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { settings: m.settings, settingsError: null };
     case "settings_failed":
       return { settingsError: m.message, notice: m.message };
+    case "diagnostics": {
+      const { type: _, ...diagnostics } = m;
+      return { diagnostics };
+    }
     case "update_ready":
       return { update: { version: m.version, installing: false } };
     case "update_failed":
