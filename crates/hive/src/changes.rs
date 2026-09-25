@@ -19,6 +19,15 @@ pub(crate) const BINARY_PROBE: usize = 8000;
 /// Most bytes of JSON for the files of one `changes` message, well under `MAX_PAYLOAD`.
 const MESSAGE_BUDGET: usize = 3_145_728; // 3 MiB
 
+/// The `git status` whose entries [`parse_status`] reads.
+pub const STATUS: [&str; 5] = [
+    "status",
+    "--porcelain=v2",
+    "-z",
+    "--untracked-files=all",
+    "--find-renames",
+];
+
 /// A worktree's changes; `files` may be cut short (`truncated`), the totals never are.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Changes {
@@ -32,14 +41,7 @@ pub struct Changes {
 /// The changes of the worktree at `dir` against `HEAD` (the empty tree before the first
 /// commit).
 pub fn list(dir: &Path) -> io::Result<Changes> {
-    let status = [
-        "status",
-        "--porcelain=v2",
-        "-z",
-        "--untracked-files=all",
-        "--find-renames",
-    ];
-    let status = git(dir, &status)?;
+    let status = git(dir, &STATUS)?;
     let head = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
     let base = if head.is_empty() {
         git(dir, &["hash-object", "-t", "tree", "/dev/null"])?
