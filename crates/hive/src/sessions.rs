@@ -621,7 +621,10 @@ not json
         let older = log(&folder, "a.jsonl", repo);
         touched(&older, 0);
         let wt = format!("{repo}/.claude/worktrees/w");
-        touched(&log(&root.join(normalized(&wt)), "b.jsonl", &format!("{wt}/src")), 1);
+        touched(
+            &log(&root.join(normalized(&wt)), "b.jsonl", &format!("{wt}/src")),
+            1,
+        );
         // Not a session: a bad id, not a log, a symlink, a folder, a cwd elsewhere, a
         // project that is not followed.
         log(&folder, "bad id.jsonl", repo);
