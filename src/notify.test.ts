@@ -137,7 +137,15 @@ test("finishing (working or with subagents → waiting for you) notifies with th
         path: "/r/shop",
         error: null,
         worktrees: [
-          { id: "w", name: "feat", path: "/r/shop/w", branch: null, main: false, claude: true },
+          {
+            id: "w",
+            name: "feat",
+            path: "/r/shop/w",
+            branch: null,
+            main: false,
+            claude: true,
+            status: null,
+          },
         ],
       },
     },

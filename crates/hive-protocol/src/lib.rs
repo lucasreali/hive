@@ -334,6 +334,12 @@ pub enum Control {
     },
     /// App → service: stop watching (the files panel closed).
     UnwatchWorktree,
+    /// Service → app: a worktree's status changed since it was last sent (checked every 30 s,
+    /// and after a change in the watched worktree); `None` when git could not tell.
+    WorktreeStatus {
+        path: String,
+        status: Option<WorktreeStatus>,
+    },
     /// App → service, sent when it changes: the terminal shown (none while a file, or
     /// nothing, is) and whether the app window has the focus. An agent that finishes in that
     /// terminal while the window has the focus was seen, so it is not pending.
@@ -710,6 +716,23 @@ pub struct Worktree {
     pub main: bool,
     /// Follows Claude's convention: `<repo>/.claude/worktrees/<name>` (#7).
     pub claude: bool,
+    /// `None` when git could not tell.
+    pub status: Option<WorktreeStatus>,
+}
+
+/// A worktree's health, for the sidebar. Hive never merges anything (#12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeStatus {
+    /// Files that differ from `HEAD`, untracked ones included, as `changes` lists them.
+    pub changes: u64,
+    /// Commits of its `HEAD` missing from the branch checked out in the main worktree, and
+    /// the reverse; `None` for the main worktree itself, or when that one is detached.
+    pub ahead: Option<u64>,
+    pub behind: Option<u64>,
+    /// Every commit of its `HEAD` is on the main worktree's branch.
+    pub merged: bool,
+    /// When its `HEAD` was committed, in milliseconds since the Unix epoch.
+    pub last_commit_ms: u64,
 }
 
 /// A Claude Code session of a followed project, from its log.
@@ -1111,6 +1134,7 @@ mod tests {
             branch: Some("main".into()),
             main: true,
             claude: false,
+            status: None,
         };
         let msg = Control::ProjectAdded {
             project: Project {
@@ -1360,6 +1384,25 @@ mod tests {
             windows: false,
         };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+    }
+
+    #[test]
+    fn worktree_status_is_tagged_json() {
+        let status = Control::WorktreeStatus {
+            path: "/r/w".into(),
+            status: Some(WorktreeStatus {
+                changes: 3,
+                ahead: Some(2),
+                behind: None,
+                merged: false,
+                last_commit_ms: 1000,
+            }),
+        };
+        assert_eq!(
+            &Frame::control(0, &status).payload[..],
+            br#"{"type":"worktree_status","path":"/r/w","status":{"changes":3,"ahead":2,"behind":null,"merged":false,"last_commit_ms":1000}}"#
+        );
+        assert_eq!(Frame::control(0, &status).to_control().unwrap(), status);
     }
 
     #[test]
