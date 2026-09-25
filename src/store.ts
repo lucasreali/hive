@@ -339,6 +339,22 @@ export type AgentStatus = {
   subagents: Subagent[];
 } & Doing;
 
+/** One alert `notify` raised, kept for the bell's inbox (6.5). `id` grows with each alert. */
+export type InboxItem = {
+  id: number;
+  /** The agent's session id: clicking the item goes to it while it runs. */
+  agent: string;
+  state: AgentState;
+  /** Wall clock, ms since the epoch. */
+  at: number;
+  /** E.g. "fix login is waiting for permission". */
+  text: string;
+  /** The agent's space, once the store knows spaces (6.14): the item names it. */
+  space?: string;
+};
+/** At most this many alerts are kept, the newest first. */
+export const INBOX_LIMIT = 100;
+
 /**
  * Mirrors `hive_protocol::Settings`: the service's settings file, read and saved whole. The
  * service checks the ranges (#37).
@@ -462,6 +478,9 @@ export type HiveState = {
   /** Terminal tabs in the order they opened, and the one shown. */
   tabs: Tab[];
   activeTab: number | null;
+  /** The alerts raised, the newest first (at most `INBOX_LIMIT`), and the newest id seen. */
+  inbox: InboxItem[];
+  inboxSeen: number;
   /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
   focused: boolean;
   // Service data
@@ -534,6 +553,8 @@ export const initialState: HiveState = {
   collapsed: {},
   tabs: [],
   activeTab: null,
+  inbox: [],
+  inboxSeen: 0,
   focused: false,
   connection: { status: "connecting" },
   settings: DEFAULT_SETTINGS,
@@ -855,6 +876,13 @@ export const openProjectMenu = (projectMenu: ProjectMenu | null) =>
   useHive.setState({ projectMenu });
 export const openSessionMenu = (sessionMenu: SessionMenu | null) =>
   useHive.setState({ sessionMenu });
+/** Keeps an alert in the inbox, the newest first. */
+export const addToInbox = (item: Omit<InboxItem, "id">) =>
+  useHive.setState((s) => ({
+    inbox: [{ ...item, id: (s.inbox[0]?.id ?? 0) + 1 }, ...s.inbox].slice(0, INBOX_LIMIT),
+  }));
+/** Opening the inbox marks every alert read. */
+export const markInboxRead = () => useHive.setState((s) => ({ inboxSeen: s.inbox[0]?.id ?? 0 }));
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });

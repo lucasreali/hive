@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { version } from "../../package.json";
 import { App } from "../App";
 import { COMMANDS } from "../shortcuts";
@@ -29,7 +29,9 @@ function open() {
   return screen.getByRole("dialog", { name: "Settings" }) as HTMLDialogElement;
 }
 
-const section = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
+// Within the dialog: the title bar's bell is also named "Notifications".
+const section = (name: string) =>
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name }));
 const input = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
 const search = (value: string) =>
   fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), {

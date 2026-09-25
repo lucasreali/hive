@@ -447,8 +447,8 @@ function nameError(project: Project, name: string): string | null {
  * A fake service for the browser (`bun run dev`, Playwright): it welcomes the UI, and each
  * terminal shows a prompt, echoes what is typed, repeats the line on Enter and exits on `exit`;
  * `cd <dir>` moves it and `claude` detects an idle agent there (removed when the terminal
- * exits); every later line sets that agent working; `worktree-remove <name>` removes that
- * Claude worktree as a `WorktreeRemove` hook would.
+ * exits); every later line sets that agent working, and `state <state>` then sets that state;
+ * `worktree-remove <name>` removes that Claude worktree as a `WorktreeRemove` hook would.
  * Projects come from `MOCK_REPOS`; any other path is refused as not found. Branches come from
  * `MOCK_BRANCHES`, and new worktrees are added to the fake project. A watched worktree lists
  * `MOCK_FILES`; `touch <name>` in a terminal there adds a file and sends the list (and the
@@ -769,6 +769,11 @@ export function createMockTransport(
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
         if (terminal.agent && line) setState(terminal.agent, "working", line);
         if (line === "claude") detect(id, terminal);
+        // `state <state>` then moves it there, as a hook would (the inbox's alerts, 6.5).
+        const next = line.slice(6) as AgentState;
+        if (terminal.agent && line.startsWith("state ") && URGENCY.includes(next)) {
+          setState(terminal.agent, next);
+        }
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
