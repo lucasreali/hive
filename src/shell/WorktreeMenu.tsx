@@ -30,32 +30,36 @@ function moveInMenu(event: KeyboardEvent<HTMLElement>, onClose: () => void): voi
 
 /**
  * A context menu at `at` (kept inside the window), focused on its first item. It closes
- * (`onClose`, which must not change between renders) on a click outside, Esc, Tab,
- * scrolling, resizing or the window losing focus.
+ * (`onClose`, which must not change between renders) on a click outside it and its `anchor`
+ * (the button that toggles it, if any), Esc, Tab, scrolling outside it, resizing or the window
+ * losing focus.
  */
 export function ContextMenu(props: {
   at: { x: number; y: number };
   label: string;
   onClose: () => void;
+  anchor?: HTMLElement | null;
+  className?: string;
   children: ReactNode;
 }) {
-  const { at, onClose } = props;
+  const { at, onClose, anchor } = props;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const outside = (e: Event) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
+      const target = e.target as Node;
+      if (!ref.current?.contains(target) && !anchor?.contains(target)) onClose();
     };
     document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("scroll", onClose, true);
+    document.addEventListener("scroll", outside, true);
     window.addEventListener("blur", onClose);
     window.addEventListener("resize", onClose);
     return () => {
       document.removeEventListener("pointerdown", outside, true);
-      document.removeEventListener("scroll", onClose, true);
+      document.removeEventListener("scroll", outside, true);
       window.removeEventListener("blur", onClose);
       window.removeEventListener("resize", onClose);
     };
-  }, [onClose]);
+  }, [onClose, anchor]);
   useLayoutEffect(() => {
     const el = ref.current as HTMLDivElement;
     el.style.left = `${Math.max(0, Math.min(at.x, window.innerWidth - el.offsetWidth))}px`;
@@ -65,7 +69,7 @@ export function ContextMenu(props: {
   return (
     <div
       ref={ref}
-      className="context-menu"
+      className={props.className ? `context-menu ${props.className}` : "context-menu"}
       role="menu"
       aria-label={props.label}
       onKeyDown={(e) => moveInMenu(e, onClose)}

@@ -52,7 +52,7 @@ test("states: collapsed nodes show the most urgent state inside; F8 walks the pe
 }) => {
   await page.goto("/?mock=states");
   const tree = page.getByRole("navigation", { name: "Projects" });
-  const chip = page.getByRole("button", { name: "3 pending: go to the next (F8)" });
+  const chip = page.getByRole("button", { name: "3 pending: notifications" });
   await expect(chip).toBeVisible();
   await expect(chip).toHaveCSS("color", "rgb(222, 193, 132)");
 
@@ -74,8 +74,9 @@ test("states: collapsed nodes show the most urgent state inside; F8 walks the pe
     await expect(selected).toHaveText(label);
   }
   await expect(icon).toHaveCount(0);
-  // Clicking the counter is F8.
+  // The bell's inbox lists the pending agents in tree order; clicking one goes to it.
   await chip.click();
+  await page.getByRole("menuitem").nth(1).click();
   await expect(selected).toHaveText("waiting for you");
 });
 

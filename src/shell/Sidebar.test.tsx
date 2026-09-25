@@ -273,10 +273,9 @@ test("a collapsed node shows the most urgent state inside; the bell counts pendi
   // In the title bar: a bell with the number of pending agents.
   const counter = () => document.querySelector(".pending-bell") as HTMLButtonElement;
   act(() => apply({ type: "projects", projects: [shop, api] }));
-  expect([counter().textContent, counter().title, counter().disabled]).toEqual([
+  expect([counter().textContent, counter().title]).toEqual([
     "",
-    "Nothing pending",
-    true,
+    "Notifications (F8: next pending)",
   ]);
   act(() => {
     agent("s1", main.id, "working");
@@ -291,7 +290,7 @@ test("a collapsed node shows the most urgent state inside; the bell counts pendi
   });
   // An agent outside every project still counts.
   expect(counter().textContent).toBe("3");
-  expect(counter().getAttribute("aria-label")).toBe("3 pending: go to the next (F8)");
+  expect(counter().getAttribute("aria-label")).toBe("3 pending: notifications");
 
   const rollup = (name: string) =>
     screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }).querySelector(".state-icon");
@@ -316,8 +315,9 @@ test("a collapsed node shows the most urgent state inside; the bell counts pendi
   act(() => agent("s1", main.id, "waiting_permission"));
   expect(rollup("shop")?.getAttribute("data-state")).toBe("waiting_permission");
 
-  // The bell is F8.
+  // The bell's inbox lists the pending agents first; clicking one goes to it, as F8 does.
   fireEvent.click(counter());
+  fireEvent.click(screen.getAllByRole("menuitem")[0] as HTMLElement);
   expect(useHive.getState().selection).toBe("s1");
   expect(screen.getByRole("button", { name: /^shop/ }).querySelector(".state-icon")).toBeNull();
 });
