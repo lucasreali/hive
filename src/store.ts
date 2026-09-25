@@ -36,6 +36,8 @@ export type ServiceMessage =
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
+  | { type: "spaces"; spaces: Space[]; current: string }
+  | { type: "space_failed"; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -147,7 +149,19 @@ export type ProjectError =
   | "not_found"
   | "not_a_directory"
   | "not_a_git_repository"
+  | "in_other_space"
   | "storage";
+
+/** Mirrors `hive_protocol::SpaceEnv`: what a space's terminals get; null leaves the user's own. */
+export type SpaceEnv = {
+  claude_config_dir: string | null;
+  git_name: string | null;
+  git_email: string | null;
+  gh_config_dir: string | null;
+};
+
+/** Mirrors `hive_protocol::Space` (6.14): its projects' ids and its terminals' environment. */
+export type Space = { id: string; name: string; projects: string[]; env: SpaceEnv };
 
 /** A project's branches; `current` is checked out in its main worktree (the "default"). */
 export type Branches = {
@@ -428,6 +442,8 @@ export type Modal =
   | "update-app"
   | "remove-worktree"
   | "rename-worktree"
+  | "new-space"
+  | "edit-space"
   | "settings"
   | "remove-merged"
   | null;
@@ -493,6 +509,11 @@ export type HiveState = {
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
   addProjectError: string | null;
+  /** Every space and the current one's id (whose projects show); null until the service sent them. */
+  spaces: Space[] | null;
+  currentSpace: string | null;
+  /** Why the last space request was refused. */
+  spaceError: string | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
   /** The worktree a dialog opened for (its row's menu). */
@@ -562,6 +583,9 @@ export const initialState: HiveState = {
   diagnostics: null,
   projects: null,
   addProjectError: null,
+  spaces: null,
+  currentSpace: null,
+  spaceError: null,
   modalProject: null,
   modalWorktree: null,
   worktreeDialog: {
@@ -736,6 +760,16 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "add_project_failed":
       return { addProjectError: m.message };
+    case "spaces":
+      // The answer to the space dialog's request: it has done its job.
+      return {
+        spaces: m.spaces,
+        currentSpace: m.current,
+        spaceError: null,
+        modal: s.modal === "new-space" || s.modal === "edit-space" ? null : s.modal,
+      };
+    case "space_failed":
+      return { spaceError: m.message };
     case "branches": {
       const { type: _, ...branches } = m;
       return patchDialog(s, { branches });
@@ -877,6 +911,7 @@ export const openModal = (
     modalProject,
     modalWorktree,
     addProjectError: null,
+    spaceError: null,
     worktreeDialog: initialState.worktreeDialog,
   });
 export const openMenu = (menu: WorktreeMenu | null) => useHive.setState({ menu });
@@ -1046,6 +1081,21 @@ export function panelWorktree(s: HiveState): { project: Project; worktree: Workt
   const find = (id: string | null | undefined) => all.find((e) => e.worktree.id === id);
   const tab = s.tabs.find((t) => t.id === s.activeTab);
   return find(selectedPlace(s)) ?? find(tab?.cwd) ?? null;
+}
+
+/** The space holding the project `id`. */
+export const spaceOf = (s: HiveState, project: string | null): Space | undefined =>
+  s.spaces?.find((space) => space.projects.includes(project ?? ""));
+
+/** The current space. */
+export const currentSpace = (s: HiveState): Space | undefined =>
+  s.spaces?.find((space) => space.id === s.currentSpace);
+
+/** The projects the sidebar shows: the current space's (every one until the spaces arrive). */
+export function spaceProjects(s: HiveState): Project[] {
+  const all = Object.values(s.projects ?? {});
+  const space = currentSpace(s);
+  return space ? all.filter((p) => space.projects.includes(p.id)) : all;
 }
 
 /** Agents in the sidebar's order (project, worktree, arrival); those outside the tree last. */

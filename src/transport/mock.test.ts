@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { type AgentState, DEFAULT_SETTINGS, type ServiceMessage } from "../store";
+import {
+  type AgentState,
+  DEFAULT_SETTINGS,
+  type ServiceMessage,
+  type Space,
+  type SpaceEnv,
+} from "../store";
 import {
   agentStatus,
   createMockTransport,
@@ -51,6 +57,7 @@ test("welcomes the UI asynchronously", async () => {
   expect(messages).toEqual([
     { type: "welcome", version: "mock", distro: "Ubuntu" },
     { type: "settings", settings: DEFAULT_SETTINGS },
+    { type: "spaces", spaces: [space("default", "Default", [SHOP, API])], current: "default" },
     { type: "projects", projects: MOCK_REPOS.slice(0, 2) },
   ]);
 });
@@ -89,12 +96,13 @@ test("a scenario fails the connection instead", async () => {
   for (const [scenario, types] of [
     ["mismatch", ["version_mismatch"]],
     ["disconnected", ["disconnected"]],
-    ["", ["welcome", "settings", "projects"]],
+    ["", ["welcome", "settings", "spaces", "projects"]],
     [
       "states",
       [
         "welcome",
         "settings",
+        "spaces",
         "projects",
         ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state", "agent_usage"]),
       ],
@@ -111,7 +119,7 @@ test("states: shop also lists the worktree a subagent owns", async () => {
   const messages: ServiceMessage[] = [];
   await createMockTransport("states").connect((m) => messages.push(m));
   await tick();
-  const [, , listed] = messages;
+  const [, , , listed] = messages;
   const shop = listed?.type === "projects" ? listed.projects[0] : undefined;
   expect(shop?.worktrees.map((w) => w.id).at(-1)).toBe(MOCK_OWN_WORKTREE);
   const owners = MOCK_STATES.flatMap(([, , subs]) => subs).filter((s) => s.worktree);
@@ -133,8 +141,15 @@ test("projects are added from the fake repositories only", async () => {
   await transport.addProject("/nope");
   await transport.listProjects();
   await tick();
-  expect(messages.slice(3)).toEqual([
+  const spaces: ServiceMessage = {
+    type: "spaces",
+    spaces: [space("default", "Default", [SHOP])],
+    current: "default",
+  };
+  expect(messages.slice(4)).toEqual([
+    spaces,
     { type: "project_added", project: shop },
+    spaces,
     { type: "project_added", project: shop },
     {
       type: "add_project_failed",
@@ -142,6 +157,7 @@ test("projects are added from the fake repositories only", async () => {
       error: "not_found",
       message: "cannot open /nope: No such file or directory (os error 2)",
     },
+    spaces,
     { type: "projects", projects: [shop] },
   ]);
   expect(shop.worktrees.map((w) => [w.name, w.branch, w.main, w.claude])).toEqual([
@@ -793,4 +809,76 @@ test("states: each subagent of MOCK_STATES has a conversation; others have none"
   ] as ServiceMessage[]);
   // Without the states scenario there are no subagents.
   expect(await answers(null, [["mock-state-2", "a3"]])).toEqual([none] as ServiceMessage[]);
+});
+
+const SHOP = "/home/user/projects/shop";
+const API = "/home/user/projects/api";
+const NO_ENV: SpaceEnv = {
+  claude_config_dir: null,
+  git_name: null,
+  git_email: null,
+  gh_config_dir: null,
+};
+function space(id: string, name: string, projects: string[], env = NO_ENV): Space {
+  return { id, name, projects, env };
+}
+
+test("spaces are kept as the service keeps them", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  messages.length = 0;
+  const env = { ...NO_ENV, git_name: "Me" };
+  const def = space("default", "Default", [SHOP, API]);
+  await transport.createSpace(" ", NO_ENV);
+  await transport.createSpace(" Work ", env);
+  await transport.listSessions();
+  // A project of another space cannot join this one.
+  await transport.addProject(SHOP);
+  await transport.updateSpace("space-1", "Job", NO_ENV);
+  await transport.updateSpace("space-1", "", NO_ENV);
+  await transport.updateSpace("nope", "x", NO_ENV);
+  await transport.selectSpace("nope");
+  await transport.selectSpace("default");
+  await transport.deleteSpace("default");
+  await transport.deleteSpace("nope");
+  await transport.deleteSpace("space-1");
+  await transport.deleteSpace("default");
+  await tick();
+  const failed = (message: string) => ({ type: "space_failed", message }) as ServiceMessage;
+  expect(messages).toEqual([
+    failed("Enter a name for the space"),
+    { type: "spaces", spaces: [def, space("space-1", "Work", [], env)], current: "space-1" },
+    { type: "sessions", sessions: [], error: null },
+    {
+      type: "add_project_failed",
+      path: SHOP,
+      error: "in_other_space",
+      message: `${SHOP} is already in the space Default`,
+    },
+    { type: "spaces", spaces: [def, space("space-1", "Job", [])], current: "space-1" },
+    failed("Enter a name for the space"),
+    failed('no space "nope"'),
+    failed('no space "nope"'),
+    { type: "spaces", spaces: [def, space("space-1", "Job", [])], current: "default" },
+    failed("Default has projects: only an empty space can be deleted"),
+    failed('no space "nope"'),
+    { type: "spaces", spaces: [def], current: "default" },
+    failed("Default has projects: only an empty space can be deleted"),
+  ]);
+});
+
+test("deleting the current space makes the first one current, never the last one", async () => {
+  const transport = createMockTransport("empty");
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await transport.createSpace("Work", NO_ENV);
+  await transport.deleteSpace("space-1");
+  await transport.deleteSpace("default");
+  await tick();
+  expect(messages.slice(-2)).toEqual([
+    { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
+    { type: "space_failed", message: "the last space cannot be deleted" },
+  ]);
 });

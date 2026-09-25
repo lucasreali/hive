@@ -25,6 +25,9 @@ pub struct Terminal {
     pub watch: Watch,
     /// When the PTY last printed something (the silence rule of agent states).
     pub last_output: Instant,
+    /// The Claude config folder its space gave it (6.14), where its agents' sessions are;
+    /// `None` for the service's own.
+    pub claude_dir: Option<String>,
     input: mpsc::UnboundedSender<Input>,
 }
 
@@ -41,13 +44,15 @@ impl Terminal {
 }
 
 /// Starts the shell (see [`shell`]) on a new PTY in `cwd`, with `bin_dir` first on `PATH`
-/// and `HIVE_TERMINAL_ID` set. Returns the registry entry, the output side and the child.
+/// and `HIVE_TERMINAL_ID` set, plus `env` (its space's, 6.14). Returns the registry entry,
+/// the output side and the child.
 pub fn spawn(
     id: u32,
     cwd: &str,
     cols: u16,
     rows: u16,
     bin_dir: &Path,
+    env: &[(&'static str, String)],
 ) -> Result<(Terminal, OwnedReadPty, Child), String> {
     let start = || -> pty_process::Result<_> {
         let (pty, pts) = pty_process::open()?;
@@ -55,6 +60,7 @@ pub fn spawn(
         let child = shell(bin_dir)
             .env("HIVE_TERMINAL_ID", id.to_string())
             .env("TERM", "xterm-256color")
+            .envs(env.iter().cloned())
             .current_dir(cwd)
             .spawn(pts)?;
         Ok((pty, child))
@@ -71,6 +77,7 @@ pub fn spawn(
             session,
             watch: Watch::default(),
             last_output: Instant::now(),
+            claude_dir: None,
             input,
         },
         output,

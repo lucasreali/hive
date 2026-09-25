@@ -9,6 +9,7 @@ import type {
   ServiceMessage,
   Session,
   Settings,
+  Space,
   Subagent,
   TranscriptEntry,
   Worktree,
@@ -482,6 +483,21 @@ export function createMockTransport(
     projects[0] = { ...shop, worktrees: [...shop.worktrees, worktree(shop.path, "tests-login")] };
   }
   const find = (id: string) => projects.find((p) => p.id === id);
+  // Spaces as `hive::spaces` keeps them: every project starts in "Default".
+  const noEnv = { claude_config_dir: null, git_name: null, git_email: null, gh_config_dir: null };
+  let spaces: Space[] = [
+    { id: "default", name: "Default", projects: projects.map((p) => p.id), env: noEnv },
+  ];
+  let current = "default";
+  let made = 0;
+  const space = (id: string) => spaces.find((x) => x.id === id);
+  const sendSpaces = () => later({ type: "spaces", spaces: structuredClone(spaces), current });
+  // As the service: a refusal changes nothing; otherwise the spaces are sent.
+  const changeSpaces = (change: () => string | null) => {
+    const message = change();
+    if (message) later({ type: "space_failed", message });
+    else sendSpaces();
+  };
   let last = 0;
   type MockTerminal = {
     onData: (bytes: Uint8Array) => void;
@@ -592,11 +608,50 @@ export function createMockTransport(
       later(failure ?? WELCOME);
       if (failure) return;
       later({ type: "settings", settings });
+      sendSpaces();
       later({ type: "projects", projects });
       if (scenario === "states") for (const m of mockStates()) later(m);
     },
     async listProjects() {
+      sendSpaces();
       later({ type: "projects", projects });
+    },
+    async createSpace(name, env) {
+      changeSpaces(() => {
+        if (!name.trim()) return "Enter a name for the space";
+        current = `space-${++made}`;
+        spaces = [...spaces, { id: current, name: name.trim(), projects: [], env }];
+        return null;
+      });
+    },
+    async updateSpace(id, name, env) {
+      changeSpaces(() => {
+        const found = space(id);
+        if (!found) return `no space "${id}"`;
+        if (!name.trim()) return "Enter a name for the space";
+        Object.assign(found, { name: name.trim(), env });
+        return null;
+      });
+    },
+    async deleteSpace(id) {
+      changeSpaces(() => {
+        const found = space(id);
+        if (!found) return `no space "${id}"`;
+        if (found.projects.length > 0) {
+          return `${found.name} has projects: only an empty space can be deleted`;
+        }
+        if (spaces.length === 1) return "the last space cannot be deleted";
+        spaces = spaces.filter((x) => x !== found);
+        if (current === id) current = (spaces[0] as Space).id;
+        return null;
+      });
+    },
+    async selectSpace(id) {
+      changeSpaces(() => {
+        if (!space(id)) return `no space "${id}"`;
+        current = id;
+        return null;
+      });
     },
     async getSettings() {
       later({ type: "settings", settings });
@@ -624,7 +679,16 @@ export function createMockTransport(
         const message = `cannot open ${path}: No such file or directory (os error 2)`;
         return void later({ type: "add_project_failed", path, error: "not_found", message });
       }
-      if (!find(path)) projects.push(repo);
+      const owner = spaces.find((x) => x.projects.includes(path));
+      if (owner && owner.id !== current) {
+        const message = `${path} is already in the space ${owner.name}`;
+        return void later({ type: "add_project_failed", path, error: "in_other_space", message });
+      }
+      if (!owner) {
+        projects.push(repo);
+        space(current)?.projects.push(path);
+      }
+      sendSpaces();
       later({ type: "project_added", project: find(path) as Project });
     },
     async listDirs(path, windows) {
@@ -702,7 +766,9 @@ export function createMockTransport(
       );
     },
     async listSessions() {
-      later({ type: "sessions", sessions: [...sessions], error: null });
+      // Only the current space's.
+      const shown = sessions.filter((x) => space(current)?.projects.includes(x.project));
+      later({ type: "sessions", sessions: shown, error: null });
     },
     async locateSession(id, target) {
       const found = sessions.find((x) => x.id === id);

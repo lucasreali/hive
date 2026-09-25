@@ -1,4 +1,11 @@
-import { type AgentState, addToInbox, type HiveState, type ServiceMessage, useHive } from "./store";
+import {
+  type AgentState,
+  addToInbox,
+  type HiveState,
+  type ServiceMessage,
+  spaceOf,
+  useHive,
+} from "./store";
 import { showNotification } from "./window";
 
 // Presentation of state changes the service sent (hive.md item 5, #37): a tone when an agent
@@ -35,12 +42,21 @@ function tone(volume: number): void {
   osc.stop(t + 0.2);
 }
 
-/** "project · worktree" for the agent, as far as the service placed it. */
-function place(s: HiveState, id: string): string {
+/**
+ * "space · project · worktree" for the agent, as far as the service placed it; the space is
+ * named only when there are several (6.14: agents of every space alert).
+ */
+export function agentPlace(s: HiveState, id: string): string {
   const agent = s.agents[id];
   const project = agent?.project ? s.projects?.[agent.project] : undefined;
   const worktree = project?.worktrees.find((w) => w.id === agent?.worktree);
-  return [project?.name, worktree?.name].filter(Boolean).join(" · ");
+  return [spaceName(s, id), project?.name, worktree?.name].filter(Boolean).join(" · ");
+}
+
+/** The name of the agent's space, only when there are several (6.14). */
+export function spaceName(s: HiveState, id: string): string | undefined {
+  if ((s.spaces?.length ?? 0) < 2) return undefined;
+  return spaceOf(s, s.agents[id]?.project ?? null)?.name;
 }
 
 /**
@@ -61,7 +77,8 @@ export function notify(
   if (ALERTING.includes(after)) {
     const name = s.agentTitles[message.id] ?? "Claude";
     const what = after === "waiting_you" && BUSY.includes(before) ? "finished" : ALERT_TEXT[after];
-    addToInbox({ agent: message.id, state: after, at: wall, text: `${name} ${what}` });
+    const space = spaceName(s, message.id);
+    addToInbox({ agent: message.id, state: after, at: wall, text: `${name} ${what}`, space });
   }
   const volume = s.settings.notifications.volume;
   if (volume > 0 && ALERTING.includes(after) && now - lastTone >= TONE_GAP_MS) {
@@ -69,7 +86,7 @@ export function notify(
     tone(volume);
   }
   if (after === "waiting_you" && BUSY.includes(before) && message.pending) {
-    const where = place(s, message.id);
+    const where = agentPlace(s, message.id);
     void showNotification(
       "Agent finished",
       where ? `${where}: waiting for you` : "Waiting for you",

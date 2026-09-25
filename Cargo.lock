@@ -1792,6 +1792,7 @@ dependencies = [
  "nix",
  "notify",
  "pty-process",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

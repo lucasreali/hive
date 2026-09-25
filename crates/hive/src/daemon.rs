@@ -16,7 +16,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     AgentEvent, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, OpenSession,
-    PROTOCOL_VERSION, Role, SaveError, SessionTarget,
+    PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -33,6 +33,7 @@ use crate::paths::Paths;
 use crate::projects::{self, Projects};
 use crate::sessions::{self, Sessions};
 use crate::settings;
+use crate::spaces::Spaces;
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
 use crate::{changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper};
@@ -57,7 +58,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
-    let projects = Projects::load(paths.projects());
+    let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
     let restore = Restore {
@@ -300,6 +301,7 @@ impl State {
             return;
         };
         terminal.watch.hooked();
+        let claude_dir = terminal.claude_dir.clone();
         let Some(id) = agent_id(event) else { return };
         let mut agents = self.agents.lock().await;
         // Other terminals keep working meanwhile.
@@ -314,6 +316,7 @@ impl State {
         agent.worktree = worktree.clone();
         agent.cwd = cwd.clone();
         agent.transcript = transcript::transcript_path(&event.raw);
+        agent.claude_dir = claude_dir;
         let state = agent.message(&id);
         let detected = Control::AgentDetected {
             id: id.clone(),
@@ -331,7 +334,8 @@ impl State {
     /// Reads the agent's session name from its log and sends it when it changed.
     async fn retitle(&self, id: &str, agent: &mut Agent) {
         let Some(cwd) = agent.cwd.clone() else { return };
-        let title = tokio::task::block_in_place(|| self.sessions.title(id, &cwd));
+        let sessions = self.sessions.at(agent.claude_dir.as_deref());
+        let title = tokio::task::block_in_place(|| sessions.title(id, &cwd));
         let Some(title) = title.filter(|t| agent.title.as_ref() != Some(t)) else {
             return;
         };
@@ -405,16 +409,22 @@ impl State {
         rows: u16,
         output: mpsc::Sender<Frame>,
     ) {
+        // Its space's environment (6.14), placed before the lock since placing lists worktrees.
+        let (env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {
                 _ if channel == 0 => Err("terminal channels start at 1".to_owned()),
                 Entry::Occupied(_) => Err(format!("terminal {channel} is already open")),
-                Entry::Vacant(slot) => terminal::spawn(channel, cwd, cols, rows, &self.bin_dir)
-                    .map(|(terminal, pty, child)| {
-                        slot.insert(terminal);
-                        tokio::spawn(pump(self.clone(), channel, pty, child, output));
-                    }),
+                Entry::Vacant(slot) => {
+                    terminal::spawn(channel, cwd, cols, rows, &self.bin_dir, &env).map(
+                        |(mut terminal, pty, child)| {
+                            terminal.claude_dir = claude_dir;
+                            slot.insert(terminal);
+                            tokio::spawn(pump(self.clone(), channel, pty, child, output));
+                        },
+                    )
+                }
             }
         };
         let reply = match opened {
@@ -426,25 +436,39 @@ impl State {
 
     /// Answers a project request off the frame loop, since git can take a while.
     fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
-        self.sessions(move |projects, _| request(projects));
-    }
-
-    /// Answers a request on the followed projects and their Claude sessions off the frame
-    /// loop, since reading logs can take a while too.
-    fn sessions(
-        self: &Arc<Self>,
-        request: impl FnOnce(&Projects, &Sessions) -> Control + Send + 'static,
-    ) {
         let state = self.clone();
         tokio::spawn(async move {
             // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
             let reply = tokio::task::block_in_place(|| {
-                let mut reply = request(&state.projects, &state.sessions);
+                let mut reply = request(&state.projects);
                 state.with_health(&mut reply);
                 reply
             });
             state.to_app(0, &reply).await;
         });
+    }
+
+    /// Answers a request on the current space's projects and their Claude sessions (in the
+    /// space's Claude folder) off the frame loop, since reading logs can take a while too.
+    fn sessions(
+        self: &Arc<Self>,
+        request: impl FnOnce(&[Project], &Sessions) -> Control + Send + 'static,
+    ) {
+        let state = self.clone();
+        self.projects(move |projects| {
+            let (current, claude_dir) = projects.current();
+            request(&current, &state.sessions.at(claude_dir.as_deref()))
+        });
+    }
+
+    /// Applies a space request (6.14): answers the spaces, or why nothing changed.
+    async fn change_spaces(&self, change: impl FnOnce(&mut Spaces) -> Result<(), String>) {
+        let changed = tokio::task::block_in_place(|| self.projects.change_spaces(change));
+        let reply = match changed {
+            Ok(()) => self.projects.spaces_message(),
+            Err(message) => Control::SpaceFailed { message },
+        };
+        self.to_app(0, &reply).await;
     }
 
     /// Watches `path` for the files panel instead of the worktree watched until now, if any.
@@ -476,14 +500,18 @@ impl State {
 
     /// Follows the subagent's transcript instead of any other: sends what it holds now, then
     /// (from [`watch_terminals`]) what is appended. Only a detected agent's subagent, with a
-    /// transcript inside Claude's projects folder, is followed.
+    /// transcript inside its Claude projects folder (its space's), is followed.
     async fn watch_transcript(&self, agent: String, subagent: String) {
         let agents = self.agents.lock().await;
-        let parent = agents.get(&agent).and_then(|a| a.transcript.clone());
+        let found = agents.get(&agent);
+        let parent = found.and_then(|a| a.transcript.clone());
+        let sessions = self
+            .sessions
+            .at(found.and_then(|a| a.claude_dir.as_deref()));
         drop(agents);
         let mut watching = self.transcript.lock().await;
         let path = parent.and_then(|p| transcript::subagent_path(&p, &subagent));
-        let (Some(path), Some(root)) = (path, self.sessions.root()) else {
+        let (Some(path), Some(root)) = (path, sessions.root()) else {
             *watching = None;
             let message = "no transcript is known for this subagent".to_owned();
             return self.to_app(0, &Control::Error { message }).await;
@@ -557,8 +585,10 @@ async fn watch_terminals(state: Arc<State>) {
             {
                 state.to_app(agent.channel, &message).await;
             }
+            // Its space's Claude projects folder, as for its subagents' transcripts.
+            let sessions = state.sessions.at(agent.claude_dir.as_deref());
             let (Some(path), Some(root), true) =
-                (&agent.transcript, state.sessions.root(), agent.usage.due)
+                (&agent.transcript, sessions.root(), agent.usage.due)
             else {
                 continue;
             };
@@ -853,19 +883,44 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             };
             state.to_app(0, &diagnostics).await;
         }
-        Ok(Control::ListProjects) => state.projects(|projects| Control::Projects {
-            projects: projects.list(),
-        }),
-        Ok(Control::AddProject { path }) => {
-            state.projects(move |projects| match projects.add(&path) {
-                Ok(project) => Control::ProjectAdded { project },
-                Err((error, message)) => Control::AddProjectFailed {
-                    path,
-                    error,
-                    message,
-                },
+        Ok(Control::ListProjects) => {
+            state.to_app(0, &state.projects.spaces_message()).await;
+            state.projects(|projects| Control::Projects {
+                projects: projects.list(),
             })
         }
+        Ok(Control::AddProject { path }) => {
+            let state = state.clone();
+            tokio::spawn(async move {
+                let added = tokio::task::block_in_place(|| {
+                    let project = state.projects.add(&path)?;
+                    let mut reply = Control::ProjectAdded { project };
+                    state.with_health(&mut reply);
+                    Ok(reply)
+                });
+                let reply = match added {
+                    Ok(reply) => {
+                        // It joined the current space.
+                        state.to_app(0, &state.projects.spaces_message()).await;
+                        reply
+                    }
+                    Err((error, message)) => Control::AddProjectFailed {
+                        path,
+                        error,
+                        message,
+                    },
+                };
+                state.to_app(0, &reply).await;
+            });
+        }
+        Ok(Control::CreateSpace { name, env }) => {
+            state.change_spaces(|s| s.create(&name, env)).await
+        }
+        Ok(Control::UpdateSpace { id, name, env }) => {
+            state.change_spaces(|s| s.update(&id, &name, env)).await
+        }
+        Ok(Control::DeleteSpace { id }) => state.change_spaces(|s| s.delete(&id)).await,
+        Ok(Control::SelectSpace { id }) => state.change_spaces(|s| s.select(&id)).await,
         Ok(Control::ListBranches { project }) => state.projects(move |projects| {
             let (branches, error) = match projects.branches(&project) {
                 Ok(branches) => (branches, None),
@@ -941,14 +996,14 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }),
         Ok(Control::ListSessions) => state.sessions(|projects, sessions| {
             let running = procs::claude_cwds(procs::Source::System);
-            let (sessions, error) = match sessions.list(&projects.list(), &running) {
+            let (sessions, error) = match sessions.list(projects, &running) {
                 Ok(sessions) => (sessions, None),
                 Err(err) => (Vec::new(), Some(err.to_string())),
             };
             Control::Sessions { sessions, error }
         }),
         Ok(Control::LocateSession { id, target }) => state.sessions(move |projects, sessions| {
-            let located = sessions.find(&projects.list(), &id).and_then(|session| {
+            let located = sessions.find(projects, &id).and_then(|session| {
                 let path = match target {
                     SessionTarget::Log => session.log,
                     SessionTarget::Folder => session.cwd,
@@ -969,7 +1024,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 let deleted = if live {
                     Err(io::Error::other("the session is running: end it first"))
                 } else {
-                    sessions.delete(&projects.list(), &id)
+                    sessions.delete(projects, &id)
                 };
                 match deleted {
                     Ok(()) => Control::SessionDeleted { id },
@@ -1113,7 +1168,7 @@ mod tests {
             file: dir.join("open-sessions.json"),
             pending: Mutex::new(Vec::new()),
         };
-        let projects = Projects::load(dir.join("projects.json"));
+        let projects = Projects::load(dir.join("spaces.json"), &dir.join("projects.json"));
         Arc::new(State::new(
             dir.into(),
             projects,

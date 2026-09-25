@@ -7,6 +7,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   type Agent,
   type AgentState,
@@ -21,6 +22,7 @@ import {
   type Subagent,
   select,
   showTranscript,
+  spaceProjects,
   toggleCollapsed,
   useHive,
   type Worktree,
@@ -28,6 +30,7 @@ import {
 } from "../store";
 import { openClaude } from "../terminals";
 import { transport } from "../transport";
+import { Select } from "../ui/Select";
 import { keyText } from "../window";
 import {
   BranchIcon,
@@ -68,13 +71,13 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
 
 // ponytail: plain list, add TanStack Virtual when trees get long.
 export function Sidebar() {
-  const projects = useHive((s) => s.projects);
+  const list = useHive(useShallow(spaceProjects));
   const width = useHive((s) => s.sidebarWidth);
-  const list = Object.values(projects ?? {});
   return (
     <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree} style={{ width }}>
       <ResizeHandle side="sidebar" />
       <div className="bar">
+        <SpacePicker />
         <div className="sidebar-actions">
           <button
             type="button"
@@ -107,6 +110,35 @@ export function Sidebar() {
         )}
       </div>
     </nav>
+  );
+}
+
+/** Choices of the space select that open the space dialog instead of picking a space. */
+const NEW_SPACE = "\0new";
+const EDIT_SPACE = "\0edit";
+
+/** The current space (6.14): picks another, or opens the dialog for a new one or this one. */
+function SpacePicker() {
+  const spaces = useHive((s) => s.spaces);
+  const current = useHive((s) => s.currentSpace);
+  if (!spaces || current === null) return null;
+  const options = [
+    ...spaces.map((s) => ({ value: s.id, label: s.name })),
+    { value: NEW_SPACE, label: "New space…" },
+    { value: EDIT_SPACE, label: "Edit space…" },
+  ];
+  return (
+    <Select
+      className="space-select"
+      aria-label="Space"
+      value={current}
+      options={options}
+      onChange={(value) => {
+        if (value === NEW_SPACE) openModal("new-space");
+        else if (value === EDIT_SPACE) openModal("edit-space");
+        else void transport.selectSpace(value);
+      }}
+    />
   );
 }
 

@@ -257,9 +257,20 @@ impl Conn {
         seen
     }
 
-    /// Next control frame, skipping terminal output and `worktree_status` (sent whenever a
-    /// status changes, see [`Conn::worktree_status`]).
+    /// Next control frame, skipping terminal output, `worktree_status` (sent whenever a status
+    /// changes, see [`Conn::worktree_status`]) and `spaces`, which comes before the answers to
+    /// `list_projects` and `add_project` (see [`Conn::any_control`]).
     pub async fn control(&mut self) -> (u32, Control) {
+        loop {
+            let next = self.any_control().await;
+            if !matches!(next.1, Control::Spaces { .. }) {
+                return next;
+            }
+        }
+    }
+
+    /// Next control frame, skipping terminal output and `worktree_status` only.
+    pub async fn any_control(&mut self) -> (u32, Control) {
         loop {
             let frame = self.next().await.expect("connection closed");
             match frame.to_control() {

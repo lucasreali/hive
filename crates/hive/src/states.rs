@@ -36,6 +36,8 @@ pub struct Agent {
     pub transcript: Option<std::path::PathBuf>,
     /// Its tokens, read from `transcript` by the daemon.
     pub usage: crate::transcript::Usage,
+    /// Its terminal's Claude config folder (see `Terminal::claude_dir`).
+    pub claude_dir: Option<String>,
     state: AgentState,
     /// In start order.
     subagents: Vec<SubagentState>,
@@ -74,6 +76,7 @@ impl Agent {
             title: None,
             transcript: None,
             usage: Default::default(),
+            claude_dir: None,
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),

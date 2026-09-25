@@ -45,6 +45,11 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.closeTerminal(7);
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
+  const env = { claude_config_dir: null, git_name: "Me", git_email: null, gh_config_dir: null };
+  await tauriTransport.createSpace("Work", env);
+  await tauriTransport.updateSpace("w", "Job", env);
+  await tauriTransport.deleteSpace("w");
+  await tauriTransport.selectSpace("w");
   await tauriTransport.listDirs("", true);
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
@@ -74,6 +79,10 @@ test("terminal and project actions call their commands", async () => {
     ["close_terminal", { id: 7 }],
     ["list_projects", {}],
     ["add_project", { path: "/r" }],
+    ["create_space", { name: "Work", env }],
+    ["update_space", { id: "w", name: "Job", env }],
+    ["delete_space", { id: "w" }],
+    ["select_space", { id: "w" }],
     ["list_dirs", { path: "", windows: true }],
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],

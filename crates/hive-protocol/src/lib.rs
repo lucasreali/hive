@@ -255,6 +255,37 @@ pub enum Control {
         /// Readable explanation, shown as is.
         message: String,
     },
+    /// Every space (6.14) and the current one, whose projects the sidebar and the Sessions
+    /// panel show. Sent before `projects` in answer to `ListProjects`, before `ProjectAdded`,
+    /// and in answer to every space request.
+    Spaces {
+        spaces: Vec<Space>,
+        current: String,
+    },
+    /// App → service: a new, empty space, which becomes the current one.
+    CreateSpace {
+        name: String,
+        env: SpaceEnv,
+    },
+    /// App → service: renames a space and replaces its terminals' environment (new
+    /// terminals only).
+    UpdateSpace {
+        id: String,
+        name: String,
+        env: SpaceEnv,
+    },
+    /// App → service: removes a space without projects (never the last one).
+    DeleteSpace {
+        id: String,
+    },
+    /// App → service: makes `id` the current space.
+    SelectSpace {
+        id: String,
+    },
+    /// A space request refused, with nothing changed. Shown as is.
+    SpaceFailed {
+        message: String,
+    },
     /// App → service: the local and remote branches of a followed project, answered by
     /// `Branches`.
     ListBranches {
@@ -721,6 +752,32 @@ pub struct WorktreeSettings {
 #[serde(default)]
 pub struct ProjectSettings {}
 
+/// A group of projects (6.14) with an optional identity for the terminals opened in them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Space {
+    pub id: String,
+    pub name: String,
+    /// Ids of its projects, in the order they were added. A project is in one space only.
+    #[serde(default)]
+    pub projects: Vec<String>,
+    #[serde(default)]
+    pub env: SpaceEnv,
+}
+
+/// What a space's terminals get in their environment; `None` leaves the user's own.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpaceEnv {
+    /// `CLAUDE_CONFIG_DIR`; its `projects` folder holds the space's sessions.
+    pub claude_config_dir: Option<String>,
+    /// `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME`.
+    pub git_name: Option<String>,
+    /// `GIT_AUTHOR_EMAIL` and `GIT_COMMITTER_EMAIL`.
+    pub git_email: Option<String>,
+    /// `GH_CONFIG_DIR`.
+    pub gh_config_dir: Option<String>,
+}
+
 /// A git repository inside WSL that the app follows (#4). Paths are the service's, never
 /// derived by the app.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -888,6 +945,8 @@ pub enum ProjectError {
     NotFound,
     NotADirectory,
     NotAGitRepository,
+    /// Already followed in another space.
+    InOtherSpace,
     /// The project list could not be saved.
     Storage,
 }
@@ -1160,6 +1219,52 @@ mod tests {
             json,
             r#"["waiting_permission","error","waiting_you","with_subagents","working","idle","ended"]"#
         );
+    }
+
+    #[test]
+    fn space_messages_are_tagged_json_with_defaults_for_missing_keys() {
+        let create: Control =
+            serde_json::from_str(r#"{"type":"create_space","name":"Work","env":{}}"#).unwrap();
+        let env = SpaceEnv::default();
+        let expected = Control::CreateSpace {
+            name: "Work".into(),
+            env: env.clone(),
+        };
+        assert_eq!(create, expected);
+        let spaces = Control::Spaces {
+            spaces: vec![Space {
+                id: "default".into(),
+                name: "Default".into(),
+                projects: vec!["/r".into()],
+                env: SpaceEnv {
+                    git_email: Some("a@b".into()),
+                    ..env
+                },
+            }],
+            current: "default".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&spaces).unwrap(),
+            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"claude_config_dir":null,"git_name":null,"git_email":"a@b","gh_config_dir":null}}],"current":"default"}"#
+        );
+        let bare: Space = serde_json::from_str(r#"{"id":"x","name":"X"}"#).unwrap();
+        assert!(bare.projects.is_empty() && bare.env == SpaceEnv::default());
+        for msg in [
+            Control::UpdateSpace {
+                id: "x".into(),
+                name: "X".into(),
+                env: SpaceEnv::default(),
+            },
+            Control::DeleteSpace { id: "x".into() },
+            Control::SelectSpace { id: "x".into() },
+            Control::SpaceFailed {
+                message: "m".into(),
+            },
+        ] {
+            assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
+        }
+        let other = serde_json::to_string(&ProjectError::InOtherSpace).unwrap();
+        assert_eq!(other, r#""in_other_space""#);
     }
 
     #[test]

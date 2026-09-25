@@ -1,6 +1,7 @@
 import { ArrowCircleUpIcon, BellIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { spaceName } from "../notify";
 import { goToAgent } from "../shortcuts";
 import { type Agent, markInboxRead, pendingAgents, useHive } from "../store";
 import { isMac, windowAction } from "../window";
@@ -118,6 +119,8 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   const agents = useHive((s) => s.agents);
   const states = useHive((s) => s.agentStates);
   const titles = useHive((s) => s.agentTitles);
+  // Each item names its agent's space when there are several (6.14).
+  const spaces = useHive(useShallow((s) => pending.map((a) => spaceName(s, a.id))));
   const now = useNow();
   // Placed once: a new position would move the focus back to the first item on every tick.
   const [at] = useState(() => {
@@ -130,13 +133,15 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   };
   return (
     <ContextMenu at={at} label="Notifications" onClose={onClose} anchor={bell} className="inbox">
-      {pending.map((a) => {
+      {pending.map((a, i) => {
         const state = states[a.id]?.state ?? "idle";
         return (
           <button key={a.id} type="button" role="menuitem" onClick={go(a)}>
             <StateIcon state={state} />
             <span className="label">{titles[a.id] ?? "Claude"}</span>
-            <span className="inbox-meta">{STATE_LABEL[state]}</span>
+            <span className="inbox-meta">
+              {[spaces[i], STATE_LABEL[state]].filter(Boolean).join(" · ")}
+            </span>
           </button>
         );
       })}
@@ -154,7 +159,9 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
           >
             <StateIcon state={item.state} />
             <span className="label">{item.text}</span>
-            <span className="inbox-meta">{elapsed(item.at, now)} ago</span>
+            <span className="inbox-meta">
+              {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}
+            </span>
           </button>
         );
       })}

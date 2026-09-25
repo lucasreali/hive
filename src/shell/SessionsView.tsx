@@ -41,12 +41,15 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const error = useHive((s) => s.sessionsError);
   const agents = useHive((s) => s.agents);
   const [query, setQuery] = useState("");
-  // Asked again every few seconds: sessions outside Hive change state without hooks.
+  const space = useHive((s) => s.currentSpace);
+  // Asked again every few seconds (sessions outside Hive change state without hooks) and for
+  // another space: the service lists the current space's only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new space is listed again.
   useEffect(() => {
     void transport.listSessions();
     const every = setInterval(() => void transport.listSessions(), REFRESH_MS);
     return () => clearInterval(every);
-  }, []);
+  }, [space]);
   const q = query.trim().toLowerCase();
   const matches = (x: Session) =>
     [x.title, x.last_text, x.branch, x.id].some((v) => v?.toLowerCase().includes(q));
