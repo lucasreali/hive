@@ -2,9 +2,11 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { notify, TONE_GAP_MS } from "./notify";
 import {
   type AgentState,
+  addToInbox,
   apply,
   DEFAULT_SETTINGS,
   type HiveState,
+  INBOX_LIMIT,
   initialState,
   useHive,
 } from "./store";
@@ -180,4 +182,36 @@ test("an agent finishing already seen (not pending) gets its tone but no notific
 test("other messages are ignored", () => {
   notify({ type: "welcome", version: "1", distro: null }, useHive.getState() as HiveState, clock);
   expect(tones).toBe(0);
+});
+
+test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", () => {
+  apply({ type: "agent_title", channel: 1, id: "a", title: "fix login" });
+  feed("a", "working");
+  feed("a", "waiting_you");
+  feed("a", "waiting_permission");
+  feed("b", "idle");
+  feed("b", "waiting_you");
+  feed("b", "error");
+  // Muted: no tone, but still an alert.
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.notifications.volume = 0;
+  apply({ type: "settings", settings });
+  feed("b", "idle");
+  notify(state("b", "waiting_permission"), useHive.getState(), clock, 1234);
+  const { inbox } = useHive.getState();
+  expect(inbox.map((i) => [i.id, i.agent, i.state, i.text])).toEqual([
+    [5, "b", "waiting_permission", "Claude is waiting for permission"],
+    [4, "b", "error", "Claude failed"],
+    [3, "b", "waiting_you", "Claude is waiting for you"],
+    [2, "a", "waiting_permission", "fix login is waiting for permission"],
+    [1, "a", "waiting_you", "fix login finished"],
+  ]);
+  expect(inbox[0]?.at).toBe(1234);
+
+  useHive.setState({ inbox: [] });
+  for (let at = 0; at < INBOX_LIMIT + 5; at++) {
+    addToInbox({ agent: "a", state: "error", at, text: "" });
+  }
+  const kept = useHive.getState().inbox;
+  expect([kept.length, kept[0]?.at, kept.at(-1)?.at]).toEqual([INBOX_LIMIT, INBOX_LIMIT + 4, 5]);
 });
