@@ -26,6 +26,8 @@ export type ServiceMessage =
   | { type: "terminal_opened"; channel: number }
   | { type: "terminal_exited"; channel: number; code: number | null }
   | { type: "unhooked_agent"; channel: number }
+  // `hive badge` in that terminal; empty clears it.
+  | { type: "badge"; channel: number; text: string }
   | ({ type: "agent_detected"; channel: number } & Omit<Agent, "terminal">)
   | { type: "agent_removed"; channel: number; id: string }
   | { type: "agent_title"; channel: number; id: string; title: string }
@@ -101,6 +103,8 @@ export type Terminal = {
   exited: boolean;
   code: number | null;
   unhooked: boolean;
+  /** Set with `hive badge`; cleared when the terminal exits. */
+  badge?: string;
 };
 
 /** Mirrors `hive_protocol::Worktree`: every field comes from the service. */
@@ -648,9 +652,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "terminal_opened":
       return patchTerminal(s, m.channel, { exited: false, code: null, unhooked: false });
     case "terminal_exited":
-      return patchTerminal(s, m.channel, { exited: true, code: m.code });
+      return patchTerminal(s, m.channel, { exited: true, code: m.code, badge: "" });
     case "unhooked_agent":
       return patchTerminal(s, m.channel, { unhooked: true });
+    case "badge":
+      return patchTerminal(s, m.channel, { badge: m.text });
     case "agent_detected": {
       const { type: _, channel, ...agent } = m;
       return { agents: { ...s.agents, [m.id]: { ...agent, terminal: channel } } };
