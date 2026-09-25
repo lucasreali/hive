@@ -190,7 +190,7 @@ Only through the package managers' CLIs, never by editing manifests or lockfiles
 
 ## Status
 
-A personal project, at v0.1.x. It is used daily by its author but young: expect rough edges.
+A personal project, at v0.1.x: expect rough edges.
 
 ## License
 
