@@ -2,7 +2,7 @@ import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
 import { COMMANDS } from "../shortcuts";
-import { apply, initialState, openModal, useHive } from "../store";
+import { apply, DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
@@ -122,6 +122,43 @@ test("Enter on a worktree selects it and expands its project", () => {
     selection: fixLogin.id,
     collapsed: { [shop.id]: false },
   });
+});
+
+test("the selected worktree's run scripts are commands that type them into a new terminal", async () => {
+  const terminal = spyOn(transport, "openTerminal").mockResolvedValue(8);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.projects[shop.id] = {
+    scripts: { ...NO_SCRIPTS, run: [{ name: "dev", command: "bun dev" }] },
+  };
+  act(() => apply({ type: "settings", settings }));
+  open();
+  expect(screen.queryByRole("button", { name: /^Run: dev/ })).toBeNull();
+  act(() => useHive.setState({ selection: fixLogin.id }));
+  act(() => openModal("palette"));
+  type("run dev");
+  expect(picked()?.textContent).toBe("Run: dev");
+  key("Enter");
+  expect(terminal.mock.calls[0]?.[0]).toBe(fixLogin.path);
+  await waitFor(() => expect(write).toHaveBeenCalledWith(8, "bun dev\r"));
+  terminal.mockRestore();
+  write.mockRestore();
+});
+
+test("worktrees are the current space's only", () => {
+  const env = { claude_config_dir: null, git_name: null, git_email: null, gh_config_dir: null };
+  open();
+  act(() =>
+    apply({
+      type: "spaces",
+      spaces: [
+        { id: "default", name: "Default", projects: [shop.id], env },
+        { id: "space-1", name: "Work", projects: [api.id], env },
+      ],
+      current: "space-1",
+    }),
+  );
+  expect(groups()[1]).toEqual(["Agents and worktrees", ["main", "refactor-auth"]]);
 });
 
 test("agents show their name, state and worktree; Enter goes to the agent", () => {

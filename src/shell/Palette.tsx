@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import { COMMANDS, currentProject, goToAgent } from "../shortcuts";
-import { type HiveState, openModal, panelWorktree, select, treeAgents, useHive } from "../store";
+import {
+  type HiveState,
+  openModal,
+  panelWorktree,
+  scriptsOf,
+  select,
+  spaceProjects,
+  treeAgents,
+  useHive,
+} from "../store";
+import { openWith } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
 import { keyText } from "../window";
@@ -52,7 +62,7 @@ export function rank(items: PaletteItem[], query: string): PaletteItem[] {
 
 /**
  * The palette's commands: every shortcut command but the palette itself, then the commands
- * without a shortcut that apply now. Later commands (6.8's "Run" items) go here.
+ * without a shortcut that apply now, among them the selected worktree's run scripts (6.8).
  */
 export function paletteCommands(s: HiveState): PaletteItem[] {
   const project = currentProject(s);
@@ -64,11 +74,22 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
       run: () => openModal("remove-merged", project),
     });
   }
+  const place = panelWorktree(s);
+  if (place) {
+    const { worktree } = place;
+    for (const script of scriptsOf(s.settings, place.project.id).run) {
+      extra.push({
+        label: `Run: ${script.name}`,
+        detail: worktree.name,
+        run: () => void openWith(worktree.path, script.command),
+      });
+    }
+  }
   if (!("why" in reviewTarget(s))) extra.push({ label: "Send review", run: sendReview });
   return [...COMMANDS.filter((c) => c.id !== "palette"), ...extra];
 }
 
-/** Agents in tree order, then every worktree: Enter selects and shows it. */
+/** Agents in tree order (of every space), then the current space's worktrees: Enter selects and shows it. */
 export function places(s: HiveState): PaletteItem[] {
   const all = Object.values(s.projects ?? {});
   const worktreeName = (id: string | null) =>
@@ -82,7 +103,7 @@ export function places(s: HiveState): PaletteItem[] {
       run: () => goToAgent(agent),
     };
   });
-  const worktrees = all.flatMap((project) =>
+  const worktrees = spaceProjects(s).flatMap((project) =>
     project.worktrees.map((w) => ({
       label: w.name,
       detail: project.name,

@@ -90,6 +90,7 @@ When a newer release exists, click **Update to vX** in the title bar. Hive asks 
 | Next pending agent | F8 | F8 |
 | Command palette | Ctrl+Shift+P | ⇧⌘P |
 | Worktree picker → new terminal | Ctrl+Shift+T | ⇧⌘T |
+| Split terminal | Ctrl+Shift+D | ⇧⌘D |
 | New worktree | Ctrl+Shift+N | ⇧⌘N |
 | Side panel (files, diff, sessions) | Ctrl+Shift+B | ⇧⌘B |
 | Add project | Ctrl+Shift+O | ⇧⌘O |

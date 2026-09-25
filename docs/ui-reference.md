@@ -246,6 +246,7 @@ Terminal content in the prototype (Claude Code output, sample code) is sample da
 | Next pending agent | F8 | F8 |
 | Command palette | Ctrl+Shift+P | — |
 | Worktree picker → new terminal | Ctrl+Shift+T | Alt+T |
+| Split terminal | Ctrl+Shift+D | — |
 | New worktree | Ctrl+Shift+N | Alt+N |
 | Files and diff panel | Ctrl+Shift+B | Alt+B |
 | Add project | Ctrl+Shift+O | Ctrl+O |
