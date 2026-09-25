@@ -1,6 +1,15 @@
 import { afterEach, beforeAll, expect, mock, spyOn, test } from "bun:test";
 import { EditorView } from "@codemirror/view";
+import {
+  DefaultFileIcon,
+  DefaultFolderIcon,
+  DefaultFolderOpenedIcon,
+  getIconForFile,
+  getIconForFolder,
+} from "@react-symbols/icons/utils";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   apply,
   type ChangedFile,
@@ -304,6 +313,42 @@ test("the open file's text shows as a diff when changed, else as is, or why not"
     expect(body().textContent).toBe(`No changes in this file.${why}`);
     expect(editor()).toBeNull();
   }
+});
+
+test("rows show the library's icon for their name, its defaults for unknown ones, open or closed", async () => {
+  panel();
+  act(() => select(refactor.id));
+  const paths = ["src/main.ts", "mystery/notes.qqq", "mystery/package.json"];
+  act(() =>
+    apply({
+      type: "changes",
+      ...changes(
+        refactor.path,
+        paths.map((p) => file(p)),
+      ),
+    }),
+  );
+  const props = { className: "tree-icon", width: 14, height: 14, "aria-hidden": true } as const;
+  const svg = (el: ReactElement) => renderToStaticMarkup(el);
+  const icon = (name: string | RegExp) =>
+    screen.getByRole("treeitem", { name }).querySelector(".tree-icon")?.outerHTML;
+  // The named folder has its own icon; the unknown one the default, closed then open.
+  const src = svg(getIconForFolder({ folderName: "src", ...props }));
+  expect(src).not.toBe(svg(<DefaultFolderIcon {...props} />));
+  // The library loads in its own chunk: until then each row keeps the icon's place.
+  await waitFor(() => expect(icon("mystery")).toBe(svg(<DefaultFolderIcon {...props} />)));
+  expect(icon("src")).toBe(src);
+  expand();
+  expect(icon("mystery")).toBe(svg(<DefaultFolderOpenedIcon {...props} />));
+  expect(icon("src")).toBe(src);
+  // Files by extension, by full name, and the default.
+  expect(icon(/^main\.ts/)).toBe(svg(getIconForFile({ fileName: "main.ts", ...props })));
+  expect(icon(/^main\.ts/)).not.toBe(svg(<DefaultFileIcon {...props} />));
+  expect(icon(/^package\.json/)).toBe(
+    svg(getIconForFile({ fileName: "package.json", autoAssign: true, ...props })),
+  );
+  expect(icon(/^package\.json/)).not.toBe(svg(getIconForFile({ fileName: "x.json", ...props })));
+  expect(icon(/^notes\.qqq/)).toBe(svg(<DefaultFileIcon {...props} />));
 });
 
 test("the tree works from the keyboard", () => {

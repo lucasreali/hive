@@ -649,6 +649,21 @@ button:disabled {
   flex: none;
 }
 
+/* The file tree's icons (@react-symbols/icons) in the row's muted color: every painted fill and stroke takes
+   currentColor; masks and clip paths keep theirs so the shapes they cut stay intact. */
+.tree-icon,
+.tree-icon-space {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.tree-icon [fill]:not([fill="none"]):not(mask *, clipPath *, defs *) {
+  fill: currentColor;
+}
+.tree-icon [stroke]:not([stroke="none"]):not(mask *, clipPath *, defs *) {
+  stroke: currentColor;
+}
+
 .chevron-space {
   width: 10px;
   flex: none;
