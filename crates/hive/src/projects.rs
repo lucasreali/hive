@@ -342,6 +342,7 @@ fn worktrees(root: &Path, list: Vec<worktree::Worktree>) -> Vec<Worktree> {
                 branch: wt.branch,
                 main: i == 0,
                 claude,
+                status: None,
             }
         })
         .collect()
@@ -431,6 +432,7 @@ mod tests {
             branch: Some("main".into()),
             main: true,
             claude: false,
+            status: None,
         };
         assert_eq!(got, vec![main]);
     }

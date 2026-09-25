@@ -27,17 +27,21 @@ test("projects show their worktrees with the service's names and paths", () => {
   expect(rows).toEqual([
     ["tree-row project", "shopNew worktree", "/home/user/projects/shop"],
     ["tree-row worktree", "main", "/home/user/projects/shop"],
-    ["tree-row worktree", "fix-login", "/home/user/projects/shop/.claude/worktrees/fix-login"],
     [
       "tree-row worktree",
-      "feat-checkout",
+      "fix-login↑3↓1●2",
+      "/home/user/projects/shop/.claude/worktrees/fix-login",
+    ],
+    [
+      "tree-row worktree",
+      "feat-checkout↑1●2",
       "/home/user/projects/shop/.claude/worktrees/feat-checkout",
     ],
     ["tree-row project", "apiNew worktree", "/home/user/projects/api"],
     ["tree-row worktree", "main", "/home/user/projects/api"],
     [
       "tree-row worktree",
-      "refactor-auth",
+      "refactor-auth↓2●6merged",
       "/home/user/projects/api/.claude/worktrees/refactor-auth",
     ],
   ]);
@@ -114,10 +118,10 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   expect(rows).toEqual([
     ["tree-row project", "shopNew worktree"],
     ["tree-row worktree", "main"],
-    ["tree-row worktree", "fix-login"],
+    ["tree-row worktree", "fix-login↑3↓1●2"],
     ["tree-row agent", "idleClaudeidle"],
     ["tree-row agent", "idleClaudeidle"],
-    ["tree-row worktree", "feat-checkout"],
+    ["tree-row worktree", "feat-checkout↑1●2"],
   ]);
   const [agent, orphan] = screen.getAllByRole("button", { name: "idle Claude" });
   // Just the state and the name: no provider icon before the title.
@@ -451,4 +455,43 @@ test("a worktree's + opens a new chat there: a terminal running claude", async (
   closeTerminal(4);
   open.mockRestore();
   write.mockRestore();
+});
+
+test("a worktree's status shows as badges explained by their tooltips", () => {
+  render(<App />);
+  const [main, login] = shop.worktrees;
+  const one = { changes: 1, ahead: 1, behind: 1, merged: false, last_commit_ms: 0 };
+  const worktrees = [
+    { ...main, status: null },
+    { ...login, status: one },
+  ];
+  act(() => apply({ type: "projects", projects: [{ ...shop, worktrees }] }));
+  const badges = (path: string) =>
+    [...(tree().querySelector(`.tree-row.worktree[title="${path}"] .health`)?.children ?? [])].map(
+      (b) => [b.textContent, b.getAttribute("title")],
+    );
+  // No status, no badges.
+  expect(tree().querySelectorAll(".health")).toHaveLength(1);
+  expect(badges(login.path)).toEqual([
+    ["↑1", "1 commit not on the main worktree's branch"],
+    ["↓1", "1 commit on the main worktree's branch not here"],
+    ["●1", "1 changed file"],
+  ]);
+  act(() => apply({ type: "projects", projects: [shop, api] }));
+  expect(badges(login.path)).toEqual([
+    ["↑3", "3 commits not on the main worktree's branch"],
+    ["↓1", "1 commit on the main worktree's branch not here"],
+    ["●2", "2 changed files"],
+  ]);
+  expect(badges(api.worktrees[1].path)).toEqual([
+    ["↓2", "2 commits on the main worktree's branch not here"],
+    ["●6", "6 changed files"],
+    ["merged", "Every commit is on the main worktree's branch"],
+  ]);
+  // A clean main worktree shows none.
+  expect(badges(shop.path)).toEqual([]);
+  // The service sends a worktree's new status alone.
+  const clean = { ...one, changes: 0, ahead: 0, behind: 0, merged: true };
+  act(() => apply({ type: "worktree_status", path: login.path, status: clean }));
+  expect(badges(login.path)).toEqual([["merged", "Every commit is on the main worktree's branch"]]);
 });

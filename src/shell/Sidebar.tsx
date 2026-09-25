@@ -1,5 +1,12 @@
 import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useSyncExternalStore } from "react";
+import {
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   type Agent,
@@ -9,6 +16,7 @@ import {
   mostUrgent,
   openMenu,
   openModal,
+  openProjectMenu,
   type Project,
   type Subagent,
   select,
@@ -17,6 +25,7 @@ import {
   toggleCollapsed,
   useHive,
   type Worktree,
+  type WorktreeStatus,
 } from "../store";
 import { openClaude } from "../terminals";
 import { transport } from "../transport";
@@ -162,7 +171,9 @@ function ProjectNode({ project }: { project: Project }) {
           type="button"
           className="row-main"
           aria-current={selection === project.id}
+          aria-haspopup="menu"
           onClick={() => select(project.id)}
+          onContextMenu={(e) => openProjectMenu({ project: project.id, ...menuAt(e) })}
         >
           <FolderIcon />
           <span className="label">{project.name}</span>
@@ -194,6 +205,37 @@ function ProjectNode({ project }: { project: Project }) {
   );
 }
 
+/** Where a row's context menu opens: at the pointer, or under the row for the menu key. */
+function menuAt(e: MouseEvent<HTMLElement>): { x: number; y: number } {
+  e.preventDefault();
+  // The keyboard's menu key gives no pointer position.
+  const row = e.currentTarget.getBoundingClientRect();
+  const keyboard = e.clientX === 0 && e.clientY === 0;
+  return { x: keyboard ? row.left + 24 : e.clientX, y: keyboard ? row.bottom : e.clientY };
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** The service's status of a worktree as small badges, each explained by its tooltip. */
+function Health({ status: s }: { status: WorktreeStatus }) {
+  return (
+    <span className="health">
+      {!!s.ahead && (
+        <span title={`${plural(s.ahead, "commit")} not on the main worktree's branch`}>
+          ↑{s.ahead}
+        </span>
+      )}
+      {!!s.behind && (
+        <span title={`${plural(s.behind, "commit")} on the main worktree's branch not here`}>
+          ↓{s.behind}
+        </span>
+      )}
+      {s.changes > 0 && <span title={`${plural(s.changes, "changed file")}`}>●{s.changes}</span>}
+      {s.merged && <span title="Every commit is on the main worktree's branch">merged</span>}
+    </span>
+  );
+}
+
 /** A worktree and its agents; it collapses only when it has agents, as in the prototype. */
 function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Agent[] }) {
   const open = useHive((s) => !s.collapsed[`worktree:${w.id}`]);
@@ -220,20 +262,13 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
           aria-current={selected}
           aria-haspopup="menu"
           onClick={() => select(w.id)}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            // The keyboard's menu key gives no pointer position: open under the row.
-            const row = e.currentTarget.getBoundingClientRect();
-            const keyboard = e.clientX === 0 && e.clientY === 0;
-            const x = keyboard ? row.left + 24 : e.clientX;
-            const y = keyboard ? row.bottom : e.clientY;
-            openMenu({ worktree: w.id, x, y });
-          }}
+          onContextMenu={(e) => openMenu({ worktree: w.id, ...menuAt(e) })}
         >
           <BranchIcon />
           <span className="label">{w.name}</span>
           {!open && <Rollup agents={(a) => a.worktree === w.id} />}
         </button>
+        {w.status && <Health status={w.status} />}
         <button
           type="button"
           className="new-chat"

@@ -6,7 +6,16 @@ import {
   useRef,
   useState,
 } from "react";
-import { findWorktree, openMenu, openModal, owner, setNotice, useHive } from "../store";
+import {
+  findWorktree,
+  openMenu,
+  openModal,
+  openProjectMenu,
+  owner,
+  setNotice,
+  useHive,
+  type Worktree,
+} from "../store";
 import { openTerminal } from "../terminals";
 import { transport } from "../transport";
 import { isMac } from "../window";
@@ -135,6 +144,119 @@ export function WorktreeMenu() {
         Delete…
       </button>
     </ContextMenu>
+  );
+}
+
+const closeProjectMenu = () => openProjectMenu(null);
+
+/** A project row's context menu (right click). */
+export function ProjectMenu() {
+  const menu = useHive((s) => s.projectMenu);
+  if (!menu) return null;
+  const removeMerged = () => {
+    closeProjectMenu();
+    openModal("remove-merged", menu.project);
+  };
+  return (
+    <ContextMenu at={menu} label="Project" onClose={closeProjectMenu}>
+      <button type="button" role="menuitem" onClick={removeMerged}>
+        Remove merged worktrees…
+      </button>
+    </ContextMenu>
+  );
+}
+
+/** A linked worktree the service reports merged into the main worktree's branch, with no changes. */
+const removable = (w: Worktree) => !w.main && w.status?.merged && w.status.changes === 0;
+
+/**
+ * Removing a project's merged, clean worktrees at once: each checked one gets a plain
+ * `remove_worktree` (never `--force`), and its own result. Nothing is ever merged (#12).
+ */
+export function RemoveMergedDialog() {
+  const project = useHive((s) => s.projects?.[s.modalProject ?? ""]);
+  const failures = useHive((s) => s.worktreeDialog.removeFailures);
+  // As listed when the dialog opened: a removed worktree stays, with its result.
+  const [listed] = useState(() => project?.worktrees.filter(removable) ?? []);
+  const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
+  const [sent, setSent] = useState<Set<string>>(new Set());
+  const present = new Set(project?.worktrees.map((w) => w.path));
+  const chosen = listed.filter((w) => !unchecked.has(w.path) && !sent.has(w.path));
+  const toggle = (path: string) =>
+    setUnchecked((was) => {
+      const next = new Set(was);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
+  const result = (path: string) => failures[path] ?? (present.has(path) ? "Removing…" : "Removed");
+  return (
+    <dialog
+      className="dialog"
+      aria-labelledby="remove-merged-title"
+      ref={showModal("button[type=submit]")}
+      onClose={close}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          for (const w of chosen) void transport.removeWorktree(w.path, false);
+          setSent(new Set([...sent, ...chosen.map((w) => w.path)]));
+        }}
+      >
+        <header>
+          <h2 id="remove-merged-title">Remove merged worktrees</h2>
+          <button type="button" className="ghost" title="Close (Esc)" onClick={close}>
+            <CloseIcon />
+          </button>
+        </header>
+        <div className="dialog-body">
+          {listed.length === 0 ? (
+            <p>No merged worktrees without changes.</p>
+          ) : (
+            <>
+              <p className="field-help">
+                Every commit of these is on the main worktree's branch and they have no changes.
+                Their branches are kept.
+              </p>
+              <ul className="merged-list">
+                {listed.map((w) => (
+                  <li key={w.path} className="merged-item">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={!unchecked.has(w.path)}
+                        disabled={sent.has(w.path)}
+                        onChange={() => toggle(w.path)}
+                      />
+                      <span className="label">{w.name}</span>
+                      <span className="field-help">
+                        last commit {new Date(w.status?.last_commit_ms ?? 0).toLocaleDateString()}
+                      </span>
+                    </label>
+                    {sent.has(w.path) && (
+                      <span
+                        className={failures[w.path] ? "field-error" : "field-help"}
+                        role="status"
+                      >
+                        {result(w.path)}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+        <footer>
+          <button type="button" className="secondary" onClick={close}>
+            Close <kbd>Esc</kbd>
+          </button>
+          <button type="submit" className="primary danger" disabled={chosen.length === 0}>
+            Remove ({chosen.length}) <kbd>Enter</kbd>
+          </button>
+        </footer>
+      </form>
+    </dialog>
   );
 }
 
