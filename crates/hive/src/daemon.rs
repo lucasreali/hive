@@ -708,7 +708,9 @@ async fn hook_connection<R: AsyncRead + Unpin>(
     match frame.to_control() {
         Ok(Control::Badge { text }) => {
             let channel = frame.channel;
-            if state.terminals.lock().await.contains_key(&channel) {
+            // Held while sending, so a badge cannot follow the terminal's `terminal_exited`.
+            let terminals = state.terminals.lock().await;
+            if terminals.contains_key(&channel) {
                 let text = adapter::clip(&text, MAX_BADGE);
                 state.to_app(channel, &Control::Badge { text }).await;
             }

@@ -79,7 +79,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `close_terminal` | app → service | n | End the terminal's processes. |
 | `terminal_exited {code}` | service → app | n | The shell exited; `code` is null when it was killed by a signal. The channel is free again. |
 | `hook {event, terminal_id, payload}` | `hive hook` → service | 0 | One raw hook call. The service closes the connection after it. |
-| `badge {text}` | `hive badge` → service → app | n | Terminal n's label (`hive badge`); empty clears it. The service drops control characters, trims, cuts it at 40 characters (the last one becomes "…") and forwards it only while terminal n is open; `hive badge` sends it on a hook-role connection, which closes after it. The app drops the label when the terminal exits. |
+| `badge {text}` | `hive badge` → service → app | n | Terminal n's label (`hive badge`); empty clears it. The service drops control and invisible (zero-width, bidi) characters, trims, cuts it at 40 characters (the last one becomes "…") and forwards it only while terminal n is open; `hive badge` sends it on a hook-role connection, which closes after it. The app drops the label when the terminal exits. |
 | `agent {…AgentEvent}` | service → app | 0 | A translated hook event. |
 | `unhooked_agent` | service → app | n | A `claude` runs in terminal n without sending hook events. |
 | `agent_detected {id, project, worktree, cwd}` | service → app | n | An agent (`id` = its session id) started in terminal n. `project`/`worktree` are the ids of the followed worktree containing `cwd`, both null outside every followed project. |
@@ -286,7 +286,7 @@ See [Handshake](#handshake). A refused client is not the app, so the daemon keep
 ### Badge (6.12)
 1. `hive badge <text…>` (words joined with spaces) or `hive badge --clear` reads `HIVE_TERMINAL_ID` (a number from 1; otherwise an error and exit 2).
 2. It connects, sends `hello` (role `hook`) and `badge {text}` on channel `HIVE_TERMINAL_ID` within 200 ms; on failure it prints `hive: cannot reach the Hive service: …` and exits 1.
-3. The service cleans the text (control characters dropped, trimmed, at most 40 characters) and forwards `badge` to the app on that channel if the terminal is open.
+3. The service cleans the text (control and invisible characters dropped, trimmed, at most 40 characters) and forwards `badge` to the app on that channel if the terminal is open.
 4. The app shows a non-empty label as a muted pill on the terminal's tab and on its agent's row; `terminal_exited` clears it.
 
 ### Agent detection

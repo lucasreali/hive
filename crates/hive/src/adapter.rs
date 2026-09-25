@@ -105,10 +105,17 @@ fn activity(tool: &str, payload: &Value) -> String {
     clip(&text.unwrap_or_else(|| tool.to_owned()), MAX_ACTIVITY)
 }
 
-/// Untrusted text made fit to show: control characters dropped, trimmed, and cut at `max`
+/// Control characters, and the format and separator characters that would make shown text
+/// invisible or reorder it (zero-width, bidi controls, line/paragraph separators, BOM).
+fn invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}')
+}
+
+/// Untrusted text made fit to show: control and invisible characters dropped, trimmed, and cut at `max`
 /// characters (the last one becomes "…" when cut).
 pub fn clip(text: &str, max: usize) -> String {
-    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let clean: String = text.chars().filter(|&c| !invisible(c)).collect();
     let mut chars = clean.trim().chars();
     let mut out: String = chars.by_ref().take(max).collect();
     if chars.next().is_some() {
@@ -297,6 +304,11 @@ mod tests {
         assert_eq!(clip("  \u{7}ab  ", 2), "ab");
         assert_eq!(clip(" abc ", 2), "a…");
         assert_eq!(clip("\t\n", 5), "");
+        assert_eq!(clip("\u{200B}\u{FEFF}\u{2028}", 5), "");
+        assert_eq!(
+            clip("a\u{202E}b\u{2066}c\u{200F}\u{206F}\u{2060}", 5),
+            "abc"
+        );
     }
 
     #[test]
