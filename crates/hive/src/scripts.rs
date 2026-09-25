@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
@@ -116,14 +116,16 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
     let (output, tail) = mpsc::channel();
     // Not waited for: a process left in the background may hold the output open.
     std::thread::spawn(move || output.send(last_bytes(reader)));
-    let deadline = Instant::now() + time;
-    let waited = loop {
-        match child.try_wait() {
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
-            Ok(None) => break Ok(None),
-            done => break done,
+    // Checked once per poll until `time` is spent: bounded by a count, not a clock.
+    let polls = time.as_millis().div_ceil(POLL.as_millis());
+    let mut waited = Ok(None);
+    for _ in 0..polls {
+        waited = child.try_wait();
+        if !matches!(waited, Ok(None)) {
+            break;
         }
-    };
+        std::thread::sleep(POLL);
+    }
     // Whatever the script left running in its group ends with it: its worktree is about to
     // go. A group with members keeps its id, so this cannot reach another process's group;
     // an empty one (everything already ended) has no one to reach but for a pid reused in the
@@ -164,6 +166,7 @@ fn last_bytes(mut input: impl Read) -> Vec<u8> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
 
     #[test]
     fn each_worktree_keeps_its_own_block() {
@@ -294,6 +297,7 @@ mod tests {
         );
         let start = Instant::now();
         let err = run(&script, tmp.path(), &[], Duration::from_millis(300)).unwrap_err();
+        assert!(start.elapsed() >= Duration::from_millis(300));
         assert!(start.elapsed() < Duration::from_secs(10));
         assert_eq!(
             err.to_string(),
