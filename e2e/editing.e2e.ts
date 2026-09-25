@@ -4,7 +4,6 @@ import { expect, type Page, test } from "@playwright/test";
 async function openReadme(page: Page) {
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.keyboard.press("Control+Shift+B");
   const panel = page.getByRole("region", { name: "Files" });
   await panel.getByRole("treeitem", { name: "README.md" }).click();
   const view = page.getByRole("region", { name: "README.md" });

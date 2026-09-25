@@ -8,7 +8,8 @@ test("states: every agent and subagent shows the state icon the service sent", a
   const shown = await rows.evaluateAll((els) =>
     els.map((el) => {
       const icon = el.querySelector(".state-icon") as SVGElement;
-      const box = icon.getBoundingClientRect();
+      // The layout box: working spins, so its bounding box grows mid-rotation.
+      const box = getComputedStyle(icon);
       return [
         el.className,
         icon.getAttribute("aria-label"),
@@ -19,17 +20,17 @@ test("states: every agent and subagent shows the state icon the service sent", a
     }),
   );
   expect(shown).toEqual([
-    ["tree-row agent", "running subagents", "Claude", 14, 14],
-    ["tree-row subagent", "working", "subagent: Explore", 14, 14],
-    ["tree-row subagent", "working", "subagent: unknown", 14, 14],
-    ["tree-row agent", "waiting for permission", "Claude", 14, 14],
-    ["tree-row subagent", "waiting for permission", "subagent: general-purpose", 14, 14],
-    ["tree-row subagent", "idle", "subagent: Explore", 14, 14],
-    ["tree-row agent", "waiting for you", "Claude", 14, 14],
-    ["tree-row agent", "error", "Claude", 14, 14],
-    ["tree-row agent", "ended", "Claude", 14, 14],
-    ["tree-row agent", "working", "Claude", 14, 14],
-    ["tree-row agent", "idle", "Claude", 14, 14],
+    ["tree-row agent", "running subagents", "Claude", "14px", "14px"],
+    ["tree-row subagent", "working", "subagent: Explore", "14px", "14px"],
+    ["tree-row subagent", "working", "subagent: unknown", "14px", "14px"],
+    ["tree-row agent", "waiting for permission", "Claude", "14px", "14px"],
+    ["tree-row subagent", "waiting for permission", "subagent: general-purpose", "14px", "14px"],
+    ["tree-row subagent", "idle", "subagent: Explore", "14px", "14px"],
+    ["tree-row agent", "waiting for you", "Claude", "14px", "14px"],
+    ["tree-row agent", "error", "Claude", "14px", "14px"],
+    ["tree-row agent", "ended", "Claude", "14px", "14px"],
+    ["tree-row agent", "working", "Claude", "14px", "14px"],
+    ["tree-row agent", "idle", "Claude", "14px", "14px"],
   ]);
   // Colors come from the state tokens; only alerting states color the agent's state name.
   const permission = tree.locator(".tree-row.agent .state-label[data-state=waiting_permission]");
@@ -56,7 +57,7 @@ test("states: collapsed nodes show the most urgent state inside; F8 walks the pe
   const shop = tree.locator(".tree-row.project").first();
   const icon = shop.locator(".state-icon");
   await expect(icon).toHaveAttribute("data-state", "waiting_permission");
-  expect(await icon.boundingBox()).toMatchObject({ width: 12, height: 12 });
+  expect(await icon.boundingBox()).toMatchObject({ width: 14, height: 14 });
   await tree.getByRole("button", { name: "Collapse refactor-auth" }).click();
   const refactor = tree.locator(".tree-row.worktree", { hasText: "refactor-auth" });
   await expect(refactor.locator(".state-icon")).toHaveAttribute("data-state", "working");

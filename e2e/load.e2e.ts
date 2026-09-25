@@ -60,7 +60,9 @@ test("load: 20 terminals replay Claude Code output; the focused one stays fluid"
     { count: TERMINALS, cwd: CWD },
   );
   const focused = ids.at(-1) as number;
-  await expect(page.getByRole("tab")).toHaveCount(TERMINALS);
+  await expect(
+    page.getByRole("tablist", { name: "Open terminals and files" }).getByRole("tab"),
+  ).toHaveCount(TERMINALS);
 
   // Measures once all 20 are running (the mock starts them over 0.5-2.5 s) and the renderer's
   // glyph atlas is warm: the user types while the agents work.

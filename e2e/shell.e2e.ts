@@ -15,13 +15,14 @@ test("app shell renders with bundled fonts and toggles the right panel", async (
   await expect
     .poll(() => page.evaluate(() => document.fonts.check("13px 'IBM Plex Sans'")))
     .toBe(true);
-  await page.screenshot({ path: "target/e2e/shell.png" });
-
-  await page.getByTitle("Files, diff and sessions (Ctrl+Shift+B)").click();
+  // The side panel starts open (4.21).
   await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
   await page.screenshot({ path: "target/e2e/shell-right-panel.png" });
   await page.getByTitle("Collapse (Ctrl+Shift+B)").click();
   await expect(page.getByRole("complementary")).toHaveCount(0);
+  await page.screenshot({ path: "target/e2e/shell.png" });
+  await page.getByTitle("Files, diff and sessions (Ctrl+Shift+B)").click();
+  await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
 
   expect(external).toEqual([]);
 });
