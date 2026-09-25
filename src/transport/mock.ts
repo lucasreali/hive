@@ -121,6 +121,13 @@ function mockStates(): ServiceMessage[] {
         ...agentStatus(state, activity, Date.now() - (i + 1) * 97_000),
         subagents,
       },
+      {
+        type: "agent_usage",
+        id,
+        context_tokens: (i + 1) * 23_000,
+        context_limit: 200_000,
+        output_tokens: (i + 1) * 4_100,
+      },
     ];
   });
 }
@@ -227,6 +234,9 @@ const session = (
     last_text: last?.[1] ?? null,
     messages,
     model: "claude-opus-5-5",
+    // Made up: a bigger context for a longer session.
+    context_tokens: messages * 2_000,
+    output_tokens: messages * 300,
     branch: place.w.branch,
     updated_ms: Date.now() - ago * MINUTE,
     state,

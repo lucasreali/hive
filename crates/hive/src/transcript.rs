@@ -168,31 +168,164 @@ impl Watch {
     /// [`READ_LIMIT`] bytes of them and the last [`MAX_ENTRIES`], and whether any were left
     /// out. A transcript that shrank is read again from the start.
     fn read(&mut self) -> io::Result<(Vec<TranscriptEntry>, bool)> {
-        let mut file = match open_inside(&self.root, &self.path) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), false)),
-            file => file?,
-        };
-        let len = file.metadata()?.len();
-        if len < self.offset {
-            self.offset = 0;
-        }
-        let start = self.offset.max(len.saturating_sub(READ_LIMIT));
-        let skipped = start > self.offset;
-        file.seek(SeekFrom::Start(start))?;
-        let mut bytes = Vec::new();
-        file.take(READ_LIMIT).read_to_end(&mut bytes)?;
-        // A line still being written waits for the next read; one longer than the limit is
-        // skipped (what is left of it does not parse).
-        let whole = match bytes.iter().rposition(|&b| b == b'\n') {
-            Some(end) => end + 1,
-            None if bytes.len() as u64 == READ_LIMIT => bytes.len(),
-            None => 0,
-        };
-        self.offset = start + whole as u64;
-        let mut entries = entries(&bytes[..whole]);
+        let (bytes, skipped, _) = read_lines(&self.root, &self.path, &mut self.offset)?;
+        let mut entries = entries(&bytes);
         let over = entries.len().saturating_sub(MAX_ENTRIES);
         entries.drain(..over);
         Ok((entries, skipped || over > 0))
+    }
+}
+
+/// The whole lines of the transcript at `path` (inside `root`) written since `offset`, at most
+/// its last [`READ_LIMIT`] bytes; whether earlier ones were skipped, and whether it was read
+/// again from its start because it shrank. `offset` moves to the end of what was read. A
+/// transcript not written yet has no lines.
+fn read_lines(root: &Path, path: &Path, offset: &mut u64) -> io::Result<(Vec<u8>, bool, bool)> {
+    let mut file = match open_inside(root, path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok((Vec::new(), false, false));
+        }
+        file => file?,
+    };
+    let len = file.metadata()?.len();
+    let restarted = len < *offset;
+    if restarted {
+        *offset = 0;
+    }
+    let start = (*offset).max(len.saturating_sub(READ_LIMIT));
+    let skipped = start > *offset;
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(READ_LIMIT).read_to_end(&mut bytes)?;
+    // A line still being written waits for the next read; one longer than the limit is
+    // skipped (what is left of it does not parse).
+    let whole = match bytes.iter().rposition(|&b| b == b'\n') {
+        Some(end) => end + 1,
+        None if bytes.len() as u64 == READ_LIMIT => bytes.len(),
+        None => 0,
+    };
+    *offset = start + whole as u64;
+    bytes.truncate(whole);
+    Ok((bytes, skipped, restarted))
+}
+
+/// Largest token count taken from one usage field; a larger one counts as 0.
+const TOKEN_LIMIT: u64 = 100_000_000;
+/// The usual context window.
+pub const CONTEXT_LIMIT: u64 = 200_000;
+/// The long context window.
+pub const LONG_CONTEXT_LIMIT: u64 = 1_000_000;
+/// Longest message id remembered.
+const MESSAGE_ID_LIMIT: usize = 128;
+
+/// A conversation's tokens, from the `message.usage` of its assistant records.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Tokens {
+    /// The context of the last turn: its input, cache writes and cache reads.
+    pub context: u64,
+    /// Output tokens of the whole conversation.
+    pub output: u64,
+    /// The context went past [`CONTEXT_LIMIT`] once.
+    long: bool,
+    /// The last counted message's id and output: Claude writes a message's content blocks as
+    /// separate records repeating its usage, so a message is counted once.
+    last: Option<(String, u64)>,
+}
+
+impl Tokens {
+    /// Counts a transcript record: an assistant message with a usage, outside a subagent's
+    /// sidechain. Fields that are missing, not numbers or over [`TOKEN_LIMIT`] count as 0; a
+    /// usage without context (an API error) is left out.
+    pub fn add(&mut self, record: &Value) {
+        let sidechain = record.get("isSidechain").and_then(Value::as_bool) == Some(true);
+        if record.get("type").and_then(Value::as_str) != Some("assistant") || sidechain {
+            return;
+        }
+        let Some(usage) = record.pointer("/message/usage") else {
+            return;
+        };
+        let count = |key: &str| {
+            let n = usage.get(key).and_then(Value::as_u64);
+            n.filter(|&n| n <= TOKEN_LIMIT).unwrap_or(0)
+        };
+        let context = count("input_tokens")
+            + count("cache_creation_input_tokens")
+            + count("cache_read_input_tokens");
+        if context == 0 {
+            return;
+        }
+        self.context = context;
+        self.long |= context > CONTEXT_LIMIT;
+        let output = count("output_tokens");
+        let id = record.pointer("/message/id").and_then(Value::as_str);
+        match (&mut self.last, id.filter(|id| id.len() <= MESSAGE_ID_LIMIT)) {
+            (Some((last, counted)), Some(id)) if last == id => {
+                self.output = self.output - *counted + output;
+                *counted = output;
+            }
+            (last, id) => {
+                self.output += output;
+                *last = id.map(|id| (id.to_owned(), output));
+            }
+        }
+    }
+
+    /// The context window assumed.
+    // ponytail: guessed from the context seen, 1M once it went past 200k; the real window
+    // only reaches the statusline, not hooks or transcripts.
+    pub fn limit(&self) -> u64 {
+        if self.long {
+            LONG_CONTEXT_LIMIT
+        } else {
+            CONTEXT_LIMIT
+        }
+    }
+}
+
+/// An agent's token usage, read from its transcript as it grows.
+#[derive(Debug, Default)]
+pub struct Usage {
+    /// An event said the transcript grew: it is read on the next tick.
+    pub due: bool,
+    /// Up to where the transcript was read (always the end of a line).
+    offset: u64,
+    tokens: Tokens,
+    /// The context, its limit and the output last sent to the app.
+    sent: Option<(u64, u64, u64)>,
+}
+
+impl Usage {
+    /// Reads what the transcript at `path` (inside `root`) gained and returns the agent's new
+    /// `agent_usage` when it changed. At first only the last [`READ_LIMIT`] bytes are read,
+    /// so the output of a longer transcript's start is not counted.
+    pub fn read(&mut self, id: &str, root: &Path, path: &Path) -> Option<Control> {
+        self.due = false;
+        let (bytes, _, restarted) = read_lines(root, path, &mut self.offset).ok()?;
+        if restarted {
+            self.tokens = Tokens::default();
+        }
+        for line in bytes.split(|&b| b == b'\n') {
+            if let Ok(record) = serde_json::from_slice::<Value>(line) {
+                self.tokens.add(&record);
+            }
+        }
+        let now = (self.tokens.context, self.tokens.limit(), self.tokens.output);
+        if self.tokens.context == 0 || self.sent == Some(now) {
+            return None;
+        }
+        self.sent = Some(now);
+        self.message(id)
+    }
+
+    /// The last `agent_usage` sent, for a newly connected app.
+    pub fn message(&self, id: &str) -> Option<Control> {
+        let (context_tokens, context_limit, output_tokens) = self.sent?;
+        Some(Control::AgentUsage {
+            id: id.to_owned(),
+            context_tokens,
+            context_limit,
+            output_tokens,
+        })
     }
 }
 
@@ -440,5 +573,120 @@ mod tests {
             watch.start(),
             transcript(vec![entry(TranscriptRole::User, "x", None)], false)
         );
+    }
+
+    fn turn(id: Option<&str>, usage: Value) -> Value {
+        json!({"type": "assistant", "message": {"id": id, "usage": usage}})
+    }
+
+    fn counted(records: &[Value]) -> Tokens {
+        let mut tokens = Tokens::default();
+        for record in records {
+            tokens.add(record);
+        }
+        tokens
+    }
+
+    #[test]
+    fn tokens_are_the_last_context_and_every_output() {
+        let usage = |input: u64, output: u64| {
+            json!({"input_tokens": input, "cache_creation_input_tokens": 2,
+                   "cache_read_input_tokens": 3, "output_tokens": output})
+        };
+        let tokens = counted(&[
+            turn(Some("m1"), usage(10, 1)),
+            // The same message's next content block repeats (and updates) its usage.
+            turn(Some("m1"), usage(10, 4)),
+            turn(Some("m2"), usage(20, 3)),
+            // Not counted: a user record, a subagent's, one without usage, an API error.
+            json!({"type": "user", "message": {"usage": usage(1, 1)}}),
+            json!({"type": "assistant", "isSidechain": true, "message": {"usage": usage(1, 1)}}),
+            json!({"type": "assistant", "message": {}}),
+            turn(Some("m3"), json!({"input_tokens": 0, "output_tokens": 9})),
+        ]);
+        assert_eq!((tokens.context, tokens.output), (25, 7));
+        // Without an id, every record counts.
+        let tokens = counted(&[turn(None, usage(1, 1)), turn(None, usage(1, 1))]);
+        assert_eq!(tokens.output, 2);
+        // Ids too long are not remembered.
+        let long = "i".repeat(MESSAGE_ID_LIMIT + 1);
+        let tokens = counted(&[
+            turn(Some(&long), usage(1, 1)),
+            turn(Some(&long), usage(1, 1)),
+        ]);
+        assert_eq!(tokens.output, 2);
+        let longest = "i".repeat(MESSAGE_ID_LIMIT);
+        let tokens = counted(&[
+            turn(Some(&longest), usage(1, 1)),
+            turn(Some(&longest), usage(1, 1)),
+        ]);
+        assert_eq!(tokens.output, 1);
+    }
+
+    #[test]
+    fn tokens_ignore_fields_out_of_bounds() {
+        let tokens = counted(&[turn(
+            Some("m"),
+            json!({"input_tokens": TOKEN_LIMIT, "cache_read_input_tokens": TOKEN_LIMIT + 1,
+                   "cache_creation_input_tokens": -1, "output_tokens": "5"}),
+        )]);
+        assert_eq!((tokens.context, tokens.output), (TOKEN_LIMIT, 0));
+    }
+
+    #[test]
+    fn the_context_limit_grows_once_the_context_passed_it() {
+        let context = |n: u64| turn(None, json!({"input_tokens": n}));
+        let at = counted(&[context(CONTEXT_LIMIT)]);
+        assert_eq!(at.limit(), CONTEXT_LIMIT);
+        let past = counted(&[context(CONTEXT_LIMIT + 1), context(10)]);
+        assert_eq!((past.context, past.limit()), (10, LONG_CONTEXT_LIMIT));
+    }
+
+    #[test]
+    fn usage_is_read_as_the_transcript_grows() {
+        let f = fixture();
+        let usage = |context_tokens, context_limit, output_tokens| {
+            Some(Control::AgentUsage {
+                id: "s".into(),
+                context_tokens,
+                context_limit,
+                output_tokens,
+            })
+        };
+        let spent = |id: &str, input: u64, output: u64| {
+            line(turn(
+                Some(id),
+                json!({"input_tokens": input, "output_tokens": output}),
+            ))
+        };
+        let mut agent = Usage {
+            due: true,
+            ..Usage::default()
+        };
+        let read = |agent: &mut Usage| agent.read("s", &f.root, &f.log);
+        // Not written yet, then no usage yet: nothing to send.
+        assert_eq!(read(&mut agent), None);
+        assert!(!agent.due);
+        append(&f.log, &said("hi"));
+        assert_eq!(read(&mut agent), None);
+        assert_eq!(agent.message("s"), None);
+        append(&f.log, &spent("m1", 100, 5));
+        assert_eq!(read(&mut agent), usage(100, CONTEXT_LIMIT, 5));
+        assert_eq!(agent.message("s"), usage(100, CONTEXT_LIMIT, 5));
+        // Unchanged: nothing is sent again.
+        append(&f.log, &spent("m2", 100, 0));
+        assert_eq!(read(&mut agent), None);
+        // A line still being written waits for its end.
+        let next = spent("m3", 300_000, 2);
+        append(&f.log, &next[..9]);
+        assert_eq!(read(&mut agent), None);
+        append(&f.log, &next[9..]);
+        assert_eq!(read(&mut agent), usage(300_000, LONG_CONTEXT_LIMIT, 7));
+        // A rewritten, shorter transcript is counted again from its start.
+        std::fs::write(&f.log, spent("m4", 50, 1)).unwrap();
+        assert_eq!(read(&mut agent), usage(50, CONTEXT_LIMIT, 1));
+        // Outside the root, nothing is read.
+        let mut outside = Usage::default();
+        assert_eq!(outside.read("s", Path::new("/nope"), &f.log), None);
     }
 }

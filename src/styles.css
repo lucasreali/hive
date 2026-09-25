@@ -1476,6 +1476,14 @@ li:not(:last-child) > .owned::before {
   text-overflow: ellipsis;
 }
 
+/* The context used, discreet, after the time and activity. */
+.state-ctx {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Only the alerting states color their name (prototype); subagent names stay neutral. */
 .agent .state-label[data-state="waiting_permission"] {
   color: var(--state-permission);

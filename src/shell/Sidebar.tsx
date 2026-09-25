@@ -10,6 +10,7 @@ import {
 import {
   type Agent,
   type AgentState,
+  type AgentUsage,
   activateTab,
   type Doing,
   mostUrgent,
@@ -300,10 +301,12 @@ function Meta({ doing }: { doing: Doing }) {
 function StateLines({
   state,
   doing,
+  usage,
   title,
 }: {
   state: AgentState;
   doing?: Doing;
+  usage?: AgentUsage;
   title: ReactNode;
 }) {
   return (
@@ -316,6 +319,11 @@ function StateLines({
             {STATE_LABEL[state]}
           </span>
           {doing && <Meta doing={doing} />}
+          {usage && (
+            <span className="state-ctx" title={`${usage.context_tokens} context tokens`}>
+              ctx {Math.round((usage.context_tokens / usage.context_limit) * 100)}%
+            </span>
+          )}
         </span>
       </span>
     </>
@@ -334,6 +342,7 @@ function AgentRow({ agent }: { agent: Agent }) {
   const covered = useHive((s) => s.transcriptShown !== null);
   const shown = (useHive((s) => s.activeTab === agent.terminal) || picked) && !covered;
   const status = useHive((s) => s.agentStates[agent.id]);
+  const usage = useHive((s) => s.agentUsage[agent.id]);
   // The session's name, as on its tab; until Claude names it, just "Claude".
   const name = useHive((s) => s.agentTitles[agent.id]) ?? "Claude";
   const badge = useHive((s) => s.terminals[agent.terminal]?.badge);
@@ -352,7 +361,7 @@ function AgentRow({ agent }: { agent: Agent }) {
         data-selected={shown}
       >
         <button type="button" className="row-main" aria-current={shown} onClick={show}>
-          <StateLines state={status?.state ?? "idle"} doing={status} title={name} />
+          <StateLines state={status?.state ?? "idle"} doing={status} usage={usage} title={name} />
           {badge && (
             <span className="tab-badge label-badge" title="Set with hive badge">
               {badge}

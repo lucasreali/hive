@@ -720,3 +720,54 @@ async fn a_subagents_transcript_is_sent_and_followed_while_watched() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+/// The app's next `agent_usage`, skipping other messages.
+async fn next_usage(app: &mut Conn) -> Control {
+    loop {
+        if let (1, message @ Control::AgentUsage { .. }) = app.control().await {
+            return message;
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_agents_tokens_are_read_from_its_transcript_after_its_events() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let log = repo.env.path("home/.claude/projects/-repo/s.jsonl");
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let turn = |id: &str, input: u64, output: u64| {
+        let usage =
+            json!({"input_tokens": input, "cache_read_input_tokens": 1, "output_tokens": output});
+        let record = json!({"type": "assistant", "message": {"id": id, "usage": usage}});
+        format!("{record}\n")
+    };
+    std::fs::write(&log, turn("m1", 99, 10)).unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let start = json!({"session_id": "s", "cwd": root, "transcript_path": log});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let usage = |context_tokens, context_limit, output_tokens| Control::AgentUsage {
+        id: "s".into(),
+        context_tokens,
+        context_limit,
+        output_tokens,
+    };
+    let tool = json!({"session_id": "s", "cwd": root, "tool_name": "Bash"});
+    hook(&repo, &mut app, "1", "PostToolUse", tool).await;
+    assert_eq!(next_usage(&mut app).await, usage(100, 200_000, 10));
+    // Another event with nothing new in the transcript sends nothing (the next usage below
+    // is the appended one's).
+    let tool = json!({"session_id": "s", "cwd": root, "tool_name": "Read"});
+    hook(&repo, &mut app, "1", "PostToolUse", tool).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    // Past 200k, the window is taken as 1M; the output adds up.
+    let mut file = std::fs::File::options().append(true).open(&log).unwrap();
+    file.write_all(turn("m2", 250_000, 5).as_bytes()).unwrap();
+    let stop = json!({"session_id": "s", "cwd": root});
+    hook(&repo, &mut app, "1", "Stop", stop).await;
+    assert_eq!(next_usage(&mut app).await, usage(250_001, 1_000_000, 15));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

@@ -96,7 +96,7 @@ test("a scenario fails the connection instead", async () => {
         "welcome",
         "settings",
         "projects",
-        ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state"]),
+        ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state", "agent_usage"]),
       ],
     ],
   ] as const) {

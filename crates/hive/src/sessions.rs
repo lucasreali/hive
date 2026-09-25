@@ -14,6 +14,7 @@ use hive_protocol::{AgentState, OpenSession, Project, Session, SessionRole};
 use serde_json::Value;
 
 use crate::projects;
+use crate::transcript::Tokens;
 use crate::wrapper::write_atomic;
 
 /// Most bytes read from one log; a longer one is summarized from its start.
@@ -74,6 +75,7 @@ pub struct Summary {
     pub branch: Option<String>,
     /// How the log ends, for the session's state.
     pub end: Ending,
+    pub tokens: Tokens,
 }
 
 /// The last thing a log says happened in the main conversation.
@@ -149,6 +151,7 @@ pub fn summarize(log: &mut dyn Read) -> Summary {
                 if let Some(branch) = text("gitBranch") {
                     summary.branch = Some(branch);
                 }
+                summary.tokens.add(&record);
                 let flag = |key: &str| record.get(key).and_then(Value::as_bool) == Some(true);
                 if flag("isSidechain") || flag("isMeta") {
                     continue;
@@ -350,6 +353,8 @@ impl Sessions {
             messages: summary.messages,
             model: summary.model,
             branch: summary.branch,
+            context_tokens: summary.tokens.context,
+            output_tokens: summary.tokens.output,
             updated_ms,
             log: path.to_string_lossy().into_owned(),
             state: state(end, false),
@@ -398,9 +403,9 @@ mod tests {
 not json
 {"type":"user","cwd":"/r/src","gitBranch":"main","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
 {"type":"user","cwd":"/elsewhere","message":{"role":"user","content":"  Fix the login  "}}
-{"type":"assistant","message":{"model":"claude-x","content":[{"type":"tool_use"},{"type":"text","text":" "},{"type":"text","text":"On it."}]}}
+{"type":"assistant","message":{"model":"claude-x","usage":{"input_tokens":10,"cache_read_input_tokens":20,"output_tokens":5},"content":[{"type":"tool_use"},{"type":"text","text":" "},{"type":"text","text":"On it."}]}}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
-{"type":"assistant","isSidechain":true,"message":{"model":"claude-sub","content":"sub"}}
+{"type":"assistant","isSidechain":true,"message":{"model":"claude-sub","usage":{"input_tokens":99,"output_tokens":99},"content":"sub"}}
 {"type":"user","isMeta":true,"message":{"content":"meta"}}
 {"type":"user","message":{"role":"user","content":"Thanks, go on"}}
 {"type":"assistant","gitBranch":"feat","message":{"model":"<synthetic>","content":"Done."}}
@@ -422,8 +427,11 @@ not json
                 branch: Some("feat".into()),
                 // The last record is a user message without text.
                 end: Ending::Working,
+                tokens: summary.tokens.clone(),
             }
         );
+        // The main conversation's usage only.
+        assert_eq!((summary.tokens.context, summary.tokens.output), (30, 5));
         // A title the user set wins over Claude's, wherever it is.
         let custom = format!("{{\"type\":\"custom-title\",\"customTitle\":\"Mine\"}}\n{LOG}");
         assert_eq!(summarize(&mut custom.as_bytes()).title, Some("Mine".into()));

@@ -34,6 +34,8 @@ pub struct Agent {
     /// Its transcript, from its `SessionStart`'s `transcript_path` (unchecked: it is checked
     /// to lie in Claude's projects folder when read). Its subagents' lie beside it.
     pub transcript: Option<std::path::PathBuf>,
+    /// Its tokens, read from `transcript` by the daemon.
+    pub usage: crate::transcript::Usage,
     state: AgentState,
     /// In start order.
     subagents: Vec<SubagentState>,
@@ -71,6 +73,7 @@ impl Agent {
             cwd: None,
             title: None,
             transcript: None,
+            usage: Default::default(),
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),

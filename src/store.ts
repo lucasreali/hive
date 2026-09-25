@@ -32,6 +32,7 @@ export type ServiceMessage =
   | { type: "agent_removed"; channel: number; id: string }
   | { type: "agent_title"; channel: number; id: string; title: string }
   | ({ type: "agent_state"; id: string } & AgentStatus)
+  | ({ type: "agent_usage"; id: string } & AgentUsage)
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
@@ -210,6 +211,9 @@ export type Session = {
   messages: number;
   model: string | null;
   branch: string | null;
+  /** The last turn's context and the output so far, in tokens. */
+  context_tokens: number;
+  output_tokens: number;
   updated_ms: number;
   log: string;
   /** By how its log ends; a session running in a Hive terminal shows its live state instead. */
@@ -360,6 +364,12 @@ export type InboxItem = {
 export const INBOX_LIMIT = 100;
 
 /**
+ * What `agent_usage` says: the last turn's context, the window the service assumes, and the
+ * session's output tokens.
+ */
+export type AgentUsage = { context_tokens: number; context_limit: number; output_tokens: number };
+
+/**
  * Mirrors `hive_protocol::Settings`: the service's settings file, read and saved whole. The
  * service checks the ranges (#37).
  */
@@ -494,6 +504,8 @@ export type HiveState = {
   agentStates: Record<string, AgentStatus>;
   /** A running agent's session name (the user's, else Claude's), by session id. */
   agentTitles: Record<string, string>;
+  /** A running agent's tokens from its transcript, by session id. */
+  agentUsage: Record<string, AgentUsage>;
   /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
@@ -564,6 +576,7 @@ export const initialState: HiveState = {
   agents: {},
   agentStates: {},
   agentTitles: {},
+  agentUsage: {},
   worktreeFiles: null,
   changes: {},
   file: null,
@@ -686,11 +699,16 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { [m.id]: _, ...agents } = s.agents;
       const { [m.id]: __, ...agentStates } = s.agentStates;
       const { [m.id]: ___, ...agentTitles } = s.agentTitles;
+      const { [m.id]: ____, ...agentUsage } = s.agentUsage;
       const shown = s.transcriptShown?.agent === m.id ? null : s.transcriptShown;
-      return { agents, agentStates, agentTitles, transcriptShown: shown };
+      return { agents, agentStates, agentTitles, agentUsage, transcriptShown: shown };
     }
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
+    case "agent_usage": {
+      const { type: _, id, ...usage } = m;
+      return { agentUsage: { ...s.agentUsage, [id]: usage } };
+    }
     case "agent_state": {
       const { type: _, id, ...status } = m;
       return { agentStates: { ...s.agentStates, [id]: status } };

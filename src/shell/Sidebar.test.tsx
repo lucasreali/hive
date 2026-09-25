@@ -257,6 +257,12 @@ test("rows show the time in the state and the activity, all ticking on one timer
     clock.mockReturnValue(now + 3_600_000);
     act(() => (ticks()[0][0] as () => void)());
     expect(meta()).toEqual(["1h · Editing src/x.ts", "1h"]);
+    // The context used shows once the service sent it, on the agent's row only.
+    const ctx = () => [...tree().querySelectorAll(".state-ctx")].map((m) => m.textContent);
+    expect(ctx()).toEqual([]);
+    const usage = { context_tokens: 84_400, context_limit: 200_000, output_tokens: 9 };
+    act(() => apply({ type: "agent_usage", id: "s1", ...usage }));
+    expect(ctx()).toEqual(["ctx 42%"]);
     // The last row gone, the timer stops.
     expect(stops).not.toHaveBeenCalled();
     cleanup();

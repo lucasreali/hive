@@ -244,6 +244,15 @@ test("agent states are stored as sent, before or after the agent, and go with it
   expect(useHive.getState().agentStates).toEqual({});
 });
 
+test("agent usage is stored as sent and goes with the agent", () => {
+  const usage = { context_tokens: 84_000, context_limit: 200_000, output_tokens: 12 };
+  apply({ type: "agent_usage", id: "a", ...usage });
+  apply({ type: "agent_usage", id: "b", ...usage, output_tokens: 1 });
+  expect(useHive.getState().agentUsage.a).toEqual(usage);
+  apply({ type: "agent_removed", channel: 1, id: "a" });
+  expect(Object.keys(useHive.getState().agentUsage)).toEqual(["b"]);
+});
+
 test("useTerminal reads one terminal", () => {
   apply({ type: "terminal_opened", channel: 4 });
   const { result } = renderHook(() => useTerminal(4));

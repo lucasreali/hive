@@ -220,6 +220,17 @@ pub enum Control {
         id: String,
         title: String,
     },
+    /// The agent's tokens from its transcript, sent when they change (read at most once a
+    /// second, after `Stop`, `SubagentStop` and `PostToolUse`) and for every agent with a usage
+    /// right after the app's `Welcome`. `context_tokens` is the last turn's input with cache
+    /// writes and reads; `context_limit` the assumed window (200k, or 1M once the context
+    /// passed 200k); `output_tokens` the session's output so far.
+    AgentUsage {
+        id: String,
+        context_tokens: u64,
+        context_limit: u64,
+        output_tokens: u64,
+    },
     /// The agent's session ended, or its terminal exited.
     AgentRemoved {
         id: String,
@@ -774,6 +785,9 @@ pub struct Session {
     pub messages: u64,
     pub model: Option<String>,
     pub branch: Option<String>,
+    /// The last turn's context (input with cache writes and reads) and the output so far.
+    pub context_tokens: u64,
+    pub output_tokens: u64,
     /// When its log last changed, in milliseconds since the Unix epoch.
     pub updated_ms: u64,
     /// The log's path.
@@ -1307,6 +1321,8 @@ mod tests {
             messages: 2,
             model: None,
             branch: Some("main".into()),
+            context_tokens: 3,
+            output_tokens: 4,
             updated_ms: 5,
             log: "/c/s.jsonl".into(),
             state: AgentState::Ended,
@@ -1318,7 +1334,17 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &sessions).payload[..],
-            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false}],"error":null}"#
+            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false}],"error":null}"#
+        );
+        let usage = Control::AgentUsage {
+            id: "s".into(),
+            context_tokens: 1,
+            context_limit: 200_000,
+            output_tokens: 2,
+        };
+        assert_eq!(
+            &Frame::control(0, &usage).payload[..],
+            br#"{"type":"agent_usage","id":"s","context_tokens":1,"context_limit":200000,"output_tokens":2}"#
         );
         let locate = Control::LocateSession {
             id: "s".into(),

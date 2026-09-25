@@ -274,6 +274,12 @@ impl State {
         if let Some(state) = agent.apply(id, event, Instant::now(), &place) {
             self.to_app(channel, &state).await;
         }
+        // The transcript got a message: its usage is read on the next tick (at most once a
+        // second).
+        agent.usage.due |= matches!(
+            event.kind,
+            EventKind::ToolFinished { .. } | EventKind::TurnFinished | EventKind::SubagentStopped
+        );
         // Claude names a session after its first turn; a rename shows at the end of a turn.
         let turn = matches!(event.kind, EventKind::TurnFinished);
         if event.subagent.is_none() && (agent.title.is_none() || turn) {
@@ -378,6 +384,9 @@ impl State {
                 let id = id.clone();
                 self.to_app(agent.channel, &Control::AgentTitle { id, title })
                     .await;
+            }
+            if let Some(usage) = agent.usage.message(id) {
+                self.to_app(agent.channel, &usage).await;
             }
         }
     }
@@ -546,6 +555,16 @@ async fn watch_terminals(state: Arc<State>) {
             if let Some(message) =
                 output.and_then(|&output| agent.reconcile(id, silence, output, now))
             {
+                state.to_app(agent.channel, &message).await;
+            }
+            let (Some(path), Some(root), true) =
+                (&agent.transcript, state.sessions.root(), agent.usage.due)
+            else {
+                continue;
+            };
+            // A bounded read (see `transcript::Usage`), off the other tasks' threads.
+            let usage = &mut agent.usage;
+            if let Some(message) = tokio::task::block_in_place(|| usage.read(id, root, path)) {
                 state.to_app(agent.channel, &message).await;
             }
         }
@@ -1166,6 +1185,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut named = Agent::new(4, Instant::now(), 0);
         named.title = Some("Named".into());
+        let log = dir.path().join("s.jsonl");
+        let turn =
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":7,"output_tokens":2}}}"#;
+        std::fs::write(&log, format!("{turn}\n")).unwrap();
+        let usage = Control::AgentUsage {
+            id: "s".into(),
+            context_tokens: 7,
+            context_limit: 200_000,
+            output_tokens: 2,
+        };
+        assert_eq!(named.usage.read("s", dir.path(), &log), Some(usage.clone()));
         let state = test_state(dir.path());
         *state.agents.lock().await = HashMap::from([
             ("s".to_owned(), named),
@@ -1183,7 +1213,7 @@ mod tests {
         });
         let mut frames = FramedRead::new(client, FrameCodec);
         let mut got = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
             let frame = next.await.expect("no snapshot").unwrap().unwrap();
             got.push((frame.channel, frame.to_control().unwrap()));
@@ -1212,6 +1242,9 @@ mod tests {
         assert!(got.contains(&(5, idle("u"))), "{got:?}");
         assert!(at(&named) > at(&idle("s")), "{got:?}");
         assert_eq!(got[at(&named).unwrap()].0, 4);
+        // Its usage too, once known.
+        assert!(at(&usage) > at(&idle("s")), "{got:?}");
+        assert_eq!(got[at(&usage).unwrap()].0, 4);
         drop(frames);
         assert!(serving.await.unwrap());
     }
