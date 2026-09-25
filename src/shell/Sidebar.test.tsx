@@ -6,6 +6,7 @@ import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
 import { STATE_LABEL } from "./icons";
+import { elapsed } from "./Sidebar";
 
 afterEach(() => {
   cleanup();
@@ -140,6 +141,7 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
 
 test("agents and their subagents show the state the service sent, named for screen readers", () => {
   render(<App />);
+  const none = { activity: null, since_ms: 0 };
   const [main, fixLogin] = shop.worktrees;
   const at = (w: typeof main) => ({ project: shop.id, worktree: w.id, cwd: w.path });
   act(() => {
@@ -152,8 +154,8 @@ test("agents and their subagents show the state the service sent, named for scre
       id: "s1",
       ...agentStatus("waiting_permission"),
       subagents: [
-        { id: "a1", agent_type: "Explore", state: "working", worktree: null },
-        { id: "a2", agent_type: null, state: "waiting_permission", worktree: null },
+        { id: "a1", agent_type: "Explore", state: "working", worktree: null, ...none },
+        { id: "a2", agent_type: null, state: "waiting_permission", worktree: null, ...none },
       ],
     });
     apply({ type: "agent_state", id: "s2", ...agentStatus("ended"), subagents: [] });
@@ -198,6 +200,66 @@ test("agents and their subagents show the state the service sent, named for scre
   act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("idle"), subagents: [] }));
   expect(tree().querySelector(".tree-row.subagent")).toBeNull();
 });
+
+test("elapsed time reads in seconds, minutes, then hours", () => {
+  const at = (ms: number) => elapsed(1_000_000, 1_000_000 + ms);
+  expect([-5, 0, 59_999, 60_000, 3_599_999, 3_600_000, 90_000_000].map(at)).toEqual([
+    "0s",
+    "0s",
+    "59s",
+    "1m",
+    "59m",
+    "1h",
+    "25h",
+  ]);
+});
+
+test("rows show the time in the state and the activity, all ticking on one timer", () => {
+  const now = 5_000_000;
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  const timers = spyOn(globalThis, "setInterval");
+  const stops = spyOn(globalThis, "clearInterval");
+  const ticks = () => timers.mock.calls.filter(([, ms]) => ms === 1000);
+  try {
+    render(<App />);
+    const [main] = shop.worktrees;
+    act(() => {
+      apply({ type: "projects", projects: [shop] });
+      apply({ type: "agent_detected", channel: 1, id: "s1", project: shop.id, ...at(main) });
+      apply({
+        type: "agent_state",
+        id: "s1",
+        ...agentStatus("with_subagents", "Editing src/x.ts", now - 125_000),
+        subagents: [
+          {
+            id: "a1",
+            agent_type: "Explore",
+            state: "working",
+            worktree: null,
+            activity: null,
+            since_ms: now - 5_000,
+          },
+        ],
+      });
+    });
+    const meta = () => [...tree().querySelectorAll(".state-meta")].map((m) => m.textContent);
+    expect(meta()).toEqual(["2m · Editing src/x.ts", "5s"]);
+    expect(ticks()).toHaveLength(1);
+    clock.mockReturnValue(now + 3_600_000);
+    act(() => (ticks()[0][0] as () => void)());
+    expect(meta()).toEqual(["1h · Editing src/x.ts", "1h"]);
+    // The last row gone, the timer stops.
+    expect(stops).not.toHaveBeenCalled();
+    cleanup();
+    expect(stops).toHaveBeenCalledTimes(1);
+  } finally {
+    clock.mockRestore();
+    timers.mockRestore();
+    stops.mockRestore();
+  }
+});
+
+const at = (w: (typeof shop.worktrees)[number]) => ({ worktree: w.id, cwd: w.path });
 
 test("a collapsed node shows the most urgent state inside; the bell counts pending agents", () => {
   render(<App />);
@@ -316,7 +378,14 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
   render(<App />);
   const [main, , featCheckout] = shop.worktrees;
   const sub = (id: string, worktree: string | null) =>
-    ({ id, agent_type: "Explore", state: "working", worktree }) as const;
+    ({
+      id,
+      agent_type: "Explore",
+      state: "working",
+      worktree,
+      activity: null,
+      since_ms: 0,
+    }) as const;
   const subagents = (...list: ReturnType<typeof sub>[]) =>
     apply({ type: "agent_state", id: "s1", ...agentStatus("with_subagents"), subagents: list });
   act(() => {

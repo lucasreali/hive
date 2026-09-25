@@ -300,7 +300,10 @@ export type Subagent = {
   agent_type: string | null;
   state: AgentState;
   worktree: string | null;
-};
+} & Doing;
+
+/** What an agent or subagent is doing (its current tool call) and since when (ms since the epoch) its state lasts. */
+export type Doing = { activity: string | null; since_ms: number };
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins)
@@ -311,7 +314,7 @@ export type AgentStatus = {
   urgency: number;
   pending: boolean;
   subagents: Subagent[];
-};
+} & Doing;
 
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
