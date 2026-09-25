@@ -97,11 +97,11 @@ async fn a_project_lists_its_worktrees_and_survives_a_restart() {
     assert_eq!(again, project);
     assert_eq!(list(&mut conn).await, vec![project.clone()]);
 
-    let file = repo.env.path("data/hive/projects.json");
+    let file = repo.env.path("data/hive/spaces.json");
     let mode = std::fs::metadata(&file).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
-    let saved: Vec<String> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    assert_eq!(saved, [root]);
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved["spaces"][0]["projects"], serde_json::json!([root]));
 
     drop(conn);
     assert!(daemon.wait_exit().success());

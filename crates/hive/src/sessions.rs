@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hive_protocol::{AgentState, OpenSession, Project, Session, SessionRole};
@@ -221,17 +221,30 @@ pub fn valid_id(id: &str) -> bool {
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
+/// Each log's summary, kept until the file changes.
+type Cache = Mutex<HashMap<PathBuf, (SystemTime, u64, Summary)>>;
+
 /// The logs of one Claude directory, with each log's summary kept until the file changes.
 pub struct Sessions {
     root: Option<PathBuf>,
-    cache: Mutex<HashMap<PathBuf, (SystemTime, u64, Summary)>>,
+    cache: Arc<Cache>,
 }
 
 impl Sessions {
     pub fn new(root: Option<PathBuf>) -> Self {
         Self {
             root,
-            cache: Mutex::new(HashMap::new()),
+            cache: Arc::default(),
+        }
+    }
+
+    /// The logs of a space's Claude config folder `claude_dir` (its `projects` folder), or
+    /// these when it has none; the summaries are shared.
+    pub fn at(&self, claude_dir: Option<&str>) -> Self {
+        let root = claude_dir.map(|dir| Path::new(dir).join("projects"));
+        Self {
+            root: root.or_else(|| self.root.clone()),
+            cache: self.cache.clone(),
         }
     }
 
@@ -392,6 +405,15 @@ mod tests {
             Some("/h/.claude/projects".into())
         );
         assert_eq!(root(&[]), None);
+    }
+
+    #[test]
+    fn a_space_with_its_own_claude_folder_has_its_own_root() {
+        let sessions = Sessions::new(Some("/h/.claude/projects".into()));
+        let space = sessions.at(Some("/work/.claude"));
+        assert_eq!(space.root(), Some(Path::new("/work/.claude/projects")));
+        assert!(Arc::ptr_eq(&space.cache, &sessions.cache));
+        assert_eq!(sessions.at(None).root(), sessions.root());
     }
 
     const LOG: &str = r#"{"type":"mode","mode":"x"}

@@ -1,70 +1,119 @@
-//! Projects: git repositories inside WSL that the app follows (#4). The service owns the list
-//! and keeps it in `<data>/hive/projects.json`, a JSON array of top-level paths.
+//! Projects: git repositories inside WSL that the app follows (#4), grouped in spaces
+//! (`hive::spaces`). The service owns the list and keeps it in `<data>/hive/spaces.json`; the
+//! flat `projects.json` of earlier versions (a JSON array of top-level paths) becomes the
+//! "Default" space until the first change is saved.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use hive_protocol::{Project, ProjectError, Worktree};
+use hive_protocol::{Control, Project, ProjectError, Worktree};
+use serde::de::DeserializeOwned;
 
+use crate::spaces::{self, Spaces};
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
 use crate::{git, procs};
 
-/// Largest project list file read.
+/// Largest spaces or project list file read.
 const FILE_LIMIT: u64 = 1024 * 1024;
 /// Most processes named when a worktree is in use.
 const BUSY_SHOWN: usize = 5;
 
 pub struct Projects {
     file: PathBuf,
-    paths: Mutex<Vec<String>>,
+    spaces: Mutex<Spaces>,
 }
 
 impl Projects {
-    /// Loads the list from `file`. A missing file is an empty list; an unreadable or corrupt
-    /// one is moved aside to `<file>.corrupt` with a warning, and the list starts empty.
-    pub fn load(file: PathBuf) -> Self {
-        let paths = match read(&file) {
-            Ok(paths) => paths,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(err) => {
-                let aside = file.with_extension("json.corrupt");
-                eprintln!(
-                    "hive: warning: ignoring {} ({err}); moved to {}",
-                    file.display(),
-                    aside.display()
-                );
-                let _ = std::fs::rename(&file, aside);
-                Vec::new()
+    /// Loads the spaces from `file`; without it, the projects listed in `legacy` (the file of
+    /// earlier versions) make the "Default" space. A missing file is an empty list; an
+    /// unreadable or invalid one is moved aside to `<file>.corrupt` with a warning, and the
+    /// list starts empty.
+    pub fn load(file: PathBuf, legacy: &Path) -> Self {
+        let loaded = read(&file).and_then(|s: Spaces| s.check().map_err(io::Error::other));
+        let spaces = match loaded {
+            Ok(spaces) => spaces,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                Spaces::with(read(legacy).unwrap_or_else(|err| set_aside(legacy, err)))
             }
+            Err(err) => Spaces::with(set_aside(&file, err)),
         };
         Self {
             file,
-            paths: Mutex::new(paths),
+            spaces: Mutex::new(spaces),
         }
     }
 
     /// Every project with its worktrees, in the order they were added.
     pub fn list(&self) -> Vec<Project> {
-        let paths = self.paths().clone();
+        let paths: Vec<String> = self.spaces().projects().cloned().collect();
         paths.iter().map(|path| project(path)).collect()
     }
 
-    /// Follows the git repository containing `path`. Adding one already followed changes
-    /// nothing and answers the same project.
+    /// The spaces and the current one, for the app.
+    pub fn spaces_message(&self) -> Control {
+        let spaces = self.spaces();
+        Control::Spaces {
+            spaces: spaces.spaces.clone(),
+            current: spaces.current.clone(),
+        }
+    }
+
+    /// The current space's projects and Claude config folder (where its sessions are).
+    pub fn current(&self) -> (Vec<Project>, Option<String>) {
+        let (paths, env) = self.spaces().current();
+        let projects = paths.iter().map(|path| project(path)).collect();
+        (projects, env.claude_config_dir)
+    }
+
+    /// What a terminal opened in `cwd` gets from the space of the project holding it: its
+    /// environment entries and Claude config folder. Nothing outside every project.
+    pub fn terminal_env(&self, cwd: &str) -> (Vec<(&'static str, String)>, Option<String>) {
+        let place = place(&self.list(), cwd);
+        let spaces = self.spaces();
+        let space = place.and_then(|(project, _)| spaces.of(&project).cloned());
+        let env = space.map(|s| s.env).unwrap_or_default();
+        (spaces::vars(&env), env.claude_config_dir)
+    }
+
+    /// Applies a space request and saves the result; nothing changes when either fails.
+    pub fn change_spaces(
+        &self,
+        change: impl FnOnce(&mut Spaces) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut spaces = self.spaces();
+        let mut next = spaces.clone();
+        change(&mut next)?;
+        save(&self.file, &next)
+            .map_err(|err| format!("cannot save {}: {err}", self.file.display()))?;
+        *spaces = next;
+        Ok(())
+    }
+
+    /// Follows the git repository containing `path` in the current space. Adding one
+    /// already there changes nothing and answers the same project; one in another space is
+    /// refused (a project is in one space only).
     pub fn add(&self, path: &str) -> Result<Project, (ProjectError, String)> {
         let id = validate(path)?.to_string_lossy().into_owned();
-        {
-            let mut paths = self.paths();
-            if !paths.contains(&id) {
-                let mut next = paths.clone();
-                next.push(id.clone());
-                save(&self.file, &next).map_err(|err| {
-                    let message = format!("cannot save {}: {err}", self.file.display());
-                    (ProjectError::Storage, message)
-                })?;
-                *paths = next;
+        let owner = {
+            let spaces = self.spaces();
+            spaces
+                .of(&id)
+                .map(|s| (s.id != spaces.current, s.name.clone()))
+        };
+        match owner {
+            Some((true, name)) => {
+                let message = format!("{id} is already in the space {name}");
+                return Err((ProjectError::InOtherSpace, message));
+            }
+            Some((false, _)) => {}
+            None => {
+                let added = self.change_spaces(|spaces| {
+                    spaces.add(id.clone());
+                    Ok(())
+                });
+                added.map_err(|message| (ProjectError::Storage, message))?;
             }
         }
         Ok(project(&id))
@@ -158,14 +207,14 @@ impl Projects {
 
     /// Only followed projects are acted on: the id comes from the app.
     fn root(&self, id: &str) -> io::Result<PathBuf> {
-        if self.paths().iter().any(|path| path == id) {
+        if self.spaces().projects().any(|path| path == id) {
             return Ok(PathBuf::from(id));
         }
         Err(io::Error::other(format!("{id} is not a followed project")))
     }
 
-    fn paths(&self) -> MutexGuard<'_, Vec<String>> {
-        self.paths.lock().unwrap_or_else(PoisonError::into_inner)
+    fn spaces(&self) -> MutexGuard<'_, Spaces> {
+        self.spaces.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -202,14 +251,29 @@ fn unused(proc: procs::Source, path: &str) -> io::Result<()> {
     )))
 }
 
-fn read(file: &Path) -> io::Result<Vec<String>> {
+fn read<T: DeserializeOwned>(file: &Path) -> io::Result<T> {
     let bytes = git::read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
     serde_json::from_slice(&bytes).map_err(io::Error::other)
 }
 
-fn save(file: &Path, paths: &[String]) -> io::Result<()> {
+/// Moves an unreadable or invalid list aside with a warning (a missing one is only empty):
+/// the service starts without it.
+fn set_aside(file: &Path, err: io::Error) -> Vec<String> {
+    if err.kind() != io::ErrorKind::NotFound {
+        let aside = file.with_extension("json.corrupt");
+        eprintln!(
+            "hive: warning: ignoring {} ({err}); moved to {}",
+            file.display(),
+            aside.display()
+        );
+        let _ = std::fs::rename(file, aside);
+    }
+    Vec::new()
+}
+
+fn save(file: &Path, spaces: &Spaces) -> io::Result<()> {
     file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
-    let json = serde_json::to_vec_pretty(paths)?;
+    let json = serde_json::to_vec_pretty(spaces)?;
     write_atomic(file, &json, 0o600)
 }
 
@@ -457,20 +521,25 @@ mod tests {
                 " is not a directory",
             ),
         ];
-        let projects = Projects::load(tmp.path().join("projects.json"));
+        let projects = load(tmp.path());
         for (path, error, message) in cases {
             let (got, text) = projects.add(&path).unwrap_err();
             assert_eq!(got, error, "{path}");
             assert!(text.contains(message), "{text}");
         }
         assert!(projects.list().is_empty());
-        assert!(!tmp.path().join("projects.json").exists());
+        assert!(!tmp.path().join("spaces.json").exists());
+    }
+
+    /// Projects kept in `dir`: `spaces.json`, else the older `projects.json`.
+    fn load(dir: &Path) -> Projects {
+        Projects::load(dir.join("spaces.json"), &dir.join("projects.json"))
     }
 
     #[test]
     fn worktree_requests_need_a_followed_project() {
         let tmp = tempfile::tempdir().unwrap();
-        let projects = Projects::load(tmp.path().join("projects.json"));
+        let projects = load(tmp.path());
         let id = tmp.path().display().to_string();
         let refused = format!("{id} is not a followed project");
         assert_eq!(projects.branches(&id).unwrap_err().to_string(), refused);
@@ -480,56 +549,97 @@ mod tests {
         assert_eq!(err.to_string(), refused);
         assert!(!tmp.path().join(WORKTREES_DIR).exists());
         // A followed one gets the same checks as the CLI, without git for the name.
-        projects.paths().push(id.clone());
+        projects.spaces().add(id.clone());
         assert!(projects.validate_worktree_name(&id, "free").is_ok());
         let err = projects.validate_worktree_name(&id, "Bad").unwrap_err();
         assert!(err.to_string().starts_with("invalid worktree name"));
     }
 
     #[test]
-    fn a_missing_file_is_an_empty_list() {
+    fn missing_files_are_an_empty_default_space() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(
-            Projects::load(tmp.path().join("projects.json"))
-                .list()
-                .is_empty()
+        let projects = load(tmp.path());
+        assert!(projects.list().is_empty());
+        assert_eq!(*projects.spaces(), Spaces::with(vec![]));
+        assert_eq!(projects.current(), (vec![], None));
+        assert_eq!(
+            projects.spaces_message(),
+            Control::Spaces {
+                spaces: Spaces::with(vec![]).spaces,
+                current: "default".into(),
+            }
         );
     }
 
     #[test]
-    fn a_corrupt_file_is_moved_aside() {
+    fn the_older_project_list_becomes_the_default_space() {
         let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("projects.json");
-        for bad in [&b"{not json"[..], &vec![b' '; FILE_LIMIT as usize + 1]] {
-            std::fs::write(&file, bad).unwrap();
-            assert!(Projects::load(file.clone()).paths().is_empty());
-            assert!(!file.exists());
-            assert_eq!(
-                std::fs::read(tmp.path().join("projects.json.corrupt")).unwrap(),
-                bad
-            );
+        let legacy = tmp.path().join("projects.json");
+        std::fs::write(&legacy, r#"["/a", "/b c"]"#).unwrap();
+        let projects = load(tmp.path());
+        let migrated = Spaces::with(vec!["/a".into(), "/b c".into()]);
+        assert_eq!(*projects.spaces(), migrated);
+        // Saved as spaces on the first change; the older file stays as it was.
+        let create = |s: &mut Spaces| s.create("Work", Default::default());
+        projects.change_spaces(create).unwrap();
+        let kept = std::fs::read_to_string(&legacy).unwrap();
+        assert_eq!(kept, r#"["/a", "/b c"]"#);
+        let again = load(tmp.path());
+        assert_eq!(*again.spaces(), *projects.spaces());
+        assert_eq!(again.spaces().current, "space-1");
+        assert_eq!(again.current(), (vec![], None));
+    }
+
+    #[test]
+    fn corrupt_files_are_moved_aside() {
+        let tmp = tempfile::tempdir().unwrap();
+        let no_space = br#"{"current":"x","spaces":[]}"#;
+        let long = vec![b' '; FILE_LIMIT as usize + 1];
+        for name in ["spaces.json", "projects.json"] {
+            let file = tmp.path().join(name);
+            for bad in [&b"{not json"[..], &long, no_space] {
+                std::fs::write(&file, bad).unwrap();
+                assert_eq!(*load(tmp.path()).spaces(), Spaces::with(vec![]));
+                assert!(!file.exists());
+                let aside = tmp.path().join(format!("{name}.corrupt"));
+                assert_eq!(std::fs::read(aside).unwrap(), bad);
+            }
         }
     }
 
     #[test]
-    fn saved_lists_are_private_and_load_back() {
+    fn saved_spaces_are_private_and_load_back() {
         let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("data/hive/projects.json");
+        let dir = tmp.path().join("data/hive");
         // Longer than a few KiB, well within the read limit.
         let mut paths: Vec<String> = (0..500).map(|i| format!("/projects/{i:04}")).collect();
         paths.push("/b c".to_owned());
-        save(&file, &paths).unwrap();
-        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-        assert_eq!(*Projects::load(file).paths(), paths);
+        let spaces = Spaces::with(paths);
+        save(&dir.join("spaces.json"), &spaces).unwrap();
+        let meta = std::fs::metadata(dir.join("spaces.json")).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        assert_eq!(*load(&dir).spaces(), spaces);
     }
 
     #[test]
-    fn a_failed_save_is_a_storage_error() {
+    fn a_failed_save_changes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         // The data "directory" is a file, so nothing can be written under it.
         let blocker = tmp.path().join("data");
         std::fs::write(&blocker, "").unwrap();
-        assert!(save(&blocker.join("projects.json"), &[]).is_err());
+        let projects = load(&blocker);
+        let create = |s: &mut Spaces| s.create("Work", Default::default());
+        let err = projects.change_spaces(create).unwrap_err();
+        assert!(err.starts_with("cannot save "), "{err}");
+        assert_eq!(*projects.spaces(), Spaces::with(vec![]));
+        // A refused request saves nothing either.
+        let refused = projects.change_spaces(|s| s.select("nope"));
+        assert_eq!(refused, Err(r#"no space "nope""#.to_owned()));
+    }
+
+    #[test]
+    fn a_terminal_outside_every_project_gets_no_space_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(load(tmp.path()).terminal_env("/anywhere"), (vec![], None));
     }
 }

@@ -10,7 +10,7 @@ use crate::worktree::Repo;
 
 /// Runs `hive hook <event>` from terminal `terminal`, like Claude Code does, and returns the
 /// app's messages up to the forwarded event (so the service has handled the call).
-async fn hook(
+pub(crate) async fn hook(
     repo: &Repo,
     app: &mut Conn,
     terminal: &str,

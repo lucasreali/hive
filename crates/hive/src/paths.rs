@@ -65,9 +65,14 @@ impl Paths {
         self.data.join("hive-hooks.json")
     }
 
-    /// The projects the app follows (`hive::projects`).
+    /// The projects the app followed before spaces (6.14): read only while `spaces` is missing.
     pub fn projects(&self) -> PathBuf {
         self.data.join("projects.json")
+    }
+
+    /// The spaces and the projects the app follows (`hive::projects`).
+    pub fn spaces(&self) -> PathBuf {
+        self.data.join("spaces.json")
     }
 
     /// The Claude sessions that ran in Hive's terminals when the app last closed.
@@ -137,6 +142,7 @@ mod tests {
             PathBuf::from("/d/hive/hive-hooks.json")
         );
         assert_eq!(paths.projects(), PathBuf::from("/d/hive/projects.json"));
+        assert_eq!(paths.spaces(), PathBuf::from("/d/hive/spaces.json"));
         assert_eq!(
             paths.open_sessions(),
             PathBuf::from("/d/hive/open-sessions.json")

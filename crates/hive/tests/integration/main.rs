@@ -19,6 +19,8 @@ mod hook;
 #[cfg(test)]
 mod projects;
 #[cfg(test)]
+mod spaces;
+#[cfg(test)]
 mod terminal;
 #[cfg(test)]
 mod watch;

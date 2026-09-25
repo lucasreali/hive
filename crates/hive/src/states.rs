@@ -34,6 +34,8 @@ pub struct Agent {
     /// Its transcript, from its `SessionStart`'s `transcript_path` (unchecked: it is checked
     /// to lie in Claude's projects folder when read). Its subagents' lie beside it.
     pub transcript: Option<std::path::PathBuf>,
+    /// Its terminal's Claude config folder (see `Terminal::claude_dir`).
+    pub claude_dir: Option<String>,
     state: AgentState,
     /// In start order.
     subagents: Vec<SubagentState>,
@@ -71,6 +73,7 @@ impl Agent {
             cwd: None,
             title: None,
             transcript: None,
+            claude_dir: None,
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),

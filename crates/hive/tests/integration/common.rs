@@ -257,8 +257,19 @@ impl Conn {
         seen
     }
 
-    /// Next control frame, skipping terminal output.
+    /// Next control frame, skipping terminal output and `spaces`, which comes before the
+    /// answers to `list_projects` and `add_project` (see `any_control`).
     pub async fn control(&mut self) -> (u32, Control) {
+        loop {
+            let next = self.any_control().await;
+            if !matches!(next.1, Control::Spaces { .. }) {
+                return next;
+            }
+        }
+    }
+
+    /// Next control frame, skipping terminal output.
+    pub async fn any_control(&mut self) -> (u32, Control) {
         loop {
             let frame = self.next().await.expect("connection closed");
             if let Ok(mut message) = frame.to_control() {
