@@ -671,13 +671,14 @@ mod tests {
         let err = save(&file, &Spaces::with(paths)).unwrap_err();
         assert_eq!(err.to_string(), "the list would be over 1048576 bytes");
         assert!(!file.exists());
-        // Just within the limit is saved.
-        let json = serde_json::to_vec_pretty(&Spaces::with(vec![])).unwrap();
-        let fill = FILE_LIMIT as usize - json.len() - 20;
-        let fits = Spaces::with(vec![format!("/{}", "x".repeat(fill))]);
-        let size = serde_json::to_vec_pretty(&fits).unwrap().len() as u64;
-        assert!(size <= FILE_LIMIT && size > FILE_LIMIT - 40, "{size}");
-        save(&file, &fits).unwrap();
+        // Exactly the limit is saved; one byte more is not.
+        let sized = |n: usize| Spaces::with(vec![format!("/{}", "x".repeat(n))]);
+        let len = |s: &Spaces| serde_json::to_vec_pretty(s).unwrap().len();
+        let n = FILE_LIMIT as usize - (len(&sized(0)));
+        assert_eq!(len(&sized(n)) as u64, FILE_LIMIT);
+        save(&file, &sized(n)).unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().len(), FILE_LIMIT);
+        assert!(save(&file, &sized(n + 1)).is_err());
     }
 
     #[test]

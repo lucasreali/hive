@@ -302,6 +302,16 @@ mod tests {
     }
 
     #[test]
+    fn a_new_id_is_found_even_when_every_lower_one_is_taken() {
+        let mut spaces = Spaces::with(vec![]);
+        spaces.create("One", SpaceEnv::default()).unwrap();
+        spaces.delete("default").unwrap();
+        // Only "space-1" is left: the next one is "space-2".
+        spaces.create("Two", SpaceEnv::default()).unwrap();
+        assert_eq!(spaces.current, "space-2");
+    }
+
+    #[test]
     fn a_space_with_projects_is_kept() {
         let mut spaces = Spaces::with(vec!["/a".into()]);
         spaces.create("Other", SpaceEnv::default()).unwrap();
