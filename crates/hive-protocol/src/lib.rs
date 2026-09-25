@@ -5,6 +5,8 @@
 //! frames carry raw PTY bytes. Channel 0 is the connection itself; terminals
 //! use channels from 1 up.
 
+use std::collections::BTreeMap;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
@@ -502,6 +504,24 @@ pub enum Control {
         windows_path: Option<String>,
         error: Option<String>,
     },
+    /// App → service: the settings; answered by `Settings`.
+    GetSettings,
+    /// The service's settings (`$XDG_CONFIG_HOME/hive/settings.json`): sent to the app right
+    /// after `Welcome`, and in answer to `GetSettings` and to a saved `SetSettings`.
+    Settings {
+        settings: Settings,
+    },
+    /// App → service: checks and saves the whole settings; answered by `Settings`, or by
+    /// `SettingsFailed` with nothing saved.
+    SetSettings {
+        settings: Settings,
+    },
+    /// Settings not saved (a value out of range, or the write failed), or a settings file
+    /// ignored for being invalid (sent after `Settings`, which then holds the defaults).
+    /// Shown as is.
+    SettingsFailed {
+        message: String,
+    },
     /// App → service: follow a subagent's conversation (6.10), read from its transcript
     /// beside its agent's. Answered by `Transcript` now and `TranscriptAppended` as it grows.
     /// Only one is followed: this replaces the previous one.
@@ -561,6 +581,113 @@ impl Control {
         }
     }
 }
+
+/// The user's settings. Every field has a default, so a partial (or older) file reads fine;
+/// unknown keys are ignored. Ranges are checked by the service (`hive::settings`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub terminal: TerminalSettings,
+    pub appearance: AppearanceSettings,
+    pub notifications: NotificationSettings,
+    pub agents: AgentSettings,
+    pub worktrees: WorktreeSettings,
+    /// By project id (its path).
+    pub projects: BTreeMap<String, ProjectSettings>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerminalSettings {
+    /// A CSS font family list.
+    pub font_family: String,
+    /// Pixels, 8 to 32.
+    pub font_size: u32,
+    /// Lines of history each new terminal keeps, 1000 to 100000.
+    pub scrollback: u32,
+    pub cursor_style: CursorStyle,
+    pub cursor_blink: bool,
+    pub copy_on_select: bool,
+}
+
+impl Default for TerminalSettings {
+    fn default() -> Self {
+        Self {
+            font_family: "\"IBM Plex Mono\", monospace".to_owned(),
+            font_size: 13,
+            scrollback: 5000,
+            cursor_style: CursorStyle::Block,
+            cursor_blink: false,
+            copy_on_select: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorStyle {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppearanceSettings {
+    pub theme: Theme,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    #[default]
+    OneDark,
+    OneLight,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationSettings {
+    /// The alert tone's volume in percent, 0 (mute) to 100.
+    pub volume: u32,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self { volume: 100 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentSettings {
+    /// Seconds without terminal output after which a working agent waits for you, 2 to 60.
+    pub silence_secs: u32,
+    /// Closing the app asks first while agents run.
+    pub confirm_close: bool,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            silence_secs: 5,
+            confirm_close: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorktreeSettings {
+    /// The branch new worktrees start from; `None`: the project's current branch.
+    pub default_base: Option<String>,
+}
+
+/// One project's settings; none yet.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectSettings {}
 
 /// A git repository inside WSL that the app follows (#4). Paths are the service's, never
 /// derived by the app.
@@ -1370,6 +1497,39 @@ mod tests {
             &Frame::control(0, &target).payload[..],
             br#"{"type":"editor_target","worktree":"/r","path":"a","windows_path":"w","error":null}"#
         );
+    }
+
+    #[test]
+    fn settings_messages_are_tagged_json_with_defaults_for_missing_keys() {
+        let get = Frame::control(0, &Control::GetSettings);
+        assert_eq!(&get.payload[..], br#"{"type":"get_settings"}"#);
+        let settings = Control::Settings {
+            settings: Settings::default(),
+        };
+        assert_eq!(
+            &Frame::control(0, &settings).payload[..],
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"IBM Plex Mono\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{}}}"#
+        );
+        let partial: Control = serde_json::from_str(
+            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"unknown":1}}"#,
+        )
+        .unwrap();
+        let mut expected = Settings::default();
+        expected.terminal.cursor_style = CursorStyle::Bar;
+        expected.appearance.theme = Theme::OneLight;
+        expected
+            .projects
+            .insert("/r".into(), ProjectSettings::default());
+        assert_eq!(partial, Control::SetSettings { settings: expected });
+        let failed = Control::SettingsFailed {
+            message: "m".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &failed).payload[..],
+            br#"{"type":"settings_failed","message":"m"}"#
+        );
+        let underline: CursorStyle = serde_json::from_str(r#""underline""#).unwrap();
+        assert_eq!(underline, CursorStyle::Underline);
     }
 
     #[test]

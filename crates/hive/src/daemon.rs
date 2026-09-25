@@ -32,6 +32,7 @@ use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
 use crate::sessions::{self, Sessions};
+use crate::settings;
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
 use crate::{changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper};
@@ -55,6 +56,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
     let projects = Projects::load(paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
+    let settings = settings::Store::load(paths.settings());
     let restore = Restore {
         file: paths.open_sessions(),
         pending: Mutex::new(sessions::take_open(&paths.open_sessions())),
@@ -65,6 +67,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         paths.bin_dir(),
         projects,
         sessions,
+        settings,
         restore,
     )
     .await;
@@ -95,9 +98,10 @@ async fn serve(
     bin_dir: PathBuf,
     projects: Projects,
     sessions: Sessions,
+    settings: settings::Store,
     restore: Restore,
 ) -> io::Result<()> {
-    let state = Arc::new(State::new(bin_dir, projects, sessions, restore));
+    let state = Arc::new(State::new(bin_dir, projects, sessions, settings, restore));
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
@@ -145,6 +149,7 @@ struct State {
     projects: Projects,
     /// Claude Code's session logs of the followed projects.
     sessions: Sessions,
+    settings: settings::Store,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -159,7 +164,13 @@ struct Restore {
 }
 
 impl State {
-    fn new(bin_dir: PathBuf, projects: Projects, sessions: Sessions, restore: Restore) -> Self {
+    fn new(
+        bin_dir: PathBuf,
+        projects: Projects,
+        sessions: Sessions,
+        settings: settings::Store,
+        restore: Restore,
+    ) -> Self {
         Self {
             app: Mutex::new(None),
             terminals: Mutex::new(HashMap::new()),
@@ -170,6 +181,7 @@ impl State {
             bin_dir,
             projects,
             sessions,
+            settings,
             restore,
             sent: Default::default(),
         }
@@ -346,6 +358,15 @@ impl State {
         }
     }
 
+    /// The settings, then why the settings file was ignored, if it was.
+    async fn send_settings(&self) {
+        let (settings, warning) = self.settings.get();
+        self.to_app(0, &Control::Settings { settings }).await;
+        if let Some(message) = warning {
+            self.to_app(0, &Control::SettingsFailed { message }).await;
+        }
+    }
+
     /// Sent to a newly connected app right after `Welcome`: the state of every live agent.
     async fn snapshot(&self) {
         for (id, agent) in self.agents.lock().await.iter() {
@@ -515,10 +536,13 @@ async fn watch_terminals(state: Arc<State>) {
             state.to_app(channel, &Control::UnhookedAgent).await;
         }
         // Not under the terminals lock: placing a new agent holds the agents lock while git runs.
+        let silence = state.settings.silence();
         for (id, agent) in state.agents.lock().await.iter_mut() {
             let output = last_output.get(&agent.channel);
             agent.watched = state.watches(agent.channel);
-            if let Some(message) = output.and_then(|&output| agent.reconcile(id, output, now)) {
+            if let Some(message) =
+                output.and_then(|&output| agent.reconcile(id, silence, output, now))
+            {
                 state.to_app(agent.channel, &message).await;
             }
         }
@@ -716,6 +740,7 @@ where
         }
         *app = Some(control_tx);
     }
+    state.send_settings().await;
     state.snapshot().await;
     // Only the first app after a restart resumes the sessions the last one left.
     let restore = std::mem::take(&mut *state.restore.pending.lock().await);
@@ -759,6 +784,14 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         Ok(Control::View { terminal, focused }) => {
             let watched = terminal.filter(|_| focused).unwrap_or(0);
             state.watched.store(watched, Ordering::Relaxed);
+        }
+        Ok(Control::GetSettings) => state.send_settings().await,
+        Ok(Control::SetSettings { settings }) => {
+            let reply = match tokio::task::block_in_place(|| state.settings.set(settings)) {
+                Ok(settings) => Control::Settings { settings },
+                Err(message) => Control::SettingsFailed { message },
+            };
+            state.to_app(0, &reply).await;
         }
         Ok(Control::ListProjects) => state.projects(|projects| Control::Projects {
             projects: projects.list(),
@@ -1025,6 +1058,7 @@ mod tests {
             dir.into(),
             projects,
             Sessions::new(None),
+            settings::Store::load(dir.join("settings.json")),
             restore,
         ))
     }
@@ -1108,7 +1142,7 @@ mod tests {
         });
         let mut frames = FramedRead::new(client, FrameCodec);
         let mut got = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..4 {
             let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
             let frame = next.await.expect("no snapshot").unwrap().unwrap();
             got.push((frame.channel, frame.to_control().unwrap()));
@@ -1128,6 +1162,11 @@ mod tests {
             title: "Named".into(),
         };
         let at = |message: &Control| got.iter().position(|(_, m)| m == message);
+        // The settings come first.
+        let settings = Control::Settings {
+            settings: Default::default(),
+        };
+        assert_eq!(got[0], (0, settings));
         assert!(got.contains(&(4, idle("s"))), "{got:?}");
         assert!(got.contains(&(5, idle("u"))), "{got:?}");
         assert!(at(&named) > at(&idle("s")), "{got:?}");

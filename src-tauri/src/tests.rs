@@ -472,6 +472,13 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         path: "a".into(),
     };
     assert_eq!(service.control().await, (0, editor));
+    hive.get_settings().unwrap();
+    assert_eq!(service.control().await, (0, Control::GetSettings));
+    let mut settings = Settings::default();
+    settings.notifications.volume = 0;
+    hive.set_settings(settings.clone()).unwrap();
+    let set = Control::SetSettings { settings };
+    assert_eq!(service.control().await, (0, set));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -530,7 +537,8 @@ async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
         json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
     );
     assert_eq!(service.control().await, (1, Control::CloseTerminal));
-    // The new UI gets the projects again.
+    // The new UI gets the settings and the projects again.
+    assert_eq!(service.control().await, (0, Control::GetSettings));
     assert_eq!(service.control().await, (0, Control::ListProjects));
     // The old terminal's exit is not reported to the new UI.
     service
@@ -630,6 +638,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
+    assert_eq!(hive.get_settings(), not_connected);
+    assert_eq!(hive.set_settings(Settings::default()), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
     assert_eq!(hive.list_dirs(String::new(), false), not_connected);
     assert_eq!(hive.list_sessions(), not_connected);
@@ -819,7 +829,9 @@ fn commands_reach_the_managed_hive() {
             locate_session,
             delete_session,
             save_file,
-            open_in_editor
+            open_in_editor,
+            get_settings,
+            set_settings
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -866,6 +878,7 @@ fn commands_reach_the_managed_hive() {
     let locate = json!({"id": "s", "target": "log"});
     let delete = json!({"id": "s"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
+    let settings = json!({"settings": {"notifications": {"volume": 0}}});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
@@ -886,6 +899,8 @@ fn commands_reach_the_managed_hive() {
         ("delete_session", &delete),
         ("save_file", &save),
         ("open_in_editor", &file),
+        ("get_settings", &json!({})),
+        ("set_settings", &settings),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
@@ -928,6 +943,8 @@ fn commands_reach_the_managed_hive() {
         ("delete_session", delete),
         ("save_file", save),
         ("open_in_editor", file),
+        ("get_settings", json!({})),
+        ("set_settings", settings),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

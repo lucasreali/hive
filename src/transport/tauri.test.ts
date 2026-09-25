@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { ServiceMessage } from "../store";
+import { DEFAULT_SETTINGS, type ServiceMessage } from "../store";
 import { tauriTransport } from "./tauri";
 
 type Args = Record<string, unknown>;
@@ -62,6 +62,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.openFile("/r", "a.ts");
   await tauriTransport.saveFile("/r", "a.ts", "x", "v");
   await tauriTransport.openInEditor("/r", "a.ts");
+  await tauriTransport.getSettings();
+  await tauriTransport.setSettings(DEFAULT_SETTINGS);
   await tauriTransport.checkUpdate();
   await tauriTransport.installUpdate();
   expect(calls).toEqual([
@@ -87,6 +89,8 @@ test("terminal and project actions call their commands", async () => {
     ["open_file", { worktree: "/r", path: "a.ts" }],
     ["save_file", { worktree: "/r", path: "a.ts", content: "x", version: "v" }],
     ["open_in_editor", { worktree: "/r", path: "a.ts" }],
+    ["get_settings", {}],
+    ["set_settings", { settings: DEFAULT_SETTINGS }],
     ["check_update", {}],
     ["install_update", {}],
   ]);

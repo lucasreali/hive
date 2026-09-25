@@ -71,7 +71,7 @@ export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste
  */
 export async function openTerminal(cwd: string): Promise<number> {
   const term = new Terminal({
-    scrollback: useHive.getState().scrollback,
+    scrollback: useHive.getState().settings.terminal.scrollback,
     fontFamily: '"IBM Plex Mono", monospace',
     fontSize: 13,
     lineHeight: 1.2,

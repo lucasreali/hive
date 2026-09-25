@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    Control, Frame, FrameCodec, FrameError, FrameType, Role, SessionTarget, MAX_PAYLOAD,
+    Control, Frame, FrameCodec, FrameError, FrameType, Role, SessionTarget, Settings, MAX_PAYLOAD,
     PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
@@ -199,6 +199,7 @@ impl Hive {
         if link.frames.is_some() {
             if let Some(welcome) = link.welcome.clone() {
                 link.to_ui(welcome);
+                let _ = link.send(0, &Control::GetSettings);
                 let _ = link.send(0, &Control::ListProjects);
             }
             return;
@@ -457,6 +458,16 @@ impl Hive {
     pub fn open_in_editor(&self, worktree: String, path: String) -> Result<(), String> {
         self.link()
             .send(0, &Control::OpenInEditor { worktree, path })
+    }
+
+    /// The answer arrives as `settings`.
+    pub fn get_settings(&self) -> Result<(), String> {
+        self.link().send(0, &Control::GetSettings)
+    }
+
+    /// The answer arrives as `settings` or `settings_failed`.
+    pub fn set_settings(&self, settings: Settings) -> Result<(), String> {
+        self.link().send(0, &Control::SetSettings { settings })
     }
 }
 
@@ -791,6 +802,16 @@ pub mod commands {
         path: String,
     ) -> Result<(), String> {
         hive.open_in_editor(worktree, path)
+    }
+
+    #[tauri::command]
+    pub fn get_settings(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.get_settings()
+    }
+
+    #[tauri::command]
+    pub fn set_settings(hive: State<'_, Hive>, settings: Settings) -> Result<(), String> {
+        hive.set_settings(settings)
     }
 }
 

@@ -3,7 +3,7 @@ use crate::common;
 use std::os::unix::fs::PermissionsExt;
 
 use common::{Env, stop};
-use hive_protocol::{AgentEvent, Control, EventKind, PROTOCOL_VERSION, Role};
+use hive_protocol::{AgentEvent, Control, EventKind, PROTOCOL_VERSION, Role, Settings};
 use serde_json::json;
 
 fn mode(path: std::path::PathBuf) -> u32 {
@@ -178,7 +178,7 @@ async fn a_second_app_is_rejected() {
     // `Welcome` ends the handshake before the daemon takes the app's place, so wait for an
     // answer from the app connection itself: then the second one is surely the second.
     let app = env.app().await;
-    let mut second = env.connect(Role::App).await;
+    let mut second = env.handshake(Role::App).await;
     assert_eq!(
         second.control().await,
         (
@@ -245,4 +245,43 @@ async fn daemon_fails_when_the_wrapper_cannot_be_installed() {
     let out = env.hive().arg("daemon").output().unwrap();
     assert!(!out.status.success());
     assert!(!env.socket().exists());
+}
+
+#[tokio::test]
+async fn settings_are_read_checked_and_saved_by_the_service() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.path("config/hive")).unwrap();
+    let file = env.path("config/hive/settings.json");
+    std::fs::write(&file, "{").unwrap();
+    let mut daemon = env.daemon();
+    // An invalid file: the defaults, then why, and the file is left alone.
+    let mut app = env.handshake(Role::App).await;
+    let defaults = Control::Settings {
+        settings: Settings::default(),
+    };
+    assert_eq!(app.control().await, (0, defaults));
+    let (_, warning) = app.control().await;
+    assert!(
+        matches!(&warning, Control::SettingsFailed { message } if message.starts_with("Ignoring ")),
+        "{warning:?}"
+    );
+    let mut settings = Settings::default();
+    settings.agents.silence_secs = 61;
+    let set = |settings| Control::SetSettings { settings };
+    app.send(0, set(settings.clone())).await;
+    let refused = Control::SettingsFailed {
+        message: "agents.silence_secs must be between 2 and 60 (got 61)".into(),
+    };
+    assert_eq!(app.control().await, (0, refused));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{");
+    // Valid settings are saved, privately, and answered.
+    settings.agents.silence_secs = 2;
+    app.send(0, set(settings.clone())).await;
+    let saved = Control::Settings { settings };
+    assert_eq!(app.control().await, (0, saved.clone()));
+    assert_eq!(mode(file), 0o600);
+    app.send(0, Control::GetSettings).await;
+    assert_eq!(app.control().await, (0, saved));
+    drop(app);
+    assert!(daemon.wait_exit().success());
 }
