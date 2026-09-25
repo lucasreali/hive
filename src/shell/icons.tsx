@@ -14,31 +14,14 @@ import type { AgentState } from "../store";
 
 // Inline SVG icons from the prototype (docs/prototype/HiveApp.dc.html).
 
-// The title bar's Hive logo: a honeycomb of hollow cells with one lit, solid cell (the human's
-// drawing), in the color of the text beside it.
-const HEX = "M0-20L17.32-10V10L0 20L-17.32 10V-10Z";
-const HOLE = "M0-13L11.26-6.5V6.5L0 13L-11.26 6.5V-6.5Z";
-const CELLS = [
-  [-19.32, -33.46],
-  [-38.64, 0],
-  [0, 0],
-  [38.64, 0],
-  [-19.32, 33.46],
-  [19.32, 33.46],
-];
+// The title bar's Hive logo: a honeycomb of seven hollow cells (the human's drawing), in the color
+// of the text beside it.
+const HIVE_LOGO =
+  "M425.5,54.6 L333.0,1.2 L250.5,48.8 L168.0,1.2 L75.5,54.6 L75.5,149.3 L-6.5,196.6 L-6.5,303.4 L75.5,350.7 L75.5,446.4 L168.0,499.8 L250.5,452.2 L333.0,499.8 L425.5,446.4 L425.5,351.3 L508.5,303.4 L508.5,196.6 L425.5,148.7 Z M168.0,194.0 L93.5,151.0 L93.5,65.0 L168.0,22.0 L242.5,65.0 L242.5,151.0 Z M86.0,336.0 L11.5,293.0 L11.5,207.0 L86.0,164.0 L160.5,207.0 L160.5,293.0 Z M251.0,336.0 L176.5,293.0 L176.5,207.0 L251.0,164.0 L325.5,207.0 L325.5,293.0 Z M416.0,336.0 L341.5,293.0 L341.5,207.0 L416.0,164.0 L490.5,207.0 L490.5,293.0 Z M168.0,479.0 L93.5,436.0 L93.5,350.0 L168.0,307.0 L242.5,350.0 L242.5,436.0 Z M333.0,479.0 L258.5,436.0 L258.5,350.0 L333.0,307.0 L407.5,350.0 L407.5,436.0 Z";
 
 export const HiveIcon = () => (
-  <svg width="16" height="16" viewBox="-60 -60 120 120" aria-hidden="true">
-    {CELLS.map(([x, y]) => (
-      <path
-        key={`${x},${y}`}
-        d={`${HEX} ${HOLE}`}
-        fillRule="evenodd"
-        transform={`translate(${x} ${y})`}
-        fill="currentColor"
-      />
-    ))}
-    <path d={HEX} transform="translate(19.32 -33.46)" fill="currentColor" />
+  <svg width="16" height="16" viewBox="-14 -7 531 515" aria-hidden="true">
+    <path d={HIVE_LOGO} fillRule="evenodd" fill="currentColor" />
   </svg>
 );
 
