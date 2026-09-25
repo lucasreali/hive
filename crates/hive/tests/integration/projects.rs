@@ -551,7 +551,9 @@ async fn folders_are_browsed_from_home() {
 }
 
 /// `(name, ahead, behind, merged, changes)` of each worktree, sorted by name.
-fn health(project: &Project) -> Vec<(String, Option<u64>, Option<u64>, bool, u64)> {
+type Health = (String, Option<u64>, Option<u64>, bool, u64);
+
+fn health(project: &Project) -> Vec<Health> {
     let mut got: Vec<_> = project
         .worktrees
         .iter()
