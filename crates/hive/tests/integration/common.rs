@@ -39,17 +39,40 @@ impl Env {
     /// Processes running with this environment.
     pub fn processes(&self) -> Vec<hive::procs::Proc> {
         let marker = format!("XDG_RUNTIME_DIR={}", self.path("run").display());
-        hive::procs::list(std::path::Path::new("/proc"))
+        let pids = with_var(&marker);
+        hive::procs::list(hive::procs::Source::System)
             .into_iter()
-            .filter(|proc| {
-                let environ =
-                    std::fs::read(format!("/proc/{}/environ", proc.pid)).unwrap_or_default();
-                environ
-                    .split(|b| *b == 0)
-                    .any(|var| var == marker.as_bytes())
-            })
+            .filter(|proc| pids.contains(&proc.pid))
             .collect()
     }
+}
+
+/// Processes whose environment holds `var` (`NAME=value`).
+#[cfg(target_os = "linux")]
+fn with_var(var: &str) -> Vec<i32> {
+    hive::procs::list(hive::procs::Source::System)
+        .into_iter()
+        .map(|proc| proc.pid)
+        .filter(|pid| {
+            let environ = std::fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
+            environ.split(|b| *b == 0).any(|v| v == var.as_bytes())
+        })
+        .collect()
+}
+
+/// Processes whose environment holds `var` (`NAME=value`, no spaces): `ps -E` prints the
+/// command line and then the environment, space-separated.
+#[cfg(target_os = "macos")]
+fn with_var(var: &str) -> Vec<i32> {
+    let out = Command::new("ps")
+        .args(["-ax", "-E", "-ww", "-o", "pid=,command="])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| line.split(' ').any(|word| word == var))
+        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .collect()
 }
 
 pub struct Conn {
@@ -90,6 +113,9 @@ impl Env {
             .env_remove("HIVE_TERMINAL_ID")
             // Claude's session logs are read (and deleted) under the throwaway HOME only.
             .env_remove("CLAUDE_CONFIG_DIR");
+        // On macOS terminals run `$SHELL`; the tests' shell commands are fish's, as on WSL.
+        #[cfg(target_os = "macos")]
+        cmd.env("SHELL", "fish");
         cmd
     }
 

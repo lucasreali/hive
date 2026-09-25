@@ -40,6 +40,9 @@ use crate::{changes, dirs, file, procs, search, watch, worktree, wrapper};
 const TERMINAL_QUEUE: usize = 256;
 
 pub async fn run(paths: &Paths) -> io::Result<()> {
+    // Started by `hive bridge`: leave its session, so the service outlives nothing but the
+    // app connection. Fails harmlessly for a group leader (e.g. started from a shell).
+    let _ = nix::unistd::setsid();
     paths.prepare_runtime()?;
     let _lock = lock(paths)?;
     wrapper::install(paths, &std::env::current_exe()?)?;
@@ -395,7 +398,7 @@ async fn watch_terminals(state: Arc<State>) {
     let mut ticks = tokio::time::interval(watch::INTERVAL);
     loop {
         ticks.tick().await;
-        let running = watch::claude_sessions(&procs::list(Path::new("/proc")));
+        let running = watch::claude_sessions(&procs::list(procs::Source::System));
         let now = Instant::now();
         let mut last_output = HashMap::new();
         let unhooked: Vec<u32> = state
@@ -694,7 +697,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }),
         Ok(Control::RemoveWorktree { path, force }) => {
             state.projects(move |projects| {
-                match projects.remove_worktree(&path, force, Path::new("/proc")) {
+                match projects.remove_worktree(&path, force, procs::Source::System) {
                     Ok(project) => Control::WorktreeRemoved { project, path },
                     Err(err) => Control::RemoveWorktreeFailed {
                         path,
@@ -705,7 +708,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }
         Ok(Control::RenameWorktree { path, name }) => {
             state.projects(move |projects| {
-                match projects.rename_worktree(&path, &name, Path::new("/proc")) {
+                match projects.rename_worktree(&path, &name, procs::Source::System) {
                     Ok((project, to)) => Control::WorktreeRenamed {
                         project,
                         from: path,
@@ -724,7 +727,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             changes::message(path, listed)
         }),
         Ok(Control::ListSessions) => state.sessions(|projects, sessions| {
-            let running = procs::claude_cwds(Path::new("/proc"));
+            let running = procs::claude_cwds(procs::Source::System);
             let (sessions, error) = match sessions.list(&projects.list(), &running) {
                 Ok(sessions) => (sessions, None),
                 Err(err) => (Vec::new(), Some(err.to_string())),
