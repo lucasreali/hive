@@ -78,12 +78,20 @@ impl Spaces {
         space.map_or_else(Default::default, |s| (s.projects.clone(), s.env.clone()))
     }
 
-    /// Adds the project `id` to the current space.
-    pub fn add(&mut self, project: String) {
+    /// Adds the project `id` to the current space: nothing changes when it is there already,
+    /// and one in another space is refused with that space's name (a project is in one only).
+    pub fn add(&mut self, project: String) -> Result<(), String> {
+        if let Some(owner) = self.of(&project) {
+            return match owner.id == self.current {
+                true => Ok(()),
+                false => Err(owner.name.clone()),
+            };
+        }
         let current = &self.current;
         if let Some(space) = self.spaces.iter_mut().find(|s| s.id == *current) {
             space.projects.push(project);
         }
+        Ok(())
     }
 
     /// A new, empty space, made the current one.
@@ -240,7 +248,10 @@ mod tests {
         spaces.create(" Work ", SpaceEnv::default()).unwrap();
         assert_eq!(spaces.current, "space-1");
         assert_eq!(spaces.spaces[1].name, "Work");
-        spaces.add("/b".into());
+        spaces.add("/b".into()).unwrap();
+        // Once only; never into a second space.
+        spaces.add("/b".into()).unwrap();
+        assert_eq!(spaces.add("/a".into()), Err("Default".to_owned()));
         assert_eq!(
             spaces.current(),
             (vec!["/b".to_owned()], SpaceEnv::default())

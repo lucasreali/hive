@@ -35,7 +35,11 @@ impl Projects {
         let spaces = match loaded {
             Ok(spaces) => spaces,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                Spaces::with(read(legacy).unwrap_or_else(|err| set_aside(legacy, err)))
+                let mut paths = read(legacy).unwrap_or_else(|err| set_aside(legacy, err));
+                // Earlier versions allowed a hand-written path twice; a space never does.
+                let mut seen = std::collections::HashSet::new();
+                paths.retain(|p: &String| seen.insert(p.clone()));
+                Spaces::with(paths)
             }
             Err(err) => Spaces::with(set_aside(&file, err)),
         };
@@ -70,14 +74,28 @@ impl Projects {
     /// What a terminal opened in `cwd` gets from the space of the project holding it: its
     /// environment entries and Claude config folder. Nothing outside every project.
     pub fn terminal_env(&self, cwd: &str) -> (Vec<(&'static str, String)>, Option<String>) {
-        let place = place(&self.list(), cwd);
+        // Only the projects holding `cwd` when some do, so git runs for them alone; else
+        // every project (a linked worktree may be anywhere).
+        // ponytail: a worktree of one project inside another's folder takes the outer one's space.
+        let ids: Vec<String> = self.spaces().projects().cloned().collect();
+        let inside: Vec<Project> = (ids.iter())
+            .filter(|id| Path::new(cwd).starts_with(id))
+            .map(|id| project(id))
+            .collect();
+        let listed = if inside.is_empty() {
+            self.list()
+        } else {
+            inside
+        };
+        let place = place(&listed, cwd);
         let spaces = self.spaces();
         let space = place.and_then(|(project, _)| spaces.of(&project).cloned());
         let env = space.map(|s| s.env).unwrap_or_default();
         (spaces::vars(&env), env.claude_config_dir)
     }
 
-    /// Applies a space request and saves the result; nothing changes when either fails.
+    /// Applies a space request and saves the result (when it changed anything); nothing
+    /// changes when either fails.
     pub fn change_spaces(
         &self,
         change: impl FnOnce(&mut Spaces) -> Result<(), String>,
@@ -85,6 +103,9 @@ impl Projects {
         let mut spaces = self.spaces();
         let mut next = spaces.clone();
         change(&mut next)?;
+        if next == *spaces {
+            return Ok(());
+        }
         save(&self.file, &next)
             .map_err(|err| format!("cannot save {}: {err}", self.file.display()))?;
         *spaces = next;
@@ -96,26 +117,20 @@ impl Projects {
     /// refused (a project is in one space only).
     pub fn add(&self, path: &str) -> Result<Project, (ProjectError, String)> {
         let id = validate(path)?.to_string_lossy().into_owned();
-        let owner = {
-            let spaces = self.spaces();
-            spaces
-                .of(&id)
-                .map(|s| (s.id != spaces.current, s.name.clone()))
+        // Checked and added under one lock, so two adds at once cannot both add it.
+        let mut other = false;
+        let added = self.change_spaces(|spaces| {
+            spaces.add(id.clone()).map_err(|name| {
+                other = true;
+                format!("{id} is already in the space {name}")
+            })
+        });
+        let error = if other {
+            ProjectError::InOtherSpace
+        } else {
+            ProjectError::Storage
         };
-        match owner {
-            Some((true, name)) => {
-                let message = format!("{id} is already in the space {name}");
-                return Err((ProjectError::InOtherSpace, message));
-            }
-            Some((false, _)) => {}
-            None => {
-                let added = self.change_spaces(|spaces| {
-                    spaces.add(id.clone());
-                    Ok(())
-                });
-                added.map_err(|message| (ProjectError::Storage, message))?;
-            }
-        }
+        added.map_err(|message| (error, message))?;
         Ok(project(&id))
     }
 
@@ -274,6 +289,12 @@ fn set_aside(file: &Path, err: io::Error) -> Vec<String> {
 fn save(file: &Path, spaces: &Spaces) -> io::Result<()> {
     file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
     let json = serde_json::to_vec_pretty(spaces)?;
+    // Never a file the next start would refuse to read.
+    if json.len() as u64 > FILE_LIMIT {
+        return Err(io::Error::other(format!(
+            "the list would be over {FILE_LIMIT} bytes"
+        )));
+    }
     write_atomic(file, &json, 0o600)
 }
 
@@ -551,7 +572,7 @@ mod tests {
         assert_eq!(err.to_string(), refused);
         assert!(!tmp.path().join(WORKTREES_DIR).exists());
         // A followed one gets the same checks as the CLI, without git for the name.
-        projects.spaces().add(id.clone());
+        projects.spaces().add(id.clone()).unwrap();
         assert!(projects.validate_worktree_name(&id, "free").is_ok());
         let err = projects.validate_worktree_name(&id, "Bad").unwrap_err();
         assert!(err.to_string().starts_with("invalid worktree name"));
@@ -577,7 +598,7 @@ mod tests {
     fn the_older_project_list_becomes_the_default_space() {
         let tmp = tempfile::tempdir().unwrap();
         let legacy = tmp.path().join("projects.json");
-        std::fs::write(&legacy, r#"["/a", "/b c"]"#).unwrap();
+        std::fs::write(&legacy, r#"["/a", "/b c", "/a"]"#).unwrap();
         let projects = load(tmp.path());
         let migrated = Spaces::with(vec!["/a".into(), "/b c".into()]);
         assert_eq!(*projects.spaces(), migrated);
@@ -585,7 +606,7 @@ mod tests {
         let create = |s: &mut Spaces| s.create("Work", Default::default());
         projects.change_spaces(create).unwrap();
         let kept = std::fs::read_to_string(&legacy).unwrap();
-        assert_eq!(kept, r#"["/a", "/b c"]"#);
+        assert_eq!(kept, r#"["/a", "/b c", "/a"]"#);
         let again = load(tmp.path());
         assert_eq!(*again.spaces(), *projects.spaces());
         assert_eq!(again.spaces().current, "space-1");
@@ -637,6 +658,26 @@ mod tests {
         // A refused request saves nothing either.
         let refused = projects.change_spaces(|s| s.select("nope"));
         assert_eq!(refused, Err(r#"no space "nope""#.to_owned()));
+        // A request that changes nothing does not write at all.
+        assert_eq!(projects.change_spaces(|s| s.select("default")), Ok(()));
+    }
+
+    #[test]
+    fn a_list_too_big_to_read_back_is_not_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("spaces.json");
+        let long = |i: usize| format!("/{i}/{}", "x".repeat(4000));
+        let paths: Vec<String> = (0..300).map(long).collect();
+        let err = save(&file, &Spaces::with(paths)).unwrap_err();
+        assert_eq!(err.to_string(), "the list would be over 1048576 bytes");
+        assert!(!file.exists());
+        // Just within the limit is saved.
+        let json = serde_json::to_vec_pretty(&Spaces::with(vec![])).unwrap();
+        let fill = FILE_LIMIT as usize - json.len() - 20;
+        let fits = Spaces::with(vec![format!("/{}", "x".repeat(fill))]);
+        let size = serde_json::to_vec_pretty(&fits).unwrap().len() as u64;
+        assert!(size <= FILE_LIMIT && size > FILE_LIMIT - 40, "{size}");
+        save(&file, &fits).unwrap();
     }
 
     #[test]
