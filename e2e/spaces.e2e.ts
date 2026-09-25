@@ -38,7 +38,7 @@ test("a new space starts empty, takes new projects, and F8 goes back to another 
   await page.screenshot({ path: "target/e2e/space-work.png" });
 
   // Agents of the other space still count, and F8 goes to one there.
-  await expect(page.getByRole("button", { name: /pending: go to the next/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /pending: notifications/ })).toBeVisible();
   await page.keyboard.press("F8");
   await expect(space).toHaveText("Default");
   await expect(tree.getByRole("button", { name: "shop", exact: true })).toBeVisible();
