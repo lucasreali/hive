@@ -166,6 +166,8 @@ test("the header warns of a working agent and opens the file elsewhere", () => {
       urgency: 2,
       pending: false,
       subagents: [],
+      activity: null,
+      since_ms: 0,
     });
   });
   expect(screen.getByText("Agent working here")).toBeDefined();

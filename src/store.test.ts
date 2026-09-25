@@ -208,9 +208,12 @@ test("agent states are stored as sent, before or after the agent, and go with it
     agent_type: "Explore",
     state: "waiting_permission",
     worktree: null,
+    activity: null,
+    since_ms: 0,
   } as const;
-  const permission = { state: "waiting_permission", urgency: 6, pending: true } as const;
-  const idle = { state: "idle", urgency: 1, pending: false } as const;
+  const doing = { activity: null, since_ms: 0 } as const;
+  const permission = { state: "waiting_permission", urgency: 6, pending: true, ...doing } as const;
+  const idle = { state: "idle", urgency: 1, pending: false, ...doing } as const;
   apply({
     type: "agent_state",
     id: "a",
@@ -218,6 +221,8 @@ test("agent states are stored as sent, before or after the agent, and go with it
     urgency: 2,
     pending: false,
     subagents: [],
+    activity: null,
+    since_ms: 0,
   });
   apply({ type: "agent_state", id: "b", ...idle, subagents: [] });
   apply({ type: "agent_state", id: "a", ...permission, subagents: [sub] });
@@ -415,8 +420,9 @@ test("an agent is working in a worktree while it (or its subagent there) may wri
   const worktree = "/w";
   const place = (id: string, at: string | null) =>
     apply({ type: "agent_detected", channel: 1, id, project: "/p", worktree: at, cwd: at });
+  const none = { activity: null, since_ms: 0 };
   const state = (id: string, state: AgentState, subagents: Subagent[] = []) =>
-    apply({ type: "agent_state", id, state, urgency: 0, pending: false, subagents });
+    apply({ type: "agent_state", id, state, urgency: 0, pending: false, subagents, ...none });
   const working = () => agentWorkingIn(useHive.getState(), worktree);
   place("a", worktree);
   expect(working()).toBe(false); // No state yet.
@@ -434,11 +440,15 @@ test("an agent is working in a worktree while it (or its subagent there) may wri
   }
   state("a", "idle");
   place("b", "/elsewhere");
-  state("b", "working", [{ id: "s", agent_type: null, state: "working", worktree: "/other" }]);
+  state("b", "working", [
+    { id: "s", agent_type: null, state: "working", worktree: "/other", ...none },
+  ]);
   expect(working()).toBe(false);
-  state("b", "with_subagents", [{ id: "s", agent_type: null, state: "idle", worktree }]);
+  state("b", "with_subagents", [{ id: "s", agent_type: null, state: "idle", worktree, ...none }]);
   expect(working()).toBe(false);
-  state("b", "with_subagents", [{ id: "s", agent_type: null, state: "working", worktree }]);
+  state("b", "with_subagents", [
+    { id: "s", agent_type: null, state: "working", worktree, ...none },
+  ]);
   expect(working()).toBe(true);
 });
 

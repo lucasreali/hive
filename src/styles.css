@@ -1281,13 +1281,26 @@ li:not(:last-child) > .owned::before {
   color: var(--text-3);
 }
 
-.state-label {
+.state-line {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
   font-size: var(--fs-small);
   line-height: 15px;
+  white-space: nowrap;
+}
+
+.state-label {
+  flex-shrink: 0;
   color: var(--text-2);
+}
+
+/* The time in the state and the activity: muted, cut with an ellipsis. */
+.state-meta {
+  min-width: 0;
+  color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Only the alerting states color their name (prototype); subagent names stay neutral. */

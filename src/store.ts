@@ -284,7 +284,10 @@ export type Subagent = {
   agent_type: string | null;
   state: AgentState;
   worktree: string | null;
-};
+} & Doing;
+
+/** What an agent or subagent is doing (its current tool call) and since when (ms since the epoch) its state lasts. */
+export type Doing = { activity: string | null; since_ms: number };
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins)
@@ -295,7 +298,7 @@ export type AgentStatus = {
   urgency: number;
   pending: boolean;
   subagents: Subagent[];
-};
+} & Doing;
 
 /**
  * Mirrors `hive_protocol::Settings`: the service's settings file, read and saved whole. The

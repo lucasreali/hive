@@ -52,6 +52,8 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         urgency: state.urgency(),
         pending: state.pending(),
         subagents,
+        activity: None,
+        since_ms: 0,
     }
 }
 
@@ -61,6 +63,8 @@ fn sub(id: &str, state: AgentState) -> SubagentState {
         agent_type: Some("Explore".into()),
         state,
         worktree: None,
+        activity: None,
+        since_ms: 0,
     }
 }
 
@@ -286,11 +290,15 @@ async fn agent_states_follow_hook_events_and_terminal_silence() {
         ),
         (
             "PermissionRequest",
-            subagent(json!({"tool_name": "Bash"})),
+            // What the subagent asks to do is its activity.
+            subagent(json!({"tool_name": "Bash", "tool_input": {"command": "make\nx"}})),
             vec![state(
                 "s",
                 WaitingPermission,
-                vec![sub("a", WaitingPermission)],
+                vec![SubagentState {
+                    activity: Some("make".into()),
+                    ..sub("a", WaitingPermission)
+                }],
             )],
         ),
         // A failed tool is routine: still working, never an error.
@@ -359,6 +367,8 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             urgency: WaitingYou.urgency(),
             pending,
             subagents: vec![],
+            activity: None,
+            since_ms: 0,
         };
         vec![(1, message)]
     };

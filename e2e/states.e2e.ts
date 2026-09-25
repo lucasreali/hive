@@ -41,6 +41,10 @@ test("states: every agent and subagent shows the state icon the service sent", a
   const spinning = tree.locator(".tree-row.agent .state-icon[data-state=working]");
   await expect(spinning).toHaveCSS("animation-name", "hive-spin");
   await expect(spinning).toHaveCSS("color", "rgb(116, 173, 232)");
+  // After the state's name: the time in it and what the agent is doing, muted, on one line.
+  const meta = permission.locator("xpath=..").locator(".state-meta");
+  await expect(meta).toHaveText(/^\d+m · Editing src\/auth\/login\.ts$/);
+  await expect(meta).toHaveCSS("white-space", "nowrap");
 });
 
 test("states: collapsed nodes show the most urgent state inside; F8 walks the pending agents", async ({

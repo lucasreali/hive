@@ -172,18 +172,18 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   await tick();
   const fixLogin = `${shop.path}/.claude/worktrees/fix-login`;
   const agent = { type: "agent_detected", channel: id, id: "mock-session-1" } as const;
-  const state = (state: AgentState): ServiceMessage => ({
+  const state = (state: AgentState, activity: string | null = null): ServiceMessage => ({
     type: "agent_state",
     id: agent.id,
-    ...agentStatus(state),
+    ...agentStatus(state, activity, expect.any(Number)),
     subagents: [],
   });
   expect(messages.filter((m) => m.type.startsWith("agent"))).toEqual([
     { ...agent, project: shop.id, worktree: fixLogin, cwd: fixLogin },
     state("idle"),
     // The empty line sent nothing; `cd /tmp` and the second `claude` are prompts.
-    state("working"),
-    state("working"),
+    state("working", "cd /tmp"),
+    state("working", "claude"),
     { ...agent, project: null, worktree: null, cwd: "/tmp" },
     state("idle"),
   ]);
@@ -224,15 +224,20 @@ test("worktree-remove drops that Claude worktree and sends the new list", async 
 test("agent states carry the service's urgency and pending flag", () => {
   const calm = ["ended", "idle", "working", "with_subagents"] as const;
   const pending = ["waiting_you", "error", "waiting_permission"] as const;
-  expect([...calm, ...pending].map(agentStatus)).toEqual([
-    { state: "ended", urgency: 0, pending: false },
-    { state: "idle", urgency: 1, pending: false },
-    { state: "working", urgency: 2, pending: false },
-    { state: "with_subagents", urgency: 3, pending: false },
-    { state: "waiting_you", urgency: 4, pending: true },
-    { state: "error", urgency: 5, pending: true },
-    { state: "waiting_permission", urgency: 6, pending: true },
+  const doing = { activity: null, since_ms: 0 };
+  expect([...calm, ...pending].map((s) => agentStatus(s))).toEqual([
+    { state: "ended", urgency: 0, pending: false, ...doing },
+    { state: "idle", urgency: 1, pending: false, ...doing },
+    { state: "working", urgency: 2, pending: false, ...doing },
+    { state: "with_subagents", urgency: 3, pending: false, ...doing },
+    { state: "waiting_you", urgency: 4, pending: true, ...doing },
+    { state: "error", urgency: 5, pending: true, ...doing },
+    { state: "waiting_permission", urgency: 6, pending: true, ...doing },
   ]);
+  expect(agentStatus("working", "Run tests", 7)).toMatchObject({
+    activity: "Run tests",
+    since_ms: 7,
+  });
 });
 
 test("branches, name checks and new worktrees for the dialog", async () => {

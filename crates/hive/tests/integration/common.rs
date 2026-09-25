@@ -260,7 +260,8 @@ impl Conn {
     pub async fn control(&mut self) -> (u32, Control) {
         loop {
             let frame = self.next().await.expect("connection closed");
-            if let Ok(message) = frame.to_control() {
+            if let Ok(mut message) = frame.to_control() {
+                timeless(&mut message);
                 return (frame.channel, message);
             }
         }
@@ -305,4 +306,29 @@ pub fn wait_exit(child: &mut Child) -> ExitStatus {
         status.is_some()
     });
     status.unwrap()
+}
+
+/// Checks that an `agent_state`'s times are recent wall clock times, then zeroes them so
+/// messages compare exactly.
+fn timeless(message: &mut Control) {
+    let Control::AgentState {
+        since_ms,
+        subagents,
+        ..
+    } = message
+    else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let times = subagents.iter_mut().map(|s| &mut s.since_ms);
+    for since in std::iter::once(since_ms).chain(times) {
+        assert!(
+            now - 60_000 < *since && *since <= now,
+            "since_ms {since} is not a recent time"
+        );
+        *since = 0;
+    }
 }

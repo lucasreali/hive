@@ -109,6 +109,8 @@ test("a tab running Claude shows the agent's state and its session's name", () =
       urgency: 2,
       pending: false,
       subagents: [],
+      activity: null,
+      since_ms: 0,
     });
     apply({ type: "agent_title", channel: 4, id: "s", title: "Fix the login redirect" });
   });
