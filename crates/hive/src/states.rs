@@ -1,10 +1,11 @@
 //! Agent states from hook events ("Mapeamento de estados" in `docs/hive.md`). Pure logic: the
 //! daemon feeds events and the clock in, and sends the resulting `agent_state` messages.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use hive_protocol::{AgentEvent, AgentState, Control, EventKind, Notification, SubagentState};
+use serde_json::Value;
 
 /// Rule 2: an agent working or waiting for permission whose terminal prints nothing for this
 /// long was interrupted (Esc/Ctrl+C fire no `Stop`), so it waits for you.
@@ -18,6 +19,9 @@ const MAX_ID: usize = 256;
 
 /// Longest worktree path or subagent cwd used to link a subagent to its own worktree.
 const MAX_PATH: usize = 4096;
+
+/// Background launches remembered per subagent; the oldest is forgotten first.
+const MAX_LAUNCHED: usize = 32;
 
 /// A detected agent: its terminal and the state of it and its live subagents.
 #[derive(Debug)]
@@ -36,6 +40,12 @@ pub struct Agent {
     subagents: Vec<SubagentState>,
     /// The last cwd placed per live subagent, so `place` runs once per cwd.
     placed: HashMap<String, String>,
+    /// Background task ids each live subagent launched (Bash `run_in_background`, `Monitor`,
+    /// a background `Agent`), from its `PostToolUse` `tool_response`.
+    launched: HashMap<String, Vec<String>>,
+    /// Subagents that ended their turn (`SubagentStop`) while one of their launches still
+    /// runs: kept listed, working, until woken or until none of those runs any more.
+    waiting: HashSet<String>,
     /// Last hook event for the agent or a subagent; silence is counted from here at the latest.
     last_event: Instant,
     /// Whether its terminal is the one in view in the focused app window (the app's `view`);
@@ -56,6 +66,8 @@ impl Agent {
             state: AgentState::Idle,
             subagents: Vec::new(),
             placed: HashMap::new(),
+            launched: HashMap::new(),
+            waiting: HashSet::new(),
             last_event: now,
             watched: false,
             seen: false,
@@ -71,6 +83,12 @@ impl Agent {
     /// follows Claude into the worktree). It loses it on that worktree's `WorktreeRemove`, or
     /// by leaving. To confirm by spike 1.12: whether `WorktreeCreate` carries `agent_id`, and
     /// that a subagent's events carry its own `cwd`.
+    ///
+    /// A subagent leaves on its `SubagentStop`, unless a background task it launched is still
+    /// in that payload's `background_tasks` (Claude Code lists the session's running ones on
+    /// every `Stop`/`SubagentStop`): it waits to be woken by it. A waiting subagent leaves
+    /// when a later `background_tasks` no longer has any of its launches, or when its own
+    /// worktree is removed.
     pub fn apply(
         &mut self,
         id: &str,
@@ -81,11 +99,28 @@ impl Agent {
         self.changed(id, |agent| {
             agent.last_event = now;
             if let EventKind::WorktreeRemoved { path: Some(path) } = &event.kind {
+                let gone = agent.subagents.iter().filter(|s| {
+                    agent.waiting.contains(&s.id) && s.worktree.as_ref() == Some(path)
+                });
+                for id in gone.map(|s| s.id.clone()).collect::<Vec<_>>() {
+                    agent.leave(&id);
+                }
                 for sub in &mut agent.subagents {
                     if sub.worktree.as_ref() == Some(path) {
                         sub.worktree = None;
                     }
                 }
+            }
+            let live = event.raw.get("background_tasks").and_then(Value::as_array);
+            let stopped = match (&event.subagent, &event.kind) {
+                (Some(sub), EventKind::SubagentStopped) => Some(&sub.id),
+                _ => None,
+            };
+            if let Some(id) = stopped {
+                agent.waiting.insert(id.clone());
+            }
+            if stopped.is_some() || live.is_some() {
+                agent.prune(live.map_or(&[], Vec::as_slice));
             }
             let state = state_of(&event.kind);
             let Some(sub) = &event.subagent else {
@@ -94,13 +129,10 @@ impl Agent {
                 }
                 return;
             };
-            if matches!(
-                event.kind,
-                EventKind::SubagentStopped | EventKind::SessionEnded { .. }
-            ) {
-                agent.subagents.retain(|s| s.id != sub.id);
-                agent.placed.remove(&sub.id);
-                return;
+            match event.kind {
+                EventKind::SubagentStopped => return,
+                EventKind::SessionEnded { .. } => return agent.leave(&sub.id),
+                _ => {}
             }
             let known = agent.subagents.iter().position(|s| s.id == sub.id);
             if let EventKind::WorktreeCreated {
@@ -115,6 +147,7 @@ impl Agent {
                 return;
             }
             let Some(state) = state else { return };
+            agent.waiting.remove(&sub.id);
             let i = match known {
                 Some(i) => i,
                 None if agent.subagents.len() < MAX_SUBAGENTS
@@ -133,6 +166,13 @@ impl Agent {
             };
             let known = &mut agent.subagents[i];
             known.state = state;
+            if let Some(task) = launch(&event.raw) {
+                let ids = agent.launched.entry(sub.id.clone()).or_default();
+                if ids.len() == MAX_LAUNCHED {
+                    ids.remove(0);
+                }
+                ids.push(task);
+            }
             // Without a hook naming it, a subagent's worktree is where its events come from.
             let (Some(cwd), Some(own), None) = (&event.cwd, &agent.worktree, &known.worktree)
             else {
@@ -146,15 +186,46 @@ impl Agent {
         })
     }
 
+    /// Keeps each waiting subagent's launches that are still in `live` (`background_tasks`),
+    /// working; one with none left leaves.
+    fn prune(&mut self, live: &[Value]) {
+        let live: HashSet<&str> = live
+            .iter()
+            .filter_map(|t| t.get("id").and_then(Value::as_str))
+            .collect();
+        for id in self.waiting.clone() {
+            let ids = self.launched.entry(id.clone()).or_default();
+            ids.retain(|t| live.contains(t.as_str()));
+            if ids.is_empty() {
+                self.leave(&id);
+            } else if let Some(sub) = self.subagents.iter_mut().find(|s| s.id == id) {
+                sub.state = AgentState::Working;
+            }
+        }
+    }
+
+    /// Forgets a subagent.
+    fn leave(&mut self, id: &str) {
+        self.subagents.retain(|s| s.id != id);
+        self.placed.remove(id);
+        self.launched.remove(id);
+        self.waiting.remove(id);
+    }
+
     /// Rule 2, checked periodically: after [`SILENCE`] without terminal output (nor hook
     /// events), working and waiting-for-permission become waiting for you. Output alone never
-    /// moves a state back; only hook events do.
+    /// moves a state back; only hook events do. A subagent waiting on a background task is
+    /// silent by design and keeps working.
     pub fn reconcile(&mut self, id: &str, last_output: Instant, now: Instant) -> Option<Control> {
         if now.saturating_duration_since(last_output.max(self.last_event)) < SILENCE {
             return None;
         }
         self.changed(id, |agent| {
-            let subagents = agent.subagents.iter_mut().map(|s| &mut s.state);
+            let waiting = &agent.waiting;
+            let subagents = agent.subagents.iter_mut();
+            let subagents = subagents
+                .filter(|s| !waiting.contains(&s.id))
+                .map(|s| &mut s.state);
             for state in std::iter::once(&mut agent.state).chain(subagents) {
                 if matches!(state, AgentState::Working | AgentState::WaitingPermission) {
                     *state = AgentState::WaitingYou;
@@ -199,6 +270,17 @@ impl Agent {
         let after = self.message(id);
         (after != before).then_some(after)
     }
+}
+
+/// The background task a `PostToolUse` started: `backgroundTaskId` (Bash
+/// `run_in_background`), `taskId` (`Monitor`) or `agentId` (an `Agent`) in its `tool_response`.
+fn launch(raw: &Value) -> Option<String> {
+    let response = raw.get("tool_response")?;
+    ["backgroundTaskId", "taskId", "agentId"]
+        .iter()
+        .find_map(|k| response.get(k).and_then(Value::as_str))
+        .filter(|id| id.len() <= MAX_ID)
+        .map(str::to_owned)
 }
 
 /// The table: which state an event leads to; `None` leaves the state as it is.
@@ -636,5 +718,112 @@ mod tests {
             worktrees(&agent),
             [("a", Some("/r/w")), ("b", Some("/r/w"))]
         );
+    }
+
+    /// `PostToolUse` of a subagent's tool that started background task `task` under `key`.
+    fn launched(sub: &str, key: &str, task: &str) -> AgentEvent {
+        hook("PostToolUse", Some(sub), json!({"tool_response": {key: task}}))
+    }
+
+    /// A stop carrying Claude Code's list of the session's running background tasks.
+    fn stop_with(name: &str, sub: Option<&str>, live: &[&str]) -> AgentEvent {
+        let tasks: Vec<_> = live
+            .iter()
+            .map(|id| json!({"id": id, "status": "running"}))
+            .collect();
+        hook(name, sub, json!({"background_tasks": tasks}))
+    }
+
+    #[test]
+    fn a_subagent_waiting_on_its_background_task_stays_listed_until_it_is_done() {
+        let start = Instant::now();
+        let mut agent = Agent::new(1, start);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
+        let bash = json!({"tool_name": "Bash", "tool_input": {"run_in_background": true}});
+        agent.feed("s", &hook("PreToolUse", Some("a"), bash), start);
+        agent.feed("s", &launched("a", "backgroundTaskId", "b1"), start);
+        // Silence before it stops makes it waiting for you; stopping to wait makes it working.
+        agent.reconcile("s", start, start + SILENCE);
+        let late = start + SILENCE;
+        let stop = stop_with("SubagentStop", Some("a"), &["a", "b1"]);
+        assert!(agent.feed("s", &stop, late).is_some());
+        assert_eq!(shown(&agent), (WithSubagents, vec![("a".into(), Working)]));
+        // It stays working through silence, the agent's own events and tasks listed again.
+        assert_eq!(agent.reconcile("s", late, late + SILENCE * 2), None);
+        agent.feed("s", &hook("PreToolUse", None, json!({})), late);
+        agent.feed("s", &stop_with("Stop", None, &["b1"]), late);
+        assert_eq!(shown(&agent).1, [("a".into(), Working)]);
+        // Woken by the notice it starts again, waits on a monitor, then stops with none left.
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), late);
+        agent.feed("s", &launched("a", "taskId", "m1"), late);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &["m1"]), late);
+        assert_eq!(shown(&agent).1, [("a".into(), Working)]);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), late);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &["b1"]), late);
+        assert_eq!(shown(&agent), (WaitingYou, vec![]));
+        // Another subagent's running tasks do not keep one; neither does a stop without a list.
+        agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), late);
+        agent.feed("s", &launched("b", "agentId", "x"), late);
+        agent.feed("s", &stop_with("SubagentStop", Some("b"), &["b1", "m1"]), late);
+        agent.feed("s", &hook("SubagentStart", Some("c"), json!({})), late);
+        agent.feed("s", &launched("c", "backgroundTaskId", "b2"), late);
+        agent.feed("s", &hook("SubagentStop", Some("c"), json!({})), late);
+        assert_eq!(shown(&agent), (WaitingYou, vec![]));
+    }
+
+    #[test]
+    fn a_waiting_subagent_leaves_when_its_tasks_end_its_worktree_goes_or_it_ends() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now);
+        for sub in ["a", "b", "c", "d"] {
+            agent.feed("s", &hook("SubagentStart", Some(sub), json!({})), now);
+            let task = format!("t{sub}");
+            agent.feed("s", &launched(sub, "backgroundTaskId", &task), now);
+        }
+        let create = |sub| hook("WorktreeCreate", Some(sub), json!({"worktree_path": "/r/w"}));
+        agent.feed("s", &create("b"), now);
+        agent.feed("s", &create("c"), now);
+        let all = ["ta", "tb", "tc", "td"];
+        for sub in ["a", "b", "d"] {
+            agent.feed("s", &stop_with("SubagentStop", Some(sub), &all), now);
+        }
+        assert_eq!(shown(&agent).1.len(), 4);
+        // Its worktree removed: the waiting one leaves, the working one only loses it.
+        let remove = hook("WorktreeRemove", None, json!({"worktree_path": "/r/w"}));
+        agent.feed("s", &remove, now);
+        assert_eq!(worktrees(&agent), [("a", None), ("c", None), ("d", None)]);
+        // A later list without its tasks (here from the agent's `Stop`).
+        agent.feed("s", &stop_with("Stop", None, &["tc", "td"]), now);
+        assert_eq!(worktrees(&agent), [("c", None), ("d", None)]);
+        agent.feed("s", &hook("SessionEnd", Some("d"), json!({})), now);
+        assert_eq!(worktrees(&agent), [("c", None)]);
+    }
+
+    #[test]
+    fn background_launches_are_limited_in_number_and_id_length() {
+        let now = Instant::now();
+        let kept = |launches: usize, live: &str| {
+            let mut agent = Agent::new(1, now);
+            agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+            for n in 0..launches {
+                let task = format!("t{n}");
+                agent.feed("s", &launched("a", "backgroundTaskId", &task), now);
+            }
+            agent.feed("s", &stop_with("SubagentStop", Some("a"), &[live]), now);
+            !shown(&agent).1.is_empty()
+        };
+        assert!(kept(MAX_LAUNCHED, "t0"));
+        assert!(!kept(MAX_LAUNCHED + 1, "t0"));
+        assert!(kept(MAX_LAUNCHED + 1, &format!("t{MAX_LAUNCHED}")));
+        let mut agent = Agent::new(1, now);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        let long = "x".repeat(MAX_ID + 1);
+        agent.feed("s", &launched("a", "taskId", &long), now);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &[&long]), now);
+        assert!(shown(&agent).1.is_empty());
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        agent.feed("s", &launched("a", "taskId", &long[1..]), now);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &[&long[1..]]), now);
+        assert_eq!(shown(&agent).1.len(), 1);
     }
 }
