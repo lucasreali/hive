@@ -10,7 +10,7 @@ import {
   spaceProjects,
   useHive,
 } from "./store";
-import { interceptKeys } from "./terminals";
+import { interceptKeys, splitTerminal } from "./terminals";
 import { transport } from "./transport";
 import { sendReference } from "./viewer/reference";
 import { startComment } from "./viewer/review";
@@ -86,6 +86,12 @@ export const COMMANDS: readonly Command[] = [
       if (project) openModal("new-worktree", project);
       else openModal("add-project");
     },
+  },
+  {
+    id: "split-terminal",
+    label: "Split terminal",
+    keys: "Ctrl+Shift+D",
+    run: () => void splitTerminal(useHive.getState().activeTab),
   },
   {
     id: "toggle-panel",

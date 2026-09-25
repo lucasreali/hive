@@ -1,7 +1,16 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
-import { initialState, LIMITS, savedWidths, setRightPanel, setWidth, useHive } from "../store";
+import {
+  addTab,
+  initialState,
+  LIMITS,
+  savedWidths,
+  setRightPanel,
+  setSplit,
+  setWidth,
+  useHive,
+} from "../store";
 
 afterEach(() => {
   cleanup();
@@ -12,19 +21,19 @@ afterEach(() => {
 const handle = (name: string) => screen.getByRole("separator", { name });
 
 test("widths are remembered between runs, within their limits", () => {
-  expect(savedWidths()).toEqual({ sidebarWidth: 264, panelWidth: 380 });
+  expect(savedWidths()).toEqual({ sidebarWidth: 264, panelWidth: 380, splitPercent: 50 });
   setWidth("sidebar", 9999);
   setWidth("panel", 1);
   expect(useHive.getState()).toMatchObject({
     sidebarWidth: LIMITS.sidebar.max,
     panelWidth: LIMITS.panel.min,
   });
-  expect(savedWidths()).toEqual({ sidebarWidth: 480, panelWidth: 280 });
+  expect(savedWidths()).toEqual({ sidebarWidth: 480, panelWidth: 280, splitPercent: 50 });
   localStorage.setItem("hive.widths", JSON.stringify({ sidebarWidth: 300.4, panelWidth: "x" }));
-  expect(savedWidths()).toEqual({ sidebarWidth: 300, panelWidth: 380 });
+  expect(savedWidths()).toEqual({ sidebarWidth: 300, panelWidth: 380, splitPercent: 50 });
   localStorage.setItem("hive.widths", "not json");
-  expect(savedWidths()).toEqual({ sidebarWidth: 264, panelWidth: 380 });
-  expect(savedWidths(null)).toEqual({ sidebarWidth: 264, panelWidth: 380 });
+  expect(savedWidths()).toEqual({ sidebarWidth: 264, panelWidth: 380, splitPercent: 50 });
+  expect(savedWidths(null)).toEqual({ sidebarWidth: 264, panelWidth: 380, splitPercent: 50 });
 });
 
 test("a storage that cannot be used only loses the preference", () => {
@@ -35,7 +44,7 @@ test("a storage that cannot be used only loses the preference", () => {
       throw new Error("blocked");
     },
   });
-  expect(savedWidths()).toEqual({ sidebarWidth: 264, panelWidth: 380 });
+  expect(savedWidths()).toEqual({ sidebarWidth: 264, panelWidth: 380, splitPercent: 50 });
   setWidth("sidebar", 320);
   expect(useHive.getState().sidebarWidth).toBe(320);
   if (own) Object.defineProperty(window, "localStorage", own);
@@ -111,4 +120,34 @@ test("dragging sizes a panel; dragging the right one much too narrow closes it",
   fireEvent.pointerDown(left, { pointerId: 3 });
   left.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true }));
   expect(document.body.dataset.resizing).toBeUndefined();
+});
+
+test("dragging the split terminals' divider sets the left pane's share, remembered", () => {
+  render(<App />);
+  act(() => {
+    addTab(1, "/w");
+    addTab(2, "/w");
+    setSplit({ left: 1, right: 2 });
+  });
+  const divider = handle("Resize the split terminals");
+  const area = divider.parentElement as HTMLElement;
+  area.getBoundingClientRect = () => ({ left: 100, width: 1000 }) as DOMRect;
+  fireEvent.pointerDown(divider, { pointerId: 1 });
+  expect(document.body.dataset.resizing).toBe("split");
+  const move = (clientX: number) =>
+    act(() => {
+      divider.dispatchEvent(new PointerEvent("pointermove", { clientX, bubbles: true }));
+    });
+  move(400);
+  expect(useHive.getState().splitPercent).toBe(30);
+  move(1050);
+  expect(useHive.getState().splitPercent).toBe(LIMITS.split.max);
+  act(() => {
+    divider.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  });
+  expect(savedWidths().splitPercent).toBe(80);
+  fireEvent.keyDown(divider, { key: "ArrowRight" });
+  expect(useHive.getState().splitPercent).toBe(80);
+  fireEvent.keyDown(divider, { key: "ArrowLeft" });
+  expect(useHive.getState().splitPercent).toBe(78);
 });

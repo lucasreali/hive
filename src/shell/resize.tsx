@@ -9,25 +9,37 @@ import {
   widthKey,
 } from "../store";
 
-/** How far an arrow key moves the edge. */
-const STEP = 16;
+/** How far an arrow key moves the edge (pixels; percent for the split). */
+const STEP = { sidebar: 16, panel: 16, split: 2 };
+const LABEL = {
+  sidebar: "Resize the sidebar",
+  panel: "Resize the side panel",
+  split: "Resize the split terminals",
+};
 
 /**
- * The draggable edge of the left sidebar (its right edge) or of the right panel (its left
- * edge). Dragging sizes it within its limits; dragging the right panel much narrower than its
- * minimum closes it. ←/→ move the edge from the keyboard.
+ * The draggable edge of the left sidebar (its right edge), of the right panel (its left edge)
+ * or the divider of split terminals (in percent of its parent). Dragging sizes it within its
+ * limits; dragging the right panel much narrower than its minimum closes it. ←/→ move the edge
+ * from the keyboard.
  */
 export function ResizeHandle({ side }: { side: Side }) {
   const width = useHive((s) => s[widthKey(side)]);
-  const label = side === "sidebar" ? "Resize the sidebar" : "Resize the side panel";
+  const label = LABEL[side];
   const drag = (event: PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const handle = event.currentTarget;
     handle.setPointerCapture?.(event.pointerId);
     // Names the dragged edge, so only that one stays lit.
     document.body.dataset.resizing = side;
+    const area = (handle.parentElement as HTMLElement).getBoundingClientRect();
     const move = (e: globalThis.PointerEvent) => {
-      const wanted = side === "sidebar" ? e.clientX : window.innerWidth - e.clientX;
+      const wanted =
+        side === "split"
+          ? ((e.clientX - area.left) / area.width) * 100
+          : side === "sidebar"
+            ? e.clientX
+            : window.innerWidth - e.clientX;
       if (side === "panel" && wanted < PANEL_CLOSE_AT) {
         stop();
         return setRightPanel(null);
@@ -45,11 +57,11 @@ export function ResizeHandle({ side }: { side: Side }) {
     handle.addEventListener("pointercancel", stop);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step = { ArrowLeft: -STEP, ArrowRight: STEP }[event.key];
+    const step = { ArrowLeft: -STEP[side], ArrowRight: STEP[side] }[event.key];
     if (!step) return;
     event.preventDefault();
     // The right panel's edge is its left one: moving it right makes it narrower.
-    setWidth(side, width + (side === "sidebar" ? step : -step));
+    setWidth(side, width + (side === "panel" ? -step : step));
   };
   return (
     // biome-ignore lint/a11y/useSemanticElements: a focusable, movable separator has no element.

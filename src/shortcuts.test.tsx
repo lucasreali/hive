@@ -301,3 +301,16 @@ test("the WebView's context menu is off except in text fields and the editor", (
   cleanup();
   expect(menu(document.body)).toBe(true);
 });
+
+test("Ctrl+Shift+D splits the active terminal and pressed again un-splits", async () => {
+  app();
+  const ids: number[] = [];
+  const cwd = shop.worktrees[1]?.path as string;
+  await act(async () => {
+    ids.push(await openTerminal(cwd), await openTerminal(cwd));
+  });
+  expect(press(ctrlShift("D"))).toBe(true);
+  expect(useHive.getState().split).toEqual({ left: ids[1] as number, right: ids[0] as number });
+  press(ctrlShift("D"));
+  expect(useHive.getState().split).toBeNull();
+});

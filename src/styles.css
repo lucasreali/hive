@@ -562,6 +562,24 @@ button:disabled {
   height: 100%;
 }
 
+/* Split terminals (6.11): the left pane ends 6px before the divider at --split (a 0-1 share
+   of the terminal body), the right one starts 6px after it. */
+.terminal-host[data-split] {
+  display: flex;
+  gap: 12px;
+}
+
+.terminal-host[data-split] > .terminal-pane[data-pane="left"] {
+  flex: 0 0 calc((100% + 32px) * var(--split) - 22px);
+  min-width: 0;
+}
+
+.terminal-host[data-split] > .terminal-pane[data-pane="right"] {
+  order: 1;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* Right panel */
 .right-panel {
   position: relative;
@@ -2522,11 +2540,18 @@ button.result-file:hover,
   left: -3px;
 }
 
+/* Between split terminals the line always shows, as a border. */
+.resize-handle[data-side="split"] {
+  left: calc(var(--split) * 100% - 3px);
+  background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat;
+}
+
 /* A 2px line in the middle of the 6px hit area, softer than --focus; only the dragged edge. */
 .resize-handle:hover,
 .resize-handle:focus-visible,
 body[data-resizing="sidebar"] .resize-handle[data-side="sidebar"],
-body[data-resizing="panel"] .resize-handle[data-side="panel"] {
+body[data-resizing="panel"] .resize-handle[data-side="panel"],
+body[data-resizing="split"] .resize-handle[data-side="split"] {
   background: linear-gradient(var(--focus), var(--focus)) center / 2px 100% no-repeat;
   opacity: 0.7;
   outline: none;

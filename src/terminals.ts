@@ -1,14 +1,23 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
-import { addTab, removeTab, type Settings, useHive } from "./store";
+import {
+  addTab,
+  focusPane,
+  removeTab,
+  type Settings,
+  setSplit,
+  shownSplit,
+  tabPlace,
+  useHive,
+} from "./store";
 import { transport } from "./transport";
 import { commandKey, isMac } from "./window";
 
 // xterm.js lives here, outside React (#30): one Terminal per terminal id, fed straight from
 // the transport. React renders the host element and says which tab is shown; output never
-// goes through React state. Only the shown terminal is rendered, with WebGL (#28); hidden
-// ones keep parsing output into their buffer and cost no rendering.
+// goes through React state. Only the shown terminals (one, or two side by side) are rendered,
+// with WebGL (#28); hidden ones keep parsing output into their buffer and cost no rendering.
 
 /** Colors from the design tokens in `src/styles.css`; cyan is One Dark's. */
 const ONE_DARK: ITheme = {
@@ -85,7 +94,7 @@ type Entry = { term: Terminal; fit: FitAddon; el: HTMLDivElement; webgl: WebglAd
 
 const entries = new Map<number, Entry>();
 let host: HTMLElement | null = null;
-let shown: number | null = null;
+let shown: number[] = [];
 let intercept: (event: KeyboardEvent) => boolean = () => false;
 
 /**
@@ -132,6 +141,7 @@ export async function openTerminal(cwd: string): Promise<number> {
   const el = document.createElement("div");
   el.className = "terminal-pane";
   el.hidden = true;
+  el.addEventListener("focusin", () => focusPane(id));
   entries.set(id, { term, fit, el, webgl: null });
   addTab(id, cwd);
   return id;
@@ -177,23 +187,58 @@ export function closeTerminal(id: number): void {
   entry?.term.dispose();
   entry?.el.remove();
   entries.delete(id);
-  if (shown === id) shown = null;
+  shown = shown.filter((s) => s !== id);
   removeTab(id);
 }
 
-/** Shows terminal `id` in the host (hiding the previous one), or none. */
-export function showTerminal(id: number | null): void {
-  const previous = shown === null ? undefined : entries.get(shown);
-  if (previous && shown !== id) hide(previous);
-  shown = id;
-  const entry = id === null ? undefined : entries.get(id);
-  if (!entry || !host) return;
-  if (entry.el.parentElement !== host) host.append(entry.el);
-  entry.el.hidden = false;
-  if (!entry.term.element) entry.term.open(entry.el);
-  if (!entry.webgl) entry.webgl = webgl(entry);
-  entry.fit.fit();
-  entry.term.focus();
+/** Shows terminal `id` alone in the host (hiding the others), or none. */
+export const showTerminal = (id: number | null) => showTerminals(id === null ? [] : [id], id);
+
+/**
+ * Shows `ids` in the host, left to right (two make a split), hiding every other terminal, and
+ * gives `focus` the keyboard.
+ */
+export function showTerminals(ids: number[], focus: number | null): void {
+  for (const id of shown) {
+    const entry = entries.get(id);
+    if (entry && !ids.includes(id)) hide(entry);
+  }
+  shown = ids;
+  if (!host) return;
+  for (const [i, id] of ids.entries()) {
+    const entry = entries.get(id);
+    if (!entry) continue;
+    if (entry.el.parentElement !== host) host.append(entry.el);
+    entry.el.dataset.pane = ids.length > 1 ? (i === 0 ? "left" : "right") : "";
+    entry.el.hidden = false;
+    if (!entry.term.element) entry.term.open(entry.el);
+    if (!entry.webgl) entry.webgl = webgl(entry);
+    entry.fit.fit();
+  }
+  if (focus !== null) entries.get(focus)?.term.focus();
+}
+
+/** Refits every shown terminal to its pane. */
+function fitShown(): void {
+  for (const id of shown) entries.get(id)?.fit.fit();
+}
+
+/**
+ * Ctrl+Shift+D and the tab menu's "Split right" (6.11): tab `id` beside the next tab of its
+ * worktree, or beside a new terminal there when it has no other; when `id` is already a
+ * shown pane, the split ends instead.
+ */
+export async function splitTerminal(id: number | null): Promise<void> {
+  const s = useHive.getState();
+  const split = shownSplit(s);
+  if (split && (split.left === id || split.right === id)) return setSplit(null);
+  const tab = s.tabs.find((t) => t.id === id);
+  if (!tab) return;
+  const place = tabPlace(s, tab.cwd);
+  const same = s.tabs.filter((t) => tabPlace(s, t.cwd) === place);
+  const next = same[(same.indexOf(tab) + 1) % same.length] as typeof tab;
+  const right = next === tab ? await openTerminal(tab.cwd) : next.id;
+  setSplit({ left: tab.id, right });
 }
 
 function hide(entry: Entry): void {
@@ -217,33 +262,31 @@ function webgl(entry: Entry): WebglAddon | null {
   }
 }
 
-/** New settings apply to every open terminal at once; the shown one refits to the new font. */
+/** New settings apply to every open terminal at once; the shown ones refit to the new font. */
 function applySettings(settings: Settings): void {
   const options = termOptions(settings);
   for (const entry of entries.values()) entry.term.options = options;
-  const entry = shown === null ? undefined : entries.get(shown);
-  entry?.fit.fit();
+  fitShown();
 }
 
 /**
- * Makes `element` the place terminals render in, follows its size and applies new settings.
- * Returns the cleanup.
+ * Makes `element` the place terminals render in, follows its size (and the split's divider)
+ * and applies new settings. Returns the cleanup.
  */
 export function mountTerminals(element: HTMLElement): () => void {
   host = element;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const refit = () => {
+    clearTimeout(timer);
+    timer = setTimeout(fitShown, RESIZE_DEBOUNCE_MS);
+  };
   const unsubscribe = useHive.subscribe((s, prev) => {
     if (s.settings !== prev.settings) applySettings(s.settings);
+    if (s.splitPercent !== prev.splitPercent) refit();
   });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const observer = new ResizeObserver(() => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      const entry = shown === null ? undefined : entries.get(shown);
-      entry?.fit.fit();
-    }, RESIZE_DEBOUNCE_MS);
-  });
+  const observer = new ResizeObserver(refit);
   observer.observe(element);
-  showTerminal(shown);
+  showTerminals(shown, null);
   return () => {
     clearTimeout(timer);
     observer.disconnect();

@@ -449,6 +449,8 @@ export type Diagnostics = {
 
 /** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
+/** Two terminals side by side (6.11), left and right, both of one worktree. */
+export type Split = { left: number; right: number };
 
 export type Modal =
   | "new-worktree"
@@ -487,6 +489,8 @@ export type HiveState = {
   /** The left sidebar's and the right panel's widths, in pixels (see `shell/resize.tsx`). */
   sidebarWidth: number;
   panelWidth: number;
+  /** The left pane's share of a split terminal area, in percent. */
+  splitPercent: number;
   openFile: OpenFile | null;
   /** The open file's tab is the one shown, in place of the active terminal. */
   fileShown: boolean;
@@ -508,6 +512,11 @@ export type HiveState = {
   /** Terminal tabs in the order they opened, and the one shown. */
   tabs: Tab[];
   activeTab: number | null;
+  /**
+   * The split terminals (6.11), shown while the active tab (the focused pane) is one of them;
+   * any other tab shows alone.
+   */
+  split: Split | null;
   /** The alerts raised, the newest first (at most `INBOX_LIMIT`), and the newest id seen. */
   inbox: InboxItem[];
   inboxSeen: number;
@@ -580,6 +589,7 @@ export const initialState: HiveState = {
   panelView: "files",
   sidebarWidth: 264,
   panelWidth: 380,
+  splitPercent: 50,
   openFile: null,
   fileShown: false,
   selectedLines: null,
@@ -590,6 +600,7 @@ export const initialState: HiveState = {
   collapsed: {},
   tabs: [],
   activeTab: null,
+  split: null,
   inbox: [],
   inboxSeen: 0,
   focused: false,
@@ -636,11 +647,14 @@ export const initialState: HiveState = {
 export const LIMITS = {
   sidebar: { min: 200, max: 480 },
   panel: { min: 280, max: 640 },
+  /** The split's left pane, in percent of the terminal area. */
+  split: { min: 20, max: 80 },
 } as const;
 /** Dragged this narrow, the right panel closes instead. */
 export const PANEL_CLOSE_AT = 200;
 export type Side = keyof typeof LIMITS;
-export const widthKey = (side: Side) => (side === "sidebar" ? "sidebarWidth" : "panelWidth");
+const KEYS = { sidebar: "sidebarWidth", panel: "panelWidth", split: "splitPercent" } as const;
+export const widthKey = (side: Side) => KEYS[side];
 
 /** A width kept within the side's limits. */
 export const clampWidth = (side: Side, width: number) =>
@@ -656,9 +670,10 @@ export function savedWidths(storage: Pick<Storage, "getItem"> | null = safeStora
     return {
       sidebarWidth: clampWidth("sidebar", Number(saved.sidebarWidth) || 264),
       panelWidth: clampWidth("panel", Number(saved.panelWidth) || 380),
+      splitPercent: clampWidth("split", Number(saved.splitPercent) || 50),
     };
   } catch {
-    return { sidebarWidth: 264, panelWidth: 380 };
+    return { sidebarWidth: 264, panelWidth: 380, splitPercent: 50 };
   }
 }
 
@@ -673,9 +688,9 @@ export function safeStorage(): Storage | null {
 /** Sets a side's width (kept within its limits) and remembers both. */
 export function setWidth(side: Side, width: number): void {
   useHive.setState({ [widthKey(side)]: clampWidth(side, width) });
-  const { sidebarWidth, panelWidth } = useHive.getState();
+  const { sidebarWidth, panelWidth, splitPercent } = useHive.getState();
   try {
-    safeStorage()?.setItem(STORAGE, JSON.stringify({ sidebarWidth, panelWidth }));
+    safeStorage()?.setItem(STORAGE, JSON.stringify({ sidebarWidth, panelWidth, splitPercent }));
   } catch {
     // A full or blocked storage only loses the preference.
   }
@@ -1029,17 +1044,52 @@ export const activateTab = (tab: Tab) =>
     transcriptShown: null,
     selection: tabPlace(s, tab.cwd),
   }));
-/** Removes the tab; when it was shown, its right neighbour among the shown place's tabs is. */
+/**
+ * Removes the tab; when it was shown, the other pane of its split is, else its right neighbour
+ * among the shown place's tabs. Closing either pane ends the split.
+ */
 export const removeTab = (id: number) =>
   useHive.setState((s) => {
     const shown = visibleTabs(s);
     const i = shown.findIndex((t) => t.id === id);
     const rest = shown.filter((t) => t.id !== id);
-    const next = rest[Math.min(i, rest.length - 1)]?.id ?? null;
+    const split = s.split && [s.split.left, s.split.right].includes(id) ? s.split : null;
+    const other = split && (split.left === id ? split.right : split.left);
+    const next = other ?? rest[Math.min(i, rest.length - 1)]?.id ?? null;
     return {
       tabs: s.tabs.filter((t) => t.id !== id),
       activeTab: s.activeTab === id ? next : s.activeTab,
+      split: split ? null : s.split,
     };
+  });
+
+/** The split shown: the stored one while the active tab is one of its panes, else none. */
+export function shownSplit(s: HiveState): Split | null {
+  const split = s.split;
+  return split && (s.activeTab === split.left || s.activeTab === split.right) ? split : null;
+}
+
+/** The terminals the terminal area shows, left to right. */
+export function shownTerminals(s: HiveState): number[] {
+  const split = shownSplit(s);
+  if (split) return [split.left, split.right];
+  return s.activeTab === null ? [] : [s.activeTab];
+}
+
+/** Shows `left` and `right` side by side, `right` focused; null ends the split. */
+export const setSplit = (split: Split | null) =>
+  useHive.setState((s) => ({
+    split,
+    activeTab: split ? split.right : s.activeTab,
+    fileShown: split ? false : s.fileShown,
+    transcriptShown: split ? null : s.transcriptShown,
+  }));
+
+/** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
+export const focusPane = (id: number) =>
+  useHive.setState((s) => {
+    const split = shownSplit(s);
+    return split && (split.left === id || split.right === id) ? { activeTab: id } : {};
   });
 
 /**

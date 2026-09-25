@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
-import { apply, DEFAULT_SETTINGS, initialState, useHive } from "./store";
+import { apply, DEFAULT_SETTINGS, initialState, setWidth, shownTerminals, useHive } from "./store";
 import { transport } from "./transport";
 
 // happy-dom has no WebGL: a fake addon records what the manager does with the renderer.
@@ -38,8 +38,16 @@ globalThis.ResizeObserver = class {
   }
 };
 
-const { closeTerminal, interceptKeys, mountTerminals, openTerminal, showTerminal, terminal } =
-  await import("./terminals");
+const {
+  closeTerminal,
+  interceptKeys,
+  mountTerminals,
+  openTerminal,
+  showTerminal,
+  showTerminals,
+  splitTerminal,
+  terminal,
+} = await import("./terminals");
 
 const written = (term: Terminal) =>
   new Promise<string>((resolve) =>
@@ -363,4 +371,85 @@ test("closing ends a running terminal, drops it and its tab; an exited one is ju
   expect(useHive.getState().tabs).toEqual([]);
   opened.length = 0;
   close.mockRestore();
+});
+
+test("split terminals both render with WebGL, left then right; showing one alone hides the other", async () => {
+  const one = await open();
+  const two = await open();
+  const pane = (t: Terminal) => t.element?.parentElement as HTMLElement;
+  showTerminals([two.id, one.id], two.id);
+  expect([pane(two.term).dataset.pane, pane(one.term).dataset.pane]).toEqual(["left", "right"]);
+  expect([pane(one.term).hidden, pane(two.term).hidden]).toEqual([false, false]);
+  expect(addons.map((a) => a.disposed)).toEqual([false, false]);
+  expect(document.activeElement).toBe(two.term.textarea as Element);
+
+  showTerminal(one.id);
+  expect(pane(one.term).dataset.pane).toBe("");
+  expect(pane(two.term).hidden).toBe(true);
+  // The one still shown keeps its renderer.
+  expect(addons.map((a) => a.disposed)).toEqual([true, false]);
+});
+
+test("Ctrl+Shift+D splits with the next tab of the worktree, again un-splits; a click focuses a pane", async () => {
+  await open("/elsewhere");
+  const one = await open();
+  const two = await open();
+  // The next tab after the last one of the worktree wraps to its first, skipping other places.
+  await splitTerminal(two.id);
+  expect(useHive.getState().split).toEqual({ left: two.id, right: one.id });
+  expect(shownTerminals(useHive.getState())).toEqual([two.id, one.id]);
+  expect(useHive.getState().activeTab).toBe(one.id);
+
+  // Clicking into the left pane makes it the active tab, the one in view.
+  showTerminals([two.id, one.id], one.id);
+  const focusIn = (t: Terminal) =>
+    t.element?.parentElement?.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  focusIn(two.term);
+  expect(useHive.getState().activeTab).toBe(two.id);
+
+  await splitTerminal(one.id);
+  expect(useHive.getState().split).toBeNull();
+  expect(shownTerminals(useHive.getState())).toEqual([two.id]);
+  // Without a split, a pane taking the focus changes nothing.
+  focusIn(one.term);
+  expect(useHive.getState().activeTab).toBe(two.id);
+  await splitTerminal(999);
+  expect(useHive.getState().split).toBeNull();
+  await splitTerminal(null);
+  expect(useHive.getState().split).toBeNull();
+});
+
+test("a tab alone in its worktree splits beside a new terminal there; closing a pane un-splits", async () => {
+  const one = await open();
+  await splitTerminal(one.id);
+  const { split, tabs, activeTab } = useHive.getState();
+  const right = split?.right as number;
+  opened.push(right);
+  expect(split?.left).toBe(one.id);
+  expect(tabs.map((t) => t.cwd)).toEqual(["/w", "/w"]);
+  expect(activeTab).toBe(right);
+
+  // Another tab shown alone leaves the split, which comes back with either of its panes.
+  const three = await open();
+  expect(shownTerminals(useHive.getState())).toEqual([three.id]);
+  useHive.setState({ activeTab: one.id });
+  expect(shownTerminals(useHive.getState())).toEqual([one.id, right]);
+
+  // Closing the focused pane shows the other one alone.
+  closeTerminal(one.id);
+  expect(useHive.getState()).toMatchObject({ split: null, activeTab: right });
+  opened.splice(opened.indexOf(one.id), 1);
+});
+
+test("moving the divider refits the shown panes, debounced", async () => {
+  const fit = spyOn(FitAddon.prototype, "fit");
+  const one = await open();
+  const two = await open();
+  showTerminals([one.id, two.id], one.id);
+  fit.mockClear();
+  setWidth("split", 30);
+  setWidth("split", 40);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  expect(fit).toHaveBeenCalledTimes(2);
+  fit.mockRestore();
 });
