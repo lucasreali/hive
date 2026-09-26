@@ -87,10 +87,10 @@ export function CloseAppDialog({ updating = false }: { updating?: boolean }) {
         </div>
         <footer>
           <button type="button" className="secondary" onClick={cancel}>
-            Cancel <kbd>Esc</kbd>
+            Cancel
           </button>
           <button type="submit" className="primary">
-            {updating ? "Update and restart" : "Close Hive"} <kbd>Enter</kbd>
+            {updating ? "Update and restart" : "Close Hive"}
           </button>
         </footer>
       </form>

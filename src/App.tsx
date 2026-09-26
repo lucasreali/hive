@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { AddProjectDialog } from "./shell/AddProjectDialog";
 import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
+import { ConfirmDialog } from "./shell/ConfirmDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { FileMenu, FileNameDialog } from "./shell/FileMenu";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
@@ -60,6 +61,7 @@ export function App() {
         {modal === "remove-merged" && !blocked && <RemoveMergedDialog />}
         {modal === "palette" && !blocked && <Palette />}
         {modal === "file-name" && !blocked && <FileNameDialog />}
+        {modal === "confirm" && !blocked && <ConfirmDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {!blocked && <WorktreeMenu />}

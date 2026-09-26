@@ -37,7 +37,7 @@ const pick = (side: string) => {
   fireEvent.mouseDown(kind() as HTMLElement);
   fireEvent.click(screen.getByRole("option", { name: side }));
 };
-const submit = () => screen.getByRole("button", { name: "Add project Enter" }) as HTMLButtonElement;
+const submit = () => screen.getByRole("button", { name: "Add project" }) as HTMLButtonElement;
 const folders = () =>
   [...screen.getByRole("list", { name: "Folders" }).querySelectorAll("li")].map(
     (li) => li.textContent,
@@ -191,8 +191,9 @@ test("a refused path is explained under the field until the dialog reopens", () 
 test("close, cancel and Esc close the dialog", () => {
   for (const how of ["Close (Esc)", "Cancel", "Escape"]) {
     const dialog = open();
+    expect(dialog.querySelector("button kbd")).toBeNull();
     if (how === "Escape") fireEvent(dialog, new Event("close"));
-    else if (how === "Cancel") fireEvent.click(screen.getByRole("button", { name: "Cancel Esc" }));
+    else if (how === "Cancel") fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     else fireEvent.click(screen.getByTitle(how));
     expect(useHive.getState().modal).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();

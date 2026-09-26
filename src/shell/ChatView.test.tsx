@@ -107,8 +107,9 @@ test("the first chat in a folder asks first; Start chat accepts, Esc refuses", (
   act(() => apply({ type: "confirm_chat_folder", channel: 5, chat: 5, cwd: "/w" }));
   const dialog = screen.getByRole("dialog", { name: "Chat in this folder?" }) as HTMLDialogElement;
   expect(dialog.open).toBe(true);
-  expect(document.activeElement?.textContent).toBe("Start chat Enter");
-  fireEvent.click(screen.getByRole("button", { name: "Start chat Enter" }));
+  expect(document.activeElement?.textContent).toBe("Start chat");
+  expect(dialog.querySelector("button kbd")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Start chat" }));
   expect(confirm.mock.calls).toEqual([[5, "/w", true]]);
   expect(screen.queryByRole("dialog")).toBeNull();
   act(() => apply(opened));
@@ -117,7 +118,7 @@ test("the first chat in a folder asks first; Start chat accepts, Esc refuses", (
   for (const refuse of [
     (d: HTMLElement) => fireEvent(d, new Event("close")),
     () => fireEvent.click(screen.getByTitle("Cancel (Esc)")),
-    () => fireEvent.click(screen.getByRole("button", { name: "Cancel Esc" })),
+    () => fireEvent.click(screen.getByRole("button", { name: "Cancel" })),
   ]) {
     cleanup();
     useHive.setState(initialState, true);
