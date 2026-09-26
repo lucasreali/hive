@@ -1,0 +1,10 @@
+// 8.20: the WebView's own dialogs never show; ask through a Hive dialog (`ask` in src/store.ts).
+// The bare names are denied by `noRestrictedGlobals` in biome.json; this catches `window.confirm` etc.
+`$host.$name` where {
+  $host <: or { `window`, `globalThis`, `self`, `top`, `parent`, `frames` },
+  $name <: or { `alert`, `confirm`, `prompt` },
+  register_diagnostic(
+    span = $name,
+    message = "Use a Hive dialog (`ask` in src/store.ts), never the WebView's alert, confirm or prompt."
+  )
+}

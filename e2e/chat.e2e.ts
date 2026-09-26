@@ -149,7 +149,7 @@ test("chat: permission, question and plan cards pin above the composer and answe
   await tree.getByRole("button", { name: "fix-login" }).click();
   await page.getByTitle("New terminal, agent or file").click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
   const chat = page.getByRole("region", { name: "Chat" });
   const input = chat.getByRole("textbox", { name: "Message", exact: true });
   await expect(input).toBeEnabled();
@@ -214,7 +214,7 @@ test("chat: the header shows model and mode, Esc stops a turn, / lists the comma
   await tree.getByRole("button", { name: "fix-login" }).click();
   await page.getByTitle("New terminal, agent or file").click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
   const chat = page.getByRole("region", { name: "Chat" });
   const input = chat.getByRole("textbox", { name: "Message" });
   await expect(input).toBeEnabled();
@@ -257,7 +257,7 @@ test("chat: a session opens as a chat with its history, and an ended chat resume
   await page.getByRole("tab", { name: "Sessions" }).click();
   await page.getByRole("button", { name: "Actions for Checkout totals" }).click();
   await page.getByRole("menuitem", { name: "Open as Chat" }).click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
 
   const chat = page.getByRole("region", { name: "Chat" });
   const entries = chat.locator(".transcript-entry");

@@ -21,7 +21,7 @@ test("worktree health: badges with tooltips, and removing merged worktrees", asy
   const create = page.getByRole("dialog", { name: "New worktree" });
   await create.getByLabel("Worktree name").fill("done");
   await create.getByLabel("Open a terminal in the new worktree").uncheck();
-  await create.getByRole("button", { name: "Create worktree Enter" }).click();
+  await create.getByRole("button", { name: "Create worktree" }).click();
   await expect(row("done").locator(".health > span")).toHaveText(["merged"]);
 
   await tree.getByRole("button", { name: "api", exact: true }).click({ button: "right" });
@@ -32,7 +32,7 @@ test("worktree health: badges with tooltips, and removing merged worktrees", asy
   await dialog.getByRole("button", { name: /^Remove \(1\)/ }).click();
   await expect(dialog.getByRole("status")).toHaveText("Removed");
   await expect(row("done")).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Close Esc" }).click();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   // Nothing else went.
   await expect(row("refactor-auth")).toBeVisible();
