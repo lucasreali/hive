@@ -404,3 +404,133 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+/// A fake `claude` that answers `initialize` with the `fixture`'s first line, then after the
+/// first user turn replays the rest, reading one line from stdin after each request to us and
+/// appending it to `answers`.
+fn replaying(fake: &Path, fixture: &str) -> String {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chat");
+    format!(
+        r#"#!/bin/sh
+exec 3< '{fixture}'
+IFS= read -r line <&3
+IFS= read -r request
+printf '%s\n' "$line"
+IFS= read -r request
+while IFS= read -r line <&3; do
+    printf '%s\n' "$line"
+    case $line in
+    *'"control_request"'*) IFS= read -r answer && printf '%s\n' "$answer" >> '{answers}' ;;
+    esac
+done
+while IFS= read -r request; do :; done
+"#,
+        fixture = dir.join(format!("{fixture}.jsonl")).display(),
+        answers = fake.join("answers").display(),
+    )
+}
+
+/// Skips the app's messages until one `wanted` returns something for.
+async fn until<T>(app: &mut Conn, mut wanted: impl FnMut(&(u32, Control)) -> Option<T>) -> T {
+    loop {
+        if let Some(found) = wanted(&app.control().await) {
+            return found;
+        }
+    }
+}
+
+async fn request_on(app: &mut Conn, chat: u32) -> hive_protocol::ChatRequest {
+    until(app, |message| match message {
+        (c, Control::ChatRequest { request, .. }) if *c == chat => Some(request.clone()),
+        _ => None,
+    })
+    .await
+}
+
+async fn state_on(app: &mut Conn, chat: u32) -> AgentState {
+    until(app, |message| match message {
+        (c, Control::AgentState { state, .. }) if *c == chat => Some(*state),
+        _ => None,
+    })
+    .await
+}
+
+async fn gone_on(app: &mut Conn, chat: u32) -> String {
+    until(app, |message| match message {
+        (c, Control::ChatRequestGone { request, .. }) if *c == chat => Some(request.clone()),
+        _ => None,
+    })
+    .await
+}
+
+fn answer(chat: u32, request: &str, answer: ChatAnswer) -> Control {
+    Control::ChatAnswer {
+        chat,
+        request: request.into(),
+        answer,
+    }
+}
+
+#[tokio::test]
+async fn permission_requests_wait_for_the_answer_of_their_own_chat() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = sandbox(&repo);
+    write_claude(&fake, &replaying(&fake, "permission"));
+    let mut daemon = repo.env.daemon_on_path(&fake);
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    app.send(2, open(&root, None, None)).await;
+    assert_eq!(app.control().await, asked(2, &root));
+    app.send(2, confirm(2, &root, true)).await;
+    let default = ChatMode::Default;
+    let opened_2 = opened(2, &root, None, default);
+    until(&mut app, |m| (*m == opened_2).then_some(())).await;
+    let start = json!({"session_id": SESSION, "cwd": root});
+    hook(&repo, &mut app, "2", "SessionStart", start).await;
+
+    // A permission prompt waits (🟡) for the human.
+    send(&mut app, 2, "go").await;
+    let asked = request_on(&mut app, 2).await;
+    assert_eq!((asked.id.as_str(), asked.tool.as_str()), ("req_1", "Write"));
+    assert_eq!(state_on(&mut app, 2).await, AgentState::WaitingPermission);
+    app.send(2, answer(2, "req_1", ChatAnswer::Allow)).await;
+    assert_eq!(gone_on(&mut app, 2).await, "req_1");
+    let asked = request_on(&mut app, 2).await;
+    assert_eq!((asked.id.as_str(), asked.tool.as_str()), ("req_2", "Bash"));
+
+    // Another chat cannot answer it, whatever its message says.
+    app.send(3, open(&root, None, None)).await;
+    let opened_3 = opened(3, &root, None, default);
+    until(&mut app, |m| (*m == opened_3).then_some(())).await;
+    app.send(3, answer(2, "req_2", ChatAnswer::Allow)).await;
+    assert_eq!(app.control().await, error(3, "no such pending request"));
+    let deny = ChatAnswer::Deny {
+        message: Some("Not now.".into()),
+    };
+    app.send(2, answer(2, "req_2", deny)).await;
+    assert_eq!(gone_on(&mut app, 2).await, "req_2");
+    assert_eq!(state_on(&mut app, 2).await, AgentState::Working);
+    assert_eq!(state_on(&mut app, 2).await, AgentState::WaitingYou);
+
+    // Closing a chat denies what it waits on.
+    send(&mut app, 3, "go").await;
+    assert_eq!(request_on(&mut app, 3).await.id, "req_1");
+    app.send(3, Control::CloseChat { chat: 3 }).await;
+    let closed_3 = closed(3, None);
+    until(&mut app, |m| (*m == closed_3).then_some(())).await;
+    let answers = std::fs::read_to_string(fake.join("answers")).unwrap();
+    let expected = [
+        r#"{"response":{"request_id":"req_1","response":{"behavior":"allow","updatedInput":{"content":"hi","file_path":"/home/u/proj/hello.txt"}},"subtype":"success"},"type":"control_response"}"#,
+        r#"{"response":{"request_id":"req_2","response":{"behavior":"deny","interrupt":false,"message":"Not now."},"subtype":"success"},"type":"control_response"}"#,
+        r#"{"response":{"request_id":"req_1","response":{"behavior":"deny","interrupt":false,"message":"The chat was closed."},"subtype":"success"},"type":"control_response"}"#,
+    ];
+    assert_eq!(answers.lines().collect::<Vec<_>>(), expected);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
