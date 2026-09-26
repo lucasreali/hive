@@ -268,9 +268,10 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
         >
           <BranchIcon />
           <span className="label">{w.name}</span>
-          {!open && <Rollup agents={(a) => a.worktree === w.id} />}
         </button>
         {w.status && <Health status={w.status} />}
+        {/* After the badges, in the row's right column of indicators (7.13). */}
+        {!open && <Rollup agents={(a) => a.worktree === w.id} />}
         <button
           type="button"
           className="new-chat"

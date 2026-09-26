@@ -1445,6 +1445,12 @@ li:not(:last-child) > .owned::before {
   margin-top: 1px;
 }
 
+/* A collapsed row's rollup ends where the badges end: one right column of indicators (7.13). */
+.tree-row > .state-icon,
+.project .row-main > .state-icon {
+  margin-right: 6px;
+}
+
 .state-icon[data-state="waiting_permission"] {
   color: var(--state-permission);
 }
@@ -1737,8 +1743,9 @@ li:not(:last-child) > .owned::before {
   color: var(--text);
 }
 
+/* Keyboard focus shows the "+" too; a mouse click on the chevron does not (7.13). */
 .tree-row.worktree:hover .new-chat,
-.tree-row.worktree:focus-within .new-chat {
+.tree-row.worktree:has(:focus-visible) .new-chat {
   display: flex;
 }
 
