@@ -385,6 +385,8 @@ export type ChatStatus = {
   retry: string | null;
   compacting: boolean;
   session: string | null;
+  /** Set when the chat runs on an API key rather than the subscription login. */
+  api_key_source: string | null;
 };
 /** A chat tab's data, as the service sent it (keyed by the chat's channel). */
 export type Chat = {

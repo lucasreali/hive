@@ -711,6 +711,7 @@ test("a chat's messages fill its data; a chat tab is a tab of kind chat", () => 
     model: "m",
     retry: null,
     compacting: false,
+    api_key_source: null,
     session: "s",
   };
   apply({ type: "chat_status", channel: 7, ...status });

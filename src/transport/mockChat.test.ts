@@ -49,6 +49,7 @@ const status = (
   model: MOCK_CHAT_MODEL,
   retry: null,
   compacting: false,
+  api_key_source: null,
   session: "mock-chat-1",
   ...extra,
 });
