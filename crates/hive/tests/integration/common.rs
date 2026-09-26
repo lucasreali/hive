@@ -110,9 +110,15 @@ impl Env {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CEILING_DIRECTORIES", self.dir.path())
-            .env_remove("HIVE_TERMINAL_ID")
             // Claude's session logs are read (and deleted) under the throwaway HOME only.
             .env_remove("CLAUDE_CONFIG_DIR");
+        // Run from a Hive terminal, the tests would pass its `HIVE_*` on to the service and its
+        // terminals.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("HIVE_") {
+                cmd.env_remove(key);
+            }
+        }
         // On macOS terminals run `$SHELL`; the tests' shell commands are fish's, as on WSL.
         #[cfg(target_os = "macos")]
         cmd.env("SHELL", "fish");
