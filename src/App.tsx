@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { AddProjectDialog } from "./shell/AddProjectDialog";
 import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
+import { FileMenu, FileNameDialog } from "./shell/FileMenu";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { Palette } from "./shell/Palette";
 import { RightPanel } from "./shell/RightPanel";
@@ -58,11 +59,13 @@ export function App() {
         {modal === "settings" && !blocked && <SettingsDialog />}
         {modal === "remove-merged" && !blocked && <RemoveMergedDialog />}
         {modal === "palette" && !blocked && <Palette />}
+        {modal === "file-name" && !blocked && <FileNameDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {!blocked && <WorktreeMenu />}
         {!blocked && <ProjectMenu />}
         {!blocked && <SessionMenu />}
+        {!blocked && <FileMenu />}
         <ConnectionBlock />
       </div>
       <StatusBar />

@@ -543,6 +543,36 @@ pub enum Control {
         /// Shown as is.
         message: String,
     },
+    /// App → service: create the empty file `name` in `folder` (relative to the worktree, empty
+    /// for its root) (7.4). Never overwrites. Answered by `FileCreated` or `FileOpFailed`.
+    CreateFile {
+        worktree: String,
+        folder: String,
+        name: String,
+    },
+    /// The file was created at `path` (relative to the worktree).
+    FileCreated {
+        worktree: String,
+        path: String,
+    },
+    /// App → service: rename the file `path` to `name` in the same folder (7.4). Never
+    /// overwrites. Answered by `FileRenamed` or `FileOpFailed`.
+    RenameFile {
+        worktree: String,
+        path: String,
+        name: String,
+    },
+    /// The file `path` is now `to` (relative to the worktree).
+    FileRenamed {
+        worktree: String,
+        path: String,
+        to: String,
+    },
+    /// Nothing was created or renamed. Shown as is.
+    FileOpFailed {
+        worktree: String,
+        message: String,
+    },
     /// App → service: where Windows sees this file, to open it in the user's editor; an empty
     /// `path` is the worktree's folder, for the Windows Explorer. Answered by `EditorTarget`.
     OpenInEditor {
@@ -1696,6 +1726,53 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &target).payload[..],
             br#"{"type":"editor_target","worktree":"/r","path":"a","windows_path":"w","error":null}"#
+        );
+    }
+
+    #[test]
+    fn create_and_rename_messages_are_tagged_json() {
+        let create = Control::CreateFile {
+            worktree: "/r".into(),
+            folder: "d".into(),
+            name: "a".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &create).payload[..],
+            br#"{"type":"create_file","worktree":"/r","folder":"d","name":"a"}"#
+        );
+        let created = Control::FileCreated {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &created).payload[..],
+            br#"{"type":"file_created","worktree":"/r","path":"d/a"}"#
+        );
+        let rename = Control::RenameFile {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+            name: "b".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &rename).payload[..],
+            br#"{"type":"rename_file","worktree":"/r","path":"d/a","name":"b"}"#
+        );
+        let renamed = Control::FileRenamed {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+            to: "d/b".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &renamed).payload[..],
+            br#"{"type":"file_renamed","worktree":"/r","path":"d/a","to":"d/b"}"#
+        );
+        let failed = Control::FileOpFailed {
+            worktree: "/r".into(),
+            message: "m".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &failed).payload[..],
+            br#"{"type":"file_op_failed","worktree":"/r","message":"m"}"#
         );
     }
 
