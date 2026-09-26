@@ -102,6 +102,16 @@ export interface Transport {
    */
   renameFile(worktree: string, path: string, name: string): Promise<void>;
   /**
+   * Moves the file `path` into `folder` ("" for the worktree's root), keeping its name, never
+   * over another; answered by `file_renamed` or `file_op_failed`.
+   */
+  moveFile(worktree: string, path: string, folder: string): Promise<void>;
+  /**
+   * Creates the folder `name` in `folder` ("" for the worktree's root), never over an entry;
+   * answered by `folder_created` or `file_op_failed`.
+   */
+  createFolder(worktree: string, folder: string, name: string): Promise<void>;
+  /**
    * The file's Windows path for an external editor (an empty `path`: the worktree's folder);
    * answered by `editor_target`.
    */

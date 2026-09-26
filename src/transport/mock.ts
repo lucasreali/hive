@@ -599,27 +599,34 @@ export function createMockTransport(
       path,
       written,
     );
-  // Moves the listed file `from` (null: none) to `to`, answering `done()`, or why not.
+  // Folders created by `createFolder`, by `<worktree>/<path>` (git lists no empty folder).
+  const folders = new Set<string>();
+  // Moves the listed file `from` (null: none) to `to` (a new folder when `folder`), answering
+  // `done()`, or why not.
   const fileOp = (
     worktree: string,
     from: string | null,
     to: string,
     name: string,
     done: () => ServiceMessage,
+    folder = false,
   ) => {
     const shown = worktreeAt(worktree);
     const listed = shown ? (files.get(worktree) ?? mockFiles(shown)) : [];
+    const taken =
+      listed.some((p) => p === to || p.startsWith(`${to}/`)) || folders.has(`${worktree}/${to}`);
     const message = !shown
       ? `${worktree} is not a worktree of a followed project`
       : ["", ".", ".."].includes(name) || name.includes("/")
         ? "not a valid file name"
-        : listed.includes(to)
+        : taken
           ? `${name} already exists`
           : from !== null && !listed.includes(from)
             ? `${from} does not exist`
             : null;
     if (message) return void later({ type: "file_op_failed", worktree, message });
     later(done());
+    if (folder) return void folders.add(`${worktree}/${to}`);
     files.set(worktree, [...listed.filter((p) => p !== from), to].sort());
     if (watched === worktree) sendFiles(worktree);
   };
@@ -844,7 +851,8 @@ export function createMockTransport(
       written.set(`${worktree}/${path}`, content);
       later({ type: "file_saved", worktree, path, version: mockVersion(content) });
     },
-    // Stand-ins for `hive::file::{create, rename}`: the real name rules live in Rust.
+    // Stand-ins for `hive::file::{create, rename, move_to, create_folder}`: the real name rules
+    // live in Rust.
     async createFile(worktree, folder, name) {
       const path = folder ? `${folder}/${name}` : name;
       fileOp(worktree, null, path, name, () => {
@@ -859,6 +867,20 @@ export function createMockTransport(
         written.set(`${worktree}/${to}`, text);
         return { type: "file_renamed", worktree, path, to };
       });
+    },
+    async moveFile(worktree, path, folder) {
+      const name = path.slice(path.lastIndexOf("/") + 1);
+      const to = folder ? `${folder}/${name}` : name;
+      // Its own folder: nothing moves.
+      if (to === path) return void later({ type: "file_renamed", worktree, path, to });
+      fileOp(worktree, path, to, name, () => {
+        written.set(`${worktree}/${to}`, fileAt(worktree, path).content ?? "");
+        return { type: "file_renamed", worktree, path, to };
+      });
+    },
+    async createFolder(worktree, folder, name) {
+      const path = folder ? `${folder}/${name}` : name;
+      fileOp(worktree, null, path, name, () => ({ type: "folder_created", worktree, path }), true);
     },
     async openInEditor(worktree, path) {
       // An empty path is the worktree's folder.

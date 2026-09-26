@@ -1,6 +1,6 @@
-import { FilePlusIcon, type Icon, PencilSimpleIcon } from "@phosphor-icons/react";
+import { FilePlusIcon, FolderPlusIcon, type Icon, PencilSimpleIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { openFileDialog, openFileMenu, useHive } from "../store";
+import { type FileDialogKind, openFileDialog, openFileMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { CloseIcon, ICON } from "./icons";
 import { ContextMenu, showModal } from "./WorktreeMenu";
@@ -13,13 +13,13 @@ export function FileMenu() {
   const menu = useHive((s) => s.fileMenu);
   if (!menu) return null;
   const { x, y, ...target } = menu;
-  const item = (Shape: Icon, label: string, renaming: boolean) => (
+  const item = (Shape: Icon, label: string, kind: FileDialogKind) => (
     <button
       type="button"
       role="menuitem"
       onClick={() => {
         closeMenu();
-        openFileDialog(target, renaming);
+        openFileDialog(target, kind);
       }}
     >
       <Shape {...ICON} />
@@ -28,25 +28,32 @@ export function FileMenu() {
   );
   return (
     <ContextMenu at={menu} label={target.path ?? "Files"} onClose={closeMenu}>
-      {item(FilePlusIcon, "New File…", false)}
-      {target.path !== null && item(PencilSimpleIcon, "Rename…", true)}
+      {item(FilePlusIcon, "New File…", "file")}
+      {item(FolderPlusIcon, "New Folder…", "folder")}
+      {target.path !== null && item(PencilSimpleIcon, "Rename…", "rename")}
     </ContextMenu>
   );
 }
 
+const TITLES: Record<FileDialogKind, [title: string, submit: string]> = {
+  file: ["New file", "Create"],
+  folder: ["New folder", "Create"],
+  rename: ["Rename file", "Rename"],
+};
+
 /**
- * "New file" (in the menu's folder) or "Rename file": the service checks the name, creates or
- * renames without ever overwriting, and its refusal shows under the field.
+ * "New file" or "New folder" (in the menu's folder) or "Rename file": the service checks the
+ * name, creates or renames without ever overwriting, and its refusal shows under the field.
  */
 export function FileNameDialog() {
   const dialog = useHive((s) => s.fileDialog);
-  const path = dialog?.renaming ? (dialog.path ?? "") : "";
+  const path = dialog?.kind === "rename" ? (dialog.path ?? "") : "";
   const current = path.slice(path.lastIndexOf("/") + 1);
   const [name, setName] = useState(current);
   if (!dialog) return null;
-  const { worktree, folder, renaming, error } = dialog;
+  const { worktree, folder, kind, error } = dialog;
   const canSubmit = name !== "" && name !== current;
-  const title = renaming ? "Rename file" : "New file";
+  const [title, action] = TITLES[kind];
   return (
     <dialog
       className="dialog"
@@ -58,7 +65,8 @@ export function FileNameDialog() {
         onSubmit={(e) => {
           e.preventDefault();
           if (!canSubmit) return;
-          if (renaming) void transport.renameFile(worktree, path, name);
+          if (kind === "rename") void transport.renameFile(worktree, path, name);
+          else if (kind === "folder") void transport.createFolder(worktree, folder, name);
           else void transport.createFile(worktree, folder, name);
         }}
       >
@@ -99,7 +107,7 @@ export function FileNameDialog() {
             Cancel <kbd>Esc</kbd>
           </button>
           <button type="submit" className="primary" disabled={!canSubmit}>
-            {renaming ? "Rename" : "Create"} <kbd>Enter</kbd>
+            {action} <kbd>Enter</kbd>
           </button>
         </footer>
       </form>

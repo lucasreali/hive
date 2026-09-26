@@ -30,7 +30,7 @@ test("a file's menu renames it in its folder; the service's refusal shows until 
   render(<Shown />);
   expect(items()).toEqual([]);
   act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src/a.ts", x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…", "Rename…"]);
+  expect(items()).toEqual(["New File…", "New Folder…", "Rename…"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
   expect(useHive.getState().fileMenu).toBeNull();
   expect(screen.getByRole("heading").textContent).toBe("Rename file");
@@ -59,7 +59,7 @@ test("a folder's menu only creates, in that folder; the root is named as such", 
   const create = spyOn(transport, "createFile").mockResolvedValue();
   render(<Shown />);
   act(() => openFileMenu({ worktree: "/w", folder: "src", path: null, x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…"]);
+  expect(items()).toEqual(["New File…", "New Folder…"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "New File…" }));
   expect(screen.getByRole("heading").textContent).toBe("New file");
   expect(screen.getByText("src")).toBeTruthy();
@@ -75,4 +75,20 @@ test("a folder's menu only creates, in that folder; the root is named as such", 
   expect(screen.getByText("(worktree root)")).toBeTruthy();
   fireEvent.click(screen.getByTitle("Close (Esc)"));
   expect(useHive.getState().modal).toBeNull();
+});
+
+test("New Folder… asks for a name and creates it in the menu's folder", () => {
+  const create = spyOn(transport, "createFolder").mockResolvedValue();
+  render(<Shown />);
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src/a.ts", x: 1, y: 2 }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "New Folder…" }));
+  expect(screen.getByRole("heading").textContent).toBe("New folder");
+  expect([field().value, submit().disabled]).toEqual(["", true]);
+  type("lib");
+  fireEvent.submit(field());
+  expect(create).toHaveBeenCalledWith("/w", "src", "lib");
+  act(() => apply({ type: "file_op_failed", worktree: "/w", message: "lib already exists" }));
+  expect(screen.getByRole("alert").textContent).toBe("lib already exists");
+  act(() => apply({ type: "folder_created", worktree: "/w", path: "src/lib" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

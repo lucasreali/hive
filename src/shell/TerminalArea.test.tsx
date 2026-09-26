@@ -58,7 +58,7 @@ test("the + menu opens an agent or a new file in the selected worktree", async (
   newTab("New file…");
   expect(useHive.getState()).toMatchObject({
     modal: "file-name",
-    fileDialog: { worktree: fixLogin.id, folder: "", path: null, renaming: false },
+    fileDialog: { worktree: fixLogin.id, folder: "", path: null, kind: "file" },
   });
   open.mockRestore();
 });

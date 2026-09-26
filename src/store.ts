@@ -79,6 +79,7 @@ export type ServiceMessage =
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   | { type: "file_created"; worktree: string; path: string }
   | { type: "file_renamed"; worktree: string; path: string; to: string }
+  | { type: "folder_created"; worktree: string; path: string }
   | { type: "file_op_failed"; worktree: string; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
   // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
@@ -273,8 +274,10 @@ export type SessionMenu = { session: string; x: number; y: number };
  * root); `path` is the file to rename, null for a folder or the tree's background.
  */
 export type FileTarget = { worktree: string; folder: string; path: string | null };
-/** The "New file" / "Rename file" dialog: its target and the service's refusal, if any. */
-export type FileDialog = FileTarget & { renaming: boolean; error: string | null };
+/** What the file name dialog does: a new file or folder in `folder`, or rename `path`. */
+export type FileDialogKind = "file" | "folder" | "rename";
+/** The "New file" / "New folder" / "Rename file" dialog: its target and the service's refusal. */
+export type FileDialog = FileTarget & { kind: FileDialogKind; error: string | null };
 
 /** A line of a file holding the searched text (`line` is 1-based). */
 export type SearchMatch = { path: string; line: number; text: string };
@@ -621,6 +624,12 @@ export type HiveState = {
   sessionMenu: SessionMenu | null;
   fileMenu: (FileTarget & { x: number; y: number }) | null;
   fileDialog: FileDialog | null;
+  /**
+   * Folders created from the tree, by worktree: git lists no empty folder, so the tree shows
+   * these too.
+   */
+  // ponytail: kept for the window's life, even if the folder goes away outside Hive.
+  newFolders: Record<string, string[]>;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
   /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
@@ -729,6 +738,7 @@ export const initialState: HiveState = {
   sessionMenu: null,
   fileMenu: null,
   fileDialog: null,
+  newFolders: {},
   notice: null,
   update: null,
   rightPanel: "files",
@@ -1082,6 +1092,19 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...fileDialogDone(s, m.worktree),
       };
     }
+    case "folder_created": {
+      // It shows at once, even empty, with the folders around it open.
+      const open = m.path
+        .split("/")
+        .slice(0, -1)
+        .map((_, i, parts) => [`files:${m.worktree}/${parts.slice(0, i + 1).join("/")}`, false]);
+      const shown = s.newFolders[m.worktree] ?? [];
+      return {
+        newFolders: { ...s.newFolders, [m.worktree]: [...shown, m.path] },
+        collapsed: { ...s.collapsed, ...Object.fromEntries(open) },
+        ...fileDialogDone(s, m.worktree),
+      };
+    }
     case "file_op_failed":
       return s.fileDialog?.worktree === m.worktree
         ? { fileDialog: { ...s.fileDialog, error: m.message } }
@@ -1184,11 +1207,11 @@ export const openProjectMenu = (projectMenu: ProjectMenu | null) =>
 export const openSessionMenu = (sessionMenu: SessionMenu | null) =>
   useHive.setState({ sessionMenu });
 export const openFileMenu = (fileMenu: HiveState["fileMenu"]) => useHive.setState({ fileMenu });
-/** The "New file" dialog for `target`, or "Rename file" for its `path` when `renaming`. */
-export const openFileDialog = (target: FileTarget, renaming = false) =>
+/** The "New file" or "New folder" dialog for `target`, or "Rename file" for its `path`. */
+export const openFileDialog = (target: FileTarget, kind: FileDialogKind = "file") =>
   useHive.setState({
     modal: "file-name",
-    fileDialog: { ...target, renaming, error: null },
+    fileDialog: { ...target, kind, error: null },
   });
 /** Keeps an alert in the inbox, the newest first. */
 export const addToInbox = (item: Omit<InboxItem, "id">) =>

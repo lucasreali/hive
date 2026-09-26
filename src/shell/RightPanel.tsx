@@ -6,6 +6,7 @@ import {
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  type DragEvent,
   type KeyboardEvent,
   lazy,
   type MouseEvent,
@@ -100,24 +101,27 @@ export function allFiles(listed: string[], changed: ChangedFile[]): TreeFile[] {
  * The visible rows of the files tree: `files` (sorted by the service) grouped into folders,
  * folders before files. A folder starts collapsed and is open only when
  * `collapsed["<tree>:<worktree>/<path>"]` is false: each tree (Files, Diff) opens its own folders. Grouping paths is presentation; statuses and counts are the service's.
+ * `folders` (created from the tree) show even when git lists nothing in them.
  */
 export function fileRows(
   worktree: string,
   files: TreeFile[],
   collapsed: Record<string, boolean>,
   tree: "files" | "changes" = "files",
+  folders: string[] = [],
 ): FileRow[] {
   const root: Folder = { folders: new Map(), files: [] };
-  for (const file of files) {
-    const parts = file.path.split("/");
+  const folderOf = (parts: string[]) => {
     let folder = root;
-    for (const part of parts.slice(0, -1)) {
+    for (const part of parts) {
       const next = folder.folders.get(part) ?? { folders: new Map(), files: [] };
       folder.folders.set(part, next);
       folder = next;
     }
-    folder.files.push(file);
-  }
+    return folder;
+  };
+  for (const path of folders) folderOf(path.split("/"));
+  for (const file of files) folderOf(file.path.split("/").slice(0, -1)).files.push(file);
   const rows: FileRow[] = [];
   const walk = (folder: Folder, prefix: string, depth: number) => {
     for (const [name, inner] of [...folder.folders].sort(([a], [b]) => (a < b ? -1 : 1))) {
@@ -547,11 +551,12 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   const all = changedOnly ? null : listing;
   const collapsed = useHive((s) => s.collapsed);
   const open = useHive((s) => (s.openFile?.worktree === worktree ? s.openFile.path : null));
+  const newFolders = useHive((s) => (changedOnly ? undefined : s.newFolders[worktree]));
   const files = useMemo(
     () => (all ? allFiles(all.files, changes?.files ?? []) : (changes?.files ?? [])),
     [all, changes],
   );
-  const rows = fileRows(worktree, files, collapsed, changedOnly ? "changes" : "files");
+  const rows = fileRows(worktree, files, collapsed, changedOnly ? "changes" : "files", newFolders);
   const [active, setActive] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -567,6 +572,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     row.kind === "folder"
       ? useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: row.open } }))
       : leaveFile({ worktree, path: row.key }, !changedOnly);
+  const drag = useFileDrag(worktree, rows);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[at];
     if (!row) return;
@@ -585,7 +591,12 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     event.preventDefault();
   };
   return (
-    <div className="files-tree hive-scroll" ref={scroller}>
+    <div
+      className="files-tree hive-scroll"
+      ref={scroller}
+      data-drop={drag.over === ""}
+      {...(changedOnly ? {} : drag.handlers)}
+    >
       {changes && rows.length === 0 && <div className="hint">No changes in this worktree.</div>}
       {all?.truncated && <div className="hint">Too many files: the list is cut short.</div>}
       <div
@@ -618,6 +629,10 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
               data-active={item.index === at}
               data-status={status ? STATUS[status].letter : undefined}
               data-deleted={status === "deleted"}
+              data-index={item.index}
+              data-drop={row.kind === "folder" && row.path === drag.over}
+              draggable={!changedOnly && row.kind === "file" && status !== "deleted"}
+              onDragStart={(e) => drag.start(e, row)}
               title={row.kind === "file" ? row.key : undefined}
               style={{ transform: `translateY(${item.start}px)`, paddingLeft: 8 + row.depth * 14 }}
               onClick={() => {
@@ -655,6 +670,73 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
       </div>
     </div>
   );
+}
+
+/** How long a closed folder must be hovered while dragging a file before it opens. */
+export const HOVER_OPEN_MS = 600;
+
+/**
+ * Dragging a file of the Files tree onto a folder, a file (its folder) or the tree below the
+ * rows (the root) asks the service to move it there; its own folder does nothing. A closed
+ * folder hovered for [`HOVER_OPEN_MS`] opens. `over` is the folder a drop would go to.
+ */
+function useFileDrag(worktree: string, rows: FileRow[]) {
+  const [dragged, setDragged] = useState<FileTarget | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  const hover = useRef<{ key: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const unhover = () => {
+    if (hover.current) clearTimeout(hover.current.timer);
+    hover.current = null;
+  };
+  const end = () => {
+    unhover();
+    setDragged(null);
+    setOver(null);
+  };
+  // A folder does not open after the tree is gone.
+  useEffect(() => () => clearTimeout(hover.current?.timer), []);
+  const rowAt = (e: DragEvent) => {
+    const at = (e.target as Element).closest("[data-index]")?.getAttribute("data-index");
+    return at == null ? undefined : rows[Number(at)];
+  };
+  const start = (e: DragEvent, row: FileRow) => {
+    const target = fileTarget(worktree, row);
+    if (target.path === null) return;
+    e.dataTransfer.setData("text/plain", target.path);
+    e.dataTransfer.effectAllowed = "move";
+    setDragged(target);
+  };
+  const handlers = {
+    onDragOver: (e: DragEvent) => {
+      if (!dragged) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const row = rowAt(e);
+      setOver(fileTarget(worktree, row).folder);
+      if (hover.current?.key === row?.key) return;
+      unhover();
+      if (row?.kind !== "folder" || row.open) return;
+      const timer = setTimeout(
+        () => useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: false } })),
+        HOVER_OPEN_MS,
+      );
+      hover.current = { key: row.key, timer };
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+      unhover();
+      setOver(null);
+    },
+    onDrop: (e: DragEvent) => {
+      if (!dragged?.path) return;
+      e.preventDefault();
+      const folder = fileTarget(worktree, rowAt(e)).folder;
+      if (folder !== dragged.folder) void transport.moveFile(worktree, dragged.path, folder);
+      end();
+    },
+    onDragEnd: end,
+  };
+  return { over, start, handlers };
 }
 
 /**
