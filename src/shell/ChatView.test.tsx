@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { addTab, apply, initialState, type ServiceMessage, setChat, useHive } from "../store";
 import { transport } from "../transport";
@@ -15,6 +15,7 @@ beforeAll(() => {
   });
 });
 
+beforeEach(() => useHive.setState(initialState, true));
 afterEach(() => {
   mock.restore();
   cleanup();

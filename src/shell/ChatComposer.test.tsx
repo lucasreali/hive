@@ -1,9 +1,10 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { apply, type ChatStatus, initialState, setChat, useHive } from "../store";
 import { transport } from "../transport";
 import { ChatComposer } from "./ChatComposer";
 
+beforeEach(() => useHive.setState(initialState, true));
 afterEach(() => {
   mock.restore();
   cleanup();

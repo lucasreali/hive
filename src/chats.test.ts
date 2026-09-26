@@ -1,8 +1,10 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { closeChat, openChat } from "./chats";
 import { apply, initialState, useHive } from "./store";
 import { transport } from "./transport";
 
+// Other files' tests may leave tabs behind: start from a clean store.
+beforeEach(() => useHive.setState(initialState, true));
 afterEach(() => {
   mock.restore();
   useHive.setState(initialState, true);
