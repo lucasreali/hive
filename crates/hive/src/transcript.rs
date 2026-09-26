@@ -176,6 +176,18 @@ impl Watch {
     }
 }
 
+/// The whole lines of the transcript at `path` (inside `root`), at most its last
+/// [`READ_LIMIT`] bytes, and whether earlier ones were left out: a resumed chat's history.
+pub fn tail(root: &Path, path: &Path) -> io::Result<(Vec<u8>, bool)> {
+    let (mut bytes, skipped, _) = read_lines(root, path, &mut 0)?;
+    if skipped {
+        // The tail starts inside a line: it is left out.
+        let first = bytes.iter().position(|&b| b == b'\n').map_or(0, |i| i + 1);
+        bytes.drain(..first);
+    }
+    Ok((bytes, skipped))
+}
+
 /// The whole lines of the transcript at `path` (inside `root`) written since `offset`, at most
 /// its last [`READ_LIMIT`] bytes; whether earlier ones were skipped, and whether it was read
 /// again from its start because it shrank. `offset` moves to the end of what was read. A
@@ -552,6 +564,24 @@ mod tests {
         assert_eq!(watch.offset, before + READ_LIMIT);
         append(&f.log, &format!("\n{}", said("after")));
         assert_eq!(watch.poll(), appended(&["after"]));
+    }
+
+    #[test]
+    fn a_tail_is_the_last_whole_lines_inside_the_root() {
+        let f = fixture();
+        append(&f.log, &format!("{}{}", said("one"), said("two")));
+        let both = format!("{}{}", said("one"), said("two")).into_bytes();
+        assert_eq!(tail(&f.root, &f.log).unwrap(), (both, false));
+        let filler = "x".repeat(READ_LIMIT as usize);
+        std::fs::write(&f.log, format!("{}{}", said(&filler), said("last"))).unwrap();
+        assert_eq!(
+            tail(&f.root, &f.log).unwrap(),
+            (said("last").into_bytes(), true)
+        );
+        let other = f.root.parent().unwrap().join("other");
+        std::fs::create_dir(&other).unwrap();
+        let outside = tail(&other, &f.log).unwrap_err();
+        assert_eq!(outside.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]

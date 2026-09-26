@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::Stdio;
 
 use hive_protocol::AgentState::{self, *};
-use hive_protocol::{Control, OpenSession, Role, SessionTarget, SubagentState};
+use hive_protocol::{Control, OpenSession, Role, SessionKind, SessionTarget, SubagentState};
 use serde_json::{Value, json};
 
 use crate::common::Conn;
@@ -551,6 +551,7 @@ async fn sessions_running_when_the_app_closes_are_sent_to_the_next_app() {
     let open = |id: &str| OpenSession {
         id: id.into(),
         cwd: root.clone(),
+        kind: SessionKind::Terminal,
     };
     assert_eq!(
         app.control().await,

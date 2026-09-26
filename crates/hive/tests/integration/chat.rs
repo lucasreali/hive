@@ -4,7 +4,10 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use hive_protocol::{AgentState, ChatAnswer, ChatEntry, ChatEntryKind, ChatMode, Control, Role};
+use hive_protocol::{
+    AgentState, ChatAnswer, ChatEntry, ChatEntryKind, ChatMode, Control, OpenSession, Role,
+    SessionKind,
+};
 use serde_json::json;
 
 use crate::agents::hook;
@@ -354,6 +357,84 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     write_claude(&fake, &fake_claude(&fake));
     app.send(8, open(&root, None, None)).await;
     assert_eq!(app.control().await, opened(8, &root, None, default));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn a_resumed_chat_shows_its_history_and_comes_back_as_a_chat() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = sandbox(&repo);
+    let folder: String = root
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let logs = repo.env.path("home/.claude/projects").join(folder);
+    std::fs::create_dir_all(&logs).unwrap();
+    let records = [
+        json!({"type": "user", "message": {"content": "before"}}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "earlier"}]}}),
+    ];
+    let records: Vec<String> = records.iter().map(|r| format!("{r}\n")).collect();
+    std::fs::write(logs.join(format!("{SESSION}.jsonl")), records.concat()).unwrap();
+    let mut daemon = repo.env.daemon_on_path(&fake);
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+
+    // The conversation so far comes before the chat opens.
+    app.send(2, open(&root, Some(SESSION), None)).await;
+    assert_eq!(app.control().await, asked(2, &root));
+    app.send(2, confirm(2, &root, true)).await;
+    assert!(matches!(app.control().await, (0, Control::Settings { .. })));
+    let history = vec![
+        entry(1, ChatEntryKind::User, "before"),
+        entry(2, ChatEntryKind::Assistant, "earlier"),
+    ];
+    assert_eq!(app.control().await, entries(2, history));
+    let default = ChatMode::Default;
+    assert_eq!(
+        app.control().await,
+        opened(2, &root, Some(SESSION), default)
+    );
+    let start = json!({"session_id": SESSION, "cwd": root});
+    let seen = hook(&repo, &mut app, "2", "SessionStart", start).await;
+    assert!(
+        matches!(seen[0], (2, Control::AgentDetected { .. })),
+        "{seen:?}"
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+
+    // The next app gets it back as a chat.
+    let mut daemon = repo.env.daemon_on_path(&fake);
+    let mut app = repo.env.handshake(Role::App).await;
+    assert!(matches!(app.control().await, (0, Control::Settings { .. })));
+    let chat = OpenSession {
+        id: SESSION.into(),
+        cwd: root.clone(),
+        kind: SessionKind::Chat,
+    };
+    let restore = Control::RestoreSessions {
+        sessions: vec![chat],
+    };
+    assert_eq!(app.control().await, (0, restore));
+
+    // A session may be resumed from a folder inside the worktree, where it ran; that folder
+    // has no log here, so there is no history.
+    let inside = repo.root.join("src");
+    std::fs::create_dir(&inside).unwrap();
+    let inside = inside.display().to_string();
+    app.send(3, open(&inside, Some(SESSION), None)).await;
+    assert_eq!(
+        app.control().await,
+        opened(3, &inside, Some(SESSION), default)
+    );
     drop(app);
     assert!(daemon.wait_exit().success());
 }

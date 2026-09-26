@@ -331,16 +331,22 @@ impl Sessions {
     /// The name of the session `id` that runs in `cwd` (the user's, else Claude's), from its
     /// log in the folder Claude keeps for `cwd`.
     pub fn title(&self, id: &str, cwd: &str) -> Option<String> {
+        let log = self.log(id, cwd)?;
+        let meta = log.metadata().ok()?;
+        self.summary(&log, meta.modified().ok()?, meta.len())?.title
+    }
+
+    /// The log of the session `id` that ran in `cwd`, in the folder Claude keeps for `cwd`,
+    /// when it is a regular file.
+    pub fn log(&self, id: &str, cwd: &str) -> Option<PathBuf> {
         let root = self.root.as_ref().filter(|_| valid_id(id))?;
         let folder = normalized(cwd);
-        let log = std::fs::read_dir(root)
+        std::fs::read_dir(root)
             .ok()?
             .flatten()
             .filter(|dir| normalized(&dir.file_name().to_string_lossy()) == folder)
             .map(|dir| dir.path().join(format!("{id}.jsonl")))
-            .find(|log| log.symlink_metadata().is_ok_and(|m| m.is_file()))?;
-        let meta = log.metadata().ok()?;
-        self.summary(&log, meta.modified().ok()?, meta.len())?.title
+            .find(|log| log.symlink_metadata().is_ok_and(|m| m.is_file()))
     }
 
     /// The listed session `id`.
@@ -425,7 +431,7 @@ impl Sessions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hive_protocol::Worktree;
+    use hive_protocol::{SessionKind, Worktree};
 
     fn var<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into())
@@ -626,6 +632,8 @@ not json
         .unwrap();
         let sessions = Sessions::new(Some(root.clone()));
         assert_eq!(sessions.title("s", "/r/x"), Some("Named".into()));
+        assert_eq!(sessions.log("s", "/r/x"), Some(folder.join("s.jsonl")));
+        assert_eq!(sessions.log("l", "/r/x"), None);
         assert_eq!(sessions.title("u", "/r/x"), None);
         assert_eq!(sessions.title("l", "/r/x"), None);
         assert_eq!(sessions.title("o", "/r/x"), None);
@@ -645,6 +653,11 @@ not json
         let open = |id: &str, cwd: &str| OpenSession {
             id: id.into(),
             cwd: cwd.into(),
+            kind: SessionKind::Terminal,
+        };
+        let chat = OpenSession {
+            kind: SessionKind::Chat,
+            ..open("c", "/r")
         };
         // Nothing ran: nothing is kept.
         save_open(&file, &[]).unwrap();
@@ -653,15 +666,24 @@ not json
 
         save_open(
             &file,
-            &[open("a", "/r"), open("x; rm", "/r"), open("b", "rel")],
+            &[
+                open("a", "/r"),
+                open("x; rm", "/r"),
+                open("b", "rel"),
+                chat.clone(),
+            ],
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         // Ids that are not session ids, and relative folders, are dropped.
-        assert_eq!(take_open(&file), vec![open("a", "/r")]);
+        assert_eq!(take_open(&file), vec![open("a", "/r"), chat]);
         assert!(!file.exists());
         assert_eq!(take_open(&file), vec![]);
+
+        // A list kept before chats existed holds terminals.
+        std::fs::write(&file, r#"[{"id":"a","cwd":"/r"}]"#).unwrap();
+        assert_eq!(take_open(&file), vec![open("a", "/r")]);
 
         // A long list (over a few KiB) is read back whole.
         let many: Vec<OpenSession> = (0..200).map(|i| open(&format!("s{i}"), "/r")).collect();
