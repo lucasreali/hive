@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { type ChatImage, type ChatMode, useHive } from "../store";
+import { type ChatDraft, type ChatMode, EMPTY_DRAFT, setDraft, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { imageUrl } from "./ConversationView";
@@ -33,8 +33,7 @@ const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const TOO_MANY = "At most 10 images, 3 MiB together, can be sent at once.";
 const NOT_IMAGES = "Only PNG, JPEG, GIF and WebP images can be added.";
 
-/** An image waiting to be sent; `key` tells two equal ones apart. */
-type Attachment = ChatImage & { key: number };
+/** Numbers attached images, so two equal ones are told apart. */
 let attached = 0;
 
 /** A file's bytes as base64. */
@@ -53,13 +52,14 @@ export async function base64(file: Blob): Promise<string> {
  * message (growing with its text up to a limit), then a toolbar with Attach image on the left
  * and the mode selector and Send on the right. Enter sends, Shift+Enter starts a new line;
  * images are picked, pasted or dropped in and shown as thumbnails until sent. While a turn runs, Send turns into Stop, and
- * Esc stops too; closed (or not started yet) it is disabled. The draft is UI state. Typing `/`
+ * Esc stops too; closed (or not started yet) it is disabled. The draft (text, images, caret) is
+ * kept in the store by chat (8.14), so it comes back when the tab shows again. Typing `/`
  * lists the chat's slash commands that start with what follows it: ↑/↓ move, Enter or Tab
  * picks, Esc hides the list. The mode selector shows the service's mode and asks it for another.
  */
 export function ChatComposer({ chat }: { chat: number }) {
-  const [text, setText] = useState("");
-  const [images, setImages] = useState<Attachment[]>([]);
+  const draft = useHive((s) => s.drafts[chat] ?? EMPTY_DRAFT);
+  const { text, images } = draft;
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   // The draft the list was hidden for (Esc); typing shows it again.
@@ -76,16 +76,17 @@ export function ChatComposer({ chat }: { chat: number }) {
   const at = Math.min(active, matches.length - 1);
   const empty = text.trim() === "" && images.length === 0;
   const edit = (value: string) => {
-    setText(value);
+    setDraft(chat, { text: value });
     setActive(0);
   };
+  const setImages = (next: ChatDraft["images"]) => setDraft(chat, { images: next });
   const pick = (command: string) => edit(`/${command} `);
   const send = () => {
     if (!ready || busy || empty) return;
     const sent = images.map(({ media_type, data }) => ({ media_type, data }));
     transport.chatSend(chat, text, sent).catch((e) => setError(String(e)));
-    edit("");
-    setImages([]);
+    setDraft(chat, null);
+    setActive(0);
     setError(null);
   };
   const add = async (files: File[]) => {
@@ -100,7 +101,8 @@ export function ChatComposer({ chat }: { chat: number }) {
         data: await base64(file),
       })),
     );
-    const next = [...images, ...read];
+    // Read now: the draft may have changed (or the tab switched) while the files were read.
+    const next = [...(useHive.getState().drafts[chat]?.images ?? []), ...read];
     const size = next.reduce((sum, image) => sum + image.data.length, 0);
     if (next.length > MAX_IMAGES || size > MAX_IMAGE_DATA) return setError(TOO_MANY);
     setImages(next);
@@ -132,6 +134,13 @@ export function ChatComposer({ chat }: { chat: number }) {
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
+  // The caret is kept when the composer goes (its tab hides) and comes back when it shows again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when it mounts and unmounts.
+  useLayoutEffect(() => {
+    const el = field.current as HTMLTextAreaElement;
+    el.setSelectionRange(draft.start, draft.end);
+    return () => setDraft(chat, { start: el.selectionStart, end: el.selectionEnd });
+  }, []);
   const files = (event: DragEvent) => event.dataTransfer.types.includes("Files");
   return (
     <form

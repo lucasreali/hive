@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { apply, type ChatStatus, initialState, setChat, useHive } from "../store";
+import {
+  apply,
+  type ChatStatus,
+  EMPTY_DRAFT,
+  initialState,
+  setChat,
+  setChatScroll,
+  setDraft,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { base64, ChatComposer, MAX_IMAGE_DATA, MAX_IMAGES } from "./ChatComposer";
 
@@ -298,4 +307,55 @@ test("/ lists the commands that start with what follows it, picked by keyboard o
   // Shift+Enter is a new line, not a pick.
   fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
   expect(input.value).toBe("/c");
+});
+
+test("the draft (text, images, caret) comes back when the composer shows again; sending clears it", async () => {
+  const { send, input } = composer();
+  open();
+  fireEvent.change(input, { target: { value: "hello there" } });
+  input.setSelectionRange(2, 5);
+  await paste(input, [png()]);
+  // The tab switches: the composer unmounts, and mounts again.
+  cleanup();
+  render(<ChatComposer chat={3} />);
+  const again = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  expect(again.value).toBe("hello there");
+  expect([again.selectionStart, again.selectionEnd]).toEqual([2, 5]);
+  expect(
+    screen.getByRole("list", { name: "Images to send" }).querySelector("img")?.getAttribute("src"),
+  ).toBe("data:image/png;base64,iVBORw0KGgo=");
+
+  fireEvent.keyDown(again, { key: "Enter" });
+  expect(send.mock.calls).toEqual([
+    [3, "hello there", [{ media_type: "image/png", data: "iVBORw0KGgo=" }]],
+  ]);
+  expect(useHive.getState().drafts[3]).toBeUndefined();
+  expect(again.value).toBe("");
+  // Unmounted after sending, it keeps only where the caret was.
+  cleanup();
+  expect(useHive.getState().drafts[3]).toEqual({ ...EMPTY_DRAFT });
+});
+
+test("two chats keep separate drafts, and a closed chat drops its draft and scroll", () => {
+  const { input } = composer();
+  open();
+  setChat(4, "/v");
+  render(<ChatComposer chat={4} />);
+  const other = screen.getAllByRole("textbox", { name: "Message" })[1] as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: "for three" } });
+  fireEvent.change(other, { target: { value: "for four" } });
+  expect([input.value, other.value]).toEqual(["for three", "for four"]);
+  act(() => setChatScroll(3, 500, false));
+  expect(useHive.getState().chatScrolls[3]).toEqual({ offset: 500, atBottom: false });
+
+  act(() => setChat(3, null));
+  expect(useHive.getState().drafts[3]).toBeUndefined();
+  expect(useHive.getState().chatScrolls[3]).toBeUndefined();
+  expect(useHive.getState().drafts[4]?.text).toBe("for four");
+  // Nothing is kept for a chat that is not open.
+  setDraft(3, { text: "late" });
+  setChatScroll(3, 1, true);
+  expect(useHive.getState().drafts[3]).toBeUndefined();
+  expect(useHive.getState().chatScrolls[3]).toBeUndefined();
+  expect(EMPTY_DRAFT).toEqual({ text: "", images: [], start: 0, end: 0 });
 });

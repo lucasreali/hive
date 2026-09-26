@@ -306,3 +306,105 @@ test("chat: Claude's Markdown renders, and a wide table scrolls inside its messa
   await scroller.evaluate((el) => el.scrollBy(200, 0));
   await expect.poll(() => scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
 });
+
+test("chat: scrolled up, a back-to-bottom button and the prompt bar show, and new entries wait", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await expect(page.getByRole("dialog", { name: "Chat in this folder?" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  const chat = page.getByRole("region", { name: "Chat" });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  const usages = chat.locator('[data-role="usage"]');
+  await expect(input).toBeEnabled();
+  // A turn: Send turns into Stop while it runs (rows off-screen are not rendered to count).
+  const send = async (text: string) => {
+    await input.fill(text);
+    await input.press("Enter");
+    await expect(chat.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(chat.getByRole("button", { name: "Send" })).toBeVisible();
+  };
+  const long = `first message ${"and more words ".repeat(40)}\nwith a second line`;
+  for (const text of [long, ...Array.from({ length: 9 }, (_, i) => `message ${i + 2}`)]) {
+    await send(text);
+  }
+  const transcript = chat.locator(".transcript");
+  const down = chat.getByTitle("Scroll to the bottom");
+  const bar = chat.getByTitle("Scroll to this message");
+  // At the bottom, neither shows.
+  await expect(down).toBeHidden();
+  await expect(bar).toBeHidden();
+
+  // Wheel to the top: the first prompt, on one clamped line, and the button.
+  await transcript.hover();
+  await page.mouse.wheel(0, -20000);
+  await expect(down).toBeVisible();
+  await expect(bar).toContainText("first message and more words");
+  expect((await bar.boundingBox())?.height).toBeLessThan(40);
+  expect(
+    await bar
+      .locator(".conversation-prompt-text")
+      .evaluate((el) => el.scrollWidth > el.clientWidth),
+  ).toBe(true);
+
+  // A little into message 3's turn, the bar shows it; a click brings it back below the bar.
+  const third = chat.locator('.transcript-entry[data-role="user"]', { hasText: "message 3" });
+  await third.evaluate((el) => el.scrollIntoView());
+  await page.mouse.wheel(0, 40);
+  await expect(bar).toContainText("message 3");
+  await page.mouse.wheel(0, 150);
+  await bar.click();
+  await expect
+    .poll(async () => {
+      const [row, top] = [await third.boundingBox(), await bar.boundingBox()];
+      return Math.round((row?.y ?? 0) - ((top?.y ?? 0) + (top?.height ?? 0)));
+    })
+    .toBeGreaterThanOrEqual(-1);
+  await expect(third).toBeInViewport();
+
+  // New entries do not move a scrolled-up view.
+  const offset = await transcript.evaluate((el) => el.scrollTop);
+  await send("message 11");
+  expect(await transcript.evaluate((el) => el.scrollTop)).toBe(offset);
+  await expect(down).toBeVisible();
+
+  // The button goes back to the newest entry, and the view follows again.
+  await down.click();
+  await expect(down).toBeHidden();
+  await expect(bar).toBeHidden();
+  await expect(usages.last()).toBeInViewport();
+  await send("message 12");
+  await expect(usages.last()).toBeInViewport();
+});
+
+test("chat: the draft and its caret come back after another tab was shown", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  const plus = page.getByTitle("New terminal, agent or file");
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await page.keyboard.press("Enter");
+  const input = page
+    .getByRole("region", { name: "Chat" })
+    .getByRole("textbox", { name: "Message" });
+  await input.fill("half a thought");
+  await input.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 6));
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" }).getByRole("tab");
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
+  await expect(input).toBeHidden();
+  await tabs.first().click();
+  await expect(input).toHaveValue("half a thought");
+  expect(
+    await input.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd]),
+  ).toEqual([5, 6]);
+});

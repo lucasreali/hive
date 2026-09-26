@@ -410,6 +410,22 @@ export type Chat = {
 /** Entries kept of a chat; older ones are dropped. */
 export const CHAT_LIMIT = 2000;
 
+/**
+ * What is being typed in a chat's composer (8.14, UI state): the text, the images to send
+ * (`key` tells two equal ones apart) and the caret/selection (`start`..`end` in the text). Kept
+ * while the chat's tab is open, so it survives the composer unmounting; cleared on send.
+ */
+export type ChatDraft = {
+  text: string;
+  images: (ChatImage & { key: number })[];
+  start: number;
+  end: number;
+};
+export const EMPTY_DRAFT: ChatDraft = { text: "", images: [], start: 0, end: 0 };
+
+/** Where a chat's conversation was scrolled (8.14); `offset` matters only when not `atBottom`. */
+export type ChatScroll = { offset: number; atBottom: boolean };
+
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
 
@@ -731,6 +747,10 @@ export type HiveState = {
   transcript: Transcript | null;
   /** Chats (7.3) by their channel, the id of their tab. */
   chats: Record<number, Chat>;
+  /** Chat composers' drafts by chat (8.14); none means empty (`EMPTY_DRAFT`). */
+  drafts: Record<number, ChatDraft>;
+  /** Chats' scroll positions by chat (8.14); none means at the bottom. */
+  chatScrolls: Record<number, ChatScroll>;
 };
 
 export const initialState: HiveState = {
@@ -800,6 +820,8 @@ export const initialState: HiveState = {
   gotoLine: null,
   transcript: null,
   chats: {},
+  drafts: {},
+  chatScrolls: {},
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -1422,8 +1444,27 @@ export const setChat = (id: number, cwd: string | null) =>
   useHive.setState((s) => {
     if (cwd !== null) return patchChat(s, id, () => ({ cwd }));
     const { [id]: _, ...chats } = s.chats;
-    return { chats };
+    const { [id]: _draft, ...drafts } = s.drafts;
+    const { [id]: _scroll, ...chatScrolls } = s.chatScrolls;
+    return { chats, drafts, chatScrolls };
   });
+
+/**
+ * Changes chat `id`'s draft (8.14), or clears it (null, once sent). Read it with
+ * `s.drafts[id] ?? EMPTY_DRAFT`. A chat whose tab closed keeps no draft.
+ */
+export const setDraft = (id: number, patch: Partial<ChatDraft> | null) =>
+  useHive.setState((s) => {
+    if (!s.chats[id]) return {};
+    const { [id]: draft = EMPTY_DRAFT, ...drafts } = s.drafts;
+    return { drafts: patch ? { ...drafts, [id]: { ...draft, ...patch } } : drafts };
+  });
+
+/** Keeps where chat `id`'s conversation is scrolled (8.14), to come back there. */
+export const setChatScroll = (id: number, offset: number, atBottom: boolean) =>
+  useHive.setState((s) =>
+    s.chats[id] ? { chatScrolls: { ...s.chatScrolls, [id]: { offset, atBottom } } } : {},
+  );
 
 /** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
 export const focusPane = (id: number) =>
