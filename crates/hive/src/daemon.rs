@@ -624,16 +624,22 @@ impl State {
         if let Some(message) = taken {
             return self.to_app(channel, &Control::Error { message }).await;
         }
-        let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), &cwd));
         // A resumed session may have run in a folder inside the worktree: `claude --resume`
-        // finds it only from there.
+        // finds it only from there. That folder must be real (no `..`, no link), so it stays in
+        // the worktree.
+        let (place, inside) = tokio::task::block_in_place(|| {
+            let real = std::fs::canonicalize(&cwd).is_ok_and(|real| real == Path::new(&cwd));
+            (projects::place(&self.projects.list(), &cwd), real)
+        });
         let open = match place {
-            Some((project, worktree)) if worktree == cwd || resume.is_some() => Ok(chat::Open {
-                cwd,
-                project,
-                resume,
-                mode: mode.unwrap_or(ChatMode::Default),
-            }),
+            Some((project, worktree)) if worktree == cwd || resume.is_some() && inside => {
+                Ok(chat::Open {
+                    cwd,
+                    project,
+                    resume,
+                    mode: mode.unwrap_or(ChatMode::Default),
+                })
+            }
             _ => Err(format!(
                 "{cwd} is not a worktree of an added project: chats open only there"
             )),

@@ -123,11 +123,11 @@ test("chat: a session opens as a chat with its history, and an ended chat resume
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "main", exact: true }).first().click();
-  await page.getByTitle("Files, diff and sessions (Ctrl+Shift+B)").click();
+  // The side panel shows with a worktree.
   await page.getByRole("tab", { name: "Sessions" }).click();
   await page.getByRole("button", { name: "Actions for Checkout totals" }).click();
   await page.getByRole("menuitem", { name: "Open as Chat" }).click();
-  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Start chat Enter" }).click();
 
   const chat = page.getByRole("region", { name: "Chat" });
   const entries = chat.locator(".transcript-entry");

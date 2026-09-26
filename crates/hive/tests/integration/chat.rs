@@ -430,6 +430,16 @@ async fn a_resumed_chat_shows_its_history_and_comes_back_as_a_chat() {
     let inside = repo.root.join("src");
     std::fs::create_dir(&inside).unwrap();
     let inside = inside.display().to_string();
+    // Only when resuming, and only a real folder: no `..` or link out of the worktree.
+    let out = repo.root.join("out");
+    std::os::unix::fs::symlink(repo.env.path("home"), &out).unwrap();
+    let out = out.display().to_string();
+    let up = format!("{inside}/../..");
+    for (cwd, resume) in [(&inside, None), (&up, Some(SESSION)), (&out, Some(SESSION))] {
+        app.send(3, open(cwd, resume, None)).await;
+        let refused = format!("{cwd} is not a worktree of an added project: chats open only there");
+        assert_eq!(app.control().await, closed(3, Some(&refused)));
+    }
     app.send(3, open(&inside, Some(SESSION), None)).await;
     assert_eq!(
         app.control().await,
