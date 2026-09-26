@@ -63,3 +63,17 @@ In this session Hive's worktree hooks are registered: WorktreeCreate and Worktre
 Tell the agent the runs are done (Part 2) and how long Part 1 has been recording and paste anything Claude printed that looked like an error. The agent reads `target/spike/`, `/tmp/hive-spike/records`, `/tmp/hive-spike/logs` and the repository state, then writes `docs/spike/stage-0.md`.
 
 To look at the pauses in terminal output (Q2): `scripts/spike/gaps.sh /tmp/hive-spike/logs/observe-*.timing`
+
+# Chat recordings (TODO 7.3a, Stage 8)
+
+`scripts/spike/record-chat.py` records real `claude -p` stream-json sessions for the in-app chat
+(`docs/spike/chat.md` section 11). The Stage 8 scenarios answer what tasks 8.1, 8.4, 8.7, 8.9,
+8.11 and 8.12 need:
+
+```sh
+python3 scripts/spike/record-chat.py stage8
+```
+
+At the end it prints a **Findings** block, one short entry per scenario: paste it back to the
+agent, with the `tar` path it prints. It also prints the `~/.claude/projects/...` folder claude
+wrote the scratch sessions to, for you to delete.

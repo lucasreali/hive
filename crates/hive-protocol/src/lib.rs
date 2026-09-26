@@ -1113,7 +1113,9 @@ pub struct Session {
     pub log: String,
     /// Its state by how the log ends (a session running in a Hive terminal has its live one).
     pub state: AgentState,
-    /// A `claude` outside Hive's terminals runs it.
+    /// A `claude` is known to run it: in a Hive terminal or chat (its hooks name it), or
+    /// outside Hive (Claude's record of the process, its `--resume`/`--session-id`, or its
+    /// open log name it).
     pub running: bool,
 }
 

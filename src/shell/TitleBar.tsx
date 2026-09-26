@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { spaceName } from "../notify";
 import { goToAgent } from "../shortcuts";
-import { type Agent, markInboxRead, pendingAgents, useHive } from "../store";
+import { type Agent, markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
 import { isMac, windowAction } from "../window";
 import { requestUpdate } from "./CloseAppDialog";
 import {
@@ -71,13 +71,12 @@ function UpdateButton() {
 }
 
 /**
- * The agents that need you ("N pending", the service's), as a bell with their number and a dot
- * for alerts not seen yet. A click opens the inbox (6.5) and marks every alert read; F8 still
- * goes to the next pending agent.
+ * The bell, with the number of pending agents not seen yet (8.5). A click opens the inbox (6.5)
+ * and marks every alert read and the pending agents seen, clearing the badge; an agent counts
+ * again on a new alert. F8 still goes to the next pending agent.
  */
 function PendingBell() {
-  const count = useHive((s) => pendingAgents(s).length);
-  const unread = useHive((s) => (s.inbox[0]?.id ?? 0) > s.inboxSeen);
+  const count = useHive(unseenPending);
   // The bell itself, once rendered: the inbox hangs under it.
   const [bell, setBell] = useState<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -102,7 +101,6 @@ function PendingBell() {
       >
         <BellIcon size={16} weight={count > 0 ? "fill" : "regular"} aria-hidden="true" />
         {count > 0 && <span className="pending-count">{count}</span>}
-        {unread && <span className="unread-dot" title="New notifications" />}
       </button>
       {open && bell && <Inbox bell={bell} onClose={close} />}
     </>

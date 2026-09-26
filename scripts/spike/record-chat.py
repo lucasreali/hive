@@ -4,31 +4,41 @@
 Run by the human, never by an agent. One session per scenario, in a scratch git repository
 under /var/tmp (never this repository). Each scenario writes, in <out>/rec/:
 
-    <name>.out.jsonl    stdout of claude, byte for byte (one JSON message per line)
-    <name>.in.jsonl     every line this script wrote to claude's stdin
-    <name>.timing.tsv   seconds since start, direction, type/subtype of each line
-    <name>.stderr.txt   stderr of claude
+    <name>.out.jsonl         stdout of claude, byte for byte (one JSON message per line)
+    <name>.in.jsonl          every line this script wrote to claude's stdin
+    <name>.timing.tsv        seconds since start, direction, type/subtype of each line
+    <name>.stderr.txt        stderr of claude
+    <name>.transcript.jsonl  a copy of the session's transcript from ~/.claude/projects
+    <name>.hooks.jsonl       hook payloads, one per line (scenarios with "hooks")
+    <name>.settings.json     what --settings got (scenarios with "hooks" or "settings")
 
 Usage (from the repository root, any shell; no shell config is needed):
 
     python3 scripts/spike/record-chat.py                  # every scenario
     python3 scripts/spike/record-chat.py text permission  # only these
+    python3 scripts/spike/record-chat.py stage8           # the Stage 8 scenarios
     python3 scripts/spike/record-chat.py --list
 
 Options: --claude <path> (default: the first `claude` on PATH outside Hive's wrapper dir),
---model <alias> (default haiku), --out <dir> (default: a new /var/tmp/hive-chat-spike.* dir).
+--model <alias> (default haiku), --out <dir> (default: a new /var/tmp/hive-chat-spike.* dir),
+--model-1m / --model-200k / --thinking-model / --switch-model (see --help).
 
 What it touches outside <out>: claude itself writes the sessions to
-~/.claude/projects/<scratch repo path, / and . as -> as any session does; the script prints
-that folder at the end so you can delete it. User settings are not loaded
-(--setting-sources project,local) and no MCP server starts (--strict-mcp-config).
+~/.claude/projects/<scratch repo path, every non-alphanumeric as -> as any session does; the
+script prints that folder at the end so you can delete it. User settings are not loaded
+(--setting-sources project,local) and no MCP server starts (--strict-mcp-config). Hooks and
+settings a scenario needs come from --settings <rec>/<name>.settings.json; the hooks only append
+their stdin to <rec>/<name>.hooks.jsonl.
 """
 
 import argparse
+import glob
 import json
 import os
 import queue
+import re
 import shutil
+import shlex
 import signal
 import struct
 import subprocess
@@ -67,6 +77,13 @@ def image_turn():
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
     ]
 
+
+READY = "Reply with one word: ready. Do not use any tools."
+LS = "Run the shell command `ls` and say how many entries it shows."
+PRIMES = (
+    "Think carefully before answering: how many primes are there between 100 and 150? "
+    "Answer with the count only. Do not use any tools."
+)
 
 # Each scenario: prompts (user turns, sent one after each `result`), extra CLI args, and how the
 # script answers permission requests ("allow", "deny", "allow-then-deny", "answer-first").
@@ -142,7 +159,83 @@ SCENARIOS = {
         "resume_from": "text",
         "turns": ["What did you tell me in your previous answer? One line."],
     },
+    # Stage 8. A turn is a user message, or {"control": request}: the control request is sent and
+    # the next turn waits for its control_response. "model" may be a function of the options.
+    # "report" names the facts the final summary prints (see FACTS).
+    "context-1m": {  # 8.1: where the 1M window shows up
+        "model": lambda a: a.model_1m,
+        "hooks": True,
+        "turns": [READY],
+        "report": ["init", "window", "transcript_model", "hook_model"],
+    },
+    "context-opus": {  # 8.1: plain `opus` (1M natively on current models), no [1m] suffix
+        "model": "opus",
+        "hooks": True,
+        "turns": [READY],
+        "report": ["init", "window", "transcript_model", "hook_model"],
+    },
+    "context-200k": {  # 8.1: a 200k model
+        "model": lambda a: a.model_200k,
+        "hooks": True,
+        "turns": [READY],
+        "report": ["init", "window", "transcript_model", "hook_model"],
+    },
+    "auto-start": {  # 8.4: started in auto mode
+        "model": lambda a: a.thinking_model,
+        "args": ["--permission-mode", "auto"],
+        "turns": [LS],
+        "report": ["init", "asked", "stderr"],
+    },
+    "auto-switch": {  # 8.4: switched to auto mode by the control request
+        "model": lambda a: a.thinking_model,
+        "turns": [{"control": {"subtype": "set_permission_mode", "mode": "auto"}}, LS],
+        "report": ["controls", "init", "asked"],
+    },
+    "auto-switch-haiku": {  # 8.4: the same on haiku (a model that may not offer auto mode)
+        "model": "haiku",
+        "turns": [{"control": {"subtype": "set_permission_mode", "mode": "auto"}}, LS],
+        "report": ["controls", "init", "asked"],
+    },
+    "thinking-sonnet": {  # 8.7: a thinking-capable model, default settings
+        "model": lambda a: a.thinking_model,
+        "args": ["--effort", "high"],
+        "turns": [PRIMES],
+        "report": ["thinking"],
+    },
+    "thinking-summaries": {  # 8.7: the same with showThinkingSummaries (settings reference)
+        "model": lambda a: a.thinking_model,
+        "args": ["--effort", "high"],
+        "settings": {"showThinkingSummaries": True},
+        "turns": [PRIMES],
+        "report": ["thinking"],
+    },
+    "model-switch": {  # 8.9: initialize's models, set_model to an alias, then to a bad name
+        "turns": [
+            "Say hi in one word. Do not use any tools.",
+            {"control": {"subtype": "set_model", "model": lambda a: a.switch_model}},
+            "Which model are you? One line. Do not use any tools.",
+            {"control": {"subtype": "set_model", "model": "no-such-model-hive-spike"}},
+            "Say bye in one word. Do not use any tools.",
+        ],
+        "report": ["models", "controls", "init", "result_models"],
+    },
+    "title": {  # 8.11: does a stream-json session get an ai-title? does /rename work?
+        "turns": [
+            "Explain in one sentence what a git worktree is. Do not use any tools.",
+            "Now in one sentence: how do I remove one? Do not use any tools.",
+            "/rename hive spike title",
+        ],
+        "report": ["title"],
+    },
+    "mention": {  # 8.12: does claude expand @file and @folder/ itself?
+        "turns": [
+            "Without using any tools, tell me the second line of @notes.txt and the files in "
+            "@subdir/. If you cannot see them, say so."
+        ],
+        "report": ["mention"],
+    },
 }
+STAGE8 = [n for n, spec in SCENARIOS.items() if "report" in spec]
 
 
 def find_claude(explicit):
@@ -174,6 +267,9 @@ def make_repo(repo):
         f.write("# Scratch\n\nA scratch repository for the Hive chat spike.\n")
     with open(os.path.join(repo, "picture.png"), "wb") as f:
         f.write(png())
+    os.makedirs(os.path.join(repo, "subdir"))
+    with open(os.path.join(repo, "subdir", "inner.txt"), "w") as f:
+        f.write("inner file\n")
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "scratch")
@@ -286,14 +382,50 @@ def answer(policy, request, count):
     return {"behavior": "allow", "updatedInput": data}
 
 
-def run(name, spec, claude, model, repo, rec, sessions):
+def settings_args(name, spec, rec):
+    """--settings for this scenario: its settings, plus hooks appending stdin to <name>.hooks.jsonl."""
+    settings = dict(spec.get("settings", {}))
+    if spec.get("hooks"):
+        log = shlex.quote(os.path.join(rec, name + ".hooks.jsonl"))
+        hook = [{"hooks": [{"type": "command", "command": f"{{ cat; echo; }} >> {log}"}]}]
+        events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"]
+        settings["hooks"] = {event: hook for event in events}
+    if not settings:
+        return []
+    path = os.path.join(rec, name + ".settings.json")
+    with open(path, "w") as f:
+        json.dump(settings, f, indent=1)
+    return ["--settings", path]
+
+
+def config_dir():
+    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+
+
+def copy_transcript(name, sid, rec):
+    """Copy the session's transcript (found by its id) to <name>.transcript.jsonl."""
+    if not sid or not re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
+        return
+    for path in glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl")):
+        shutil.copyfile(path, os.path.join(rec, name + ".transcript.jsonl"))
+        return
+    print(f"  [{name}] no transcript found for session {sid}")
+
+
+def resolve(value, opts):
+    """A scenario value that may depend on the options (a function of them)."""
+    return value(opts) if callable(value) else value
+
+
+def run(name, spec, claude, opts, repo, rec, sessions):
     cmd = [
         claude, "-p",
         "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
         "--include-partial-messages", "--include-hook-events", "--replay-user-messages",
         "--permission-prompt-tool", "stdio",
-        "--model", spec.get("model", model),
+        "--model", resolve(spec.get("model", opts.model), opts),
         "--strict-mcp-config", "--setting-sources", "project,local",
+        *settings_args(name, spec, rec),
         *spec.get("args", []),
     ]
     if "resume_from" in spec:
@@ -317,6 +449,20 @@ def run(name, spec, claude, model, repo, rec, sessions):
     s = Session(name, cmd, repo, env, rec)
     turns = list(spec["turns"])
     policy, asked = spec.get("answer", "allow"), 0
+    pending, pending_until = None, 0  # the control request the next turn waits for (at most 60 s)
+
+    def advance():
+        """Send the next turn: a user message, or a control request to wait for."""
+        nonlocal pending, pending_until
+        turn = turns.pop(0)
+        if isinstance(turn, dict) and "control" in turn:
+            pending, pending_until = f"rec-ctl-{len(turns)}", time.monotonic() + 60
+            request = {k: resolve(v, opts) for k, v in turn["control"].items()}
+            s.send({"type": "control_request", "request_id": pending, "request": request})
+        else:
+            pending = None
+            s.send(user(turn))
+
     interrupt_at, interrupted = None, False
     s.send({"type": "control_request", "request_id": "rec-init", "request": {"subtype": "initialize", "hooks": None}})
     initialized = False
@@ -326,7 +472,10 @@ def run(name, spec, claude, model, repo, rec, sessions):
         if not initialized and time.monotonic() > init_deadline:
             print(f"  [{name}] no initialize response in 60 s; sending the prompt anyway")
             initialized = True
-            s.send(user(turns.pop(0)))
+            advance()
+        if pending and time.monotonic() > pending_until:
+            print(f"  [{name}] no reply to {pending} in 60 s; going on")
+            advance()
         if interrupt_at and not interrupted and time.monotonic() >= interrupt_at:
             interrupted = True
             s.send({"type": "control_request", "request_id": "rec-interrupt", "request": {"subtype": "interrupt"}})
@@ -339,7 +488,11 @@ def run(name, spec, claude, model, repo, rec, sessions):
         if kind == "control_response" and (msg.get("response") or {}).get("request_id") == "rec-init":
             if not initialized:
                 initialized = True
-                s.send(user(turns.pop(0)))
+                advance()
+        elif kind == "control_response" and pending and (msg.get("response") or {}).get("request_id") == pending:
+            reply = msg.get("response") or {}
+            print(f"  [{name}] control reply: {reply.get('subtype')} {reply.get('error') or ''}".rstrip())
+            advance()
         elif kind == "control_request":
             req = msg.get("request") or {}
             if req.get("subtype") == "can_use_tool":
@@ -355,8 +508,8 @@ def run(name, spec, claude, model, repo, rec, sessions):
             if any(b.get("type") == "tool_use" for b in (msg.get("message") or {}).get("content", [])):
                 interrupt_at = time.monotonic() + spec["interrupt_after_tool"]
         elif kind == "result":
-            if turns:
-                s.send(user(turns.pop(0)))
+            if turns and not pending:
+                advance()
             else:
                 s.close_stdin()
                 deadline = min(deadline, time.monotonic() + EXIT_GRACE)
@@ -364,6 +517,7 @@ def run(name, spec, claude, model, repo, rec, sessions):
         print(f"  [{name}] timed out")
     code = s.stop()
     print(f"  [{name}] exit {code}")
+    copy_transcript(name, sessions.get(name), rec)
 
 
 def summary(rec, names):
@@ -380,6 +534,200 @@ def summary(rec, names):
         print(f"{name}: " + ", ".join(f"{k}×{v}" for k, v in sorted(counts.items())))
 
 
+def load(path):
+    """The JSON objects of a .jsonl file (missing file or bad lines: skipped)."""
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                value = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                out.append(value)
+    return out
+
+
+def ordered(values):
+    return list(dict.fromkeys(v for v in values if v is not None))
+
+
+def blocks(messages, kind):
+    """Content blocks of type `kind` in the `assistant` messages."""
+    for m in messages:
+        if m.get("type") == "assistant":
+            content = (m.get("message") or {}).get("content")
+            if isinstance(content, list):
+                yield from (b for b in content if isinstance(b, dict) and b.get("type") == kind)
+
+
+def fact_init(r):
+    inits = [m for m in r["out"] if m.get("type") == "system" and m.get("subtype") == "init"]
+    seq = ordered(f"model={m.get('model')} permissionMode={m.get('permissionMode')}" for m in inits)
+    return "system/init: " + (" -> ".join(seq) or "none")
+
+
+def fact_window(r):
+    usage = [m.get("modelUsage") or {} for m in r["out"] if m.get("type") == "result"]
+    windows = {k: v.get("contextWindow") for u in usage for k, v in u.items() if isinstance(v, dict)}
+    return f"result.modelUsage contextWindow: {windows or 'none'}"
+
+
+def fact_transcript_model(r):
+    models = ordered((e.get("message") or {}).get("model") for e in r["transcript"] if e.get("type") == "assistant")
+    found = "found" if r["transcript"] else "MISSING"
+    return f"transcript ({found}) message.model: {models or 'none'}"
+
+
+def fact_hook_model(r):
+    if not r["hooks"]:
+        return "hooks: no payload recorded"
+    seen = []
+    for h in r["hooks"]:
+        fields = {k: v for k, v in h.items() if "model" in k.lower() or "context" in k.lower()}
+        seen.append(f"{h.get('hook_event_name')}: {fields or '-'}")
+    keys = sorted({k for h in r["hooks"] for k in h})
+    return "hooks: " + "; ".join(ordered(seen)) + f"\n    hook payload keys: {keys}"
+
+
+def fact_asked(r):
+    asked = [
+        (m.get("request") or {}).get("tool_name")
+        for m in r["out"]
+        if m.get("type") == "control_request" and (m.get("request") or {}).get("subtype") == "can_use_tool"
+    ]
+    tools = [b.get("name") for b in blocks(r["out"], "tool_use")]
+    results = [m.get("subtype") for m in r["out"] if m.get("type") == "result"]
+    return f"tools used: {tools}; permission asked for: {asked}; results: {results}"
+
+
+def fact_stderr(r):
+    text = r["stderr"].strip()
+    return f"stderr: {text[:300]!r}" if text else "stderr: empty"
+
+
+def fact_controls(r):
+    replies = {
+        (m.get("response") or {}).get("request_id"): m.get("response") or {}
+        for m in r["out"]
+        if m.get("type") == "control_response"
+    }
+    lines = []
+    for m in r["in"]:
+        rid = m.get("request_id") or ""
+        if m.get("type") == "control_request" and rid.startswith("rec-ctl-"):
+            req = m.get("request") or {}
+            args = {k: v for k, v in req.items() if k != "subtype"}
+            reply = replies.get(rid)
+            got = "no reply" if reply is None else f"{reply.get('subtype')}: {reply.get('error') or reply.get('response')}"
+            lines.append(f"{req.get('subtype')} {args} -> {got}")
+    return "controls: " + ("\n    ".join(lines) or "none")
+
+
+def fact_models(r):
+    for m in r["out"]:
+        resp = m.get("response") or {}
+        if m.get("type") == "control_response" and resp.get("request_id") == "rec-init":
+            body = resp.get("response") or {}
+            models = body.get("models") or []
+            names = [
+                f"{x.get('value')}{' (auto)' if x.get('supportsAutoMode') else ''}" if isinstance(x, dict) else x
+                for x in models
+            ]
+            return f"initialize models: {names or 'none'}\n    initialize keys: {sorted(body)}"
+    return "initialize: no reply"
+
+
+def fact_result_models(r):
+    msgs = ordered((m.get("message") or {}).get("model") for m in r["out"] if m.get("type") == "assistant")
+    usage = [sorted((m.get("modelUsage") or {}).keys()) for m in r["out"] if m.get("type") == "result"]
+    return f"assistant message.model: {msgs}; modelUsage per result: {usage}"
+
+
+def fact_thinking(r):
+    thinking = list(blocks(r["out"], "thinking"))
+    texts = [b for b in thinking if str(b.get("thinking") or "").strip()]
+    redacted = list(blocks(r["out"], "redacted_thinking"))
+    deltas = [
+        (m.get("event") or {}).get("delta") or {}
+        for m in r["out"]
+        if m.get("type") == "stream_event" and (m.get("event") or {}).get("type") == "content_block_delta"
+    ]
+    think = [d for d in deltas if d.get("type") == "thinking_delta"]
+    think_text = [d for d in think if str(d.get("thinking") or "").strip()]
+    sig = [d for d in deltas if d.get("type") == "signature_delta"]
+    empty = "yes" if thinking and not texts and not think_text else "no" if thinking or think_text else "no thinking at all"
+    return (
+        f"thinking text empty: {empty} (thinking blocks {len(thinking)}, with text {len(texts)}; "
+        f"redacted {len(redacted)}; thinking_delta {len(think)}, with text {len(think_text)}; signature_delta {len(sig)})"
+    )
+
+
+def fact_title(r):
+    ai = [e.get("aiTitle") for e in r["transcript"] if e.get("type") == "ai-title"]
+    custom = [e.get("customTitle") for e in r["transcript"] if e.get("type") == "custom-title"]
+    results = [str(m.get("result") or "")[:80] for m in r["out"] if m.get("type") == "result"]
+    found = "found" if r["transcript"] else "MISSING"
+    return (
+        f"transcript {found}; ai-title found: {'yes ' + repr(ai) if ai else 'no'}; "
+        f"custom-title found: {'yes ' + repr(custom) if custom else 'no'}\n    result of each turn: {results}"
+    )
+
+
+def fact_mention(r):
+    def mentions(entries):
+        text = "\n".join(json.dumps(e) for e in entries if e.get("type") != "assistant")
+        return "third line" in text, "inner.txt" in text
+
+    replay = [m for m in r["out"] if m.get("type") == "user"]
+    notes, folder = mentions(r["transcript"] + replay)
+    tools = [b.get("name") for b in blocks(r["out"] + r["transcript"], "tool_use")]
+    types = sorted({e.get("type") for e in r["transcript"]} - {None})
+    expanded = "yes" if notes or folder else "no"
+    return (
+        f"@path expanded: {expanded} (file content @notes.txt: {notes}, listing @subdir/: {folder}; "
+        f"tools used: {tools}; transcript entry types: {types})"
+    )
+
+
+FACTS = {
+    "init": fact_init,
+    "window": fact_window,
+    "transcript_model": fact_transcript_model,
+    "hook_model": fact_hook_model,
+    "asked": fact_asked,
+    "stderr": fact_stderr,
+    "controls": fact_controls,
+    "models": fact_models,
+    "result_models": fact_result_models,
+    "thinking": fact_thinking,
+    "title": fact_title,
+    "mention": fact_mention,
+}
+
+
+def findings(rec, names):
+    """The answers the Stage 8 scenarios look for, one block per scenario (to paste back)."""
+    for name in names:
+        report = SCENARIOS[name].get("report")
+        if not report:
+            continue
+        base = os.path.join(rec, name)
+        stderr = open(base + ".stderr.txt", errors="replace").read() if os.path.exists(base + ".stderr.txt") else ""
+        r = {
+            "out": load(base + ".out.jsonl"),
+            "in": load(base + ".in.jsonl"),
+            "transcript": load(base + ".transcript.jsonl"),
+            "hooks": load(base + ".hooks.jsonl"),
+            "stderr": stderr,
+        }
+        print(f"[{name}]")
+        for fact in report:
+            print("    " + FACTS[fact](r))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scenarios", nargs="*", help="scenarios to run (default: all)")
@@ -387,12 +735,18 @@ def main():
     ap.add_argument("--claude", help="path of the claude binary")
     ap.add_argument("--model", default="haiku", help="model alias (default haiku)")
     ap.add_argument("--out", help="output directory (default: a new /var/tmp/hive-chat-spike.* dir)")
+    ap.add_argument("--model-1m", default="opus[1m]", help="1M model of context-1m (default opus[1m])")
+    ap.add_argument("--model-200k", default="haiku", help="200k model of context-200k (default haiku)")
+    ap.add_argument(
+        "--thinking-model", default="sonnet", help="model of thinking-* and auto-start/auto-switch (default sonnet)"
+    )
+    ap.add_argument("--switch-model", default="sonnet", help="alias model-switch switches to (default sonnet)")
     a = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # progress shows up before du's output
     if a.list:
-        print("\n".join(SCENARIOS))
+        print("\n".join(SCENARIOS) + "\nstage8 = " + " ".join(STAGE8))
         return
-    names = a.scenarios or list(SCENARIOS)
+    names = [n for arg in a.scenarios or SCENARIOS for n in (STAGE8 if arg == "stage8" else [arg])]
     unknown = [n for n in names if n not in SCENARIOS]
     if unknown:
         sys.exit(f"record-chat: unknown scenario(s): {', '.join(unknown)} (see --list)")
@@ -411,10 +765,14 @@ def main():
     sessions = {}
     for name in names:
         print(f"== {name}")
-        run(name, SCENARIOS[name], claude, a.model, repo, rec, sessions)
+        run(name, SCENARIOS[name], claude, a, repo, rec, sessions)
     print()
     summary(rec, names)
-    projects = os.path.expanduser("~/.claude/projects/") + os.path.realpath(repo).replace("/", "-").replace(".", "-")
+    if any("report" in SCENARIOS[n] for n in names):
+        print("\n== Findings (paste this back to the agent)")
+        print(f"claude {version}")
+        findings(rec, names)
+    projects = os.path.join(config_dir(), "projects", re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(repo)))
     print(f"\nDone. Recordings: {rec}")
     print(f"claude saved these sessions under {projects} (delete it when done).")
     print(f"To share: tar -C {base} -czf /var/tmp/hive-chat-spike.tar.gz rec")

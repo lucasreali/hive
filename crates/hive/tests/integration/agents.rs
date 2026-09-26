@@ -402,7 +402,8 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
             .collect::<String>(),
     );
     std::fs::create_dir_all(&logs).unwrap();
-    for id in ["s", "old"] {
+    let outside = "0f6b3a52-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+    for id in ["s", "old", outside] {
         let line =
             json!({"type": "user", "cwd": root, "message": {"content": format!("task {id}")}});
         std::fs::write(logs.join(format!("{id}.jsonl")), line.to_string()).unwrap();
@@ -426,9 +427,46 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
     let Control::Sessions { sessions, error } = ask(Control::ListSessions).await else {
         panic!("expected sessions")
     };
-    let mut ids: Vec<_> = sessions.iter().map(|s| s.id.as_str()).collect();
+    let mut ids: Vec<_> = sessions
+        .iter()
+        .map(|s| (s.id.as_str(), s.running))
+        .collect();
     ids.sort();
-    assert_eq!((ids, error), (vec!["old", "s"], None));
+    assert_eq!(
+        (ids, error),
+        (vec![(outside, false), ("old", false), ("s", false)], None)
+    );
+
+    // A `claude` outside Hive that Claude's record names runs its session; a bare one
+    // (no record, no arguments) runs none.
+    let fake = repo.env.path("home/claude");
+    std::fs::copy("/bin/dash", &fake).unwrap();
+    let spawn = || {
+        std::process::Command::new(&fake)
+            .args(["-c", "sleep 30; :"])
+            .env("XDG_RUNTIME_DIR", repo.env.path("run"))
+            .spawn()
+            .unwrap()
+    };
+    let (mut recorded, mut bare) = (spawn(), spawn());
+    let records = repo.env.path("home/.claude/sessions");
+    std::fs::create_dir_all(&records).unwrap();
+    let pid = recorded.id();
+    let record = json!({"pid": pid, "sessionId": outside, "cwd": root});
+    std::fs::write(records.join(format!("{pid}.json")), record.to_string()).unwrap();
+    let Control::Sessions { sessions, .. } = ask(Control::ListSessions).await else {
+        panic!("expected sessions")
+    };
+    let mut running: Vec<_> = sessions
+        .iter()
+        .map(|s| (s.id.as_str(), s.running))
+        .collect();
+    running.sort();
+    assert_eq!(running, [(outside, true), ("old", false), ("s", false)]);
+    for child in [&mut recorded, &mut bare] {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
 
     for target in [SessionTarget::Log, SessionTarget::Folder] {
         let located = ask(Control::LocateSession {
@@ -464,6 +502,19 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         json!({"session_id": "s", "cwd": root}),
     )
     .await;
+    // A session its hooks name runs, in Hive's terminal; the others do not.
+    app.send(0, Control::ListSessions).await;
+    let sessions = loop {
+        if let (0, Control::Sessions { sessions, .. }) = app.control().await {
+            break sessions;
+        }
+    };
+    let mut running: Vec<_> = sessions
+        .iter()
+        .map(|s| (s.id.as_str(), s.running))
+        .collect();
+    running.sort();
+    assert_eq!(running, [(outside, false), ("old", false), ("s", true)]);
     let mut ask = async |message: Control| {
         app.send(0, message).await;
         loop {
