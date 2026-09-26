@@ -24,14 +24,66 @@ function show() {
 
 const bar = () => within(screen.getByRole("tablist", { name: "Open terminals and files" }));
 const tab = (name: string) => bar().getByRole("tab", { name: new RegExp(`^${name}`) });
+const plus = () => screen.getByRole("button", { name: "New terminal, agent or file" });
+/** Clicks "+" and the menu's `item`. */
+function newTab(item: string) {
+  fireEvent.click(plus());
+  fireEvent.click(screen.getByRole("menuitem", { name: item }));
+}
+
+test("the + menu opens an agent or a new file in the selected worktree", async () => {
+  const open = spyOn(transport, "openChat").mockResolvedValue(77);
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "fix-login" }));
+  expect(plus().getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(plus());
+  expect(plus().getAttribute("aria-expanded")).toBe("true");
+  const menu = screen.getByRole("menu", { name: "New tab" });
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Terminal", "Agent", "New file…"]);
+  expect(menu.querySelectorAll("svg[aria-hidden=true]").length).toBe(3);
+  // "+" again closes it.
+  fireEvent.click(plus());
+  expect(screen.queryByRole("menu")).toBeNull();
+
+  // Agent: the in-app chat (7.3).
+  newTab("Agent");
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(open.mock.calls).toEqual([[fixLogin.path, null, null]]);
+  await waitFor(() => expect(screen.getByRole("region", { name: "Chat" })).toBeDefined());
+
+  newTab("New file…");
+  expect(useHive.getState()).toMatchObject({
+    modal: "file-name",
+    fileDialog: { worktree: fixLogin.id, folder: "", path: null, renaming: false },
+  });
+  open.mockRestore();
+});
+
+test("the + menu from the keyboard: down opens it, arrows move, Esc gives the focus back", () => {
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "fix-login" }));
+  plus().focus();
+  fireEvent.keyDown(plus(), { key: "ArrowDown" });
+  const item = (name: string) => screen.getByRole("menuitem", { name });
+  expect(document.activeElement).toBe(item("Terminal"));
+  fireEvent.keyDown(item("Terminal"), { key: "ArrowDown" });
+  expect(document.activeElement).toBe(item("Agent"));
+  fireEvent.keyDown(item("Agent"), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(document.activeElement).toBe(plus());
+});
 
 test("New terminal opens one in the selected worktree, shown in its tab", async () => {
   const open = spyOn(transport, "openTerminal");
   show();
-  const button = screen.getByTitle("New terminal (Ctrl+Shift+T)") as HTMLButtonElement;
+  const button = screen.getByTitle("New terminal, agent or file") as HTMLButtonElement;
   expect(button.disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "fix-login" }));
-  fireEvent.click(button);
+  newTab("Terminal");
   expect(open.mock.calls[0][0]).toBe(fixLogin.path);
   await waitFor(() => expect(tab("fix-login").getAttribute("aria-selected")).toBe("true"));
   expect(tab("fix-login").closest(".tab")?.getAttribute("title")).toBe(fixLogin.path);
@@ -41,13 +93,13 @@ test("New terminal opens one in the selected worktree, shown in its tab", async 
 test("with an agent selected (F8), New terminal opens one in the agent's worktree", () => {
   const open = spyOn(transport, "openTerminal");
   show();
-  const button = screen.getByTitle("New terminal (Ctrl+Shift+T)") as HTMLButtonElement;
+  const button = screen.getByTitle("New terminal, agent or file") as HTMLButtonElement;
   const agent = { type: "agent_detected", channel: 9, cwd: "/x" } as const;
   act(() => {
     apply({ ...agent, id: "s", project: shop.id, worktree: fixLogin.id });
     select("s");
   });
-  fireEvent.click(button);
+  newTab("Terminal");
   expect(open.mock.calls.map((call) => call[0])).toEqual([fixLogin.path]);
   // An agent outside every project has no worktree to open one in.
   act(() => {

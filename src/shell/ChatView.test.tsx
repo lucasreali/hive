@@ -116,15 +116,3 @@ test("the first chat in a folder asks first; Start chat accepts, Esc refuses", (
     expect(screen.queryByRole("dialog")).toBeNull();
   }
 });
-
-test("the temporary 'New agent chat' button opens a chat in the selected worktree", async () => {
-  const open = spyOn(transport, "openChat").mockResolvedValue(9);
-  render(<TerminalArea />);
-  const button = screen.getByTitle("New agent chat") as HTMLButtonElement;
-  expect(button.disabled).toBe(true);
-  act(() => useHive.setState({ selection: "/w" }));
-  await act(async () => fireEvent.click(button));
-  expect(open.mock.calls).toEqual([["/w", null, null]]);
-  expect(useHive.getState().tabs).toEqual([{ id: 9, cwd: "/w", kind: "chat" }]);
-  expect(screen.getByRole("region", { name: "Chat" })).toBeDefined();
-});

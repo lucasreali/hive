@@ -7,7 +7,8 @@ test("chat: confirm the folder, send, entries arrive, a tool opens, Stop while b
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.getByTitle("New agent chat").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
 
   // The first chat in a folder asks first.
   const dialog = page.getByRole("dialog", { name: "Chat in this folder?" });

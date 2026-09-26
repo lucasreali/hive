@@ -2,7 +2,7 @@ import { addTab, removeTab, setChat, useHive } from "./store";
 import { transport } from "./transport";
 
 // Chats (7.3): a tab of the terminal area whose Claude runs headless in the service. The tab bar's
-// "+" menu (7.5, "Agent") and the temporary "New chat" button call `openChat`.
+// "+" menu's "Agent" (7.5) calls `openChat`.
 
 /**
  * Starts a chat in the worktree `cwd` and adds its tab, shown. The service may first ask to
