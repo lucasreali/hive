@@ -1271,6 +1271,14 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
+/* A worktree's chevron sits in a fixed box, present whether or not the row has agents. */
+.tree-row .chevron-box {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  display: flex;
+}
+
 button.chevron:hover {
   color: var(--text);
 }
