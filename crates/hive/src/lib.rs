@@ -3,6 +3,7 @@
 pub mod adapter;
 pub mod bridge;
 pub mod changes;
+pub mod chat;
 pub mod cli;
 pub mod daemon;
 pub mod dirs;

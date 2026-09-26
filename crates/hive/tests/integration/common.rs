@@ -121,12 +121,16 @@ impl Env {
 
     /// Starts `hive daemon` and waits until its socket accepts connections.
     pub fn daemon(&self) -> Daemon {
-        let child = self
-            .hive()
-            .arg("daemon")
-            .stdin(Stdio::null())
-            .spawn()
-            .unwrap();
+        self.daemon_with(&mut self.hive())
+    }
+
+    /// [`Env::daemon`] with only `path` as `PATH`, so it finds no program but those there.
+    pub fn daemon_on_path(&self, path: &std::path::Path) -> Daemon {
+        self.daemon_with(self.hive().env("PATH", path))
+    }
+
+    fn daemon_with(&self, hive: &mut Command) -> Daemon {
+        let child = hive.arg("daemon").stdin(Stdio::null()).spawn().unwrap();
         let mut daemon = Daemon(child);
         // A daemon that already exited fails the test at once, not after the timeout (a
         // mutant that returns early would otherwise make every test wait it out).
