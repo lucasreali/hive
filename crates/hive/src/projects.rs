@@ -77,9 +77,11 @@ impl Projects {
         // Only the projects holding `cwd` when some do, so git runs for them alone; else
         // every project (a linked worktree may be anywhere).
         // ponytail: a worktree of one project inside another's folder takes the outer one's space.
+        // Resolved first, as `place` does: `..` or a link may lead into another project.
+        let real = Path::new(cwd).canonicalize().unwrap_or_default();
         let ids: Vec<String> = self.spaces().projects().cloned().collect();
         let inside: Vec<Project> = (ids.iter())
-            .filter(|id| Path::new(cwd).starts_with(id))
+            .filter(|id| real.starts_with(id))
             .map(|id| project(id))
             .collect();
         let listed = if inside.is_empty() {

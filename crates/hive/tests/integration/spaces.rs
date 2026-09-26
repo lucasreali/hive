@@ -190,3 +190,51 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn a_terminal_gets_the_space_of_the_project_its_folder_resolves_into() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    // A second project, in the default space, with a link into the first.
+    let other = repo.root.with_file_name("other");
+    std::fs::create_dir(&other).unwrap();
+    repo.git_in(&other, &["init", "-q", "-b", "main"]);
+    std::os::unix::fs::symlink(&repo.root, other.join("link")).unwrap();
+    let other = other.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let add = |path: &str| Control::AddProject { path: path.into() };
+    ask(&mut app, add(&other)).await;
+    let added = app.control().await.1;
+    assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
+    let claude = repo.env.path("home/work-claude");
+    std::fs::create_dir(&claude).unwrap();
+    let claude = claude.display().to_string();
+    let env = SpaceEnv {
+        claude_config_dir: Some(claude.clone()),
+        ..SpaceEnv::default()
+    };
+    let create = Control::CreateSpace {
+        name: "Work".into(),
+        env,
+    };
+    let created = ask(&mut app, create).await;
+    assert!(matches!(created, Control::Spaces { .. }), "{created:?}");
+    ask(&mut app, add(&root)).await;
+    let added = app.control().await.1;
+    assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
+
+    // Both folders lie in `other` by their names, but in the Work project once resolved.
+    let echo = "echo \"config=$CLAUDE_CONFIG_DIR.\"\r";
+    for (channel, cwd) in [
+        (1, format!("{other}/link")),
+        (2, format!("{other}/../repo")),
+    ] {
+        app.open_terminal(channel, std::path::Path::new(&cwd)).await;
+        app.input(channel, echo).await;
+        app.output_until(channel, &format!("config={claude}."))
+            .await;
+    }
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
