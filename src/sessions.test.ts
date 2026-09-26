@@ -4,7 +4,6 @@ import {
   ago,
   copy,
   locate,
-  OUTSIDE,
   openAsChat,
   openLocated,
   remove,
@@ -56,9 +55,9 @@ test("resume shows a running session's terminal, else runs claude --resume in it
   await resume(stopped, true);
   expect(write).toHaveBeenLastCalledWith(3, `claude --resume ${stopped.id} --fork-session\r`);
 
-  // Running outside Hive: not resumed a second time, but a fork is fine.
+  // Running outside Hive: not resumed a second time, with nothing said; a fork is fine.
   await resume(session);
-  expect(notice()).toBe(OUTSIDE);
+  expect(notice()).toBeNull();
   expect(open).toHaveBeenCalledTimes(2);
   await resume(session, true);
   expect(open).toHaveBeenCalledTimes(3);
@@ -150,19 +149,23 @@ test("copying says so in the status bar, or why not", async () => {
   writeText.mockRestore();
 });
 
-test("deleting asks first", () => {
+test("deleting asks first in a Hive dialog, never the WebView's", () => {
   const deleted = spyOn(transport, "deleteSession").mockResolvedValue();
-  const confirm = spyOn(window, "confirm").mockReturnValue(false);
+  const native = spyOn(window, "confirm");
   remove(session);
-  expect(confirm.mock.calls[0]?.[0]).toBe(
-    'Delete the session "Fix the login redirect"? Its log is removed and it cannot be resumed.',
-  );
+  const { modal, question } = useHive.getState();
+  expect(modal).toBe("confirm");
+  expect([question?.title, question?.text, question?.action]).toEqual([
+    "Delete session?",
+    'Delete "Fix the login redirect"? Its log is removed and it cannot be resumed.',
+    "Delete",
+  ]);
   expect(deleted).not.toHaveBeenCalled();
-  confirm.mockReturnValue(true);
-  remove(session);
+  question?.run();
   expect(deleted).toHaveBeenCalledWith(session.id);
+  expect(native).not.toHaveBeenCalled();
   deleted.mockRestore();
-  confirm.mockRestore();
+  native.mockRestore();
 });
 
 test("token counts are short, and a session without usage shows none", () => {

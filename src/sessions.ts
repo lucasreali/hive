@@ -3,6 +3,7 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { openChat } from "./chats";
 import {
   activateTab,
+  ask,
   type OpenSession,
   type ServiceMessage,
   type Session,
@@ -22,9 +23,6 @@ type Handing = "open" | "reveal";
 /** How each located path goes to Windows, by `<id>:<target>`, until the service answers. */
 const pending = new Map<string, Handing>();
 
-/** Why a session running outside Hive is not resumed here. */
-export const OUTSIDE = "This session runs in a terminal outside Hive: continue it there";
-
 /** `claude`'s arguments to go on with a session, or to start a new one from it (`fork`). */
 export const resumeArgs = (session: Session, fork = false) =>
   `--resume ${session.id}${fork ? " --fork-session" : ""}`;
@@ -37,7 +35,7 @@ export const resumeCommand = (session: Session) =>
   `cd ${quoted(session.cwd)} && claude ${resumeArgs(session)}`;
 
 /**
- * Goes on with the session: shows its terminal when it runs in one, else runs
+ * Goes on with the session: shows its terminal or chat when it runs in one, else runs
  * `claude --resume` in a new terminal in its folder. `fork` always starts a new session.
  */
 export async function resume(session: Session, fork = false): Promise<void> {
@@ -45,8 +43,8 @@ export async function resume(session: Session, fork = false): Promise<void> {
   const agent = s.agents[session.id];
   const tab = agent && s.tabs.find((t) => t.id === agent.terminal);
   if (tab && !fork) return activateTab(tab);
-  // A second `claude` on the same session would write the same log.
-  if (session.running && !fork) return setNotice(OUTSIDE);
+  // Running outside Hive: a second `claude` on the same session would write the same log.
+  if (session.running && !fork) return;
   try {
     await openClaude(session.cwd, resumeArgs(session, fork));
   } catch (error) {
@@ -117,10 +115,12 @@ export const sessionName = (session: Session) => session.title ?? session.id;
 
 /** Deletes the session's log once the user agrees. */
 export function remove(session: Session): void {
-  const sure = window.confirm(
-    `Delete the session "${sessionName(session)}"? Its log is removed and it cannot be resumed.`,
-  );
-  if (sure) void transport.deleteSession(session.id);
+  ask({
+    title: "Delete session?",
+    text: `Delete "${sessionName(session)}"? Its log is removed and it cannot be resumed.`,
+    action: "Delete",
+    run: () => void transport.deleteSession(session.id),
+  });
 }
 
 /** A token count, short: "950", "84k", "1.2M". */

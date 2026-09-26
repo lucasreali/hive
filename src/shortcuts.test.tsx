@@ -322,24 +322,26 @@ test("the WebView's context menu is off except in text fields and the editor", (
   expect(menu(document.body)).toBe(true);
 });
 
-test("a drop nothing takes never reaches the WebView, which would open it in place of the app", () => {
+test("a file or link from outside that nothing takes is refused: the WebView would open it", () => {
   app();
   const taken = document.body.appendChild(document.createElement("div"));
   taken.addEventListener("drop", (e) => e.preventDefault());
-  // fireEvent returns false when the default was prevented.
-  expect(fireEvent.dragOver(document.body)).toBe(false);
-  expect(fireEvent.drop(document.body)).toBe(false);
-  const dataTransfer = { dropEffect: "copy" };
-  const over = createEvent.dragOver(document.body, { dataTransfer }) as DragEvent;
-  fireEvent(document.body, over);
-  expect(over.dataTransfer?.dropEffect).toBe("none");
-  // One taken on the way keeps its own drop effect.
-  const drop = createEvent.drop(taken, { dataTransfer }) as DragEvent;
-  fireEvent(taken, drop);
-  expect([drop.defaultPrevented, drop.dataTransfer?.dropEffect]).toEqual([true, "copy"]);
+  // `fire` returns the event after it went through the window.
+  const fire = (target: Element, kind: "dragOver" | "drop", types: string[]) => {
+    const dataTransfer = { types, dropEffect: "copy" };
+    const event = createEvent[kind](target, { dataTransfer }) as DragEvent;
+    fireEvent(target, event);
+    return [event.defaultPrevented, event.dataTransfer?.dropEffect];
+  };
+  expect(fire(document.body, "dragOver", ["Files"])).toEqual([true, "none"]);
+  expect(fire(document.body, "drop", ["text/uri-list", "text/plain"])).toEqual([true, "none"]);
+  // The app's own drags are left to their targets; one taken on the way keeps its effect.
+  expect(fire(document.body, "dragOver", ["text/plain"])).toEqual([false, "copy"]);
+  expect(fireEvent.dragOver(document.body)).toBe(true);
+  expect(fire(taken, "drop", ["Files"])).toEqual([true, "copy"]);
   taken.remove();
   cleanup();
-  expect(fireEvent.drop(document.body)).toBe(true);
+  expect(fire(document.body, "drop", ["Files"])).toEqual([false, "copy"]);
 });
 
 test("Ctrl+Shift+D splits the active terminal and pressed again un-splits", async () => {

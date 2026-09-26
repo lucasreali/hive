@@ -43,6 +43,7 @@ import { EditView, saveOpenFile } from "../viewer/EditView";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
 import { isMac, keyText } from "../window";
+import { askDiscard } from "./ConfirmDialog";
 import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
 import { ResizeHandle } from "./resize";
 import { SessionsView } from "./SessionsView";
@@ -746,11 +747,14 @@ function useFileDrag(worktree: string, rows: FileRow[]) {
 export function leaveFile(next: OpenFile | null, editing = false, line?: number): void {
   const { edit } = useHive.getState();
   const losing = edit && isDirty(edit) && !(next && isFor(next, edit));
-  if (losing && !window.confirm(`Discard your unsaved changes to ${edit.path}?`)) return;
-  setOpenFile(next, editing, line);
-  const s = useHive.getState();
-  const same = next && s.openFile && isFor(next, s.openFile);
-  if (same && s.editing !== editing && !(s.edit && isDirty(s.edit))) setEditing(editing);
+  const go = () => {
+    setOpenFile(next, editing, line);
+    const s = useHive.getState();
+    const same = next && s.openFile && isFor(next, s.openFile);
+    if (same && s.editing !== editing && !(s.edit && isDirty(s.edit))) setEditing(editing);
+  };
+  if (losing) askDiscard(edit.path, go);
+  else go();
 }
 
 /**

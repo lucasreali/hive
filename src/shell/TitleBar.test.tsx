@@ -53,7 +53,7 @@ test("with agents running the update asks first, like closing", () => {
   const dialog = screen.getByRole("dialog", { name: "Update Hive?" });
   expect(dialog.textContent).toContain("1 agent is running. Updating restarts Hive, which ends");
   expect(install).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Update and restart Enter" }));
+  fireEvent.click(screen.getByRole("button", { name: "Update and restart" }));
   expect(install).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(button()?.textContent).toBe("Restarting…");

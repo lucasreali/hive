@@ -52,7 +52,8 @@ test("Ctrl+, opens it on the terminal section, focused on the search; Esc and Cl
     "page",
   );
   expect(input("Font size").value).toBe("13");
-  fireEvent.click(screen.getByRole("button", { name: "Close Esc" }));
+  expect(dialog.querySelector("button kbd")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   const reopen = () => fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
   reopen();

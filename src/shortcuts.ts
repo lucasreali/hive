@@ -169,12 +169,14 @@ function onContextMenu(event: MouseEvent): void {
 }
 
 /**
- * A drag that nothing on the way took (a file or a link from outside, anywhere but the Files
- * tree or the chat): its drop would make the WebView open it in place of the app. Refused, and
- * shown as not droppable.
+ * A file or a link dragged from outside that nothing on the way took (anywhere but the chat):
+ * its drop would make the WebView open it in place of the app. Refused, and shown as not
+ * droppable. The app's own drags (tree, sidebar) are left to their targets.
  */
 function onUnhandledDrag(event: DragEvent): void {
-  if (event.defaultPrevented) return;
+  const types = event.dataTransfer?.types ?? [];
+  const outside = types.includes("Files") || types.includes("text/uri-list");
+  if (event.defaultPrevented || !outside) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
 }

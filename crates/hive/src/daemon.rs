@@ -1,7 +1,7 @@
 //! `hive daemon`: the service. Lives exactly as long as the app connection.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, Permissions};
 use std::io;
@@ -1373,14 +1373,26 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             let listed = projects.worktree(&path).and_then(|dir| changes::list(&dir));
             changes::message(path, listed)
         }),
-        Ok(Control::ListSessions) => state.sessions(|projects, sessions| {
-            let running = procs::claude_cwds(procs::Source::System);
-            let (sessions, error) = match sessions.list(projects, &running) {
-                Ok(sessions) => (sessions, None),
-                Err(err) => (Vec::new(), Some(err.to_string())),
-            };
-            Control::Sessions { sessions, error }
-        }),
+        Ok(Control::ListSessions) => {
+            // Hive's terminals and chats: their hooks name their sessions.
+            let mut running: HashSet<String> = state.agents.lock().await.keys().cloned().collect();
+            state.sessions(move |projects, sessions| {
+                // Claude keeps a record of each running `claude` beside its projects folder.
+                let records = sessions
+                    .root()
+                    .and_then(Path::parent)
+                    .map(|d| d.join("sessions"));
+                running.extend(procs::claude_sessions(
+                    procs::Source::System,
+                    records.as_deref(),
+                ));
+                let (sessions, error) = match sessions.list(projects, &running) {
+                    Ok(sessions) => (sessions, None),
+                    Err(err) => (Vec::new(), Some(err.to_string())),
+                };
+                Control::Sessions { sessions, error }
+            })
+        }
         Ok(Control::LocateSession { id, target }) => state.sessions(move |projects, sessions| {
             let located = sessions.find(projects, &id).and_then(|session| {
                 let path = match target {

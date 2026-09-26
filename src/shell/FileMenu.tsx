@@ -104,10 +104,10 @@ export function FileNameDialog() {
         </div>
         <footer>
           <button type="button" className="secondary" onClick={close}>
-            Cancel <kbd>Esc</kbd>
+            Cancel
           </button>
           <button type="submit" className="primary" disabled={!canSubmit}>
-            {action} <kbd>Enter</kbd>
+            {action}
           </button>
         </footer>
       </form>

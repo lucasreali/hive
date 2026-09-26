@@ -22,7 +22,7 @@ function Shown() {
 
 const items = () => screen.queryAllByRole("menuitem").map((i) => i.textContent);
 const field = () => screen.getByLabelText("Name") as HTMLInputElement;
-const submit = () => screen.getByRole("button", { name: /^(Create|Rename) / }) as HTMLButtonElement;
+const submit = () => screen.getByRole("button", { name: /^(Create|Rename)$/ }) as HTMLButtonElement;
 const type = (name: string) => fireEvent.change(field(), { target: { value: name } });
 
 test("a file's menu renames it in its folder; the service's refusal shows until the next edit", () => {
@@ -36,6 +36,7 @@ test("a file's menu renames it in its folder; the service's refusal shows until 
   expect(screen.getByRole("heading").textContent).toBe("Rename file");
   expect(field().value).toBe("a.ts");
   expect(submit().disabled).toBe(true);
+  expect(document.querySelector("dialog button kbd")).toBeNull();
   fireEvent.submit(field());
   expect(rename).not.toHaveBeenCalled();
   type("b.ts");
