@@ -292,8 +292,12 @@ mod tests {
             std::fs::write(root.path().join(pid.to_string()).join("cmdline"), line).unwrap()
         };
         let long = " ".repeat(READ_LIMIT as usize);
-        // Claude's own record of the process wins over its arguments.
-        record(20, format!(r#"{{"pid": 20, "sessionId": "{}"}}"#, id(1)));
+        // Claude's own record of the process wins over its arguments (a few KiB are fine).
+        let padding = " ".repeat(4096);
+        record(
+            20,
+            format!(r#"{{"pid": 20, "sessionId": "{}"}}{padding}"#, id(1)),
+        );
         args(20, &["claude", "--resume", &id(99)]);
         // A record of another process, one without a session id and an unreadable one are
         // passed over.
@@ -316,10 +320,11 @@ mod tests {
         );
         // Forking starts a new session: the resumed one is not running.
         args(24, &["claude", "--resume", &id(96), "--fork-session"]);
-        // A record that is no file (a FIFO would block) is passed over.
-        let fifo = records.path().join("25.json");
-        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
-        assert!(made.unwrap().success());
+        // A record that is no regular file is passed over (a FIFO would block), a link too.
+        let elsewhere = root.path().join("elsewhere.json");
+        let linked = format!(r#"{{"pid": 25, "sessionId": "{}"}}"#, id(91));
+        std::fs::write(&elsewhere, linked).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, records.path().join("25.json")).unwrap();
         // A named session is kept even when forking.
         args(
             25,
