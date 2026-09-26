@@ -16,6 +16,7 @@ import type {
 } from "../store";
 import { DEFAULT_SETTINGS } from "../store";
 import type { Transport } from ".";
+import { CHAT_STEP_MS, createMockChat } from "./mockChat";
 import { loadReplay, type ReplayEvent } from "./replay";
 
 const PROMPT = "mock$ ";
@@ -508,6 +509,7 @@ export function createMockTransport(
   const terminals = new Map<number, MockTerminal>();
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
+  const chat = createMockChat((message) => send(message), CHAT_STEP_MS);
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
   let recording: Promise<ReplayEvent[]> | undefined;
   const replay = async (id: number) => {
@@ -893,6 +895,30 @@ export function createMockTransport(
     async resizeTerminal() {},
     async closeTerminal(id) {
       exit(id, null);
+    },
+    // Chats share the terminals' channels, as in the app.
+    async openChat(cwd, resume, mode) {
+      const id = ++last;
+      chat.open(id, cwd, resume, mode);
+      return id;
+    },
+    async chatSend(id, text, images) {
+      chat.send(id, text, images);
+    },
+    async chatAnswer(id, request, answer) {
+      chat.answer(id, request, answer);
+    },
+    async chatInterrupt(id) {
+      chat.interrupt(id);
+    },
+    async chatSetMode(id, mode) {
+      chat.setMode(id, mode);
+    },
+    async closeChat(id) {
+      chat.close(id);
+    },
+    async confirmChatFolder(id, cwd, accepted) {
+      chat.confirm(id, cwd, accepted);
     },
   };
 }

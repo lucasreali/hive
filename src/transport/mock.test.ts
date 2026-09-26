@@ -882,3 +882,30 @@ test("deleting the current space makes the first one current, never the last one
     { type: "space_failed", message: "the last space cannot be deleted" },
   ]);
 });
+
+test("chats share the terminals' ids and play the scripted chat", async () => {
+  const { transport, messages } = await opened();
+  const chat = await transport.openChat("/w", null, null);
+  expect(chat).toBe(2);
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "confirm_chat_folder", channel: 2, chat: 2, cwd: "/w" });
+  await transport.confirmChatFolder(chat, "/w", true);
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", chat: 2, busy: false });
+  await transport.chatSetMode(chat, "plan");
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", mode: "plan" });
+  await transport.chatSend(chat, "permission", []);
+  await tick();
+  expect(messages.at(-2)).toMatchObject({ type: "chat_status", busy: true });
+  expect(messages.at(-1)).toMatchObject({ type: "chat_entries", entries: [{ kind: "user" }] });
+  await transport.chatInterrupt(chat);
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", busy: false });
+  await transport.chatAnswer(chat, "req_x", { kind: "allow" });
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "error", message: "no pending request req_x" });
+  await transport.closeChat(chat);
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "chat_closed", channel: 2, chat: 2, error: null });
+});

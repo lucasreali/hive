@@ -1,5 +1,13 @@
 import { isTauri } from "@tauri-apps/api/core";
-import type { ServiceMessage, SessionTarget, Settings, SpaceEnv } from "../store";
+import type {
+  ChatAnswer,
+  ChatImage,
+  ChatMode,
+  ServiceMessage,
+  SessionTarget,
+  Settings,
+  SpaceEnv,
+} from "../store";
 import { createMockTransport } from "./mock";
 import { tauriTransport } from "./tauri";
 
@@ -103,6 +111,24 @@ export interface Transport {
   checkUpdate(): Promise<void>;
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */
   installUpdate(): Promise<void>;
+  /**
+   * Starts a chat (7.3) in the worktree `cwd` (resuming session `resume`) and resolves with its
+   * id, a channel shared with terminals. Answered by `chat_opened` (maybe after
+   * `confirm_chat_folder`) or `chat_closed`; then `chat_entries`, `chat_request`, `chat_status`.
+   */
+  openChat(cwd: string, resume: string | null, mode: ChatMode | null): Promise<number>;
+  /** A user turn. */
+  chatSend(chat: number, text: string, images: ChatImage[]): Promise<void>;
+  /** Answers the pending request `request` (its id); answered by `chat_request_gone`. */
+  chatAnswer(chat: number, request: string, answer: ChatAnswer): Promise<void>;
+  /** Stops the running turn. */
+  chatInterrupt(chat: number): Promise<void>;
+  /** Switches the permission mode; answered by `chat_status`. */
+  chatSetMode(chat: number, mode: ChatMode): Promise<void>;
+  /** Ends the chat; answered by `chat_closed`. */
+  closeChat(chat: number): Promise<void>;
+  /** The human's answer to `confirm_chat_folder`. */
+  confirmChatFolder(chat: number, cwd: string, accepted: boolean): Promise<void>;
 }
 
 /**
