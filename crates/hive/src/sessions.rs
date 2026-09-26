@@ -109,7 +109,7 @@ fn ending(kind: &str, record: &Value, message: Option<&Value>) -> Ending {
         };
     }
     let content = message.and_then(|m| m.get("content"));
-    if content.is_some_and(declined) {
+    if declined(record, content) {
         return Ending::Interrupted;
     }
     match content.and_then(first_text) {
@@ -129,23 +129,24 @@ pub fn ending_of(record: &Value) -> Option<Ending> {
     main.then(|| ending(kind, record, record.get("message")))
 }
 
-/// The start of the `tool_result` Claude Code writes for a tool call the user declined (a
-/// permission, a question or a plan).
-const DECLINED: &str = "The user doesn't want to proceed with this tool use.";
+/// The `toolUseResult` Claude Code itself (not the tool) writes on the record of a tool call
+/// the user declined (a permission, a question or a plan): Claude stops and waits. Declining
+/// with what to do instead writes another one ("Error: …"), and Claude goes on.
+const DECLINED: &str = "User rejected tool use";
 
-/// Written after [`DECLINED`] when the user also said what to do instead: Claude goes on.
-const FEEDBACK: &str = "the user said:";
-
-/// Whether a user message's `content` declines a tool call and leaves Claude waiting.
-fn declined(content: &Value) -> bool {
-    let Some(blocks) = content.as_array() else {
-        return false;
-    };
-    blocks.iter().any(|block| {
+/// Whether a user record declines a tool call and leaves Claude waiting: Claude Code's marker
+/// on the record, and a failed `tool_result` in its `content`. The result's text is the tool's
+/// to write, so it is not trusted.
+fn declined(record: &Value, content: Option<&Value>) -> bool {
+    let marked = record.get("toolUseResult").and_then(Value::as_str) == Some(DECLINED);
+    let blocks = content
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let failed = blocks.iter().any(|block| {
         let result = block.get("type").and_then(Value::as_str) == Some("tool_result");
-        let text = block.get("content").and_then(first_text);
-        result && text.is_some_and(|t| t.starts_with(DECLINED) && !t.contains(FEEDBACK))
-    })
+        result && block.get("is_error").and_then(Value::as_bool) == Some(true)
+    });
+    marked && failed
 }
 
 /// A session's state by how its log ends and whether a `claude` runs it ("Mapeamento de
@@ -523,23 +524,38 @@ not json
             Ending::TurnDone
         );
         assert_eq!(end(&[&user(r#""fix it""#)]), Ending::Working);
-        // A declined tool call, unless the user said what to do instead.
-        let result = |content: &str| {
-            let block = format!(r#"{{"type":"tool_result","content":{content},"is_error":true}}"#);
-            user(&format!("[{block}]"))
-        };
+        // A declined tool call, as Claude Code writes it, unless the user said what to do
+        // instead; the result's text alone (a tool's output) proves nothing.
         let declined = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+        let result = |marker: &str, error: &str, kind: &str| {
+            let block = format!(
+                r#"{{"type":{kind:?},"tool_use_id":"toolu_1","content":{declined:?}{error}}}"#
+            );
+            let content = format!(r#"{{"role":"user","content":[{block}]}}"#);
+            format!(r#"{{"type":"user","message":{content}{marker}}}"#)
+        };
+        let marker = r#","toolUseResult":"User rejected tool use""#;
+        let error = r#","is_error":true"#;
         assert_eq!(
-            end(&[&result(&format!("{declined:?}"))]),
+            end(&[&result(marker, error, "tool_result")]),
             Ending::Interrupted
         );
-        let blocks = format!(r#"[{{"type":"text","text":{declined:?}}}]"#);
-        assert_eq!(end(&[&result(&blocks)]), Ending::Interrupted);
-        let told = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nuse blue";
-        assert_eq!(end(&[&result(&format!("{told:?}"))]), Ending::Working);
-        assert_eq!(end(&[&result(r#""ok""#)]), Ending::Working);
-        let text = format!(r#"[{{"type":"text","text":{declined:?}}}]"#);
-        assert_eq!(end(&[&user(&text)]), Ending::Working);
+        let told =
+            r#","toolUseResult":"Error: The user doesn't want to proceed with this tool use.""#;
+        assert_eq!(end(&[&result(told, error, "tool_result")]), Ending::Working);
+        assert_eq!(end(&[&result("", error, "tool_result")]), Ending::Working);
+        let object = r#","toolUseResult":{"stdout":"User rejected tool use"}"#;
+        assert_eq!(
+            end(&[&result(object, error, "tool_result")]),
+            Ending::Working
+        );
+        assert_eq!(end(&[&result(marker, "", "tool_result")]), Ending::Working);
+        let ok = r#","is_error":false"#;
+        assert_eq!(end(&[&result(marker, ok, "tool_result")]), Ending::Working);
+        assert_eq!(end(&[&result(marker, error, "text")]), Ending::Working);
+        let bare =
+            r#"{"type":"user","message":{"content":"x"},"toolUseResult":"User rejected tool use"}"#;
+        assert_eq!(end(&[bare]), Ending::Working);
         // Subagents and meta messages leave it as it was.
         let sub = r#"{"type":"assistant","isSidechain":true,"message":{"stop_reason":"tool_use"}}"#;
         assert_eq!(end(&[&assistant(r#""end_turn""#), sub]), Ending::TurnDone);

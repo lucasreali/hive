@@ -832,7 +832,7 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
     // The old interrupt was not news; the question stays past the silence.
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     // Declined with Esc: Claude writes the refusal and the interrupt; nothing alerts.
-    let declined = json!({"type": "user", "message": {"role": "user", "content": [{
+    let declined = json!({"type": "user", "toolUseResult": "User rejected tool use", "message": {"role": "user", "content": [{
         "type": "tool_result", "tool_use_id": "toolu_1", "is_error": true,
         "content": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
     }]}});
