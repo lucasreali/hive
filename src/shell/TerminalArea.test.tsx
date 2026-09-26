@@ -162,6 +162,7 @@ test("a tab running Claude shows the agent's state and its session's name", () =
       state: "working",
       urgency: 2,
       pending: false,
+      interrupted: false,
       subagents: [],
       activity: null,
       since_ms: 0,

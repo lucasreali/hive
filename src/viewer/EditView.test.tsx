@@ -165,6 +165,7 @@ test("the header warns of a working agent and opens the file elsewhere", () => {
       state: "working",
       urgency: 2,
       pending: false,
+      interrupted: false,
       subagents: [],
       activity: null,
       since_ms: 0,

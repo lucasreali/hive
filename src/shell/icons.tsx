@@ -6,17 +6,19 @@ import {
   ChatTeardropTextIcon,
   CheckCircleIcon,
   CircleDashedIcon,
-  CircleHalfIcon,
   CirclesThreeIcon,
   FolderPlusIcon,
   FolderSimpleIcon,
   GitBranchIcon,
+  ListChecksIcon,
   MagnifyingGlassIcon,
   MinusIcon,
   CheckIcon as PhosphorCheckIcon,
   FileIcon as PhosphorFileIcon,
   type Icon as PhosphorIcon,
   PlusIcon as PhosphorPlusIcon,
+  QuestionIcon,
+  ShieldWarningIcon,
   SidebarSimpleIcon,
   SquareIcon,
   StopCircleIcon,
@@ -85,6 +87,8 @@ export const BranchIcon = icon(GitBranchIcon);
 /** Row labels for each state (docs/ui-reference.md glossary). */
 export const STATE_LABEL: Record<AgentState, string> = {
   waiting_permission: "waiting for permission",
+  waiting_plan: "waiting for plan approval",
+  waiting_answer: "waiting for your answer",
   error: "error",
   waiting_you: "waiting for you",
   working: "working",
@@ -95,7 +99,9 @@ export const STATE_LABEL: Record<AgentState, string> = {
 
 // Phosphor icons (outlined), each in its state's color token.
 const STATE_ICON: Record<AgentState, PhosphorIcon> = {
-  waiting_permission: CircleHalfIcon,
+  waiting_permission: ShieldWarningIcon,
+  waiting_plan: ListChecksIcon,
+  waiting_answer: QuestionIcon,
   error: XCircleIcon,
   waiting_you: ChatCircleDotsIcon,
   working: CircleDashedIcon,

@@ -77,15 +77,15 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 
 test("a tone only when entering an alerting state, not while staying in it", () => {
   feed("a", "working");
-  for (const s of ["waiting_permission", "error"] as const) {
+  for (const s of ["waiting_plan", "waiting_answer", "waiting_permission", "error"] as const) {
     feed("a", s, tones * TONE_GAP_MS * 2);
   }
-  expect(tones).toBe(2);
+  expect(tones).toBe(4);
   feed("a", "error", 10 * TONE_GAP_MS);
   feed("a", "idle", 20 * TONE_GAP_MS);
   feed("a", "with_subagents", 30 * TONE_GAP_MS);
   feed("a", "ended", 40 * TONE_GAP_MS);
-  expect(tones).toBe(2);
+  expect(tones).toBe(4);
 });
 
 test("an agent's first state and the snapshot after welcome stay silent", async () => {
@@ -179,6 +179,19 @@ test("an agent finishing already seen (not pending) gets its tone but no notific
   expect([tones, shown]).toEqual([1, []]);
 });
 
+test("an agent the user interrupted raises nothing: no tone, inbox or notification", async () => {
+  feed("a", "waiting_answer");
+  const tone = tones;
+  const inbox = useHive.getState().inbox.length;
+  const interrupted = { ...state("a", "waiting_you"), pending: false, interrupted: true };
+  notify(interrupted, useHive.getState(), clock + TONE_GAP_MS * 4);
+  apply(interrupted);
+  feed("a", "working", TONE_GAP_MS * 8);
+  notify(interrupted, useHive.getState(), clock + TONE_GAP_MS * 12);
+  await settle();
+  expect([tones, useHive.getState().inbox.length, shown]).toEqual([tone, inbox, []]);
+});
+
 test("other messages are ignored", () => {
   notify({ type: "welcome", version: "1", distro: null }, useHive.getState() as HiveState, clock);
   expect(tones).toBe(0);
@@ -207,6 +220,13 @@ test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", 
     [1, "a", "waiting_you", "fix login finished"],
   ]);
   expect(inbox[0]?.at).toBe(1234);
+  feed("a", "waiting_plan");
+  feed("a", "waiting_answer");
+  const texts = useHive.getState().inbox.map((i) => i.text);
+  expect(texts.slice(0, 2)).toEqual([
+    "fix login is waiting for your answer",
+    "fix login is waiting for plan approval",
+  ]);
 
   useHive.setState({ inbox: [] });
   for (let at = 0; at < INBOX_LIMIT + 5; at++) {
