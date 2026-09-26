@@ -1,4 +1,10 @@
-import { FilePlusIcon, RobotIcon, TerminalWindowIcon } from "@phosphor-icons/react";
+import {
+  FilePlusIcon,
+  RobotIcon,
+  SquareSplitHorizontalIcon,
+  TerminalWindowIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -39,6 +45,7 @@ import {
   AddFolderIcon,
   CloseIcon,
   FileIcon,
+  ICON,
   PanelIcon,
   PlusIcon,
   StateIcon,
@@ -221,9 +228,11 @@ function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
       <button type="button" role="menuitem" onClick={act(() => void splitTerminal(menu.tab))}>
+        <SquareSplitHorizontalIcon {...ICON} />
         {split ? "Unsplit" : "Split right"}
       </button>
       <button type="button" role="menuitem" onClick={act(() => closeTerminal(menu.tab))}>
+        <XIcon {...ICON} />
         Close terminal
       </button>
     </ContextMenu>
@@ -311,13 +320,13 @@ function NewTabButton({ worktree }: { worktree: string | null }) {
         <PlusIcon size={14} />
       </button>
       {at && worktree !== null && (
-        <ContextMenu at={at} label="New tab" onClose={close} anchor={plus} className="new-tab-menu">
+        <ContextMenu at={at} label="New tab" onClose={close} anchor={plus}>
           <button type="button" role="menuitem" onClick={act((w) => void openTerminal(w))}>
-            <TerminalWindowIcon size={14} aria-hidden="true" />
+            <TerminalWindowIcon {...ICON} />
             Terminal
           </button>
           <button type="button" role="menuitem" onClick={act(openAgent)}>
-            <RobotIcon size={14} aria-hidden="true" />
+            <RobotIcon {...ICON} />
             Agent
           </button>
           <button
@@ -325,7 +334,7 @@ function NewTabButton({ worktree }: { worktree: string | null }) {
             role="menuitem"
             onClick={act((w) => openFileDialog({ worktree: w, folder: "", path: null }))}
           >
-            <FilePlusIcon size={14} aria-hidden="true" />
+            <FilePlusIcon {...ICON} />
             New file…
           </button>
         </ContextMenu>

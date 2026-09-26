@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { clearAddProjectError, openModal, safeStorage, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
-import { CloseIcon, FolderIcon } from "./icons";
+import { CloseIcon, FolderIcon, ICON } from "./icons";
 
 const close = () => openModal(null);
 
@@ -148,7 +148,7 @@ export function AddProjectDialog() {
                       title="Up a level"
                       onClick={() => go(listing.parent as string)}
                     >
-                      <ArrowUpIcon />
+                      <ArrowUpIcon {...ICON} />
                       <span className="folder-name">{listing.parent}</span>
                     </button>
                   </li>
@@ -161,7 +161,7 @@ export function AddProjectDialog() {
                       className="folder-row"
                       onClick={() => go(`${typed.slice(0, cut)}${d.name}${windows ? "\\" : "/"}`)}
                     >
-                      {d.git ? <GitBranchIcon aria-label="Repository" /> : <FolderIcon />}
+                      {d.git ? <GitBranchIcon size={14} aria-label="Repository" /> : <FolderIcon />}
                       <span className="folder-name">{d.name}</span>
                     </button>
                   </li>

@@ -1,3 +1,4 @@
+import { FileTextIcon, GitBranchIcon, type Icon, LightningIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { COMMANDS, currentProject, goToAgent } from "../shortcuts";
 import {
@@ -14,7 +15,7 @@ import { openWith } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
 import { keyText } from "../window";
-import { SearchIcon, STATE_LABEL } from "./icons";
+import { ICON, SearchIcon, STATE_LABEL } from "./icons";
 import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
 
 // The command palette (Ctrl+Shift+P, 6.3): one filtered list of commands, agents and worktrees,
@@ -22,7 +23,7 @@ import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
 
 /** A palette row; `keys` is the shortcut hint of a command. */
 export type PaletteItem = { label: string; detail?: string; keys?: string; run: () => void };
-type Group = { name: string; items: PaletteItem[] };
+type Group = { name: string; icon: Icon; items: PaletteItem[] };
 
 /** Most file matches listed: the rest is the Files panel's job. */
 export const FILE_LIMIT = 50;
@@ -145,9 +146,9 @@ export function Palette() {
     run: () => leaveFile({ worktree: results?.worktree ?? "", path: m.path }, true, m.line),
   }));
   const groups: Group[] = [
-    { name: "Commands", items: rank(paletteCommands(s), q) },
-    { name: "Agents and worktrees", items: rank(places(s), q) },
-    { name: "Files", items: files },
+    { name: "Commands", icon: LightningIcon, items: rank(paletteCommands(s), q) },
+    { name: "Agents and worktrees", icon: GitBranchIcon, items: rank(places(s), q) },
+    { name: "Files", icon: FileTextIcon, items: files },
   ].filter((g) => g.items.length > 0);
   const items = groups.flatMap((g) => g.items);
   const searching = !!worktree && q !== "" && !results;
@@ -193,7 +194,10 @@ export function Palette() {
       <div className="picker-list">
         {groups.map((group) => (
           <section key={group.name} aria-label={group.name}>
-            <h3 className="palette-group">{group.name}</h3>
+            <h3 className="palette-group">
+              <group.icon {...ICON} />
+              {group.name}
+            </h3>
             {group.items.map((item) => {
               const i = n++;
               return (
