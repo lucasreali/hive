@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, test } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { type ChatEntry, mergeEntries } from "../store";
-import { CHAT_LABELS, ConversationView, type Labels, ordered } from "./ConversationView";
+import { CHAT_LABELS, ConversationView, imageUrl, type Labels, ordered } from "./ConversationView";
 
 beforeAll(() => {
   // happy-dom has no layout: give the list its CSS size so the virtualizer shows entries.
@@ -120,4 +120,24 @@ test("live text renders its own row again, not the others", () => {
   expect(reads - before).toBe(1);
   const texts = [...view.container.querySelectorAll(".transcript-text")];
   expect(texts.map((t) => t.textContent)).toEqual(["Hi", "The text"]);
+});
+
+test("images show from data: URLs, in messages and tool results, and grow when clicked", () => {
+  const image = { media_type: "image/png", data: "iVBORw0KGgo=" };
+  const gif = { media_type: "image/gif", data: "R0lGODlh" };
+  const list = [
+    entry(1, "user", "Look", { image }),
+    entry(2, "tool", "/p/a.gif", { tool: "Read", status: "ok", output: "", image: gif }),
+    entry(3, "assistant", "A dot."),
+  ];
+  const view = render(<ConversationView entries={list} labels={CHAT_LABELS} />);
+  const sources = [...view.container.querySelectorAll("img")].map((img) => img.src);
+  expect(sources).toEqual(["data:image/png;base64,iVBORw0KGgo=", "data:image/gif;base64,R0lGODlh"]);
+  const [button] = view.getAllByTitle("Enlarge the image") as [HTMLElement];
+  expect(button.textContent).toBe("");
+  fireEvent.click(button);
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(view.getByTitle("Shrink the image"));
+  expect(button.getAttribute("aria-pressed")).toBe("false");
+  expect(imageUrl(gif)).toBe("data:image/gif;base64,R0lGODlh");
 });

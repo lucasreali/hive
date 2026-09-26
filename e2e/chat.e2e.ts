@@ -63,6 +63,45 @@ test("chat: confirm the folder, send, entries arrive, a tool opens, Stop while b
   await expect(tabs.getByRole("tab")).toHaveCount(0);
 });
 
+/** A 1×1 PNG. */
+const DOT =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await expect(page.getByRole("dialog", { name: "Chat in this folder?" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  const chat = page.getByRole("region", { name: "Chat" });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  await expect(input).toBeEnabled();
+
+  await input.evaluate((element, dot) => {
+    const bytes = Uint8Array.from(atob(dot), (c) => c.charCodeAt(0));
+    const clipboardData = new DataTransfer();
+    clipboardData.items.add(new File([bytes], "dot.png", { type: "image/png" }));
+    const paste = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
+    element.dispatchEvent(paste);
+  }, DOT);
+  const thumbs = chat.getByRole("list", { name: "Images to send" }).getByRole("img");
+  await expect(thumbs).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
+  await input.fill("what is this?");
+  await input.press("Enter");
+  await expect(chat.getByRole("list", { name: "Images to send" })).toBeHidden();
+
+  const sent = chat.locator('.transcript-entry[data-role="user"]').first();
+  await expect(sent).toContainText("what is this?");
+  const image = sent.getByTitle("Enlarge the image");
+  await expect(image.locator("img")).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
+  await image.click();
+  await expect(sent.getByTitle("Shrink the image")).toHaveAttribute("aria-pressed", "true");
+});
+
 test("chat: permission, question and plan cards pin above the composer and answer by keyboard", async ({
   page,
 }) => {

@@ -1,7 +1,7 @@
 import { CheckIcon, CircleNotchIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, type ReactNode, useEffect, useRef } from "react";
-import type { ChatEntry, ToolStatus } from "../store";
+import { memo, type ReactNode, useEffect, useRef, useState } from "react";
+import type { ChatEntry, ChatImage, ToolStatus } from "../store";
 
 /** How a message's author is named: a chat's own, and a subagent's (6.10, nested ones). */
 export type Labels = { user: string; assistant: string };
@@ -37,6 +37,25 @@ export function ordered(entries: ChatEntry[]): ChatEntry[] {
   return rows.flat();
 }
 
+/** An image as the `src` of an `<img>`: a `data:` URL (the service checked its type). */
+export const imageUrl = (image: ChatImage) => `data:${image.media_type};base64,${image.data}`;
+
+/** An entry's image, small until clicked. */
+function Picture({ image }: { image: ChatImage }) {
+  const [large, setLarge] = useState(false);
+  return (
+    <button
+      type="button"
+      className="chat-image"
+      title={large ? "Shrink the image" : "Enlarge the image"}
+      aria-pressed={large}
+      onClick={() => setLarge(!large)}
+    >
+      <img src={imageUrl(image)} alt="" />
+    </button>
+  );
+}
+
 /**
  * One entry, by its kind (plain text: no Markdown, 7.3 decision). Memoized: live text (7.3h)
  * replaces one entry, and the store keeps the others, so only its row renders again.
@@ -49,7 +68,10 @@ const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Lab
       return (
         <>
           <span className="transcript-role">{names[entry.kind]}</span>
-          <span className="transcript-text">{entry.text}</span>
+          <span className="transcript-text">
+            {entry.text}
+            {entry.image && <Picture image={entry.image} />}
+          </span>
         </>
       );
     case "thinking":
@@ -75,6 +97,7 @@ const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Lab
         <details className="tool-details">
           <summary>{head}</summary>
           <pre className="tool-output">{entry.output}</pre>
+          {entry.image && <Picture image={entry.image} />}
         </details>
       );
     }

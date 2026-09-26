@@ -186,15 +186,197 @@ fn tool_calls_are_summed_up_in_one_line() {
 
 #[test]
 fn tool_output_is_its_text() {
-    assert_eq!(output(&json!("plain")), "plain");
+    assert_eq!(output(&json!("plain")), ("plain".into(), None));
     let blocks = json!([
         {"type": "text", "text": "a"},
-        {"type": "image", "source": {}},
+        {"type": "text", "text": 3},
         {"type": "other"},
         {"type": "text", "text": "b"},
     ]);
-    assert_eq!(output(&blocks), "a\n(image not shown)\nb");
-    assert_eq!(output(&json!(null)), "");
+    assert_eq!(output(&blocks), ("a\nb".into(), None));
+    assert_eq!(output(&json!(null)), (String::new(), None));
+}
+
+/// `bytes` of an image of type `magic`, `len` long, as base64.
+fn encoded(magic: &[u8], len: usize) -> String {
+    let mut bytes = magic.to_vec();
+    bytes.resize(len, 0);
+    STANDARD.encode(bytes)
+}
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+/// Base64 bytes of a PNG exactly [`MAX_IMAGE_DATA`] long.
+const LARGEST: usize = MAX_IMAGE_DATA / 4 * 3;
+
+fn png(data: String) -> ChatImage {
+    ChatImage {
+        media_type: "image/png".into(),
+        data,
+    }
+}
+
+#[test]
+fn images_are_typed_by_their_first_bytes() {
+    let webp = b"RIFF\x10\0\0\0WEBPVP8 ";
+    let types: [(&[u8], Option<&str>); 9] = [
+        (PNG, Some("image/png")),
+        (&[0xFF, 0xD8, 0xFF, 0xE0][..], Some("image/jpeg")),
+        (b"GIF87a..", Some("image/gif")),
+        (b"GIF89a..", Some("image/gif")),
+        (webp, Some("image/webp")),
+        (b"RIFF\x10\0\0\0WAVEfmt ", None),
+        (&PNG[..7], None),
+        (b"<svg xmlns=", None),
+        (b"", None),
+    ];
+    for (bytes, media_type) in types {
+        assert_eq!(sniff(bytes), media_type, "{bytes:?}");
+    }
+    // The type claimed never counts; data that is not strict base64 is no image.
+    let gif = STANDARD.encode(b"GIF89a");
+    let typed = |media_type: &str| ChatImage {
+        media_type: media_type.into(),
+        data: gif.clone(),
+    };
+    assert_eq!(image(&gif), Some(typed("image/gif")));
+    for data in ["R0lGODlh\n", "R0lGODlh=", "R0lGOD", "not base64!"] {
+        assert_eq!(image(data), None, "{data}");
+    }
+    assert_eq!(image(&STANDARD.encode(b"hello")), None);
+}
+
+#[test]
+fn a_tool_results_first_image_is_shown_when_it_fits() {
+    let small = encoded(PNG, 8);
+    let block = |data: &str| json!({"type": "image", "source": {"type": "base64", "data": data}});
+    let blocks = json!([
+        {"type": "text", "text": "a"},
+        block(&small),
+        block(&small),
+        {"type": "text", "text": "b"},
+    ]);
+    assert_eq!(
+        output(&blocks),
+        ("a\n(image of 1 KiB not shown)\nb".into(), Some(png(small)))
+    );
+    let largest = encoded(PNG, LARGEST);
+    assert_eq!(output(&json!([block(&largest)])).1, Some(png(largest)));
+    let over = encoded(PNG, LARGEST + 1);
+    let note = "(image of 3073 KiB not shown)".to_owned();
+    assert_eq!(output(&json!([block(&over)])), (note, None));
+    let text = STANDARD.encode(b"plain text");
+    assert_eq!(
+        output(&json!([block(&text), {"type": "image"}])),
+        (
+            "(image of 1 KiB not shown)\n(image of 0 KiB not shown)".into(),
+            None
+        )
+    );
+}
+
+#[test]
+fn a_tool_result_image_goes_with_its_entry() {
+    let mut stream = stream();
+    stream.line(Some(br#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/p/a.png"}}]}}"#));
+    let data = encoded(PNG, 8);
+    let result = json!({"type": "user", "message": {"content": [{"type": "tool_result",
+        "tool_use_id": "t1", "content": [{"type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": data}}]}]}});
+    let out = stream.line(Some(result.to_string().as_bytes()));
+    let entry = &entries(&out)[0];
+    assert_eq!(
+        (entry.output.as_deref(), entry.image.clone()),
+        (Some(""), Some(png(data)))
+    );
+}
+
+#[test]
+fn the_largest_tool_entry_fits_in_a_frame() {
+    // Control characters grow six times in JSON (`\u0001`).
+    let wide = |len: usize| "\u{1}".repeat(len);
+    let mut stream = stream();
+    let call = json!({"type": "assistant", "parent_tool_use_id": "p".repeat(MAX_ID),
+        "message": {"content": [{"type": "tool_use", "id": "t1", "name": wide(1000),
+        "input": {"command": wide(1000)}}]}});
+    stream.line(Some(call.to_string().as_bytes()));
+    let image = json!({"type": "image", "source": {"data": encoded(PNG, LARGEST)}});
+    let result = json!({"type": "user", "message": {"content": [{"type": "tool_result",
+        "tool_use_id": "t1", "content": [{"type": "text", "text": wide(MAX_TEXT * 2)}, image]}]}});
+    let out = stream.line(Some(result.to_string().as_bytes()));
+    assert!(entries(&out)[0].image.is_some());
+    let json = serde_json::to_vec(&out.app[0]).unwrap();
+    assert!(json.len() <= hive_protocol::MAX_PAYLOAD, "{}", json.len());
+}
+
+fn sent(out: &Out) -> Value {
+    assert_eq!(out.write.len(), 1);
+    out.write[0]["message"]["content"].clone()
+}
+
+#[test]
+fn a_turns_images_are_sent_as_blocks_and_shown_with_it() {
+    let mut stream = stream();
+    let (a, b) = (encoded(PNG, 8), encoded(b"GIF89a", 6));
+    // The type the app claims is replaced by the one of the content.
+    let out = stream.send("look", &[png(a.clone()), png(b.clone())]);
+    let block = |media_type: &str, data: &str| json!({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}});
+    assert_eq!(
+        sent(&out),
+        json!([{"type": "text", "text": "look"}, block("image/png", &a), block("image/gif", &b)])
+    );
+    let gif = ChatImage {
+        media_type: "image/gif".into(),
+        data: b,
+    };
+    assert_eq!(
+        entries(&out),
+        [
+            ChatEntry {
+                image: Some(png(a.clone())),
+                ..entry(1, User, "look")
+            },
+            ChatEntry {
+                image: Some(gif),
+                ..entry(2, User, "")
+            },
+        ]
+    );
+    // An image alone has no text block; a text alone stays a string.
+    assert_eq!(
+        sent(&stream.send("", &[png(a.clone())])),
+        json!([block("image/png", &a)])
+    );
+    assert_eq!(sent(&stream.send("hi", &[])), json!("hi"));
+}
+
+#[test]
+fn a_turns_images_are_bounded_and_checked() {
+    let mut stream = stream();
+    let mut refused = |images: &[ChatImage]| {
+        let out = stream.send("x", images);
+        assert!(out.write.is_empty());
+        let kinds = kinds(&out);
+        assert_eq!(kinds.len(), 1);
+        assert_eq!(kinds[0].0, Error);
+        kinds[0].1.clone()
+    };
+    let small = png(encoded(PNG, 8));
+    assert_eq!(
+        refused(&vec![small.clone(); MAX_IMAGES + 1]),
+        "At most 10 images can be sent at once."
+    );
+    let over = [png(encoded(PNG, LARGEST - 3)), small.clone()];
+    assert_eq!(refused(&over), "The images are larger than 3 MiB together.");
+    let only = "Only PNG, JPEG, GIF and WebP images can be sent.";
+    assert_eq!(
+        refused(&[small.clone(), png(STANDARD.encode(b"<svg>"))]),
+        only
+    );
+    assert_eq!(refused(&[png("%%%%".into())]), only);
+    // Right at the limits it is sent.
+    assert_eq!(stream.send("", &vec![small; MAX_IMAGES]).write.len(), 1);
+    let largest = png(encoded(PNG, LARGEST));
+    assert_eq!(stream.send("", &[largest]).write.len(), 1);
 }
 
 #[test]
@@ -1454,15 +1636,6 @@ fn the_context_comes_from_the_main_threads_calls() {
 #[test]
 fn turns_modes_and_interrupts_are_written_to_claude() {
     let mut stream = stream();
-    let out = stream.send(
-        "x",
-        &[ChatImage {
-            media_type: "image/png".into(),
-            data: "AA".into(),
-        }],
-    );
-    assert_eq!(kinds(&out), [(Error, "Images cannot be sent yet.".into())]);
-    assert!(out.write.is_empty());
     let big = "y".repeat(MAX_TURN + 1);
     let out = stream.send(&big, &[]);
     assert_eq!(
