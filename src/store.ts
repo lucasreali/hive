@@ -531,7 +531,8 @@ export type Settings = {
   agents: { silence_secs: number; confirm_close: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */
-  projects: Record<string, { scripts: ProjectScripts }>;
+  /** `chat_confirmed`: chats (7.3) allowed in the project; set by the service only. */
+  projects: Record<string, { scripts: ProjectScripts; chat_confirmed?: boolean }>;
 };
 
 /** A project's scripts (6.8): the user's own, kept only in the settings. */

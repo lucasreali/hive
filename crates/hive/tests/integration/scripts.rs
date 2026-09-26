@@ -78,9 +78,13 @@ async fn the_archive_script_runs_before_a_removal_and_can_cancel_it() {
         archive: Some(archive),
         ..Default::default()
     };
-    settings
-        .projects
-        .insert(root.clone(), ProjectSettings { scripts });
+    settings.projects.insert(
+        root.clone(),
+        ProjectSettings {
+            scripts,
+            chat_confirmed: false,
+        },
+    );
     let set = Control::SetSettings {
         settings: settings.clone(),
     };

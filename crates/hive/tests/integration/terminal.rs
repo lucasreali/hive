@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use hive_protocol::{ChatAnswer, ChatMode, Control, Role};
+use hive_protocol::{Control, Role};
 
 use crate::common::{Env, wait_until};
 
@@ -171,42 +171,6 @@ async fn invalid_open_requests_are_answered_with_errors() {
             }
         )
     );
-
-    let chat = [
-        Control::OpenChat {
-            cwd: "/r".into(),
-            resume: None,
-            mode: None,
-        },
-        Control::ChatSend {
-            chat: 10,
-            text: "hi".into(),
-            images: vec![],
-        },
-        Control::ChatAnswer {
-            chat: 10,
-            request: "r".into(),
-            answer: ChatAnswer::Allow,
-        },
-        Control::ChatInterrupt { chat: 10 },
-        Control::ChatSetMode {
-            chat: 10,
-            mode: ChatMode::Plan,
-        },
-        Control::CloseChat { chat: 10 },
-        Control::ConfirmChatFolder {
-            chat: 10,
-            cwd: "/r".into(),
-            accepted: Some(true),
-        },
-    ];
-    for message in chat {
-        app.send(10, message).await;
-        let unavailable = Control::Error {
-            message: "chat not available yet".into(),
-        };
-        assert_eq!(app.control().await, (10, unavailable));
-    }
     drop(app);
     assert!(daemon.wait_exit().success());
 }
