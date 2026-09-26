@@ -210,7 +210,7 @@ pub fn create(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
 /// Renames the regular file `path` of the worktree at `dir` to `name` in the same folder,
 /// never over an existing entry. Returns the new path relative to the worktree.
 pub fn rename(dir: &Path, path: &str, name: &str) -> io::Result<String> {
-    rename_with(dir, path, name, |from| fs::remove_file(from))
+    rename_with(dir, path, name, &|from| fs::remove_file(from))
 }
 
 /// [`rename`] with the removal of the old name passed in, so its failure can be tested.
@@ -223,7 +223,7 @@ pub fn rename_with(
     dir: &Path,
     path: &str,
     name: &str,
-    unlink: impl FnOnce(&Path) -> io::Result<()>,
+    unlink: &dyn Fn(&Path) -> io::Result<()>,
 ) -> io::Result<String> {
     let name = file_name(name)?;
     let rel = relative(path)?;
@@ -814,14 +814,14 @@ mod tests {
     fn a_failed_rename_leaves_the_old_name_only() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a"), "a").unwrap();
-        let fail = |_: &Path| Err(io::Error::other("no"));
-        let err = rename_with(dir.path(), "a", "b", fail).unwrap_err();
+        let fail = |_: &Path| -> io::Result<()> { Err(io::Error::other("no")) };
+        let err = rename_with(dir.path(), "a", "b", &fail).unwrap_err();
         assert_eq!(err.to_string(), "no");
         assert!(dir.path().join("a").exists());
         assert!(!dir.path().join("b").exists());
         // The old name gone meanwhile: the file is at the new one.
-        let gone = |_: &Path| Err(io::Error::from(io::ErrorKind::NotFound));
-        assert_eq!(rename_with(dir.path(), "a", "b", gone).unwrap(), "b");
+        let gone = |_: &Path| -> io::Result<()> { Err(io::Error::from(io::ErrorKind::NotFound)) };
+        assert_eq!(rename_with(dir.path(), "a", "b", &gone).unwrap(), "b");
         assert!(dir.path().join("b").exists());
     }
 
