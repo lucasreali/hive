@@ -1,6 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
+import LIGATURES from "./assets/fonts/ligatures.json";
 import {
   addTab,
   focusPane,
@@ -87,6 +88,40 @@ export function termOptions({ terminal: t, appearance }: Settings): ITerminalOpt
   };
 }
 
+/**
+ * Ligatures (7.11): xterm draws each cell alone, so a font's ligatures never show unless a
+ * character joiner hands the WebGL renderer the sequence as one unit. The list is the one the
+ * bundled Hive Mono has ligatures for (scripts/build-terminal-font.sh); longest first.
+ */
+export function ligatureRanges(text: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  let i = 0;
+  while (i < text.length) {
+    const found = LIGATURES.find((sequence) => text.startsWith(sequence, i));
+    if (found) ranges.push([i, i + found.length]);
+    i += found ? found.length : 1;
+  }
+  return ranges;
+}
+
+/**
+ * The bundled faces load on first use, and xterm measures its cells and caches its glyphs
+ * with whatever font is ready then: they are loaded before the first terminal is made. Null
+ * once they are (or without a FontFaceSet): nothing to wait for.
+ */
+const BUNDLED_FACES = ['1em "Hive Mono"', 'bold 1em "Hive Mono"', '1em "Symbols Nerd Font"'];
+let fontsReady = false;
+let fontsLoading: Promise<void> | null = null;
+function bundledFonts(): Promise<void> | null {
+  if (fontsReady || !("fonts" in document)) return null;
+  fontsLoading ??= Promise.all(
+    BUNDLED_FACES.map((face) => document.fonts.load(face).catch(() => [])),
+  ).then(() => {
+    fontsReady = true;
+  });
+  return fontsLoading;
+}
+
 /** How long the host must keep its size before terminals are refitted and the PTY resized. */
 export const RESIZE_DEBOUNCE_MS = 50;
 
@@ -119,7 +154,13 @@ export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste
  * before the service is asked, so no output is lost before the tab appears.
  */
 export async function openTerminal(cwd: string): Promise<number> {
-  const term = new Terminal({ lineHeight: 1.2, ...termOptions(useHive.getState().settings) });
+  const fonts = bundledFonts();
+  if (fonts) await fonts;
+  const term = new Terminal({
+    lineHeight: 1.2,
+    allowProposedApi: true, // registerCharacterJoiner
+    ...termOptions(useHive.getState().settings),
+  });
   let id: number;
   try {
     id = await transport.openTerminal(cwd, term.cols, term.rows, (bytes) => term.write(bytes));
@@ -211,7 +252,10 @@ export function showTerminals(ids: number[], focus: number | null): void {
     if (entry.el.parentElement !== host) host.append(entry.el);
     entry.el.dataset.pane = ids.length > 1 ? (i === 0 ? "left" : "right") : "";
     entry.el.hidden = false;
-    if (!entry.term.element) entry.term.open(entry.el);
+    if (!entry.term.element) {
+      entry.term.open(entry.el);
+      entry.term.registerCharacterJoiner(ligatureRanges);
+    }
     if (!entry.webgl) entry.webgl = webgl(entry);
     entry.fit.fit();
   }

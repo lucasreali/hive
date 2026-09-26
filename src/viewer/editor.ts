@@ -23,7 +23,7 @@ const theme = Prec.highest(
     {
       "&": { height: "100%", fontSize: "12px", backgroundColor: "var(--bg)" },
       "&.cm-focused": { outline: "none" },
-      ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "18px" },
+      ".cm-scroller": { fontFamily: "var(--font-code)", lineHeight: "18px" },
       ".cm-content": { padding: "4px 0" },
       ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--text-4)", border: "none" },
       ".cm-lineNumbers .cm-gutterElement": { minWidth: "32px", padding: "0 6px 0 4px" },

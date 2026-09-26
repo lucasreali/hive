@@ -59,7 +59,15 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
       return terminal(2).cols;
     }),
   ).toBeGreaterThan(80);
-  expect(await page.evaluate(() => document.fonts.check("13px 'IBM Plex Mono'"))).toBe(true);
+  // Hive Mono (regular and bold) and the Nerd Font symbols are loaded before a terminal is made.
+  expect(
+    await page.evaluate(() =>
+      [...document.fonts]
+        .filter((face) => /Hive Mono|Symbols Nerd Font/.test(face.family))
+        .map((face) => `${face.family.replaceAll('"', "")} ${face.weight} ${face.status}`)
+        .sort(),
+    ),
+  ).toEqual(["Hive Mono 400 loaded", "Hive Mono 700 loaded", "Symbols Nerd Font 100 900 loaded"]);
   await page.screenshot({ path: "target/e2e/terminals.png" });
 
   // Tabs belong to their worktree: only refactor-auth's shows now.

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
@@ -47,9 +47,25 @@ globalThis.ResizeObserver = class {
   }
 };
 
+// happy-dom has no FontFaceSet: a fake one, for this file only, records which faces are
+// loaded and fails one.
+const loadedFaces: string[] = [];
+Object.defineProperty(document, "fonts", {
+  configurable: true,
+  value: {
+    load: async (face: string) => {
+      loadedFaces.push(face);
+      if (face.startsWith("bold")) throw new Error("network error");
+      return [];
+    },
+  },
+});
+afterAll(() => Reflect.deleteProperty(document, "fonts"));
+
 const {
   closeTerminal,
   interceptKeys,
+  ligatureRanges,
   mountTerminals,
   openTerminal,
   showTerminal,
@@ -205,6 +221,41 @@ test("input goes to the service until the shell exits; size changes resize the P
   expect(write).toHaveBeenCalledTimes(1);
   write.mockRestore();
   resize.mockRestore();
+});
+
+test("the bundled fonts load once, before the first terminal; a failed face does not stop it", async () => {
+  await open();
+  await open();
+  expect(loadedFaces).toEqual([
+    '1em "Hive Mono"',
+    'bold 1em "Hive Mono"',
+    '1em "Symbols Nerd Font"',
+  ]);
+});
+
+test("the font's ligature sequences are joined, longest first, and nothing else", () => {
+  expect(ligatureRanges("a => b !== c")).toEqual([
+    [2, 4],
+    [7, 10],
+  ]);
+  expect(ligatureRanges("<!-- www ===")).toEqual([
+    [0, 4],
+    [5, 8],
+    [9, 12],
+  ]);
+  expect(ligatureRanges("plain text = >")).toEqual([]);
+  expect(ligatureRanges("")).toEqual([]);
+});
+
+test("a terminal joins ligatures once it is opened, with the proposed API allowed", async () => {
+  const { id, term } = await open();
+  expect(term.options.allowProposedApi).toBe(true);
+  const join = spyOn(term, "registerCharacterJoiner");
+  showTerminal(id);
+  showTerminal(null);
+  showTerminal(id);
+  expect(join).toHaveBeenCalledTimes(1);
+  expect(join.mock.calls[0][0]).toBe(ligatureRanges);
 });
 
 test("only the shown terminal is rendered, with WebGL; hiding it frees the renderer", async () => {
