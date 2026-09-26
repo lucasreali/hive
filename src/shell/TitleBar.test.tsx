@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
-import { addToInbox, apply, initialState, useHive } from "../store";
+import { addToInbox, apply, initialState, pendingAgents, useHive } from "../store";
 import { transport } from "../transport";
 import { agentStatus } from "../transport/mock";
 
@@ -60,10 +60,10 @@ test("with agents running the update asks first, like closing", () => {
   install.mockRestore();
 });
 
-test("the bell's inbox: pending agents, then the alerts; unread dot; going to an agent", () => {
+test("the bell's inbox: pending agents, then the alerts; going to an agent", () => {
   render(<App />);
   const bell = () => document.querySelector(".pending-bell") as HTMLButtonElement;
-  const dot = () => bell().querySelector(".unread-dot");
+  const dot = () => bell().querySelector(".pending-count");
   const items = () => screen.getAllByRole("menuitem");
   act(() => {
     apply({ type: "welcome", version: "0.1.0", distro: null });
@@ -77,10 +77,10 @@ test("the bell's inbox: pending agents, then the alerts; unread dot; going to an
     apply({ type: "agent_state", id: "a", ...agentStatus("waiting_permission"), subagents: [] });
     apply({ type: "agent_state", id: "b", ...agentStatus("working"), subagents: [] });
   });
-  // Nothing raised yet: no dot; the empty inbox says so. (Item texts start with the icon's name.)
-  expect(dot()).toBeNull();
+  // Seen once the bell opens: no badge; the empty inbox says so. (Item texts start with the icon's name.)
   act(() => useHive.setState({ agentStates: {} }));
   fireEvent.click(bell());
+  expect(dot()).toBeNull();
   expect(bell().getAttribute("aria-expanded")).toBe("true");
   expect(items().map((i) => [i.textContent, (i as HTMLButtonElement).disabled])).toEqual([
     ["No notifications", true],
@@ -132,6 +132,66 @@ test("the bell's inbox: pending agents, then the alerts; unread dot; going to an
   fireEvent.click(bell());
   fireEvent.click(items()[0] as HTMLElement);
   expect(useHive.getState().selection).toBe("a");
+});
+
+test("the badge counts pending agents not seen yet; opening the bell clears it (8.5)", () => {
+  render(<App />);
+  const bell = () => document.querySelector(".pending-bell") as HTMLButtonElement;
+  const badge = () => bell().querySelector(".pending-count")?.textContent ?? null;
+  const filled = () => bell().getAttribute("data-pending");
+  const state = (id: string, s: Parameters<typeof agentStatus>[0]) =>
+    act(() => apply({ type: "agent_state", id, ...agentStatus(s), subagents: [] }));
+  const open = () => {
+    fireEvent.click(bell());
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  };
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    for (const [channel, id] of [
+      [1, "a"],
+      [2, "b"],
+      [3, "c"],
+    ] as const) {
+      apply({ type: "agent_detected", channel, id, project: null, worktree: null, cwd: null });
+    }
+  });
+  state("a", "waiting_permission");
+  state("b", "waiting_you");
+  state("c", "working");
+  expect([badge(), filled(), bell().title]).toEqual([
+    "2",
+    "true",
+    "2 pending: notifications (F8: next pending)",
+  ]);
+  // Opening marks them seen: no badge, a plain bell; no navigation.
+  open();
+  expect([badge(), filled(), bell().title]).toEqual([
+    null,
+    "false",
+    "Notifications (F8: next pending)",
+  ]);
+  expect(useHive.getState().selection).toBeNull();
+  // They stay pending: the inbox still lists them.
+  expect(pendingAgents(useHive.getState()).map((a) => a.id)).toEqual(["a", "b"]);
+  // Another update in the same pending state is not a new alert.
+  state("a", "waiting_permission");
+  expect(badge()).toBeNull();
+  // A new pending agent counts; so does a new pending reason.
+  state("c", "error");
+  expect(badge()).toBe("1");
+  state("b", "waiting_permission");
+  expect(badge()).toBe("2");
+  open();
+  expect(badge()).toBeNull();
+  // Pending again after working counts again, even in the same state.
+  state("a", "working");
+  expect(badge()).toBeNull();
+  state("a", "waiting_permission");
+  expect(badge()).toBe("1");
+  // An agent that goes away forgets it was seen.
+  open();
+  act(() => apply({ type: "agent_removed", channel: 2, id: "b" }));
+  expect(useHive.getState().pendingSeen).toEqual({ a: "waiting_permission", c: "error" });
 });
 
 test("an update failure without an offered update only says why", () => {

@@ -126,6 +126,11 @@
   box-sizing: border-box;
 }
 
+/* A placeholder is never selected (8.19): Ctrl+A or a drag over the page would highlight it. */
+::placeholder {
+  user-select: none;
+}
+
 html,
 body,
 #root {
@@ -289,18 +294,6 @@ label:has(> input[type="checkbox"]:disabled) {
   font-weight: 700;
   line-height: 15px;
   text-align: center;
-}
-
-/* Alerts raised since the inbox was last opened; left of the bell, clear of the count. */
-.unread-dot {
-  position: absolute;
-  top: 4px;
-  left: 5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--bar);
-  background: var(--accent);
 }
 
 .inbox {

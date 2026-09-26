@@ -146,3 +146,24 @@ test("a plan card approves, approves accepting edits, or keeps planning with fee
   fireEvent.click(button("Keep planning"));
   expect(fourth.answers()).toEqual([[4, "req_1", { kind: "keep_planning", feedback: "shorter" }]]);
 });
+
+test("the card leaves the focus in an input or an editable element", () => {
+  for (const make of [
+    () => document.createElement("input"),
+    () => document.createElement("textarea"),
+    () => {
+      const div = document.createElement("div");
+      div.contentEditable = "true";
+      div.tabIndex = 0;
+      return div;
+    },
+  ]) {
+    const field = document.body.appendChild(make());
+    field.focus();
+    expect(document.activeElement).toBe(field);
+    card("question");
+    expect(document.activeElement).toBe(field);
+    cleanup();
+    field.remove();
+  }
+});
