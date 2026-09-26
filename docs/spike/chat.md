@@ -676,6 +676,21 @@ python3 scripts/spike/record-chat.py            # all of them (~15–25 min with
   open points (thinking shape, `stdio` + `permission_denied`, plan mode after approval,
   `apiKeySource` value, `session_state_changed`, image limits, `PermissionRequest` hook in `-p`).
 
+### 11.1 Stage 8 scenarios
+
+`python3 scripts/spike/record-chat.py stage8` runs only these (~5–10 min; a few one-line turns,
+one of them on Opus). Every scenario also copies its session transcript to
+`rec/<name>.transcript.jsonl`, and ends with a **Findings** block to paste back.
+
+| Scenario | Task | What it records |
+|---|---|---|
+| `context-1m`, `context-opus`, `context-200k` | 8.1 | Where the model and its window show up: `system/init.model`, `result.modelUsage.*.contextWindow`, the transcript's `message.model`, and the hook payloads (hooks from `--settings` that only append stdin to `rec/<name>.hooks.jsonl`). Models: `--model-1m` (default `opus[1m]`), plain `opus`, `--model-200k` (default `haiku`) |
+| `auto-start`, `auto-switch`, `auto-switch-haiku` | 8.4 | `--permission-mode auto`, and `set_permission_mode {mode: "auto"}` (on `--thinking-model` and on haiku): the `control_response`, `system/init.permissionMode`, whether `ls` still asks |
+| `thinking-sonnet`, `thinking-summaries` | 8.7 | Thinking blocks and `thinking_delta`s on `--thinking-model` (default `sonnet`), `--effort high`; the second with `showThinkingSummaries: true` in `--settings` (the documented setting that stops the Anthropic API redacting thinking) |
+| `model-switch` | 8.9 | The `initialize` reply's `models`, then `set_model` to `--switch-model` (default `sonnet`) and to an unknown name, with each reply and the next `system/init` |
+| `title` | 8.11 | Two turns and `/rename hive spike title`; whether the transcript gets `ai-title` / `custom-title` |
+| `mention` | 8.12 | A prompt with `@notes.txt` and `@subdir/`; whether the file content or listing reaches the transcript without a tool call |
+
 ---
 
 ## 12. Alternative considered: option B, rich prompts for the interactive `claude`
