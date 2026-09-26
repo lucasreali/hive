@@ -60,11 +60,14 @@ const URGENCY: AgentState[] = [
   "with_subagents",
   "waiting_you",
   "error",
+  "waiting_answer",
+  "waiting_plan",
   "waiting_permission",
 ];
 export const agentStatus = (state: AgentState, activity: string | null = null, since_ms = 0) => {
   const urgency = URGENCY.indexOf(state);
-  return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you"), activity, since_ms };
+  const pending = urgency >= URGENCY.indexOf("waiting_you");
+  return { state, urgency, pending, interrupted: false, activity, since_ms };
 };
 
 /** `?mock=states`: shop's worktree that subagent a3 works in, shown as its parent row (#22). */
@@ -90,7 +93,7 @@ export const MOCK_STATES: [string, AgentState, Subagent[], string | null][] = [
     "waiting_permission",
     [
       sub("a3", "general-purpose", "waiting_permission", MOCK_OWN_WORKTREE, "bun test src/auth"),
-      sub("a4", "Explore", "idle"),
+      sub("a4", "Explore", "waiting_answer", null, "Asking a question"),
     ],
     "Editing src/auth/login.ts",
   ],

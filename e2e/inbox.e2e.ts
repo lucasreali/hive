@@ -6,7 +6,8 @@ async function agentIn(page: Page, worktree: string, state: string) {
   const agents = tree.locator(".tree-row.agent");
   const count = await agents.count();
   await tree.getByRole("button", { name: worktree, exact: true }).click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   const tab = page.getByRole("tablist").getByRole("tab", { name: worktree });
   await expect(tab).toHaveAttribute("aria-selected", "true");
   await page.keyboard.type("claude");

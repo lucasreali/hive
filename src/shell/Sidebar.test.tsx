@@ -192,7 +192,7 @@ test("agents and their subagents show the state the service sent, named for scre
     expect(icon.getAttribute("data-state")).toBe(state);
     shapes.add(icon.innerHTML.replace(/<title>.*<\/title>/, ""));
   }
-  expect(shapes.size).toBe(7);
+  expect(shapes.size).toBe(9);
   // A subagent row shows its conversation (6.10), selected in place of its agent.
   const explore = screen.getByRole("button", { name: /subagent: Explore/ });
   fireEvent.click(explore);

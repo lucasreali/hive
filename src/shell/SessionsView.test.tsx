@@ -111,6 +111,7 @@ test("a click resumes a session; a running one shows its state and its terminal"
       state: "working",
       urgency: 2,
       pending: false,
+      interrupted: false,
       subagents: [],
       activity: null,
       since_ms: 0,

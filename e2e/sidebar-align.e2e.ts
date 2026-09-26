@@ -17,13 +17,15 @@ test("sidebar: a collapsed worktree's rollup lines up with the badges' right col
   };
 
   // Agents in shop's main (no badges) and in fix-login (badges ↑3 ↓1 ●2).
-  const newTerminal = page.getByTitle("New terminal (Ctrl+Shift+T)");
+  const plus = page.getByTitle("New terminal, agent or file");
   await tree.getByRole("button", { name: "main", exact: true }).first().click();
-  await newTerminal.click();
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await page.keyboard.type("claude");
   await page.keyboard.press("Enter");
   await tree.getByRole("button", { name: "main", exact: true }).first().click();
-  await newTerminal.click();
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await page.keyboard.type("cd .claude/worktrees/fix-login");
   await page.keyboard.press("Enter");
   await page.keyboard.type("claude");

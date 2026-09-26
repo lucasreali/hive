@@ -1452,7 +1452,9 @@ li:not(:last-child) > .owned::before {
   margin-right: 6px;
 }
 
-.state-icon[data-state="waiting_permission"] {
+.state-icon[data-state="waiting_permission"],
+.state-icon[data-state="waiting_plan"],
+.state-icon[data-state="waiting_answer"] {
   color: var(--state-permission);
 }
 .state-icon[data-state="error"] {
@@ -1530,7 +1532,9 @@ li:not(:last-child) > .owned::before {
 }
 
 /* Only the alerting states color their name (prototype); subagent names stay neutral. */
-.agent .state-label[data-state="waiting_permission"] {
+.agent .state-label[data-state="waiting_permission"],
+.agent .state-label[data-state="waiting_plan"],
+.agent .state-label[data-state="waiting_answer"] {
   color: var(--state-permission);
 }
 

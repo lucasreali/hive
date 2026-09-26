@@ -208,6 +208,9 @@ pub enum Control {
         state: AgentState,
         urgency: u8,
         pending: bool,
+        /// It waits for you because the user interrupted it (Esc/Ctrl+C, or declined a
+        /// dialog): not pending, and nothing alerts (no tone, inbox or OS notification).
+        interrupted: bool,
         subagents: Vec<SubagentState>,
         /// What the agent itself is doing (its current tool call), cleared when its turn ends.
         activity: Option<String>,
@@ -1260,6 +1263,12 @@ pub enum EventKind {
     },
     SubagentStarted,
     SubagentStopped,
+    /// Compaction of the conversation began (`PreCompact`).
+    CompactStarted,
+    /// Compaction ended (`PostCompact`).
+    CompactFinished,
+    /// An MCP server asks the user for input (`Elicitation`).
+    ElicitationRequested,
     SessionEnded {
         reason: Option<String>,
     },
@@ -1283,8 +1292,14 @@ pub enum EventKind {
 pub enum Notification {
     PermissionPrompt,
     ElicitationDialog,
+    ElicitationUrlDialog,
+    ElicitationComplete,
+    ElicitationResponse,
     IdlePrompt,
     AgentNeedsInput,
+    QuotaAutoResumeFired,
+    QuotaAutoResumeStale,
+    QuotaAutoResumeDisabled,
     Other(String),
 }
 
@@ -1299,17 +1314,21 @@ pub enum AgentState {
     WithSubagents,
     WaitingYou,
     Error,
+    /// A question on screen (AskUserQuestion, an MCP form).
+    WaitingAnswer,
+    /// A plan waiting for approval (ExitPlanMode).
+    WaitingPlan,
     WaitingPermission,
 }
 
 impl AgentState {
-    /// Higher is more urgent: the declaration order, 0 (ended) to 6 (waiting for permission).
+    /// Higher is more urgent: the declaration order, 0 (ended) to 8 (waiting for permission).
     pub fn urgency(self) -> u8 {
         self as u8
     }
 
-    /// Needs the user (the "N pending" counter and F8): waiting for permission, error
-    /// (urgency "alta") and waiting for you ("média").
+    /// Needs the user (the "N pending" counter and F8): waiting for permission, a plan or an
+    /// answer, error (urgency "alta") and waiting for you ("média").
     pub fn pending(self) -> bool {
         self >= AgentState::WaitingYou
     }
@@ -1432,8 +1451,9 @@ mod tests {
         let msg = Control::AgentState {
             id: "s".into(),
             state: AgentState::WaitingPermission,
-            urgency: 6,
+            urgency: 8,
             pending: true,
+            interrupted: false,
             subagents: vec![SubagentState {
                 id: "a".into(),
                 agent_type: None,
@@ -1447,7 +1467,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
     }
@@ -1457,6 +1477,8 @@ mod tests {
         use AgentState::*;
         let most_urgent_first = [
             WaitingPermission,
+            WaitingPlan,
+            WaitingAnswer,
             Error,
             WaitingYou,
             WithSubagents,
@@ -1466,13 +1488,16 @@ mod tests {
         ];
         assert!(most_urgent_first.windows(2).all(|w| w[0] > w[1]));
         let urgency: Vec<u8> = most_urgent_first.iter().map(|s| s.urgency()).collect();
-        assert_eq!(urgency, [6, 5, 4, 3, 2, 1, 0]);
+        assert_eq!(urgency, [8, 7, 6, 5, 4, 3, 2, 1, 0]);
         let pending: Vec<bool> = most_urgent_first.iter().map(|s| s.pending()).collect();
-        assert_eq!(pending, [true, true, true, false, false, false, false]);
+        assert_eq!(
+            pending,
+            [true, true, true, true, true, false, false, false, false]
+        );
         let json = serde_json::to_string(&most_urgent_first).unwrap();
         assert_eq!(
             json,
-            r#"["waiting_permission","error","waiting_you","with_subagents","working","idle","ended"]"#
+            r#"["waiting_permission","waiting_plan","waiting_answer","error","waiting_you","with_subagents","working","idle","ended"]"#
         );
     }
 

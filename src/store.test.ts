@@ -222,14 +222,21 @@ test("agent states are stored as sent, before or after the agent, and go with it
     since_ms: 0,
   } as const;
   const doing = { activity: null, since_ms: 0 } as const;
-  const permission = { state: "waiting_permission", urgency: 6, pending: true, ...doing } as const;
-  const idle = { state: "idle", urgency: 1, pending: false, ...doing } as const;
+  const permission = {
+    state: "waiting_permission",
+    urgency: 6,
+    pending: true,
+    interrupted: false,
+    ...doing,
+  } as const;
+  const idle = { state: "idle", urgency: 1, pending: false, interrupted: false, ...doing } as const;
   apply({
     type: "agent_state",
     id: "a",
     state: "working",
     urgency: 2,
     pending: false,
+    interrupted: false,
     subagents: [],
     activity: null,
     since_ms: 0,
@@ -479,7 +486,16 @@ test("an agent is working in a worktree while it (or its subagent there) may wri
     apply({ type: "agent_detected", channel: 1, id, project: "/p", worktree: at, cwd: at });
   const none = { activity: null, since_ms: 0 };
   const state = (id: string, state: AgentState, subagents: Subagent[] = []) =>
-    apply({ type: "agent_state", id, state, urgency: 0, pending: false, subagents, ...none });
+    apply({
+      type: "agent_state",
+      id,
+      state,
+      urgency: 0,
+      pending: false,
+      interrupted: false,
+      subagents,
+      ...none,
+    });
   const working = () => agentWorkingIn(useHive.getState(), worktree);
   place("a", worktree);
   expect(working()).toBe(false); // No state yet.

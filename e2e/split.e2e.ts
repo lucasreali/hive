@@ -32,7 +32,8 @@ test("split: Ctrl+Shift+D shows two terminals side by side, a click focuses one,
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect.poll(() => screen(page, 1)).toBe("mock$");
 
   // Alone in its worktree, the terminal splits beside a new one there, which takes the focus.

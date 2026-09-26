@@ -6,13 +6,14 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist");
-  const newTerminal = page.getByTitle("New terminal (Ctrl+Shift+T)");
+  const plus = page.getByTitle("New terminal, agent or file");
   const agents = tree.locator(".tree-row.agent");
   const rows = () => tree.locator(".tree-row").allTextContents();
 
   // A terminal opened in shop's main worktree.
   await tree.getByRole("button", { name: "main", exact: true }).first().click();
-  await newTerminal.click();
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(tabs.getByRole("tab", { name: "main" })).toHaveAttribute("aria-selected", "true");
   // The fake service detects an agent where `claude` runs, not where the terminal opened.
   await page.keyboard.type("cd .claude/worktrees/fix-login");
@@ -42,7 +43,8 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
   expect(await iconX("fix-login")).toBeGreaterThan(0);
 
   await tree.getByRole("button", { name: "refactor-auth" }).click();
-  await newTerminal.click();
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(tabs.getByRole("tab", { name: "refactor-auth" })).toHaveAttribute(
     "aria-selected",
     "true",

@@ -271,9 +271,18 @@ impl State {
 
     /// Tracks agents: a `SessionStart` from one of our terminals marks its `claude` as hooked
     /// and detects the agent; any other event of a detected agent (or of its subagents)
-    /// updates its state; its own `SessionEnd` removes it.
+    /// updates its state; its own `SessionEnd` removes it. The `SessionStart` that follows a
+    /// compaction leaves a known agent as it is (state, subagents, tokens).
     async fn saw(&self, event: &AgentEvent) {
         if event.kind == EventKind::SessionStarted {
+            let compacted =
+                event.raw.get("source").and_then(serde_json::Value::as_str) == Some("compact");
+            if compacted
+                && let Some(id) = agent_id(event)
+                && self.agents.lock().await.contains_key(&id)
+            {
+                return;
+            }
             if let Some(channel) = event.terminal_id.as_deref().and_then(|t| t.parse().ok()) {
                 self.detect(channel, event).await;
             }
@@ -340,6 +349,8 @@ impl State {
         agent.worktree = worktree.clone();
         agent.cwd = cwd.clone();
         agent.transcript = transcript::transcript_path(&event.raw);
+        // Read on the next tick: what the transcript already holds is not news (interrupts).
+        agent.usage.due = true;
         agent.claude_dir = claude_dir;
         let state = agent.message(&id);
         let detected = Control::AgentDetected {
@@ -792,6 +803,10 @@ async fn watch_terminals(state: Arc<State>) {
             {
                 state.to_app(agent.channel, &message).await;
             }
+            // While it may be interrupted, its transcript is read every tick for the interrupt.
+            if agent.busy() {
+                agent.usage.due = true;
+            }
             // Its space's Claude projects folder, as for its subagents' transcripts.
             let sessions = state.sessions.at(agent.claude_dir.as_deref());
             let (Some(path), Some(root), true) =
@@ -802,6 +817,11 @@ async fn watch_terminals(state: Arc<State>) {
             // A bounded read (see `transcript::Usage`), off the other tasks' threads.
             let usage = &mut agent.usage;
             if let Some(message) = tokio::task::block_in_place(|| usage.read(id, root, path)) {
+                state.to_app(agent.channel, &message).await;
+            }
+            if agent.usage.interrupted()
+                && let Some(message) = agent.interrupt(id, now)
+            {
                 state.to_app(agent.channel, &message).await;
             }
         }
@@ -1580,6 +1600,7 @@ mod tests {
             state: hive_protocol::AgentState::Idle,
             urgency: 1,
             pending: false,
+            interrupted: false,
             subagents: vec![],
             activity: None,
             since_ms: 0,

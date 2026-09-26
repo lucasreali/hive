@@ -439,6 +439,8 @@ export type AgentState =
   | "idle"
   | "working"
   | "waiting_permission"
+  | "waiting_plan"
+  | "waiting_answer"
   | "waiting_you"
   | "error"
   | "with_subagents"
@@ -466,6 +468,8 @@ export type AgentStatus = {
   state: AgentState;
   urgency: number;
   pending: boolean;
+  /** It waits for you because the user interrupted it: nothing alerts. */
+  interrupted: boolean;
   subagents: Subagent[];
 } & Doing;
 
@@ -1346,7 +1350,13 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
 
 /** States in which an agent may be writing files: the file view's "Agent working here". */
-const WRITING: AgentState[] = ["working", "with_subagents", "waiting_permission"];
+const WRITING: AgentState[] = [
+  "working",
+  "with_subagents",
+  "waiting_permission",
+  "waiting_plan",
+  "waiting_answer",
+];
 
 /** An agent placed in `worktree`, or a subagent in its own worktree there, may be writing. */
 export const agentWorkingIn = (s: HiveState, worktree: string): boolean =>
