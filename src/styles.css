@@ -1052,6 +1052,40 @@ label:has(> input[type="checkbox"]:disabled) {
   width: 130px;
 }
 
+/* Chat controls (7.3i): the `/` list above the composer, the header's model, mode and warnings. */
+.chat-composer {
+  position: relative;
+}
+
+.chat-composer .chat-commands {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 12px;
+  min-width: 200px;
+  max-height: 240px;
+}
+
+.chat-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  padding-right: 6px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.chat-doing {
+  color: var(--state-working);
+}
+
+.chat-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--state-permission);
+}
+
 /* Chat requests (7.3): permission, question and plan cards pinned above the composer. */
 .chat-requests {
   flex: none;

@@ -113,6 +113,47 @@ test("chat: permission, question and plan cards pin above the composer and answe
 
   // The selector asks the service for another mode.
   await mode.click();
-  await page.getByRole("option", { name: "Plan only" }).click();
-  await expect(mode).toHaveText("Plan only");
+  await page.getByRole("option", { name: "Plan", exact: true }).click();
+  await expect(mode).toHaveText("Plan");
+});
+
+test("chat: the header shows model and mode, Esc stops a turn, / lists the commands", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  const chat = page.getByRole("region", { name: "Chat" });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  await expect(input).toBeEnabled();
+  await expect(chat.locator(".chat-meta")).toHaveText("claude-mock · Default");
+
+  // Esc in the message stops the running turn.
+  await input.fill("list the files");
+  await input.press("Enter");
+  await expect(chat.getByRole("button", { name: "Stop" })).toBeVisible();
+  await input.press("Escape");
+  await expect(chat.locator('[data-role="note"]')).toHaveText("Interrupted");
+  await expect(chat.getByRole("button", { name: "Send" })).toBeVisible();
+
+  // `/` lists the commands; the arrows and Enter pick one.
+  const commands = chat.getByRole("listbox", { name: "Commands" });
+  await input.fill("/");
+  await expect(commands.getByRole("option")).toHaveText(["/compact", "/clear", "/review"]);
+  await input.press("c");
+  await expect(commands.getByRole("option")).toHaveText(["/compact", "/clear"]);
+  await input.press("ArrowDown");
+  await expect(commands.getByRole("option", { selected: true })).toHaveText("/clear");
+  await input.press("Enter");
+  await expect(input).toHaveValue("/clear ");
+  await expect(commands).toBeHidden();
+  // Esc hides the list.
+  await input.fill("/r");
+  await expect(commands).toBeVisible();
+  await input.press("Escape");
+  await expect(commands).toBeHidden();
+  await expect(input).toHaveValue("/r");
 });

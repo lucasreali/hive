@@ -1,16 +1,47 @@
+import { WarningIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { type Chat, useHive } from "../store";
 import { transport } from "../transport";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, MODES } from "./ChatComposer";
 import { ChatRequestCard } from "./ChatRequestCard";
 import { CHAT_LABELS, ConversationView } from "./ConversationView";
-import { ChatIcon, CloseIcon } from "./icons";
+import { ChatIcon, CloseIcon, ICON } from "./icons";
 
 /** The chat's state in its bar. */
 function stateText(chat: Chat): string {
   if (chat.closed) return "ended";
   if (!chat.opened) return "starting";
   return chat.status?.busy ? "working" : "ready";
+}
+
+/**
+ * The header's right side: what the chat is doing besides its turn (compacting, an API retry),
+ * a warning when it runs on an API key instead of the subscription login (#45), its model and
+ * permission mode.
+ */
+function ChatMeta({ chat }: { chat: Chat }) {
+  const status = chat.status;
+  const mode = MODES.find((m) => m.value === (status?.mode ?? chat.opened?.mode))?.label;
+  const doing = status?.compacting ? "Compacting…" : status?.retry;
+  return (
+    <span className="chat-meta">
+      {doing && (
+        <span className="chat-doing" role="status">
+          {doing}
+        </span>
+      )}
+      {status?.api_key_source && (
+        <span
+          className="chat-warning"
+          role="note"
+          title={`This chat runs on an API key (${status.api_key_source}), not your subscription login: it may be billed separately.`}
+        >
+          <WarningIcon {...ICON} /> API key
+        </span>
+      )}
+      {[status?.model, mode].filter(Boolean).join(" · ")}
+    </span>
+  );
 }
 
 /**
@@ -88,6 +119,7 @@ export function ChatView({ id }: { id: number }) {
             {state}
           </span>
         </span>
+        <ChatMeta chat={chat} />
       </div>
       <ConversationView entries={chat.entries} labels={CHAT_LABELS}>
         {!chat.opened && !chat.closed && <div className="hint">Starting Claude…</div>}

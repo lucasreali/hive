@@ -1,36 +1,67 @@
 import { PaperPlaneRightIcon, StopIcon } from "@phosphor-icons/react";
-import { type KeyboardEvent, useState } from "react";
+import { type KeyboardEvent, useId, useState } from "react";
 import { type ChatMode, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { ICON } from "./icons";
 
 /** The permission modes offered (7.3): never `bypassPermissions`. */
-const MODES: { value: ChatMode; label: string }[] = [
+export const MODES: { value: ChatMode; label: string }[] = [
   { value: "default", label: "Default" },
   { value: "accept_edits", label: "Accept edits" },
-  { value: "plan", label: "Plan only" },
+  { value: "plan", label: "Plan" },
 ];
+
+const NO_COMMANDS: string[] = [];
 
 /**
  * A chat's input (7.3): Enter sends, Shift+Enter starts a new line. While a turn runs, Send
- * turns into Stop; closed (or not started yet) it is disabled. The draft is UI state. The mode
- * selector shows the service's mode and asks it for another.
+ * turns into Stop, and Esc stops too; closed (or not started yet) it is disabled. The draft is
+ * UI state. Typing `/` lists the chat's slash commands that start with what follows it: ↑/↓
+ * move, Enter or Tab picks, Esc hides the list. The mode selector shows the service's mode and
+ * asks it for another.
  */
 export function ChatComposer({ chat }: { chat: number }) {
   const [text, setText] = useState("");
+  const [active, setActive] = useState(0);
+  // The draft the list was hidden for (Esc); typing shows it again.
+  const [hidden, setHidden] = useState<string | null>(null);
+  const id = useId();
   const busy = useHive((s) => !!s.chats[chat]?.status?.busy);
   const ready = useHive((s) => !!s.chats[chat]?.opened && !s.chats[chat]?.closed);
   const mode = useHive((s) => s.chats[chat]?.status?.mode ?? s.chats[chat]?.opened?.mode);
+  const commands = useHive((s) => s.chats[chat]?.opened?.commands ?? NO_COMMANDS);
+  const typed = /^\/\S*$/.test(text) && text !== hidden ? text.slice(1) : null;
+  const matches = typed === null ? [] : commands.filter((c) => c.startsWith(typed));
+  const at = Math.min(active, matches.length - 1);
+  const edit = (value: string) => {
+    setText(value);
+    setActive(0);
+  };
+  const pick = (command: string) => edit(`/${command} `);
   const send = () => {
     if (!ready || busy || text.trim() === "") return;
     void transport.chatSend(chat, text, []);
-    setText("");
+    edit("");
   };
   const keys = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    send();
+    if (event.nativeEvent.isComposing) return;
+    const listed = matches.length > 0;
+    const move = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+    if (listed && move) {
+      event.preventDefault();
+      setActive((at + move + matches.length) % matches.length);
+    } else if (listed && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
+      event.preventDefault();
+      pick(matches[at]);
+    } else if (event.key === "Escape" && listed) {
+      setHidden(text);
+    } else if (event.key === "Escape" && busy) {
+      void transport.chatInterrupt(chat);
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send();
+    }
   };
   return (
     <form
@@ -40,13 +71,43 @@ export function ChatComposer({ chat }: { chat: number }) {
         send();
       }}
     >
+      {matches.length > 0 && (
+        <div
+          className="select-list chat-commands"
+          role="listbox"
+          id={id}
+          aria-label="Commands"
+          // The focus stays in the message.
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          {matches.map((command, i) => (
+            // biome-ignore lint/a11y/useKeyWithClickEvents: the message field handles the keys.
+            <div
+              key={command}
+              id={`${id}-${i}`}
+              role="option"
+              tabIndex={-1}
+              aria-selected={i === at}
+              data-active={i === at}
+              onMouseMove={() => setActive(i)}
+              onClick={() => pick(command)}
+            >
+              /{command}
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         aria-label="Message"
-        placeholder={ready ? "Message Claude (Shift+Enter for a new line)" : undefined}
+        aria-controls={matches.length > 0 ? id : undefined}
+        aria-activedescendant={matches.length > 0 ? `${id}-${at}` : undefined}
+        placeholder={
+          ready ? "Message Claude (Shift+Enter for a new line, / for commands)" : undefined
+        }
         rows={3}
         value={text}
         disabled={!ready}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => edit(event.target.value)}
         onKeyDown={keys}
       />
       <Select
@@ -61,7 +122,7 @@ export function ChatComposer({ chat }: { chat: number }) {
         <button
           type="button"
           className="secondary"
-          title="Stop the turn"
+          title="Stop the turn (Esc)"
           onClick={() => void transport.chatInterrupt(chat)}
         >
           <StopIcon {...ICON} /> Stop
