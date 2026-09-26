@@ -748,10 +748,11 @@ pub async fn next_line<R: AsyncBufRead + Unpin>(
         // The last line, without a newline.
         return Ok(Some(true));
     }
+    // The rest of the line, in bounded reads, up to its newline or the end.
     loop {
         buf.clear();
         let read = (&mut *reader).take(limit).read_until(b'\n', buf).await?;
-        if read == 0 || buf.last() == Some(&b'\n') {
+        if matches!((read, buf.last()), (0, _) | (_, Some(b'\n'))) {
             buf.clear();
             return Ok(Some(false));
         }

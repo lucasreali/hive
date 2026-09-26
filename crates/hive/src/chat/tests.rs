@@ -242,6 +242,7 @@ fn entries_are_sent_in_bounded_batches() {
     assert_eq!(sizes(batches(7, list(5), 2, 1000)), [2, 2, 1]);
     assert_eq!(sizes(batches(7, list(5), 10, 2 * len)), [2, 2, 1]);
     assert_eq!(sizes(batches(7, list(5), 10, 2 * len - 1)), [1, 1, 1, 1, 1]);
+    assert_eq!(sizes(batches(7, list(5), 10, 3 * len)), [3, 2]);
     assert_eq!(sizes(batches(7, list(2), 10, 1)), [1, 1]);
     assert!(batches(7, Vec::new(), 1, 1).is_empty());
 }
@@ -558,6 +559,35 @@ fn retries_informational_notes_and_failed_turns_are_shown() {
 }
 
 #[test]
+fn the_end_of_a_turn_clears_its_transient_status() {
+    let mut stream = stream();
+    let mut line = |value: Value| stream.line(Some(value.to_string().as_bytes()));
+    line(json!({"type": "system", "subtype": "status", "status": "compacting"}));
+    let out = line(json!({"type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 9}));
+    let retrying = Control::ChatStatus {
+        chat: 7,
+        busy: false,
+        mode: ChatMode::Default,
+        model: None,
+        retry: Some("Retrying 2/9…".into()),
+        compacting: true,
+        session: None,
+    };
+    assert_eq!(out.app, [retrying]);
+    let out = line(json!({"type": "result", "subtype": "success"}));
+    let idle = Control::ChatStatus {
+        chat: 7,
+        busy: false,
+        mode: ChatMode::Default,
+        model: None,
+        retry: None,
+        compacting: false,
+        session: None,
+    };
+    assert_eq!(out.app.last(), Some(&idle));
+}
+
+#[test]
 fn an_interrupted_turn_is_noted_not_failed() {
     let mut stream = stream();
     let out = replay(&mut stream, "interrupt");
@@ -770,13 +800,17 @@ fn turns_modes_and_interrupts_are_written_to_claude() {
     assert!(stream.set_mode(ChatMode::AcceptEdits).app.is_empty());
 }
 
+/// Every line of `input`; bounded by its length, so a mutant cannot loop forever.
 async fn lines(input: &[u8], max: usize) -> Vec<Option<String>> {
     let mut reader = input;
     let (mut buf, mut read) = (Vec::new(), Vec::new());
-    while let Some(whole) = next_line(&mut reader, &mut buf, max).await.unwrap() {
-        read.push(whole.then(|| String::from_utf8_lossy(&buf).into_owned()));
+    for _ in 0..input.len() + 2 {
+        match next_line(&mut reader, &mut buf, max).await.unwrap() {
+            Some(whole) => read.push(whole.then(|| String::from_utf8_lossy(&buf).into_owned())),
+            None => return read,
+        }
     }
-    read
+    panic!("more lines than bytes: {read:?}")
 }
 
 #[tokio::test]
@@ -826,15 +860,24 @@ fn start(script: &str, dir: &Path, env: &[(&'static str, String)]) -> (Chat, Pip
     Chat::start(stream, Path::new("/bin/sh"), &args, cwd, env).unwrap()
 }
 
+/// Reads claude's stdout to its end and reaps it; its group is killed after 10 s, so a
+/// test (or a mutant) never leaves it running or waits forever.
 async fn read_all(pipes: Pipes) -> (String, Option<ExitStatus>) {
     let Pipes {
         mut child,
         mut stdout,
         ..
     } = pipes;
+    let group = Pid::from_raw(child.id().unwrap() as i32);
     let mut out = String::new();
-    stdout.read_to_string(&mut out).await.unwrap();
-    (out, child.wait().await.ok())
+    let limit = Duration::from_secs(10);
+    let read = tokio::time::timeout(limit, stdout.read_to_string(&mut out)).await;
+    if read.is_err() {
+        let _ = killpg(group, Signal::SIGKILL);
+    }
+    let status = child.wait().await.ok();
+    assert!(read.is_ok(), "claude did not end: {out:?}");
+    (out, status)
 }
 
 #[tokio::test]
