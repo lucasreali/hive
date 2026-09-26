@@ -662,6 +662,12 @@ export type HiveState = {
   /** The alerts raised, the newest first (at most `INBOX_LIMIT`), and the newest id seen. */
   inbox: InboxItem[];
   inboxSeen: number;
+  /**
+   * The pending agents seen when the bell was last opened, with the state they were pending in
+   * (8.5): the bell's badge counts the others. An agent leaves it when it stops being pending in
+   * that state, so a new alert counts again.
+   */
+  pendingSeen: Record<string, AgentState>;
   /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
   focused: boolean;
   // Service data
@@ -749,6 +755,7 @@ export const initialState: HiveState = {
   split: null,
   inbox: [],
   inboxSeen: 0,
+  pendingSeen: {},
   focused: false,
   connection: { status: "connecting" },
   settings: DEFAULT_SETTINGS,
@@ -935,8 +942,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { [m.id]: __, ...agentStates } = s.agentStates;
       const { [m.id]: ___, ...agentTitles } = s.agentTitles;
       const { [m.id]: ____, ...agentUsage } = s.agentUsage;
+      const { [m.id]: _____, ...pendingSeen } = s.pendingSeen;
       const shown = s.transcriptShown?.agent === m.id ? null : s.transcriptShown;
-      return { agents, agentStates, agentTitles, agentUsage, transcriptShown: shown };
+      return { agents, agentStates, agentTitles, agentUsage, pendingSeen, transcriptShown: shown };
     }
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
@@ -946,7 +954,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "agent_state": {
       const { type: _, id, ...status } = m;
-      return { agentStates: { ...s.agentStates, [id]: status } };
+      const agentStates = { ...s.agentStates, [id]: status };
+      if (status.pending && s.pendingSeen[id] === status.state) return { agentStates };
+      const { [id]: __, ...pendingSeen } = s.pendingSeen;
+      return { agentStates, pendingSeen };
     }
     case "projects": {
       const projects = Object.fromEntries(m.projects.map((p) => [p.id, p]));
@@ -1195,8 +1206,14 @@ export const addToInbox = (item: Omit<InboxItem, "id">) =>
   useHive.setState((s) => ({
     inbox: [{ ...item, id: (s.inbox[0]?.id ?? 0) + 1 }, ...s.inbox].slice(0, INBOX_LIMIT),
   }));
-/** Opening the inbox marks every alert read. */
-export const markInboxRead = () => useHive.setState((s) => ({ inboxSeen: s.inbox[0]?.id ?? 0 }));
+/** Opening the inbox marks every alert read and the pending agents seen (8.5). */
+export const markInboxRead = () =>
+  useHive.setState((s) => ({
+    inboxSeen: s.inbox[0]?.id ?? 0,
+    pendingSeen: Object.fromEntries(
+      pendingAgents(s).map((a) => [a.id, s.agentStates[a.id]?.state as AgentState]),
+    ),
+  }));
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
@@ -1432,6 +1449,9 @@ export function treeAgents(s: HiveState): Agent[] {
 /** Agents that need the user, in tree order: the "N pending" counter and F8's cycle. */
 export const pendingAgents = (s: HiveState): Agent[] =>
   treeAgents(s).filter((a) => s.agentStates[a.id]?.pending);
+/** Pending agents not seen since the bell was last opened: the bell's badge (8.5). */
+export const unseenPending = (s: HiveState): number =>
+  pendingAgents(s).filter((a) => s.pendingSeen[a.id] !== s.agentStates[a.id]?.state).length;
 
 /** The state of highest `urgency` among `agents` (rule 1, for a collapsed node), or null. */
 export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
