@@ -165,3 +165,25 @@ test("a message the app could not send says why", async () => {
   });
   expect(screen.getByRole("alert").textContent).toBe("frame payload too large");
 });
+
+test("the mode selector shows the service's mode and asks it for another", () => {
+  const setMode = spyOn(transport, "chatSetMode").mockResolvedValue();
+  composer();
+  const select = screen.getByRole("combobox", { name: "Permission mode" }) as HTMLButtonElement;
+  expect([select.disabled, select.textContent]).toEqual([true, "Default"]);
+  open();
+  expect(select.disabled).toBe(false);
+  fireEvent.mouseDown(select);
+  // Never bypassPermissions.
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+    "Default",
+    "Accept edits",
+    "Plan only",
+  ]);
+  fireEvent.click(screen.getByRole("option", { name: "Plan only" }));
+  expect(setMode.mock.calls).toEqual([[3, "plan"]]);
+  // The selector follows the service, not the click.
+  expect(select.textContent).toBe("Default");
+  act(() => apply({ type: "chat_status", channel: 3, ...status(false), mode: "plan" }));
+  expect(select.textContent).toBe("Plan only");
+});

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { type Chat, useHive } from "../store";
 import { transport } from "../transport";
 import { ChatComposer } from "./ChatComposer";
+import { ChatRequestCard } from "./ChatRequestCard";
 import { CHAT_LABELS, ConversationView } from "./ConversationView";
 import { ChatIcon, CloseIcon } from "./icons";
 
@@ -97,6 +98,13 @@ export function ChatView({ id }: { id: number }) {
       {chat.closed?.error && (
         <div className="files-error" role="alert">
           {chat.closed.error}
+        </div>
+      )}
+      {chat.requests.length > 0 && (
+        <div className="chat-requests">
+          {chat.requests.map((request) => (
+            <ChatRequestCard key={request.id} chat={id} request={request} />
+          ))}
         </div>
       )}
       <ChatComposer chat={id} />

@@ -1,9 +1,17 @@
 import { PaperPlaneRightIcon, StopIcon, XIcon } from "@phosphor-icons/react";
 import { type DragEvent, type KeyboardEvent, useState } from "react";
-import { type ChatImage, useHive } from "../store";
+import { type ChatImage, type ChatMode, useHive } from "../store";
 import { transport } from "../transport";
+import { Select } from "../ui/Select";
 import { imageUrl } from "./ConversationView";
 import { ICON } from "./icons";
+
+/** The permission modes offered (7.3): never `bypassPermissions`. */
+const MODES: { value: ChatMode; label: string }[] = [
+  { value: "default", label: "Default" },
+  { value: "accept_edits", label: "Accept edits" },
+  { value: "plan", label: "Plan only" },
+];
 
 /**
  * The service's limits (`hive::chat::MAX_IMAGES`, `MAX_IMAGE_DATA`): at most 10 images per
@@ -34,7 +42,8 @@ export async function base64(file: Blob): Promise<string> {
 /**
  * A chat's input (7.3): Enter sends, Shift+Enter starts a new line; images are pasted or
  * dropped in and shown as thumbnails until sent. While a turn runs, Send turns into Stop; closed
- * (or not started yet) it is disabled. The draft is UI state.
+ * (or not started yet) it is disabled. The draft is UI state. The mode selector shows the
+ * service's mode and asks it for another.
  */
 export function ChatComposer({ chat }: { chat: number }) {
   const [text, setText] = useState("");
@@ -42,6 +51,7 @@ export function ChatComposer({ chat }: { chat: number }) {
   const [error, setError] = useState<string | null>(null);
   const busy = useHive((s) => !!s.chats[chat]?.status?.busy);
   const ready = useHive((s) => !!s.chats[chat]?.opened && !s.chats[chat]?.closed);
+  const mode = useHive((s) => s.chats[chat]?.status?.mode ?? s.chats[chat]?.opened?.mode);
   const empty = text.trim() === "" && images.length === 0;
   const send = () => {
     if (!ready || busy || empty) return;
@@ -124,6 +134,14 @@ export function ChatComposer({ chat }: { chat: number }) {
           event.preventDefault();
           void add(pasted);
         }}
+      />
+      <Select
+        className="chat-mode"
+        aria-label="Permission mode"
+        value={mode ?? "default"}
+        options={MODES}
+        disabled={!ready}
+        onChange={(value) => void transport.chatSetMode(chat, value as ChatMode)}
       />
       {busy ? (
         <button

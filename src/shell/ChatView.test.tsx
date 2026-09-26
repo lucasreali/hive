@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, expect, mock, spyOn, test } from "bun
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { addTab, apply, initialState, type ServiceMessage, setChat, useHive } from "../store";
 import { transport } from "../transport";
+import { MOCK_CHAT_REQUESTS } from "../transport/mockChat";
 import { TerminalArea } from "./TerminalArea";
 
 beforeAll(() => {
@@ -116,4 +117,17 @@ test("the first chat in a folder asks first; Start chat accepts, Esc refuses", (
     expect(confirm.mock.calls).toEqual([[5, "/w", false]]);
     expect(screen.queryByRole("dialog")).toBeNull();
   }
+});
+
+test("pending requests pin above the composer until the service says they are gone", () => {
+  const view = chatTab();
+  act(() => apply(opened));
+  expect(view.querySelector(".chat-requests")).toBeNull();
+  const request = { id: "req_1", ...MOCK_CHAT_REQUESTS.permission };
+  act(() => apply({ type: "chat_request", channel: 5, chat: 5, request }));
+  const pinned = view.querySelector(".chat-requests") as HTMLElement;
+  expect(pinned.nextElementSibling?.className).toBe("chat-composer");
+  expect(screen.getByRole("region", { name: "Permission request" })).toBeDefined();
+  act(() => apply({ type: "chat_request_gone", channel: 5, chat: 5, request: "req_1" }));
+  expect(screen.queryByRole("region", { name: "Permission request" })).toBeNull();
 });
