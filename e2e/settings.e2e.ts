@@ -26,7 +26,10 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   await page.keyboard.press("Control+Comma");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Font size").fill("20");
+  await dialog.getByLabel("Font size", { exact: true }).fill("19");
+  // The stepper's own button, not the WebView's spin button.
+  await dialog.getByRole("button", { name: "Increase Font size" }).click();
+  await expect(dialog.getByLabel("Font size", { exact: true })).toHaveValue("20");
   await expect.poll(async () => (await terminal(page)).fontSize).toBe(20);
   // Bigger cells: the terminal refits to fewer columns.
   expect((await terminal(page)).cols).toBeLessThan(before.cols);

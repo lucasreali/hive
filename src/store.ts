@@ -527,7 +527,7 @@ export type HiveState = {
   selection: string | null;
   /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
-   * has its project's id), a folder of the files panel by `folder:<worktree>/<path>`
+   * has its project's id), a folder of the Files or Diff tree by `files:` or `changes:<worktree>/<path>`
    * (folders start collapsed: one is open only when its entry is false).
    */
   collapsed: Record<string, boolean>;

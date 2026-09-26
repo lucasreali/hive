@@ -13,3 +13,9 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# cargo-mutants builds (`.cargo/mutants.toml`): without debug info every mutant builds and
+# links faster; a failing test's backtrace is not needed to count the mutant as caught.
+[profile.mutants]
+inherits = "test"
+debug = "none"

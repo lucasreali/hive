@@ -1,3 +1,4 @@
+import { version } from "../../package.json";
 import { type Connection, setNotice, useHive } from "../store";
 import { isMac } from "../window";
 
@@ -32,6 +33,7 @@ export function StatusBar() {
           {notice}
         </button>
       )}
+      <span className="app-version">v{version}</span>
     </footer>
   );
 }

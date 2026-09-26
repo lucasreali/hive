@@ -1,15 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-test("create a worktree from a project row: name check, branch filter, tree update", async ({
+test("create a worktree from a project's menu: name check, branch filter, tree update", async ({
   page,
 }) => {
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
-  const row = tree.locator(".tree-row.project", { hasText: "shop" });
-  // The row's affordance shows on hover, as in the prototype.
-  await expect(row.getByTitle("New worktree (Ctrl+Shift+N)")).toBeHidden();
-  await row.hover();
-  await row.getByTitle("New worktree (Ctrl+Shift+N)").click();
+  // The project row has no inline button: creating a worktree is in its right-click menu.
+  await expect(
+    tree.locator(".tree-row.project", { hasText: "shop" }).getByRole("button"),
+  ).toHaveCount(2);
+  await tree.getByRole("button", { name: "shop", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^New worktree…/ }).click();
 
   const dialog = page.getByRole("dialog", { name: "New worktree" });
   const name = dialog.getByLabel("Worktree name");
@@ -66,9 +67,8 @@ test("create a worktree from a project row: name check, branch filter, tree upda
 
 test("the long remote branch list scrolls with the arrow keys", async ({ page }) => {
   await page.goto("/");
-  const row = page.locator(".tree-row.project", { hasText: "shop" });
-  await row.hover();
-  await row.getByTitle("New worktree (Ctrl+Shift+N)").click();
+  await page.getByRole("button", { name: "shop", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^New worktree…/ }).click();
   const filter = page.getByLabel("Base branch");
   await filter.fill("renovate");
   for (let i = 0; i < 40; i++) await filter.press("ArrowDown");

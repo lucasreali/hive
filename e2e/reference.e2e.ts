@@ -21,6 +21,7 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await expect.poll(() => screen(page, 1)).toBe("mock$");
 
   const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
   for (const name of ["src", "auth"]) {
     await panel.getByRole("treeitem", { name, exact: true }).click();
   }
