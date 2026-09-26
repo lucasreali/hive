@@ -21,7 +21,7 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
   await page.keyboard.press("Enter");
   await expect(agents).toHaveCount(1);
   expect((await rows()).slice(0, 5)).toEqual([
-    "shopNew worktree",
+    "shop",
     "main",
     "fix-login↑3↓1●2",
     // The icon's name, the title, the state's name and the time in it.

@@ -25,7 +25,7 @@ test("projects show their worktrees with the service's names and paths", () => {
     r.getAttribute("title"),
   ]);
   expect(rows).toEqual([
-    ["tree-row project", "shopNew worktree", "/home/user/projects/shop"],
+    ["tree-row project", "shop", "/home/user/projects/shop"],
     ["tree-row worktree", "main", "/home/user/projects/shop"],
     [
       "tree-row worktree",
@@ -37,7 +37,7 @@ test("projects show their worktrees with the service's names and paths", () => {
       "feat-checkout↑1●2",
       "/home/user/projects/shop/.claude/worktrees/feat-checkout",
     ],
-    ["tree-row project", "apiNew worktree", "/home/user/projects/api"],
+    ["tree-row project", "api", "/home/user/projects/api"],
     ["tree-row worktree", "main", "/home/user/projects/api"],
     [
       "tree-row worktree",
@@ -116,7 +116,7 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   });
   const rows = [...tree().querySelectorAll(".tree-row")].map((r) => [r.className, r.textContent]);
   expect(rows).toEqual([
-    ["tree-row project", "shopNew worktree"],
+    ["tree-row project", "shop"],
     ["tree-row worktree", "main"],
     ["tree-row worktree", "fix-login↑3↓1●2"],
     ["tree-row agent", "idleClaudeidle"],

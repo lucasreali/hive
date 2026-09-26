@@ -51,10 +51,12 @@ const branchNames = () => [...document.querySelectorAll(".branch-name")].map((b)
 const plan = () => document.querySelector(".plan")?.textContent;
 const type = (value: string) => fireEvent.change(nameField(), { target: { value } });
 
-test("the project row opens the dialog for that project, with its branches", async () => {
+test("the project's menu opens the dialog for that project, with its branches", async () => {
   render(<App />);
   act(() => apply({ type: "projects", projects: [shop, api] }));
-  fireEvent.click(screen.getAllByTitle("New worktree (Ctrl+Shift+N)")[1]);
+  fireEvent.contextMenu(screen.getByRole("button", { name: "api" }), { clientX: 10, clientY: 20 });
+  fireEvent.click(screen.getByRole("menuitem", { name: "New worktree… Ctrl+Shift+N" }));
+  expect(useHive.getState().projectMenu).toBeNull();
   const dialog = screen.getByRole("dialog", { name: "New worktree" }) as HTMLDialogElement;
   expect(dialog.open).toBe(true);
   expect(document.activeElement).toBe(nameField());
