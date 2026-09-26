@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, Permissions};
 use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -169,6 +169,9 @@ struct State {
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
+    /// The user's `PATH` ([`wrapper::user_path`]) once asked for; asked again while no
+    /// `claude` is on it.
+    user_path: Mutex<Option<OsString>>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -206,7 +209,25 @@ impl State {
             ports,
             restore,
             sent: Default::default(),
+            user_path: Mutex::new(None),
         }
+    }
+
+    /// The real `claude` the user's terminals would run, and the user's `PATH` it was
+    /// looked for on (see [`wrapper::user_path`]).
+    async fn user_claude(&self) -> (Option<PathBuf>, OsString) {
+        let mut cached = self.user_path.lock().await;
+        if let Some(path) = cached.as_ref()
+            && let Some(claude) = wrapper::real_claude(Some(path), &self.bin_dir)
+        {
+            return (Some(claude), path.clone());
+        }
+        let var = std::env::var_os;
+        let shell = wrapper::path_shell();
+        let path = wrapper::user_path(shell, var("PATH"), var("HOME"), wrapper::SHELL_TIMEOUT);
+        let path = path.await;
+        *cached = Some(path.clone());
+        (wrapper::real_claude(Some(&path), &self.bin_dir), path)
     }
 
     fn sent(&self) -> std::sync::MutexGuard<'_, health::Sent> {
@@ -706,8 +727,9 @@ impl State {
         }
         let (mut env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
         env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
-        let path = std::env::var_os("PATH");
-        let claude = wrapper::real_claude(path.as_deref(), &self.bin_dir);
+        let (claude, path) = self.user_claude().await;
+        // Its tools need the user's programs; a space's own `PATH` still wins.
+        env.insert(0, ("PATH", path.to_string_lossy().into_owned()));
         let started = claude.ok_or_else(|| "no claude found on PATH".to_owned());
         let started = started.and_then(|claude| {
             let args = chat::args(&self.hooks_settings, open.mode, open.resume.as_deref());
@@ -1214,8 +1236,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.to_app(0, &target).await;
         }
         Ok(Control::GetDiagnostics) => {
-            let path = std::env::var_os("PATH");
-            let claude = wrapper::real_claude(path.as_deref(), &state.bin_dir);
+            let (claude, _) = state.user_claude().await;
             let diagnostics = Control::Diagnostics {
                 settings_file: state.settings.file().display().to_string(),
                 wrapper: state.bin_dir.join("claude").display().to_string(),

@@ -1,11 +1,15 @@
 //! The `claude` wrapper put first on `PATH` in Hive terminals, and the hooks settings it injects.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::Permissions;
 use std::io::{self, Write};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use tokio::io::AsyncReadExt;
 
 use serde_json::{Map, Value, json};
 
@@ -118,7 +122,6 @@ exec "$real" --settings "$hive_settings" "$@"
 
 /// The `claude` the wrapper in `bin` would run with `path` as `PATH`: the first executable
 /// `claude` file outside `bin`, as the script looks for it (relative entries skipped too).
-/// ponytail: the service's `PATH`, not the terminals' login shell one; ask a terminal if they differ.
 pub fn real_claude(path: Option<&OsStr>, bin: &Path) -> Option<PathBuf> {
     std::env::split_paths(path?)
         .filter(|dir| dir.is_absolute() && dir != bin)
@@ -128,6 +131,81 @@ pub fn real_claude(path: Option<&OsStr>, bin: &Path) -> Option<PathBuf> {
                 .metadata()
                 .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         })
+}
+
+/// How long the user's shell gets to print its `PATH`.
+pub const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
+/// The most the user's shell may print, its config's output included.
+const SHELL_OUTPUT: u64 = 64 * 1024;
+/// Run by the user's shell: prints its `PATH` on the last line (fish joins a quoted `PATH`
+/// with `:` too). A fixed string: nothing from input goes into it.
+const PRINT_PATH: &str = r#"printf '%s\n' "$PATH""#;
+
+/// The user's shell as terminals start it (fish, after its config, on WSL), asked for its
+/// `PATH`.
+#[cfg(target_os = "linux")]
+pub fn path_shell() -> (OsString, Vec<OsString>) {
+    ("fish".into(), vec!["-c".into(), PRINT_PATH.into()])
+}
+
+/// The user's login shell (`$SHELL`), as terminals start it on macOS, asked for its `PATH`.
+#[cfg(target_os = "macos")]
+pub fn path_shell() -> (OsString, Vec<OsString>) {
+    let var = std::env::var_os("SHELL");
+    let shell = crate::terminal::login::launch(var, None, None, Path::new(""));
+    let args = vec!["-l".into(), "-c".into(), PRINT_PATH.into()];
+    (shell.program, args)
+}
+
+/// The `PATH` the user's terminals get, for chats and for finding the real `claude`: the
+/// one `shell` (see [`path_shell`]) prints, else the service's `path` (started through
+/// `wsl.exe`, it lacks what the user's config adds), then `~/.local/bin` and
+/// `~/.claude/local`, where Claude Code installs itself. Empty entries are dropped.
+pub async fn user_path(
+    shell: (OsString, Vec<OsString>),
+    path: Option<OsString>,
+    home: Option<OsString>,
+    timeout: Duration,
+) -> OsString {
+    let path = shell_path(&shell.0, &shell.1, timeout)
+        .await
+        .or(path)
+        .unwrap_or_default();
+    let installs = home
+        .map(PathBuf::from)
+        .into_iter()
+        .flat_map(|home| [home.join(".local/bin"), home.join(".claude/local")]);
+    let dirs = std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .chain(installs);
+    std::env::join_paths(dirs).unwrap_or(path)
+}
+
+/// The last line `program` prints with `args` (stdin and stderr closed), when it exits
+/// successfully within `timeout` having printed at most [`SHELL_OUTPUT`] bytes.
+async fn shell_path(program: &OsStr, args: &[OsString], timeout: Duration) -> Option<OsString> {
+    let mut child = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
+    let stdout = child.stdout.take()?;
+    let run = async {
+        let mut out = Vec::new();
+        let read = stdout.take(SHELL_OUTPUT + 1).read_to_end(&mut out).await;
+        let status = child.wait().await.ok()?;
+        (read.is_ok() && status.success() && out.len() as u64 <= SHELL_OUTPUT).then_some(out)
+    };
+    // ponytail: only the shell is killed on a timeout; a process it left behind lives on.
+    let out = tokio::time::timeout(timeout, run).await.ok()??;
+    let line = out
+        .strip_suffix(b"\n")?
+        .rsplit(|&byte| byte == b'\n')
+        .next()?;
+    (!line.is_empty()).then(|| OsString::from_vec(line.to_vec()))
 }
 
 /// Single-quotes `path` for `sh`.
@@ -165,6 +243,65 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
+
+    /// [`user_path`] with `sh -c script` as the user's shell.
+    async fn sh_path(script: &str, path: &str, home: Option<&str>, timeout: u64) -> OsString {
+        let shell = ("sh".into(), vec!["-c".into(), script.into()]);
+        let timeout = Duration::from_millis(timeout);
+        user_path(shell, Some(path.into()), home.map(Into::into), timeout).await
+    }
+
+    #[tokio::test]
+    async fn the_user_path_is_the_last_line_the_shell_prints_then_claudes_install_dirs() {
+        let printed = sh_path("echo config says hi; echo /a:/b", "/s", Some("/h"), 5000).await;
+        assert_eq!(printed, "/a:/b:/h/.local/bin:/h/.claude/local");
+        // The shell's own `PATH`, printed as fish is asked for it.
+        let (program, args) = path_shell();
+        #[cfg(target_os = "linux")]
+        assert_eq!((program, &args[..1]), ("fish".into(), &["-c".into()][..]));
+        #[cfg(target_os = "macos")]
+        {
+            let shell = std::env::var_os("SHELL").filter(|shell| !shell.is_empty());
+            let shell = shell.unwrap_or_else(|| "/bin/zsh".into());
+            assert_eq!(
+                (program, &args[..2]),
+                (shell, &["-l".into(), "-c".into()][..])
+            );
+        }
+        let service = std::env::var_os("PATH").unwrap();
+        let sh = ("sh".into(), args[args.len() - 2..].to_vec());
+        let printed = user_path(sh, None, None, SHELL_TIMEOUT).await;
+        let expected: Vec<_> = std::env::split_paths(&service)
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .collect();
+        assert_eq!(printed, std::env::join_paths(expected).unwrap());
+        // Exactly the most it may print.
+        let full = "head -c 65535 /dev/zero | tr '\\0' a; echo";
+        assert_eq!(sh_path(full, "/s", None, 5000).await, *"a".repeat(65535));
+    }
+
+    #[tokio::test]
+    async fn without_the_shells_path_the_services_is_used() {
+        for script in [
+            "echo /a; exit 1",
+            "printf /no-newline",
+            "echo /a; echo",
+            "head -c 65536 /dev/zero | tr '\\0' a; echo",
+        ] {
+            assert_eq!(
+                sh_path(script, "/s::/t", None, 5000).await,
+                "/s:/t",
+                "{script}"
+            );
+        }
+        assert_eq!(sh_path("exec sleep 5", "/s", None, 50).await, "/s");
+        let missing = ("/nonexistent/sh".into(), vec![]);
+        let home = Some("/h".into());
+        let path = user_path(missing, None, home, SHELL_TIMEOUT).await;
+        assert_eq!(path, "/h/.local/bin:/h/.claude/local");
+        // A home that cannot go on a `PATH`.
+        assert_eq!(sh_path("echo /a", "/s", Some("/h:x"), 5000).await, "/a");
+    }
 
     const FAKE_CLAUDE: &str = "#!/bin/sh\nprintf 'wrapped=%s\\n' \"${HIVE_WRAPPED-unset}\"\nfor a in \"$@\"; do printf '[%s]\\n' \"$a\"; done\n";
 

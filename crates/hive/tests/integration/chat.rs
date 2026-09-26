@@ -657,3 +657,56 @@ async fn a_folder_turned_into_a_link_while_confirming_does_not_start_the_chat() 
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn claude_is_found_and_run_on_the_path_of_the_users_shell() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = sandbox(&repo);
+    // claude is only where the user's fish config puts it, not on the service's `PATH`.
+    let user = repo.env.path("user bin");
+    std::fs::create_dir(&user).unwrap();
+    let seen = repo.env.path("path seen");
+    let record = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$PATH\" > '{}'\n",
+        seen.display()
+    );
+    let script = fake_claude(&fake).replacen("#!/bin/sh\n", &record, 1);
+    std::fs::remove_file(fake.join("claude")).unwrap();
+    write_claude(&user, &script);
+    let fish = repo.env.path("config/fish");
+    std::fs::create_dir_all(&fish).unwrap();
+    let config = format!("set -gx PATH '{}' $PATH\n", user.display());
+    std::fs::write(fish.join("config.fish"), config).unwrap();
+    let mut daemon = repo.env.daemon_on_path(&fake);
+    let mut app = repo.env.connect(Role::App).await;
+
+    app.send(0, Control::GetDiagnostics).await;
+    let (0, Control::Diagnostics { claude, .. }) = app.control().await else {
+        panic!("no diagnostics")
+    };
+    assert_eq!(claude, Some(user.join("claude").display().to_string()));
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    app.send(2, open(&root, None, None)).await;
+    assert_eq!(app.control().await, asked(2, &root));
+    app.send(2, confirm(2, &root, true)).await;
+    assert!(matches!(app.control().await, (0, Control::Settings { .. })));
+    assert!(matches!(
+        app.control().await,
+        (2, Control::ChatOpened { chat: 2, .. })
+    ));
+    // Its `PATH` is the user's, with where Claude Code installs itself last.
+    let path = std::fs::read_to_string(&seen).unwrap();
+    let home = repo.env.path("home");
+    assert!(path.starts_with(&format!("{}:", user.display())), "{path}");
+    assert!(path.contains(&format!(":{}:", fake.display())), "{path}");
+    let installs = format!(":{0}/.local/bin:{0}/.claude/local\n", home.display());
+    assert!(path.ends_with(&installs), "{path}");
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
