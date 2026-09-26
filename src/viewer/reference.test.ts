@@ -48,6 +48,8 @@ test("without selected lines or a live terminal in that worktree, it says why", 
   expect(target({ selectedLines: null })).toEqual({ why: "Select lines to send their reference" });
   expect(target({ openFile: null })).toEqual({ why: "Select lines to send their reference" });
   expect(target({ activeTab: null })).toEqual({ why: "No terminal open" });
+  // A chat's tab takes no reference.
+  expect(target({ tabs: [{ id: 2, cwd: wt, kind: "chat" }] })).toEqual({ why: "No terminal open" });
   expect(target({ terminals: { 2: { id: 2, exited: true, code: 0, unhooked: false } } })).toEqual({
     why: "The terminal has exited",
   });

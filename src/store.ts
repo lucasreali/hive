@@ -386,6 +386,23 @@ export type ChatStatus = {
   compacting: boolean;
   session: string | null;
 };
+/** A chat tab's data, as the service sent it (keyed by the chat's channel). */
+export type Chat = {
+  cwd: string;
+  /** Null until `chat_opened`. */
+  opened: ChatOpened | null;
+  status: ChatStatus | null;
+  /** At most `CHAT_LIMIT`, oldest first. */
+  entries: ChatEntry[];
+  /** Permissions, questions and plans waiting on the human, oldest first. */
+  requests: ChatRequest[];
+  /** The service asks to confirm the first chat in this folder (`confirm_chat_folder`). */
+  confirm: boolean;
+  /** Set once `chat_closed` arrived; `error` holds claude's last words when it failed. */
+  closed: { error: string | null } | null;
+};
+/** Entries kept of a chat; older ones are dropped. */
+export const CHAT_LIMIT = 2000;
 
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
@@ -560,8 +577,11 @@ export type Diagnostics = {
   claude: string | null;
 };
 
-/** A terminal tab: the terminal and the worktree path it was opened in (its title's source). */
-export type Tab = { id: number; cwd: string };
+/**
+ * A tab of the terminal area: a terminal, or a chat (7.3) when `kind` is "chat" (absent is a
+ * terminal), and the worktree path it was opened in (its title's source).
+ */
+export type Tab = { id: number; cwd: string; kind?: "terminal" | "chat" };
 /** Two terminals side by side (6.11), left and right, both of one worktree. */
 export type Split = { left: number; right: number };
 
@@ -693,6 +713,8 @@ export type HiveState = {
   gotoLine: (OpenFile & { line: number }) | null;
   /** The followed subagent's conversation; check `agent` and `subagent`. */
   transcript: Transcript | null;
+  /** Chats (7.3) by their channel, the id of their tab. */
+  chats: Record<number, Chat>;
 };
 
 export const initialState: HiveState = {
@@ -759,6 +781,7 @@ export const initialState: HiveState = {
   sessionsError: null,
   gotoLine: null,
   transcript: null,
+  chats: {},
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -820,6 +843,39 @@ export const useHive = create<HiveState>()(() => ({ ...initialState, ...savedWid
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
   const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };
   return { terminals: { ...s.terminals, [id]: { ...current, ...patch } } };
+}
+
+/** Changes chat `id`, made empty first when the service speaks of it before its tab exists. */
+function patchChat(s: HiveState, id: number, patch: (chat: Chat) => Partial<Chat>) {
+  const chat = s.chats[id] ?? {
+    cwd: "",
+    opened: null,
+    status: null,
+    entries: [],
+    requests: [],
+    confirm: false,
+    closed: null,
+  };
+  return { chats: { ...s.chats, [id]: { ...chat, ...patch(chat) } } };
+}
+
+/**
+ * A chat's entries after `chat_entries`: an entry replaces the one with its `id` (a tool's
+ * result), or the last one when `replaceLast` (live text); any other is added at the end.
+ */
+export function mergeEntries(
+  entries: ChatEntry[],
+  more: ChatEntry[],
+  replaceLast: boolean,
+): ChatEntry[] {
+  const next = [...entries];
+  more.forEach((entry, i) => {
+    // ponytail: a linear search per entry over at most CHAT_LIMIT; index by id if it shows.
+    const at = i === 0 && replaceLast ? next.length - 1 : next.findIndex((e) => e.id === entry.id);
+    if (at >= 0) next[at] = entry;
+    else next.push(entry);
+  });
+  return next.slice(-CHAT_LIMIT);
 }
 
 function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<HiveState> {
@@ -1042,6 +1098,33 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         },
       };
     }
+    case "chat_opened": {
+      const { type: _, channel: __, ...opened } = m;
+      return patchChat(s, m.chat, () => ({ opened, cwd: m.cwd, confirm: false }));
+    }
+    case "chat_entries":
+      return patchChat(s, m.chat, (c) => ({
+        entries: mergeEntries(c.entries, m.entries, m.replace_last),
+      }));
+    case "chat_request":
+      return patchChat(s, m.chat, (c) => ({ requests: [...c.requests, m.request] }));
+    case "chat_request_gone":
+      return patchChat(s, m.chat, (c) => ({
+        requests: c.requests.filter((r) => r.id !== m.request),
+      }));
+    case "chat_status": {
+      const { type: _, channel: __, ...status } = m;
+      return patchChat(s, m.chat, () => ({ status }));
+    }
+    case "chat_closed":
+      return patchChat(s, m.chat, (c) => ({
+        closed: { error: m.error },
+        confirm: false,
+        requests: [],
+        status: c.status && { ...c.status, busy: false },
+      }));
+    case "confirm_chat_folder":
+      return patchChat(s, m.chat, () => ({ cwd: m.cwd, confirm: true }));
     case "disconnected":
       // The service is gone, and every agent and the watches with it.
       return {
@@ -1187,10 +1270,10 @@ export const setFocused = (focused: boolean) => useHive.setState({ focused });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
 
-/** A terminal just opened in `cwd`: its tab is shown and its worktree selected. */
-export const addTab = (id: number, cwd: string) =>
+/** A terminal (or a chat) just opened in `cwd`: its tab is shown and its worktree selected. */
+export const addTab = (id: number, cwd: string, kind?: "chat") =>
   useHive.setState((s) => ({
-    tabs: [...s.tabs, { id, cwd }],
+    tabs: [...s.tabs, kind ? { id, cwd, kind } : { id, cwd }],
     activeTab: id,
     fileShown: false,
     transcriptShown: null,
@@ -1243,6 +1326,14 @@ export const setSplit = (split: Split | null) =>
     fileShown: split ? false : s.fileShown,
     transcriptShown: split ? null : s.transcriptShown,
   }));
+
+/** Keeps chat `id`'s data from its tab's start (`cwd`), or drops it (null) when the tab closes. */
+export const setChat = (id: number, cwd: string | null) =>
+  useHive.setState((s) => {
+    if (cwd !== null) return patchChat(s, id, () => ({ cwd }));
+    const { [id]: _, ...chats } = s.chats;
+    return { chats };
+  });
 
 /** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
 export const focusPane = (id: number) =>

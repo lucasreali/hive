@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { closeChat, openChat } from "../chats";
 import {
   activateTab,
   fileVisible,
@@ -34,15 +35,16 @@ import {
 import {
   closeTerminal,
   mountTerminals,
-  openClaude,
   openTerminal,
   showTerminals,
   splitTerminal,
 } from "../terminals";
 import { isDirty } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
+import { ChatView } from "./ChatView";
 import {
   AddFolderIcon,
+  ChatIcon,
   CloseIcon,
   FileIcon,
   ICON,
@@ -138,8 +140,9 @@ function TabItem(props: {
 }
 
 /**
- * A terminal's tab: the worktree's name, or, while a Claude agent runs in it, the agent's
- * state and its session's name (as in Orca). Tabs show only their worktree's, so no project.
+ * A terminal's (or a chat's) tab: the worktree's name, or, while a Claude agent runs in it, the
+ * agent's state and its session's name (as in Orca). Tabs show only their worktree's, so no
+ * project.
  */
 function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => void }) {
   const active = useHive((s) => s.activeTab === tab.id && !s.fileShown && !s.transcriptShown);
@@ -152,20 +155,27 @@ function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => voi
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
   const agentState = useHive((s) => (agent ? (s.agentStates[agent]?.state ?? "idle") : null));
   const title = useHive((s) => (agent ? s.agentTitles[agent] : undefined));
+  const chat = tab.kind === "chat";
+  const ended = useHive((s) => !!s.chats[tab.id]?.closed);
   return (
     <TabItem
       active={active}
       split={split}
-      onMenu={(event) => {
-        event.preventDefault();
-        onMenu({ tab: tab.id, x: event.clientX, y: event.clientY });
-      }}
+      // A chat has no split, so no menu.
+      onMenu={
+        chat
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              onMenu({ tab: tab.id, x: event.clientX, y: event.clientY });
+            }
+      }
       title={title ? `${title}\n${tab.cwd}` : tab.cwd}
       onShow={() => activateTab(tab)}
-      close={`Close terminal ${title ?? name}`}
-      onClose={() => closeTerminal(tab.id)}
+      close={`Close ${chat ? "chat" : "terminal"} ${title ?? name}`}
+      onClose={() => (chat ? closeChat(tab.id) : closeTerminal(tab.id))}
     >
-      {agentState ? <StateIcon state={agentState} /> : <TerminalIcon />}
+      {agentState ? <StateIcon state={agentState} /> : chat ? <ChatIcon /> : <TerminalIcon />}
       <span className="tab-name" data-agent={title ? true : undefined}>
         {title ?? name}
       </span>
@@ -187,6 +197,7 @@ function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => voi
           exited
         </span>
       )}
+      {ended && <span className="tab-badge">ended</span>}
     </TabItem>
   );
 }
@@ -277,8 +288,8 @@ function NoTerminals({ worktree }: { worktree: string }) {
   );
 }
 
-/** The "+" menu's Agent: for now a terminal running `claude`; the in-app chat (7.3) replaces it. */
-const openAgent = (worktree: string) => void openClaude(worktree);
+/** The "+" menu's Agent: the in-app chat (7.3). */
+const openAgent = (worktree: string) => void openChat(worktree);
 
 /**
  * The tab bar's "+": a menu to open a terminal, an agent or a new file (its name asked first)
@@ -352,6 +363,13 @@ export function TerminalArea() {
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
   const transcript = useHive((s) => s.transcriptShown);
+  const chat = useHive((s) =>
+    !s.fileShown &&
+    !s.transcriptShown &&
+    visibleTabs(s).some((t) => t.id === s.activeTab && t.kind === "chat")
+      ? s.activeTab
+      : null,
+  );
   const percent = useHive((s) => s.splitPercent);
   const [menu, setMenu] = useState<TabMenu | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -383,7 +401,8 @@ export function TerminalArea() {
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript} />
+        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript || chat !== null} />
+        {chat !== null && <ChatView key={chat} id={chat} />}
         {file && <FileView worktree={file.worktree} />}
         {transcript && (
           <TranscriptView

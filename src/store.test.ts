@@ -6,10 +6,13 @@ import {
   addTab,
   agentWorkingIn,
   apply,
+  CHAT_LIMIT,
+  type ChatEntry,
   DEFAULT_SETTINGS,
   fileVisible,
   hideTranscript,
   initialState,
+  mergeEntries,
   openFileDialog,
   openFileMenu,
   openModal,
@@ -18,6 +21,7 @@ import {
   type ServiceMessage,
   type Subagent,
   select,
+  setChat,
   setEdit,
   setEditing,
   setEditorNotice,
@@ -35,6 +39,7 @@ import {
   visibleTabs,
 } from "./store";
 import { MOCK_REPOS, MOCK_SESSIONS } from "./transport/mock";
+import { MOCK_CHAT_REQUESTS } from "./transport/mockChat";
 import { type EditBuffer, toText } from "./viewer/buffer";
 
 beforeEach(() => useHive.setState(initialState, true));
@@ -637,4 +642,103 @@ test("a shown conversation selects its agent and gives way to any terminal or fi
   useHive.setState({ transcriptShown: shown });
   apply({ type: "disconnected", reason: "gone" });
   expect(useHive.getState().transcriptShown).toBeNull();
+});
+
+const chatEntry = (id: number, text: string, more: Partial<ChatEntry> = {}): ChatEntry => ({
+  id,
+  kind: "assistant",
+  text,
+  tool: null,
+  parent: null,
+  status: null,
+  output: null,
+  image: null,
+  ...more,
+});
+
+test("chat entries are added, replace theirs by id, or the last one for live text; capped", () => {
+  const [a, b] = [chatEntry(1, "a"), chatEntry(2, "b", { status: "running" })];
+  expect(mergeEntries([], [a, b], false)).toEqual([a, b]);
+  // A tool's result re-sends its entry.
+  const done = { ...b, status: "ok" as const, output: "out" };
+  expect(mergeEntries([a, b], [done], false)).toEqual([a, done]);
+  // Live text: the first entry replaces the last, whatever its id; the rest follow.
+  const grown = chatEntry(3, "b grown");
+  const c = chatEntry(4, "c");
+  expect(mergeEntries([a, b], [grown, c], true)).toEqual([a, grown, c]);
+  expect(mergeEntries([], [a], true)).toEqual([a]);
+  const many = Array.from({ length: CHAT_LIMIT }, (_, i) => chatEntry(i + 10, "n"));
+  const merged = mergeEntries([a], many, false);
+  expect([merged.length, merged[0]?.id, merged.at(-1)?.id]).toEqual([
+    CHAT_LIMIT,
+    10,
+    CHAT_LIMIT + 9,
+  ]);
+});
+
+test("a chat's messages fill its data; a chat tab is a tab of kind chat", () => {
+  const chat = (id = 7) => useHive.getState().chats[id];
+  // The service may speak before the tab exists.
+  apply({ type: "confirm_chat_folder", channel: 7, chat: 7, cwd: "/w" });
+  expect(chat()).toEqual({
+    cwd: "/w",
+    opened: null,
+    status: null,
+    entries: [],
+    requests: [],
+    confirm: true,
+    closed: null,
+  });
+  setChat(7, "/w");
+  addTab(7, "/w", "chat");
+  expect(useHive.getState().tabs).toEqual([{ id: 7, cwd: "/w", kind: "chat" }]);
+  expect(chat()?.confirm).toBe(true);
+  const opened = {
+    chat: 7,
+    cwd: "/w",
+    session: "s",
+    model: "m",
+    mode: "default" as const,
+    commands: ["compact"],
+    api_key_source: null,
+  };
+  apply({ type: "chat_opened", channel: 7, ...opened });
+  expect([chat()?.opened, chat()?.confirm]).toEqual([opened, false]);
+  const status = {
+    chat: 7,
+    busy: true,
+    mode: "plan" as const,
+    model: "m",
+    retry: null,
+    compacting: false,
+    session: "s",
+  };
+  apply({ type: "chat_status", channel: 7, ...status });
+  expect(chat()?.status).toEqual(status);
+  const entries = (list: ChatEntry[], replace_last: boolean): ServiceMessage => ({
+    type: "chat_entries",
+    channel: 7,
+    chat: 7,
+    entries: list,
+    replace_last,
+  });
+  apply(entries([chatEntry(1, "hi")], false));
+  apply(entries([chatEntry(2, "hi!")], true));
+  expect(chat()?.entries).toEqual([chatEntry(2, "hi!")]);
+  const request = { id: "r1", ...MOCK_CHAT_REQUESTS.permission };
+  apply({ type: "chat_request", channel: 7, chat: 7, request });
+  apply({ type: "chat_request", channel: 7, chat: 7, request: { ...request, id: "r2" } });
+  apply({ type: "chat_request_gone", channel: 7, chat: 7, request: "r1" });
+  expect(chat()?.requests.map((r) => r.id)).toEqual(["r2"]);
+  apply({ type: "chat_closed", channel: 7, chat: 7, error: "boom" });
+  expect([chat()?.closed, chat()?.status?.busy, chat()?.requests]).toEqual([
+    { error: "boom" },
+    false,
+    [],
+  ]);
+  // Closed before any status, it has none.
+  apply({ type: "chat_closed", channel: 8, chat: 8, error: null });
+  expect([chat(8)?.closed, chat(8)?.status]).toEqual([{ error: null }, null]);
+  setChat(7, null);
+  expect(Object.keys(useHive.getState().chats)).toEqual(["8"]);
 });

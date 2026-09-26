@@ -3,6 +3,7 @@ import {
   ArrowSquareOutIcon,
   CaretRightIcon,
   ChatCircleDotsIcon,
+  ChatTeardropTextIcon,
   CheckCircleIcon,
   CircleDashedIcon,
   CirclesThreeIcon,
@@ -129,6 +130,9 @@ export const StateIcon = ({ state }: { state: AgentState }) => {
 export const RefreshIcon = icon(ArrowClockwiseIcon);
 
 export const TerminalIcon = icon(TerminalWindowIcon);
+
+/** An in-app chat (7.3): its tab and its bar. */
+export const ChatIcon = icon(ChatTeardropTextIcon);
 
 /** A box with an arrow out of it: open elsewhere. */
 export const ExternalIcon = icon(ArrowSquareOutIcon);

@@ -32,8 +32,7 @@ function newTab(item: string) {
 }
 
 test("the + menu opens an agent or a new file in the selected worktree", async () => {
-  const open = spyOn(transport, "openTerminal");
-  const write = spyOn(transport, "writeTerminal");
+  const open = spyOn(transport, "openChat").mockResolvedValue(77);
   show();
   fireEvent.click(screen.getByRole("button", { name: "fix-login" }));
   expect(plus().getAttribute("aria-expanded")).toBe("false");
@@ -50,10 +49,11 @@ test("the + menu opens an agent or a new file in the selected worktree", async (
   fireEvent.click(plus());
   expect(screen.queryByRole("menu")).toBeNull();
 
+  // Agent: the in-app chat (7.3).
   newTab("Agent");
   expect(screen.queryByRole("menu")).toBeNull();
-  expect(open.mock.calls[0][0]).toBe(fixLogin.path);
-  await waitFor(() => expect(write.mock.calls[0]?.[1]).toBe("claude\r"));
+  expect(open.mock.calls).toEqual([[fixLogin.path, null, null]]);
+  await waitFor(() => expect(screen.getByRole("region", { name: "Chat" })).toBeDefined());
 
   newTab("New file…");
   expect(useHive.getState()).toMatchObject({
@@ -61,7 +61,6 @@ test("the + menu opens an agent or a new file in the selected worktree", async (
     fileDialog: { worktree: fixLogin.id, folder: "", path: null, renaming: false },
   });
   open.mockRestore();
-  write.mockRestore();
 });
 
 test("the + menu from the keyboard: down opens it, arrows move, Esc gives the focus back", () => {

@@ -26,10 +26,11 @@ test('the "+" menu: from the keyboard, an agent and a new file', async ({ page }
   );
   await expect(page.getByRole("menu")).toHaveCount(0);
 
-  // Agent: a terminal that starts claude, detected as an agent.
+  // Agent: the in-app chat (7.3), after the first chat's folder confirmation.
   await plus.click();
   await item("Agent").click();
-  await expect(tree.getByRole("img", { name: "idle" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await expect(page.getByRole("region", { name: "Chat" })).toBeVisible();
 
   // New file: its name first, then it opens in the editor.
   await plus.click();
