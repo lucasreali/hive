@@ -359,3 +359,121 @@ test("two chats keep separate drafts, and a closed chat drops its draft and scro
   expect(useHive.getState().chatScrolls[3]).toBeUndefined();
   expect(EMPTY_DRAFT).toEqual({ text: "", images: [], start: 0, end: 0 });
 });
+
+const said = (texts: string[]) =>
+  act(() =>
+    apply({
+      type: "chat_entries",
+      channel: 3,
+      chat: 3,
+      entries: texts.map((text, i) => ({
+        id: i + 1,
+        kind: i === 1 ? "assistant" : "user",
+        text,
+        tool: null,
+        parent: null,
+        status: null,
+        output: null,
+        image: null,
+      })),
+      replace_last: false,
+    }),
+  );
+
+test("↑/↓ walk this chat's sent messages, text only, and come back to what was typed", () => {
+  const { input } = composer();
+  open();
+  // The assistant's reply and an image-only message (no text) are not in the history.
+  said(["first", "a reply", "second\nline", ""]);
+  fireEvent.change(input, { target: { value: "draft" } });
+  input.setSelectionRange(2, 2);
+  expect(fireEvent.keyDown(input, { key: "ArrowUp" })).toBe(false);
+  expect(input.value).toBe("second\nline");
+  expect([input.selectionStart, input.selectionEnd]).toEqual([11, 11]);
+  // On the last line of a multi-line message ↑ moves the caret, as usual.
+  expect(fireEvent.keyDown(input, { key: "ArrowUp" })).toBe(true);
+  expect(input.value).toBe("second\nline");
+  input.setSelectionRange(3, 3);
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input.value).toBe("first");
+  // Nothing older: the key does its usual thing.
+  expect(fireEvent.keyDown(input, { key: "ArrowUp" })).toBe(true);
+  expect(input.value).toBe("first");
+  // Modified arrows are left alone.
+  expect(fireEvent.keyDown(input, { key: "ArrowDown", shiftKey: true })).toBe(true);
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(input.value).toBe("second\nline");
+  // ↓ on the first line of a multi-line message moves the caret.
+  input.setSelectionRange(1, 1);
+  expect(fireEvent.keyDown(input, { key: "ArrowDown" })).toBe(true);
+  input.setSelectionRange(8, 8);
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(input.value).toBe("draft");
+  expect(input.selectionStart).toBe(5);
+  // Past what was typed ↓ does nothing more.
+  expect(fireEvent.keyDown(input, { key: "ArrowDown" })).toBe(true);
+  expect(input.value).toBe("draft");
+});
+
+test("typing after ↑ keeps the text as the new draft; ↑ inside a multi-line text moves the caret", () => {
+  const { input } = composer();
+  open();
+  said(["first"]);
+  fireEvent.change(input, { target: { value: "one\ntwo" } });
+  input.setSelectionRange(5, 5);
+  expect(fireEvent.keyDown(input, { key: "ArrowUp" })).toBe(true);
+  expect(input.value).toBe("one\ntwo");
+  input.setSelectionRange(1, 1);
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input.value).toBe("first");
+  fireEvent.change(input, { target: { value: "first!" } });
+  // Editing ends the walk: ↓ no longer brings back the old draft.
+  expect(fireEvent.keyDown(input, { key: "ArrowDown" })).toBe(true);
+  expect(input.value).toBe("first!");
+  // The same text brought back still puts the caret at its end.
+  fireEvent.change(input, { target: { value: "first" } });
+  input.setSelectionRange(0, 0);
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect([input.value, input.selectionStart]).toEqual(["first", 5]);
+});
+
+test("↑ moves in the slash-command list instead of the history", () => {
+  const { input } = composer();
+  open(["clear", "compact"]);
+  said(["first"]);
+  fireEvent.change(input, { target: { value: "/c" } });
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input.value).toBe("/c");
+  expect(screen.getAllByRole("option")[1].getAttribute("aria-selected")).toBe("true");
+});
+
+test("Ctrl+C copies a selection, stops a running turn, or clears the composer", async () => {
+  const { stop, input } = composer();
+  open();
+  fireEvent.change(input, { target: { value: "hello" } });
+  await paste(input, [png()]);
+  // With text selected it copies, as usual.
+  input.setSelectionRange(0, 3);
+  expect(fireEvent.keyDown(input, { key: "c", ctrlKey: true })).toBe(true);
+  expect(input.value).toBe("hello");
+  input.setSelectionRange(5, 5);
+  // Other modifiers or keys are left alone.
+  expect(fireEvent.keyDown(input, { key: "c", ctrlKey: true, altKey: true })).toBe(true);
+  expect(fireEvent.keyDown(input, { key: "c", ctrlKey: true, metaKey: true })).toBe(true);
+  expect(fireEvent.keyDown(input, { key: "c" })).toBe(true);
+  expect(fireEvent.keyDown(input, { key: "v", ctrlKey: true })).toBe(true);
+  expect(input.value).toBe("hello");
+  // While Claude works it interrupts, keeping the draft.
+  act(() => apply({ type: "chat_status", channel: 3, ...status(true) }));
+  expect(fireEvent.keyDown(input, { key: "c", ctrlKey: true })).toBe(false);
+  expect(stop.mock.calls).toEqual([[3]]);
+  expect(input.value).toBe("hello");
+  // Idle it clears the text and the images; the chat stays open.
+  act(() => apply({ type: "chat_status", channel: 3, ...status(false) }));
+  expect(fireEvent.keyDown(input, { key: "C", ctrlKey: true, shiftKey: true })).toBe(false);
+  expect(stop.mock.calls).toEqual([[3]]);
+  expect(input.value).toBe("");
+  expect(screen.queryByRole("list", { name: "Images to send" })).toBeNull();
+  expect(useHive.getState().drafts[3]).toBeUndefined();
+  expect(input.disabled).toBe(false);
+});

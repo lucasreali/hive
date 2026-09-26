@@ -55,7 +55,9 @@ export async function base64(file: Blob): Promise<string> {
  * Esc stops too; closed (or not started yet) it is disabled. The draft (text, images, caret) is
  * kept in the store by chat (8.14), so it comes back when the tab shows again. Typing `/`
  * lists the chat's slash commands that start with what follows it: ↑/↓ move, Enter or Tab
- * picks, Esc hides the list. The mode selector shows the service's mode and asks it for another.
+ * picks, Esc hides the list. Like Claude's terminal (8.8), ↑ on the first line brings back the
+ * messages sent in this chat (↓ walks back to what was being typed), and Ctrl+C with nothing
+ * selected stops a running turn or, idle, clears the composer. The mode selector shows the service's mode and asks it for another.
  */
 export function ChatComposer({ chat }: { chat: number }) {
   const draft = useHive((s) => s.drafts[chat] ?? EMPTY_DRAFT);
@@ -64,6 +66,10 @@ export function ChatComposer({ chat }: { chat: number }) {
   const [active, setActive] = useState(0);
   // The draft the list was hidden for (Esc); typing shows it again.
   const [hidden, setHidden] = useState<string | null>(null);
+  // ↑/↓ history (8.8): how far back (1 = the last message sent) and what was being typed.
+  const [recall, setRecall] = useState<{ back: number; typed: string } | null>(null);
+  // Where to put the caret once the text brought back by ↑/↓ shows.
+  const caret = useRef<number | null>(null);
   const id = useId();
   const field = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -78,6 +84,13 @@ export function ChatComposer({ chat }: { chat: number }) {
   const edit = (value: string) => {
     setDraft(chat, { text: value });
     setActive(0);
+    setRecall(null);
+  };
+  /** Shows message `back` of the history (0 = what was being typed), caret at its end. */
+  const show = (back: number, value: string, typed: string) => {
+    setDraft(chat, { text: value });
+    setRecall(back === 0 ? null : { back, typed });
+    caret.current = value.length;
   };
   const setImages = (next: ChatDraft["images"]) => setDraft(chat, { images: next });
   const pick = (command: string) => edit(`/${command} `);
@@ -87,6 +100,7 @@ export function ChatComposer({ chat }: { chat: number }) {
     transport.chatSend(chat, text, sent).catch((e) => setError(String(e)));
     setDraft(chat, null);
     setActive(0);
+    setRecall(null);
     setError(null);
   };
   const add = async (files: File[]) => {
@@ -118,6 +132,15 @@ export function ChatComposer({ chat }: { chat: number }) {
     } else if (listed && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
       event.preventDefault();
       pick(matches[at]);
+    } else if (move && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      history(event, move);
+    } else if (
+      event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      event.key.toLowerCase() === "c"
+    ) {
+      interrupt(event);
     } else if (event.key === "Escape" && listed) {
       setHidden(text);
     } else if (event.key === "Escape" && busy) {
@@ -127,13 +150,48 @@ export function ChatComposer({ chat }: { chat: number }) {
       send();
     }
   };
+  /**
+   * ↑ on the caret's first line brings back the message sent before the one shown, ↓ on its
+   * last line the one after, and past the newest what was being typed (8.8). The history is
+   * this chat's user messages, text only. Elsewhere the keys move the caret as usual.
+   */
+  const history = (event: KeyboardEvent, move: number) => {
+    const el = event.currentTarget as HTMLTextAreaElement;
+    const edge =
+      move < 0
+        ? !text.slice(0, el.selectionStart).includes("\n")
+        : !text.slice(el.selectionEnd).includes("\n");
+    if (!edge || (move > 0 && !recall)) return;
+    const sent = (useHive.getState().chats[chat]?.entries ?? [])
+      .filter((entry) => entry.kind === "user" && entry.text !== "")
+      .map((entry) => entry.text);
+    const back = (recall?.back ?? 0) - move;
+    if (back > sent.length) return;
+    event.preventDefault();
+    const typed = recall?.typed ?? text;
+    show(back, back === 0 ? typed : sent[sent.length - back], typed);
+  };
+  /** Ctrl+C: copies a selection; else stops a running turn, or clears the composer (8.8). */
+  const interrupt = (event: KeyboardEvent) => {
+    const el = event.currentTarget as HTMLTextAreaElement;
+    if (el.selectionStart !== el.selectionEnd) return;
+    event.preventDefault();
+    if (busy) {
+      void transport.chatInterrupt(chat);
+      return;
+    }
+    setDraft(chat, null);
+    setRecall(null);
+  };
   // The message grows with its text; CSS caps it, then it scrolls.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the height follows the text.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the height follows the text, the caret ↑/↓.
   useLayoutEffect(() => {
     const el = field.current as HTMLTextAreaElement;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-  }, [text]);
+    if (caret.current !== null) el.setSelectionRange(caret.current, caret.current);
+    caret.current = null;
+  }, [text, recall]);
   // The caret is kept when the composer goes (its tab hides) and comes back when it shows again.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only when it mounts and unmounts.
   useLayoutEffect(() => {
