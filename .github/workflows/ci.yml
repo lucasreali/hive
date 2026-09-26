@@ -50,7 +50,7 @@ jobs:
     uses: ./.github/workflows/mutants.yml
     with:
       in-diff: true
-      base: ${{ inputs.mutants-base }}
+      base: ${{ inputs.mutants-base || '2503f14' }}
 
   frontend:
     runs-on: ubuntu-latest
