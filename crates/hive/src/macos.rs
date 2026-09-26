@@ -76,6 +76,13 @@ pub fn shell(bin_dir: &Path) -> pty_process::Command {
         .envs(launch.env)
 }
 
+/// The user's login shell (`$SHELL`), as terminals start it, asked for its `PATH`.
+pub fn path_shell() -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
+    let shell = login::launch(std::env::var_os("SHELL"), None, None, Path::new(""));
+    let print = crate::wrapper::PRINT_PATH;
+    (shell.program, vec!["-l".into(), "-c".into(), print.into()])
+}
+
 /// The app runs beside the service: it opens `path` itself.
 pub fn native_path(path: &Path, _wslpath: &OsStr) -> io::Result<String> {
     Ok(path.to_string_lossy().into_owned())

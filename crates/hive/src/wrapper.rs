@@ -139,7 +139,7 @@ pub const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 const SHELL_OUTPUT: u64 = 64 * 1024;
 /// Run by the user's shell: prints its `PATH` on the last line (fish joins a quoted `PATH`
 /// with `:` too). A fixed string: nothing from input goes into it.
-const PRINT_PATH: &str = r#"printf '%s\n' "$PATH""#;
+pub(crate) const PRINT_PATH: &str = r#"printf '%s\n' "$PATH""#;
 
 /// The user's shell as terminals start it (fish, after its config, on WSL), asked for its
 /// `PATH`.
@@ -148,14 +148,8 @@ pub fn path_shell() -> (OsString, Vec<OsString>) {
     ("fish".into(), vec!["-c".into(), PRINT_PATH.into()])
 }
 
-/// The user's login shell (`$SHELL`), as terminals start it on macOS, asked for its `PATH`.
 #[cfg(target_os = "macos")]
-pub fn path_shell() -> (OsString, Vec<OsString>) {
-    let var = std::env::var_os("SHELL");
-    let shell = crate::terminal::login::launch(var, None, None, Path::new(""));
-    let args = vec!["-l".into(), "-c".into(), PRINT_PATH.into()];
-    (shell.program, args)
-}
+pub use crate::macos::path_shell;
 
 /// The `PATH` the user's terminals get, for chats and for finding the real `claude`: the
 /// one `shell` (see [`path_shell`]) prints, else the service's `path` (started through
@@ -286,7 +280,8 @@ mod tests {
             "echo /a; exit 1",
             "printf /no-newline",
             "echo /a; echo",
-            "head -c 65536 /dev/zero | tr '\\0' a; echo",
+            // One byte too many: cut at the limit, it would end in a whole line.
+            "head -c 65535 /dev/zero | tr '\\0' a; echo; echo",
         ] {
             assert_eq!(
                 sh_path(script, "/s::/t", None, 5000).await,
