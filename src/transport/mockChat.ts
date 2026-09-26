@@ -133,7 +133,7 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
     parent: null,
     status: null,
     output: null,
-    image: null,
+    images: [],
     ...more,
   });
   const entries = (id: number, list: ChatEntry[], replace_last = false) =>
@@ -186,9 +186,7 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
     };
     chat.busy = true;
     status(id, chat, {});
-    const user = [entry(chat, "user", text, { image: images[0] ?? null })];
-    user.push(...images.slice(1).map((image) => entry(chat, "user", "", { image })));
-    entries(id, user);
+    entries(id, [entry(chat, "user", text, { images })]);
     show([entry(chat, "thinking", "Let me look at the worktree first.")]);
     show([entry(chat, "assistant", "I'll list the files.")]);
     tool("Bash", "ls -la", "README.md\nsrc\n");

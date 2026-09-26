@@ -25,7 +25,7 @@ export function TranscriptView({ agent, subagent }: SubagentRef) {
       parent: null,
       status: null,
       output: null,
-      image: null,
+      images: [],
     }),
   );
   useEffect(() => {

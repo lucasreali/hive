@@ -70,7 +70,7 @@ test("a chat tab shows the chat in place of the terminals, from start to end", (
   );
   expect(state()).toBe("working");
   const hi = { id: 1, kind: "user", text: "hi", tool: null, parent: null } as const;
-  const entry = { ...hi, status: null, output: null, image: null };
+  const entry = { ...hi, status: null, output: null, images: [] };
   act(() =>
     apply({ type: "chat_entries", channel: 5, chat: 5, entries: [entry], replace_last: false }),
   );

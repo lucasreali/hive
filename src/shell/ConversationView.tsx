@@ -56,6 +56,19 @@ function Picture({ image }: { image: ChatImage }) {
   );
 }
 
+/** An entry's images, in a row under its text. */
+function Pictures({ images }: { images: ChatImage[] }) {
+  if (images.length === 0) return null;
+  return (
+    <span className="chat-images">
+      {images.map((image, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: an entry's images never reorder.
+        <Picture key={i} image={image} />
+      ))}
+    </span>
+  );
+}
+
 /**
  * One entry, by its kind (plain text: no Markdown, 7.3 decision). Memoized: live text (7.3h)
  * replaces one entry, and the store keeps the others, so only its row renders again.
@@ -70,7 +83,7 @@ const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Lab
           <span className="transcript-role">{names[entry.kind]}</span>
           <span className="transcript-text">
             {entry.text}
-            {entry.image && <Picture image={entry.image} />}
+            <Pictures images={entry.images} />
           </span>
         </>
       );
@@ -97,7 +110,7 @@ const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Lab
         <details className="tool-details">
           <summary>{head}</summary>
           <pre className="tool-output">{entry.output}</pre>
-          {entry.image && <Picture image={entry.image} />}
+          <Pictures images={entry.images} />
         </details>
       );
     }

@@ -1121,10 +1121,17 @@ label:has(> input[type="checkbox"]:disabled) {
   background: var(--panel);
 }
 
-/* An entry's image: a thumbnail that grows to the row's width when clicked. */
+/* An entry's images: thumbnails in a row; one grows to the row's width when clicked. */
+.chat-images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .chat-image {
   display: block;
-  margin-top: 6px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1140,6 +1147,8 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 .chat-image[aria-pressed="true"] {
+  flex-basis: 100%;
+  max-width: fit-content;
   cursor: zoom-out;
 }
 
@@ -1152,7 +1161,7 @@ label:has(> input[type="checkbox"]:disabled) {
   outline: 1px solid var(--focus);
 }
 
-.tool-details > .chat-image {
+.tool-details > .chat-images {
   margin-left: 92px;
 }
 
