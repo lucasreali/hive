@@ -255,8 +255,8 @@ mod tests {
         assert_eq!((program, &args[..1]), ("fish".into(), &["-c".into()][..]));
         #[cfg(target_os = "macos")]
         {
-            let shell = std::env::var_os("SHELL").filter(|shell| !shell.is_empty());
-            let shell = shell.unwrap_or_else(|| "/bin/zsh".into());
+            let var = std::env::var_os("SHELL");
+            let shell = crate::terminal::login::launch(var, None, None, Path::new("")).program;
             assert_eq!(
                 (program, &args[..2]),
                 (shell, &["-l".into(), "-c".into()][..])
