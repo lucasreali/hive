@@ -777,8 +777,8 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 /* Where a dragged file would go (8.3): a folder, or the whole tree for the root. */
-.file-row[data-drop="true"],
-.files-tree[data-drop="true"] {
+.file-row[data-file-drop="true"],
+.files-tree[data-file-drop="true"] {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 

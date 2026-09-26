@@ -809,7 +809,7 @@ test("a file dragged onto a folder, a file or below the rows moves there", async
   const started = last as unknown as DataTransfer;
   expect([started.getData("text/plain"), started.effectAllowed]).toEqual(["README.md", "move"]);
   fireEvent.dragOver(row("src"), { dataTransfer });
-  expect([row("src").dataset.drop, (last as unknown as DataTransfer).dropEffect]).toEqual([
+  expect([row("src").dataset.fileDrop, (last as unknown as DataTransfer).dropEffect]).toEqual([
     "true",
     "move",
   ]);
@@ -819,13 +819,13 @@ test("a file dragged onto a folder, a file or below the rows moves there", async
   });
   fireEvent.drop(row("src"), { dataTransfer });
   expect(moved).toHaveBeenCalledWith(fixLogin.path, "README.md", "src");
-  expect(row("src").dataset.drop).toBe("false");
+  expect(row("src").dataset.fileDrop).toBe("false");
 
   // Onto a file: its folder. Its own folder does nothing.
   fireEvent.dragStart(row("main.ts"), { dataTransfer });
   fireEvent.dragOver(readme, { dataTransfer });
   const scroller = document.querySelector(".files-tree") as HTMLElement;
-  expect(scroller.dataset.drop).toBe("true");
+  expect(scroller.dataset.fileDrop).toBe("true");
   fireEvent.drop(readme, { dataTransfer });
   expect(moved).toHaveBeenLastCalledWith(fixLogin.path, "src/main.ts", "");
   fireEvent.dragStart(row("main.ts"), { dataTransfer });
@@ -850,15 +850,15 @@ test("a file dragged onto a folder, a file or below the rows moves there", async
     fireEvent(from, event);
   };
   leave(row("docs"), readme);
-  expect(row("docs").dataset.drop).toBe("true");
+  expect(row("docs").dataset.fileDrop).toBe("true");
   leave(scroller, document.body);
-  expect(row("docs").dataset.drop).toBe("false");
+  expect(row("docs").dataset.fileDrop).toBe("false");
   fireEvent.dragOver(row("docs"), { dataTransfer });
   fireEvent.dragOver(readme, { dataTransfer });
   fireEvent.dragEnd(readme, { dataTransfer });
   await new Promise((done) => setTimeout(done, HOVER_OPEN_MS * 1.5));
   expect(row("docs").getAttribute("aria-expanded")).toBe("false");
-  expect(scroller.dataset.drop).toBe("false");
+  expect(scroller.dataset.fileDrop).toBe("false");
   // An open folder does not wait to open.
   fireEvent.dragStart(readme, { dataTransfer });
   fireEvent.dragOver(row("src"), { dataTransfer });

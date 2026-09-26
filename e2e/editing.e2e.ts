@@ -175,7 +175,7 @@ test("files: New Folder shows an empty folder; a dragged file moves into it, its
   await page.mouse.down();
   await page.mouse.move(to.x + 40, to.y + to.height / 2);
   await page.mouse.move(to.x + 41, to.y + to.height / 2);
-  await expect(folder).toHaveAttribute("data-drop", "true");
+  await expect(folder).toHaveAttribute("data-file-drop", "true");
   await expect(folder).toHaveAttribute("aria-expanded", "true");
   await page.mouse.up();
   await expect(page.getByRole("region", { name: "notes/README.md" })).toBeVisible();

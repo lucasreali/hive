@@ -595,7 +595,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     <div
       className="files-tree hive-scroll"
       ref={scroller}
-      data-drop={drag.over === ""}
+      data-file-drop={drag.over === ""}
       {...(changedOnly ? {} : drag.handlers)}
     >
       {changes && rows.length === 0 && <div className="hint">No changes in this worktree.</div>}
@@ -631,7 +631,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
               data-status={status ? STATUS[status].letter : undefined}
               data-deleted={status === "deleted"}
               data-index={item.index}
-              data-drop={row.kind === "folder" && row.path === drag.over}
+              data-file-drop={row.kind === "folder" && row.path === drag.over}
               draggable={!changedOnly && row.kind === "file" && status !== "deleted"}
               onDragStart={(e) => drag.start(e, row)}
               title={row.kind === "file" ? row.key : undefined}
