@@ -174,7 +174,9 @@ function scroller(container: HTMLElement) {
 
 test("scrolled up, a button and the prompt of the view's top show; at the bottom they go", () => {
   const onScroll = mock((_offset: number, _atBottom: boolean) => {});
-  const view = render(<ConversationView entries={turns()} labels={CHAT_LABELS} onScroll={onScroll} />);
+  const view = render(
+    <ConversationView entries={turns()} labels={CHAT_LABELS} onScroll={onScroll} />,
+  );
   const { scroll } = scroller(view.container);
   expect(view.queryByTitle("Scroll to the bottom")).toBeNull();
   expect(view.container.querySelector(".conversation-prompt")).toBeNull();
@@ -184,9 +186,7 @@ test("scrolled up, a button and the prompt of the view's top show; at the bottom
   const bar = view.getByTitle("Scroll to this message");
   expect(bar.querySelector(".transcript-role")?.textContent).toBe("You");
   // Text only: no image, and CSS keeps it to one line.
-  expect(bar.querySelector(".conversation-prompt-text")?.textContent).toBe(
-    "Prompt 5\nsecond line",
-  );
+  expect(bar.querySelector(".conversation-prompt-text")?.textContent).toBe("Prompt 5\nsecond line");
   expect(bar.querySelector("img")).toBeNull();
   expect(onScroll).toHaveBeenLastCalledWith(1050, false);
 
