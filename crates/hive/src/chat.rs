@@ -1053,25 +1053,23 @@ impl Stream {
                 // with the message's text, within a turn's caps, as `send` shows them.
                 Some("image") => {
                     let data = text(&block["source"]["data"]);
-                    let Some(shown) = (data.len() <= MAX_IMAGE_DATA)
-                        .then(|| image(data))
-                        .flatten()
-                    else {
-                        continue;
-                    };
+                    // The caps are checked before the data is decoded.
                     let with_text = entries[first..]
                         .last()
-                        .is_some_and(|entry| entry.kind == ChatEntryKind::User);
-                    if !with_text {
+                        .filter(|entry| entry.kind == ChatEntryKind::User);
+                    let (count, used) = with_text.map_or((0, 0), |entry| {
+                        let used = entry.images.iter().map(|image| image.data.len()).sum();
+                        (entry.images.len(), used)
+                    });
+                    let fits = count < MAX_IMAGES && used + data.len() <= MAX_IMAGE_DATA;
+                    let Some(shown) = fits.then(|| image(data)).flatten() else {
+                        continue;
+                    };
+                    if with_text.is_none() {
                         entries.push(self.entry(ChatEntryKind::User, "", parent));
                     }
                     let last = entries.len() - 1;
-                    let entry = &mut entries[last];
-                    let data: usize = entry.images.iter().map(|image| image.data.len()).sum();
-                    if entry.images.len() < MAX_IMAGES && data + shown.data.len() <= MAX_IMAGE_DATA
-                    {
-                        entry.images.push(shown);
-                    }
+                    entries[last].images.push(shown);
                 }
                 Some("tool_result") => {
                     let call = id_of(&block["tool_use_id"]).and_then(|id| self.tools.remove(id));

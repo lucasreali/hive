@@ -147,16 +147,26 @@ mod tests {
             .collect();
         let png = ("image/png".to_owned(), png.len());
         let gif = ("image/gif".to_owned(), gif.len());
-        let big = ("image/png".to_owned(), big.len());
+        let largest = ("image/png".to_owned(), big.len());
         assert_eq!(
             shown,
             vec![
                 (1, "look".into(), vec![png.clone(), gif]),
-                (2, String::new(), vec![big.clone()]),
-                (3, String::new(), vec![big]),
+                (2, String::new(), vec![largest.clone()]),
+                (3, String::new(), vec![largest]),
                 (4, String::new(), vec![png; 10]),
             ]
         );
+        // The largest resumed user entry (control characters grow six times in JSON) fits
+        // in a frame.
+        let wide = "\u{1}".repeat(1 << 20);
+        let records = lines(&[json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": wide}, block(&big),
+        ]}})]);
+        let out = Stream::new(3, "/r".into(), ChatMode::Default, None).history(&records, false);
+        assert_eq!(entries(&out)[0].images.len(), 1);
+        let json = serde_json::to_vec(&out.app[0]).unwrap();
+        assert!(json.len() <= hive_protocol::MAX_PAYLOAD, "{}", json.len());
     }
 
     #[test]
