@@ -1014,6 +1014,17 @@ label:has(> input[type="checkbox"]:disabled) {
   padding: 6px 12px;
 }
 
+.chat-ended {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-2);
+}
+
 .chat-composer {
   flex: none;
   display: flex;

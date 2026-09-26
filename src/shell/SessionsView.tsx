@@ -1,5 +1,6 @@
 import {
   ArrowBendUpRightIcon,
+  ChatTeardropTextIcon,
   CopyIcon,
   DotsThreeIcon,
   FileTextIcon,
@@ -16,6 +17,7 @@ import {
   copy,
   locate,
   OUTSIDE,
+  openAsChat,
   remove,
   resume,
   resumeCommand,
@@ -179,6 +181,10 @@ export function SessionMenu() {
           title: outside ? OUTSIDE : undefined,
         },
       )}
+      {item(ChatTeardropTextIcon, "Open as Chat", () => void openAsChat(x), {
+        disabled: live || x.running,
+        title: live || x.running ? "End the session before opening it as a chat" : undefined,
+      })}
       {item(ArrowBendUpRightIcon, "Continue in New Session", () => void resume(x, true))}
       {item(CopyIcon, "Copy Resume Command", () => void copy(resumeCommand(x), "resume command"))}
       <hr />

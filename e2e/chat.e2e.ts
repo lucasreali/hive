@@ -56,3 +56,32 @@ test("chat: confirm the folder, send, entries arrive, a tool opens, Stop while b
   await expect(chat).toBeHidden();
   await expect(tabs.getByRole("tab")).toHaveCount(0);
 });
+
+test("chat: a session opens as a chat with its history, and an ended chat resumes", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "main", exact: true }).first().click();
+  await page.getByTitle("Files, diff and sessions (Ctrl+Shift+B)").click();
+  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: "Actions for Checkout totals" }).click();
+  await page.getByRole("menuitem", { name: "Open as Chat" }).click();
+  await page.keyboard.press("Enter");
+
+  const chat = page.getByRole("region", { name: "Chat" });
+  const entries = chat.locator(".transcript-entry");
+  await expect(entries.first()).toHaveText("YouWhat are git worktrees?");
+  await expect(entries).toHaveCount(2);
+
+  // Once it ends, it resumes in its place, its history shown again.
+  const input = chat.getByRole("textbox", { name: "Message" });
+  await input.fill("crash");
+  await input.press("Enter");
+  await chat.getByRole("button", { name: "Resume" }).click();
+  await expect(chat.getByRole("button", { name: "Resume" })).toBeHidden();
+  await expect(entries).toHaveCount(2);
+  await expect(
+    page.getByRole("tablist", { name: "Open terminals and files" }).getByRole("tab"),
+  ).toHaveCount(1);
+});

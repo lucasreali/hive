@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { chatSession, resumeChat } from "../chats";
 import { type Chat, useHive } from "../store";
 import { transport } from "../transport";
 import { ChatComposer } from "./ChatComposer";
@@ -97,6 +98,14 @@ export function ChatView({ id }: { id: number }) {
       {chat.closed?.error && (
         <div className="files-error" role="alert">
           {chat.closed.error}
+        </div>
+      )}
+      {chat.closed && chatSession(chat) && (
+        <div className="chat-ended">
+          <span>The chat ended.</span>
+          <button type="button" className="secondary" onClick={() => void resumeChat(id)}>
+            Resume
+          </button>
         </div>
       )}
       <ChatComposer chat={id} />

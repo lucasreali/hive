@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { closeChat, openChat } from "./chats";
+import { chatSession, closeChat, openChat, resumeChat } from "./chats";
 import { apply, initialState, useHive } from "./store";
 import { transport } from "./transport";
 
@@ -37,4 +37,52 @@ test("a chat the service refused adds no tab", async () => {
   spyOn(transport, "openChat").mockRejectedValue(new Error("no"));
   await expect(openChat("/w")).rejects.toThrow("no");
   expect(useHive.getState().tabs).toEqual([]);
+});
+
+test("an ended chat resumes its session in a new chat that replaces its tab", async () => {
+  const open = spyOn(transport, "openChat").mockResolvedValueOnce(4).mockResolvedValueOnce(5);
+  expect(await openChat("/w", "s-1", "plan")).toBe(4);
+  expect(open.mock.calls).toEqual([["/w", "s-1", "plan"]]);
+  // Nothing to resume while the service named no session.
+  expect(chatSession(useHive.getState().chats[4])).toBeNull();
+  await resumeChat(4);
+  expect(open).toHaveBeenCalledTimes(1);
+  apply({
+    type: "chat_opened",
+    channel: 4,
+    chat: 4,
+    cwd: "/w",
+    session: "s-1",
+    model: null,
+    mode: "plan",
+    commands: [],
+    api_key_source: null,
+  });
+  apply({ type: "chat_closed", channel: 4, chat: 4, error: null });
+  await resumeChat(4);
+  expect(open.mock.calls[1]).toEqual(["/w", "s-1", "plan"]);
+  expect(useHive.getState().tabs).toEqual([{ id: 5, cwd: "/w", kind: "chat" }]);
+  expect(useHive.getState().chats[4]).toBeUndefined();
+
+  // The status's session and mode are the latest.
+  apply({
+    type: "chat_status",
+    channel: 5,
+    chat: 5,
+    busy: false,
+    mode: "accept_edits",
+    model: null,
+    retry: null,
+    compacting: false,
+    session: "s-2",
+  });
+  apply({ type: "chat_closed", channel: 5, chat: 5, error: "gone" });
+  open.mockRejectedValueOnce("refused");
+  await resumeChat(5);
+  expect(open.mock.calls[2]).toEqual(["/w", "s-2", "accept_edits"]);
+  expect(useHive.getState().notice).toBe("Cannot resume the chat in /w: refused");
+  expect(useHive.getState().tabs).toEqual([{ id: 5, cwd: "/w", kind: "chat" }]);
+  // No such chat: nothing.
+  await resumeChat(99);
+  expect(open).toHaveBeenCalledTimes(3);
 });

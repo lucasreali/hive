@@ -78,6 +78,8 @@ test("a chat tab shows the chat in place of the terminals, from start to end", (
   );
   expect(state()).toBe("ended");
   expect(screen.getByRole("alert").textContent).toBe("claude exited with code 1");
+  // It never named a session: there is nothing to resume.
+  expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
   // The tab says so; closing an ended chat does not ask the service again.
   const close = spyOn(transport, "closeChat").mockResolvedValue();
   const tab = screen.getByRole("tab");
@@ -116,4 +118,16 @@ test("the first chat in a folder asks first; Start chat accepts, Esc refuses", (
     expect(confirm.mock.calls).toEqual([[5, "/w", false]]);
     expect(screen.queryByRole("dialog")).toBeNull();
   }
+});
+
+test("an ended chat with a session offers to resume it in its place", async () => {
+  const open = spyOn(transport, "openChat").mockResolvedValue(6);
+  chatTab();
+  act(() => apply({ ...opened, session: "s-1" } as ServiceMessage));
+  expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  act(() => apply({ type: "chat_closed", channel: 5, chat: 5, error: null }));
+  expect(screen.getByText("The chat ended.")).toBeDefined();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Resume" })));
+  expect(open.mock.calls).toEqual([["/w", "s-1", "default"]]);
+  expect(useHive.getState().tabs).toEqual([{ id: 6, cwd: "/w", kind: "chat" }]);
 });
