@@ -25,11 +25,11 @@ case "${1:-}" in
     tries=0
     while [ "$(runs | wc -l)" -lt 2 ] && [ "$tries" -lt 30 ]; do
       tries=$((tries + 1))
-      sleep 5
+      sleep 20
     done
     failed=0
     runs | while read -r id url; do
-      if gh run watch "$id" --exit-status >/dev/null; then
+      if gh run watch "$id" --interval 120 --exit-status >/dev/null; then
         echo "green $url"
       else
         echo "FAILED $url (scripts/ci.sh logs $id)"
