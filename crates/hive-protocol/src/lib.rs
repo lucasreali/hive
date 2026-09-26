@@ -791,7 +791,8 @@ pub struct ChatEntry {
     pub status: Option<ToolStatus>,
     /// A tool's result.
     pub output: Option<String>,
-    pub image: Option<ChatImage>,
+    /// A user turn's images, or a tool result's one image.
+    pub images: Vec<ChatImage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1681,7 +1682,7 @@ mod tests {
             parent: Some("toolu_1".into()),
             status: Some(ToolStatus::Running),
             output: None,
-            image: None,
+            images: vec![],
         };
         let request = ChatRequest {
             id: "req_8".into(),
@@ -1742,12 +1743,12 @@ mod tests {
                             parent: None,
                             status: Some(ToolStatus::Error),
                             output: Some("o".into()),
-                            image: Some(image),
+                            images: vec![image],
                         },
                     ],
                     replace_last: true,
                 },
-                r#"{"type":"chat_entries","chat":2,"entries":[{"id":3,"kind":"tool","text":"cargo test","tool":"Bash","parent":"toolu_1","status":"running","output":null,"image":null},{"id":4,"kind":"usage","text":"1 s","tool":null,"parent":null,"status":"error","output":"o","image":{"media_type":"image/png","data":"iVBO"}}],"replace_last":true}"#,
+                r#"{"type":"chat_entries","chat":2,"entries":[{"id":3,"kind":"tool","text":"cargo test","tool":"Bash","parent":"toolu_1","status":"running","output":null,"images":[]},{"id":4,"kind":"usage","text":"1 s","tool":null,"parent":null,"status":"error","output":"o","images":[{"media_type":"image/png","data":"iVBO"}]}],"replace_last":true}"#,
             ),
             (
                 Control::ChatRequest { chat: 2, request },

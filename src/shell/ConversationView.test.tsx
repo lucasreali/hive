@@ -30,7 +30,7 @@ const entry = (id: number, kind: ChatEntry["kind"], text: string, more: Partial<
     parent: null,
     status: null,
     output: null,
-    image: null,
+    images: [],
     ...more,
   }) satisfies ChatEntry;
 
@@ -135,13 +135,20 @@ test("images show from data: URLs, in messages and tool results, and grow when c
   const image = { media_type: "image/png", data: "iVBORw0KGgo=" };
   const gif = { media_type: "image/gif", data: "R0lGODlh" };
   const list = [
-    entry(1, "user", "Look", { image }),
-    entry(2, "tool", "/p/a.gif", { tool: "Read", status: "ok", output: "", image: gif }),
+    entry(1, "user", "Look", { images: [image, gif] }),
+    entry(2, "tool", "/p/a.gif", { tool: "Read", status: "ok", output: "", images: [gif] }),
     entry(3, "assistant", "A dot."),
   ];
   const view = render(<ConversationView entries={list} labels={CHAT_LABELS} />);
   const sources = [...view.container.querySelectorAll("img")].map((img) => img.src);
-  expect(sources).toEqual(["data:image/png;base64,iVBORw0KGgo=", "data:image/gif;base64,R0lGODlh"]);
+  const png = "data:image/png;base64,iVBORw0KGgo=";
+  const dot = "data:image/gif;base64,R0lGODlh";
+  expect(sources).toEqual([png, dot, dot]);
+  // One "You" row: its text with both thumbnails in a row under it.
+  expect(view.getAllByText("You")).toHaveLength(1);
+  const [row] = view.container.querySelectorAll(".chat-images") as unknown as [HTMLElement];
+  expect(row.closest(".transcript-text")?.textContent).toBe("Look");
+  expect([...row.querySelectorAll("img")].map((img) => img.src)).toEqual([png, dot]);
   const [button] = view.getAllByTitle("Enlarge the image") as [HTMLElement];
   expect(button.textContent).toBe("");
   fireEvent.click(button);

@@ -81,13 +81,15 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
   const input = chat.getByRole("textbox", { name: "Message" });
   await expect(input).toBeEnabled();
 
-  await input.evaluate((element, dot) => {
-    const bytes = Uint8Array.from(atob(dot), (c) => c.charCodeAt(0));
-    const clipboardData = new DataTransfer();
-    clipboardData.items.add(new File([bytes], "dot.png", { type: "image/png" }));
-    const paste = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
-    element.dispatchEvent(paste);
-  }, DOT);
+  const paste = () =>
+    input.evaluate((element, dot) => {
+      const bytes = Uint8Array.from(atob(dot), (c) => c.charCodeAt(0));
+      const clipboardData = new DataTransfer();
+      clipboardData.items.add(new File([bytes], "dot.png", { type: "image/png" }));
+      const paste = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
+      element.dispatchEvent(paste);
+    }, DOT);
+  await paste();
   const thumbs = chat.getByRole("list", { name: "Images to send" }).getByRole("img");
   await expect(thumbs).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
 
@@ -119,13 +121,25 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
   expect(mode?.y).toBeGreaterThan((message?.y as number) + (message?.height as number) - 1);
   expect(send?.x).toBeGreaterThan(mode?.x as number);
 
+  // A second image: the message with both is one "You" row, its thumbnails side by side (8.18).
+  await paste();
+  await expect(thumbs).toHaveCount(2);
   await input.fill("what is this?");
   await input.press("Enter");
   await expect(chat.getByRole("list", { name: "Images to send" })).toBeHidden();
 
-  const sent = chat.locator('.transcript-entry[data-role="user"]').first();
+  const users = chat.locator('.transcript-entry[data-role="user"]');
+  await expect(users).toHaveCount(1);
+  const sent = users.first();
   await expect(sent).toContainText("what is this?");
-  const image = sent.getByTitle("Enlarge the image");
+  const images = sent.getByTitle("Enlarge the image");
+  await expect(images).toHaveCount(2);
+  const [left, right] = await Promise.all(
+    [images.nth(0), images.nth(1)].map((i) => i.boundingBox()),
+  );
+  expect(right?.y).toBe(left?.y);
+  expect(right?.x).toBeGreaterThan((left?.x as number) + (left?.width as number));
+  const image = images.first();
   await expect(image.locator("img")).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
   await image.click();
   await expect(sent.getByTitle("Shrink the image")).toHaveAttribute("aria-pressed", "true");
