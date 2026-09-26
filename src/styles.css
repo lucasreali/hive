@@ -359,12 +359,12 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 .ghost:hover:not(:disabled),
-.ghost[aria-pressed="true"] {
+.ghost[aria-pressed="true"]:not(.unpressed-look) {
   background: var(--hover);
   color: var(--text);
 }
 
-.ghost[aria-pressed="true"] {
+.ghost[aria-pressed="true"]:not(.unpressed-look) {
   background: var(--selected);
 }
 
@@ -3285,4 +3285,101 @@ body[data-resizing] {
 .review-delete {
   width: 20px;
   height: 20px;
+}
+
+/* Claude's messages as Markdown (8.6). */
+.markdown {
+  white-space: normal;
+  line-height: 18px;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown :is(p, ul, ol, pre, blockquote, .md-table) {
+  margin: 0 0 8px;
+}
+
+.markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 12px 0 6px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+
+.markdown h1 {
+  font-size: var(--fs-title);
+}
+
+.markdown :is(ul, ol) {
+  padding-left: 20px;
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+.markdown a:hover {
+  color: var(--accent-hover);
+}
+
+.markdown code {
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+.markdown pre {
+  padding: 6px 8px;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.markdown pre code {
+  padding: 0;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.markdown blockquote {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-2);
+}
+
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.md-table {
+  overflow-x: auto;
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown :is(th, td) {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.markdown th {
+  background: var(--panel);
+  font-weight: 600;
+}
+
+.md-img {
+  color: var(--text-3);
+  font-style: italic;
 }
