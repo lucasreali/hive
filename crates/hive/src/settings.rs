@@ -87,6 +87,20 @@ impl Store {
         Duration::from_secs(self.current().0.agents.silence_secs.into())
     }
 
+    /// Whether the human allowed chats (7.3) in the project `id`.
+    pub fn chat_confirmed(&self, id: &str) -> bool {
+        let current = self.current();
+        current.0.projects.get(id).is_some_and(|p| p.chat_confirmed)
+    }
+
+    /// Remembers that the human allowed chats in the project `id`; the settings then in use.
+    pub fn confirm_chat(&self, id: &str) -> Result<Settings, String> {
+        let mut settings = self.get().0;
+        let project = settings.projects.entry(id.to_owned()).or_default();
+        project.chat_confirmed = true;
+        self.set(settings)
+    }
+
     /// The scripts of the project `id` (none when it has no settings).
     pub fn scripts(&self, id: &str) -> ProjectScripts {
         let current = self.current();
@@ -221,6 +235,27 @@ mod tests {
         let mode = std::fs::metadata(&file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(Store::load(file).get(), (settings, None));
+    }
+
+    #[test]
+    fn confirmed_chat_projects_are_saved_with_their_other_settings() {
+        let (tmp, store) = store();
+        let mut settings = with_scripts(ProjectScripts {
+            setup: Some("make".into()),
+            ..Default::default()
+        });
+        store.set(settings.clone()).unwrap();
+        assert!(!store.chat_confirmed("/r"));
+        let confirmed = store.confirm_chat("/r").unwrap();
+        settings.projects.get_mut("/r").unwrap().chat_confirmed = true;
+        assert_eq!(confirmed, settings);
+        assert!(store.chat_confirmed("/r"));
+        assert!(!store.chat_confirmed("/other"));
+        let file = tmp.path().join("hive/settings.json");
+        assert!(Store::load(file).chat_confirmed("/r"));
+        // A project without settings gets them.
+        store.confirm_chat("/s").unwrap();
+        assert!(store.chat_confirmed("/s"));
     }
 
     #[test]
@@ -390,7 +425,10 @@ mod tests {
 
     fn with_scripts(scripts: ProjectScripts) -> Settings {
         let mut settings = Settings::default();
-        let project = ProjectSettings { scripts };
+        let project = ProjectSettings {
+            scripts,
+            chat_confirmed: false,
+        };
         settings.projects.insert("/r".into(), project);
         settings
     }
