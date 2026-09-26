@@ -1,5 +1,12 @@
-import { PaperPlaneRightIcon, StopIcon, XIcon } from "@phosphor-icons/react";
-import { type DragEvent, type KeyboardEvent, useId, useState } from "react";
+import { ArrowUpIcon, PaperclipIcon, StopIcon, XIcon } from "@phosphor-icons/react";
+import {
+  type DragEvent,
+  type KeyboardEvent,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { type ChatImage, type ChatMode, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
@@ -42,8 +49,10 @@ export async function base64(file: Blob): Promise<string> {
 }
 
 /**
- * A chat's input (7.3): Enter sends, Shift+Enter starts a new line; images are pasted or
- * dropped in and shown as thumbnails until sent. While a turn runs, Send turns into Stop, and
+ * A chat's input (7.3), one box like Zed's agent panel: thumbnails and errors on top, the
+ * message (growing with its text up to a limit), then a toolbar with Attach image on the left
+ * and the mode selector and Send on the right. Enter sends, Shift+Enter starts a new line;
+ * images are picked, pasted or dropped in and shown as thumbnails until sent. While a turn runs, Send turns into Stop, and
  * Esc stops too; closed (or not started yet) it is disabled. The draft is UI state. Typing `/`
  * lists the chat's slash commands that start with what follows it: ↑/↓ move, Enter or Tab
  * picks, Esc hides the list. The mode selector shows the service's mode and asks it for another.
@@ -56,6 +65,8 @@ export function ChatComposer({ chat }: { chat: number }) {
   // The draft the list was hidden for (Esc); typing shows it again.
   const [hidden, setHidden] = useState<string | null>(null);
   const id = useId();
+  const field = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const busy = useHive((s) => !!s.chats[chat]?.status?.busy);
   const ready = useHive((s) => !!s.chats[chat]?.opened && !s.chats[chat]?.closed);
   const mode = useHive((s) => s.chats[chat]?.status?.mode ?? s.chats[chat]?.opened?.mode);
@@ -114,6 +125,13 @@ export function ChatComposer({ chat }: { chat: number }) {
       send();
     }
   };
+  // The message grows with its text; CSS caps it, then it scrolls.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the height follows the text.
+  useLayoutEffect(() => {
+    const el = field.current as HTMLTextAreaElement;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
   const files = (event: DragEvent) => event.dataTransfer.types.includes("Files");
   return (
     <form
@@ -180,12 +198,11 @@ export function ChatComposer({ chat }: { chat: number }) {
         </p>
       )}
       <textarea
+        ref={field}
         aria-label="Message"
         aria-controls={matches.length > 0 ? id : undefined}
         aria-activedescendant={matches.length > 0 ? `${id}-${at}` : undefined}
-        placeholder={
-          ready ? "Message Claude (Shift+Enter for a new line, / for commands)" : undefined
-        }
+        placeholder={ready ? "Message Claude — / for commands" : undefined}
         rows={3}
         value={text}
         disabled={!ready}
@@ -198,28 +215,60 @@ export function ChatComposer({ chat }: { chat: number }) {
           void add(pasted);
         }}
       />
-      <Select
-        className="chat-mode"
-        aria-label="Permission mode"
-        value={mode ?? "default"}
-        options={MODES}
-        disabled={!ready}
-        onChange={(value) => void transport.chatSetMode(chat, value as ChatMode)}
-      />
-      {busy ? (
+      <div className="chat-toolbar">
         <button
           type="button"
-          className="secondary"
-          title="Stop the turn (Esc)"
-          onClick={() => void transport.chatInterrupt(chat)}
+          className="ghost chat-icon"
+          aria-label="Attach image"
+          title="Attach image"
+          disabled={!ready}
+          onClick={() => picker.current?.click()}
         >
-          <StopIcon {...ICON} /> Stop
+          <PaperclipIcon {...ICON} />
         </button>
-      ) : (
-        <button type="submit" className="primary" disabled={!ready || empty}>
-          <PaperPlaneRightIcon {...ICON} /> Send
-        </button>
-      )}
+        <input
+          ref={picker}
+          type="file"
+          accept={IMAGE_TYPES.join(",")}
+          multiple
+          hidden
+          onChange={(event) => {
+            const picked = [...(event.target.files ?? [])];
+            // The same file can be picked again.
+            event.target.value = "";
+            if (picked.length > 0) void add(picked);
+          }}
+        />
+        <Select
+          className="chat-mode"
+          aria-label="Permission mode"
+          value={mode ?? "default"}
+          options={MODES}
+          disabled={!ready}
+          onChange={(value) => void transport.chatSetMode(chat, value as ChatMode)}
+        />
+        {busy ? (
+          <button
+            type="button"
+            className="secondary chat-icon"
+            aria-label="Stop"
+            title="Stop the turn (Esc)"
+            onClick={() => void transport.chatInterrupt(chat)}
+          >
+            <StopIcon {...ICON} weight="fill" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            className="primary chat-icon"
+            aria-label="Send"
+            title="Send (Enter)"
+            disabled={!ready || empty}
+          >
+            <ArrowUpIcon {...ICON} weight="bold" />
+          </button>
+        )}
+      </div>
     </form>
   );
 }
