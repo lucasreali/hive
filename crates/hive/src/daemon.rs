@@ -624,25 +624,15 @@ impl State {
         if let Some(message) = taken {
             return self.to_app(channel, &Control::Error { message }).await;
         }
-        // A resumed session may have run in a folder inside the worktree: `claude --resume`
-        // finds it only from there. That folder must be real (no `..`, no link), so it stays in
-        // the worktree.
-        let (place, inside) = tokio::task::block_in_place(|| {
-            let real = std::fs::canonicalize(&cwd).is_ok_and(|real| real == Path::new(&cwd));
-            (projects::place(&self.projects.list(), &cwd), real)
-        });
-        let open = match place {
-            Some((project, worktree)) if worktree == cwd || resume.is_some() && inside => {
-                Ok(chat::Open {
-                    cwd,
-                    project,
-                    resume,
-                    mode: mode.unwrap_or(ChatMode::Default),
-                })
-            }
-            _ => Err(format!(
-                "{cwd} is not a worktree of an added project: chats open only there"
-            )),
+        let project = tokio::task::block_in_place(|| self.chat_project(&cwd, resume.is_some()));
+        let open = match project {
+            Some(project) => Ok(chat::Open {
+                cwd,
+                project,
+                resume,
+                mode: mode.unwrap_or(ChatMode::Default),
+            }),
+            None => Err(not_a_chat_folder(&cwd)),
         };
         let open = open.and_then(|open| match open.resume.as_deref() {
             Some(id) if !chat::is_session(id) => Err("not a session id to resume".to_owned()),
@@ -663,6 +653,17 @@ impl State {
                 };
                 self.to_app(channel, &ask).await;
             }
+        }
+    }
+
+    /// The project a chat in `cwd` opens in: `cwd` must be one of its worktrees. A resumed
+    /// session may have run in a folder inside the worktree: `claude --resume` finds it only
+    /// from there. That folder must be real (no `..`, no link), so it stays in the worktree.
+    fn chat_project(&self, cwd: &str, resume: bool) -> Option<String> {
+        let real = std::fs::canonicalize(cwd).is_ok_and(|real| real == Path::new(cwd));
+        match projects::place(&self.projects.list(), cwd) {
+            Some((project, worktree)) if worktree == cwd || resume && real => Some(project),
+            _ => None,
         }
     }
 
@@ -694,6 +695,15 @@ impl State {
     /// and its worktree's `HIVE_*`), found as the wrapper finds it.
     async fn start_chat(self: &Arc<Self>, channel: u32, open: chat::Open) {
         let cwd = &open.cwd;
+        // Checked again: the folder may have changed (e.g. into a link) while the human
+        // confirmed it.
+        let resume = open.resume.is_some();
+        let project = tokio::task::block_in_place(|| self.chat_project(cwd, resume));
+        if project.as_ref() != Some(&open.project) {
+            return self
+                .chat_closed(channel, Some(not_a_chat_folder(cwd)))
+                .await;
+        }
         let (mut env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
         env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
         let path = std::env::var_os("PATH");
@@ -955,6 +965,10 @@ async fn chat_lines(stdout: tokio::process::ChildStdout, lines: mpsc::Sender<Opt
 
 /// Turns a chat's stdout into messages until it closes, sending its live text when due
 /// ([`chat::Stream::flush`]), then reports its exit.
+fn not_a_chat_folder(cwd: &str) -> String {
+    format!("{cwd} is not a worktree of an added project: chats open only there")
+}
+
 async fn chat_pump(state: Arc<State>, channel: u32, pipes: chat::Pipes) {
     let chat::Pipes {
         mut child,

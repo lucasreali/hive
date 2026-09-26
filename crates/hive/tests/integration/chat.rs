@@ -626,3 +626,34 @@ async fn a_resumed_chat_shows_its_history_and_comes_back_as_a_chat() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn a_folder_turned_into_a_link_while_confirming_does_not_start_the_chat() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = sandbox(&repo);
+    let mut daemon = repo.env.daemon_on_path(&fake);
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    let inside = repo.root.join("src");
+    std::fs::create_dir(&inside).unwrap();
+    let cwd = inside.display().to_string();
+    app.send(2, open(&cwd, Some(SESSION), None)).await;
+    assert_eq!(app.control().await, asked(2, &cwd));
+
+    // While the human answers, the folder becomes a link out of the worktree.
+    std::fs::remove_dir(&inside).unwrap();
+    std::os::unix::fs::symlink(repo.env.path("home"), &inside).unwrap();
+    app.send(2, confirm(2, &cwd, true)).await;
+    assert!(matches!(app.control().await, (0, Control::Settings { .. })));
+    let refused = format!("{cwd} is not a worktree of an added project: chats open only there");
+    assert_eq!(app.control().await, closed(2, Some(&refused)));
+    assert!(!fake.join("args").exists(), "claude ran");
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
