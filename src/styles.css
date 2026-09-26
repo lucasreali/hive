@@ -1669,6 +1669,58 @@ li:not(:last-child) > .owned::before {
   box-shadow: 0 0 0 1px var(--state-error);
 }
 
+/* Number stepper (src/ui/NumberInput.tsx): the native spin buttons give way to two carets */
+.stepper {
+  position: relative;
+  display: flex;
+}
+
+.stepper input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
+  appearance: textfield;
+}
+
+.stepper input::-webkit-inner-spin-button,
+.stepper input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.stepper-buttons {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: flex;
+  flex-direction: column;
+  width: 22px;
+  border-left: 1px solid var(--border-subtle);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  overflow: hidden;
+}
+
+.stepper-button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-3);
+}
+
+.stepper-button + .stepper-button {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.stepper-button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .field-error {
   color: var(--state-error);
   overflow-wrap: anywhere;
