@@ -75,6 +75,7 @@ test("an ended chat resumes its session in a new chat that replaces its tab", as
     retry: null,
     compacting: false,
     session: "s-2",
+    api_key_source: null,
   });
   apply({ type: "chat_closed", channel: 5, chat: 5, error: "gone" });
   open.mockRejectedValueOnce("refused");
