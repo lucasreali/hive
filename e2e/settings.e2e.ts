@@ -17,7 +17,8 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect.poll(async () => (await terminal(page)).fontSize).toBe(13);
   const before = await terminal(page);
 

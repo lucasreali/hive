@@ -285,7 +285,8 @@ label:has(> input[type="checkbox"]:disabled) {
   overflow-y: auto;
 }
 
-.inbox [role="menuitem"] {
+.inbox [role="menuitem"],
+.new-tab-menu [role="menuitem"] {
   display: flex;
   flex-shrink: 0;
   align-items: center;

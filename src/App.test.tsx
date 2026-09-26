@@ -53,12 +53,7 @@ test("on macOS the shell leaves room for the traffic lights and speaks macOS", (
   const status = screen.getByTitle("Service connection");
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(status.textContent).toBe("macOSconnected");
-  for (const title of [
-    "Add project (⇧⌘O)",
-    "Files, diff and sessions (⇧⌘B)",
-    "New terminal (⇧⌘T)",
-    "Collapse (⇧⌘B)",
-  ]) {
+  for (const title of ["Add project (⇧⌘O)", "Files, diff and sessions (⇧⌘B)", "Collapse (⇧⌘B)"]) {
     expect(screen.getByTitle(title)).toBeDefined();
   }
   act(() => apply({ type: "projects", projects: [] }));
@@ -98,7 +93,7 @@ test("the project button opens the add-project dialog", () => {
 
 test("new terminal waits for the worktree picker", () => {
   render(<App />);
-  expect((screen.getByTitle("New terminal (Ctrl+Shift+T)") as HTMLButtonElement).disabled).toBe(
+  expect((screen.getByTitle("New terminal, agent or file") as HTMLButtonElement).disabled).toBe(
     true,
   );
 });

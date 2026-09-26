@@ -16,7 +16,8 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect.poll(() => screen(page, 1)).toBe("mock$");
 
   const panel = page.getByRole("complementary", { name: "Side panel" });
