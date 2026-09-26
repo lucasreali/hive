@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { version } from "../package.json";
 import { asMac } from "../test/mac";
 import { App } from "./App";
 import { apply, initialState, useHive } from "./store";
@@ -15,7 +16,7 @@ test("renders the shell regions", () => {
   expect(screen.getByRole("banner").textContent).toBe("Hive");
   expect(screen.getByRole("navigation", { name: "Projects" }).textContent).toContain("No projects");
   expect(screen.getByRole("region", { name: "Terminals" })).toBeDefined();
-  expect(screen.getByRole("contentinfo").textContent).toBe("WSLconnecting");
+  expect(screen.getByRole("contentinfo").textContent).toBe(`WSLconnectingv${version}`);
   // The side panel starts open.
   expect(screen.getByRole("complementary", { name: "Side panel" })).toBeDefined();
 });

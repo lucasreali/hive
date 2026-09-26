@@ -19,7 +19,7 @@ import {
 } from "../store";
 import { openTerminal, openWith } from "../terminals";
 import { transport } from "../transport";
-import { isMac } from "../window";
+import { isMac, keyText } from "../window";
 import { CloseIcon } from "./icons";
 
 const closeMenu = () => openMenu(null);
@@ -170,13 +170,16 @@ const closeProjectMenu = () => openProjectMenu(null);
 export function ProjectMenu() {
   const menu = useHive((s) => s.projectMenu);
   if (!menu) return null;
-  const removeMerged = () => {
+  const dialog = (modal: "new-worktree" | "remove-merged") => () => {
     closeProjectMenu();
-    openModal("remove-merged", menu.project);
+    openModal(modal, menu.project);
   };
   return (
     <ContextMenu at={menu} label="Project" onClose={closeProjectMenu}>
-      <button type="button" role="menuitem" onClick={removeMerged}>
+      <button type="button" role="menuitem" onClick={dialog("new-worktree")}>
+        New worktree… <kbd>{keyText("Ctrl+Shift+N")}</kbd>
+      </button>
+      <button type="button" role="menuitem" onClick={dialog("remove-merged")}>
         Remove merged worktrees…
       </button>
     </ContextMenu>

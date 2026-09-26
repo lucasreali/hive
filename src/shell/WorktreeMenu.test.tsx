@@ -334,6 +334,10 @@ test("the project menu removes merged worktrees without changes, each with its r
   act(() => apply({ type: "projects", projects: [merged] }));
   fireEvent.contextMenu(row("shop"), { clientX: 10, clientY: 20 });
   expect(useHive.getState().projectMenu).toEqual({ project: shop.id, x: 10, y: 20 });
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+    "New worktree… Ctrl+Shift+N",
+    "Remove merged worktrees…",
+  ]);
   fireEvent.keyDown(screen.getByRole("menu", { name: "Project" }), { key: "Escape" });
   expect(menu()).toBeNull();
   fireEvent.contextMenu(row("shop"), { clientX: 10, clientY: 20 });

@@ -99,12 +99,13 @@ export function allFiles(listed: string[], changed: ChangedFile[]): TreeFile[] {
 /**
  * The visible rows of the files tree: `files` (sorted by the service) grouped into folders,
  * folders before files. A folder starts collapsed and is open only when
- * `collapsed["folder:<worktree>/<path>"]` is false. Grouping paths is presentation; statuses and counts are the service's.
+ * `collapsed["<tree>:<worktree>/<path>"]` is false: each tree (Files, Diff) opens its own folders. Grouping paths is presentation; statuses and counts are the service's.
  */
 export function fileRows(
   worktree: string,
   files: TreeFile[],
   collapsed: Record<string, boolean>,
+  tree: "files" | "changes" = "files",
 ): FileRow[] {
   const root: Folder = { folders: new Map(), files: [] };
   for (const file of files) {
@@ -120,7 +121,7 @@ export function fileRows(
   const rows: FileRow[] = [];
   const walk = (folder: Folder, prefix: string, depth: number) => {
     for (const [name, inner] of [...folder.folders].sort(([a], [b]) => (a < b ? -1 : 1))) {
-      const key = `folder:${worktree}/${prefix}${name}`;
+      const key = `${tree}:${worktree}/${prefix}${name}`;
       const open = collapsed[key] === false;
       const path = `${prefix}${name}`;
       rows.push({ kind: "folder", key, path, name, depth, open, status: strongest(inner) });
@@ -424,7 +425,7 @@ function NameResults({ worktree, query }: { worktree: string; query: string }) {
             className="result-file"
             title={file.path}
             data-status={file.status ? STATUS[file.status].letter : undefined}
-            onClick={() => leaveFile({ worktree, path: file.path }, !file.status)}
+            onClick={() => leaveFile({ worktree, path: file.path }, true)}
           >
             <ResultFile file={file} />
           </button>
@@ -498,7 +499,7 @@ function ContentResults({ worktree, query }: { worktree: string; query: string }
                     type="button"
                     className="result-line"
                     title={`${path}:${m.line}`}
-                    onClick={() => leaveFile({ worktree, path }, !file.status, m.line)}
+                    onClick={() => leaveFile({ worktree, path }, true, m.line)}
                   >
                     <span className="line-number">{m.line}</span>
                     <span className="line-text">
@@ -550,7 +551,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     () => (all ? allFiles(all.files, changes?.files ?? []) : (changes?.files ?? [])),
     [all, changes],
   );
-  const rows = fileRows(worktree, files, collapsed);
+  const rows = fileRows(worktree, files, collapsed, changedOnly ? "changes" : "files");
   const [active, setActive] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -561,11 +562,11 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     overscan: 8,
   });
   const at = Math.min(active, rows.length - 1);
-  // A file without changes opens as editable text; a changed one as its diff (#31).
+  // The Diff tab opens a file as its diff; the Files tab as editable text (#31).
   const pick = (row: FileRow) =>
     row.kind === "folder"
       ? useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: row.open } }))
-      : leaveFile({ worktree, path: row.key }, !row.file.status);
+      : leaveFile({ worktree, path: row.key }, !changedOnly);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[at];
     if (!row) return;
@@ -658,13 +659,16 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
 
 /**
  * Opens `next` (null closes the file), at `line` when given, once the user agrees to drop the unsaved edits of the
- * file open now, if any.
+ * file open now, if any. The file already open switches to editable text or its diff as asked, unless it has unsaved edits.
  */
 export function leaveFile(next: OpenFile | null, editing = false, line?: number): void {
   const { edit } = useHive.getState();
   const losing = edit && isDirty(edit) && !(next && isFor(next, edit));
   if (losing && !window.confirm(`Discard your unsaved changes to ${edit.path}?`)) return;
   setOpenFile(next, editing, line);
+  const s = useHive.getState();
+  const same = next && s.openFile && isFor(next, s.openFile);
+  if (same && s.editing !== editing && !(s.edit && isDirty(s.edit))) setEditing(editing);
 }
 
 /**
