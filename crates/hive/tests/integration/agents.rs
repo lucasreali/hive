@@ -51,6 +51,7 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         state,
         urgency: state.urgency(),
         pending: state.pending(),
+        interrupted: false,
         subagents,
         activity: None,
         since_ms: 0,
@@ -277,7 +278,7 @@ async fn agent_states_follow_hook_events_and_terminal_silence() {
         let ids = json!({"session_id": "s", "agent_id": "a", "agent_type": "Explore"});
         merged(ids, extra)
     };
-    let steps: [(&str, Value, Vec<Control>); 6] = [
+    let steps: [(&str, Value, Vec<Control>); 7] = [
         (
             "UserPromptSubmit",
             main(json!({})),
@@ -316,6 +317,12 @@ async fn agent_states_follow_hook_events_and_terminal_silence() {
             "Notification",
             main(json!({"notification_type": "permission_prompt"})),
             vec![state("s", WaitingPermission, vec![])],
+        ),
+        // Approved: working again (a dialog alone never decays with silence).
+        (
+            "PostToolUse",
+            main(json!({"tool_name": "Bash"})),
+            vec![state("s", Working, vec![])],
         ),
     ];
     for (event, payload, expected) in steps {
@@ -366,6 +373,7 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             state: WaitingYou,
             urgency: WaitingYou.urgency(),
             pending,
+            interrupted: false,
             subagents: vec![],
             activity: None,
             since_ms: 0,
@@ -768,6 +776,114 @@ async fn an_agents_tokens_are_read_from_its_transcript_after_its_events() {
     let stop = json!({"session_id": "s", "cwd": root});
     hook(&repo, &mut app, "1", "Stop", stop).await;
     assert_eq!(next_usage(&mut app).await, usage(250_001, 1_000_000, 15));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+/// `message` (an `agent_state`) with the agent's own `activity`.
+fn doing(mut message: Control, what: &str) -> Control {
+    if let Control::AgentState { activity, .. } = &mut message {
+        *activity = Some(what.into());
+    }
+    message
+}
+
+/// The app's next `agent_state`, skipping other messages (usage).
+async fn next_state(app: &mut Conn) -> Control {
+    loop {
+        if let (1, message @ Control::AgentState { .. }) = app.control().await {
+            return message;
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the_agent() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let log = repo.env.path("home/.claude/projects/-repo/s.jsonl");
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let said = |text: &str| {
+        let record = json!({"type": "user", "message": {"role": "user", "content": text}});
+        format!("{record}\n")
+    };
+    let append = |text: &str| {
+        let mut file = std::fs::File::options().append(true).open(&log).unwrap();
+        file.write_all(text.as_bytes()).unwrap();
+    };
+    // A resumed session whose transcript already ends on an old interrupt.
+    std::fs::write(&log, said("[Request interrupted by user]")).unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let start = json!({"session_id": "s", "cwd": root, "transcript_path": log, "source": "resume"});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    // The transcript is read once before anything new is written to it.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let main = |extra| merged(json!({"session_id": "s", "cwd": root}), extra);
+    let ask = main(json!({
+        "tool_name": "AskUserQuestion", "tool_use_id": "toolu_1",
+        "tool_input": {"questions": [{"question": "Red or blue?", "header": "Colour",
+                       "options": [{"label": "red"}, {"label": "blue"}], "multiSelect": false}]},
+    }));
+    let seen = hook(&repo, &mut app, "1", "PreToolUse", ask).await;
+    let asking = doing(state("s", WaitingAnswer, vec![]), "Asking a question");
+    assert_eq!(seen, [(1, asking)]);
+    // The old interrupt was not news; the question stays past the silence.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // Declined with Esc: Claude writes the refusal and the interrupt; nothing alerts.
+    let declined = json!({"type": "user", "message": {"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": "toolu_1", "is_error": true,
+        "content": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+    }]}});
+    append(&format!(
+        "{declined}\n{}",
+        said("[Request interrupted by user for tool use]")
+    ));
+    let mut interrupted = state("s", WaitingYou, vec![]);
+    if let Control::AgentState {
+        pending,
+        interrupted: quiet,
+        ..
+    } = &mut interrupted
+    {
+        (*pending, *quiet) = (false, true);
+    }
+    assert_eq!(next_state(&mut app).await, interrupted);
+
+    // A compaction keeps the agent: its subagents stay, and nothing is sent again.
+    hook(&repo, &mut app, "1", "UserPromptSubmit", main(json!({}))).await;
+    let subagent = json!({"session_id": "s", "agent_id": "a", "agent_type": "Explore"});
+    hook(&repo, &mut app, "1", "SubagentStart", subagent).await;
+    let seen = hook(
+        &repo,
+        &mut app,
+        "1",
+        "PreCompact",
+        main(json!({"trigger": "auto"})),
+    )
+    .await;
+    let compacting = doing(
+        state("s", WithSubagents, vec![sub("a", Working)]),
+        "Compacting",
+    );
+    assert_eq!(seen, [(1, compacting)]);
+    let seen = hook(
+        &repo,
+        &mut app,
+        "1",
+        "PostCompact",
+        main(json!({"trigger": "auto"})),
+    )
+    .await;
+    assert_eq!(
+        seen,
+        [(1, state("s", WithSubagents, vec![sub("a", Working)]))]
+    );
+    let again = main(json!({"transcript_path": log, "source": "compact"}));
+    assert_eq!(hook(&repo, &mut app, "1", "SessionStart", again).await, []);
+    let seen = hook(&repo, &mut app, "1", "Stop", main(json!({}))).await;
+    assert_eq!(seen, [(1, state("s", WaitingYou, vec![sub("a", Working)]))]);
     drop(app);
     assert!(daemon.wait_exit().success());
 }

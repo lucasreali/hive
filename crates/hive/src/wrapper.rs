@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::paths::Paths;
 
 /// Claude Code events Hive observes; each one runs `hive hook <event>`.
-pub const EVENTS: [&str; 12] = [
+pub const EVENTS: [&str; 15] = [
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
@@ -25,6 +25,9 @@ pub const EVENTS: [&str; 12] = [
     "SubagentStart",
     "SubagentStop",
     "SessionEnd",
+    "PreCompact",
+    "PostCompact",
+    "Elicitation",
 ];
 
 /// Hook timeout in seconds. `hive hook` gives up after ~200 ms on its own; this only
@@ -343,7 +346,7 @@ mod tests {
         let settings: Value = serde_json::from_str(&text).unwrap();
         let hooks = settings.as_object().unwrap()["hooks"].as_object().unwrap();
         assert_eq!(settings.as_object().unwrap().len(), 1);
-        assert_eq!(hooks.len(), 14);
+        assert_eq!(hooks.len(), 17);
         for event in EVENTS {
             let expected = json!([{ "hooks": [{
                 "type": "command",

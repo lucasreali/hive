@@ -108,12 +108,44 @@ fn ending(kind: &str, record: &Value, message: Option<&Value>) -> Ending {
             _ => Ending::Working,
         };
     }
-    match message.and_then(|m| m.get("content")).and_then(first_text) {
+    let content = message.and_then(|m| m.get("content"));
+    if content.is_some_and(declined) {
+        return Ending::Interrupted;
+    }
+    match content.and_then(first_text) {
         Some(text) if text.starts_with("[Request interrupted by user") => Ending::Interrupted,
         // A slash command's tags: no turn of Claude follows.
         Some(text) if text.starts_with('<') => Ending::TurnDone,
         _ => Ending::Working,
     }
+}
+
+/// How a log record leaves the main conversation; `None` for one that does not (not a
+/// message, a subagent's or a meta one).
+pub fn ending_of(record: &Value) -> Option<Ending> {
+    let kind = record.get("type").and_then(Value::as_str)?;
+    let flag = |key: &str| record.get(key).and_then(Value::as_bool) == Some(true);
+    let main = matches!(kind, "user" | "assistant") && !flag("isSidechain") && !flag("isMeta");
+    main.then(|| ending(kind, record, record.get("message")))
+}
+
+/// The start of the `tool_result` Claude Code writes for a tool call the user declined (a
+/// permission, a question or a plan).
+const DECLINED: &str = "The user doesn't want to proceed with this tool use.";
+
+/// Written after [`DECLINED`] when the user also said what to do instead: Claude goes on.
+const FEEDBACK: &str = "the user said:";
+
+/// Whether a user message's `content` declines a tool call and leaves Claude waiting.
+fn declined(content: &Value) -> bool {
+    let Some(blocks) = content.as_array() else {
+        return false;
+    };
+    blocks.iter().any(|block| {
+        let result = block.get("type").and_then(Value::as_str) == Some("tool_result");
+        let text = block.get("content").and_then(first_text);
+        result && text.is_some_and(|t| t.starts_with(DECLINED) && !t.contains(FEEDBACK))
+    })
 }
 
 /// A session's state by how its log ends and whether a `claude` runs it ("Mapeamento de
@@ -491,9 +523,44 @@ not json
             Ending::TurnDone
         );
         assert_eq!(end(&[&user(r#""fix it""#)]), Ending::Working);
+        // A declined tool call, unless the user said what to do instead.
+        let result = |content: &str| {
+            let block = format!(r#"{{"type":"tool_result","content":{content},"is_error":true}}"#);
+            user(&format!("[{block}]"))
+        };
+        let declined = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+        assert_eq!(
+            end(&[&result(&format!("{declined:?}"))]),
+            Ending::Interrupted
+        );
+        let blocks = format!(r#"[{{"type":"text","text":{declined:?}}}]"#);
+        assert_eq!(end(&[&result(&blocks)]), Ending::Interrupted);
+        let told = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nuse blue";
+        assert_eq!(end(&[&result(&format!("{told:?}"))]), Ending::Working);
+        assert_eq!(end(&[&result(r#""ok""#)]), Ending::Working);
+        let text = format!(r#"[{{"type":"text","text":{declined:?}}}]"#);
+        assert_eq!(end(&[&user(&text)]), Ending::Working);
         // Subagents and meta messages leave it as it was.
         let sub = r#"{"type":"assistant","isSidechain":true,"message":{"stop_reason":"tool_use"}}"#;
         assert_eq!(end(&[&assistant(r#""end_turn""#), sub]), Ending::TurnDone);
+    }
+
+    #[test]
+    fn only_main_conversation_messages_have_an_ending() {
+        let record = |text: &str| serde_json::from_str::<Value>(text).unwrap();
+        let interrupted =
+            r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#;
+        assert_eq!(ending_of(&record(interrupted)), Some(Ending::Interrupted));
+        let done = r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#;
+        assert_eq!(ending_of(&record(done)), Some(Ending::TurnDone));
+        for other in [
+            r#"{"type":"user","isSidechain":true,"message":{"content":"[Request interrupted by user]"}}"#,
+            r#"{"type":"user","isMeta":true,"message":{"content":"[Request interrupted by user]"}}"#,
+            r#"{"type":"ai-title","aiTitle":"x"}"#,
+            r#"{"type":3}"#,
+        ] {
+            assert_eq!(ending_of(&record(other)), None, "{other}");
+        }
     }
 
     #[test]

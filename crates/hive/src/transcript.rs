@@ -292,6 +292,10 @@ pub struct Usage {
     tokens: Tokens,
     /// The context, its limit and the output last sent to the app.
     sent: Option<(u64, u64, u64)>,
+    /// Read once: what was there before the agent was detected is not news.
+    primed: bool,
+    /// The last read ended the main conversation on an interrupt (see [`Usage::interrupted`]).
+    interrupted: bool,
 }
 
 impl Usage {
@@ -304,17 +308,28 @@ impl Usage {
         if restarted {
             self.tokens = Tokens::default();
         }
+        let mut end = None;
         for line in bytes.split(|&b| b == b'\n') {
             if let Ok(record) = serde_json::from_slice::<Value>(line) {
                 self.tokens.add(&record);
+                end = crate::sessions::ending_of(&record).or(end);
             }
         }
+        self.interrupted = self.primed && end == Some(crate::sessions::Ending::Interrupted);
+        self.primed = true;
         let now = (self.tokens.context, self.tokens.limit(), self.tokens.output);
         if self.tokens.context == 0 || self.sent == Some(now) {
             return None;
         }
         self.sent = Some(now);
         self.message(id)
+    }
+
+    /// Whether the lines the last read found, after the first read, end the main conversation
+    /// on the user's interrupt (`[Request interrupted by user…]`) or on a declined tool call;
+    /// answered once.
+    pub fn interrupted(&mut self) -> bool {
+        std::mem::take(&mut self.interrupted)
     }
 
     /// The last `agent_usage` sent, for a newly connected app.
@@ -688,5 +703,35 @@ mod tests {
         // Outside the root, nothing is read.
         let mut outside = Usage::default();
         assert_eq!(outside.read("s", Path::new("/nope"), &f.log), None);
+    }
+
+    #[test]
+    fn an_interrupt_is_news_only_after_the_first_read_and_while_it_is_last() {
+        let f = fixture();
+        let esc = said("[Request interrupted by user]");
+        // What the transcript held before the first read is old news.
+        append(&f.log, &esc);
+        let mut usage = Usage::default();
+        let read = |usage: &mut Usage| {
+            usage.read("s", &f.root, &f.log);
+            usage.interrupted()
+        };
+        assert!(!read(&mut usage));
+        append(&f.log, &said("go on"));
+        assert!(!read(&mut usage));
+        append(&f.log, &said("[Request interrupted by user for tool use]"));
+        assert!(read(&mut usage));
+        // Answered once; nothing new is no interrupt.
+        assert!(!usage.interrupted());
+        assert!(!read(&mut usage));
+        // A later message, or a subagent's interrupt, leaves the conversation going on.
+        let answer = json!({"type": "assistant", "message": {"stop_reason": "tool_use"}});
+        let sub = json!({"type": "user", "isSidechain": true,
+                         "message": {"content": "[Request interrupted by user]"}});
+        append(&f.log, &format!("{esc}{answer}\n{sub}\n"));
+        assert!(!read(&mut usage));
+        // The interrupt last, after other records in the same read.
+        append(&f.log, &format!("{answer}\n{esc}"));
+        assert!(read(&mut usage));
     }
 }

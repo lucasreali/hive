@@ -56,8 +56,12 @@ pub struct Agent {
     pub watched: bool,
     /// It finished while watched: already seen, so not pending until its state changes.
     seen: bool,
+    /// It waits for you because the user interrupted it, until its state changes.
+    interrupted: bool,
     /// What the agent itself is doing, from its last tool call; cleared when its turn ends.
     activity: Option<String>,
+    /// Its state and activity when a compaction began (`PreCompact`), back at `PostCompact`.
+    compacting: Option<(AgentState, Option<String>)>,
     /// Wall clock (ms since the epoch) when the displayed state began.
     since_ms: u64,
     /// A moment and its wall clock time: wall times are counted from here with the monotonic
@@ -85,7 +89,9 @@ impl Agent {
             last_event: now,
             watched: false,
             seen: false,
+            interrupted: false,
             activity: None,
+            compacting: None,
             since_ms: wall_ms,
             origin: (now, wall_ms),
         }
@@ -119,7 +125,7 @@ impl Agent {
         now: Instant,
         place: &dyn Fn(&str) -> Option<String>,
     ) -> Option<Control> {
-        self.changed(id, now, |agent| {
+        self.changed(id, now, false, |agent| {
             agent.last_event = now;
             if let EventKind::WorktreeRemoved { path: Some(path) } = &event.kind {
                 let gone = agent
@@ -146,9 +152,23 @@ impl Agent {
             if stopped.is_some() || live.is_some() {
                 agent.prune(live.map_or(&[], Vec::as_slice));
             }
-            let state = state_of(&event.kind);
             let Some(sub) = &event.subagent else {
-                if let Some(state) = state {
+                // A compaction shows as working, then gives back what it interrupted.
+                let saved = agent.compacting.take();
+                match event.kind {
+                    EventKind::CompactStarted => {
+                        agent.compacting =
+                            saved.or_else(|| Some((agent.state, agent.activity.clone())));
+                    }
+                    EventKind::CompactFinished => {
+                        if let Some((state, activity)) = saved {
+                            (agent.state, agent.activity) = (state, activity);
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+                if let Some(state) = state_of(&event.kind, agent.state) {
                     agent.state = state;
                 }
                 return follow(&mut agent.activity, event);
@@ -158,6 +178,8 @@ impl Agent {
                 return agent.leave(&sub.id);
             }
             let known = agent.subagents.iter().position(|s| s.id == sub.id);
+            let current = known.map_or(AgentState::Idle, |i| agent.subagents[i].state);
+            let state = state_of(&event.kind, current);
             if let Some(i) = known {
                 follow(&mut agent.subagents[i].activity, event);
             }
@@ -241,8 +263,9 @@ impl Agent {
     }
 
     /// Rule 2, checked periodically: after `silence` (the `agents.silence_secs` setting)
-    /// without terminal output (nor hook events), working and waiting-for-permission become
-    /// waiting for you: the agent was interrupted (Esc/Ctrl+C fire no `Stop`). Output alone
+    /// without terminal output (nor hook events), working becomes waiting for you: the agent
+    /// was likely interrupted (Esc/Ctrl+C fire no `Stop`) and the transcript did not say so.
+    /// A dialog (permission, question, plan) is static, so it never decays. Output alone
     /// never moves a state back; only hook events do. A subagent waiting on a background task
     /// is silent by design and keeps working.
     pub fn reconcile(
@@ -255,21 +278,42 @@ impl Agent {
         if now.saturating_duration_since(last_output.max(self.last_event)) < silence {
             return None;
         }
-        self.changed(id, now, |agent| {
-            let waiting = &agent.waiting;
-            let subagents = agent.subagents.iter_mut();
-            let subagents = subagents
-                .filter(|s| !waiting.contains(&s.id))
-                .map(|s| (&mut s.state, &mut s.activity));
-            let own = (&mut agent.state, &mut agent.activity);
-            for (state, activity) in std::iter::once(own).chain(subagents) {
-                if matches!(state, AgentState::Working | AgentState::WaitingPermission) {
-                    // Interrupted: the tool call it was on is over.
-                    *state = AgentState::WaitingYou;
-                    *activity = None;
-                }
-            }
+        self.changed(id, now, false, |agent| {
+            agent.settle(|state| state == AgentState::Working)
         })
+    }
+
+    /// The transcript says the user interrupted the agent (Esc/Ctrl+C, or declined a dialog):
+    /// it and its subagents working or on a dialog wait for you, already seen (the user
+    /// caused it, so nothing alerts).
+    pub fn interrupt(&mut self, id: &str, now: Instant) -> Option<Control> {
+        self.changed(id, now, true, |agent| {
+            agent.settle(|state| state == AgentState::Working || dialog(state))
+        })
+    }
+
+    /// Whether it may be interrupted: working or on a dialog, itself or through a subagent.
+    /// The daemon then reads its transcript every tick.
+    pub fn busy(&self) -> bool {
+        let shown = self.displayed();
+        matches!(shown, AgentState::Working | AgentState::WithSubagents) || dialog(shown)
+    }
+
+    /// The agent and its subagents (not those waiting on a background task) in a state `hit`
+    /// accepts wait for you; the tool call they were on is over.
+    fn settle(&mut self, hit: impl Fn(AgentState) -> bool) {
+        let waiting = &self.waiting;
+        let subagents = self.subagents.iter_mut();
+        let subagents = subagents
+            .filter(|s| !waiting.contains(&s.id))
+            .map(|s| (&mut s.state, &mut s.activity));
+        let own = (&mut self.state, &mut self.activity);
+        for (state, activity) in std::iter::once(own).chain(subagents) {
+            if hit(*state) {
+                *state = AgentState::WaitingYou;
+                *activity = None;
+            }
+        }
     }
 
     /// The `agent_state` message. Rule 1: the most urgent of the agent, its subagents and
@@ -281,6 +325,7 @@ impl Agent {
             state,
             urgency: state.urgency(),
             pending: state.pending() && !self.seen,
+            interrupted: self.interrupted,
             subagents: self.subagents.clone(),
             activity: self.activity.clone(),
             since_ms: self.since_ms,
@@ -297,12 +342,14 @@ impl Agent {
     }
 
     /// Applies `update`; when the displayed state changed, the agent is seen only if it just
-    /// finished (working or with subagents → waiting for you) while watched (hive.md item 5).
+    /// finished (working or with subagents → waiting for you) while watched (hive.md item 5),
+    /// or was made to wait for you `quiet`ly (an interrupt).
     /// A state that changed (the displayed one, or a subagent's) begins at `now`.
     fn changed(
         &mut self,
         id: &str,
         now: Instant,
+        quiet: bool,
         update: impl FnOnce(&mut Self),
     ) -> Option<Control> {
         let before = self.message(id);
@@ -317,7 +364,8 @@ impl Agent {
         let wall = self.wall(now);
         if shown != was {
             let busy = matches!(was, AgentState::Working | AgentState::WithSubagents);
-            self.seen = self.watched && busy && shown == AgentState::WaitingYou;
+            self.interrupted = quiet && shown == AgentState::WaitingYou;
+            self.seen = self.interrupted || self.watched && busy && shown == AgentState::WaitingYou;
             self.since_ms = wall;
         }
         for sub in &mut self.subagents {
@@ -330,10 +378,12 @@ impl Agent {
     }
 }
 
-/// Keeps the activity an event brings; the end of a turn, a session or a subagent clears it.
+/// Keeps the activity an event brings; a new prompt, the end of a turn, a session or a
+/// subagent clears it. A turn that ends with background tasks still running says how many.
 fn follow(activity: &mut Option<String>, event: &AgentEvent) {
     match event.kind {
-        EventKind::TurnFinished
+        EventKind::TurnFinished => *activity = background(&event.raw),
+        EventKind::PromptSubmitted
         | EventKind::TurnFailed { .. }
         | EventKind::SessionEnded { .. }
         | EventKind::SubagentStopped => *activity = None,
@@ -342,6 +392,32 @@ fn follow(activity: &mut Option<String>, event: &AgentEvent) {
                 *activity = Some(doing.clone());
             }
         }
+    }
+}
+
+/// "N background tasks" for the `background_tasks` a `Stop` lists, when there are any.
+fn background(raw: &Value) -> Option<String> {
+    match raw.get("background_tasks").and_then(Value::as_array)?.len() {
+        0 => None,
+        1 => Some("1 background task".to_owned()),
+        n => Some(format!("{n} background tasks")),
+    }
+}
+
+/// The three dialog states: the user has to decide.
+fn dialog(state: AgentState) -> bool {
+    matches!(
+        state,
+        AgentState::WaitingPermission | AgentState::WaitingPlan | AgentState::WaitingAnswer
+    )
+}
+
+/// The dialog a tool opens by being called: a question, or a plan to approve.
+fn asks(tool: &Option<String>) -> Option<AgentState> {
+    match tool.as_deref() {
+        Some("AskUserQuestion") => Some(AgentState::WaitingAnswer),
+        Some("ExitPlanMode") => Some(AgentState::WaitingPlan),
+        _ => None,
     }
 }
 
@@ -356,30 +432,45 @@ fn launch(raw: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The table: which state an event leads to; `None` leaves the state as it is.
-/// `PostToolUseFailure` (`ToolFailed`) is routine and means working, never error.
-fn state_of(kind: &EventKind) -> Option<AgentState> {
+/// The table: which state an event leads to from `current`; `None` leaves it as it is.
+/// `PostToolUseFailure` (`ToolFailed`) is routine and means working, never error. A question
+/// or a plan opens with its tool call, and the late `permission_prompt` reminder does not
+/// turn it into a permission.
+fn state_of(kind: &EventKind, current: AgentState) -> Option<AgentState> {
     use AgentState::*;
+    use Notification as N;
     Some(match kind {
         EventKind::SessionStarted => Idle,
+        EventKind::ToolStarted { tool } => asks(tool).unwrap_or(Working),
+        EventKind::PermissionRequested { tool } => asks(tool).unwrap_or(WaitingPermission),
         EventKind::PromptSubmitted
-        | EventKind::ToolStarted { .. }
         | EventKind::ToolFinished { .. }
         | EventKind::ToolFailed { .. }
-        | EventKind::SubagentStarted => Working,
-        EventKind::PermissionRequested { .. }
+        | EventKind::SubagentStarted
+        | EventKind::CompactStarted
         | EventKind::Notification {
-            notification: Notification::PermissionPrompt | Notification::ElicitationDialog,
+            notification: N::ElicitationComplete | N::ElicitationResponse | N::QuotaAutoResumeFired,
+        } => Working,
+        EventKind::Notification {
+            notification: N::PermissionPrompt,
+        } if current == WaitingAnswer || current == WaitingPlan => return None,
+        EventKind::Notification {
+            notification: N::PermissionPrompt,
         } => WaitingPermission,
+        EventKind::ElicitationRequested
+        | EventKind::Notification {
+            notification: N::ElicitationDialog | N::ElicitationUrlDialog | N::AgentNeedsInput,
+        } => WaitingAnswer,
         EventKind::TurnFinished
         | EventKind::Notification {
-            notification: Notification::IdlePrompt | Notification::AgentNeedsInput,
+            notification: N::IdlePrompt | N::QuotaAutoResumeStale | N::QuotaAutoResumeDisabled,
         } => WaitingYou,
         EventKind::TurnFailed { .. } => Error,
         EventKind::SessionEnded { .. } => Ended,
         EventKind::SubagentStopped
+        | EventKind::CompactFinished
         | EventKind::Notification {
-            notification: Notification::Other(_),
+            notification: N::Other(_),
         }
         | EventKind::WorktreeCreated { .. }
         | EventKind::WorktreeRemoved { .. }
@@ -447,7 +538,9 @@ mod tests {
             ("PreToolUse", Working),
             ("PostToolUse", Working),
             ("PostToolUseFailure", Working),
+            ("PreCompact", Working),
             ("PermissionRequest", WaitingPermission),
+            ("Elicitation", WaitingAnswer),
             ("Stop", WaitingYou),
             ("StopFailure", Error),
             ("SessionEnd", Ended),
@@ -457,12 +550,243 @@ mod tests {
         }
         let notifications = [
             ("permission_prompt", WaitingPermission),
-            ("elicitation_dialog", WaitingPermission),
+            ("elicitation_dialog", WaitingAnswer),
+            ("elicitation_url_dialog", WaitingAnswer),
+            ("agent_needs_input", WaitingAnswer),
+            ("elicitation_complete", Working),
+            ("elicitation_response", Working),
+            ("quota_auto_resume_fired", Working),
             ("idle_prompt", WaitingYou),
-            ("agent_needs_input", WaitingYou),
+            ("quota_auto_resume_stale", WaitingYou),
+            ("quota_auto_resume_disabled", WaitingYou),
         ];
         for (kind, state) in notifications {
             assert_eq!(after(&notification(kind)), state, "{kind}");
+        }
+    }
+
+    /// A tool call as Claude Code sends it (hooks reference), from the agent itself.
+    fn call(name: &str, tool: &str, input: serde_json::Value) -> AgentEvent {
+        let payload = json!({"tool_name": tool, "tool_input": input, "tool_use_id": "toolu_1"});
+        hook(name, None, payload)
+    }
+
+    fn question() -> serde_json::Value {
+        json!({"questions": [{"question": "Red or blue?", "header": "Colour",
+                              "options": [{"label": "red"}, {"label": "blue"}],
+                              "multiSelect": false}]})
+    }
+
+    #[test]
+    fn a_question_and_a_plan_wait_for_the_user_from_their_tool_call() {
+        let plan = json!({"plan": "1. Append \"planned\" to notes.txt"});
+        let table = [
+            ("PreToolUse", "AskUserQuestion", WaitingAnswer),
+            ("PermissionRequest", "AskUserQuestion", WaitingAnswer),
+            ("PreToolUse", "ExitPlanMode", WaitingPlan),
+            ("PermissionRequest", "ExitPlanMode", WaitingPlan),
+            ("PostToolUse", "AskUserQuestion", Working),
+            ("PostToolUse", "ExitPlanMode", Working),
+        ];
+        for (name, tool, state) in table {
+            let input = if tool == "ExitPlanMode" {
+                plan.clone()
+            } else {
+                question()
+            };
+            assert_eq!(after(&call(name, tool, input)), state, "{name} {tool}");
+        }
+        // The late reminder does not make a question or a plan a permission.
+        let now = Instant::now();
+        let dialogs = [
+            ("AskUserQuestion", WaitingAnswer, "Asking a question"),
+            ("ExitPlanMode", WaitingPlan, "Plan ready for approval"),
+        ];
+        for (tool, state, doing) in dialogs {
+            let mut agent = Agent::new(1, now, 0);
+            agent.feed("s", &call("PreToolUse", tool, question()), now);
+            let reminder = notification("permission_prompt");
+            assert_eq!(agent.feed("s", &reminder, now), None, "{tool}");
+            assert_eq!(shown(&agent).0, state);
+            assert_eq!(activities(&agent).0, Some(doing));
+            // Answered: it works again.
+            agent.feed("s", &call("PostToolUse", tool, question()), now);
+            assert_eq!(shown(&agent).0, Working);
+        }
+        // A permission already asked is asked again by the reminder, as a permission.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed(
+            "s",
+            &call("PreToolUse", "Bash", json!({"command": "rm x"})),
+            now,
+        );
+        agent.feed("s", &notification("permission_prompt"), now);
+        assert_eq!(shown(&agent).0, WaitingPermission);
+        // A subagent's question shows on its agent (most urgent wins), and its reminder too.
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        let ask = json!({"tool_name": "AskUserQuestion", "tool_input": question()});
+        agent.feed("s", &hook("PreToolUse", Some("a"), ask), now);
+        agent.feed("s", &hook("PostToolUse", None, json!({})), now);
+        let reminder = hook(
+            "Notification",
+            Some("a"),
+            json!({"notification_type": "permission_prompt"}),
+        );
+        assert_eq!(agent.feed("s", &reminder, now), None);
+        assert_eq!(
+            shown(&agent),
+            (WaitingAnswer, vec![("a".into(), WaitingAnswer)])
+        );
+    }
+
+    #[test]
+    fn the_dialogs_rank_permission_then_plan_then_answer() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed(
+            "s",
+            &hook("StopFailure", None, json!({"error": "rate_limit"})),
+            now,
+        );
+        let ask = |sub, tool| {
+            let input = json!({"tool_name": tool, "tool_input": {}});
+            hook("PermissionRequest", Some(sub), input)
+        };
+        agent.feed("s", &ask("a", "AskUserQuestion"), now);
+        assert_eq!(shown(&agent).0, WaitingAnswer);
+        agent.feed("s", &ask("b", "ExitPlanMode"), now);
+        assert_eq!(shown(&agent).0, WaitingPlan);
+        agent.feed("s", &ask("c", "Bash"), now);
+        assert_eq!(shown(&agent).0, WaitingPermission);
+        assert!(pending(&agent));
+    }
+
+    #[test]
+    fn a_compaction_works_then_gives_back_what_it_interrupted() {
+        let now = Instant::now();
+        let pre = |trigger| {
+            hook(
+                "PreCompact",
+                None,
+                json!({"trigger": trigger, "custom_instructions": ""}),
+            )
+        };
+        let post = |trigger| hook("PostCompact", None, json!({"trigger": trigger}));
+        // Mid-turn (auto): working on the same tool call afterwards.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &tool("PreToolUse", None, "Run tests"), now);
+        agent.feed("s", &pre("auto"), now);
+        assert_eq!(
+            (shown(&agent).0, activities(&agent).0),
+            (Working, Some("Compacting"))
+        );
+        // A second `PreCompact` keeps what the first one interrupted.
+        agent.feed("s", &pre("auto"), now);
+        agent.feed("s", &post("auto"), now);
+        assert_eq!(
+            (shown(&agent).0, activities(&agent).0),
+            (Working, Some("Run tests"))
+        );
+        // `/compact` after a turn: waiting for you again, without an activity.
+        agent.feed("s", &hook("Stop", None, json!({})), now);
+        agent.feed("s", &pre("manual"), now);
+        assert_eq!(shown(&agent).0, Working);
+        assert!(agent.feed("s", &post("manual"), now).is_some());
+        assert_eq!((shown(&agent).0, activities(&agent).0), (WaitingYou, None));
+        // Without its start (or after another event), its end changes nothing.
+        assert_eq!(agent.feed("s", &post("manual"), now), None);
+        agent.feed("s", &pre("manual"), now);
+        agent.feed("s", &hook("Stop", None, json!({})), now);
+        agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+        assert_eq!(agent.feed("s", &post("manual"), now), None);
+        assert_eq!(shown(&agent).0, Working);
+        // A subagent's compaction works, and its end leaves it so.
+        agent.feed(
+            "s",
+            &hook("PreCompact", Some("a"), json!({"trigger": "auto"})),
+            now,
+        );
+        agent.feed(
+            "s",
+            &hook("PostCompact", Some("a"), json!({"trigger": "auto"})),
+            now,
+        );
+        assert_eq!(shown(&agent).1, [("a".into(), Working)]);
+        assert_eq!(activities(&agent).1, [Some("Compacting")]);
+    }
+
+    #[test]
+    fn a_turn_that_leaves_background_tasks_running_says_how_many() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &tool("PreToolUse", None, "Run server"), now);
+        let tasks = |n: usize| {
+            let live: Vec<String> = (0..n).map(|i| format!("b{i}")).collect();
+            let live: Vec<&str> = live.iter().map(String::as_str).collect();
+            stop_with("Stop", None, &live)
+        };
+        agent.feed("s", &tasks(2), now);
+        assert_eq!(
+            (shown(&agent).0, activities(&agent).0),
+            (WaitingYou, Some("2 background tasks"))
+        );
+        assert!(pending(&agent));
+        agent.feed("s", &tasks(1), now);
+        assert_eq!(activities(&agent).0, Some("1 background task"));
+        // A new prompt starts afresh; a turn with none left says nothing.
+        agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+        assert_eq!(activities(&agent).0, None);
+        agent.feed("s", &tasks(3), now);
+        agent.feed("s", &tasks(0), now);
+        assert_eq!(activities(&agent).0, None);
+    }
+
+    #[test]
+    fn an_interrupt_waits_for_you_without_alerting() {
+        let now = Instant::now();
+        for event in [
+            hook("PreToolUse", None, json!({})),
+            call("PreToolUse", "AskUserQuestion", question()),
+            call("PreToolUse", "ExitPlanMode", json!({"plan": "x"})),
+            call("PermissionRequest", "Bash", json!({"command": "rm x"})),
+        ] {
+            let mut agent = Agent::new(1, now, 0);
+            agent.feed("s", &event, now);
+            assert!(agent.busy(), "{:?}", event.kind);
+            let sent = agent.interrupt("s", now + SILENCE);
+            assert_eq!(sent, Some(agent.message("s")));
+            assert_eq!((shown(&agent).0, pending(&agent)), (WaitingYou, false));
+            assert!(interrupted(&agent));
+            assert_eq!((activities(&agent).0, agent.since_ms), (None, 5_000));
+            assert!(!agent.busy());
+            // Its next change alerts as usual.
+            agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+            agent.feed("s", &hook("Stop", None, json!({})), now);
+            assert!(pending(&agent) && !interrupted(&agent));
+        }
+        // Subagents working or asking are interrupted with it; one waiting on its background
+        // task is not.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        agent.feed("s", &hook("PermissionRequest", Some("b"), json!({})), now);
+        agent.feed("s", &hook("SubagentStart", Some("c"), json!({})), now);
+        agent.feed("s", &launched("c", "taskId", "t1"), now);
+        agent.feed("s", &stop_with("SubagentStop", Some("c"), &["t1"]), now);
+        assert!(agent.busy());
+        agent.interrupt("s", now);
+        let subs = vec![
+            ("a".into(), WaitingYou),
+            ("b".into(), WaitingYou),
+            ("c".into(), Working),
+        ];
+        assert_eq!(shown(&agent), (WaitingYou, subs));
+        assert!(!pending(&agent));
+        // Nothing to interrupt: nothing changes or is sent.
+        for idle in ["SessionStart", "Stop", "StopFailure", "SessionEnd"] {
+            let mut agent = Agent::new(1, now, 0);
+            agent.feed("s", &hook(idle, None, json!({})), now);
+            assert!(!agent.busy(), "{idle}");
+            assert_eq!(agent.interrupt("s", now), None, "{idle}");
         }
     }
 
@@ -505,6 +829,7 @@ mod tests {
                 state: Working,
                 urgency: 2,
                 pending: false,
+                interrupted: false,
                 subagents: vec![],
                 activity: None,
                 since_ms: 1_005,
@@ -644,6 +969,7 @@ mod tests {
                 state: WithSubagents,
                 urgency: 3,
                 pending: false,
+                interrupted: false,
                 subagents: vec![SubagentState {
                     id: "a".into(),
                     agent_type: Some("Explore".into()),
@@ -727,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn silence_turns_working_and_waiting_permission_into_waiting_you() {
+    fn silence_turns_working_into_waiting_you() {
         let start = Instant::now();
         let at = |ms| start + Duration::from_millis(ms);
         let mut agent = Agent::new(1, start, 0);
@@ -747,26 +1073,39 @@ mod tests {
         assert_eq!(agent.reconcile("s", SILENCE, start, at(5_999)), None);
         let sent = agent.reconcile("s", SILENCE, at(2_000), at(7_000));
         assert_eq!(sent, Some(agent.message("s")));
-        let all_waiting = ["a", "b", "c"]
-            .map(|id| (id.to_owned(), WaitingYou))
-            .to_vec();
-        assert_eq!(shown(&agent), (WaitingYou, all_waiting));
+        // A dialog stays: it is static on screen.
+        let subs = vec![
+            ("a".to_owned(), WaitingYou),
+            ("b".to_owned(), WaitingPermission),
+            ("c".to_owned(), WaitingYou),
+        ];
+        assert_eq!(shown(&agent), (WaitingPermission, subs));
         // Nothing left to change; output alone does not move it back.
         assert_eq!(agent.reconcile("s", SILENCE, at(7_000), at(20_000)), None);
-        assert_eq!(shown(&agent).0, WaitingYou);
+        assert_eq!(shown(&agent).0, WaitingPermission);
+        assert_eq!(activities(&agent).0, None);
     }
 
     #[test]
     fn silence_leaves_other_states_alone() {
         let start = Instant::now();
         let late = start + SILENCE * 2;
-        for (name, state) in [
-            ("SessionStart", Idle),
-            ("StopFailure", Error),
-            ("SessionEnd", Ended),
+        let tool = |name: &str| json!({"tool_name": name});
+        for (name, extra, state) in [
+            ("SessionStart", json!({}), Idle),
+            ("StopFailure", json!({}), Error),
+            ("SessionEnd", json!({}), Ended),
+            ("PermissionRequest", tool("Bash"), WaitingPermission),
+            ("PreToolUse", tool("AskUserQuestion"), WaitingAnswer),
+            ("PreToolUse", tool("ExitPlanMode"), WaitingPlan),
+            (
+                "Elicitation",
+                json!({"mcp_server_name": "db"}),
+                WaitingAnswer,
+            ),
         ] {
             let mut agent = Agent::new(1, start, 0);
-            agent.feed("s", &hook(name, None, json!({})), start);
+            agent.feed("s", &hook(name, None, extra), start);
             assert_eq!(agent.reconcile("s", SILENCE, start, late), None, "{name}");
             assert_eq!(shown(&agent).0, state);
         }
@@ -774,6 +1113,16 @@ mod tests {
         let mut agent = Agent::new(1, start, 0);
         agent.feed("s", &hook("PreToolUse", None, json!({})), start);
         assert_eq!(agent.reconcile("s", SILENCE, late, start), None);
+    }
+
+    fn interrupted(agent: &Agent) -> bool {
+        matches!(
+            agent.message("s"),
+            Control::AgentState {
+                interrupted: true,
+                ..
+            }
+        )
     }
 
     fn pending(agent: &Agent) -> bool {

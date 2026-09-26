@@ -35,6 +35,9 @@ impl Adapter for ClaudeCode {
             },
             "SubagentStart" => EventKind::SubagentStarted,
             "SubagentStop" => EventKind::SubagentStopped,
+            "PreCompact" => EventKind::CompactStarted,
+            "PostCompact" => EventKind::CompactFinished,
+            "Elicitation" => EventKind::ElicitationRequested,
             "SessionEnd" => EventKind::SessionEnded {
                 reason: field("reason"),
             },
@@ -54,6 +57,7 @@ impl Adapter for ClaudeCode {
         let activity = match &kind {
             EventKind::ToolStarted { tool: Some(tool) }
             | EventKind::PermissionRequested { tool: Some(tool) } => Some(activity(tool, &payload)),
+            EventKind::CompactStarted => Some("Compacting".to_owned()),
             _ => None,
         };
         AgentEvent {
@@ -100,6 +104,8 @@ fn activity(tool: &str, payload: &Value) -> String {
             .map(str::to_owned),
         "Grep" | "Glob" => input("pattern").map(|p| format!("Searching {p}")),
         "Agent" | "Task" => input("description").map(str::to_owned),
+        "AskUserQuestion" => Some("Asking a question".to_owned()),
+        "ExitPlanMode" => Some("Plan ready for approval".to_owned()),
         _ => None,
     };
     clip(&text.unwrap_or_else(|| tool.to_owned()), MAX_ACTIVITY)
@@ -129,8 +135,14 @@ fn notification(kind: String) -> Notification {
     match kind.as_str() {
         "permission_prompt" => Notification::PermissionPrompt,
         "elicitation_dialog" => Notification::ElicitationDialog,
+        "elicitation_url_dialog" => Notification::ElicitationUrlDialog,
+        "elicitation_complete" => Notification::ElicitationComplete,
+        "elicitation_response" => Notification::ElicitationResponse,
         "idle_prompt" => Notification::IdlePrompt,
         "agent_needs_input" => Notification::AgentNeedsInput,
+        "quota_auto_resume_fired" => Notification::QuotaAutoResumeFired,
+        "quota_auto_resume_stale" => Notification::QuotaAutoResumeStale,
+        "quota_auto_resume_disabled" => Notification::QuotaAutoResumeDisabled,
         _ => Notification::Other(kind),
     }
 }
@@ -333,6 +345,28 @@ mod tests {
         );
         assert_eq!(kind("Stop", json!({})), EventKind::TurnFinished);
         assert_eq!(kind("SubagentStop", json!({})), EventKind::SubagentStopped);
+        let compact =
+            json!({"session_id": "s", "hook_event_name": "PreCompact", "trigger": "auto"});
+        let started = ClaudeCode.translate("PreCompact", None, compact);
+        assert_eq!(started.kind, EventKind::CompactStarted);
+        assert_eq!(started.activity.as_deref(), Some("Compacting"));
+        let finished = ClaudeCode.translate("PostCompact", None, json!({"trigger": "manual"}));
+        assert_eq!(finished.kind, EventKind::CompactFinished);
+        assert_eq!(finished.activity, None);
+        let form = json!({"mcp_server_name": "db", "mode": "form", "message": "Name?"});
+        assert_eq!(kind("Elicitation", form), EventKind::ElicitationRequested);
+    }
+
+    #[test]
+    fn questions_and_plans_say_what_they_wait_for() {
+        let question = json!({"questions": [{"question": "Red or blue?", "options": []}]});
+        assert_eq!(doing("AskUserQuestion", question), "Asking a question");
+        let plan = json!({"plan": "1. Append \"planned\"."});
+        assert_eq!(doing("ExitPlanMode", plan), "Plan ready for approval");
+        assert_eq!(
+            activity_of("PermissionRequest", "ExitPlanMode", json!({})).as_deref(),
+            Some("Plan ready for approval")
+        );
     }
 
     #[test]
@@ -386,6 +420,21 @@ mod tests {
         n("elicitation_dialog", Notification::ElicitationDialog);
         n("idle_prompt", Notification::IdlePrompt);
         n("agent_needs_input", Notification::AgentNeedsInput);
+        n("elicitation_url_dialog", Notification::ElicitationUrlDialog);
+        n("elicitation_complete", Notification::ElicitationComplete);
+        n("elicitation_response", Notification::ElicitationResponse);
+        n(
+            "quota_auto_resume_fired",
+            Notification::QuotaAutoResumeFired,
+        );
+        n(
+            "quota_auto_resume_stale",
+            Notification::QuotaAutoResumeStale,
+        );
+        n(
+            "quota_auto_resume_disabled",
+            Notification::QuotaAutoResumeDisabled,
+        );
         n("auth_success", Notification::Other("auth_success".into()));
     }
 
