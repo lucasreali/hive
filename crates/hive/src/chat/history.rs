@@ -126,6 +126,8 @@ mod tests {
         big[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
         let big = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, big);
         let over = format!("{big}AAAA");
+        // Two halves fill a turn's 3 MiB exactly.
+        let half = &big[..big.len() / 2];
         let block = |data: &str| json!({"type": "image", "source": {"data": data}});
         let records = lines(&[
             json!({"type": "user", "message": {"content": [
@@ -136,6 +138,7 @@ mod tests {
             // Within a turn's caps: 3 MiB of images together, at most 10.
             json!({"type": "user", "message": {"content": [block(&big), block(png)]}}),
             json!({"type": "user", "message": {"content": vec![block(png); 11]}}),
+            json!({"type": "user", "message": {"content": [block(half), block(half)]}}),
         ]);
         let out = stream.history(&records, false);
         let shown: Vec<_> = entries(&out)
@@ -155,6 +158,11 @@ mod tests {
                 (2, String::new(), vec![largest.clone()]),
                 (3, String::new(), vec![largest]),
                 (4, String::new(), vec![png; 10]),
+                (
+                    5,
+                    String::new(),
+                    vec![("image/png".to_owned(), half.len()); 2]
+                ),
             ]
         );
         // The largest resumed user entry (control characters grow six times in JSON) fits
