@@ -1053,7 +1053,8 @@ button:disabled {
   background: var(--state-error);
 }
 
-.connection-state {
+.connection-state,
+.app-version {
   color: var(--text-3);
 }
 
