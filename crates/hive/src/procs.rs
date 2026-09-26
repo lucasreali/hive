@@ -120,7 +120,14 @@ pub fn claude_sessions(source: Source, records: Option<&Path>) -> HashSet<String
 
 /// The session in Claude's record of process `pid`, when the record is that process's.
 fn recorded(dir: &Path, pid: i32) -> Option<String> {
-    let file = File::open(dir.join(format!("{pid}.json"))).ok()?;
+    let path = dir.join(format!("{pid}.json"));
+    // Checked before opening: opening a FIFO would block the service until a writer came.
+    // A swap between the check and the open needs write access to Claude's folder (the
+    // same user).
+    if !path.symlink_metadata().ok()?.is_file() {
+        return None;
+    }
+    let file = File::open(path).ok()?;
     let bytes = crate::git::read_limited(&mut &file, READ_LIMIT).ok()?;
     let record: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     if record["pid"].as_i64() != Some(pid.into()) {
@@ -309,6 +316,10 @@ mod tests {
         );
         // Forking starts a new session: the resumed one is not running.
         args(24, &["claude", "--resume", &id(96), "--fork-session"]);
+        // A record that is no file (a FIFO would block) is passed over.
+        let fifo = records.path().join("25.json");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.unwrap().success());
         // A named session is kept even when forking.
         args(
             25,
