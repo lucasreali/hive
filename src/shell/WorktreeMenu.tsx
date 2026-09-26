@@ -1,4 +1,14 @@
 import {
+  BroomIcon,
+  CopyIcon,
+  FolderOpenIcon,
+  PencilSimpleIcon,
+  PlayIcon,
+  PlusIcon,
+  TerminalWindowIcon,
+  TrashIcon,
+} from "@phosphor-icons/react";
+import {
   type KeyboardEvent,
   type ReactNode,
   useEffect,
@@ -20,7 +30,7 @@ import {
 import { openTerminal, openWith } from "../terminals";
 import { transport } from "../transport";
 import { isMac, keyText } from "../window";
-import { CloseIcon } from "./icons";
+import { CloseIcon, ICON } from "./icons";
 
 const closeMenu = () => openMenu(null);
 const close = () => openModal(null);
@@ -117,6 +127,7 @@ export function WorktreeMenu() {
   return (
     <ContextMenu at={menu} label={`Worktree ${w.name}`} onClose={closeMenu}>
       <button type="button" role="menuitem" onClick={act(() => void openTerminal(w.path))}>
+        <TerminalWindowIcon {...ICON} />
         New terminal here
       </button>
       {runs.map((run) => (
@@ -127,10 +138,12 @@ export function WorktreeMenu() {
           title={run.command}
           onClick={act(() => void openWith(w.path, run.command))}
         >
+          <PlayIcon {...ICON} />
           Run: {run.name}
         </button>
       ))}
       <button type="button" role="menuitem" onClick={act(copy)}>
+        <CopyIcon {...ICON} />
         Copy path
       </button>
       <button
@@ -138,6 +151,7 @@ export function WorktreeMenu() {
         role="menuitem"
         onClick={act(() => void transport.openInEditor(w.path, ""))}
       >
+        <FolderOpenIcon {...ICON} />
         {isMac() ? "Reveal in Finder" : "Open in Explorer"}
       </button>
       <hr />
@@ -148,6 +162,7 @@ export function WorktreeMenu() {
         title={renameWhy}
         onClick={act(() => openModal("rename-worktree", null, w.id))}
       >
+        <PencilSimpleIcon {...ICON} />
         Rename…
       </button>
       <button
@@ -158,6 +173,7 @@ export function WorktreeMenu() {
         title={w.main ? "The main worktree cannot be deleted" : undefined}
         onClick={act(() => openModal("remove-worktree", null, w.id))}
       >
+        <TrashIcon {...ICON} />
         Delete…
       </button>
     </ContextMenu>
@@ -177,9 +193,11 @@ export function ProjectMenu() {
   return (
     <ContextMenu at={menu} label="Project" onClose={closeProjectMenu}>
       <button type="button" role="menuitem" onClick={dialog("new-worktree")}>
+        <PlusIcon {...ICON} />
         New worktree… <kbd>{keyText("Ctrl+Shift+N")}</kbd>
       </button>
       <button type="button" role="menuitem" onClick={dialog("remove-merged")}>
+        <BroomIcon {...ICON} />
         Remove merged worktrees…
       </button>
     </ContextMenu>

@@ -1,4 +1,4 @@
-import { TerminalWindowIcon } from "@phosphor-icons/react";
+import { SquareSplitHorizontalIcon, TerminalWindowIcon, XIcon } from "@phosphor-icons/react";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -37,6 +37,7 @@ import {
   AddFolderIcon,
   CloseIcon,
   FileIcon,
+  ICON,
   PanelIcon,
   PlusIcon,
   StateIcon,
@@ -219,9 +220,11 @@ function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
       <button type="button" role="menuitem" onClick={act(() => void splitTerminal(menu.tab))}>
+        <SquareSplitHorizontalIcon {...ICON} />
         {split ? "Unsplit" : "Split right"}
       </button>
       <button type="button" role="menuitem" onClick={act(() => closeTerminal(menu.tab))}>
+        <XIcon {...ICON} />
         Close terminal
       </button>
     </ContextMenu>
