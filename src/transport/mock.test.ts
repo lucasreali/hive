@@ -615,7 +615,8 @@ test("files are moved and folders created as the service does, never over anothe
   await transport.createFolder(w, "empty", "inner");
   await transport.moveFile(w, "README.md", "empty");
   await tick();
-  const renamed = (path: string, to: string) => ({ type: "file_renamed", worktree: w, path, to });
+  const renamed = (path: string, to: string) =>
+    ({ type: "file_renamed", worktree: w, path, to }) as const;
   expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
     { type: "folder_created", worktree: w, path: "empty" },
     { type: "folder_created", worktree: w, path: "empty/inner" },
@@ -629,7 +630,7 @@ test("files are moved and folders created as the service does, never over anothe
   await transport.createFolder(w, "", "src");
   await transport.moveFile(w, "gone.ts", "empty");
   await tick();
-  const failed = (message: string) => ({ type: "file_op_failed", worktree: w, message });
+  const failed = (message: string) => ({ type: "file_op_failed", worktree: w, message }) as const;
   expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
     renamed("empty/README.md", "README.md"),
     renamed("README.md", "README.md"),

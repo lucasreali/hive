@@ -169,6 +169,17 @@ function onContextMenu(event: MouseEvent): void {
 }
 
 /**
+ * A drag that nothing on the way took (a file or a link from outside, anywhere but the Files
+ * tree or the chat): its drop would make the WebView open it in place of the app. Refused, and
+ * shown as not droppable.
+ */
+function onUnhandledDrag(event: DragEvent): void {
+  if (event.defaultPrevented) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+}
+
+/**
  * Listens on the window, where every key ends up, including a terminal's: the terminal only
  * lets shortcuts through (xterm leaves them unhandled, so they bubble up) and the window runs
  * them, once. Returns the cleanup.
@@ -177,9 +188,13 @@ export function installShortcuts(): () => void {
   interceptKeys((event) => shortcut(event) !== null);
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("contextmenu", onContextMenu);
+  window.addEventListener("dragover", onUnhandledDrag);
+  window.addEventListener("drop", onUnhandledDrag);
   return () => {
     interceptKeys(() => false);
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("contextmenu", onContextMenu);
+    window.removeEventListener("dragover", onUnhandledDrag);
+    window.removeEventListener("drop", onUnhandledDrag);
   };
 }

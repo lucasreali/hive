@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, waitFor } from "@testing-library/react";
 import { asMac } from "../test/mac";
 import { App } from "./App";
 import { nextPending, shortcut } from "./shortcuts";
@@ -320,6 +320,26 @@ test("the WebView's context menu is off except in text fields and the editor", (
   // Uninstalled with the app.
   cleanup();
   expect(menu(document.body)).toBe(true);
+});
+
+test("a drop nothing takes never reaches the WebView, which would open it in place of the app", () => {
+  app();
+  const taken = document.body.appendChild(document.createElement("div"));
+  taken.addEventListener("drop", (e) => e.preventDefault());
+  // fireEvent returns false when the default was prevented.
+  expect(fireEvent.dragOver(document.body)).toBe(false);
+  expect(fireEvent.drop(document.body)).toBe(false);
+  const dataTransfer = { dropEffect: "copy" };
+  const over = createEvent.dragOver(document.body, { dataTransfer }) as DragEvent;
+  fireEvent(document.body, over);
+  expect(over.dataTransfer?.dropEffect).toBe("none");
+  // One taken on the way keeps its own drop effect.
+  const drop = createEvent.drop(taken, { dataTransfer }) as DragEvent;
+  fireEvent(taken, drop);
+  expect([drop.defaultPrevented, drop.dataTransfer?.dropEffect]).toEqual([true, "copy"]);
+  taken.remove();
+  cleanup();
+  expect(fireEvent.drop(document.body)).toBe(true);
 });
 
 test("Ctrl+Shift+D splits the active terminal and pressed again un-splits", async () => {

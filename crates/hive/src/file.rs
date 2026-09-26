@@ -187,12 +187,23 @@ fn taken(name: &str) -> impl FnOnce(io::Error) -> io::Error {
     }
 }
 
-/// `folder` of the worktree at `dir` (empty: its root, `root`), resolved inside it.
+/// `folder` of the worktree at `dir` (empty: its root, `root`), resolved inside it and not in
+/// its `.git`.
 fn folder_in(dir: &Path, root: &Path, folder: &str) -> io::Result<PathBuf> {
     match folder {
         "" => Ok(root.to_path_buf()),
-        folder => inside(dir, &dir.join(relative(folder)?)),
+        folder => not_git(root, inside(dir, &dir.join(relative(folder)?))?),
     }
+}
+
+/// `folder` (resolved, inside `root`), unless it is in the repository's `.git`: a file moved
+/// there could become a hook, one moved out breaks the repository.
+fn not_git(root: &Path, folder: PathBuf) -> io::Result<PathBuf> {
+    let rel = folder.strip_prefix(root).unwrap_or(&folder);
+    if rel.components().any(|c| c.as_os_str() == ".git") {
+        return Err(io::Error::other("Hive does not change what is inside .git"));
+    }
+    Ok(folder)
 }
 
 /// Creates the empty file `name` in `folder` of the worktree at `dir` (empty: its root), never
@@ -228,13 +239,13 @@ pub fn create_folder(dir: &Path, folder: &str, name: &str) -> io::Result<String>
     Ok(relative_to(&root, &path))
 }
 
-/// The regular file `path` of the worktree at `dir` (the entry itself, not what a symlink
-/// points to), in its folder resolved inside `dir`.
-fn source(dir: &Path, path: &str) -> io::Result<PathBuf> {
+/// The regular file `path` of the worktree at `dir` (resolved: `root`; the entry itself, not
+/// what a symlink points to), in its folder resolved inside `dir` and not in its `.git`.
+fn source(dir: &Path, root: &Path, path: &str) -> io::Result<PathBuf> {
     let rel = relative(path)?;
     // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
     let joined = dir.join(rel);
-    let parent = inside(dir, joined.parent().unwrap_or(dir))?;
+    let parent = not_git(root, inside(dir, joined.parent().unwrap_or(dir))?)?;
     let from = parent.join(joined.file_name().unwrap_or_default());
     if !from.symlink_metadata()?.is_file() {
         return Err(io::Error::other(format!("{path} is not a regular file")));
@@ -257,7 +268,7 @@ pub fn rename_with(
 ) -> io::Result<String> {
     let name = file_name(name)?;
     let root = dir.canonicalize()?;
-    let from = source(dir, path)?;
+    let from = source(dir, &root, path)?;
     relink(&root, &from, &from.with_file_name(name), unlink)
 }
 
@@ -276,7 +287,7 @@ pub fn move_with(
     unlink: &dyn Fn(&Path) -> io::Result<()>,
 ) -> io::Result<String> {
     let root = dir.canonicalize()?;
-    let from = source(dir, path)?;
+    let from = source(dir, &root, path)?;
     let to = folder_in(dir, &root, folder)?.join(from.file_name().unwrap_or_default());
     if to == from {
         return Ok(relative_to(&root, &from));
@@ -288,7 +299,10 @@ pub fn move_with(
 /// `rename(2)` would replace it), then `from` removed; when that fails, the new link goes
 /// again. Returns `to` relative to `root`.
 // ponytail: both names exist for a moment, and a file system without hard links refuses;
-// `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)` if either matters.
+// the folders are checked, then used by path, so a process of the same user that swaps one
+// for a symlink in between can make it act outside the worktree. `openat(O_NOFOLLOW)` +
+// `linkat`/`unlinkat` (or `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)`) if either
+// matters.
 fn relink(
     root: &Path,
     from: &Path,
@@ -1012,6 +1026,35 @@ mod tests {
         std::os::unix::fs::symlink("real", dir.path().join("alias")).unwrap();
         assert_eq!(move_to(dir.path(), "a", "alias").unwrap(), "real/a");
         assert_eq!(move_to(dir.path(), "alias/a", "real").unwrap(), "real/a");
+    }
+
+    #[test]
+    fn nothing_is_created_or_moved_inside_git() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/hooks")).unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("pre-commit"), "x").unwrap();
+        std::fs::write(dir.path().join(".git/config"), "c").unwrap();
+        std::os::unix::fs::symlink(".git/hooks", dir.path().join("hooks")).unwrap();
+        let refused = "Hive does not change what is inside .git";
+        let err = |r: io::Result<String>| r.unwrap_err().to_string();
+        assert_eq!(
+            err(move_to(dir.path(), "pre-commit", ".git/hooks")),
+            refused
+        );
+        assert_eq!(err(move_to(dir.path(), "pre-commit", "hooks")), refused);
+        assert_eq!(err(move_to(dir.path(), ".git/config", "src")), refused);
+        assert_eq!(err(rename(dir.path(), ".git/config", "x")), refused);
+        assert_eq!(err(create(dir.path(), ".git", "x")), refused);
+        assert_eq!(err(create_folder(dir.path(), "hooks", "x")), refused);
+        assert!(!dir.path().join(".git/hooks/pre-commit").exists());
+        assert!(dir.path().join(".git/config").exists());
+        // A name that only starts like it is not `.git`.
+        std::fs::create_dir(dir.path().join(".github")).unwrap();
+        assert_eq!(
+            move_to(dir.path(), "pre-commit", ".github").unwrap(),
+            ".github/pre-commit"
+        );
     }
 
     #[test]
