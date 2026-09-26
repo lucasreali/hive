@@ -5,7 +5,7 @@
 //! plus a `channel` field. Terminal output goes, as raw bytes, to the `Channel` given for that
 //! terminal by `open_terminal`. No Tauri events are used.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;
@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    Control, Frame, FrameCodec, FrameError, FrameType, Role, SessionTarget, Settings, SpaceEnv,
-    MAX_PAYLOAD, PROTOCOL_VERSION,
+    ChatAnswer, ChatImage, ChatMode, Control, Frame, FrameCodec, FrameError, FrameType, Role,
+    SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -114,6 +114,8 @@ struct Link {
     welcome: Option<Value>,
     /// Output channel of every open terminal, by frame channel.
     terminals: HashMap<u32, Channel<InvokeResponseBody>>,
+    /// Every open chat (7.3), by frame channel; chats share the terminals' channels.
+    chats: HashSet<u32>,
     last_channel: u32,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
@@ -142,6 +144,17 @@ impl Link {
 
     fn send(&self, channel: u32, message: &Control) -> Result<(), String> {
         self.frame(Frame::control(channel, message))
+    }
+
+    /// Sends `message` on a new channel and returns it.
+    fn open(&mut self, message: &Control) -> Result<u32, String> {
+        let id = self
+            .last_channel
+            .checked_add(1)
+            .ok_or("no terminal channel left")?;
+        self.send(id, message)?;
+        self.last_channel = id;
+        Ok(id)
     }
 }
 
@@ -195,6 +208,9 @@ impl Hive {
         link.ui = Some(ui);
         for id in std::mem::take(&mut link.terminals).into_keys() {
             let _ = link.send(id, &Control::CloseTerminal);
+        }
+        for chat in std::mem::take(&mut link.chats) {
+            let _ = link.send(chat, &Control::CloseChat { chat });
         }
         if link.frames.is_some() {
             if let Some(welcome) = link.welcome.clone() {
@@ -303,12 +319,7 @@ impl Hive {
         output: Channel<InvokeResponseBody>,
     ) -> Result<u32, String> {
         let mut link = self.link();
-        let id = link
-            .last_channel
-            .checked_add(1)
-            .ok_or("no terminal channel left")?;
-        link.send(id, &Control::OpenTerminal { cwd, cols, rows })?;
-        link.last_channel = id;
+        let id = link.open(&Control::OpenTerminal { cwd, cols, rows })?;
         link.terminals.insert(id, output);
         Ok(id)
     }
@@ -521,6 +532,67 @@ impl Hive {
     pub fn get_diagnostics(&self) -> Result<(), String> {
         self.link().send(0, &Control::GetDiagnostics)
     }
+
+    /// Opens a chat (7.3) on a new channel, which is its id; answered on that channel by
+    /// `chat_opened` (maybe after `confirm_chat_folder`) or `chat_closed`.
+    pub fn open_chat(
+        &self,
+        cwd: String,
+        resume: Option<String>,
+        mode: Option<ChatMode>,
+    ) -> Result<u32, String> {
+        let mut link = self.link();
+        let id = link.open(&Control::OpenChat { cwd, resume, mode })?;
+        link.chats.insert(id);
+        Ok(id)
+    }
+
+    pub fn chat_send(&self, chat: u32, text: String, images: Vec<ChatImage>) -> Result<(), String> {
+        let send = Control::ChatSend { chat, text, images };
+        self.link().send(chat, &send)
+    }
+
+    pub fn chat_answer(
+        &self,
+        chat: u32,
+        request: String,
+        answer: ChatAnswer,
+    ) -> Result<(), String> {
+        let answer = Control::ChatAnswer {
+            chat,
+            request,
+            answer,
+        };
+        self.link().send(chat, &answer)
+    }
+
+    pub fn chat_interrupt(&self, chat: u32) -> Result<(), String> {
+        self.link().send(chat, &Control::ChatInterrupt { chat })
+    }
+
+    pub fn chat_set_mode(&self, chat: u32, mode: ChatMode) -> Result<(), String> {
+        self.link().send(chat, &Control::ChatSetMode { chat, mode })
+    }
+
+    /// Answered by `chat_closed`.
+    pub fn close_chat(&self, chat: u32) -> Result<(), String> {
+        self.link().send(chat, &Control::CloseChat { chat })
+    }
+
+    /// The human's answer to `confirm_chat_folder`.
+    pub fn confirm_chat_folder(
+        &self,
+        chat: u32,
+        cwd: String,
+        accepted: bool,
+    ) -> Result<(), String> {
+        let confirm = Control::ConfirmChatFolder {
+            chat,
+            cwd,
+            accepted: Some(accepted),
+        };
+        self.link().send(chat, &confirm)
+    }
 }
 
 impl Hive {
@@ -598,8 +670,11 @@ async fn pump<R: AsyncRead + Unpin>(
             Ok(message) => message,
             Err(error) => return End::Broken(error.to_string()),
         };
-        // Messages for a terminal this UI did not open (e.g. one closed by a reload) are dropped.
-        if frame.channel != 0 && !link.terminals.contains_key(&frame.channel) {
+        // Messages for a terminal or chat this UI did not open (e.g. one closed by a reload)
+        // are dropped.
+        let open =
+            link.terminals.contains_key(&frame.channel) || link.chats.contains(&frame.channel);
+        if frame.channel != 0 && !open {
             continue;
         }
         let mut value = serde_json::to_value(&message).unwrap_or_default();
@@ -619,6 +694,7 @@ async fn pump<R: AsyncRead + Unpin>(
                 return End::Refused;
             }
             Control::TerminalExited { .. } => drop(link.terminals.remove(&frame.channel)),
+            Control::ChatClosed { .. } => drop(link.chats.remove(&frame.channel)),
             _ => {}
         }
         link.to_ui(value);
@@ -626,12 +702,16 @@ async fn pump<R: AsyncRead + Unpin>(
     End::Closed
 }
 
-/// Ends the connection: every open terminal exits, then the UI gets `disconnected`.
+/// Ends the connection: every open terminal exits and every chat closes, then the UI gets
+/// `disconnected`.
 fn disconnected(link: &mut Link, reason: String) {
     link.frames = None;
     link.welcome = None;
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
+    }
+    for chat in std::mem::take(&mut link.chats) {
+        link.to_ui(json!({"type": "chat_closed", "channel": chat, "chat": chat, "error": null}));
     }
     link.to_ui(json!({"type": "disconnected", "reason": reason}));
 }
@@ -919,6 +999,61 @@ pub mod commands {
     #[tauri::command]
     pub fn get_diagnostics(hive: State<'_, Hive>) -> Result<(), String> {
         hive.get_diagnostics()
+    }
+
+    #[tauri::command]
+    pub fn open_chat(
+        hive: State<'_, Hive>,
+        cwd: String,
+        resume: Option<String>,
+        mode: Option<ChatMode>,
+    ) -> Result<u32, String> {
+        hive.open_chat(cwd, resume, mode)
+    }
+
+    #[tauri::command]
+    pub fn chat_send(
+        hive: State<'_, Hive>,
+        chat: u32,
+        text: String,
+        images: Vec<ChatImage>,
+    ) -> Result<(), String> {
+        hive.chat_send(chat, text, images)
+    }
+
+    #[tauri::command]
+    pub fn chat_answer(
+        hive: State<'_, Hive>,
+        chat: u32,
+        request: String,
+        answer: ChatAnswer,
+    ) -> Result<(), String> {
+        hive.chat_answer(chat, request, answer)
+    }
+
+    #[tauri::command]
+    pub fn chat_interrupt(hive: State<'_, Hive>, chat: u32) -> Result<(), String> {
+        hive.chat_interrupt(chat)
+    }
+
+    #[tauri::command]
+    pub fn chat_set_mode(hive: State<'_, Hive>, chat: u32, mode: ChatMode) -> Result<(), String> {
+        hive.chat_set_mode(chat, mode)
+    }
+
+    #[tauri::command]
+    pub fn close_chat(hive: State<'_, Hive>, chat: u32) -> Result<(), String> {
+        hive.close_chat(chat)
+    }
+
+    #[tauri::command]
+    pub fn confirm_chat_folder(
+        hive: State<'_, Hive>,
+        chat: u32,
+        cwd: String,
+        accepted: bool,
+    ) -> Result<(), String> {
+        hive.confirm_chat_folder(chat, cwd, accepted)
     }
 }
 

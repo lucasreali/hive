@@ -97,6 +97,22 @@ export type ServiceMessage =
       subagent: string;
       entries: TranscriptEntry[];
     }
+  // The chat (7.3), on the chat's channel (`chat` is that channel).
+  | ({ type: "chat_opened"; channel: number } & ChatOpened)
+  | {
+      type: "chat_entries";
+      channel: number;
+      chat: number;
+      entries: ChatEntry[];
+      replace_last: boolean;
+    }
+  | { type: "chat_request"; channel: number; chat: number; request: ChatRequest }
+  | { type: "chat_request_gone"; channel: number; chat: number; request: string }
+  | ({ type: "chat_status"; channel: number } & ChatStatus)
+  // Also sent by the app side (Rust) for every open chat when the bridge exits.
+  | { type: "chat_closed"; channel: number; chat: number; error: string | null }
+  // The first chat in a project waits for the human's answer (`confirmChatFolder`).
+  | { type: "confirm_chat_folder"; channel: number; chat: number; cwd: string }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -296,6 +312,80 @@ export type SubagentRef = { agent: string; subagent: string };
 export type Transcript = SubagentRef & { entries: TranscriptEntry[]; truncated: boolean };
 /** Entries kept of a followed conversation; older ones are dropped. */
 export const TRANSCRIPT_LIMIT = 1000;
+
+/** Mirrors `hive_protocol::ChatMode`; `bypassPermissions` is never offered. */
+export type ChatMode = "default" | "accept_edits" | "plan";
+/** Mirrors `hive_protocol::ChatImage`: `data` is base64. */
+export type ChatImage = { media_type: string; data: string };
+export type ChatEntryKind =
+  | "user"
+  | "assistant"
+  | "thinking"
+  | "tool"
+  | "error"
+  | "note"
+  | "divider"
+  | "usage";
+export type ToolStatus = "running" | "ok" | "error";
+/**
+ * Mirrors `hive_protocol::ChatEntry`: one row of a chat. An entry with a known `id` replaces
+ * that one (a tool's result); `parent` is the `Agent` call a subagent's entry belongs to.
+ */
+export type ChatEntry = {
+  id: number;
+  kind: ChatEntryKind;
+  text: string;
+  tool: string | null;
+  parent: string | null;
+  status: ToolStatus | null;
+  output: string | null;
+  image: ChatImage | null;
+};
+/** Mirrors `hive_protocol::ChatQuestion`: one question of an `AskUserQuestion`. */
+export type ChatQuestion = {
+  question: string;
+  header: string;
+  multi: boolean;
+  options: { label: string; description: string }[];
+};
+/** Mirrors `hive_protocol::ChatRequest`: a permission, question or plan waiting on the human. */
+export type ChatRequest = {
+  id: string;
+  kind: "permission" | "question" | "plan";
+  tool: string;
+  /** The full command, path or input JSON. */
+  detail: string;
+  reason: string | null;
+  questions: ChatQuestion[];
+  plan: string | null;
+};
+/** Mirrors `hive_protocol::ChatAnswer`; `answers` has, per question, labels or one free text. */
+export type ChatAnswer =
+  | { kind: "allow" }
+  | { kind: "deny"; message: string | null }
+  | { kind: "answers"; answers: string[][] }
+  | { kind: "approve_plan"; accept_edits: boolean }
+  | { kind: "keep_planning"; feedback: string };
+export type ChatOpened = {
+  chat: number;
+  cwd: string;
+  session: string | null;
+  model: string | null;
+  mode: ChatMode;
+  commands: string[];
+  /** Set when the chat runs on an API key rather than the subscription login. */
+  api_key_source: string | null;
+};
+export type ChatStatus = {
+  chat: number;
+  busy: boolean;
+  mode: ChatMode;
+  model: string | null;
+  /** A transient API retry, e.g. "Retrying 2/10…". */
+  retry: string | null;
+  compacting: boolean;
+  session: string | null;
+};
 
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
