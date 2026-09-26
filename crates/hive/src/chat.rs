@@ -801,10 +801,8 @@ impl Stream {
             self.mode = mode;
         }
         // "none" is the subscription login (#45); anything else is an API key.
-        let source = message["apiKeySource"]
-            .as_str()
-            .filter(|s| !s.is_empty() && *s != "none");
-        self.api_key_source = source.map(|s| clip(s, MAX_ID));
+        let source = message["apiKeySource"].as_str().map(|s| clip(s, MAX_ID));
+        self.api_key_source = source.filter(|s| !s.is_empty() && s != "none");
         let capabilities = blocks(&message["capabilities"]);
         self.cancel_queued = capabilities.contains(&json!("interrupt_cancel_queued_v1"));
     }

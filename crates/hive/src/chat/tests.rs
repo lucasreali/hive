@@ -1214,6 +1214,9 @@ fn an_api_key_shows_in_the_status_and_the_subscription_does_not() {
     let managed = source(json!("/login managed key"));
     assert_eq!(managed.as_deref(), Some("/login managed key"));
     assert_eq!(source(json!("")), None);
+    // Judged as shown: blanks and invisible characters around "none" do not make it a key.
+    assert_eq!(source(json!(" none\u{200b} ")), None);
+    assert_eq!(source(json!("\u{200b}")), None);
     let long = source(json!("k".repeat(MAX_ID + 50)));
     assert_eq!(long.map(|s| s.chars().count()), Some(MAX_ID));
     assert_eq!(source(json!(null)), None);
