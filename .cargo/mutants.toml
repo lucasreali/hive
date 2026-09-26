@@ -1,7 +1,8 @@
 # Files excluded from mutation testing; each one is listed with its reason in COVERAGE_EXCLUSIONS.md.
 exclude_globs = ["src-tauri/src/main.rs", "crates/hive/src/macos.rs"]
-# A mutant that drops the app's requests fails dozens of integration tests, each only after
-# waiting `common::TIMEOUT` (10 s) for a reply. libtest runs one test per CPU (2-4 on CI
-# runners), so those idle waits queued past `--timeout` (daemon.rs `app_frame`, run
-# 36197856481). More threads let them overlap: the mutant is caught in time, not timed out.
-additional_cargo_test_args = ["--", "--test-threads=16"]
+# Build with `[profile.mutants]` (Cargo.toml: no debug info) and test with nextest, which fails
+# fast by default: no test starts after the first failure, the one a mutant needs to be caught.
+# The tests already running finish, so `common::Env`'s drop still stops their daemons. Nextest
+# runs no doctests; the workspace has none, so no mutant can be caught only by one.
+profile = "mutants"
+test_tool = "nextest"

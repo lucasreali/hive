@@ -102,6 +102,10 @@ test("numbers and texts are saved once typing pauses; non-numbers are not sent",
   section("Agents");
   fireEvent.change(input("Silence before waiting for you (seconds)"), { target: { value: "9" } });
   await waitFor(() => expect(settings().agents.silence_secs).toBe(9));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Increase Silence before waiting for you (seconds)" }),
+  );
+  await waitFor(() => expect(settings().agents.silence_secs).toBe(10));
   set.mockRestore();
 });
 

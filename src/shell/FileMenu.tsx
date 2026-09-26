@@ -1,7 +1,8 @@
+import { FilePlusIcon, type Icon, PencilSimpleIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { openFileDialog, openFileMenu, useHive } from "../store";
 import { transport } from "../transport";
-import { CloseIcon } from "./icons";
+import { CloseIcon, ICON } from "./icons";
 import { ContextMenu, showModal } from "./WorktreeMenu";
 
 const closeMenu = () => openFileMenu(null);
@@ -12,7 +13,7 @@ export function FileMenu() {
   const menu = useHive((s) => s.fileMenu);
   if (!menu) return null;
   const { x, y, ...target } = menu;
-  const item = (label: string, renaming: boolean) => (
+  const item = (Shape: Icon, label: string, renaming: boolean) => (
     <button
       type="button"
       role="menuitem"
@@ -21,13 +22,14 @@ export function FileMenu() {
         openFileDialog(target, renaming);
       }}
     >
+      <Shape {...ICON} />
       {label}
     </button>
   );
   return (
     <ContextMenu at={menu} label={target.path ?? "Files"} onClose={closeMenu}>
-      {item("New File…", false)}
-      {target.path !== null && item("Rename…", true)}
+      {item(FilePlusIcon, "New File…", false)}
+      {target.path !== null && item(PencilSimpleIcon, "Rename…", true)}
     </ContextMenu>
   );
 }

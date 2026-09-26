@@ -17,7 +17,8 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect.poll(async () => (await terminal(page)).fontSize).toBe(13);
   const before = await terminal(page);
 
@@ -25,7 +26,10 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   await page.keyboard.press("Control+Comma");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Font size").fill("20");
+  await dialog.getByLabel("Font size", { exact: true }).fill("19");
+  // The stepper's own button, not the WebView's spin button.
+  await dialog.getByRole("button", { name: "Increase Font size" }).click();
+  await expect(dialog.getByLabel("Font size", { exact: true })).toHaveValue("20");
   await expect.poll(async () => (await terminal(page)).fontSize).toBe(20);
   // Bigger cells: the terminal refits to fewer columns.
   expect((await terminal(page)).cols).toBeLessThan(before.cols);

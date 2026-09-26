@@ -20,7 +20,8 @@ test("review comments on the diff are pasted into the terminal as one text", asy
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(page.locator(".terminal-pane:visible textarea")).toBeFocused();
   // The program in the terminal asks for bracketed paste, as Claude Code does.
   await page.evaluate(async () => {
@@ -31,6 +32,7 @@ test("review comments on the diff are pasted into the terminal as one text", asy
   const writes = await recordWrites(page);
 
   const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
   for (const name of ["src", "auth"]) {
     await panel.getByRole("treeitem", { name, exact: true }).click();
   }

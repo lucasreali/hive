@@ -16,9 +16,8 @@ test("worktree health: badges with tooltips, and removing merged worktrees", asy
   await expect(row("refactor-auth").locator(".health > span")).toHaveText(["↓2", "●6", "merged"]);
 
   // A new worktree has nothing of its own yet, so it counts as merged and clean.
-  const project = tree.locator(".tree-row.project", { hasText: "api" });
-  await project.hover();
-  await project.getByTitle("New worktree (Ctrl+Shift+N)").click();
+  await tree.getByRole("button", { name: "api", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^New worktree…/ }).click();
   const create = page.getByRole("dialog", { name: "New worktree" });
   await create.getByLabel("Worktree name").fill("done");
   await create.getByLabel("Open a terminal in the new worktree").uncheck();

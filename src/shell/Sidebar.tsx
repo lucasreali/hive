@@ -180,15 +180,6 @@ function ProjectNode({ project }: { project: Project }) {
           <span className="label">{project.name}</span>
           {!open && <Rollup agents={(a) => project.worktrees.some((w) => w.id === a.worktree)} />}
         </button>
-        <button
-          type="button"
-          className="new-worktree"
-          title={keyText("New worktree (Ctrl+Shift+N)")}
-          onClick={() => openModal("new-worktree", project.id)}
-        >
-          <PlusIcon size={10} />
-          New worktree
-        </button>
       </div>
       {open && (
         <ul>
@@ -244,19 +235,20 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
   return (
     <li>
       <div className="tree-row worktree" title={w.path} data-selected={selected}>
-        {agents.length > 0 ? (
-          <button
-            type="button"
-            className="chevron"
-            aria-label={`${open ? "Collapse" : "Expand"} ${w.name}`}
-            aria-expanded={open}
-            onClick={() => toggleCollapsed(`worktree:${w.id}`)}
-          >
-            <ChevronIcon open={open} />
-          </button>
-        ) : (
-          <span className="chevron" />
-        )}
+        {/* One fixed box with or without agents, so every worktree's icon lines up (7.13). */}
+        <span className="chevron-box">
+          {agents.length > 0 && (
+            <button
+              type="button"
+              className="chevron"
+              aria-label={`${open ? "Collapse" : "Expand"} ${w.name}`}
+              aria-expanded={open}
+              onClick={() => toggleCollapsed(`worktree:${w.id}`)}
+            >
+              <ChevronIcon open={open} />
+            </button>
+          )}
+        </span>
         <button
           type="button"
           className="row-main"
@@ -267,9 +259,10 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
         >
           <BranchIcon />
           <span className="label">{w.name}</span>
-          {!open && <Rollup agents={(a) => a.worktree === w.id} />}
         </button>
         {w.status && <Health status={w.status} />}
+        {/* After the badges, in the row's right column of indicators (7.13). */}
+        {!open && <Rollup agents={(a) => a.worktree === w.id} />}
         <button
           type="button"
           className="new-chat"

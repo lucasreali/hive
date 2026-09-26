@@ -1,4 +1,15 @@
-import { ArrowClockwiseIcon, DotsThreeIcon } from "@phosphor-icons/react";
+import {
+  ArrowBendUpRightIcon,
+  CopyIcon,
+  DotsThreeIcon,
+  FileTextIcon,
+  FolderOpenIcon,
+  FolderSimpleIcon,
+  type Icon,
+  PlayIcon,
+  TerminalWindowIcon,
+  TrashIcon,
+} from "@phosphor-icons/react";
 import { type MouseEvent, useEffect, useState } from "react";
 import {
   ago,
@@ -13,7 +24,7 @@ import {
 } from "../sessions";
 import { openSessionMenu, type Session, useHive } from "../store";
 import { transport } from "../transport";
-import { StateIcon } from "./icons";
+import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { ContextMenu } from "./WorktreeMenu";
 
 /** How often the open Sessions tab asks for the sessions again. */
@@ -76,7 +87,7 @@ export function SessionsView({ worktree }: { worktree: string }) {
           aria-label="Refresh sessions"
           onClick={() => void transport.listSessions()}
         >
-          <ArrowClockwiseIcon size={14} aria-hidden="true" />
+          <RefreshIcon />
         </button>
       </div>
       {error && <div className="files-error">{error}</div>}
@@ -143,7 +154,7 @@ export function SessionMenu() {
   const live = useHive((s) => !!x && !!s.agents[x.id]);
   if (!menu || !x) return null;
   const outside = x.running && !live;
-  const item = (label: string, action: () => void, extra: object = {}) => (
+  const item = (Shape: Icon, label: string, action: () => void, extra: object = {}) => (
     <button
       type="button"
       role="menuitem"
@@ -153,26 +164,32 @@ export function SessionMenu() {
       }}
       {...extra}
     >
+      <Shape {...ICON} />
       {label}
     </button>
   );
   return (
     <ContextMenu at={menu} label={`Session ${sessionName(x)}`} onClose={closeMenu}>
-      {item(live ? "Show Its Terminal" : "Resume in Worktree", () => void resume(x), {
-        disabled: outside,
-        title: outside ? OUTSIDE : undefined,
-      })}
-      {item("Continue in New Session", () => void resume(x, true))}
-      {item("Copy Resume Command", () => void copy(resumeCommand(x), "resume command"))}
+      {item(
+        live ? TerminalWindowIcon : PlayIcon,
+        live ? "Show Its Terminal" : "Resume in Worktree",
+        () => void resume(x),
+        {
+          disabled: outside,
+          title: outside ? OUTSIDE : undefined,
+        },
+      )}
+      {item(ArrowBendUpRightIcon, "Continue in New Session", () => void resume(x, true))}
+      {item(CopyIcon, "Copy Resume Command", () => void copy(resumeCommand(x), "resume command"))}
       <hr />
-      {item("Open Log", () => locate(x, "log", "open"))}
-      {item("Reveal Log", () => locate(x, "log", "reveal"))}
-      {item("Open Working Directory", () => locate(x, "folder", "open"))}
+      {item(FileTextIcon, "Open Log", () => locate(x, "log", "open"))}
+      {item(FolderOpenIcon, "Reveal Log", () => locate(x, "log", "reveal"))}
+      {item(FolderSimpleIcon, "Open Working Directory", () => locate(x, "folder", "open"))}
       <hr />
-      {item("Copy Session ID", () => void copy(x.id, "session id"))}
-      {item("Copy Log Path", () => void copy(x.log, "log path"))}
+      {item(CopyIcon, "Copy Session ID", () => void copy(x.id, "session id"))}
+      {item(CopyIcon, "Copy Log Path", () => void copy(x.log, "log path"))}
       <hr />
-      {item("Delete", () => remove(x), {
+      {item(TrashIcon, "Delete", () => remove(x), {
         className: "danger",
         disabled: live || x.running,
         title: live || x.running ? "End the session before deleting it" : undefined,

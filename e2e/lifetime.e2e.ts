@@ -18,7 +18,8 @@ test("closing with a working agent asks first: cancel keeps the app, confirm clo
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "main", exact: true }).first().click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await page.keyboard.type("claude");
   await page.keyboard.press("Enter");
   await expect(tree.getByRole("img", { name: "idle" })).toHaveCount(1);

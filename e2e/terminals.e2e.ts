@@ -20,13 +20,14 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
-  const newTerminal = page.getByTitle("New terminal (Ctrl+Shift+T)");
+  const plus = page.getByTitle("New terminal, agent or file");
   await expect(tree.getByRole("button", { name: "fix-login" })).toBeVisible();
   // Nothing selected, so there is no worktree to open a terminal in.
-  await expect(newTerminal).toBeDisabled();
+  await expect(plus).toBeDisabled();
 
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await newTerminal.click();
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(tabs.getByRole("tab", { name: "fix-login" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -38,7 +39,8 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   await expect.poll(() => screen(page, 1)).toBe("mock$ echo one\necho one\nmock$");
 
   await tree.getByRole("button", { name: "refactor-auth" }).click();
-  await newTerminal.click();
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(tabs.getByRole("tab", { name: "refactor-auth" })).toHaveAttribute(
     "aria-selected",
     "true",

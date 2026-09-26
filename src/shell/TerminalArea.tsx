@@ -1,4 +1,10 @@
-import { TerminalWindowIcon } from "@phosphor-icons/react";
+import {
+  FilePlusIcon,
+  RobotIcon,
+  SquareSplitHorizontalIcon,
+  TerminalWindowIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -13,6 +19,7 @@ import {
   activateTab,
   fileVisible,
   type HiveState,
+  openFileDialog,
   openModal,
   selectedPlace,
   setRightPanel,
@@ -27,6 +34,7 @@ import {
 import {
   closeTerminal,
   mountTerminals,
+  openClaude,
   openTerminal,
   showTerminals,
   splitTerminal,
@@ -37,6 +45,7 @@ import {
   AddFolderIcon,
   CloseIcon,
   FileIcon,
+  ICON,
   PanelIcon,
   PlusIcon,
   StateIcon,
@@ -219,9 +228,11 @@ function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
       <button type="button" role="menuitem" onClick={act(() => void splitTerminal(menu.tab))}>
+        <SquareSplitHorizontalIcon {...ICON} />
         {split ? "Unsplit" : "Split right"}
       </button>
       <button type="button" role="menuitem" onClick={act(() => closeTerminal(menu.tab))}>
+        <XIcon {...ICON} />
         Close terminal
       </button>
     </ContextMenu>
@@ -266,7 +277,73 @@ function NoTerminals({ worktree }: { worktree: string }) {
   );
 }
 
-// "+" opens a terminal in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
+/** The "+" menu's Agent: for now a terminal running `claude`; the in-app chat (7.3) replaces it. */
+const openAgent = (worktree: string) => void openClaude(worktree);
+
+/**
+ * The tab bar's "+": a menu to open a terminal, an agent or a new file (its name asked first)
+ * in `worktree`. Enter, Space or ↓ open it; Esc closes it and gives the focus back to "+".
+ */
+function NewTabButton({ worktree }: { worktree: string | null }) {
+  const [plus, setPlus] = useState<HTMLButtonElement | null>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const close = useCallback(() => {
+    setAt(null);
+    plus?.focus();
+  }, [plus]);
+  const show = () => {
+    const box = (plus as HTMLButtonElement).getBoundingClientRect();
+    setAt({ x: box.left, y: box.bottom + 4 });
+  };
+  const act = (action: (worktree: string) => void) => () => {
+    close();
+    action(worktree as string);
+  };
+  return (
+    <>
+      <button
+        ref={setPlus}
+        type="button"
+        className="ghost"
+        title="New terminal, agent or file"
+        aria-label="New terminal, agent or file"
+        aria-haspopup="menu"
+        aria-expanded={at !== null}
+        disabled={worktree === null}
+        onClick={() => (at ? close() : show())}
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowDown") return;
+          e.preventDefault();
+          show();
+        }}
+      >
+        <PlusIcon size={14} />
+      </button>
+      {at && worktree !== null && (
+        <ContextMenu at={at} label="New tab" onClose={close} anchor={plus}>
+          <button type="button" role="menuitem" onClick={act((w) => void openTerminal(w))}>
+            <TerminalWindowIcon {...ICON} />
+            Terminal
+          </button>
+          <button type="button" role="menuitem" onClick={act(openAgent)}>
+            <RobotIcon {...ICON} />
+            Agent
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={act((w) => openFileDialog({ worktree: w, folder: "", path: null }))}
+          >
+            <FilePlusIcon {...ICON} />
+            New file…
+          </button>
+        </ContextMenu>
+      )}
+    </>
+  );
+}
+
+// "+" opens a terminal, an agent or a new file in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
 // the selected worktree's tabs show (a project's are its main worktree's).
 export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
@@ -286,15 +363,7 @@ export function TerminalArea() {
             <TerminalTab key={tab.id} tab={tab} onMenu={setMenu} />
           ))}
           <FileTab />
-          <button
-            type="button"
-            className="ghost"
-            title={keyText("New terminal (Ctrl+Shift+T)")}
-            disabled={selected === null}
-            onClick={() => selected !== null && void openTerminal(selected)}
-          >
-            <PlusIcon size={14} />
-          </button>
+          <NewTabButton worktree={selected} />
         </div>
         <div className="tabs-actions">
           <button
