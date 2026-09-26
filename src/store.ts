@@ -268,7 +268,7 @@ export type Session = {
   log: string;
   /** By how its log ends; a session running in a Hive terminal shows its live state instead. */
   state: AgentState;
-  /** A `claude` outside Hive's terminals runs it. */
+  /** A `claude` is known to run it: in a Hive terminal or chat (see `agents`), or outside Hive. */
   running: boolean;
 };
 export type SessionTarget = "log" | "folder";

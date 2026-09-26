@@ -4,7 +4,6 @@ import {
   ago,
   copy,
   locate,
-  OUTSIDE,
   openAsChat,
   openLocated,
   remove,
@@ -56,9 +55,9 @@ test("resume shows a running session's terminal, else runs claude --resume in it
   await resume(stopped, true);
   expect(write).toHaveBeenLastCalledWith(3, `claude --resume ${stopped.id} --fork-session\r`);
 
-  // Running outside Hive: not resumed a second time, but a fork is fine.
+  // Running outside Hive: not resumed a second time, with nothing said; a fork is fine.
   await resume(session);
-  expect(notice()).toBe(OUTSIDE);
+  expect(notice()).toBeNull();
   expect(open).toHaveBeenCalledTimes(2);
   await resume(session, true);
   expect(open).toHaveBeenCalledTimes(3);
