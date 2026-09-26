@@ -96,3 +96,31 @@ test("editing: an agent writing the file under unsaved edits shows the conflict"
   await expect(view.locator(".cm-content")).toHaveText("third agent edit");
   await expect(view.getByRole("alert")).toBeHidden();
 });
+
+test("editing: the tree's menu renames the open file and creates a new one", async ({ page }) => {
+  await page.goto("/");
+  const { panel } = await openReadme(page);
+  const dialog = page.getByRole("dialog");
+  await panel.getByRole("treeitem", { name: "README.md" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await expect(dialog.getByLabel("Name")).toHaveValue("README.md");
+  // Taken names are refused by the (fake) service, and the reason shows.
+  await dialog.getByLabel("Name").fill("package.json");
+  await page.keyboard.press("Enter");
+  await expect(dialog.getByRole("alert")).toHaveText("package.json already exists");
+  await dialog.getByLabel("Name").fill("NOTES.md");
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  // The open file follows the rename.
+  const notes = page.getByRole("region", { name: "NOTES.md" });
+  await expect(notes.locator(".cm-content")).toContainText("export const value = 1;");
+  await expect(panel.getByRole("treeitem", { name: "NOTES.md" })).toBeVisible();
+  await expect(panel.getByRole("treeitem", { name: "README.md" })).toHaveCount(0);
+
+  await panel.getByRole("treeitem", { name: "NOTES.md" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New File…" }).click();
+  await dialog.getByLabel("Name").fill("todo.md");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("region", { name: "todo.md" })).toBeVisible();
+  await expect(panel.getByRole("treeitem", { name: "todo.md" })).toBeVisible();
+});

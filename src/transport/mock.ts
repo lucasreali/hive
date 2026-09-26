@@ -596,6 +596,30 @@ export function createMockTransport(
       path,
       written,
     );
+  // Moves the listed file `from` (null: none) to `to`, answering `done()`, or why not.
+  const fileOp = (
+    worktree: string,
+    from: string | null,
+    to: string,
+    name: string,
+    done: () => ServiceMessage,
+  ) => {
+    const shown = worktreeAt(worktree);
+    const listed = shown ? (files.get(worktree) ?? mockFiles(shown)) : [];
+    const message = !shown
+      ? `${worktree} is not a worktree of a followed project`
+      : ["", ".", ".."].includes(name) || name.includes("/")
+        ? "not a valid file name"
+        : listed.includes(to)
+          ? `${name} already exists`
+          : from !== null && !listed.includes(from)
+            ? `${from} does not exist`
+            : null;
+    if (message) return void later({ type: "file_op_failed", worktree, message });
+    later(done());
+    files.set(worktree, [...listed.filter((p) => p !== from), to].sort());
+    if (watched === worktree) sendFiles(worktree);
+  };
   // A stand-in for an agent editing a file: `write <path> <text>` in a worktree's terminal.
   const write = (cwd: string, args: string) => {
     const [path = "", ...words] = args.split(" ");
@@ -816,6 +840,22 @@ export function createMockTransport(
       if (now.version !== version) return void failure("conflict", `${path} changed on disk`);
       written.set(`${worktree}/${path}`, content);
       later({ type: "file_saved", worktree, path, version: mockVersion(content) });
+    },
+    // Stand-ins for `hive::file::{create, rename}`: the real name rules live in Rust.
+    async createFile(worktree, folder, name) {
+      const path = folder ? `${folder}/${name}` : name;
+      fileOp(worktree, null, path, name, () => {
+        written.set(`${worktree}/${path}`, "");
+        return { type: "file_created", worktree, path };
+      });
+    },
+    async renameFile(worktree, path, name) {
+      const to = path.replace(/[^/]*$/, name);
+      fileOp(worktree, path, to, name, () => {
+        const text = fileAt(worktree, path).content ?? "";
+        written.set(`${worktree}/${to}`, text);
+        return { type: "file_renamed", worktree, path, to };
+      });
     },
     async openInEditor(worktree, path) {
       // An empty path is the worktree's folder.

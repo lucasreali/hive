@@ -718,6 +718,13 @@ label:has(> input[type="checkbox"]:disabled) {
   overflow: auto;
   padding: 4px 0;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* It fills the panel, so a right click below the rows opens the menu for the root. */
+.files-tree [role="tree"] {
+  flex: 1 0 auto;
 }
 
 .files-tree .hint {

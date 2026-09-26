@@ -551,6 +551,52 @@ test("a save checks the version as the service does; write stands in for an agen
   expect(messages).toHaveLength(3);
 });
 
+test("files are created and renamed as the service does, never over another", async () => {
+  const { transport, messages } = await connected();
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  const w = shop.path;
+  await transport.watchWorktree(w);
+  await tick();
+  messages.length = 0;
+  await transport.createFile(w, "src", "new.ts");
+  await tick();
+  expect(messages.map((m) => m.type)).toEqual(["file_created", "files", "changes"]);
+  expect(messages[0]).toEqual({ type: "file_created", worktree: w, path: "src/new.ts" });
+  expect((messages[1] as { files: string[] }).files).toContain("src/new.ts");
+  await transport.unwatchWorktree();
+  messages.length = 0;
+  await transport.createFile(w, "", "top.ts");
+  await transport.renameFile(w, "src/new.ts", "renamed.ts");
+  await transport.openFile(w, "src/renamed.ts");
+  const failures: [string, string | null, string][] = [
+    ["/nowhere", null, "x"],
+    [w, null, ""],
+    [w, null, "a/b"],
+    [w, null, "README.md"],
+    [w, "gone.ts", "x"],
+  ];
+  for (const [worktree, from, name] of failures) {
+    if (from) await transport.renameFile(worktree, from, name);
+    else await transport.createFile(worktree, "", name);
+  }
+  await tick();
+  const failed = (worktree: string, message: string) => ({
+    type: "file_op_failed",
+    worktree,
+    message,
+  });
+  expect(messages).toEqual([
+    { type: "file_created", worktree: w, path: "top.ts" },
+    { type: "file_renamed", worktree: w, path: "src/new.ts", to: "src/renamed.ts" },
+    expect.objectContaining({ type: "file", path: "src/renamed.ts", content: "" }),
+    failed("/nowhere", "/nowhere is not a worktree of a followed project"),
+    failed(w, "not a valid file name"),
+    failed(w, "not a valid file name"),
+    failed(w, "README.md already exists"),
+    failed(w, "gone.ts does not exist"),
+  ]);
+});
+
 test("a file's Windows path for an external editor, or why not", async () => {
   const { transport, messages } = await connected();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];

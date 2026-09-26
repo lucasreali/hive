@@ -466,6 +466,22 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         version: Some("v".into()),
     };
     assert_eq!(service.control().await, (0, save));
+    hive.create_file("/r".into(), "d".into(), "a".into())
+        .unwrap();
+    let create = Control::CreateFile {
+        worktree: "/r".into(),
+        folder: "d".into(),
+        name: "a".into(),
+    };
+    assert_eq!(service.control().await, (0, create));
+    hive.rename_file("/r".into(), "d/a".into(), "b".into())
+        .unwrap();
+    let rename = Control::RenameFile {
+        worktree: "/r".into(),
+        path: "d/a".into(),
+        name: "b".into(),
+    };
+    assert_eq!(service.control().await, (0, rename));
     hive.open_in_editor("/r".into(), "a".into()).unwrap();
     let editor = Control::OpenInEditor {
         worktree: "/r".into(),
@@ -784,6 +800,14 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.save_file("/r".into(), "a".into(), "x".into(), None),
         not_connected
     );
+    assert_eq!(
+        hive.create_file("/r".into(), "".into(), "a".into()),
+        not_connected
+    );
+    assert_eq!(
+        hive.rename_file("/r".into(), "a".into(), "b".into()),
+        not_connected
+    );
     assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
     assert_eq!(hive.get_settings(), not_connected);
     assert_eq!(hive.set_settings(Settings::default()), not_connected);
@@ -986,6 +1010,8 @@ fn commands_reach_the_managed_hive() {
             locate_session,
             delete_session,
             save_file,
+            create_file,
+            rename_file,
             open_in_editor,
             get_settings,
             set_settings,
@@ -1048,6 +1074,8 @@ fn commands_reach_the_managed_hive() {
     let locate = json!({"id": "s", "target": "log"});
     let delete = json!({"id": "s"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
+    let create_file = json!({"worktree": "/r", "folder": "", "name": "a"});
+    let rename_file = json!({"worktree": "/r", "path": "a", "name": "b"});
     let settings = json!({"settings": {"notifications": {"volume": 0}}});
     let new_space = json!({"name": "W", "env": {}});
     let update = json!({"id": "w", "name": "W", "env": {"git_name": "Me"}});
@@ -1087,6 +1115,8 @@ fn commands_reach_the_managed_hive() {
         ("locate_session", &locate),
         ("delete_session", &delete),
         ("save_file", &save),
+        ("create_file", &create_file),
+        ("rename_file", &rename_file),
         ("open_in_editor", &file),
         ("get_settings", &json!({})),
         ("set_settings", &settings),
@@ -1138,6 +1168,8 @@ fn commands_reach_the_managed_hive() {
         ("locate_session", locate),
         ("delete_session", delete),
         ("save_file", save),
+        ("create_file", create_file),
+        ("rename_file", rename_file),
         ("open_in_editor", file),
         ("get_settings", json!({})),
         ("set_settings", settings),

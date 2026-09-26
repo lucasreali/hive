@@ -25,7 +25,7 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
-import { allFiles, FilesView, fileRows, NAME_LIMIT, RightPanel } from "./RightPanel";
+import { allFiles, FilesView, fileRows, fileTarget, NAME_LIMIT, RightPanel } from "./RightPanel";
 import { TerminalArea } from "./TerminalArea";
 
 beforeAll(() => {
@@ -654,4 +654,38 @@ test("the line asked for is shown once the file's text is there, in the diff or 
   act(() => setOpenFile({ worktree: fixLogin.path, path: "b.ts" }, true, 1));
   expect(useHive.getState().gotoLine).toBeNull();
   expect(selected()).toBe("one");
+});
+
+test("the files menu targets a folder, a file's folder, or the root; a deleted file has no rename", () => {
+  const files = [file("README.md"), file("src/a.ts"), file("src/gone.ts", "deleted")];
+  const targets = fileRows("/w", files, { "folder:/w/src": false }).map((r) => fileTarget("/w", r));
+  expect(targets).toEqual([
+    { worktree: "/w", folder: "src", path: null },
+    { worktree: "/w", folder: "src", path: "src/a.ts" },
+    { worktree: "/w", folder: "src", path: null },
+    { worktree: "/w", folder: "", path: "README.md" },
+  ]);
+  expect(fileTarget("/w", undefined)).toEqual({ worktree: "/w", folder: "", path: null });
+});
+
+test("a right click opens the files menu for its row, below the rows for the root", () => {
+  panel();
+  act(() => select(refactor.id));
+  const listed = [file("README.md"), file("src/a.ts")];
+  act(() => apply({ type: "changes", ...changes(refactor.path, listed) }));
+  const menu = () => useHive.getState().fileMenu;
+  const at = { worktree: refactor.path };
+  const readme = () => screen.getByRole("treeitem", { name: /^README/ });
+  fireEvent.contextMenu(readme(), { clientX: 5, clientY: 6 });
+  expect(menu()).toEqual({ ...at, folder: "", path: "README.md", x: 5, y: 6 });
+  expect(tree().getAttribute("aria-activedescendant")).toBe(readme().id);
+  fireEvent.contextMenu(tree(), { clientX: 7, clientY: 8 });
+  expect(menu()).toEqual({ ...at, folder: "", path: null, x: 7, y: 8 });
+  // The Menu key (no pointer) on the tree: the active row, under it.
+  readme().getBoundingClientRect = () => ({ left: 10, bottom: 30 }) as DOMRect;
+  fireEvent.contextMenu(tree());
+  expect(menu()).toEqual({ ...at, folder: "", path: "README.md", x: 10, y: 30 });
+  // On a row without the pointer: under the row itself.
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "src" }));
+  expect(menu()).toMatchObject({ folder: "src", path: null, x: 0, y: 0 });
 });
