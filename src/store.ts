@@ -73,7 +73,7 @@ export type ServiceMessage =
     }
   | { type: "session_deleted"; id: string }
   // Handled by `restore` (src/sessions.ts), not stored.
-  | { type: "restore_sessions"; sessions: { id: string; cwd: string }[] }
+  | { type: "restore_sessions"; sessions: OpenSession[] }
   | { type: "delete_session_failed"; id: string; message: string }
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
@@ -239,6 +239,9 @@ export type Changes = {
 
 /** The file shown under the files tree, in the viewer or its diff. */
 export type OpenFile = { worktree: string; path: string };
+
+/** Mirrors `hive_protocol::OpenSession`: a session that ran in a Hive terminal or chat. */
+export type OpenSession = { id: string; cwd: string; kind: "terminal" | "chat" };
 
 /** A Claude Code session of a followed project, as the service read it from its log. */
 export type Session = {

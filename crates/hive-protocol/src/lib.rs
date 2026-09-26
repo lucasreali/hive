@@ -1116,11 +1116,23 @@ pub struct Session {
     pub running: bool,
 }
 
-/// A Claude session that ran in a Hive terminal, and the folder it ran in.
+/// A Claude session that ran in a Hive terminal or chat, and the folder it ran in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenSession {
     pub id: String,
     pub cwd: String,
+    /// Where it ran; lists kept before chats existed have none: terminals.
+    #[serde(default)]
+    pub kind: SessionKind,
+}
+
+/// Where a Claude session runs in Hive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    #[default]
+    Terminal,
+    Chat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1954,12 +1966,16 @@ mod tests {
             sessions: vec![OpenSession {
                 id: "s".into(),
                 cwd: "/r".into(),
+                kind: SessionKind::Chat,
             }],
         };
         assert_eq!(
             &Frame::control(0, &restore).payload[..],
-            br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r"}]}"#
+            br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r","kind":"chat"}]}"#
         );
+        // Kept before chats existed: a terminal's.
+        let old: OpenSession = serde_json::from_str(r#"{"id":"s","cwd":"/r"}"#).unwrap();
+        assert_eq!(old.kind, SessionKind::Terminal);
         for message in [
             Control::AgentTitle {
                 id: "s".into(),

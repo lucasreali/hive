@@ -145,6 +145,7 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   actions(name);
   expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
     "Resume in Worktree",
+    "Open as Chat",
     "Continue in New Session",
     "Copy Resume Command",
     "Open Log",
@@ -182,6 +183,9 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   act(() => select(shop.id));
   pick("Resume in Worktree", untitled.id);
   expect(open.mock.calls.at(-1)?.[0]).toBe(untitled.cwd);
+  const chat = spyOn(transport, "openChat").mockResolvedValue(9);
+  pick("Open as Chat", untitled.id);
+  expect(chat.mock.calls).toEqual([[untitled.cwd, untitled.id, null]]);
 
   // Running outside Hive: neither resumed nor deleted here; a new session from it is fine.
   act(() => select(shop.worktrees[1].id));
@@ -190,6 +194,11 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   expect([resumeItem.hasAttribute("disabled"), resumeItem.title]).toEqual([true, OUTSIDE]);
   const removeItem = screen.getByRole("menuitem", { name: "Delete" }) as HTMLButtonElement;
   expect(removeItem.disabled).toBe(true);
+  const chatItem = screen.getByRole("menuitem", { name: "Open as Chat" }) as HTMLButtonElement;
+  expect([chatItem.disabled, chatItem.title]).toEqual([
+    true,
+    "End the session before opening it as a chat",
+  ]);
   fireEvent.keyDown(menu() as HTMLElement, { key: "Escape" });
 
   // A right click opens it at the pointer; a session running in Hive cannot be deleted.
@@ -211,6 +220,8 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   expect(screen.getByRole("menuitem", { name: "Show Its Terminal" })).toBeDefined();
   const remove = screen.getByRole("menuitem", { name: "Delete" }) as HTMLButtonElement;
   expect([remove.disabled, remove.title]).toEqual([true, "End the session before deleting it"]);
+  const asChat = screen.getByRole("menuitem", { name: "Open as Chat" }) as HTMLButtonElement;
+  expect(asChat.disabled).toBe(true);
   // The menu key has no pointer: under the row.
   fireEvent.keyDown(menu() as HTMLElement, { key: "Escape" });
   fireEvent.contextMenu(row, { clientX: 0, clientY: 0 });

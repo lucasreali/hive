@@ -1337,5 +1337,7 @@ pub async fn end(groups: Vec<i32>) {
     }
 }
 
+mod history;
+
 #[cfg(test)]
 mod tests;

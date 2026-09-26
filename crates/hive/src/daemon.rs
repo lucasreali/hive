@@ -16,7 +16,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     AgentEvent, ChatMode, Control, EventKind, Frame, FrameCodec, FrameError, FrameType,
-    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget,
+    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionKind, SessionTarget,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -382,19 +382,25 @@ impl State {
         self.to_app(agent.channel, &message).await;
     }
 
-    /// Keeps the sessions running in Hive's terminals, in terminal order, to resume them when
-    /// the app opens again.
+    /// Keeps the sessions running in Hive's terminals and chats, in channel order, to resume
+    /// them when the app opens again.
     async fn save_open(&self) {
+        let chats: Vec<u32> = self.chats.lock().await.keys().copied().collect();
         let agents = self.agents.lock().await;
         let mut open: Vec<(u32, OpenSession)> = agents
             .iter()
             .filter_map(|(id, agent)| {
                 let cwd = agent.cwd.clone()?;
+                let kind = match chats.contains(&agent.channel) {
+                    true => SessionKind::Chat,
+                    false => SessionKind::Terminal,
+                };
                 Some((
                     agent.channel,
                     OpenSession {
                         id: id.clone(),
                         cwd,
+                        kind,
                     },
                 ))
             })
@@ -618,14 +624,22 @@ impl State {
         if let Some(message) = taken {
             return self.to_app(channel, &Control::Error { message }).await;
         }
-        let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), &cwd));
+        // A resumed session may have run in a folder inside the worktree: `claude --resume`
+        // finds it only from there. That folder must be real (no `..`, no link), so it stays in
+        // the worktree.
+        let (place, inside) = tokio::task::block_in_place(|| {
+            let real = std::fs::canonicalize(&cwd).is_ok_and(|real| real == Path::new(&cwd));
+            (projects::place(&self.projects.list(), &cwd), real)
+        });
         let open = match place {
-            Some((project, worktree)) if worktree == cwd => Ok(chat::Open {
-                cwd,
-                project,
-                resume,
-                mode: mode.unwrap_or(ChatMode::Default),
-            }),
+            Some((project, worktree)) if worktree == cwd || resume.is_some() && inside => {
+                Ok(chat::Open {
+                    cwd,
+                    project,
+                    resume,
+                    mode: mode.unwrap_or(ChatMode::Default),
+                })
+            }
             _ => Err(format!(
                 "{cwd} is not a worktree of an added project: chats open only there"
             )),
@@ -693,6 +707,12 @@ impl State {
         });
         match started {
             Ok((mut chat, pipes)) => {
+                if let Some(session) = &open.resume {
+                    let sessions = self.sessions.at(claude_dir.as_deref());
+                    let out = tokio::task::block_in_place(|| history(&sessions, session, cwd));
+                    self.chat_out(channel, chat.stream.history(&out.0, out.1))
+                        .await;
+                }
                 chat.claude_dir = claude_dir;
                 self.chats.lock().await.insert(channel, chat);
                 tokio::spawn(chat_pump(self.clone(), channel, pipes));
@@ -761,6 +781,15 @@ impl State {
 }
 
 /// The agent an event belongs to: its session id; `None` for subagent events.
+/// A resumed chat's history: the tail of session `id`'s log in the folder Claude keeps for
+/// `cwd`, inside Claude's projects folder, and whether its start was left out. Nothing when
+/// the log is not found or cannot be read.
+fn history(sessions: &Sessions, id: &str, cwd: &str) -> (Vec<u8>, bool) {
+    let log = sessions.root().zip(sessions.log(id, cwd));
+    log.and_then(|(root, log)| transcript::tail(root, &log).ok())
+        .unwrap_or_default()
+}
+
 fn agent_id(event: &AgentEvent) -> Option<String> {
     match event.subagent {
         None => event.session_id.clone(),
