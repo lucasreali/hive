@@ -16,15 +16,22 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { closeChat, openChat } from "../chats";
+import { useReorder } from "../reorder";
 import {
   activateTab,
+  barItems,
+  barKey,
+  type FileTab as FileTabData,
+  fileKey,
+  fileTabState,
   fileVisible,
   type HiveState,
+  moveTab,
   openFileDialog,
   openModal,
   selectedPlace,
+  setOpenFile,
   setRightPanel,
-  showFile,
   shownSplit,
   shownTerminals,
   type Tab,
@@ -39,7 +46,7 @@ import {
   showTerminals,
   splitTerminal,
 } from "../terminals";
-import { isDirty } from "../viewer/buffer";
+import { isDirty, isFor } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
 import { ChatView } from "./ChatView";
 import {
@@ -53,7 +60,7 @@ import {
   StateIcon,
   TerminalIcon,
 } from "./icons";
-import { FileView, leaveFile } from "./RightPanel";
+import { closeFile, FileView } from "./RightPanel";
 import { ResizeHandle } from "./resize";
 import { TranscriptView } from "./TranscriptView";
 import { ContextMenu } from "./WorktreeMenu";
@@ -90,12 +97,16 @@ function find(s: HiveState, path: string) {
   return null;
 }
 
+/** The drag-and-drop props of a tab (`useReorder`), to move it along the bar (8.21). */
+type Drag = ReturnType<ReturnType<typeof useReorder>>;
+
 /**
- * A tab of the bar: its label shows it, its × closes it. Terminals and the open file share it.
- * With unsaved edits the × shows a dot instead, as in other editors, and turns back into the ×
- * on hover or keyboard focus, where it is about to be used.
+ * A tab of the bar: its label shows it, its × closes it, dragging it moves it. Terminals, chats
+ * and files share it. With unsaved edits the × shows a dot instead, as in other editors, and
+ * turns back into the × on hover or keyboard focus, where it is about to be used.
  */
 function TabItem(props: {
+  drag: Drag;
   active: boolean;
   /** Shown beside the active tab, in a split. */
   split?: boolean;
@@ -109,6 +120,7 @@ function TabItem(props: {
 }) {
   return (
     <div
+      {...props.drag}
       className="tab"
       data-active={props.active}
       data-split={props.split || undefined}
@@ -144,7 +156,8 @@ function TabItem(props: {
  * agent's state and its session's name (as in Orca). Tabs show only their worktree's, so no
  * project.
  */
-function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => void }) {
+function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: Drag }) {
+  const { tab, onMenu } = props;
   const active = useHive((s) => s.activeTab === tab.id && !s.fileShown && !s.transcriptShown);
   const split = useHive((s) => {
     const shown = !s.fileShown && !s.transcriptShown && shownSplit(s);
@@ -159,6 +172,7 @@ function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => voi
   const ended = useHive((s) => !!s.chats[tab.id]?.closed);
   return (
     <TabItem
+      drag={props.drag}
       active={active}
       split={split}
       // A chat has no split, so no menu.
@@ -202,20 +216,22 @@ function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => voi
   );
 }
 
-/** The open file's tab, after the terminals; closing it asks first when edits are unsaved. */
-function FileTab() {
-  const open = useHive((s) => (fileVisible(s) ? s.openFile : null));
-  const active = useHive((s) => s.fileShown);
-  const dirty = useHive((s) => !!s.edit && isDirty(s.edit));
-  if (!open) return null;
-  const name = open.path.slice(open.path.lastIndexOf("/") + 1);
+/** An open file's tab (8.21); closing it asks first when its edits are unsaved. */
+function FileTab({ file, drag }: { file: FileTabData; drag: Drag }) {
+  const active = useHive((s) => s.fileShown && !!s.openFile && isFor(file, s.openFile));
+  const dirty = useHive((s) => {
+    const { edit } = fileTabState(s, file);
+    return !!edit && isDirty(edit);
+  });
+  const name = file.path.slice(file.path.lastIndexOf("/") + 1);
   return (
     <TabItem
+      drag={drag}
       active={active}
-      title={open.path}
-      onShow={showFile}
+      title={file.path}
+      onShow={() => setOpenFile(file)}
       close={`Close file ${name}`}
-      onClose={() => leaveFile(null)}
+      onClose={() => closeFile(file)}
       dirty={dirty}
     >
       <FileIcon />
@@ -360,6 +376,9 @@ export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
   const empty = useHive((s) => s.projects !== null && Object.keys(s.projects).length === 0);
   const tabs = useHive(useShallow(visibleTabs));
+  const items = useHive(useShallow(barItems));
+  const keys = useHive(useShallow((s) => barItems(s).map((item) => barKey(s, item))));
+  const drag = useReorder("tabs", moveTab, true);
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
   const transcript = useHive((s) => s.transcriptShown);
@@ -377,10 +396,14 @@ export function TerminalArea() {
     <section className="terminals" aria-label="Terminals">
       <div className="bar">
         <div className="tabs" role="tablist" aria-label="Open terminals and files">
-          {tabs.map((tab) => (
-            <TerminalTab key={tab.id} tab={tab} onMenu={setMenu} />
-          ))}
-          <FileTab />
+          {items.map((item, i) => {
+            const key = keys[i] as string;
+            return "path" in item ? (
+              <FileTab key={fileKey(item)} file={item} drag={drag(key)} />
+            ) : (
+              <TerminalTab key={item.id} tab={item} onMenu={setMenu} drag={drag(key)} />
+            );
+          })}
           <NewTabButton worktree={selected} />
         </div>
         <div className="tabs-actions">

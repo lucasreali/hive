@@ -5,6 +5,7 @@ import LIGATURES from "./assets/fonts/ligatures.json";
 import {
   addTab,
   focusPane,
+  inBarOrder,
   removeTab,
   type Settings,
   setSplit,
@@ -269,7 +270,7 @@ function fitShown(): void {
 
 /**
  * Ctrl+Shift+D and the tab menu's "Split right" (6.11): tab `id` beside the next tab of its
- * worktree, or beside a new terminal there when it has no other; when `id` is already a
+ * worktree in the bar's order, or beside a new terminal there when it has no other; when `id` is already a
  * shown pane, the split ends instead.
  */
 export async function splitTerminal(id: number | null): Promise<void> {
@@ -281,7 +282,10 @@ export async function splitTerminal(id: number | null): Promise<void> {
   const tab = terminals.find((t) => t.id === id);
   if (!tab) return;
   const place = tabPlace(s, tab.cwd);
-  const same = terminals.filter((t) => tabPlace(s, t.cwd) === place);
+  const same = inBarOrder(
+    s,
+    terminals.filter((t) => tabPlace(s, t.cwd) === place),
+  );
   const next = same[(same.indexOf(tab) + 1) % same.length] as typeof tab;
   const right = next === tab ? await openTerminal(tab.cwd) : next.id;
   setSplit({ left: tab.id, right });

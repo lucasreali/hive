@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { clearGotoLine, setEdit, setSelectedLines, useHive } from "../store";
+import { clearGotoLine, saveFileView, setEdit, setSelectedLines, useHive } from "../store";
 import { transport } from "../transport";
 import { type EditBuffer, failed, isFor, resolve, startSave } from "./buffer";
-import { createEditor, type Editor, revealLine } from "./editor";
+import { createEditor, type Editor, restoreView, revealLine, snapshot } from "./editor";
 
 /** Ctrl+S and the Save button: sends the buffer's text with the version it was based on. */
 export function saveOpenFile(): void {
@@ -38,14 +38,18 @@ export function EditView({ edit }: { edit: EditBuffer }) {
   const [comparing, setComparing] = useState(false);
   const { path, doc, conflict } = edit;
   useEffect(() => {
-    const { edit } = useHive.getState();
-    const created = createEditor(parent.current as HTMLDivElement, path, (edit as EditBuffer).doc, {
+    const { edit, openFiles } = useHive.getState();
+    const file = edit as EditBuffer;
+    const created = createEditor(parent.current as HTMLDivElement, path, file.doc, {
       change: changed,
       save: saveOpenFile,
       select: setSelectedLines,
     });
     editor.current = created;
+    // Shown again in its tab (8.21): as it was left.
+    restoreView(created.view, openFiles.find((f) => isFor(f, file))?.view);
     return () => {
+      saveFileView(file, snapshot(created.view));
       created.destroy();
       setSelectedLines(null);
     };

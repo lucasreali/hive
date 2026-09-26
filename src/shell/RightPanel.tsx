@@ -21,8 +21,10 @@ import { useShallow } from "zustand/react/shallow";
 import {
   agentWorkingIn,
   type ChangedFile,
+  dropFile,
   type FileStatus,
   type FileTarget,
+  fileTabState,
   type OpenFile,
   openFileMenu,
   type PanelView,
@@ -36,7 +38,7 @@ import {
   type Worktree,
 } from "../store";
 import { transport } from "../transport";
-import { isDirty, isFor } from "../viewer/buffer";
+import { isDirty } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { referenceTarget, sendReference } from "../viewer/reference";
@@ -659,20 +661,21 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
 }
 
 /**
- * Opens `next` (null closes the file), at `line` when given, once the user agrees to drop the unsaved edits of the
- * file open now, if any. The file already open switches to editable text or its diff as asked, unless it has unsaved edits.
+ * Opens `next` in its tab (8.21), at `line` when given. A file already open switches to editable
+ * text or its diff as asked, unless it has unsaved edits.
  */
-export function leaveFile(next: OpenFile | null, editing = false, line?: number): void {
-  const { edit } = useHive.getState();
-  const losing = edit && isDirty(edit) && !(next && isFor(next, edit));
-  const go = () => {
-    setOpenFile(next, editing, line);
-    const s = useHive.getState();
-    const same = next && s.openFile && isFor(next, s.openFile);
-    if (same && s.editing !== editing && !(s.edit && isDirty(s.edit))) setEditing(editing);
-  };
-  if (losing) askDiscard(edit.path, go);
-  else go();
+export function leaveFile(next: OpenFile, editing = false, line?: number): void {
+  setOpenFile(next, editing, line);
+  const s = useHive.getState();
+  if (s.editing !== editing && !(s.edit && isDirty(s.edit))) setEditing(editing);
+}
+
+/** Closes file `f`'s tab, once the user agrees to drop its unsaved edits, if any. */
+export function closeFile(f: OpenFile): void {
+  const { edit } = fileTabState(useHive.getState(), f);
+  const close = () => useHive.setState((s) => dropFile(s, f));
+  if (edit && isDirty(edit)) askDiscard(f.path, close);
+  else close();
 }
 
 /**

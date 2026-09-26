@@ -240,6 +240,11 @@ export type Changes = {
 
 /** The file shown under the files tree, in the viewer or its diff. */
 export type OpenFile = { worktree: string; path: string };
+/**
+ * An open file's tab (8.21). While another file is the open one, it keeps that file's own
+ * editor state: editable text or diff, its edit buffer, and its view (selection and scroll).
+ */
+export type FileTab = OpenFile & { editing: boolean; edit: EditBuffer | null; view: unknown };
 
 /** Mirrors `hive_protocol::OpenSession`: a session that ran in a Hive terminal or chat. */
 export type OpenSession = { id: string; cwd: string; kind: "terminal" | "chat" };
@@ -644,6 +649,14 @@ export type HiveState = {
   splitPercent: number;
   /** Session ids in the order the user put the agents in (8.2); others follow in arrival order. */
   agentOrder: string[];
+  /**
+   * The tab bar's order (8.21): tab keys (`barKey`) in the order they opened, as the user moved
+   * them; each bar shows its own tabs in this order. Kept between runs, like the widths.
+   */
+  tabOrder: string[];
+  /** Every open file's tab, in the order they opened. */
+  openFiles: FileTab[];
+  /** The file of the file tabs whose view shows (when `fileShown`) and whose state is live. */
   openFile: OpenFile | null;
   /** The open file's tab is the one shown, in place of the active terminal. */
   fileShown: boolean;
@@ -749,6 +762,8 @@ export const initialState: HiveState = {
   panelWidth: 380,
   splitPercent: 50,
   agentOrder: [],
+  tabOrder: [],
+  openFiles: [],
   openFile: null,
   fileShown: false,
   selectedLines: null,
@@ -922,11 +937,43 @@ export function stepAgent(id: string, step: -1 | 1): void {
   if (target) moveAgent(id, target.id, step > 0);
 }
 
+/** Where the tab bar's order is remembered between runs (a per-window preference, #37). */
+const TAB_ORDER_STORAGE = "hive.tabOrder";
+
+/**
+ * The tab bar's order remembered from the last run, empty when none or unreadable. A plain
+ * terminal's key names a channel of that run only, so only files and sessions are kept.
+ */
+export function savedTabOrder(storage: Pick<Storage, "getItem"> | null = safeStorage()): string[] {
+  try {
+    const saved: unknown = JSON.parse(storage?.getItem(TAB_ORDER_STORAGE) ?? "[]");
+    return Array.isArray(saved)
+      ? saved
+          .filter((k): k is string => typeof k === "string" && !k.startsWith("tab:"))
+          .slice(-ORDER_LIMIT)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Remembers the tab bar's order whenever it changes. */
+export function saveTabOrder(s: HiveState, prev: HiveState): void {
+  if (s.tabOrder === prev.tabOrder) return;
+  try {
+    safeStorage()?.setItem(TAB_ORDER_STORAGE, JSON.stringify(s.tabOrder));
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
 export const useHive = create<HiveState>()(() => ({
   ...initialState,
   ...savedWidths(),
   agentOrder: savedAgentOrder(),
+  tabOrder: savedTabOrder(),
 }));
+useHive.subscribe(saveTabOrder);
 
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
   const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };
@@ -1120,7 +1167,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "files": {
       const { type: _, ...worktreeFiles } = m;
-      return { worktreeFiles };
+      return deletedFiles({ ...s, worktreeFiles }, s.worktreeFiles);
     }
     case "changes": {
       const { type: _, ...changes } = m;
@@ -1145,21 +1192,25 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { file, edit: editFor(s, file) };
     }
     case "file_saved":
-      return s.edit && isFor(s.edit, m) ? { edit: saved(s.edit, m.version) } : {};
+      return patchEdits(s, m, (b) => saved(b, m.version));
     case "save_failed":
-      return s.edit && isFor(s.edit, m) ? { edit: failed(s.edit, m.error, m.message) } : {};
-    case "file_created": {
-      // The new file opens as editable text, unless that would drop unsaved edits.
-      const keep = s.edit && isDirty(s.edit);
-      const open = keep ? {} : opened(s, { worktree: m.worktree, path: m.path }, true);
-      return { ...open, ...fileDialogDone(s, m.worktree) };
-    }
+      return patchEdits(s, m, (b) => failed(b, m.error, m.message));
+    case "file_created":
+      // The new file opens in its own tab as editable text.
+      return {
+        ...opened(s, { worktree: m.worktree, path: m.path }, true),
+        ...fileDialogDone(s, m.worktree),
+      };
     case "file_renamed": {
-      // The open file, its text and its edits follow the rename.
+      // Its tab, its place in the bar, its text and its edits follow the rename (or move).
       const moved = <T extends OpenFile>(f: T | null) =>
         f && isFor(f, m) ? { ...f, path: m.to } : f;
+      const from = fileKey(m);
+      const to = fileKey({ worktree: m.worktree, path: m.to });
       return {
         openFile: moved(s.openFile),
+        openFiles: s.openFiles.map((f) => ({ ...(moved(f) as FileTab), edit: moved(f.edit) })),
+        tabOrder: s.tabOrder.map((k) => (k === from ? to : k)),
         file: moved(s.file),
         edit: moved(s.edit),
         ...fileDialogDone(s, m.worktree),
@@ -1238,6 +1289,49 @@ function editFor(s: HiveState, file: FileText | null): EditBuffer | null {
   return s.edit ? fromDisk(s.edit, file) : startEdit(file);
 }
 
+/** `change` applied to the edit buffers of file `f`: the open one's and its tab's. */
+function patchEdits(
+  s: HiveState,
+  f: OpenFile,
+  change: (b: EditBuffer) => EditBuffer,
+): Partial<HiveState> {
+  const mine = (b: EditBuffer | null): b is EditBuffer => !!b && isFor(b, f);
+  return {
+    edit: mine(s.edit) ? change(s.edit) : s.edit,
+    openFiles: s.openFiles.map((t) => (mine(t.edit) ? { ...t, edit: change(t.edit) } : t)),
+  };
+}
+
+/**
+ * After a new listing of a worktree: the tabs of its files that the last listing held and this
+ * one does not (deleted) close; one with unsaved edits asks first. A listing cut short proves
+ * nothing.
+ */
+function deletedFiles(s: HiveState, before: WorktreeFiles | null): HiveState {
+  const now = s.worktreeFiles as WorktreeFiles;
+  if (before?.path !== now.path || before.truncated || now.truncated) return s;
+  const was = new Set(before.files);
+  const is = new Set(now.files);
+  const gone = s.openFiles.filter(
+    (f) => f.worktree === now.path && was.has(f.path) && !is.has(f.path),
+  );
+  let next = s;
+  for (const f of gone) {
+    const edit = fileTabState(next, f).edit;
+    const question = {
+      title: "Discard changes?",
+      text: `${f.path} was deleted. Your unsaved changes to it will be lost.`,
+      action: "Discard",
+      run: () => useHive.setState((s) => dropFile(s, f)),
+    };
+    next = {
+      ...next,
+      ...(edit && isDirty(edit) ? { modal: "confirm", question } : dropFile(next, f)),
+    };
+  }
+  return next;
+}
+
 /** Closes the file dialog when the answer is for its worktree. */
 function fileDialogDone(s: HiveState, worktree: string): Partial<HiveState> {
   return s.fileDialog?.worktree === worktree ? { fileDialog: null, modal: null } : {};
@@ -1287,34 +1381,93 @@ export const clearAddProjectError = () => useHive.setState({ addProjectError: nu
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });
 /**
- * Opens a file in its tab and shows it (null closes it), as editable text when `editing`,
- * dropping the previous file's edit buffer. The file already open stays as it is.
+ * Opens a file in its own tab (8.21) and shows it, as editable text when `editing`; a file
+ * already open shows its tab as it was left. The file shown before keeps its state in its tab.
+ * Null closes the open file's tab, without asking (`closeFile` asks).
  */
 export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: number) =>
-  useHive.setState((s) => opened(s, openFile, editing, line));
+  useHive.setState((s) =>
+    openFile ? opened(s, openFile, editing, line) : s.openFile ? dropFile(s, s.openFile) : {},
+  );
 
-function opened(
+/** The key of a file's tab in `tabOrder`. */
+export const fileKey = (f: OpenFile) => `file:${f.worktree}\n${f.path}`;
+
+/** `order` with `key` last, unless it already has a place; the oldest go past the limit. */
+const withKey = (order: string[], key: string) =>
+  order.includes(key) ? order : [...order, key].slice(-ORDER_LIMIT);
+
+/** File `f`'s own state: live for the open file, else kept in its tab. */
+export function fileTabState(
   s: HiveState,
-  openFile: OpenFile | null,
-  editing: boolean,
-  line?: number,
-): Partial<HiveState> {
-  const gotoLine = openFile && line ? { ...openFile, line } : null;
-  return openFile && s.openFile && isFor(openFile, s.openFile)
-    ? { fileShown: true, gotoLine, transcriptShown: null }
-    : {
-        openFile,
-        fileShown: openFile !== null,
-        transcriptShown: openFile ? null : s.transcriptShown,
-        editing,
-        edit: null,
-        editorNotice: null,
-        gotoLine,
-      };
+  f: OpenFile,
+): { editing: boolean; edit: EditBuffer | null } {
+  if (s.openFile && isFor(f, s.openFile)) return { editing: s.editing, edit: s.edit };
+  const tab = s.openFiles.find((t) => isFor(t, f));
+  return { editing: tab?.editing ?? false, edit: tab?.edit ?? null };
 }
+
+function opened(s: HiveState, file: OpenFile, editing: boolean, line?: number) {
+  const { worktree, path } = file;
+  const shown = {
+    fileShown: true,
+    gotoLine: line ? { worktree, path, line } : null,
+    transcriptShown: null,
+  };
+  if (s.openFile && isFor(file, s.openFile)) return shown;
+  // The file shown until now keeps its live state in its tab.
+  const openFiles = s.openFiles.map((f) =>
+    s.openFile && isFor(f, s.openFile) ? { ...f, editing: s.editing, edit: s.edit } : f,
+  );
+  const tab = openFiles.find((f) => isFor(f, file));
+  return {
+    ...shown,
+    openFiles: tab
+      ? openFiles
+      : [...openFiles, { worktree, path, editing, edit: null, view: null }],
+    tabOrder: withKey(s.tabOrder, fileKey(file)),
+    openFile: { worktree, path },
+    editing: tab ? tab.editing : editing,
+    edit: tab ? tab.edit : null,
+    editorNotice: null,
+  };
+}
+
+/**
+ * Closes file `f`'s tab. When it was shown, the tab beside it in the bar (the right one, else
+ * the left one) shows instead.
+ */
+export function dropFile(s: HiveState, f: OpenFile): Partial<HiveState> {
+  const items = barItems(s);
+  const i = items.findIndex((t) => "path" in t && isFor(t, f));
+  const rest = items.filter((_, j) => j !== i);
+  const base = {
+    openFiles: s.openFiles.filter((t) => !isFor(t, f)),
+    tabOrder: s.tabOrder.filter((k) => k !== fileKey(f)),
+  };
+  if (!s.openFile || !isFor(f, s.openFile)) return base;
+  const closed = {
+    ...base,
+    openFile: null,
+    fileShown: false,
+    editing: false,
+    edit: null,
+    editorNotice: null,
+    gotoLine: null,
+  };
+  const next = s.fileShown ? rest[Math.min(Math.max(i, 0), rest.length - 1)] : undefined;
+  if (next && "path" in next) return { ...closed, ...opened({ ...s, ...closed }, next, false) };
+  return next ? { ...closed, activeTab: next.id } : closed;
+}
+
+/** Keeps file `f`'s view (its selection and scroll) in its tab, for when it shows again. */
+export const saveFileView = (f: OpenFile, view: unknown) =>
+  useHive.setState((s) => ({
+    openFiles: s.openFiles.map((t) => (isFor(t, f) ? { ...t, view } : t)),
+  }));
+
 /** The line asked for was shown. */
 export const clearGotoLine = () => useHive.setState({ gotoLine: null });
-export const showFile = () => useHive.setState({ fileShown: true, transcriptShown: null });
 /** Shows the open file as editable text (its buffer starts from the last answer) or not. */
 export const setEditing = (editing: boolean) =>
   useHive.setState((s) => ({ editing, edit: editing ? editFor({ ...s, editing }, s.file) : null }));
@@ -1332,12 +1485,19 @@ export const select = (selection: string | null) =>
     const next = { ...s, selection };
     const tabs = visibleTabs(next);
     const keep = tabs.some((t) => t.id === s.activeTab);
-    return {
+    const shown = {
       selection,
       activeTab: keep ? s.activeTab : (tabs.at(-1)?.id ?? null),
       fileShown: s.fileShown && fileVisible(next),
       transcriptShown: null,
     };
+    // A place with files but no terminal shows its last file.
+    const file = barItems(next)
+      .filter((t) => "path" in t)
+      .at(-1) as FileTab | undefined;
+    return !shown.fileShown && tabs.length === 0 && file
+      ? { ...shown, ...opened(next, file, false) }
+      : shown;
   });
 /**
  * Shows a subagent's conversation in place of the terminals (6.10): its agent is selected, and
@@ -1364,6 +1524,7 @@ export const toggleCollapsed = (id: string) =>
 export const addTab = (id: number, cwd: string, kind?: "chat") =>
   useHive.setState((s) => ({
     tabs: [...s.tabs, kind ? { id, cwd, kind } : { id, cwd }],
+    tabOrder: withKey(s.tabOrder, `tab:${id}`),
     activeTab: id,
     fileShown: false,
     transcriptShown: null,
@@ -1378,7 +1539,8 @@ export const activateTab = (tab: Tab) =>
   }));
 /**
  * Removes the tab; when it was shown, the other pane of its split is, else its right neighbour
- * among the shown place's tabs. Closing either pane ends the split.
+ * in the bar (the left one when it was last), which may be a file. Closing either pane ends the
+ * split.
  */
 export const removeTab = (id: number) =>
   useHive.setState((s) => {
@@ -1388,11 +1550,20 @@ export const removeTab = (id: number) =>
     const split = s.split && [s.split.left, s.split.right].includes(id) ? s.split : null;
     const other = split && (split.left === id ? split.right : split.left);
     const next = other ?? rest[Math.min(i, rest.length - 1)]?.id ?? null;
-    return {
+    const items = barItems(s);
+    const at = items.findIndex((t) => !("path" in t) && t.id === id);
+    const beside = items.filter((_, j) => j !== at)[Math.min(at, items.length - 2)];
+    const gone = [barKey(s, { id, cwd: "" }), `tab:${id}`];
+    const removed = {
       tabs: s.tabs.filter((t) => t.id !== id),
+      tabOrder: s.tabOrder.filter((k) => !gone.includes(k)),
       activeTab: s.activeTab === id ? next : s.activeTab,
       split: split ? null : s.split,
     };
+    const covered = s.fileShown || s.transcriptShown !== null;
+    return s.activeTab === id && !other && !covered && beside && "path" in beside
+      ? { ...removed, ...opened({ ...s, ...removed }, beside, false) }
+      : removed;
   });
 
 /** The split shown: the stored one while the active tab is one of its panes, else none. */
@@ -1455,10 +1626,63 @@ export function tabsPlace(s: HiveState): string | null {
   return tab ? tabPlace(s, tab.cwd) : agent.worktree;
 }
 
-/** The terminal tabs of the place the tab bar shows, in the order they opened. */
+/** The terminal tabs of the place the tab bar shows, in the bar's order. */
 export function visibleTabs(s: HiveState): Tab[] {
   const place = tabsPlace(s);
-  return place === null ? s.tabs : s.tabs.filter((t) => tabPlace(s, t.cwd) === place);
+  return inBarOrder(
+    s,
+    place === null ? s.tabs : s.tabs.filter((t) => tabPlace(s, t.cwd) === place),
+  );
+}
+
+/** A tab of the bar: a terminal or chat, or an open file. */
+export type BarItem = Tab | FileTab;
+
+/**
+ * A tab's key in `tabOrder` (8.21): a file's by its path; a terminal's or chat's by its Claude
+ * session while one runs in it (so it keeps its place when the session is resumed after a
+ * reload), else by its channel.
+ */
+export function barKey(s: HiveState, item: BarItem): string {
+  if ("path" in item) return fileKey(item);
+  const agent = Object.values(s.agents).find((a) => a.terminal === item.id);
+  return agent ? `session:${agent.id}` : `tab:${item.id}`;
+}
+
+/** `items` in the bar's order (`tabOrder`); any it does not hold follow, as given (a stable sort). */
+export function inBarOrder<T extends BarItem>(s: HiveState, items: T[]): T[] {
+  const rank = (item: T) => {
+    let i = s.tabOrder.indexOf(barKey(s, item));
+    if (i < 0 && !("path" in item)) i = s.tabOrder.indexOf(`tab:${item.id}`);
+    return i < 0 ? s.tabOrder.length : i;
+  };
+  return [...items].sort((a, b) => rank(a) - rank(b));
+}
+
+/** The tabs of the bar, terminals, chats and files mixed, in its order. */
+export function barItems(s: HiveState): BarItem[] {
+  const place = tabsPlace(s);
+  const files = s.openFiles.filter((f) => place === null || tabPlace(s, f.worktree) === place);
+  return inBarOrder(s, [...visibleTabs(s), ...files]);
+}
+
+/**
+ * Moves the bar's tab `id` next to its tab `target` (after it when `after`), both `barKey`s:
+ * the bar's keys take the places they held in `tabOrder`, in the new order.
+ */
+export function moveTab(id: string, target: string, after: boolean): void {
+  useHive.setState((s) => {
+    const keys = barItems(s).map((item) => barKey(s, item));
+    const moved = moveNextTo(keys, id, target, after);
+    if (moved === keys) return {};
+    const order = keys.reduce(withKey, s.tabOrder);
+    const slots = order.flatMap((k, i) => (keys.includes(k) ? [i] : []));
+    const tabOrder = [...order];
+    slots.forEach((slot, i) => {
+      tabOrder[slot] = moved[i] as string;
+    });
+    return { tabOrder };
+  });
 }
 
 /** Whether the open file's tab belongs to the place the tab bar shows. */

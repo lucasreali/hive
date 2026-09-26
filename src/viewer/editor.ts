@@ -90,6 +90,24 @@ function replaceState(view: EditorView, state: EditorState) {
   view.scrollDOM.scrollTop = top;
 }
 
+/** A view's selection and scroll, kept in a file's tab to show it again as it was left (8.21). */
+export type ViewSnapshot = { selection: EditorSelection; top: number };
+
+export const snapshot = (view: EditorView): ViewSnapshot => ({
+  selection: view.state.selection,
+  top: view.scrollDOM.scrollTop,
+});
+
+/** Puts a snapshot back into `view`, its selection kept within the text; none does nothing. */
+export function restoreView(view: EditorView, saved: unknown): void {
+  if (!saved) return;
+  const { selection, top } = saved as ViewSnapshot;
+  const clamp = (n: number) => Math.min(n, view.state.doc.length);
+  const ranges = selection.ranges.map((r) => EditorSelection.range(clamp(r.anchor), clamp(r.head)));
+  view.dispatch({ selection: EditorSelection.create(ranges, selection.mainIndex) });
+  view.scrollDOM.scrollTop = top;
+}
+
 const commented = Decoration.line({ class: "cm-commented" });
 
 /** Marks every line of `ranges` that the document has (the text may have changed since). */

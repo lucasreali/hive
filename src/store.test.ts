@@ -27,7 +27,6 @@ import {
   setEditorNotice,
   setOpenFile,
   setRightPanel,
-  showFile,
   showTranscript,
   TRANSCRIPT_LIMIT,
   type TranscriptEntry,
@@ -420,14 +419,18 @@ test("editing keeps a buffer for the open file, fed by its answers", () => {
   apply({ type: "save_failed", worktree: "/w", path: "a.ts", error: "conflict", message: "m" });
   expect([edit()?.error, edit()?.recheck]).toEqual(["m", 1]);
 
-  // The same file again keeps the buffer; another file or closing drops it.
+  // The same file again keeps the buffer; another file shows in its own tab (8.21), and
+  // closing it shows a.ts again with its buffer; closing that one drops it.
   setOpenFile({ worktree: "/w", path: "a.ts" }, false);
   expect(useHive.getState().editing).toBe(true);
   useHive.setState({ editorNotice: "n" });
   setOpenFile({ worktree: "/w", path: "b.ts" });
   expect(useHive.getState()).toMatchObject({ editing: false, edit: null, editorNotice: null });
   setOpenFile(null);
-  expect(useHive.getState().openFile).toBeNull();
+  expect(useHive.getState()).toMatchObject({ openFile: { path: "a.ts" }, editing: true });
+  expect(edit()?.version).toBe("v:three\n");
+  setOpenFile(null);
+  expect(useHive.getState()).toMatchObject({ openFile: null, openFiles: [], edit: null });
   // Not editing: answers keep no buffer, and nothing is stored for these.
   apply(fileAnswer("x\n", "b.ts"));
   apply({ type: "file_saved", worktree: "/w", path: "b.ts", version: "v" });
@@ -435,18 +438,19 @@ test("editing keeps a buffer for the open file, fed by its answers", () => {
   expect(edit()).toBeNull();
 });
 
-test("a created file opens as editable text unless unsaved edits would be lost", () => {
+test("a created file opens as editable text in its own tab", () => {
   const s = () => useHive.getState();
   openFileDialog({ worktree: "/w", folder: "", path: null });
   apply({ type: "file_created", worktree: "/w", path: "new.ts" });
   expect(s()).toMatchObject({ modal: null, fileDialog: null, editing: true, fileShown: true });
   expect(s().openFile).toEqual({ worktree: "/w", path: "new.ts" });
-  // Unsaved edits of the open file stay; the dialog of another worktree stays open.
+  // Unsaved edits of the open file stay in its tab; the dialog of another worktree stays open.
   apply(fileAnswer("one\n", "new.ts"));
   setEdit({ ...(s().edit as EditBuffer), doc: toText("mine\n") });
   openFileDialog({ worktree: "/x", folder: "", path: null });
   apply({ type: "file_created", worktree: "/w", path: "other.ts" });
-  expect(s().openFile?.path).toBe("new.ts");
+  expect(s().openFile?.path).toBe("other.ts");
+  expect(s().openFiles[0]?.edit?.doc.toString()).toBe("mine\n");
   expect(s()).toMatchObject({ modal: "file-name", fileDialog: { worktree: "/x" } });
 });
 
@@ -621,7 +625,7 @@ test("a shown conversation selects its agent and gives way to any terminal or fi
     () => select("/w"),
     () => activateTab({ id: 1, cwd: "/w" }),
     () => addTab(3, "/w"),
-    showFile,
+    () => setOpenFile({ worktree: "/w", path: "b" }),
     () => setOpenFile({ worktree: "/w", path: "a" }),
     () => setOpenFile({ worktree: "/w", path: "a" }),
   ];
@@ -631,7 +635,7 @@ test("a shown conversation selects its agent and gives way to any terminal or fi
     expect(useHive.getState().transcriptShown).toBeNull();
   }
   // Closing the file leaves a shown conversation.
-  useHive.setState({ transcriptShown: shown });
+  useHive.setState({ transcriptShown: shown, fileShown: false });
   setOpenFile(null);
   expect(useHive.getState().transcriptShown).toEqual(shown);
   // Its agent leaving takes it away; another agent leaving does not.

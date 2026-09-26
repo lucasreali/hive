@@ -75,11 +75,13 @@ test("asks for the open file when it opens, its worktree changes, or the service
     ["/w", "b.ts"],
   ]);
 
+  // Closing b.ts's tab shows a.ts's, beside it (8.21).
   setOpenFile(null);
+  expect(openFile.mock.calls.at(-1)).toEqual(["/w", "a.ts"]);
   apply({ type: "disconnected", reason: "gone" });
   stop();
   setOpenFile({ worktree: "/w", path: "c.ts" });
-  expect(openFile).toHaveBeenCalledTimes(4);
+  expect(openFile).toHaveBeenCalledTimes(5);
 });
 
 test("asks again when a save found a newer version on disk", () => {
