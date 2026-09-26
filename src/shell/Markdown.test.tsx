@@ -85,6 +85,7 @@ test("only http(s) and mailto links are links", () => {
   expect(view.textContent).toContain("bad ent file rel");
   expect(safeUrl(" JavaScript:x")).toBe("");
   expect(safeUrl("HTTPS://a.dev")).toBe("HTTPS://a.dev");
+  expect(safeUrl("mailto:x@a.dev?body=hi&attach=/home/u/.ssh/id_rsa")).toBe("mailto:x@a.dev");
 });
 
 test("a click opens the link outside the app and the webview does not navigate", async () => {
@@ -99,6 +100,17 @@ test("a click opens the link outside the app and the webview does not navigate",
   expect(click.defaultPrevented).toBe(true);
   expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://a.dev");
   expect(calls).toEqual([]);
+  // A middle-click opens outside too; another button does nothing; neither navigates.
+  useHive.setState({ notice: null });
+  const aux = (button: number) => {
+    const event = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button });
+    link.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  expect(aux(2)).toBe(true);
+  expect(useHive.getState().notice).toBeNull();
+  expect(aux(1)).toBe(true);
+  expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://a.dev");
 
   await openLink("https://a.dev", true);
   expect(calls).toEqual([["plugin:opener|open_url", { url: "https://a.dev" }]]);

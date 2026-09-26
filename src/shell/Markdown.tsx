@@ -5,8 +5,15 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { setNotice } from "../store";
 
-/** Only these links open (8.6): anything else (`javascript:`, `file:`, relative) is plain text. */
-export const safeUrl = (url: string) => (/^(https?:|mailto:)/i.test(url.trim()) ? url : "");
+/**
+ * Only these links open (8.6): anything else (`javascript:`, `file:`, relative) is plain text.
+ * A `mailto:` keeps its address only: no prefilled body or `attach=` for the mail app.
+ */
+export function safeUrl(url: string): string {
+  const trimmed = url.trim();
+  if (/^mailto:/i.test(trimmed)) return trimmed.split("?")[0] as string;
+  return /^https?:/i.test(trimmed) ? trimmed : "";
+}
 
 /**
  * A link opens outside the app, in the default browser or mail app (the opener plugin); the
@@ -33,6 +40,11 @@ const COMPONENTS: Components = {
         onClick={(event) => {
           event.preventDefault();
           void openLink(href);
+        }}
+        // A middle-click (auxclick, not click) would open a popup webview on Windows.
+        onAuxClick={(event) => {
+          event.preventDefault();
+          if (event.button === 1) void openLink(href);
         }}
       >
         {children}
