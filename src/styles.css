@@ -934,6 +934,132 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-2);
 }
 
+/* The chat (7.3): its entry kinds, subagent groups and composer. */
+.transcript-entry[data-nested] {
+  padding-left: 28px;
+  box-shadow: inset 16px 0 0 -15px var(--tree-line);
+}
+
+.transcript-entry[data-role="thinking"] .transcript-text,
+.transcript-entry[data-role="note"] .transcript-text,
+.transcript-entry[data-role="usage"] .transcript-text {
+  color: var(--text-3);
+  font-size: var(--fs-small);
+}
+
+.transcript-entry[data-role="note"] .transcript-text {
+  font-style: italic;
+}
+
+.transcript-entry[data-role="usage"] .transcript-text {
+  text-align: right;
+  font-size: var(--fs-meta);
+}
+
+.transcript-entry[data-role="error"] .transcript-role,
+.transcript-entry[data-role="error"] .transcript-text {
+  color: var(--state-error);
+}
+
+.transcript-entry[data-role="divider"] .transcript-text {
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-small);
+}
+
+.transcript-entry summary {
+  cursor: pointer;
+  color: var(--text-3);
+}
+
+.tool-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-details > summary {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  list-style: none;
+}
+
+.tool-status {
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: var(--text-3);
+}
+
+.transcript-entry[data-status="ok"] .tool-status {
+  color: var(--state-idle);
+}
+
+.transcript-entry[data-status="error"] .tool-status {
+  color: var(--state-error);
+}
+
+.tool-status.spin {
+  color: var(--state-working);
+  animation: hive-spin 1s linear infinite;
+}
+
+.tool-output {
+  margin: 6px 0 0 92px;
+  padding: 6px 8px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-view > .files-error {
+  padding: 6px 12px;
+}
+
+.chat-composer {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--panel);
+}
+
+.chat-composer textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  outline: none;
+  resize: none;
+}
+
+.chat-composer textarea:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.chat-composer textarea:disabled {
+  color: var(--text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-status.spin {
+    animation: none;
+  }
+}
+
 /* CodeMirror scrolls inside it (src/viewer/editor.ts). */
 .code-view {
   flex: 1;

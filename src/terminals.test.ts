@@ -2,7 +2,16 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
-import { apply, DEFAULT_SETTINGS, initialState, setWidth, shownTerminals, useHive } from "./store";
+import {
+  addTab,
+  apply,
+  DEFAULT_SETTINGS,
+  initialState,
+  removeTab,
+  setWidth,
+  shownTerminals,
+  useHive,
+} from "./store";
 import { transport } from "./transport";
 
 // happy-dom has no WebGL: a fake addon records what the manager does with the renderer.
@@ -415,6 +424,14 @@ test("Ctrl+Shift+D splits with the next tab of the worktree, again un-splits; a 
   expect(useHive.getState().activeTab).toBe(two.id);
   await splitTerminal(999);
   expect(useHive.getState().split).toBeNull();
+  // A chat (7.3) neither splits nor is picked as the other pane.
+  addTab(50, "/w", "chat");
+  await splitTerminal(50);
+  expect(useHive.getState().split).toBeNull();
+  await splitTerminal(one.id);
+  expect(useHive.getState().split).toEqual({ left: one.id, right: two.id });
+  await splitTerminal(one.id);
+  removeTab(50);
   await splitTerminal(null);
   expect(useHive.getState().split).toBeNull();
 });
