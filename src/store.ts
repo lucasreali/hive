@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { moveNextTo } from "./reorder";
 import {
   type EditBuffer,
   failed,
@@ -262,7 +263,7 @@ export type Session = {
   log: string;
   /** By how its log ends; a session running in a Hive terminal shows its live state instead. */
   state: AgentState;
-  /** A `claude` outside Hive's terminals runs it. */
+  /** A `claude` is known to run it: in a Hive terminal or chat (see `agents`), or outside Hive. */
   running: boolean;
 };
 export type SessionTarget = "log" | "folder";
@@ -604,7 +605,13 @@ export type Modal =
   | "remove-merged"
   | "palette"
   | "file-name"
+  | "confirm"
   | null;
+/**
+ * A yes/no question asked in a Hive dialog (8.20), never the WebView's `confirm`: `run` happens
+ * only when the user picks `action` (e.g. "Discard", "Delete").
+ */
+export type Question = { title: string; text: string; action: string; run: () => void };
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
 /** A project row's context menu, at the pointer. */
@@ -621,6 +628,8 @@ export type HiveState = {
   sessionMenu: SessionMenu | null;
   fileMenu: (FileTarget & { x: number; y: number }) | null;
   fileDialog: FileDialog | null;
+  /** The question of the "confirm" modal (`ask`). */
+  question: Question | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
   /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
@@ -633,6 +642,8 @@ export type HiveState = {
   panelWidth: number;
   /** The left pane's share of a split terminal area, in percent. */
   splitPercent: number;
+  /** Session ids in the order the user put the agents in (8.2); others follow in arrival order. */
+  agentOrder: string[];
   openFile: OpenFile | null;
   /** The open file's tab is the one shown, in place of the active terminal. */
   fileShown: boolean;
@@ -735,6 +746,7 @@ export const initialState: HiveState = {
   sessionMenu: null,
   fileMenu: null,
   fileDialog: null,
+  question: null,
   notice: null,
   update: null,
   rightPanel: "files",
@@ -742,6 +754,7 @@ export const initialState: HiveState = {
   sidebarWidth: 264,
   panelWidth: 380,
   splitPercent: 50,
+  agentOrder: [],
   openFile: null,
   fileShown: false,
   selectedLines: null,
@@ -850,7 +863,77 @@ export function setWidth(side: Side, width: number): void {
   }
 }
 
-export const useHive = create<HiveState>()(() => ({ ...initialState, ...savedWidths() }));
+/** Where the agents' order is remembered between runs (a per-window preference, #37). */
+const ORDER_STORAGE = "hive.agentOrder";
+/** How many session ids are remembered; the oldest moves are forgotten first. */
+const ORDER_LIMIT = 500;
+
+/** The agents' order remembered from the last run; empty when none or unreadable. */
+export function savedAgentOrder(
+  storage: Pick<Storage, "getItem"> | null = safeStorage(),
+): string[] {
+  try {
+    const saved: unknown = JSON.parse(storage?.getItem(ORDER_STORAGE) ?? "[]");
+    return Array.isArray(saved)
+      ? saved.filter((id): id is string => typeof id === "string").slice(0, ORDER_LIMIT)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** `agents` in the user's order (8.2): ordered ones first, the rest as they came (a stable sort). */
+export function inAgentOrder(agents: Agent[], order: string[]): Agent[] {
+  const rank = (a: Agent) => {
+    const i = order.indexOf(a.id);
+    return i < 0 ? order.length : i;
+  };
+  return [...agents].sort((a, b) => rank(a) - rank(b));
+}
+
+/**
+ * Moves agent `id` next to agent `target` (after it when `after`), and remembers the order. Only
+ * within one worktree: the service places an agent by its cwd, so another worktree refuses it.
+ */
+export function moveAgent(id: string, target: string, after: boolean): void {
+  const s = useHive.getState();
+  const agent = s.agents[id];
+  if (!agent || id === target || s.agents[target]?.worktree !== agent.worktree) return;
+  const siblings = inAgentOrder(
+    Object.values(s.agents).filter((a) => a.worktree === agent.worktree),
+    s.agentOrder,
+  ).map((a) => a.id);
+  const moved = moveNextTo(siblings, id, target, after);
+  const agentOrder = [...moved, ...s.agentOrder.filter((o) => !moved.includes(o))].slice(
+    0,
+    ORDER_LIMIT,
+  );
+  useHive.setState({ agentOrder });
+  try {
+    safeStorage()?.setItem(ORDER_STORAGE, JSON.stringify(agentOrder));
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
+/** Moves agent `id` one place up (`-1`) or down (`1`) among its worktree's agents (Alt+↑/↓). */
+export function stepAgent(id: string, step: -1 | 1): void {
+  const s = useHive.getState();
+  const agent = s.agents[id];
+  if (!agent) return;
+  const siblings = inAgentOrder(
+    Object.values(s.agents).filter((a) => a.worktree === agent.worktree),
+    s.agentOrder,
+  );
+  const target = siblings[siblings.findIndex((a) => a.id === id) + step];
+  if (target) moveAgent(id, target.id, step > 0);
+}
+
+export const useHive = create<HiveState>()(() => ({
+  ...initialState,
+  ...savedWidths(),
+  agentOrder: savedAgentOrder(),
+}));
 
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
   const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };
@@ -1201,6 +1284,8 @@ export const openFileDialog = (target: FileTarget, renaming = false) =>
     modal: "file-name",
     fileDialog: { ...target, renaming, error: null },
   });
+/** Asks `question` in the confirm dialog (`ConfirmDialog`). */
+export const ask = (question: Question) => useHive.setState({ modal: "confirm", question });
 /** Keeps an alert in the inbox, the newest first. */
 export const addToInbox = (item: Omit<InboxItem, "id">) =>
   useHive.setState((s) => ({
@@ -1436,14 +1521,17 @@ export function spaceProjects(s: HiveState): Project[] {
   return space ? all.filter((p) => space.projects.includes(p.id)) : all;
 }
 
-/** Agents in the sidebar's order (project, worktree, arrival); those outside the tree last. */
+/**
+ * Agents in the sidebar's order (project, worktree, then the user's order within it, 8.2);
+ * those outside the tree last.
+ */
 export function treeAgents(s: HiveState): Agent[] {
   const worktrees = Object.values(s.projects ?? {}).flatMap((p) => p.worktrees.map((w) => w.id));
   const place = (a: Agent) => {
     const i = worktrees.indexOf(a.worktree ?? "");
     return i < 0 ? worktrees.length : i;
   };
-  return Object.values(s.agents).sort((a, b) => place(a) - place(b));
+  return inAgentOrder(Object.values(s.agents), s.agentOrder).sort((a, b) => place(a) - place(b));
 }
 
 /** Agents that need the user, in tree order: the "N pending" counter and F8's cycle. */

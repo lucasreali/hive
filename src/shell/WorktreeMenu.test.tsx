@@ -198,7 +198,7 @@ test("delete asks first; a refusal shows why and offers to force it", () => {
   expect(dialog.open).toBe(true);
   expect(dialog.textContent).toContain(`Delete fix-login and its folder ${login.path}?`);
   expect(dialog.textContent).toContain(`The branch ${login.branch} is kept.`);
-  const submit = within(dialog).getByRole("button", { name: "Delete Enter" });
+  const submit = within(dialog).getByRole("button", { name: "Delete" });
   expect(document.activeElement).toBe(submit);
   fireEvent.click(submit);
   expect(remove).toHaveBeenLastCalledWith(login.path, false);
@@ -216,7 +216,7 @@ test("delete asks first; a refusal shows why and offers to force it", () => {
   const message = "contains modified or untracked files, use --force to delete it";
   act(() => apply({ type: "remove_worktree_failed", path: login.path, message }));
   expect(within(dialog).getByRole("alert").textContent).toBe(message);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Delete anyway Enter" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete anyway" }));
   expect(remove).toHaveBeenLastCalledWith(login.path, true);
 
   select(login.id);
@@ -229,7 +229,7 @@ test("delete asks first; a refusal shows why and offers to force it", () => {
   act(() => openModal("remove-worktree", null, detached.id));
   const again = screen.getByRole("dialog", { name: "Delete worktree" });
   expect(again.textContent).not.toContain("is kept");
-  fireEvent.click(within(again).getByRole("button", { name: "Cancel Esc" }));
+  fireEvent.click(within(again).getByRole("button", { name: "Cancel" }));
   expect(useHive.getState().modal).toBeNull();
   remove.mockRestore();
 });
@@ -243,7 +243,8 @@ test("rename checks the name with the service and moves the selection along", ()
   fireEvent.click(item("Rename…"));
   const dialog = screen.getByRole("dialog", { name: "Rename worktree" });
   const field = within(dialog).getByLabelText("New name") as HTMLInputElement;
-  const submit = within(dialog).getByRole("button", { name: "Rename Enter" }) as HTMLButtonElement;
+  const submit = within(dialog).getByRole("button", { name: "Rename" }) as HTMLButtonElement;
+  expect(dialog.querySelector("button kbd")).toBeNull();
   expect(document.activeElement).toBe(field);
   expect(field.value).toBe("fix-login");
   expect(validate).toHaveBeenLastCalledWith(shop.id, "fix-login");
@@ -355,11 +356,11 @@ test("the project menu removes merged worktrees without changes, each with its r
   const submit = () => within(dialog).getByRole("button", { name: /^Remove/ }) as HTMLButtonElement;
   expect(within(dialog).getAllByRole("checkbox")).toHaveLength(2);
   expect([box("a"), box("b")].map((c) => (c as HTMLInputElement).checked)).toEqual([true, true]);
-  expect(submit().textContent).toBe("Remove (2) Enter");
+  expect(submit().textContent).toBe("Remove (2)");
   fireEvent.click(box("b"));
   fireEvent.click(box("a"));
   fireEvent.click(box("a"));
-  expect(submit().textContent).toBe("Remove (1) Enter");
+  expect(submit().textContent).toBe("Remove (1)");
   fireEvent.click(submit());
   expect(remove.mock.calls).toEqual([[a.path, false]]);
   expect((box("a") as HTMLInputElement).disabled).toBe(true);
@@ -382,7 +383,7 @@ test("the project menu removes merged worktrees without changes, each with its r
     ["in use by fish (1)", "field-error"],
   ]);
   expect(submit().disabled).toBe(true);
-  fireEvent.click(within(dialog).getByRole("button", { name: /^Close Esc/ }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(useHive.getState().modal).toBeNull();
 });
 

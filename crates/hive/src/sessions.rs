@@ -2,7 +2,7 @@
 //! `<claude dir>/projects/<encoded cwd>/<id>.jsonl` whose `cwd` lies in a followed worktree.
 //! Logs are only read, except when the user deletes one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
@@ -290,9 +290,12 @@ impl Sessions {
     }
 
     /// Every session whose `cwd` lies in a followed worktree, the most recent first. `running`
-    /// holds the folder of each `claude` process: in each folder, that many of the most recent
-    /// sessions count as running (a `claude` writes the newest log of its folder).
-    pub fn list(&self, projects: &[Project], running: &[PathBuf]) -> io::Result<Vec<Session>> {
+    /// holds the ids of the sessions a `claude` is known to run.
+    pub fn list(
+        &self,
+        projects: &[Project],
+        running: &HashSet<String>,
+    ) -> io::Result<Vec<Session>> {
         let Some(root) = &self.root else {
             return Ok(Vec::new());
         };
@@ -317,12 +320,8 @@ impl Sessions {
             }
         }
         sessions.sort_by(|(a, _), (b, _)| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
-        let mut left: Vec<&Path> = running.iter().map(PathBuf::as_path).collect();
         for (session, end) in &mut sessions {
-            if let Some(i) = left.iter().position(|cwd| *cwd == Path::new(&session.cwd)) {
-                left.swap_remove(i);
-                session.running = true;
-            }
+            session.running = running.contains(&session.id);
             session.state = state(*end, session.running);
         }
         Ok(sessions.into_iter().map(|(session, _)| session).collect())
@@ -354,7 +353,7 @@ impl Sessions {
         if !valid_id(id) {
             return Err(io::Error::other(format!("invalid session id {id:?}")));
         }
-        self.list(projects, &[])?
+        self.list(projects, &HashSet::new())?
             .into_iter()
             .find(|s| s.id == id)
             .ok_or_else(|| io::Error::other(format!("no session {id} in the followed projects")))
@@ -784,7 +783,7 @@ not json
 
         let sessions = Sessions::new(Some(root.clone()));
         let followed = [project(repo), project("/other-not-followed")];
-        let list = sessions.list(&followed, &[]).unwrap();
+        let list = sessions.list(&followed, &HashSet::new()).unwrap();
         let got: Vec<_> = list
             .iter()
             .map(|s| (s.id.as_str(), s.worktree.as_str(), s.title.as_deref()))
@@ -804,13 +803,13 @@ not json
                 .all(|s| !s.running && s.state == AgentState::WaitingYou)
         );
 
-        // A `claude` in a folder runs the newest session of that folder; one in a folder
-        // with no session runs none.
+        // Two sessions in one folder, a `claude` running the older: only it runs (an id no
+        // log has marks nothing).
         // Newer by more than the millisecond the order is measured in.
         std::thread::sleep(std::time::Duration::from_millis(20));
         let second = log(&folder, "h.jsonl", repo);
         touched(&second, 2);
-        let running = [PathBuf::from(repo), PathBuf::from("/nowhere")];
+        let running = HashSet::from(["a".to_owned(), "gone".to_owned()]);
         let list = sessions.list(&followed, &running).unwrap();
         let got: Vec<_> = list
             .iter()
@@ -819,9 +818,9 @@ not json
         assert_eq!(
             got,
             [
-                ("h", true, AgentState::Working),
+                ("h", false, AgentState::WaitingYou),
                 ("b", false, AgentState::WaitingYou),
-                ("a", false, AgentState::WaitingYou),
+                ("a", true, AgentState::Working),
             ]
         );
         std::fs::remove_file(second).unwrap();
@@ -859,7 +858,12 @@ not json
             "no session zz in the followed projects"
         );
         sessions.delete(&followed, "b").unwrap();
-        assert!(sessions.list(&followed, &[]).unwrap().is_empty());
+        assert!(
+            sessions
+                .list(&followed, &HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
         assert!(sessions.delete(&followed, "b").is_err());
 
         log(&folder, "a.jsonl", repo);
@@ -873,11 +877,16 @@ not json
         assert!(folder.join("g").symlink_metadata().is_ok());
 
         // No Claude directory, or none yet: no sessions.
-        assert!(Sessions::new(None).list(&followed, &[]).unwrap().is_empty());
+        assert!(
+            Sessions::new(None)
+                .list(&followed, &HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
         let missing = Sessions::new(Some(tmp.path().join("none")));
-        assert!(missing.list(&followed, &[]).unwrap().is_empty());
+        assert!(missing.list(&followed, &HashSet::new()).unwrap().is_empty());
         // A root that is a file cannot be listed.
         let file = Sessions::new(Some(tmp.path().join("projects/stray-file")));
-        assert!(file.list(&followed, &[]).is_err());
+        assert!(file.list(&followed, &HashSet::new()).is_err());
     }
 }

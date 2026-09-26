@@ -34,7 +34,7 @@ Windows                         WSL
 | `hive::chat` | The in-app chat (7.3): starts the real `claude -p` in stream-json mode on pipes, in its own process group; reads its stdout in bounded lines and turns them into `chat_*` messages (`Stream`, pure); writes user turns and control requests; the stop escalation and the end with the service. |
 | `hive::terminal` | Spawns `fish -C 'set -gx PATH <bin> $PATH'` on a PTY with `HIVE_TERMINAL_ID`, its space's environment entries and its worktree's `HIVE_*` entries. Handles input and resize, and ends process groups. |
 | `hive::scripts` | Project scripts (6.8): each worktree's block of 10 ports (`<data>/hive/ports.json`), the `HIVE_*` environment, and running the archive script (`sh -c`, time limit, process group killed). |
-| `hive::procs` | Minimal `/proc` reader (pid, pgrp, session, comm; skips zombies). |
+| `hive::procs` | Minimal `/proc` reader (pid, pgrp, session, comm; skips zombies), and the Claude session each `claude` process runs (8.16). |
 | `hive::watch` | Pure state machine for the unhooked-`claude` warning. |
 | `hive::states` | Pure agent state machine: hook events → state per agent and subagent, "the most urgent wins", PTY-silence reconciliation (the clock is passed in). |
 | `hive::adapter` | `Adapter` trait and `ClaudeCode` adapter: raw hook payload → `AgentEvent` (raw payload kept). |
@@ -374,6 +374,7 @@ From the transcripts only: no 5 h or weekly limits, and the user's statusline is
 3. The context window is taken as 200k, or 1M once the context passed 200k (a heuristic: the real window only reaches the statusline).
 4. `agent_usage` is sent on the agent's channel when context, window or output changed. The sidebar shows "ctx 42%" after the agent's state line.
 5. Sessions panel: `sessions` entries carry `context_tokens` and `output_tokens`, counted the same way while summarizing the log (cached with the summary).
+6. Sessions panel, `running` (8.16): a session runs only when a `claude` is known to run its id: the agents of Hive's terminals and chats (their hooks name the session), and each process named `claude`, from, in order, Claude's own record `<Claude config folder>/sessions/<pid>.json` (its `sessionId`, when its `pid` is that process's), its arguments in `/proc/<pid>/cmdline` (`--session-id <id>`, else `--resume`/`-r <id>` without `--fork-session`), or an open `<id>.jsonl` in `/proc/<pid>/fd`. Ids must be UUIDs; the record and the command line are read up to 64 KiB, at most 4096 open files per process. A process none of these name (a bare `claude`, `--continue`) marks nothing. On macOS only the record is read. The app shows a session of its own terminal or chat as "Show its terminal/chat"; one running outside Hive has Resume, Open as Chat and Delete disabled, without text, and "Continue in New Session" enabled.
 
 ### App disconnect (or SIGTERM)
 1. The accept loop stops and the watcher stops.
