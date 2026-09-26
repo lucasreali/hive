@@ -914,7 +914,18 @@ async fn pump(
         .await;
 }
 
-/// Turns a chat's stdout into messages until it closes, then reports its exit.
+/// Reads a chat's stdout lines (`None`: one too long, skipped) until it closes.
+async fn chat_lines(stdout: tokio::process::ChildStdout, lines: mpsc::Sender<Option<Vec<u8>>>) {
+    let mut stdout = tokio::io::BufReader::new(stdout);
+    let mut buf = Vec::new();
+    while let Ok(Some(whole)) = chat::next_line(&mut stdout, &mut buf, chat::MAX_LINE).await {
+        // The pump reads until this ends: it never goes first.
+        let _ = lines.send(whole.then(|| buf.clone())).await;
+    }
+}
+
+/// Turns a chat's stdout into messages until it closes, sending its live text when due
+/// ([`chat::Stream::flush`]), then reports its exit.
 async fn chat_pump(state: Arc<State>, channel: u32, pipes: chat::Pipes) {
     let chat::Pipes {
         mut child,
@@ -922,13 +933,37 @@ async fn chat_pump(state: Arc<State>, channel: u32, pipes: chat::Pipes) {
         stderr,
     } = pipes;
     let stderr = tokio::spawn(chat::tail(stderr));
-    let mut stdout = tokio::io::BufReader::new(stdout);
-    let mut buf = Vec::new();
-    while let Ok(Some(whole)) = chat::next_line(&mut stdout, &mut buf, chat::MAX_LINE).await {
-        let line = whole.then_some(buf.as_slice());
+    let (sender, mut lines) = mpsc::channel(1);
+    tokio::spawn(chat_lines(stdout, sender));
+    loop {
+        let due = {
+            let chats = state.chats.lock().await;
+            let chat = chats.get(&channel);
+            chat.and_then(|chat| chat.stream.due(std::time::Instant::now()))
+        };
+        let timer = async {
+            match due {
+                Some(due) => tokio::time::sleep_until(due.into()).await,
+                None => std::future::pending().await,
+            }
+        };
+        // Live text is flushed after every line too; the timer sends what is left when claude pauses.
+        let line = tokio::select! {
+            biased;
+            () = timer => None,
+            line = lines.recv() => match line {
+                Some(line) => Some(line),
+                None => break,
+            },
+        };
         let mut chats = state.chats.lock().await;
         let out = chats.get_mut(&channel).map(|chat| {
-            let out = chat.stream.line(line);
+            let mut out = match &line {
+                Some(line) => chat.stream.line(line.as_deref()),
+                None => chat::Out::default(),
+            };
+            out.app
+                .extend(chat.stream.flush(std::time::Instant::now()).app);
             chat.run(out)
         });
         state.chat_out(channel, out.unwrap_or_default()).await;

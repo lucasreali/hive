@@ -15,34 +15,38 @@ const SESSION: &str = "9f1c2b7e-5d3a-4c1e-8b2f-0a6d4e8c1f00";
 
 /// A fake `claude` (`sh`): writes its chat id and arguments to `args`, answers `initialize`
 /// with the `text` fixture's first line, replays the rest after the first user turn, fails on
-/// a turn holding "crash", and ends when its stdin closes.
+/// a turn holding "crash", replays the `streaming` fixture pausing after its first two deltas
+/// on a turn holding "pause", and ends when its stdin closes.
 fn fake_claude(fake: &Path) -> String {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chat/text.jsonl");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chat");
     format!(
         r#"#!/bin/sh
 printf '%s\n' "$HIVE_TERMINAL_ID" "$HIVE_WRAPPED" "$@" > '{args}'
-exec 3< '{fixture}'
+exec 3< '{fixtures}/text.jsonl'
 IFS= read -r line <&3
 IFS= read -r request
 printf '%s\n' "$line"
 while IFS= read -r request; do
     case $request in
     *crash*) echo boom >&2; exit 3 ;;
+    *pause*) n=0; while IFS= read -r line; do
+        printf '%s\n' "$line"; n=$((n + 1)); [ $n = 5 ] && sleep 0.3
+    done < '{fixtures}/streaming.jsonl' ;;
     *'"type":"user"'*) while IFS= read -r line <&3; do printf '%s\n' "$line"; done ;;
     esac
 done
 "#,
         args = fake.join("args").display(),
-        fixture = fixture.display(),
+        fixtures = fixtures.display(),
     )
 }
 
-/// The service's whole `PATH`: `git`, `fish` and a fake `claude`.
+/// The service's whole `PATH`: `git`, `fish`, `sleep` and a fake `claude`.
 fn sandbox(repo: &Repo) -> PathBuf {
     let dir = repo.env.path("fake");
     std::fs::create_dir(&dir).unwrap();
     let path = std::env::var_os("PATH").unwrap();
-    for tool in ["git", "fish"] {
+    for tool in ["git", "fish", "sleep"] {
         let found = std::env::split_paths(&path)
             .map(|d| d.join(tool))
             .find(|p| p.is_file())
@@ -228,7 +232,7 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     let hooks = repo.env.path("data/hive/hive-hooks.json");
     let expected = format!(
         "4\n1\n-p\n--input-format\nstream-json\n--output-format\nstream-json\n--verbose\n\
-         --replay-user-messages\n--permission-prompt-tool\nstdio\n--permission-mode\n\
+         --replay-user-messages\n--include-partial-messages\n--permission-prompt-tool\nstdio\n--permission-mode\n\
          acceptEdits\n--settings\n{}\n--resume\n{SESSION}\n",
         hooks.display()
     );
@@ -252,8 +256,29 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     assert_eq!(app.control().await, status(4, true, default, true));
     let reply = "Git worktrees let one repository have several checkouts at once. \
                  Each one has its own branch and working files.";
+    // The reply grows live (the first delta at once, the next 50 ms later at most, unless the
+    // whole reply comes first), then the whole reply takes its place.
+    let grown = entry(
+        2,
+        ChatEntryKind::Assistant,
+        "Git worktrees let one repository ",
+    );
+    assert_eq!(app.control().await, entries(4, vec![grown]));
+    let mut next = app.control().await;
+    while matches!(
+        next,
+        (
+            4,
+            Control::ChatEntries {
+                replace_last: true,
+                ..
+            }
+        )
+    ) {
+        next = app.control().await;
+    }
     let assistant = entry(2, ChatEntryKind::Assistant, reply);
-    assert_eq!(app.control().await, entries(4, vec![assistant]));
+    assert_eq!(next, entries(4, vec![assistant]));
     let usage = entry(
         3,
         ChatEntryKind::Usage,
@@ -354,6 +379,28 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     write_claude(&fake, &fake_claude(&fake));
     app.send(8, open(&root, None, None)).await;
     assert_eq!(app.control().await, opened(8, &root, None, default));
+    // Live text left waiting when claude pauses is sent when its 50 ms are over.
+    send(&mut app, 8, "pause").await;
+    let user = entry(1, ChatEntryKind::User, "pause");
+    assert_eq!(app.control().await, entries(8, vec![user]));
+    let busy = |model: bool| {
+        let (_, mut busy) = status(8, true, default, model);
+        if let Control::ChatStatus { session, .. } = &mut busy {
+            *session = model.then(|| SESSION.into());
+        }
+        (8, busy)
+    };
+    assert_eq!(app.control().await, busy(false));
+    assert_eq!(app.control().await, busy(true));
+    let grown = entry(2, ChatEntryKind::Thinking, "Two files");
+    assert_eq!(app.control().await, entries(8, vec![grown]));
+    let grown = entry(2, ChatEntryKind::Thinking, "Two files to list.");
+    let replace = Control::ChatEntries {
+        chat: 8,
+        entries: vec![grown],
+        replace_last: true,
+    };
+    assert_eq!(app.control().await, (8, replace));
     drop(app);
     assert!(daemon.wait_exit().success());
 }

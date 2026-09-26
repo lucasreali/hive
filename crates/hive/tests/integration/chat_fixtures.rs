@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
-const SCENARIOS: [&str; 13] = [
+/// The recorder's scenarios, and `streaming`: live text (7.3h), written from the documented
+/// shapes (spike 4.14).
+const SCENARIOS: [&str; 14] = [
     "text",
     "thinking",
     "tools",
@@ -17,6 +19,7 @@ const SCENARIOS: [&str; 13] = [
     "image",
     "interrupt",
     "resume",
+    "streaming",
 ];
 
 #[test]

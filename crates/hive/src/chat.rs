@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hive_protocol::{
     AgentEvent, ChatEntry, ChatEntryKind, ChatImage, ChatMode, Control, EventKind, ToolStatus,
@@ -46,6 +46,8 @@ const STDERR_TAIL: usize = 4 << 10;
 pub const GRACE: Duration = Duration::from_secs(5);
 /// The same when the service ends (#18).
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+/// Live text is sent to the app at most this often per chat (spike 4.14).
+pub const LIVE_EVERY: Duration = Duration::from_millis(50);
 
 /// `claude --permission-mode`'s value for `mode`.
 pub fn mode_arg(mode: ChatMode) -> &'static str {
@@ -74,6 +76,7 @@ pub fn args(settings: &Path, mode: ChatMode, resume: Option<&str>) -> Vec<OsStri
         "stream-json",
         "--verbose",
         "--replay-user-messages",
+        "--include-partial-messages",
         "--permission-prompt-tool",
         "stdio",
         "--permission-mode",
@@ -223,6 +226,20 @@ pub struct Out {
     pub turn: Option<AgentEvent>,
 }
 
+/// The entry growing from a content block's deltas (spike 4.14), until its `assistant` message.
+#[derive(Debug)]
+struct Live {
+    /// The block's `index` in its message.
+    index: Option<u64>,
+    entry: ChatEntry,
+    /// The text so far, kept up to a little over [`MAX_TEXT`].
+    text: String,
+    /// The app has the entry.
+    shown: bool,
+    /// It grew since it was last sent.
+    changed: bool,
+}
+
 /// A chat's conversation state, built from claude's stdout (pure: no process).
 #[derive(Debug)]
 pub struct Stream {
@@ -244,6 +261,10 @@ pub struct Stream {
     failed: bool,
     /// Context tokens of the last main-thread API call.
     context: u64,
+    /// The entry growing live, if any.
+    live: Option<Live>,
+    /// When live text was last sent.
+    sent_at: Option<Instant>,
 }
 
 impl Stream {
@@ -264,6 +285,8 @@ impl Stream {
             retry: None,
             failed: false,
             context: 0,
+            live: None,
+            sent_at: None,
         }
     }
 
@@ -412,7 +435,9 @@ impl Stream {
             ("user", _) => self.user(message, parent, entries),
             ("result", _) => self.result(message, entries, out),
             ("rate_limit_event", _) => self.rate_limit(&message["rate_limit_info"], entries),
-            // `stream_event` (live text, 7.3h), `tool_progress`, hooks, tasks, …
+            // Main thread only; a subagent's would be ignored.
+            ("stream_event", _) if parent.is_none() => self.streamed(&message["event"]),
+            // `tool_progress`, hooks, tasks, …
             _ => {}
         }
     }
@@ -487,13 +512,15 @@ impl Stream {
             self.context = context(&message["usage"]);
         }
         for block in blocks(&message["content"]) {
+            let (assistant, thinking) = (ChatEntryKind::Assistant, ChatEntryKind::Thinking);
             let entry = match block["type"].as_str() {
                 Some("text") if failed => {
-                    self.entry(ChatEntryKind::Error, text(&block["text"]), parent)
+                    let error = ChatEntryKind::Error;
+                    self.block(assistant, error, text(&block["text"]), parent)
                 }
-                Some("text") => self.entry(ChatEntryKind::Assistant, text(&block["text"]), parent),
+                Some("text") => self.block(assistant, assistant, text(&block["text"]), parent),
                 Some("thinking") => {
-                    self.entry(ChatEntryKind::Thinking, text(&block["thinking"]), parent)
+                    self.block(thinking, thinking, text(&block["thinking"]), parent)
                 }
                 Some("tool_use") => self.tool(block, parent),
                 // `redacted_thinking` has nothing to read.
@@ -501,6 +528,86 @@ impl Stream {
             };
             entries.push(entry);
         }
+    }
+
+    /// A text or thinking block's entry (`kind`); the entry that grew live from it (as
+    /// `streamed`) gives its id, so the app replaces it.
+    fn block(
+        &mut self,
+        streamed: ChatEntryKind,
+        kind: ChatEntryKind,
+        text: &str,
+        parent: Option<&str>,
+    ) -> ChatEntry {
+        let live = (self.live).take_if(|live| parent.is_none() && live.entry.kind == streamed);
+        match live {
+            Some(live) => ChatEntry {
+                kind,
+                text: cut(text, MAX_TEXT),
+                ..live.entry
+            },
+            None => self.entry(kind, text, parent),
+        }
+    }
+
+    /// A text or thinking delta grows its block's live entry, sent by [`Self::flush`]; other
+    /// events are ignored (`input_json_delta`: the tool row comes with its `assistant`).
+    fn streamed(&mut self, event: &Value) {
+        let delta = &event["delta"];
+        let (kind, piece) = match (text(&event["type"]), text(&delta["type"])) {
+            ("content_block_delta", "text_delta") => (ChatEntryKind::Assistant, &delta["text"]),
+            ("content_block_delta", "thinking_delta") => {
+                (ChatEntryKind::Thinking, &delta["thinking"])
+            }
+            _ => return,
+        };
+        let index = event["index"].as_u64();
+        let mut live = match self.live.take() {
+            Some(live) if live.index == index && live.entry.kind == kind => live,
+            // A new block (one left without its `assistant` stays as it was last sent).
+            _ => Live {
+                index,
+                entry: self.entry(kind, "", None),
+                text: String::new(),
+                shown: false,
+                changed: false,
+            },
+        };
+        if live.text.len() <= MAX_TEXT {
+            live.text.push_str(text(piece));
+        }
+        live.changed = true;
+        self.live = Some(live);
+    }
+
+    /// When the live text should be sent: at `now` if none was sent in the last
+    /// [`LIVE_EVERY`], else when that ends; `None` when it has not changed.
+    pub fn due(&self, now: Instant) -> Option<Instant> {
+        self.live.as_ref().filter(|live| live.changed)?;
+        Some(self.sent_at.map_or(now, |at| (at + LIVE_EVERY).max(now)))
+    }
+
+    /// Sends the live text if it is due at `now`: the entry replaces the app's last one when it
+    /// is that one already (`replace_last`), else its own `id`.
+    pub fn flush(&mut self, now: Instant) -> Out {
+        let (mut out, due, last) = (Out::default(), self.due(now), self.last_entry);
+        let Some(live) = self
+            .live
+            .as_mut()
+            .filter(|_| due.is_some_and(|due| due <= now))
+        else {
+            return out;
+        };
+        live.entry.text = cut(&live.text, MAX_TEXT);
+        let replace_last = live.shown && live.entry.id == last;
+        (live.shown, live.changed) = (true, false);
+        self.sent_at = Some(now);
+        out.app.push(Control::ChatEntries {
+            chat: self.chat,
+            entries: vec![live.entry.clone()],
+            replace_last,
+        });
+        out
     }
 
     fn tool(&mut self, block: &Value, parent: Option<&str>) -> ChatEntry {
@@ -555,6 +662,11 @@ impl Stream {
 
     /// The end of a turn (spike 4.10, 4.12, 4.13): an error or "Interrupted", then the usage.
     fn result(&mut self, message: &Value, entries: &mut Vec<ChatEntry>, out: &mut Out) {
+        // Live text cut by the end of the turn stays as it grew.
+        if let Some(mut live) = self.live.take().filter(|live| live.changed) {
+            live.entry.text = cut(&live.text, MAX_TEXT);
+            entries.push(live.entry);
+        }
         let interrupted = text(&message["terminal_reason"]).starts_with("aborted");
         let failed =
             !interrupted && (message["is_error"] == true || message["subtype"] != "success");

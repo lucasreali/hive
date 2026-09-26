@@ -98,7 +98,8 @@ fn modes_are_the_clis_permission_modes() {
 fn claude_runs_headless_with_hives_hooks() {
     let settings = Path::new("/d/hive-hooks.json");
     let fixed = "-p --input-format stream-json --output-format stream-json --verbose \
-                 --replay-user-messages --permission-prompt-tool stdio --permission-mode";
+                 --replay-user-messages --include-partial-messages --permission-prompt-tool stdio \
+                 --permission-mode";
     let expected = |mode: &str, rest: &[&str]| {
         let mut args: Vec<OsString> = fixed.split(' ').map(OsString::from).collect();
         args.push(mode.into());
@@ -329,6 +330,164 @@ fn thinking_is_an_entry_and_redacted_thinking_is_not() {
     assert_eq!(kinds[1].0, Assistant);
     assert_eq!(kinds[2].0, Usage);
     assert_eq!(kinds.len(), 3);
+}
+
+fn live(id: u32, kind: ChatEntryKind, text: &str, replace_last: bool) -> Control {
+    Control::ChatEntries {
+        chat: 7,
+        entries: vec![entry(id, kind, text)],
+        replace_last,
+    }
+}
+
+/// A `stream_event` line: a text or thinking delta of block `index`, from `parent`.
+fn delta(index: u64, thinking: bool, text: &str, parent: Option<&str>) -> Vec<u8> {
+    let delta = match thinking {
+        true => json!({"type": "thinking_delta", "thinking": text}),
+        false => json!({"type": "text_delta", "text": text}),
+    };
+    let event = json!({"type": "content_block_delta", "index": index, "delta": delta});
+    let line = json!({"type": "stream_event", "event": event, "parent_tool_use_id": parent});
+    line.to_string().into_bytes()
+}
+
+#[test]
+fn live_text_grows_at_most_every_50_ms_and_its_block_replaces_it() {
+    let mut stream = stream();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chat");
+    let text = std::fs::read_to_string(dir.join("streaming.jsonl")).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let t0 = Instant::now();
+    let at = |ms| t0 + Duration::from_millis(ms);
+    // The lines `range`, then a flush at `ms`.
+    let feed = |stream: &mut Stream, range: std::ops::Range<usize>, ms| {
+        let mut app = Vec::new();
+        for line in &lines[range] {
+            app.extend(stream.line(Some(line.as_bytes())).app);
+        }
+        app.extend(stream.flush(at(ms)).app);
+        app
+    };
+    // The first delta shows at once; the next waits for the 50 ms to pass.
+    let first = live(1, Thinking, "Two files", false);
+    assert_eq!(feed(&mut stream, 0..4, 0), [status(false, true), first]);
+    assert_eq!(feed(&mut stream, 4..5, 10), []);
+    assert_eq!(stream.due(at(10)), Some(at(50)));
+    assert_eq!(stream.due(at(70)), Some(at(70)));
+    assert_eq!(stream.flush(at(49)), Out::default());
+    let grown = live(1, Thinking, "Two files to list.", true);
+    assert_eq!(stream.flush(at(50)).app, [grown]);
+    assert_eq!(stream.flush(at(90)), Out::default());
+    // The whole block takes the live entry's id.
+    let thinking = live(1, Thinking, "Two files to list.", false);
+    assert_eq!(feed(&mut stream, 5..6, 60), [thinking]);
+    assert_eq!(stream.due(at(60)), None);
+    // The next block's first delta waits too.
+    assert_eq!(feed(&mut stream, 6..9, 70), []);
+    assert_eq!(stream.due(at(70)), Some(at(100)));
+    let first = live(2, Assistant, "I'll list ", false);
+    assert_eq!(stream.flush(at(100)).app, [first]);
+    assert_eq!(feed(&mut stream, 9..10, 110), []);
+    // Its block comes before the next delta was due; tool input deltas are ignored.
+    let text = live(2, Assistant, "I'll list the files.", false);
+    let mut call = entry(3, Tool, "ls");
+    call.tool = Some("Bash".into());
+    call.status = Some(ToolStatus::Running);
+    let tool = |entry: &ChatEntry| Control::ChatEntries {
+        chat: 7,
+        entries: vec![entry.clone()],
+        replace_last: false,
+    };
+    assert_eq!(feed(&mut stream, 10..16, 200), [text, tool(&call)]);
+    call.status = Some(ToolStatus::Ok);
+    call.output = Some("README.md\nsrc".into());
+    let first = live(4, Assistant, "There are ", false);
+    assert_eq!(feed(&mut stream, 16..23, 300), [tool(&call), first]);
+    // Behind a newer entry, it is replaced by id.
+    let note = live(5, Note, "Context is almost full.", false);
+    let grown = live(4, Assistant, "There are two: README.md", false);
+    assert_eq!(feed(&mut stream, 23..25, 400), [note, grown]);
+    // Cut by the end of the turn, it keeps the text it got.
+    let end = Control::ChatEntries {
+        chat: 7,
+        entries: vec![
+            entry(4, Assistant, "There are two: README.md and src"),
+            entry(6, Note, "Interrupted"),
+            entry(7, Usage, "2.3 s · 40 output tokens · 0% context"),
+        ],
+        replace_last: false,
+    };
+    assert_eq!(feed(&mut stream, 25..27, 410), [end]);
+    assert_eq!(stream.due(at(500)), None);
+}
+
+#[test]
+fn live_text_is_bounded_per_block_and_main_thread_only() {
+    let mut stream = stream();
+    let now = Instant::now();
+    let flush = |stream: &mut Stream, line: Vec<u8>, secs| {
+        stream.line(Some(&line));
+        stream.flush(now + Duration::from_secs(secs)).app
+    };
+    // A subagent's deltas (never sent) are ignored.
+    assert_eq!(
+        flush(&mut stream, delta(0, false, "x", Some("toolu_1")), 1),
+        []
+    );
+    // Text stops growing a little past the cap.
+    let long = "a".repeat(MAX_TEXT);
+    let [Control::ChatEntries { entries, .. }] =
+        &flush(&mut stream, delta(0, false, &long, None), 2)[..]
+    else {
+        panic!()
+    };
+    assert_eq!(entries[0].text, long);
+    stream.line(Some(&delta(0, false, "b", None)));
+    stream.line(Some(&delta(0, false, "c", None)));
+    assert_eq!(
+        stream.live.as_ref().map(|live| live.text.len()),
+        Some(MAX_TEXT + 1)
+    );
+    // Another block, or another kind at the same index, is another entry.
+    let thinking = flush(&mut stream, delta(0, true, "t", None), 3);
+    assert_eq!(thinking, [live(2, Thinking, "t", false)]);
+    let text = flush(&mut stream, delta(1, true, "u", None), 4);
+    assert_eq!(text, [live(3, Thinking, "u", false)]);
+}
+
+#[test]
+fn only_the_main_threads_block_of_its_kind_replaces_the_live_entry() {
+    let mut stream = stream();
+    stream.line(Some(&delta(0, false, "Grow", None)));
+    stream.flush(Instant::now());
+    let block = |kind: &str, text: &str, parent: Option<&str>, error: bool| {
+        let key = if kind == "thinking" {
+            "thinking"
+        } else {
+            "text"
+        };
+        let mut block = json!({"type": "assistant", "parent_tool_use_id": parent,
+            "message": {"content": [{"type": kind, key: text}]}});
+        if error {
+            block["error"] = json!("rate_limit");
+        }
+        block.to_string().into_bytes()
+    };
+    let out = stream.line(Some(&block("text", "sub", Some("toolu_1"), false)));
+    let [sub] = &entries(&out)[..] else { panic!() };
+    assert_eq!((sub.id, sub.parent.as_deref()), (2, Some("toolu_1")));
+    let out = stream.line(Some(&block("thinking", "hm", None, false)));
+    assert_eq!(kinds(&out), [(Thinking, "hm".into())]);
+    assert_eq!(entries(&out)[0].id, 3);
+    let out = stream.line(Some(&block("text", "Rate limited", None, true)));
+    assert_eq!(entries(&out), [entry(1, Error, "Rate limited")]);
+    assert!(stream.live.is_none());
+    // Live text already sent adds nothing at the end of the turn.
+    stream.line(Some(&delta(0, false, "Shown", None)));
+    stream.flush(Instant::now() + Duration::from_secs(1));
+    let result = json!({"type": "result", "subtype": "success", "duration_ms": 1000});
+    let out = stream.line(Some(result.to_string().as_bytes()));
+    assert_eq!(kinds(&out), [(Usage, "1.0 s · 0 output tokens".into())]);
 }
 
 #[test]
