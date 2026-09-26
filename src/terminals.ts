@@ -105,21 +105,23 @@ export function ligatureRanges(text: string): [number, number][] {
 }
 
 /**
- * The bundled faces load on first use, and xterm measures its cells and caches its glyphs
- * with whatever font is ready then: they are loaded before the first terminal is made. Null
- * once they are (or without a FontFaceSet): nothing to wait for.
+ * The bundled faces would load only on first use, and xterm measures its cells and caches its
+ * glyphs with whatever font is ready then. So they load as soon as the terminals mount, and
+ * terminals already rendered by then measure and draw again. A terminal never waits for
+ * them: keys typed into a new one are not lost.
  */
 const BUNDLED_FACES = ['1em "Hive Mono"', 'bold 1em "Hive Mono"', '1em "Symbols Nerd Font"'];
-let fontsReady = false;
-let fontsLoading: Promise<void> | null = null;
-function bundledFonts(): Promise<void> | null {
-  if (fontsReady || !("fonts" in document)) return null;
-  fontsLoading ??= Promise.all(
-    BUNDLED_FACES.map((face) => document.fonts.load(face).catch(() => [])),
-  ).then(() => {
-    fontsReady = true;
-  });
-  return fontsLoading;
+async function loadBundledFonts(): Promise<void> {
+  if (!("fonts" in document)) return;
+  await Promise.all(BUNDLED_FACES.map((face) => document.fonts.load(face).catch(() => [])));
+  for (const { term } of entries.values()) {
+    if (!term.element) continue;
+    // A new font family is what makes xterm measure again and drop its glyph cache.
+    const family = term.options.fontFamily;
+    term.options.fontFamily = "monospace";
+    term.options.fontFamily = family;
+  }
+  fitShown();
 }
 
 /** How long the host must keep its size before terminals are refitted and the PTY resized. */
@@ -154,8 +156,6 @@ export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste
  * before the service is asked, so no output is lost before the tab appears.
  */
 export async function openTerminal(cwd: string): Promise<number> {
-  const fonts = bundledFonts();
-  if (fonts) await fonts;
   const term = new Terminal({
     lineHeight: 1.2,
     allowProposedApi: true, // registerCharacterJoiner
@@ -333,6 +333,7 @@ export function mountTerminals(element: HTMLElement): () => void {
   const observer = new ResizeObserver(refit);
   observer.observe(element);
   showTerminals(shown, null);
+  void loadBundledFonts();
   return () => {
     clearTimeout(timer);
     observer.disconnect();

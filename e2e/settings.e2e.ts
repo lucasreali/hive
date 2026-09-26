@@ -1,15 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 
-/**
- * Terminal 1's font size and columns, read from the page's own terminal manager (undefined
- * until it exists: it waits for the bundled fonts).
- */
-function terminal(page: Page): Promise<{ fontSize?: number; cols?: number }> {
+/** Terminal 1's font size and columns, read from the page's own terminal manager. */
+function terminal(page: Page): Promise<{ fontSize: number; cols: number }> {
   return page.evaluate(async () => {
     const url = "/src/terminals.ts";
     const { terminal } = await import(/* @vite-ignore */ url);
     const term = terminal(1);
-    return { fontSize: term?.options.fontSize, cols: term?.cols };
+    return { fontSize: term.options.fontSize, cols: term.cols };
   });
 }
 
@@ -35,7 +32,7 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   await expect(dialog.getByLabel("Font size", { exact: true })).toHaveValue("20");
   await expect.poll(async () => (await terminal(page)).fontSize).toBe(20);
   // Bigger cells: the terminal refits to fewer columns.
-  expect((await terminal(page)).cols).toBeLessThan(before.cols as number);
+  expect((await terminal(page)).cols).toBeLessThan(before.cols);
 
   expect(await cssVar(page, "--bg")).toBe("#282c33");
   await dialog.getByRole("button", { name: "Appearance" }).click();

@@ -48,13 +48,15 @@ globalThis.ResizeObserver = class {
 };
 
 // happy-dom has no FontFaceSet: a fake one, for this file only, records which faces are
-// loaded and fails one.
+// loaded, finishes when `fontsGate` does and fails one.
 const loadedFaces: string[] = [];
+let fontsGate = Promise.resolve();
 Object.defineProperty(document, "fonts", {
   configurable: true,
   value: {
     load: async (face: string) => {
       loadedFaces.push(face);
+      await fontsGate;
       if (face.startsWith("bold")) throw new Error("network error");
       return [];
     },
@@ -90,6 +92,7 @@ beforeEach(async () => {
   host = document.createElement("div");
   document.body.append(host);
   unmount = mountTerminals(host);
+  await settle(); // the bundled fonts it loads
   webglFails = false;
   addons.length = 0;
 });
@@ -223,14 +226,32 @@ test("input goes to the service until the shell exits; size changes resize the P
   resize.mockRestore();
 });
 
-test("the bundled fonts load once, before the first terminal; a failed face does not stop it", async () => {
-  await open();
-  await open();
+test("the bundled fonts load when the terminals mount, and the rendered ones measure again", async () => {
+  unmount();
+  loadedFaces.length = 0;
+  let release = () => {};
+  fontsGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  unmount = mountTerminals(host);
   expect(loadedFaces).toEqual([
     '1em "Hive Mono"',
     'bold 1em "Hive Mono"',
     '1em "Symbols Nerd Font"',
   ]);
+  // A new terminal does not wait for them.
+  const { id, term } = await open();
+  const hidden = (await open()).term;
+  showTerminal(id);
+  const family = term.options.fontFamily;
+  const fit = spyOn(FitAddon.prototype, "fit");
+  release();
+  await settle();
+  expect(fit).toHaveBeenCalledTimes(1);
+  expect(term.options.fontFamily).toBe(family);
+  expect(hidden.element).toBeUndefined();
+  fit.mockRestore();
+  fontsGate = Promise.resolve();
 });
 
 test("the font's ligature sequences are joined, longest first, and nothing else", () => {
