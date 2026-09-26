@@ -11,7 +11,8 @@ use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use hive_protocol::{
-    AgentEvent, ChatEntry, ChatEntryKind, ChatImage, ChatMode, Control, EventKind, ToolStatus,
+    AgentEvent, ChatAnswer, ChatEntry, ChatEntryKind, ChatImage, ChatMode, ChatOption,
+    ChatQuestion, ChatRequest, ChatRequestKind, Control, EventKind, ToolStatus,
 };
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
@@ -40,6 +41,14 @@ const MAX_BATCH: usize = 3 << 20;
 const MAX_COMMANDS: usize = 500;
 /// Most tool calls of a turn waiting for their result.
 const MAX_TOOLS: usize = 1024;
+/// Most requests waiting for the human; more are denied.
+const MAX_PENDING: usize = 64;
+/// Most questions of an `AskUserQuestion` shown, and most options of each.
+const MAX_QUESTIONS: usize = 16;
+/// Longest plan shown (spike 5.5).
+const MAX_PLAN: usize = 256 << 10;
+/// Longest free-text answer or deny message, and longest text of a question shown.
+const MAX_ANSWER: usize = 4 << 10;
 /// Bytes of stderr kept for `chat_closed`.
 const STDERR_TAIL: usize = 4 << 10;
 /// Each step of closing a chat waits this long for claude to exit (spike 5.6).
@@ -123,9 +132,9 @@ fn blocks(content: &Value) -> &[Value] {
     content.as_array().map_or(&[], Vec::as_slice)
 }
 
-/// One line for a tool call: its command, path or pattern, else its input as JSON.
-fn summary(tool: &str, input: &Value) -> String {
-    let key = match tool {
+/// The input field that says what a tool call does: its command, path, pattern, …
+fn key(tool: &str) -> Option<&'static str> {
+    match tool {
         "Bash" => Some("command"),
         "Read" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => Some("file_path"),
         "Grep" | "Glob" => Some("pattern"),
@@ -133,8 +142,18 @@ fn summary(tool: &str, input: &Value) -> String {
         "WebSearch" => Some("query"),
         "Agent" | "Task" => Some("description"),
         _ => None,
-    };
-    let text = key.and_then(|key| input[key].as_str());
+    }
+}
+
+/// What a tool call does, whole: its command or path, else its input as JSON.
+fn detail(tool: &str, input: &Value) -> String {
+    let text = key(tool).and_then(|key| input[key].as_str());
+    text.map_or_else(|| input.to_string(), str::to_owned)
+}
+
+/// One line for a tool call: its command, path or pattern, else its input as JSON.
+fn summary(tool: &str, input: &Value) -> String {
+    let text = key(tool).and_then(|key| input[key].as_str());
     clip(
         &text.map_or_else(|| input.to_string(), str::to_owned),
         MAX_SUMMARY,
@@ -192,6 +211,142 @@ fn time_of_day(secs: u64) -> String {
     format!("{:02}:{:02} UTC", secs / 3600 % 24, secs / 60 % 60)
 }
 
+/// The questions of an `AskUserQuestion` input, as shown (bounded); an answer names their
+/// options by these labels.
+fn questions(input: &Value) -> Vec<ChatQuestion> {
+    let questions = blocks(&input["questions"]).iter().take(MAX_QUESTIONS);
+    let shown = |value: &Value| cut(text(value), MAX_ANSWER);
+    let question = |q: &Value| ChatQuestion {
+        question: shown(&q["question"]),
+        header: shown(&q["header"]),
+        multi: q["multiSelect"] == true,
+        options: blocks(&q["options"])
+            .iter()
+            .take(MAX_QUESTIONS)
+            .map(|o| ChatOption {
+                label: shown(&o["label"]),
+                description: shown(&o["description"]),
+            })
+            .collect(),
+    };
+    questions.map(question).collect()
+}
+
+/// A `control_response` answering claude's request `id`.
+fn reply(id: &str, response: Value) -> Value {
+    json!({"type": "control_response",
+           "response": {"subtype": "success", "request_id": id, "response": response}})
+}
+
+/// A denial with the human's `message` (≤ 4 KiB), or `otherwise` when it is empty.
+fn deny(message: &str, otherwise: &str) -> Result<Value, &'static str> {
+    if message.len() > MAX_ANSWER {
+        return Err("The message is longer than 4 KiB.");
+    }
+    Ok(denial(if message.is_empty() {
+        otherwise
+    } else {
+        message
+    }))
+}
+
+/// claude may not run the tool; it reads `message` and goes on with the turn.
+fn denial(message: &str) -> Value {
+    json!({"behavior": "deny", "message": message, "interrupt": false})
+}
+
+/// The response to a pending request for the human's `answer`, if it fits the request. An
+/// allow always carries claude's own `input`.
+fn response(
+    request: &ChatRequest,
+    input: &Value,
+    answer: &ChatAnswer,
+) -> Result<Value, &'static str> {
+    use ChatRequestKind as Kind;
+    let allow = |input: Value| json!({"behavior": "allow", "updatedInput": input});
+    match (request.kind, answer) {
+        (_, ChatAnswer::Deny { message }) => deny(
+            message.as_deref().unwrap_or_default(),
+            "The user denied this.",
+        ),
+        (Kind::Plan, ChatAnswer::KeepPlanning { feedback }) => {
+            deny(feedback, "The user wants to keep planning.")
+        }
+        (Kind::Permission, ChatAnswer::Allow) | (Kind::Plan, ChatAnswer::ApprovePlan { .. }) => {
+            Ok(allow(input.clone()))
+        }
+        (Kind::Question, ChatAnswer::Answers { answers }) => {
+            let chosen = answered(&request.questions, blocks(&input["questions"]), answers)?;
+            let mut input = input.as_object().cloned().unwrap_or_default();
+            input.insert("answers".into(), chosen);
+            Ok(allow(Value::Object(input)))
+        }
+        _ => Err("This answer does not fit the request."),
+    }
+}
+
+/// `AskUserQuestion`'s `answers`: question text → the chosen label, the chosen labels of a
+/// multiple choice, or a free text; each as claude wrote it (`asked`), the app naming them by
+/// their shown labels.
+fn answered(
+    questions: &[ChatQuestion],
+    asked: &[Value],
+    answers: &[Vec<String>],
+) -> Result<Value, &'static str> {
+    if answers.len() != questions.len() {
+        return Err("Answer every question.");
+    }
+    let mut map = serde_json::Map::new();
+    for ((question, asked), chosen) in questions.iter().zip(asked).zip(answers) {
+        let labels: Option<Vec<Value>> = chosen
+            .iter()
+            .map(|label| {
+                let at = question.options.iter().position(|o| o.label == *label)?;
+                Some(asked["options"][at]["label"].clone())
+            })
+            .collect();
+        let value = match (labels, chosen.as_slice()) {
+            (Some(_), [_, _, ..]) if !question.multi => {
+                return Err("Choose one option.");
+            }
+            (Some(labels), [_, ..]) if question.multi => Value::Array(labels),
+            (Some(mut labels), [_]) => labels.remove(0),
+            (None, [text]) if text.len() > MAX_ANSWER => {
+                return Err("The answer is longer than 4 KiB.");
+            }
+            (None, [text]) if !text.is_empty() => json!(text),
+            _ => return Err("Choose an option or write an answer."),
+        };
+        map.insert(text(&asked["question"]).to_owned(), value);
+    }
+    Ok(Value::Object(map))
+}
+
+/// What the human decided about a request, as a note.
+fn outcome(request: &ChatRequest, input: &Value, answer: &ChatAnswer) -> String {
+    let tool = &request.tool;
+    match (request.kind, answer) {
+        (_, ChatAnswer::Allow) => format!("Allowed {tool}: {}", summary(tool, input)),
+        (ChatRequestKind::Question, ChatAnswer::Deny { .. }) => "Question dismissed".to_owned(),
+        (ChatRequestKind::Plan, ChatAnswer::Deny { .. }) => "Plan rejected".to_owned(),
+        (_, ChatAnswer::Deny { .. }) => format!("Denied {tool}: {}", summary(tool, input)),
+        (_, ChatAnswer::Answers { answers }) => {
+            let answers: Vec<String> = answers.iter().map(|a| a.join(", ")).collect();
+            format!("Answered: {}", answers.join("; "))
+        }
+        (
+            _,
+            ChatAnswer::ApprovePlan {
+                accept_edits: false,
+            },
+        ) => "Plan approved".to_owned(),
+        (_, ChatAnswer::ApprovePlan { accept_edits: true }) => {
+            "Plan approved, accepting edits".to_owned()
+        }
+        (_, ChatAnswer::KeepPlanning { feedback }) => format!("Kept planning: {feedback}"),
+    }
+}
+
 /// Splits entries into `chat_entries` messages of at most `most` entries and `bytes` bytes.
 fn batches(chat: u32, entries: Vec<ChatEntry>, most: usize, bytes: usize) -> Vec<Control> {
     let mut batches: Vec<(Vec<ChatEntry>, usize)> = Vec::new();
@@ -234,6 +389,8 @@ pub struct Stream {
     initialize: Option<String>,
     /// Tool calls waiting for their result, by `tool_use_id`: the result updates the entry.
     tools: HashMap<String, ChatEntry>,
+    /// Requests waiting for the human (spike 4.5–4.7), oldest first, with claude's input.
+    pending: Vec<(ChatRequest, Value)>,
     session: Option<String>,
     model: Option<String>,
     mode: ChatMode,
@@ -256,6 +413,7 @@ impl Stream {
             last_request: 0,
             initialize: None,
             tools: HashMap::new(),
+            pending: Vec::new(),
             session,
             model: None,
             mode,
@@ -381,9 +539,23 @@ impl Stream {
         let parent = id_of(&message["parent_tool_use_id"]);
         match (text(&message["type"]), text(&message["subtype"])) {
             ("control_response", _) => self.answered(&message["response"], entries, out),
-            ("control_request", _) => self.asked(message, entries, out),
+            ("control_request", _) => self.asked(message, out),
+            ("control_cancel_request", _) => {
+                let id = &message["request_id"];
+                if let Some(at) = self.pending.iter().position(|(r, _)| *id == r.id) {
+                    let note = format!("Request cancelled: {}", self.pending[at].0.tool);
+                    entries.push(self.entry(ChatEntryKind::Note, &note, None));
+                    self.gone(at, out);
+                }
+            }
             ("system", "init") => self.init(message),
-            ("system", "status") => self.compacting = message["status"] == "compacting",
+            ("system", "status") => {
+                self.compacting = message["status"] == "compacting";
+                // e.g. leaving plan mode after an approved plan.
+                if let Some(mode) = message["permissionMode"].as_str().and_then(mode_of) {
+                    self.mode = mode;
+                }
+            }
             ("system", "compact_boundary") => {
                 let tokens = message["compact_metadata"]["pre_tokens"].as_u64();
                 let text = match tokens {
@@ -443,25 +615,137 @@ impl Stream {
         });
     }
 
-    /// A request to us. Permission prompts, questions and plans are denied until 7.3e, which
-    /// answers them here; any other (SDK hooks, SDK MCP servers: we register none) is refused.
-    fn asked(&mut self, message: &Value, entries: &mut Vec<ChatEntry>, out: &mut Out) {
+    /// A request to us: a permission prompt, question or plan waits for the human (at most
+    /// [`MAX_PENDING`]); any other (SDK hooks, SDK MCP servers: we register none) is refused.
+    fn asked(&mut self, message: &Value, out: &mut Out) {
         let Some(id) = id_of(&message["request_id"]) else {
             return;
         };
         let request = &message["request"];
-        let response = if request["subtype"] == "can_use_tool" {
-            let tool = clip(text(&request["tool_name"]), MAX_ID);
-            let note = format!("{tool} was denied: Hive cannot answer permission requests yet.");
-            entries.push(self.entry(ChatEntryKind::Note, &note, None));
-            let why = "Denied: the app cannot answer permission requests yet.";
-            let deny = json!({"behavior": "deny", "message": why, "interrupt": false});
-            json!({"subtype": "success", "request_id": id, "response": deny})
-        } else {
-            json!({"subtype": "error", "request_id": id, "error": "not supported"})
+        if request["subtype"] != "can_use_tool" {
+            let error = json!({"subtype": "error", "request_id": id, "error": "not supported"});
+            return out
+                .write
+                .push(json!({"type": "control_response", "response": error}));
+        }
+        if self.pending.iter().any(|(r, _)| r.id == id) {
+            // Already asked: it is answered once.
+            return;
+        }
+        if self.pending.len() == MAX_PENDING {
+            let denied = denial("Too many requests are waiting.");
+            return out.write.push(reply(id, denied));
+        }
+        let tool = clip(text(&request["tool_name"]), MAX_ID);
+        let input = request["input"].clone();
+        let questions = match tool.as_str() {
+            "AskUserQuestion" => questions(&input),
+            _ => Vec::new(),
         };
-        out.write
-            .push(json!({"type": "control_response", "response": response}));
+        let (kind, plan) = match tool.as_str() {
+            _ if !questions.is_empty() => (ChatRequestKind::Question, None),
+            "ExitPlanMode" => {
+                let plan = cut(text(&input["plan"]), MAX_PLAN);
+                (ChatRequestKind::Plan, Some(plan))
+            }
+            _ => (ChatRequestKind::Permission, None),
+        };
+        let reason = request["decision_reason"].as_str();
+        let asked = ChatRequest {
+            id: id.to_owned(),
+            kind,
+            detail: cut(&detail(&tool, &input), MAX_TEXT),
+            tool,
+            reason: reason.map(|r| cut(r, MAX_TEXT)),
+            questions,
+            plan,
+        };
+        out.app.push(Control::ChatRequest {
+            chat: self.chat,
+            request: asked.clone(),
+        });
+        self.pending.push((asked, input));
+        out.turn = self.waiting();
+    }
+
+    /// The pending request at `at` is answered or cancelled: its card goes.
+    fn gone(&mut self, at: usize, out: &mut Out) {
+        let (request, _) = self.pending.remove(at);
+        out.app.push(Control::ChatRequestGone {
+            chat: self.chat,
+            request: request.id,
+        });
+        out.turn = self.waiting();
+    }
+
+    /// The agent's state for the requests left: waiting on the newest (its tool says for
+    /// what: a permission, an answer or a plan), else working again.
+    fn waiting(&self) -> Option<AgentEvent> {
+        let kind = match self.pending.last() {
+            Some((request, _)) => EventKind::PermissionRequested {
+                tool: Some(request.tool.clone()),
+            },
+            None => EventKind::ToolFinished { tool: None },
+        };
+        self.event(kind)
+    }
+
+    /// An event of this chat's agent, once its session is known.
+    fn event(&self, kind: EventKind) -> Option<AgentEvent> {
+        let session = self.session.clone();
+        session.map(|id| agent_event(self.chat, id, kind))
+    }
+
+    /// The human's answer to the pending request `id`: taken once, only for a request of this
+    /// chat and when it fits it; otherwise refused with an error and the request still waits.
+    pub fn answer(&mut self, id: &str, answer: &ChatAnswer) -> Out {
+        let at = self.pending.iter().position(|(r, _)| r.id == id);
+        let answered = at.ok_or("no such pending request").and_then(|at| {
+            let (request, input) = &self.pending[at];
+            response(request, input, answer).map(|response| (at, response))
+        });
+        let (at, response) = match answered {
+            Ok(answered) => answered,
+            Err(message) => {
+                let message = message.to_owned();
+                return Out {
+                    app: vec![Control::Error { message }],
+                    ..Out::default()
+                };
+            }
+        };
+        let mut out = match answer {
+            ChatAnswer::ApprovePlan { accept_edits: true } => self.set_mode(ChatMode::AcceptEdits),
+            _ => Out::default(),
+        };
+        out.write.insert(0, reply(id, response));
+        let (request, input) = &self.pending[at];
+        let note = outcome(request, input, answer);
+        self.note(&note, &mut out);
+        self.gone(at, &mut out);
+        out
+    }
+
+    /// Keeps what the human decided in the conversation, once the card goes.
+    fn note(&mut self, note: &str, out: &mut Out) {
+        let entries = vec![self.entry(ChatEntryKind::Note, note, None)];
+        out.app.push(Control::ChatEntries {
+            chat: self.chat,
+            entries,
+            replace_last: false,
+        });
+    }
+
+    /// Denies every pending request (the chat closes: default is deny).
+    pub fn deny_all(&mut self) -> Out {
+        let denials = self
+            .pending
+            .drain(..)
+            .map(|(request, _)| reply(&request.id, denial("The chat was closed.")));
+        Out {
+            write: denials.collect(),
+            ..Out::default()
+        }
     }
 
     fn init(&mut self, message: &Value) {
@@ -579,10 +863,7 @@ impl Stream {
             true => EventKind::TurnFailed { error: None },
             false => EventKind::TurnFinished,
         };
-        out.turn = self
-            .session
-            .clone()
-            .map(|id| agent_event(self.chat, id, kind));
+        out.turn = self.event(kind);
         self.busy = false;
         self.compacting = false;
         self.retry = None;
@@ -709,9 +990,12 @@ impl Chat {
         out
     }
 
-    /// Closes claude's stdin (it ends after the running turn). Returns whether it was open.
+    /// Denies every pending request, then closes claude's stdin (it ends after the running
+    /// turn). Returns whether it was open.
     pub fn close(&mut self) -> bool {
         self.closing = true;
+        let denials = self.stream.deny_all();
+        self.run(denials);
         self.stdin.take().is_some()
     }
 }
