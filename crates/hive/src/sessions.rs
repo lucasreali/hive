@@ -762,6 +762,8 @@ not json
         let older = log(&folder, "a.jsonl", repo);
         touched(&older, 0);
         let wt = format!("{repo}/.claude/worktrees/w");
+        // Sessions are placed by their resolved cwd: the folders exist.
+        std::fs::create_dir_all(format!("{wt}/src")).unwrap();
         touched(
             &log(&root.join(normalized(&wt)), "b.jsonl", &format!("{wt}/src")),
             1,

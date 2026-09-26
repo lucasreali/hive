@@ -146,6 +146,8 @@ async fn a_subagents_own_worktree_is_sent_with_it() {
         worktree_hook(&repo, &mut app, "hook-create", create).await,
         vec![]
     );
+    // Hook cwds are placed resolved, so the folder exists.
+    std::fs::create_dir(format!("{sub_b}/src")).unwrap();
     let inside = subagent("b", json!({"cwd": format!("{sub_b}/src")}));
     let seen = hook(&repo, &mut app, "1", "SubagentStart", inside).await;
     assert_eq!(seen, with(vec![owning("a", &sub_a), owning("b", &sub_b)]));
@@ -194,6 +196,7 @@ async fn agents_are_placed_by_their_cwd_and_removed_when_they_end() {
     app.open_terminal(2, &repo.root).await;
 
     let cwd = format!("{fix_a}/src");
+    std::fs::create_dir(&cwd).unwrap();
     let start = json!({"session_id": "s1", "cwd": cwd, "source": "startup"});
     let seen = hook(&repo, &mut app, "1", "SessionStart", start).await;
     let placed = detected("s1", Some((&root, &fix_a)), &cwd);
