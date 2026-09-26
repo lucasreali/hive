@@ -147,6 +147,40 @@ test("pending requests pin above the composer until the service says they are go
   expect(screen.queryByRole("region", { name: "Permission request" })).toBeNull();
 });
 
+test("a request arriving while the user types keeps the composer's focus, text and Enter", () => {
+  const view = chatTab();
+  act(() => apply(opened));
+  const send = spyOn(transport, "chatSend").mockResolvedValue();
+  const answer = spyOn(transport, "chatAnswer").mockResolvedValue();
+  const message = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  message.focus();
+  fireEvent.change(message, { target: { value: "fix the bug" } });
+  message.setSelectionRange(3, 3);
+  const request = { id: "req_1", ...MOCK_CHAT_REQUESTS.permission };
+  act(() => apply({ type: "chat_request", channel: 5, chat: 5, request }));
+  const card = screen.getByRole("region", { name: "Permission request" });
+  expect(document.activeElement).toBe(message);
+  expect(message.value).toBe("fix the bug");
+  expect(message.selectionStart).toBe(3);
+  // Enter sends the message; the card is not answered.
+  fireEvent.keyDown(message, { key: "Enter" });
+  expect(send.mock.calls.map(([chat, text]) => [chat, text])).toEqual([[5, "fix the bug"]]);
+  expect(answer).not.toHaveBeenCalled();
+  // Once the user focuses the card, its Enter answers.
+  card.focus();
+  fireEvent.keyDown(card, { key: "Enter" });
+  expect(answer.mock.calls.map(([, , value]) => value)).toEqual([{ kind: "allow" }]);
+  expect(view.querySelector(".chat-requests")).not.toBeNull();
+});
+
+test("a request arriving with the composer unfocused takes the focus", () => {
+  chatTab();
+  act(() => apply(opened));
+  const request = { id: "req_1", ...MOCK_CHAT_REQUESTS.permission };
+  act(() => apply({ type: "chat_request", channel: 5, chat: 5, request }));
+  expect(document.activeElement).toBe(screen.getByRole("region", { name: "Permission request" }));
+});
+
 test("the header shows the model and mode, what else runs, and warns of an API key", () => {
   const view = chatTab();
   const meta = () => view.querySelector(".chat-meta")?.textContent;
