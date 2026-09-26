@@ -52,9 +52,17 @@ export function Select(props: {
     const box = (trigger.current as HTMLButtonElement).getBoundingClientRect();
     const el = list.current as HTMLDivElement;
     el.style.left = `${box.left}px`;
-    el.style.top = `${box.bottom + 2}px`;
     el.style.minWidth = `${box.width}px`;
-    el.style.maxHeight = `${Math.max(80, Math.min(LIST_MAX, window.innerHeight - box.bottom - 8))}px`;
+    // It opens upwards when there is more room above (e.g. the chat composer, at the bottom).
+    const below = window.innerHeight - box.bottom - 8;
+    const above = box.top - 8;
+    if (below < LIST_MAX && above > below) {
+      el.style.bottom = `${window.innerHeight - box.top + 2}px`;
+      el.style.maxHeight = `${Math.min(LIST_MAX, above)}px`;
+    } else {
+      el.style.top = `${box.bottom + 2}px`;
+      el.style.maxHeight = `${Math.max(80, Math.min(LIST_MAX, below))}px`;
+    }
   }, [open]);
 
   useEffect(() => {

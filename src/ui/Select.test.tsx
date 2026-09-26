@@ -89,6 +89,18 @@ test("the trigger shows the value; a click opens the list under it, a pick close
   expect(list()).toBeNull();
 });
 
+test("near the bottom of the window the list opens above the trigger", () => {
+  const { trigger } = setup();
+  const bottom = window.innerHeight - 10;
+  spyOn(trigger, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: bottom - 30, width: 120, height: 30 }),
+  );
+  fireEvent.mouseDown(trigger);
+  const style = (list() as HTMLElement).style;
+  expect([style.top, style.bottom, style.maxHeight]).toEqual(["", "42px", "240px"]);
+  mock.restore();
+});
+
 test("the keyboard opens, moves and picks; Esc closes without reaching the dialog", () => {
   const escapes: string[] = [];
   const { trigger, changed } = setup("b", (e) => {
