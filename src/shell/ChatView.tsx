@@ -1,7 +1,7 @@
 import { WarningIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { chatSession, resumeChat } from "../chats";
-import { type Chat, useHive } from "../store";
+import { type Chat, setChatScroll, useHive } from "../store";
 import { transport } from "../transport";
 import { ChatComposer, MODES } from "./ChatComposer";
 import { ChatRequestCard } from "./ChatRequestCard";
@@ -110,6 +110,8 @@ export function ChatView({ id }: { id: number }) {
   const chat = useHive((s) => s.chats[id]);
   if (!chat) return null;
   const state = stateText(chat);
+  // Read, not followed: only where the view starts (it remounts with the tab) needs it.
+  const scroll = useHive.getState().chatScrolls[id];
   return (
     <section className="file-view transcript-view chat-view" aria-label="Chat">
       <div className="file-view-bar">
@@ -122,7 +124,12 @@ export function ChatView({ id }: { id: number }) {
         </span>
         <ChatMeta chat={chat} />
       </div>
-      <ConversationView entries={chat.entries} labels={CHAT_LABELS}>
+      <ConversationView
+        entries={chat.entries}
+        labels={CHAT_LABELS}
+        initialOffset={scroll && !scroll.atBottom ? scroll.offset : undefined}
+        onScroll={(offset, atBottom) => setChatScroll(id, offset, atBottom)}
+      >
         {!chat.opened && !chat.closed && <div className="hint">Starting Claude…</div>}
         {chat.opened && chat.entries.length === 0 && (
           <div className="hint">Send a message to start.</div>

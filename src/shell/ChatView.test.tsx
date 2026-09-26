@@ -1,6 +1,14 @@
 import { afterEach, beforeAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { addTab, apply, initialState, type ServiceMessage, setChat, useHive } from "../store";
+import {
+  activateTab,
+  addTab,
+  apply,
+  initialState,
+  type ServiceMessage,
+  setChat,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { MOCK_CHAT_REQUESTS } from "../transport/mockChat";
 import { TerminalArea } from "./TerminalArea";
@@ -180,4 +188,32 @@ test("the header shows the model and mode, what else runs, and warns of an API k
     "This chat runs on an API key (ANTHROPIC_API_KEY), not your subscription login: it may be billed separately.",
   );
   expect(meta()).toBe(" API keyclaude-haiku-4-5 · Plan");
+});
+
+test("switching to another chat and back keeps each one's draft and scroll position", () => {
+  chatTab();
+  act(() => apply(opened));
+  const input = () => screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  fireEvent.change(input(), { target: { value: "half a thought" } });
+  const transcript = document.querySelector(".transcript") as HTMLElement;
+  Object.defineProperty(transcript, "scrollHeight", { value: 6000 });
+  transcript.scrollTop = 1000;
+  fireEvent.scroll(transcript);
+
+  act(() => {
+    setChat(6, "/w");
+    addTab(6, "/w", "chat");
+  });
+  expect(input().value).toBe("");
+
+  const scrollTo = mock((_: ScrollToOptions) => {});
+  const original = HTMLElement.prototype.scrollTo;
+  HTMLElement.prototype.scrollTo = scrollTo as unknown as typeof original;
+  try {
+    act(() => activateTab({ id: 5, cwd: "/w", kind: "chat" }));
+    expect(input().value).toBe("half a thought");
+    expect(scrollTo.mock.calls[0]?.[0].top).toBe(1000);
+  } finally {
+    HTMLElement.prototype.scrollTo = original;
+  }
 });

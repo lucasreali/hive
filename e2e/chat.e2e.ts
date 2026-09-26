@@ -382,3 +382,29 @@ test("chat: scrolled up, a back-to-bottom button and the prompt bar show, and ne
   await send("message 12");
   await expect(usages.last()).toBeInViewport();
 });
+
+test("chat: the draft and its caret come back after another tab was shown", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  const plus = page.getByTitle("New terminal, agent or file");
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await page.keyboard.press("Enter");
+  const input = page
+    .getByRole("region", { name: "Chat" })
+    .getByRole("textbox", { name: "Message" });
+  await input.fill("half a thought");
+  await input.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 6));
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" }).getByRole("tab");
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
+  await expect(input).toBeHidden();
+  await tabs.first().click();
+  await expect(input).toHaveValue("half a thought");
+  expect(
+    await input.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd]),
+  ).toEqual([5, 6]);
+});
