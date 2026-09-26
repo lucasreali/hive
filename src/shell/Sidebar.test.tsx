@@ -307,8 +307,11 @@ test("a collapsed node shows the most urgent state inside; the bell counts pendi
   expect(counter().textContent).toBe("3");
   expect(counter().getAttribute("aria-label")).toBe("3 pending: notifications");
 
+  // The rollup sits in the row, after the name and its badges.
+  const rollupOf = (button: HTMLElement) =>
+    button.closest(".tree-row")?.querySelector(".state-icon") ?? null;
   const rollup = (name: string) =>
-    screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }).querySelector(".state-icon");
+    rollupOf(screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }));
   // Expanded nodes show nothing; a worktree without agents has nothing to collapse.
   expect(rollup("shop")).toBeNull();
   expect(screen.queryByRole("button", { name: "Collapse feat-checkout" })).toBeNull();
@@ -317,7 +320,8 @@ test("a collapsed node shows the most urgent state inside; the bell counts pendi
   expect(screen.getAllByRole("button", { name: /Claude/ })).toHaveLength(3);
   // A main worktree collapses apart from its project (they share an id).
   fireEvent.click(screen.getAllByRole("button", { name: "Collapse main" })[1]);
-  expect(screen.getByRole("button", { name: "main error" })).toBeDefined();
+  const apiMain = screen.getAllByRole("button", { name: "main" })[1] as HTMLElement;
+  expect(rollupOf(apiMain)?.getAttribute("data-state")).toBe("error");
   expect(screen.getByRole("button", { name: "refactor-auth" })).toBeDefined();
   // No state yet: nothing to show.
   fireEvent.click(screen.getByRole("button", { name: "Collapse refactor-auth" }));

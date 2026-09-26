@@ -28,6 +28,18 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
     expect.stringMatching(/^idleClaudeidle\ds$/),
     "feat-checkout↑1●2",
   ]);
+  // A worktree with agents (chevron) and one without line up their branch icons (7.13).
+  const iconX = async (name: string) =>
+    (
+      await tree
+        .locator(".tree-row.worktree", { hasText: name })
+        .locator(".row-main > svg")
+        .boundingBox()
+    )?.x;
+  await expect(tree.getByRole("button", { name: "Collapse fix-login" })).toBeVisible();
+  await expect(tree.getByRole("button", { name: "Collapse feat-checkout" })).toHaveCount(0);
+  expect(await iconX("fix-login")).toBe(await iconX("feat-checkout"));
+  expect(await iconX("fix-login")).toBeGreaterThan(0);
 
   await tree.getByRole("button", { name: "refactor-auth" }).click();
   await newTerminal.click();

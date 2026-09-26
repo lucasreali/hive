@@ -1272,6 +1272,14 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
+/* A worktree's chevron sits in a fixed box, present whether or not the row has agents. */
+.tree-row .chevron-box {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  display: flex;
+}
+
 button.chevron:hover {
   color: var(--text);
 }
@@ -1436,6 +1444,12 @@ li:not(:last-child) > .owned::before {
 .state-icon {
   flex: none;
   margin-top: 1px;
+}
+
+/* A collapsed row's rollup ends where the badges end: one right column of indicators (7.13). */
+.tree-row > .state-icon,
+.project .row-main > .state-icon {
+  margin-right: 6px;
 }
 
 .state-icon[data-state="waiting_permission"] {
@@ -1759,8 +1773,9 @@ li:not(:last-child) > .owned::before {
   color: var(--text);
 }
 
+/* Keyboard focus shows the "+" too; a mouse click on the chevron does not (7.13). */
 .tree-row.worktree:hover .new-chat,
-.tree-row.worktree:focus-within .new-chat {
+.tree-row.worktree:has(:focus-visible) .new-chat {
   display: flex;
 }
 
