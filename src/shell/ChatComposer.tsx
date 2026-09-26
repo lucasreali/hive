@@ -1,17 +1,27 @@
 import { PaperPlaneRightIcon, StopIcon } from "@phosphor-icons/react";
 import { type KeyboardEvent, useState } from "react";
-import { useHive } from "../store";
+import { type ChatMode, useHive } from "../store";
 import { transport } from "../transport";
+import { Select } from "../ui/Select";
 import { ICON } from "./icons";
+
+/** The permission modes offered (7.3): never `bypassPermissions`. */
+const MODES: { value: ChatMode; label: string }[] = [
+  { value: "default", label: "Default" },
+  { value: "accept_edits", label: "Accept edits" },
+  { value: "plan", label: "Plan only" },
+];
 
 /**
  * A chat's input (7.3): Enter sends, Shift+Enter starts a new line. While a turn runs, Send
- * turns into Stop; closed (or not started yet) it is disabled. The draft is UI state.
+ * turns into Stop; closed (or not started yet) it is disabled. The draft is UI state. The mode
+ * selector shows the service's mode and asks it for another.
  */
 export function ChatComposer({ chat }: { chat: number }) {
   const [text, setText] = useState("");
   const busy = useHive((s) => !!s.chats[chat]?.status?.busy);
   const ready = useHive((s) => !!s.chats[chat]?.opened && !s.chats[chat]?.closed);
+  const mode = useHive((s) => s.chats[chat]?.status?.mode ?? s.chats[chat]?.opened?.mode);
   const send = () => {
     if (!ready || busy || text.trim() === "") return;
     void transport.chatSend(chat, text, []);
@@ -38,6 +48,14 @@ export function ChatComposer({ chat }: { chat: number }) {
         disabled={!ready}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={keys}
+      />
+      <Select
+        className="chat-mode"
+        aria-label="Permission mode"
+        value={mode ?? "default"}
+        options={MODES}
+        disabled={!ready}
+        onChange={(value) => void transport.chatSetMode(chat, value as ChatMode)}
       />
       {busy ? (
         <button
