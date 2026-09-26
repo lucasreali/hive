@@ -1,6 +1,8 @@
 # Agent states: re-evaluation (TODO 7.6, proposal)
 
-Status: **proposal, waiting on the human.** No product code changed. Built from the code on `main` (v0.2.0), the official hooks reference (`code.claude.com/docs/en/hooks`, read 2026-09-25) and a read-only look at existing transcripts. Anything marked **(to record)** is not confirmed yet and is what the recording session below must answer.
+Status: **applied** (task `task/7.6-agent-states`, 2026-09-26): the human accepted every recommendation (Q1–Q5) on 2026-09-25 and asked to implement before the recordings; see [§8](#8-applied-for-docshivemd). The recordings (§6) are still wanted to confirm the rows marked (to record). The original proposal follows unchanged.
+
+Original status: proposal. No product code changed. Built from the code on `main` (v0.2.0), the official hooks reference (`code.claude.com/docs/en/hooks`, read 2026-09-25) and a read-only look at existing transcripts. Anything marked **(to record)** is not confirmed yet and is what the recording session below must answer.
 
 ## 1. The bug, and why
 
@@ -168,3 +170,32 @@ What the recordings must answer:
 8. **Background tasks** (Q3): `Stop` with non-empty `background_tasks` sets the activity "N background tasks" (clipped, bounded count).
 9. **Frontend** (presentation only): `AgentState` type, `STATE_LABEL`, `STATE_ICON` (`ShieldWarningIcon`, `QuestionIcon`, `ListChecksIcon`), CSS colour for the new states (`--state-permission`), inbox/notify/close-app dialog lists that enumerate states, mock transport; unit tests for each new file path and an e2e row in `e2e/states.e2e.ts`.
 10. **Docs**: the human applies §4 to `docs/hive.md`; the agent updates `docs/ui-reference.md` (state rows, glossary) and `docs/architecture.md`.
+
+## 8. Applied (for `docs/hive.md`)
+
+Implemented as in §4, with Q1–Q5 as recommended. The rows below are what the code now does, in `docs/hive.md`'s wording, for the human to copy into "Mapeamento de estados" (the agent never edits `docs/hive.md`).
+
+| Estado | Origem | Urgência |
+|---|---|---|
+| 🟢 Ocioso | SessionStart (`startup`, `resume`, `clear`, `fork`) | nenhuma |
+| 🔵 Trabalhando | UserPromptSubmit, PreToolUse (exceto AskUserQuestion e ExitPlanMode), PostToolUse, PostToolUseFailure, SubagentStart, PreCompact (atividade "Compacting"); Notification `elicitation_complete`, `elicitation_response`, `quota_auto_resume_fired` | baixa |
+| 🟡 Aguardando permissão | PermissionRequest (exceto AskUserQuestion e ExitPlanMode); Notification `permission_prompt` | alta 🚨 |
+| 🟡 Aguardando aprovação do plano | PreToolUse/PermissionRequest `ExitPlanMode` | alta 🚨 |
+| 🟡 Aguardando resposta | PreToolUse/PermissionRequest `AskUserQuestion`; Elicitation; Notification `elicitation_dialog`, `elicitation_url_dialog`, `agent_needs_input` | alta 🚨 |
+| 🟠 Aguardando você | Stop (com `background_tasks`: atividade "N background tasks"); Notification `idle_prompt`, `quota_auto_resume_stale`, `quota_auto_resume_disabled`; interrupção (regra 2) | média |
+| 🔴 Erro | StopFailure | alta 🚨 |
+| 🟣 Com subagentes | SubagentStart / SubagentStop | baixa |
+| ⚫ Encerrado | SessionEnd | nenhuma |
+
+**Regras (aplicadas):**
+
+1. **O mais urgente vence:** urgência, da maior para a menor: permissão > plano > resposta > erro > aguardando você > com subagentes > trabalhando > ocioso > encerrado. Um subagente em qualquer 🟡 põe o pai nesse 🟡.
+2. **Interrupção:** enquanto o agente está 🔵, 🟣 ou 🟡, o serviço lê a cada segundo as linhas novas do transcript da sessão; se a última mensagem da conversa principal é `[Request interrupted by user…]` ou o `tool_result` de recusa ("The user doesn't want to proceed with this tool use." sem "the user said:"), o agente e seus subagentes em 🔵/🟡 vão para 🟠 **sem pendência, som, item na caixa de entrada nem notificação** (campo `interrupted` do `agent_state`), até o estado mudar de novo. O que o transcript já tinha quando o agente foi detectado não conta. Reserva: 🔵 com o PTY `agents.silence_secs` em silêncio vai para 🟠 (como antes, com alerta). **Os três 🟡 não decaem por silêncio.**
+3. **Compactação:** `PreCompact` mostra 🔵 "Compacting" e guarda o estado; `PostCompact` devolve o estado e a atividade de antes. O `SessionStart` com `source: "compact"` de uma sessão conhecida não muda nada (estado, subagentes, tokens).
+4. **Lembrete de permissão:** o `Notification permission_prompt` (~6 s depois de qualquer diálogo) não transforma uma pergunta ou um plano em permissão.
+5. **Tarefas em segundo plano:** `Stop` com `background_tasks` não vazio fica em 🟠 com a atividade "N background tasks"; o próximo `UserPromptSubmit` limpa a atividade.
+6. **Hooks registrados** (#27, síncronos, 1 s): os 12 de antes mais `PreCompact`, `PostCompact` e `Elicitation`.
+
+Added beyond §7: the `interrupted` field on `agent_state`, because the app cannot otherwise tell an interrupt (no tone, Q4) from a turn finished in view (tone, hive.md item 5); and `PostCompact` restoring the pre-compaction state, so a `/compact` typed after a turn goes back to 🟠 instead of staying 🔵 until the silence fallback.
+
+To check with the recordings (§6): R1 whether AskUserQuestion/ExitPlanMode also fire `PermissionRequest` (handled either way); R2 that declining writes exactly those transcript lines; R4 the compaction order (a `Stop` after `/compact` would also be fine); R5 which hooks wake a `Stop` with background tasks.
