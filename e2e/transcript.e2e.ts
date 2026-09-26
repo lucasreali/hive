@@ -7,7 +7,8 @@ test("transcript: clicking a subagent shows its conversation; Back returns to th
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
   await tree.getByRole("button", { name: "fix-login", exact: true }).click();
-  await page.getByTitle("New terminal (Ctrl+Shift+T)").click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
   const tab = tabs.getByRole("tab", { name: "fix-login" });
   await expect(tab).toHaveAttribute("aria-selected", "true");
   const terminal = page.locator(".terminal-host");
@@ -20,7 +21,7 @@ test("transcript: clicking a subagent shows its conversation; Back returns to th
     .click();
   const view = page.getByRole("region", { name: "Subagent conversation" });
   await expect(view.locator(".file-view-bar")).toContainText("subagent: Explore");
-  await expect(view.locator(".state-icon")).toHaveAttribute("data-state", "idle");
+  await expect(view.locator(".state-icon")).toHaveAttribute("data-state", "waiting_answer");
   const entries = view.locator(".transcript-entry");
   await expect(entries).toHaveCount(4);
   await expect(entries.first()).toContainText("Find where the login form is handled (a4).");

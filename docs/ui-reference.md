@@ -32,17 +32,17 @@ The tokens live as CSS custom properties in `src/styles.css`.
 
 Other values seen: canvas behind the prototype `#1B1E23` (not used in the app), disabled primary button `#3E4A5C` with `--text-3` text, dialog backdrop `rgba(18,20,24,0.55)`, dialog shadow `0 16px 40px rgba(0,0,0,0.45)`, picker shadow `0 12px 32px rgba(0,0,0,0.4)`, pending chip `rgba(222,193,132,0.10)` background (`0.18` hover) and `0.28` border, sidebar resize hover `rgba(71,103,158,0.6)`.
 
-### Agent states (color + shape, `StateIcon.dc.html`)
+### Agent states (color + Phosphor icon, TODO 7.6)
 
-| Token | Color | Shape | Urgency |
+| Token | Color | Icon (Phosphor, `weight="bold"`, 14 px) | Urgency |
 |---|---|---|---|
-| `--state-permission` | `#DEC184` | Triangle with "!" | high · alert (bell) |
-| `--state-error` | `#D07277` | Circle with X | high · alert (bell) |
-| `--state-you` | `#E08A5A` | Ring with dot | medium |
-| `--state-working` | `#74ADE8` | Dot pulsing every 2.4 s | low |
-| `--state-subagents` | `#B477CF` | Three nodes | low |
-| `--state-idle` | `#A1C181` | Circle with check | none |
-| `--state-ended` | `#878A98` | Rounded square | none |
+| `--state-permission` | `#DEC184` | `ShieldWarningIcon` (waiting for permission) · `ListChecksIcon` (waiting for plan approval) · `QuestionIcon` (waiting for your answer) | high · alert (bell) |
+| `--state-error` | `#D07277` | `XCircleIcon` | high · alert (bell) |
+| `--state-you` | `#E08A5A` | `ChatCircleDotsIcon` | medium (an interrupt: no alert) |
+| `--state-working` | `#74ADE8` | `CircleDashedIcon`, spinning | low |
+| `--state-subagents` | `#B477CF` | `CirclesThreeIcon` | low |
+| `--state-idle` | `#A1C181` | `CheckCircleIcon` | none |
+| `--state-ended` | `#878A98` | `StopCircleIcon` | none |
 
 Git status colors in the files panel: modified `#DEC184`, added `#A1C181`, deleted `#D07277` (strikethrough). Diff backgrounds: added `rgba(161,193,129,0.12)`, removed `rgba(208,114,119,0.12)`, hunk header `rgba(116,173,232,0.08)` with `#74ADE8` text.
 
@@ -76,6 +76,8 @@ IBM Plex Sans and IBM Plex Mono, weights 400/500/600, bundled with `@fontsource/
 
 Row heights: project 26px, worktree 24px, sub-worktree 22px, file row 22px, picker row 30px, branch row 24px. Indents: project 6px, worktree 20px, agent 40px, subagent 56px. Buttons: primary/secondary 28px high (empty-state primary 30px), ghost 24px, icon 26×24, window buttons 46px wide. Text fields 30px. Dialog 520px wide, 120px from the top; picker 560px wide, 44px from the top.
 
+Icons (7.7): Phosphor only (`@phosphor-icons/react`), regular weight at 14px (`ICON` in `src/shell/icons.tsx`), `currentColor`, `aria-hidden` when decorative, and an accessible name (`title` or `aria-label`) on icon-only buttons. Exceptions: chevrons and stepper carets 10px bold, inline plus/check beside text 12px, the dialogs' close cross 15px bold, the title bar's update and bell 16px bold, the window buttons light, empty-state icons 28–32px light. Agent states use their own Phosphor set (above). Files and folders in the file tree use `@react-symbols/icons`; the Hive logo is the only hand-drawn SVG. Leading icons go on context-menu items (muted `--text-2`, danger items in their color), settings sections and palette group headings; not on every button.
+
 ## Glossary (PT → EN)
 
 ### Core terms
@@ -101,6 +103,8 @@ Row heights: project 26px, worktree 24px, sub-worktree 22px, file row 22px, pick
 | Portuguese | English (label) |
 |---|---|
 | aguardando permissão | waiting for permission |
+| aguardando aprovação do plano | waiting for plan approval |
+| aguardando resposta | waiting for your answer |
 | erro | error |
 | aguardando você | waiting for you |
 | trabalhando | working |

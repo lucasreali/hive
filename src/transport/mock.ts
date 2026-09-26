@@ -16,6 +16,7 @@ import type {
 } from "../store";
 import { DEFAULT_SETTINGS } from "../store";
 import type { Transport } from ".";
+import { CHAT_STEP_MS, createMockChat } from "./mockChat";
 import { loadReplay, type ReplayEvent } from "./replay";
 
 const PROMPT = "mock$ ";
@@ -59,11 +60,14 @@ const URGENCY: AgentState[] = [
   "with_subagents",
   "waiting_you",
   "error",
+  "waiting_answer",
+  "waiting_plan",
   "waiting_permission",
 ];
 export const agentStatus = (state: AgentState, activity: string | null = null, since_ms = 0) => {
   const urgency = URGENCY.indexOf(state);
-  return { state, urgency, pending: urgency >= URGENCY.indexOf("waiting_you"), activity, since_ms };
+  const pending = urgency >= URGENCY.indexOf("waiting_you");
+  return { state, urgency, pending, interrupted: false, activity, since_ms };
 };
 
 /** `?mock=states`: shop's worktree that subagent a3 works in, shown as its parent row (#22). */
@@ -89,7 +93,7 @@ export const MOCK_STATES: [string, AgentState, Subagent[], string | null][] = [
     "waiting_permission",
     [
       sub("a3", "general-purpose", "waiting_permission", MOCK_OWN_WORKTREE, "bun test src/auth"),
-      sub("a4", "Explore", "idle"),
+      sub("a4", "Explore", "waiting_answer", null, "Asking a question"),
     ],
     "Editing src/auth/login.ts",
   ],
@@ -508,6 +512,7 @@ export function createMockTransport(
   const terminals = new Map<number, MockTerminal>();
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
+  const chat = createMockChat((message) => send(message), CHAT_STEP_MS);
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
   let recording: Promise<ReplayEvent[]> | undefined;
   const replay = async (id: number) => {
@@ -594,6 +599,30 @@ export function createMockTransport(
       path,
       written,
     );
+  // Moves the listed file `from` (null: none) to `to`, answering `done()`, or why not.
+  const fileOp = (
+    worktree: string,
+    from: string | null,
+    to: string,
+    name: string,
+    done: () => ServiceMessage,
+  ) => {
+    const shown = worktreeAt(worktree);
+    const listed = shown ? (files.get(worktree) ?? mockFiles(shown)) : [];
+    const message = !shown
+      ? `${worktree} is not a worktree of a followed project`
+      : ["", ".", ".."].includes(name) || name.includes("/")
+        ? "not a valid file name"
+        : listed.includes(to)
+          ? `${name} already exists`
+          : from !== null && !listed.includes(from)
+            ? `${from} does not exist`
+            : null;
+    if (message) return void later({ type: "file_op_failed", worktree, message });
+    later(done());
+    files.set(worktree, [...listed.filter((p) => p !== from), to].sort());
+    if (watched === worktree) sendFiles(worktree);
+  };
   // A stand-in for an agent editing a file: `write <path> <text>` in a worktree's terminal.
   const write = (cwd: string, args: string) => {
     const [path = "", ...words] = args.split(" ");
@@ -815,6 +844,22 @@ export function createMockTransport(
       written.set(`${worktree}/${path}`, content);
       later({ type: "file_saved", worktree, path, version: mockVersion(content) });
     },
+    // Stand-ins for `hive::file::{create, rename}`: the real name rules live in Rust.
+    async createFile(worktree, folder, name) {
+      const path = folder ? `${folder}/${name}` : name;
+      fileOp(worktree, null, path, name, () => {
+        written.set(`${worktree}/${path}`, "");
+        return { type: "file_created", worktree, path };
+      });
+    },
+    async renameFile(worktree, path, name) {
+      const to = path.replace(/[^/]*$/, name);
+      fileOp(worktree, path, to, name, () => {
+        const text = fileAt(worktree, path).content ?? "";
+        written.set(`${worktree}/${to}`, text);
+        return { type: "file_renamed", worktree, path, to };
+      });
+    },
     async openInEditor(worktree, path) {
       // An empty path is the worktree's folder.
       const { error } = path ? fileAt(worktree, path) : { error: null };
@@ -893,6 +938,30 @@ export function createMockTransport(
     async resizeTerminal() {},
     async closeTerminal(id) {
       exit(id, null);
+    },
+    // Chats share the terminals' channels, as in the app.
+    async openChat(cwd, resume, mode) {
+      const id = ++last;
+      chat.open(id, cwd, resume, mode);
+      return id;
+    },
+    async chatSend(id, text, images) {
+      chat.send(id, text, images);
+    },
+    async chatAnswer(id, request, answer) {
+      chat.answer(id, request, answer);
+    },
+    async chatInterrupt(id) {
+      chat.interrupt(id);
+    },
+    async chatSetMode(id, mode) {
+      chat.setMode(id, mode);
+    },
+    async closeChat(id) {
+      chat.close(id);
+    },
+    async confirmChatFolder(id, cwd, accepted) {
+      chat.confirm(id, cwd, accepted);
     },
   };
 }

@@ -1,0 +1,164 @@
+# Mutation testing split into shards sized by the number of mutants (TODO 7.1), so the wall-clock
+# time stays close to constant whatever the size of the change. Called by ci.yml (the diff's
+# mutants, blocks the merge) and mutants-full.yml (every mutant, nightly). Every mutant is
+# tested: no sampling, no --iterate. `.cargo/mutants.toml` holds the shared configuration.
+name: mutants
+
+on:
+  workflow_call:
+    inputs:
+      in-diff:
+        description: Only the mutants of the branch's diff (false = the whole workspace).
+        type: boolean
+        required: true
+      base:
+        description: Diff base (default the merge base with origin/main; nothing runs on main).
+        type: string
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+  # About one shard per 25 mutants, at most 20 (the free plan's concurrent-job limit).
+  MUTANTS_PER_SHARD: 25
+  MAX_SHARDS: 20
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      n: ${{ steps.plan.outputs.n }}
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      # A task branch: the mutants of its own diff since it left `main` (merge base, so commits
+      # that landed on `main` meanwhile are not counted). On `main` itself nothing runs: every
+      # commit arrives by fast-forward from a task branch whose run already tested its mutants.
+      - id: plan
+        env:
+          IN_DIFF: ${{ inputs.in-diff }}
+          BASE: ${{ inputs.base }}
+        run: |
+          args=()
+          if [ "$IN_DIFF" = true ]; then
+            if [ -z "$BASE" ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+              echo "on main: nothing to test"; echo "n=0" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            git diff "${BASE:-$(git merge-base origin/main HEAD)}" -- '*.rs' > diff.patch
+            args=(--in-diff diff.patch)
+          fi
+          count=$(cargo mutants --list "${args[@]}" | wc -l)
+          n=$(( (count + MUTANTS_PER_SHARD - 1) / MUTANTS_PER_SHARD ))
+          n=$(( n > MAX_SHARDS ? MAX_SHARDS : n ))
+          echo "$count mutants in $n shards"
+          echo "n=$n" >> "$GITHUB_OUTPUT"
+          echo "shards=$(jq -nc "[range($n)]")" >> "$GITHUB_OUTPUT"
+      - if: inputs.in-diff && steps.plan.outputs.n != '0'
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutants-diff
+          path: diff.patch
+          retention-days: 7
+
+  # The shards skip cargo-mutants' baseline (`--baseline=skip`); this job is that baseline, once:
+  # it proves the unmutated suite passes with the shards' exact setup and times it for their
+  # test timeout (5x the suite, at least 20 s: cargo-mutants' own automatic rule). It also saves
+  # the build cache the shards restore.
+  baseline:
+    needs: plan
+    if: needs.plan.outputs.n != '0'
+    runs-on: ubuntu-latest
+    outputs:
+      timeout: ${{ steps.test.outputs.timeout }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: mutants
+      - run: cargo nextest run --workspace --cargo-profile mutants --no-run
+      - id: test
+        run: |
+          start=$(date +%s)
+          cargo nextest run --workspace --cargo-profile mutants
+          secs=$(( $(date +%s) - start ))
+          echo "suite: ${secs}s"
+          echo "timeout=$(( secs * 5 > 20 ? secs * 5 : 20 ))" >> "$GITHUB_OUTPUT"
+
+  shard:
+    needs: [plan, baseline]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        k: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rui314/setup-mold@v1
+      # One cache for every shard (they build the same tree), written by the baseline job.
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: mutants
+          cache-save: "false"
+      - if: inputs.in-diff
+        uses: actions/download-artifact@v6
+        with:
+          name: mutants-diff
+      # Identical arguments and denominator in every shard, or the shards do not partition the
+      # mutants. In place: one mutant at a time in this checkout, over the restored cache.
+      # Exit code 2 (missed) or 3 (timeout) fails the shard.
+      - env:
+          IN_DIFF: ${{ inputs.in-diff }}
+          SHARD: ${{ matrix.k }}/${{ needs.plan.outputs.n }}
+          TIMEOUT: ${{ needs.baseline.outputs.timeout }}
+        run: |
+          args=()
+          if [ "$IN_DIFF" = true ]; then args=(--in-diff diff.patch); fi
+          cargo mutants --in-place --baseline=skip --timeout "$TIMEOUT" \
+            --shard "$SHARD" --sharding round-robin "${args[@]}"
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutants-shard-${{ matrix.k }}
+          path: mutants.out
+          retention-days: 7
+
+  # One verdict and one artifact (`mutants-out`) for every shard.
+  gather:
+    needs: [plan, shard]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.n != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: mutants-shard-*
+          path: shards
+      - run: |
+          mkdir mutants.out
+          for f in caught missed timeout unviable; do
+            cat shards/*/"$f.txt" > "mutants.out/$f.txt" 2>/dev/null || true
+          done
+          mv shards mutants.out/
+          for f in caught missed timeout unviable; do
+            echo "$f: $(wc -l < "mutants.out/$f.txt")" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          cat mutants.out/missed.txt mutants.out/timeout.txt
+      - uses: actions/upload-artifact@v6
+        with:
+          name: mutants-out
+          path: mutants.out
+          retention-days: 7
+      - env:
+          SHARDS: ${{ needs.shard.result }}
+          SHARDS_EXPECTED: ${{ needs.plan.outputs.n }}
+        run: |
+          got=$(find mutants.out/shards -mindepth 1 -maxdepth 1 -type d | wc -l)
+          if [ "$SHARDS" != success ] || [ "$got" != "$SHARDS_EXPECTED" ] \
+            || [ -s mutants.out/missed.txt ] || [ -s mutants.out/timeout.txt ]; then
+            echo "mutants failed: shards $SHARDS ($got of $SHARDS_EXPECTED reported)"; exit 1
+          fi

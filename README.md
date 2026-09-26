@@ -139,7 +139,7 @@ Details: [`docs/architecture.md`](docs/architecture.md). Decisions: [`docs/hive.
 
 - Rust stable (`rustup`), [bun](https://bun.sh), fish and git.
 - To build the Windows app from WSL: `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin --locked`.
-- For the gates: `cargo-llvm-cov`, `cargo-mutants`, `cargo-deny`, `cargo-machete`.
+- For the gates: `cargo-llvm-cov`, `cargo-mutants`, `cargo-nextest` (mutants run under it), `cargo-deny`, `cargo-machete`.
 
 ```sh
 bun install
@@ -175,7 +175,7 @@ bun run e2e             # Playwright; needs libnss3 and libnspr4
 
 - 100% line coverage in Rust and in the frontend, plus mutation testing on the changed code. Excluded files are listed with their reasons in [`COVERAGE_EXCLUSIONS.md`](COVERAGE_EXCLUSIONS.md).
 - Integration tests run the real `hive` with a temporary `HOME`/`XDG_*` and a stand-in `claude`; they never touch your environment.
-- CI: [`macos.yml`](.github/workflows/macos.yml) runs on every push to `main` (clippy, coverage and mutants of the macOS-only code, `bun test`, a release bundle). [`release.yml`](.github/workflows/release.yml) runs on `v*` tags.
+- CI: [`ci.yml`](.github/workflows/ci.yml) runs every gate on each push, the diff's mutants in parallel shards ([`mutants.yml`](.github/workflows/mutants.yml)); [`mutants-full.yml`](.github/workflows/mutants-full.yml) tests every mutant of `main` nightly and opens an issue for the survivors. [`macos.yml`](.github/workflows/macos.yml) runs on every push to `main` (clippy, coverage and mutants of the macOS-only code, `bun test`, a release bundle). [`release.yml`](.github/workflows/release.yml) runs on `v*` tags.
 
 ### Releasing
 

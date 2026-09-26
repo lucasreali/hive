@@ -108,12 +108,45 @@ fn ending(kind: &str, record: &Value, message: Option<&Value>) -> Ending {
             _ => Ending::Working,
         };
     }
-    match message.and_then(|m| m.get("content")).and_then(first_text) {
+    let content = message.and_then(|m| m.get("content"));
+    if declined(record, content) {
+        return Ending::Interrupted;
+    }
+    match content.and_then(first_text) {
         Some(text) if text.starts_with("[Request interrupted by user") => Ending::Interrupted,
         // A slash command's tags: no turn of Claude follows.
         Some(text) if text.starts_with('<') => Ending::TurnDone,
         _ => Ending::Working,
     }
+}
+
+/// How a log record leaves the main conversation; `None` for one that does not (not a
+/// message, a subagent's or a meta one).
+pub fn ending_of(record: &Value) -> Option<Ending> {
+    let kind = record.get("type").and_then(Value::as_str)?;
+    let flag = |key: &str| record.get(key).and_then(Value::as_bool) == Some(true);
+    let main = matches!(kind, "user" | "assistant") && !flag("isSidechain") && !flag("isMeta");
+    main.then(|| ending(kind, record, record.get("message")))
+}
+
+/// The `toolUseResult` Claude Code itself (not the tool) writes on the record of a tool call
+/// the user declined (a permission, a question or a plan): Claude stops and waits. Declining
+/// with what to do instead writes another one ("Error: …"), and Claude goes on.
+const DECLINED: &str = "User rejected tool use";
+
+/// Whether a user record declines a tool call and leaves Claude waiting: Claude Code's marker
+/// on the record, and a failed `tool_result` in its `content`. The result's text is the tool's
+/// to write, so it is not trusted.
+fn declined(record: &Value, content: Option<&Value>) -> bool {
+    let marked = record.get("toolUseResult").and_then(Value::as_str) == Some(DECLINED);
+    let blocks = content
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let failed = blocks.iter().any(|block| {
+        let result = block.get("type").and_then(Value::as_str) == Some("tool_result");
+        result && block.get("is_error").and_then(Value::as_bool) == Some(true)
+    });
+    marked && failed
 }
 
 /// A session's state by how its log ends and whether a `claude` runs it ("Mapeamento de
@@ -298,16 +331,22 @@ impl Sessions {
     /// The name of the session `id` that runs in `cwd` (the user's, else Claude's), from its
     /// log in the folder Claude keeps for `cwd`.
     pub fn title(&self, id: &str, cwd: &str) -> Option<String> {
+        let log = self.log(id, cwd)?;
+        let meta = log.metadata().ok()?;
+        self.summary(&log, meta.modified().ok()?, meta.len())?.title
+    }
+
+    /// The log of the session `id` that ran in `cwd`, in the folder Claude keeps for `cwd`,
+    /// when it is a regular file.
+    pub fn log(&self, id: &str, cwd: &str) -> Option<PathBuf> {
         let root = self.root.as_ref().filter(|_| valid_id(id))?;
         let folder = normalized(cwd);
-        let log = std::fs::read_dir(root)
+        std::fs::read_dir(root)
             .ok()?
             .flatten()
             .filter(|dir| normalized(&dir.file_name().to_string_lossy()) == folder)
             .map(|dir| dir.path().join(format!("{id}.jsonl")))
-            .find(|log| log.symlink_metadata().is_ok_and(|m| m.is_file()))?;
-        let meta = log.metadata().ok()?;
-        self.summary(&log, meta.modified().ok()?, meta.len())?.title
+            .find(|log| log.symlink_metadata().is_ok_and(|m| m.is_file()))
     }
 
     /// The listed session `id`.
@@ -392,7 +431,7 @@ impl Sessions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hive_protocol::Worktree;
+    use hive_protocol::{SessionKind, Worktree};
 
     fn var<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into())
@@ -491,9 +530,59 @@ not json
             Ending::TurnDone
         );
         assert_eq!(end(&[&user(r#""fix it""#)]), Ending::Working);
+        // A declined tool call, as Claude Code writes it, unless the user said what to do
+        // instead; the result's text alone (a tool's output) proves nothing.
+        let declined = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+        let result = |marker: &str, error: &str, kind: &str| {
+            let block = format!(
+                r#"{{"type":{kind:?},"tool_use_id":"toolu_1","content":{declined:?}{error}}}"#
+            );
+            let content = format!(r#"{{"role":"user","content":[{block}]}}"#);
+            format!(r#"{{"type":"user","message":{content}{marker}}}"#)
+        };
+        let marker = r#","toolUseResult":"User rejected tool use""#;
+        let error = r#","is_error":true"#;
+        assert_eq!(
+            end(&[&result(marker, error, "tool_result")]),
+            Ending::Interrupted
+        );
+        let told =
+            r#","toolUseResult":"Error: The user doesn't want to proceed with this tool use.""#;
+        assert_eq!(end(&[&result(told, error, "tool_result")]), Ending::Working);
+        assert_eq!(end(&[&result("", error, "tool_result")]), Ending::Working);
+        let object = r#","toolUseResult":{"stdout":"User rejected tool use"}"#;
+        assert_eq!(
+            end(&[&result(object, error, "tool_result")]),
+            Ending::Working
+        );
+        assert_eq!(end(&[&result(marker, "", "tool_result")]), Ending::Working);
+        let ok = r#","is_error":false"#;
+        assert_eq!(end(&[&result(marker, ok, "tool_result")]), Ending::Working);
+        assert_eq!(end(&[&result(marker, error, "text")]), Ending::Working);
+        let bare =
+            r#"{"type":"user","message":{"content":"x"},"toolUseResult":"User rejected tool use"}"#;
+        assert_eq!(end(&[bare]), Ending::Working);
         // Subagents and meta messages leave it as it was.
         let sub = r#"{"type":"assistant","isSidechain":true,"message":{"stop_reason":"tool_use"}}"#;
         assert_eq!(end(&[&assistant(r#""end_turn""#), sub]), Ending::TurnDone);
+    }
+
+    #[test]
+    fn only_main_conversation_messages_have_an_ending() {
+        let record = |text: &str| serde_json::from_str::<Value>(text).unwrap();
+        let interrupted =
+            r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#;
+        assert_eq!(ending_of(&record(interrupted)), Some(Ending::Interrupted));
+        let done = r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#;
+        assert_eq!(ending_of(&record(done)), Some(Ending::TurnDone));
+        for other in [
+            r#"{"type":"user","isSidechain":true,"message":{"content":"[Request interrupted by user]"}}"#,
+            r#"{"type":"user","isMeta":true,"message":{"content":"[Request interrupted by user]"}}"#,
+            r#"{"type":"ai-title","aiTitle":"x"}"#,
+            r#"{"type":3}"#,
+        ] {
+            assert_eq!(ending_of(&record(other)), None, "{other}");
+        }
     }
 
     #[test]
@@ -543,6 +632,8 @@ not json
         .unwrap();
         let sessions = Sessions::new(Some(root.clone()));
         assert_eq!(sessions.title("s", "/r/x"), Some("Named".into()));
+        assert_eq!(sessions.log("s", "/r/x"), Some(folder.join("s.jsonl")));
+        assert_eq!(sessions.log("l", "/r/x"), None);
         assert_eq!(sessions.title("u", "/r/x"), None);
         assert_eq!(sessions.title("l", "/r/x"), None);
         assert_eq!(sessions.title("o", "/r/x"), None);
@@ -562,6 +653,11 @@ not json
         let open = |id: &str, cwd: &str| OpenSession {
             id: id.into(),
             cwd: cwd.into(),
+            kind: SessionKind::Terminal,
+        };
+        let chat = OpenSession {
+            kind: SessionKind::Chat,
+            ..open("c", "/r")
         };
         // Nothing ran: nothing is kept.
         save_open(&file, &[]).unwrap();
@@ -570,15 +666,24 @@ not json
 
         save_open(
             &file,
-            &[open("a", "/r"), open("x; rm", "/r"), open("b", "rel")],
+            &[
+                open("a", "/r"),
+                open("x; rm", "/r"),
+                open("b", "rel"),
+                chat.clone(),
+            ],
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         // Ids that are not session ids, and relative folders, are dropped.
-        assert_eq!(take_open(&file), vec![open("a", "/r")]);
+        assert_eq!(take_open(&file), vec![open("a", "/r"), chat]);
         assert!(!file.exists());
         assert_eq!(take_open(&file), vec![]);
+
+        // A list kept before chats existed holds terminals.
+        std::fs::write(&file, r#"[{"id":"a","cwd":"/r"}]"#).unwrap();
+        assert_eq!(take_open(&file), vec![open("a", "/r")]);
 
         // A long list (over a few KiB) is read back whole.
         let many: Vec<OpenSession> = (0..200).map(|i| open(&format!("s{i}"), "/r")).collect();
@@ -657,6 +762,8 @@ not json
         let older = log(&folder, "a.jsonl", repo);
         touched(&older, 0);
         let wt = format!("{repo}/.claude/worktrees/w");
+        // Sessions are placed by their resolved cwd: the folders exist.
+        std::fs::create_dir_all(format!("{wt}/src")).unwrap();
         touched(
             &log(&root.join(normalized(&wt)), "b.jsonl", &format!("{wt}/src")),
             1,

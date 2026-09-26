@@ -55,6 +55,8 @@ fn main() {
             commands::locate_session,
             commands::delete_session,
             commands::save_file,
+            commands::create_file,
+            commands::rename_file,
             commands::open_in_editor,
             commands::get_settings,
             commands::set_settings,
@@ -64,6 +66,13 @@ fn main() {
             commands::select_space,
             commands::open_settings_file,
             commands::get_diagnostics,
+            commands::open_chat,
+            commands::chat_send,
+            commands::chat_answer,
+            commands::chat_interrupt,
+            commands::chat_set_mode,
+            commands::close_chat,
+            commands::confirm_chat_folder,
         ])
         .build(tauri::generate_context!());
     match result {

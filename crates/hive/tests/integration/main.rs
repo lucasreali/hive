@@ -7,6 +7,10 @@ mod bridge;
 #[cfg(test)]
 mod changes;
 #[cfg(test)]
+mod chat;
+#[cfg(test)]
+mod chat_fixtures;
+#[cfg(test)]
 mod common;
 #[cfg(test)]
 mod daemon;

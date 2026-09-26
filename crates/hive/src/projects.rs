@@ -77,9 +77,11 @@ impl Projects {
         // Only the projects holding `cwd` when some do, so git runs for them alone; else
         // every project (a linked worktree may be anywhere).
         // ponytail: a worktree of one project inside another's folder takes the outer one's space.
+        // Resolved first, as `place` does: `..` or a link may lead into another project.
+        let real = Path::new(cwd).canonicalize().unwrap_or_default();
         let ids: Vec<String> = self.spaces().projects().cloned().collect();
         let inside: Vec<Project> = (ids.iter())
-            .filter(|id| Path::new(cwd).starts_with(id))
+            .filter(|id| real.starts_with(id))
             .map(|id| project(id))
             .collect();
         let listed = if inside.is_empty() {
@@ -241,15 +243,17 @@ impl Projects {
 }
 
 /// The followed worktree containing `cwd`, as `(project id, worktree id)`. Claude worktrees
-/// live inside the main one, so the deepest match wins (#19).
+/// live inside the main one, so the deepest match wins (#19). Both sides are resolved first,
+/// so `..` or a link cannot take a path out of a worktree; one that does not resolve is in none.
 pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
-    let cwd = Path::new(cwd);
+    let cwd = Path::new(cwd).canonicalize().ok()?;
     projects
         .iter()
         .flat_map(|p| p.worktrees.iter().map(move |w| (p, w)))
-        .filter(|(_, w)| cwd.starts_with(&w.path))
-        .max_by_key(|(_, w)| w.path.len())
-        .map(|(p, w)| (p.id.clone(), w.id.clone()))
+        .filter_map(|(p, w)| Some((p, w, Path::new(&w.path).canonicalize().ok()?)))
+        .filter(|(_, _, real)| cwd.starts_with(real))
+        .max_by_key(|(_, _, real)| real.as_os_str().len())
+        .map(|(p, w, _)| (p.id.clone(), w.id.clone()))
 }
 
 /// Refuses a worktree that some process (e.g. a terminal or an agent) works in.
@@ -491,6 +495,23 @@ mod tests {
 
     #[test]
     fn an_agent_is_placed_in_the_deepest_worktree_containing_its_cwd() {
+        // The projects are added through a link to their real folder: both sides resolve.
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        for dir in [
+            "r/src/x",
+            "r/.claude/worktrees/a/src",
+            "r/.claude/worktrees/ab",
+            "r2/y",
+        ] {
+            std::fs::create_dir_all(real.join(dir)).unwrap();
+        }
+        std::fs::create_dir_all(real.join("elsewhere")).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        // A link from inside a worktree to a folder outside every one.
+        std::os::unix::fs::symlink(real.join("elsewhere"), real.join("r/out")).unwrap();
+        let at_link = |p: &str| link.join(p).to_string_lossy().into_owned();
         let project = |root: &str, list| Project {
             id: root.into(),
             name: String::new(),
@@ -498,33 +519,42 @@ mod tests {
             worktrees: worktrees(Path::new(root), list),
             error: None,
         };
+        let (r, a, r2) = (
+            at_link("r"),
+            at_link("r/.claude/worktrees/a"),
+            at_link("r2"),
+        );
         let projects = [
             project(
-                "/r",
+                &r,
                 vec![
-                    wt("/r", Some("main"), false),
-                    wt("/r/.claude/worktrees/a", None, false),
+                    // A worktree whose folder does not resolve is in no match.
+                    wt(&at_link("r/.claude/worktrees/gone"), None, false),
+                    wt(&r, Some("main"), false),
+                    wt(&a, None, false),
                 ],
             ),
-            project("/r2", vec![wt("/r2", None, false)]),
+            project(&r2, vec![wt(&r2, None, false)]),
         ];
-        let place = |cwd| place(&projects, cwd);
+        let place = |cwd: &Path| place(&projects, &cwd.to_string_lossy());
         let at = |p: &str, w: &str| Some((p.to_owned(), w.to_owned()));
-        assert_eq!(place("/r"), at("/r", "/r"));
-        assert_eq!(place("/r/src/x"), at("/r", "/r"));
-        assert_eq!(
-            place("/r/.claude/worktrees/a"),
-            at("/r", "/r/.claude/worktrees/a")
-        );
-        assert_eq!(
-            place("/r/.claude/worktrees/a/src"),
-            at("/r", "/r/.claude/worktrees/a")
-        );
-        assert_eq!(place("/r/.claude/worktrees/ab"), at("/r", "/r"));
-        // Whole path components only: /r2 is not inside /r.
-        assert_eq!(place("/r2/y"), at("/r2", "/r2"));
-        assert_eq!(place("/elsewhere"), None);
-        assert_eq!(place(""), None);
+        for base in [&link, &real] {
+            assert_eq!(place(&base.join("r")), at(&r, &r));
+            assert_eq!(place(&base.join("r/src/x")), at(&r, &r));
+            assert_eq!(place(&base.join("r/.claude/worktrees/a")), at(&r, &a));
+            assert_eq!(place(&base.join("r/.claude/worktrees/a/src")), at(&r, &a));
+            assert_eq!(place(&base.join("r/.claude/worktrees/ab")), at(&r, &r));
+            // Whole path components only: r2 is not inside r.
+            assert_eq!(place(&base.join("r2/y")), at(&r2, &r2));
+            assert_eq!(place(&base.join("elsewhere")), None);
+            // `..` and a link cannot take a path out of a worktree.
+            assert_eq!(place(&base.join("r/../elsewhere")), None);
+            assert_eq!(place(&base.join("r/src/../../r2/y")), at(&r2, &r2));
+            assert_eq!(place(&base.join("r/out")), None);
+            // Nor can a path that does not resolve.
+            assert_eq!(place(&base.join("r/missing")), None);
+        }
+        assert_eq!(place(Path::new("")), None);
     }
 
     #[test]

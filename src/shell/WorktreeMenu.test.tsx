@@ -54,6 +54,10 @@ test("a worktree's right click opens its menu at the pointer; main and foreign o
     ["Rename…", false],
     ["Delete…", false],
   ]);
+  // Each item leads with a decorative icon (7.7): its name stays the text.
+  for (const i of screen.getAllByRole("menuitem")) {
+    expect(i.firstElementChild?.getAttribute("aria-hidden")).toBe("true");
+  }
   expect(document.activeElement).toBe(item("New terminal here"));
   expect((menu() as HTMLElement).style.left).toBe("40px");
   expect((menu() as HTMLElement).style.top).toBe("60px");
@@ -334,6 +338,10 @@ test("the project menu removes merged worktrees without changes, each with its r
   act(() => apply({ type: "projects", projects: [merged] }));
   fireEvent.contextMenu(row("shop"), { clientX: 10, clientY: 20 });
   expect(useHive.getState().projectMenu).toEqual({ project: shop.id, x: 10, y: 20 });
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+    "New worktree… Ctrl+Shift+N",
+    "Remove merged worktrees…",
+  ]);
   fireEvent.keyDown(screen.getByRole("menu", { name: "Project" }), { key: "Escape" });
   expect(menu()).toBeNull();
   fireEvent.contextMenu(row("shop"), { clientX: 10, clientY: 20 });

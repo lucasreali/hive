@@ -25,7 +25,7 @@ test("projects show their worktrees with the service's names and paths", () => {
     r.getAttribute("title"),
   ]);
   expect(rows).toEqual([
-    ["tree-row project", "shopNew worktree", "/home/user/projects/shop"],
+    ["tree-row project", "shop", "/home/user/projects/shop"],
     ["tree-row worktree", "main", "/home/user/projects/shop"],
     [
       "tree-row worktree",
@@ -37,7 +37,7 @@ test("projects show their worktrees with the service's names and paths", () => {
       "feat-checkout↑1●2",
       "/home/user/projects/shop/.claude/worktrees/feat-checkout",
     ],
-    ["tree-row project", "apiNew worktree", "/home/user/projects/api"],
+    ["tree-row project", "api", "/home/user/projects/api"],
     ["tree-row worktree", "main", "/home/user/projects/api"],
     [
       "tree-row worktree",
@@ -116,7 +116,7 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   });
   const rows = [...tree().querySelectorAll(".tree-row")].map((r) => [r.className, r.textContent]);
   expect(rows).toEqual([
-    ["tree-row project", "shopNew worktree"],
+    ["tree-row project", "shop"],
     ["tree-row worktree", "main"],
     ["tree-row worktree", "fix-login↑3↓1●2"],
     ["tree-row agent", "idleClaudeidle"],
@@ -192,7 +192,7 @@ test("agents and their subagents show the state the service sent, named for scre
     expect(icon.getAttribute("data-state")).toBe(state);
     shapes.add(icon.innerHTML.replace(/<title>.*<\/title>/, ""));
   }
-  expect(shapes.size).toBe(7);
+  expect(shapes.size).toBe(9);
   // A subagent row shows its conversation (6.10), selected in place of its agent.
   const explore = screen.getByRole("button", { name: /subagent: Explore/ });
   fireEvent.click(explore);
@@ -307,8 +307,11 @@ test("a collapsed node shows the most urgent state inside; the bell counts pendi
   expect(counter().textContent).toBe("3");
   expect(counter().getAttribute("aria-label")).toBe("3 pending: notifications");
 
+  // The rollup sits in the row, after the name and its badges.
+  const rollupOf = (button: HTMLElement) =>
+    button.closest(".tree-row")?.querySelector(".state-icon") ?? null;
   const rollup = (name: string) =>
-    screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }).querySelector(".state-icon");
+    rollupOf(screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }));
   // Expanded nodes show nothing; a worktree without agents has nothing to collapse.
   expect(rollup("shop")).toBeNull();
   expect(screen.queryByRole("button", { name: "Collapse feat-checkout" })).toBeNull();
@@ -317,7 +320,8 @@ test("a collapsed node shows the most urgent state inside; the bell counts pendi
   expect(screen.getAllByRole("button", { name: /Claude/ })).toHaveLength(3);
   // A main worktree collapses apart from its project (they share an id).
   fireEvent.click(screen.getAllByRole("button", { name: "Collapse main" })[1]);
-  expect(screen.getByRole("button", { name: "main error" })).toBeDefined();
+  const apiMain = screen.getAllByRole("button", { name: "main" })[1] as HTMLElement;
+  expect(rollupOf(apiMain)?.getAttribute("data-state")).toBe("error");
   expect(screen.getByRole("button", { name: "refactor-auth" })).toBeDefined();
   // No state yet: nothing to show.
   fireEvent.click(screen.getByRole("button", { name: "Collapse refactor-auth" }));

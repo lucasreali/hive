@@ -5,6 +5,7 @@ import {
   copy,
   locate,
   OUTSIDE,
+  openAsChat,
   openLocated,
   remove,
   restore,
@@ -74,15 +75,21 @@ test("the sessions open when the app last closed are resumed, one after the othe
     .mockResolvedValueOnce(4)
     .mockRejectedValueOnce("gone");
   const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  const chat = spyOn(transport, "openChat").mockResolvedValue(6);
   await restore([
-    { id: "a", cwd: "/r" },
-    { id: "b", cwd: "/r/x" },
+    { id: "a", cwd: "/r", kind: "terminal" },
+    { id: "b", cwd: "/r/x", kind: "terminal" },
+    { id: "c", cwd: "/r/y", kind: "chat" },
   ]);
   expect(open.mock.calls.map((c) => c[0])).toEqual(["/r", "/r/x"]);
   expect(write).toHaveBeenCalledWith(4, "claude --resume a\r");
   expect(notice()).toBe("Cannot resume the session in /r/x: gone");
+  // A chat comes back as a chat.
+  expect(chat.mock.calls).toEqual([["/r/y", "c", null]]);
+  expect(useHive.getState().tabs.at(-1)).toEqual({ id: 6, cwd: "/r/y", kind: "chat" });
   open.mockRestore();
   write.mockRestore();
+  chat.mockRestore();
 });
 
 test("a located log or folder opens, or is revealed, with Windows' apps", async () => {
@@ -185,4 +192,14 @@ test("how long ago, in the largest unit", () => {
     new Date(minutes(60 * 24 * 30)).toLocaleDateString(),
   );
   expect(ago(Date.now())).toBe("now");
+});
+
+test("a session opens as a chat in its folder, or says why not", async () => {
+  const chat = spyOn(transport, "openChat").mockResolvedValueOnce(7).mockRejectedValueOnce("no");
+  await openAsChat(stopped);
+  expect(chat.mock.calls).toEqual([[stopped.cwd, stopped.id, null]]);
+  expect(useHive.getState().activeTab).toBe(7);
+  await openAsChat(stopped);
+  expect(notice()).toBe(`Cannot open a chat in ${stopped.cwd}: no`);
+  chat.mockRestore();
 });

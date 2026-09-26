@@ -39,6 +39,8 @@ export const tauriTransport: Transport = {
   openFile: (worktree, path) => invoke("open_file", { worktree, path }),
   saveFile: (worktree, path, content, version) =>
     invoke("save_file", { worktree, path, content, version }),
+  createFile: (worktree, folder, name) => invoke("create_file", { worktree, folder, name }),
+  renameFile: (worktree, path, name) => invoke("rename_file", { worktree, path, name }),
   openInEditor: (worktree, path) => invoke("open_in_editor", { worktree, path }),
   getSettings: () => invoke("get_settings"),
   setSettings: (settings) => invoke("set_settings", { settings }),
@@ -46,4 +48,12 @@ export const tauriTransport: Transport = {
   getDiagnostics: () => invoke("get_diagnostics"),
   checkUpdate: () => invoke("check_update"),
   installUpdate: () => invoke("install_update"),
+  openChat: (cwd, resume, mode) => invoke<number>("open_chat", { cwd, resume, mode }),
+  chatSend: (chat, text, images) => invoke("chat_send", { chat, text, images }),
+  chatAnswer: (chat, request, answer) => invoke("chat_answer", { chat, request, answer }),
+  chatInterrupt: (chat) => invoke("chat_interrupt", { chat }),
+  chatSetMode: (chat, mode) => invoke("chat_set_mode", { chat, mode }),
+  closeChat: (chat) => invoke("close_chat", { chat }),
+  confirmChatFolder: (chat, cwd, accepted) =>
+    invoke("confirm_chat_folder", { chat, cwd, accepted }),
 };

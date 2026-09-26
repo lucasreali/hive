@@ -13,11 +13,19 @@ import { showNotification } from "./window";
 // not pending (it finished in view of the focused window: already seen). Nothing here computes a
 // state.
 
-const ALERTING: AgentState[] = ["waiting_permission", "waiting_you", "error"];
+const ALERTING: AgentState[] = [
+  "waiting_permission",
+  "waiting_plan",
+  "waiting_answer",
+  "waiting_you",
+  "error",
+];
 const BUSY: AgentState[] = ["working", "with_subagents"];
 /** What an alert says after the agent's name; "finished" when it stops working. */
 const ALERT_TEXT: Partial<Record<AgentState, string>> = {
   waiting_permission: "is waiting for permission",
+  waiting_plan: "is waiting for plan approval",
+  waiting_answer: "is waiting for your answer",
   waiting_you: "is waiting for you",
   error: "failed",
 };
@@ -73,7 +81,8 @@ export function notify(
   if (message.type !== "agent_state") return;
   const before = s.agentStates[message.id]?.state;
   const after = message.state;
-  if (before === undefined || before === after) return;
+  // The user interrupted it: they are at the keyboard, so nothing alerts.
+  if (before === undefined || before === after || message.interrupted) return;
   if (ALERTING.includes(after)) {
     const name = s.agentTitles[message.id] ?? "Claude";
     const what = after === "waiting_you" && BUSY.includes(before) ? "finished" : ALERT_TEXT[after];

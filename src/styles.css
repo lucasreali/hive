@@ -285,13 +285,6 @@ label:has(> input[type="checkbox"]:disabled) {
   overflow-y: auto;
 }
 
-.inbox [role="menuitem"] {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-}
-
 .inbox-meta {
   color: var(--text-3);
   font-size: 11px;
@@ -718,6 +711,13 @@ label:has(> input[type="checkbox"]:disabled) {
   overflow: auto;
   padding: 4px 0;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* It fills the panel, so a right click below the rows opens the menu for the root. */
+.files-tree [role="tree"] {
+  flex: 1 0 auto;
 }
 
 .files-tree .hint {
@@ -927,6 +927,369 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-2);
 }
 
+/* The chat (7.3): its entry kinds, subagent groups and composer. */
+.transcript-entry[data-nested] {
+  padding-left: 28px;
+  box-shadow: inset 16px 0 0 -15px var(--tree-line);
+}
+
+.transcript-entry[data-role="thinking"] .transcript-text,
+.transcript-entry[data-role="note"] .transcript-text,
+.transcript-entry[data-role="usage"] .transcript-text {
+  color: var(--text-3);
+  font-size: var(--fs-small);
+}
+
+.transcript-entry[data-role="note"] .transcript-text {
+  font-style: italic;
+}
+
+.transcript-entry[data-role="usage"] .transcript-text {
+  text-align: right;
+  font-size: var(--fs-meta);
+}
+
+.transcript-entry[data-role="error"] .transcript-role,
+.transcript-entry[data-role="error"] .transcript-text {
+  color: var(--state-error);
+}
+
+.transcript-entry[data-role="divider"] .transcript-text {
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-small);
+}
+
+.transcript-entry summary {
+  cursor: pointer;
+  color: var(--text-3);
+}
+
+.tool-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-details > summary {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  list-style: none;
+}
+
+.tool-status {
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: var(--text-3);
+}
+
+.transcript-entry[data-status="ok"] .tool-status {
+  color: var(--state-idle);
+}
+
+.transcript-entry[data-status="error"] .tool-status {
+  color: var(--state-error);
+}
+
+.tool-status.spin {
+  color: var(--state-working);
+  animation: hive-spin 1s linear infinite;
+}
+
+.tool-output {
+  margin: 6px 0 0 92px;
+  padding: 6px 8px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-view > .files-error {
+  padding: 6px 12px;
+}
+
+.chat-ended {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-2);
+}
+
+.chat-composer {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--panel);
+}
+
+/* Images to send and a refusal take their own line above the input. */
+.chat-attachments,
+.chat-composer-error {
+  flex: 0 0 100%;
+  order: -1;
+  margin: 0;
+}
+
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-attachments li {
+  position: relative;
+}
+
+.chat-attachments img {
+  display: block;
+  height: 56px;
+  max-width: 120px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.chat-attachments .ghost {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  background: var(--panel);
+}
+
+/* An entry's image: a thumbnail that grows to the row's width when clicked. */
+.chat-image {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.chat-image img {
+  display: block;
+  max-width: 240px;
+  max-height: 160px;
+}
+
+.chat-image[aria-pressed="true"] {
+  cursor: zoom-out;
+}
+
+.chat-image[aria-pressed="true"] img {
+  max-width: 100%;
+  max-height: none;
+}
+
+.chat-image:focus-visible {
+  outline: 1px solid var(--focus);
+}
+
+.tool-details > .chat-image {
+  margin-left: 92px;
+}
+
+.chat-composer textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  outline: none;
+  resize: none;
+}
+
+.chat-composer textarea:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.chat-composer textarea:disabled {
+  color: var(--text-3);
+}
+
+.chat-composer .chat-mode {
+  flex: none;
+  width: 130px;
+}
+
+/* Chat controls (7.3i): the `/` list above the composer, the header's model, mode and warnings. */
+.chat-composer {
+  position: relative;
+}
+
+.chat-composer .chat-commands {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 12px;
+  min-width: 200px;
+  max-height: 240px;
+}
+
+.chat-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  padding-right: 6px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.chat-doing {
+  color: var(--state-working);
+}
+
+.chat-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--state-permission);
+}
+
+/* Chat requests (7.3): permission, question and plan cards pinned above the composer. */
+.chat-requests {
+  flex: none;
+  max-height: 60%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.chat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--state-permission);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
+.chat-card:focus {
+  border-color: var(--focus);
+  border-left-color: var(--state-permission);
+}
+
+.chat-card > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--state-permission);
+}
+
+.chat-card-tool {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 400;
+  color: var(--text);
+}
+
+.chat-card-text {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-card-reason,
+.chat-question p {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.chat-card input[type="text"] {
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: var(--fs-body);
+  outline: none;
+}
+
+.chat-card input[type="text"]:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.chat-card > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chat-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.chat-question legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+.chat-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat-options button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-status.spin {
+    animation: none;
+  }
+}
+
 /* CodeMirror scrolls inside it (src/viewer/editor.ts). */
 .code-view {
   flex: 1;
@@ -1066,7 +1429,8 @@ label:has(> input[type="checkbox"]:disabled) {
   background: var(--state-error);
 }
 
-.connection-state {
+.connection-state,
+.app-version {
   color: var(--text-3);
 }
 
@@ -1271,6 +1635,14 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
+/* A worktree's chevron sits in a fixed box, present whether or not the row has agents. */
+.tree-row .chevron-box {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  display: flex;
+}
+
 button.chevron:hover {
   color: var(--text);
 }
@@ -1437,7 +1809,15 @@ li:not(:last-child) > .owned::before {
   margin-top: 1px;
 }
 
-.state-icon[data-state="waiting_permission"] {
+/* A collapsed row's rollup ends where the badges end: one right column of indicators (7.13). */
+.tree-row > .state-icon,
+.project .row-main > .state-icon {
+  margin-right: 6px;
+}
+
+.state-icon[data-state="waiting_permission"],
+.state-icon[data-state="waiting_plan"],
+.state-icon[data-state="waiting_answer"] {
   color: var(--state-permission);
 }
 .state-icon[data-state="error"] {
@@ -1515,7 +1895,9 @@ li:not(:last-child) > .owned::before {
 }
 
 /* Only the alerting states color their name (prototype); subagent names stay neutral. */
-.agent .state-label[data-state="waiting_permission"] {
+.agent .state-label[data-state="waiting_permission"],
+.agent .state-label[data-state="waiting_plan"],
+.agent .state-label[data-state="waiting_answer"] {
   color: var(--state-permission);
 }
 
@@ -1669,6 +2051,58 @@ li:not(:last-child) > .owned::before {
   box-shadow: 0 0 0 1px var(--state-error);
 }
 
+/* Number stepper (src/ui/NumberInput.tsx): the native spin buttons give way to two carets */
+.stepper {
+  position: relative;
+  display: flex;
+}
+
+.stepper input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
+  appearance: textfield;
+}
+
+.stepper input::-webkit-inner-spin-button,
+.stepper input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.stepper-buttons {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: flex;
+  flex-direction: column;
+  width: 22px;
+  border-left: 1px solid var(--border-subtle);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  overflow: hidden;
+}
+
+.stepper-button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-3);
+}
+
+.stepper-button + .stepper-button {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.stepper-button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .field-error {
   color: var(--state-error);
   overflow-wrap: anywhere;
@@ -1686,29 +2120,6 @@ li:not(:last-child) > .owned::before {
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--border-subtle);
-}
-
-/* New worktree (screens 1c/1d) */
-.new-worktree {
-  display: none;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 6px 0 4px;
-  border-radius: var(--radius);
-  background: var(--selected);
-  color: var(--text);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.new-worktree:hover {
-  background: var(--selected-hover);
-}
-
-.tree-row.project:hover .new-worktree,
-.tree-row.project:focus-within .new-worktree {
-  display: flex;
 }
 
 /* A worktree row's "+": a new chat (a terminal running claude), shown on hover. */
@@ -1729,8 +2140,9 @@ li:not(:last-child) > .owned::before {
   color: var(--text);
 }
 
+/* Keyboard focus shows the "+" too; a mouse click on the chevron does not (7.13). */
 .tree-row.worktree:hover .new-chat,
-.tree-row.worktree:focus-within .new-chat {
+.tree-row.worktree:has(:focus-visible) .new-chat {
   display: flex;
 }
 
@@ -1792,6 +2204,9 @@ li:not(:last-child) > .owned::before {
 }
 
 .settings-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   height: 26px;
   padding: 0 8px;
   border-radius: var(--radius);
@@ -2219,6 +2634,9 @@ li:not(:last-child) > .owned::before {
 }
 
 .palette-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   padding: 8px 8px 4px;
   font-size: var(--fs-meta);
@@ -2256,6 +2674,10 @@ li:not(:last-child) > .owned::before {
 }
 
 .context-menu [role="menuitem"] {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
   height: 26px;
   padding: 0 10px;
   text-align: left;
@@ -2275,6 +2697,20 @@ li:not(:last-child) > .owned::before {
 
 .context-menu .danger:not(:disabled) {
   color: var(--state-error);
+}
+
+.context-menu [role="menuitem"] kbd {
+  margin-left: auto;
+}
+
+/* A menu item's leading icon (7.7), muted; agent state icons keep their color. */
+.context-menu [role="menuitem"] > svg:not(.state-icon) {
+  flex: none;
+  color: var(--text-2);
+}
+
+.context-menu .danger:not(:disabled) > svg {
+  color: inherit;
 }
 
 .context-menu hr {

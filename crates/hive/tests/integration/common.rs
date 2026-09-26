@@ -110,9 +110,15 @@ impl Env {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CEILING_DIRECTORIES", self.dir.path())
-            .env_remove("HIVE_TERMINAL_ID")
             // Claude's session logs are read (and deleted) under the throwaway HOME only.
             .env_remove("CLAUDE_CONFIG_DIR");
+        // Run from a Hive terminal, the tests would pass its `HIVE_*` on to the service and its
+        // terminals.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("HIVE_") {
+                cmd.env_remove(key);
+            }
+        }
         // On macOS terminals run `$SHELL`; the tests' shell commands are fish's, as on WSL.
         #[cfg(target_os = "macos")]
         cmd.env("SHELL", "fish");
@@ -121,12 +127,16 @@ impl Env {
 
     /// Starts `hive daemon` and waits until its socket accepts connections.
     pub fn daemon(&self) -> Daemon {
-        let child = self
-            .hive()
-            .arg("daemon")
-            .stdin(Stdio::null())
-            .spawn()
-            .unwrap();
+        self.daemon_with(&mut self.hive())
+    }
+
+    /// [`Env::daemon`] with only `path` as `PATH`, so it finds no program but those there.
+    pub fn daemon_on_path(&self, path: &std::path::Path) -> Daemon {
+        self.daemon_with(self.hive().env("PATH", path))
+    }
+
+    fn daemon_with(&self, hive: &mut Command) -> Daemon {
+        let child = hive.arg("daemon").stdin(Stdio::null()).spawn().unwrap();
         let mut daemon = Daemon(child);
         // A daemon that already exited fails the test at once, not after the timeout (a
         // mutant that returns early would otherwise make every test wait it out).

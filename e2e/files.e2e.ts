@@ -55,6 +55,20 @@ test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles i
   const readme = all.getByRole("treeitem", { name: "README.md" });
   await expect(readme).toBeVisible();
   await expect(readme.locator(".status-letter")).toHaveCount(0);
+
+  // A changed file opened from Files is plain editable text, no diff marks.
+  const everyFile = all.getByRole("tree", { name: "Files" });
+  await open(everyFile, "src", "auth");
+  await everyFile.getByRole("treeitem", { name: /session\.ts/ }).click();
+  const session = page.getByRole("region", { name: "src/auth/session.ts" });
+  await expect(session.locator(".cm-content")).toHaveAttribute("contenteditable", "true");
+  await expect(session.locator(".cm-deletedChunk")).toHaveCount(0);
+  // The folders opened in Files stay closed in Diff.
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
+  await expect(files.getByRole("treeitem", { name: "src", exact: true })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
 });
 
 test("files panel: a changed file shows as a read-only unified diff", async ({ page }) => {
@@ -62,6 +76,7 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
   const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
   const files = panel.getByRole("tree", { name: "Files" });
 
   await open(files, "src", "auth");

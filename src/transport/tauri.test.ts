@@ -66,6 +66,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.searchFiles("/r", "q");
   await tauriTransport.openFile("/r", "a.ts");
   await tauriTransport.saveFile("/r", "a.ts", "x", "v");
+  await tauriTransport.createFile("/r", "src", "b.ts");
+  await tauriTransport.renameFile("/r", "a.ts", "c.ts");
   await tauriTransport.openInEditor("/r", "a.ts");
   await tauriTransport.getSettings();
   await tauriTransport.setSettings(DEFAULT_SETTINGS);
@@ -99,6 +101,8 @@ test("terminal and project actions call their commands", async () => {
     ["search_files", { worktree: "/r", query: "q" }],
     ["open_file", { worktree: "/r", path: "a.ts" }],
     ["save_file", { worktree: "/r", path: "a.ts", content: "x", version: "v" }],
+    ["create_file", { worktree: "/r", folder: "src", name: "b.ts" }],
+    ["rename_file", { worktree: "/r", path: "a.ts", name: "c.ts" }],
     ["open_in_editor", { worktree: "/r", path: "a.ts" }],
     ["get_settings", {}],
     ["set_settings", { settings: DEFAULT_SETTINGS }],
@@ -106,5 +110,26 @@ test("terminal and project actions call their commands", async () => {
     ["get_diagnostics", {}],
     ["check_update", {}],
     ["install_update", {}],
+  ]);
+});
+
+test("chat actions call their commands on the chat's id", async () => {
+  const calls = record(4);
+  expect(await tauriTransport.openChat("/r", null, "plan")).toBe(4);
+  const image = { media_type: "image/png", data: "iVBO" };
+  await tauriTransport.chatSend(4, "hi", [image]);
+  await tauriTransport.chatAnswer(4, "req_1", { kind: "deny", message: null });
+  await tauriTransport.chatInterrupt(4);
+  await tauriTransport.chatSetMode(4, "accept_edits");
+  await tauriTransport.closeChat(4);
+  await tauriTransport.confirmChatFolder(4, "/r", true);
+  expect(calls).toEqual([
+    ["open_chat", { cwd: "/r", resume: null, mode: "plan" }],
+    ["chat_send", { chat: 4, text: "hi", images: [image] }],
+    ["chat_answer", { chat: 4, request: "req_1", answer: { kind: "deny", message: null } }],
+    ["chat_interrupt", { chat: 4 }],
+    ["chat_set_mode", { chat: 4, mode: "accept_edits" }],
+    ["close_chat", { chat: 4 }],
+    ["confirm_chat_folder", { chat: 4, cwd: "/r", accepted: true }],
   ]);
 });

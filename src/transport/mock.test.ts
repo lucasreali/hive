@@ -277,16 +277,24 @@ test("worktree-remove drops that Claude worktree and sends the new list", async 
 
 test("agent states carry the service's urgency and pending flag", () => {
   const calm = ["ended", "idle", "working", "with_subagents"] as const;
-  const pending = ["waiting_you", "error", "waiting_permission"] as const;
+  const pending = [
+    "waiting_you",
+    "error",
+    "waiting_answer",
+    "waiting_plan",
+    "waiting_permission",
+  ] as const;
   const doing = { activity: null, since_ms: 0 };
   expect([...calm, ...pending].map((s) => agentStatus(s))).toEqual([
-    { state: "ended", urgency: 0, pending: false, ...doing },
-    { state: "idle", urgency: 1, pending: false, ...doing },
-    { state: "working", urgency: 2, pending: false, ...doing },
-    { state: "with_subagents", urgency: 3, pending: false, ...doing },
-    { state: "waiting_you", urgency: 4, pending: true, ...doing },
-    { state: "error", urgency: 5, pending: true, ...doing },
-    { state: "waiting_permission", urgency: 6, pending: true, ...doing },
+    { state: "ended", urgency: 0, pending: false, interrupted: false, ...doing },
+    { state: "idle", urgency: 1, pending: false, interrupted: false, ...doing },
+    { state: "working", urgency: 2, pending: false, interrupted: false, ...doing },
+    { state: "with_subagents", urgency: 3, pending: false, interrupted: false, ...doing },
+    { state: "waiting_you", urgency: 4, pending: true, interrupted: false, ...doing },
+    { state: "error", urgency: 5, pending: true, interrupted: false, ...doing },
+    { state: "waiting_answer", urgency: 6, pending: true, interrupted: false, ...doing },
+    { state: "waiting_plan", urgency: 7, pending: true, interrupted: false, ...doing },
+    { state: "waiting_permission", urgency: 8, pending: true, interrupted: false, ...doing },
   ]);
   expect(agentStatus("working", "Run tests", 7)).toMatchObject({
     activity: "Run tests",
@@ -549,6 +557,52 @@ test("a save checks the version as the service does; write stands in for an agen
   await transport.setView(id, true);
   await tick();
   expect(messages).toHaveLength(3);
+});
+
+test("files are created and renamed as the service does, never over another", async () => {
+  const { transport, messages } = await connected();
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  const w = shop.path;
+  await transport.watchWorktree(w);
+  await tick();
+  messages.length = 0;
+  await transport.createFile(w, "src", "new.ts");
+  await tick();
+  expect(messages.map((m) => m.type)).toEqual(["file_created", "files", "changes"]);
+  expect(messages[0]).toEqual({ type: "file_created", worktree: w, path: "src/new.ts" });
+  expect((messages[1] as { files: string[] }).files).toContain("src/new.ts");
+  await transport.unwatchWorktree();
+  messages.length = 0;
+  await transport.createFile(w, "", "top.ts");
+  await transport.renameFile(w, "src/new.ts", "renamed.ts");
+  await transport.openFile(w, "src/renamed.ts");
+  const failures: [string, string | null, string][] = [
+    ["/nowhere", null, "x"],
+    [w, null, ""],
+    [w, null, "a/b"],
+    [w, null, "README.md"],
+    [w, "gone.ts", "x"],
+  ];
+  for (const [worktree, from, name] of failures) {
+    if (from) await transport.renameFile(worktree, from, name);
+    else await transport.createFile(worktree, "", name);
+  }
+  await tick();
+  const failed = (worktree: string, message: string) => ({
+    type: "file_op_failed",
+    worktree,
+    message,
+  });
+  expect(messages).toEqual([
+    { type: "file_created", worktree: w, path: "top.ts" },
+    { type: "file_renamed", worktree: w, path: "src/new.ts", to: "src/renamed.ts" },
+    expect.objectContaining({ type: "file", path: "src/renamed.ts", content: "" }),
+    failed("/nowhere", "/nowhere is not a worktree of a followed project"),
+    failed(w, "not a valid file name"),
+    failed(w, "not a valid file name"),
+    failed(w, "README.md already exists"),
+    failed(w, "gone.ts does not exist"),
+  ]);
 });
 
 test("a file's Windows path for an external editor, or why not", async () => {
@@ -881,4 +935,31 @@ test("deleting the current space makes the first one current, never the last one
     { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
     { type: "space_failed", message: "the last space cannot be deleted" },
   ]);
+});
+
+test("chats share the terminals' ids and play the scripted chat", async () => {
+  const { transport, messages } = await opened();
+  const chat = await transport.openChat("/w", null, null);
+  expect(chat).toBe(2);
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "confirm_chat_folder", channel: 2, chat: 2, cwd: "/w" });
+  await transport.confirmChatFolder(chat, "/w", true);
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", chat: 2, busy: false });
+  await transport.chatSetMode(chat, "plan");
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", mode: "plan" });
+  await transport.chatSend(chat, "permission", []);
+  await tick();
+  expect(messages.at(-2)).toMatchObject({ type: "chat_status", busy: true });
+  expect(messages.at(-1)).toMatchObject({ type: "chat_entries", entries: [{ kind: "user" }] });
+  await transport.chatInterrupt(chat);
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", busy: false });
+  await transport.chatAnswer(chat, "req_x", { kind: "allow" });
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "error", message: "no pending request req_x" });
+  await transport.closeChat(chat);
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "chat_closed", channel: 2, chat: 2, error: null });
 });

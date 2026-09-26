@@ -35,6 +35,8 @@ if [ "${MUTANTS:-1}" = 1 ]; then
         break
       fi
     done ) &
-  TMPDIR=/var/tmp/hive-mutants cargo mutants --gitignore true -j 1 --timeout 60 --in-diff "$out/diff.patch" >"$out/mutants.log" 2>&1
+  # Same setup as CI (.cargo/mutants.toml: nextest, `mutants` profile; needs cargo-nextest) in
+  # one shard, with the baseline run here: it sets the automatic test timeout.
+  TMPDIR=/var/tmp/hive-mutants cargo mutants --gitignore true -j 1 --in-diff "$out/diff.patch" >"$out/mutants.log" 2>&1
   grep -E '^(MISSED|TIMEOUT|ERROR)|mutants tested|memory low' "$out/mutants.log" | sed 's/^/      /'
 fi

@@ -1,4 +1,10 @@
-import { TerminalWindowIcon } from "@phosphor-icons/react";
+import {
+  FilePlusIcon,
+  RobotIcon,
+  SquareSplitHorizontalIcon,
+  TerminalWindowIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -9,10 +15,12 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { closeChat, openChat } from "../chats";
 import {
   activateTab,
   fileVisible,
   type HiveState,
+  openFileDialog,
   openModal,
   selectedPlace,
   setRightPanel,
@@ -33,10 +41,13 @@ import {
 } from "../terminals";
 import { isDirty } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
+import { ChatView } from "./ChatView";
 import {
   AddFolderIcon,
+  ChatIcon,
   CloseIcon,
   FileIcon,
+  ICON,
   PanelIcon,
   PlusIcon,
   StateIcon,
@@ -129,8 +140,9 @@ function TabItem(props: {
 }
 
 /**
- * A terminal's tab: the worktree's name, or, while a Claude agent runs in it, the agent's
- * state and its session's name (as in Orca). Tabs show only their worktree's, so no project.
+ * A terminal's (or a chat's) tab: the worktree's name, or, while a Claude agent runs in it, the
+ * agent's state and its session's name (as in Orca). Tabs show only their worktree's, so no
+ * project.
  */
 function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => void }) {
   const active = useHive((s) => s.activeTab === tab.id && !s.fileShown && !s.transcriptShown);
@@ -143,20 +155,27 @@ function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => voi
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
   const agentState = useHive((s) => (agent ? (s.agentStates[agent]?.state ?? "idle") : null));
   const title = useHive((s) => (agent ? s.agentTitles[agent] : undefined));
+  const chat = tab.kind === "chat";
+  const ended = useHive((s) => !!s.chats[tab.id]?.closed);
   return (
     <TabItem
       active={active}
       split={split}
-      onMenu={(event) => {
-        event.preventDefault();
-        onMenu({ tab: tab.id, x: event.clientX, y: event.clientY });
-      }}
+      // A chat has no split, so no menu.
+      onMenu={
+        chat
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              onMenu({ tab: tab.id, x: event.clientX, y: event.clientY });
+            }
+      }
       title={title ? `${title}\n${tab.cwd}` : tab.cwd}
       onShow={() => activateTab(tab)}
-      close={`Close terminal ${title ?? name}`}
-      onClose={() => closeTerminal(tab.id)}
+      close={`Close ${chat ? "chat" : "terminal"} ${title ?? name}`}
+      onClose={() => (chat ? closeChat(tab.id) : closeTerminal(tab.id))}
     >
-      {agentState ? <StateIcon state={agentState} /> : <TerminalIcon />}
+      {agentState ? <StateIcon state={agentState} /> : chat ? <ChatIcon /> : <TerminalIcon />}
       <span className="tab-name" data-agent={title ? true : undefined}>
         {title ?? name}
       </span>
@@ -178,6 +197,7 @@ function TerminalTab({ tab, onMenu }: { tab: Tab; onMenu: (menu: TabMenu) => voi
           exited
         </span>
       )}
+      {ended && <span className="tab-badge">ended</span>}
     </TabItem>
   );
 }
@@ -219,9 +239,11 @@ function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
       <button type="button" role="menuitem" onClick={act(() => void splitTerminal(menu.tab))}>
+        <SquareSplitHorizontalIcon {...ICON} />
         {split ? "Unsplit" : "Split right"}
       </button>
       <button type="button" role="menuitem" onClick={act(() => closeTerminal(menu.tab))}>
+        <XIcon {...ICON} />
         Close terminal
       </button>
     </ContextMenu>
@@ -266,7 +288,73 @@ function NoTerminals({ worktree }: { worktree: string }) {
   );
 }
 
-// "+" opens a terminal in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
+/** The "+" menu's Agent: the in-app chat (7.3). */
+const openAgent = (worktree: string) => void openChat(worktree);
+
+/**
+ * The tab bar's "+": a menu to open a terminal, an agent or a new file (its name asked first)
+ * in `worktree`. Enter, Space or ↓ open it; Esc closes it and gives the focus back to "+".
+ */
+function NewTabButton({ worktree }: { worktree: string | null }) {
+  const [plus, setPlus] = useState<HTMLButtonElement | null>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const close = useCallback(() => {
+    setAt(null);
+    plus?.focus();
+  }, [plus]);
+  const show = () => {
+    const box = (plus as HTMLButtonElement).getBoundingClientRect();
+    setAt({ x: box.left, y: box.bottom + 4 });
+  };
+  const act = (action: (worktree: string) => void) => () => {
+    close();
+    action(worktree as string);
+  };
+  return (
+    <>
+      <button
+        ref={setPlus}
+        type="button"
+        className="ghost"
+        title="New terminal, agent or file"
+        aria-label="New terminal, agent or file"
+        aria-haspopup="menu"
+        aria-expanded={at !== null}
+        disabled={worktree === null}
+        onClick={() => (at ? close() : show())}
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowDown") return;
+          e.preventDefault();
+          show();
+        }}
+      >
+        <PlusIcon size={14} />
+      </button>
+      {at && worktree !== null && (
+        <ContextMenu at={at} label="New tab" onClose={close} anchor={plus}>
+          <button type="button" role="menuitem" onClick={act((w) => void openTerminal(w))}>
+            <TerminalWindowIcon {...ICON} />
+            Terminal
+          </button>
+          <button type="button" role="menuitem" onClick={act(openAgent)}>
+            <RobotIcon {...ICON} />
+            Agent
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={act((w) => openFileDialog({ worktree: w, folder: "", path: null }))}
+          >
+            <FilePlusIcon {...ICON} />
+            New file…
+          </button>
+        </ContextMenu>
+      )}
+    </>
+  );
+}
+
+// "+" opens a terminal, an agent or a new file in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
 // the selected worktree's tabs show (a project's are its main worktree's).
 export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
@@ -275,6 +363,13 @@ export function TerminalArea() {
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
   const transcript = useHive((s) => s.transcriptShown);
+  const chat = useHive((s) =>
+    !s.fileShown &&
+    !s.transcriptShown &&
+    visibleTabs(s).some((t) => t.id === s.activeTab && t.kind === "chat")
+      ? s.activeTab
+      : null,
+  );
   const percent = useHive((s) => s.splitPercent);
   const [menu, setMenu] = useState<TabMenu | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -286,15 +381,7 @@ export function TerminalArea() {
             <TerminalTab key={tab.id} tab={tab} onMenu={setMenu} />
           ))}
           <FileTab />
-          <button
-            type="button"
-            className="ghost"
-            title={keyText("New terminal (Ctrl+Shift+T)")}
-            disabled={selected === null}
-            onClick={() => selected !== null && void openTerminal(selected)}
-          >
-            <PlusIcon size={14} />
-          </button>
+          <NewTabButton worktree={selected} />
         </div>
         <div className="tabs-actions">
           <button
@@ -314,7 +401,8 @@ export function TerminalArea() {
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript} />
+        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript || chat !== null} />
+        {chat !== null && <ChatView key={chat} id={chat} />}
         {file && <FileView worktree={file.worktree} />}
         {transcript && (
           <TranscriptView

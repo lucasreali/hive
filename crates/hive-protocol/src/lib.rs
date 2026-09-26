@@ -208,6 +208,9 @@ pub enum Control {
         state: AgentState,
         urgency: u8,
         pending: bool,
+        /// It waits for you because the user interrupted it (Esc/Ctrl+C, or declined a
+        /// dialog): not pending, and nothing alerts (no tone, inbox or OS notification).
+        interrupted: bool,
         subagents: Vec<SubagentState>,
         /// What the agent itself is doing (its current tool call), cleared when its turn ends.
         activity: Option<String>,
@@ -540,6 +543,36 @@ pub enum Control {
         /// Shown as is.
         message: String,
     },
+    /// App → service: create the empty file `name` in `folder` (relative to the worktree, empty
+    /// for its root) (7.4). Never overwrites. Answered by `FileCreated` or `FileOpFailed`.
+    CreateFile {
+        worktree: String,
+        folder: String,
+        name: String,
+    },
+    /// The file was created at `path` (relative to the worktree).
+    FileCreated {
+        worktree: String,
+        path: String,
+    },
+    /// App → service: rename the file `path` to `name` in the same folder (7.4). Never
+    /// overwrites. Answered by `FileRenamed` or `FileOpFailed`.
+    RenameFile {
+        worktree: String,
+        path: String,
+        name: String,
+    },
+    /// The file `path` is now `to` (relative to the worktree).
+    FileRenamed {
+        worktree: String,
+        path: String,
+        to: String,
+    },
+    /// Nothing was created or renamed. Shown as is.
+    FileOpFailed {
+        worktree: String,
+        message: String,
+    },
     /// App → service: where Windows sees this file, to open it in the user's editor; an empty
     /// `path` is the worktree's folder, for the Windows Explorer. Answered by `EditorTarget`.
     OpenInEditor {
@@ -613,8 +646,207 @@ pub enum Control {
         subagent: String,
         entries: Vec<TranscriptEntry>,
     },
+    /// App → service, on the new chat's channel (allocated by the app like a terminal's):
+    /// start a chat (7.3, `docs/spike/chat.md`) in the worktree `cwd`, resuming session `resume`.
+    OpenChat {
+        cwd: String,
+        resume: Option<String>,
+        mode: Option<ChatMode>,
+    },
+    /// The chat's `claude` started (`system/init`).
+    ChatOpened {
+        chat: u32,
+        cwd: String,
+        session: Option<String>,
+        model: Option<String>,
+        mode: ChatMode,
+        /// Slash commands for the composer's `/` list.
+        commands: Vec<String>,
+        /// Set when the chat runs on an API key rather than the subscription login.
+        api_key_source: Option<String>,
+    },
+    /// App → service: a user turn.
+    ChatSend {
+        chat: u32,
+        text: String,
+        images: Vec<ChatImage>,
+    },
+    /// New or changed entries; an entry with a known `id` replaces that one.
+    ChatEntries {
+        chat: u32,
+        entries: Vec<ChatEntry>,
+        /// The first entry replaces the app's last one (live text).
+        replace_last: bool,
+    },
+    /// A permission, question or plan waiting for the human.
+    ChatRequest {
+        chat: u32,
+        request: ChatRequest,
+    },
+    /// App → service: the human's answer to the pending request `request` (its id).
+    ChatAnswer {
+        chat: u32,
+        request: String,
+        answer: ChatAnswer,
+    },
+    /// The request was answered or cancelled: its card goes.
+    ChatRequestGone {
+        chat: u32,
+        request: String,
+    },
+    /// App → service: stop the running turn.
+    ChatInterrupt {
+        chat: u32,
+    },
+    /// App → service: switch the permission mode.
+    ChatSetMode {
+        chat: u32,
+        mode: ChatMode,
+    },
+    ChatStatus {
+        chat: u32,
+        /// A turn is running.
+        busy: bool,
+        mode: ChatMode,
+        model: Option<String>,
+        /// A transient API retry, e.g. "Retrying 2/10…".
+        retry: Option<String>,
+        compacting: bool,
+        session: Option<String>,
+        /// Set when the chat runs on an API key rather than the subscription login (known from
+        /// the first turn's `system/init`).
+        api_key_source: Option<String>,
+    },
+    /// App → service: end the chat.
+    CloseChat {
+        chat: u32,
+    },
+    /// The chat's `claude` ended; `error` holds its last stderr lines when it failed.
+    ChatClosed {
+        chat: u32,
+        error: Option<String>,
+    },
+    /// Service → app (`accepted` absent): the first chat in this project needs the human's
+    /// confirmation. App → service: the answer.
+    ConfirmChatFolder {
+        chat: u32,
+        cwd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accepted: Option<bool>,
+    },
     Error {
         message: String,
+    },
+}
+
+/// A chat's permission mode (`claude --permission-mode`); `bypassPermissions` is never offered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMode {
+    Default,
+    AcceptEdits,
+    Plan,
+}
+
+/// An image of a user turn or a tool result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatImage {
+    pub media_type: String,
+    /// Base64.
+    pub data: String,
+}
+
+/// One row of a chat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatEntry {
+    /// Increasing within the chat.
+    pub id: u32,
+    pub kind: ChatEntryKind,
+    pub text: String,
+    /// The tool's name, for a tool call.
+    pub tool: Option<String>,
+    /// `parent_tool_use_id`: the `Agent` call a subagent's entry belongs to.
+    pub parent: Option<String>,
+    pub status: Option<ToolStatus>,
+    /// A tool's result.
+    pub output: Option<String>,
+    pub image: Option<ChatImage>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatEntryKind {
+    User,
+    Assistant,
+    Thinking,
+    Tool,
+    Error,
+    Note,
+    Divider,
+    Usage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Running,
+    Ok,
+    Error,
+}
+
+/// A permission, question or plan the chat waits on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatRequest {
+    pub id: String,
+    pub kind: ChatRequestKind,
+    pub tool: String,
+    /// The full command, path or input JSON.
+    pub detail: String,
+    pub reason: Option<String>,
+    pub questions: Vec<ChatQuestion>,
+    pub plan: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatRequestKind {
+    Permission,
+    Question,
+    Plan,
+}
+
+/// One question of an `AskUserQuestion` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatQuestion {
+    pub question: String,
+    pub header: String,
+    pub multi: bool,
+    pub options: Vec<ChatOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// The human's answer to a `ChatRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChatAnswer {
+    Allow,
+    Deny {
+        message: Option<String>,
+    },
+    /// Per question, the chosen labels or one free text.
+    Answers {
+        answers: Vec<Vec<String>>,
+    },
+    ApprovePlan {
+        accept_edits: bool,
+    },
+    KeepPlanning {
+        feedback: String,
     },
 }
 
@@ -752,6 +984,14 @@ pub struct WorktreeSettings {
 #[serde(default)]
 pub struct ProjectSettings {
     pub scripts: ProjectScripts,
+    /// The human allowed chats (7.3) in this project: the first one asks
+    /// (`confirm_chat_folder`), since `claude -p` shows no workspace trust dialog.
+    #[serde(skip_serializing_if = "is_false")]
+    pub chat_confirmed: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// The user's scripts for a project's worktrees. They live only in the settings, never in the
@@ -876,11 +1116,23 @@ pub struct Session {
     pub running: bool,
 }
 
-/// A Claude session that ran in a Hive terminal, and the folder it ran in.
+/// A Claude session that ran in a Hive terminal or chat, and the folder it ran in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenSession {
     pub id: String,
     pub cwd: String,
+    /// Where it ran; lists kept before chats existed have none: terminals.
+    #[serde(default)]
+    pub kind: SessionKind,
+}
+
+/// Where a Claude session runs in Hive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    #[default]
+    Terminal,
+    Chat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1026,6 +1278,12 @@ pub enum EventKind {
     },
     SubagentStarted,
     SubagentStopped,
+    /// Compaction of the conversation began (`PreCompact`).
+    CompactStarted,
+    /// Compaction ended (`PostCompact`).
+    CompactFinished,
+    /// An MCP server asks the user for input (`Elicitation`).
+    ElicitationRequested,
     SessionEnded {
         reason: Option<String>,
     },
@@ -1049,8 +1307,14 @@ pub enum EventKind {
 pub enum Notification {
     PermissionPrompt,
     ElicitationDialog,
+    ElicitationUrlDialog,
+    ElicitationComplete,
+    ElicitationResponse,
     IdlePrompt,
     AgentNeedsInput,
+    QuotaAutoResumeFired,
+    QuotaAutoResumeStale,
+    QuotaAutoResumeDisabled,
     Other(String),
 }
 
@@ -1065,17 +1329,21 @@ pub enum AgentState {
     WithSubagents,
     WaitingYou,
     Error,
+    /// A question on screen (AskUserQuestion, an MCP form).
+    WaitingAnswer,
+    /// A plan waiting for approval (ExitPlanMode).
+    WaitingPlan,
     WaitingPermission,
 }
 
 impl AgentState {
-    /// Higher is more urgent: the declaration order, 0 (ended) to 6 (waiting for permission).
+    /// Higher is more urgent: the declaration order, 0 (ended) to 8 (waiting for permission).
     pub fn urgency(self) -> u8 {
         self as u8
     }
 
-    /// Needs the user (the "N pending" counter and F8): waiting for permission, error
-    /// (urgency "alta") and waiting for you ("média").
+    /// Needs the user (the "N pending" counter and F8): waiting for permission, a plan or an
+    /// answer, error (urgency "alta") and waiting for you ("média").
     pub fn pending(self) -> bool {
         self >= AgentState::WaitingYou
     }
@@ -1198,8 +1466,9 @@ mod tests {
         let msg = Control::AgentState {
             id: "s".into(),
             state: AgentState::WaitingPermission,
-            urgency: 6,
+            urgency: 8,
             pending: true,
+            interrupted: false,
             subagents: vec![SubagentState {
                 id: "a".into(),
                 agent_type: None,
@@ -1213,7 +1482,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":6,"pending":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
     }
@@ -1223,6 +1492,8 @@ mod tests {
         use AgentState::*;
         let most_urgent_first = [
             WaitingPermission,
+            WaitingPlan,
+            WaitingAnswer,
             Error,
             WaitingYou,
             WithSubagents,
@@ -1232,13 +1503,16 @@ mod tests {
         ];
         assert!(most_urgent_first.windows(2).all(|w| w[0] > w[1]));
         let urgency: Vec<u8> = most_urgent_first.iter().map(|s| s.urgency()).collect();
-        assert_eq!(urgency, [6, 5, 4, 3, 2, 1, 0]);
+        assert_eq!(urgency, [8, 7, 6, 5, 4, 3, 2, 1, 0]);
         let pending: Vec<bool> = most_urgent_first.iter().map(|s| s.pending()).collect();
-        assert_eq!(pending, [true, true, true, false, false, false, false]);
+        assert_eq!(
+            pending,
+            [true, true, true, true, true, false, false, false, false]
+        );
         let json = serde_json::to_string(&most_urgent_first).unwrap();
         assert_eq!(
             json,
-            r#"["waiting_permission","error","waiting_you","with_subagents","working","idle","ended"]"#
+            r#"["waiting_permission","waiting_plan","waiting_answer","error","waiting_you","with_subagents","working","idle","ended"]"#
         );
     }
 
@@ -1368,6 +1642,214 @@ mod tests {
         );
     }
 
+    /// Every chat message has this exact JSON (the TS mirrors in `src/transport/index.ts`
+    /// rely on it) and reads back to itself.
+    #[test]
+    fn chat_messages_round_trip_as_tagged_json() {
+        let image = ChatImage {
+            media_type: "image/png".into(),
+            data: "iVBO".into(),
+        };
+        let entry = ChatEntry {
+            id: 3,
+            kind: ChatEntryKind::Tool,
+            text: "cargo test".into(),
+            tool: Some("Bash".into()),
+            parent: Some("toolu_1".into()),
+            status: Some(ToolStatus::Running),
+            output: None,
+            image: None,
+        };
+        let request = ChatRequest {
+            id: "req_8".into(),
+            kind: ChatRequestKind::Question,
+            tool: "AskUserQuestion".into(),
+            detail: "{}".into(),
+            reason: None,
+            questions: vec![ChatQuestion {
+                question: "Which?".into(),
+                header: "Lang".into(),
+                multi: true,
+                options: vec![ChatOption {
+                    label: "English".into(),
+                    description: "en".into(),
+                }],
+            }],
+            plan: Some("1. x".into()),
+        };
+        let cases: Vec<(Control, &str)> = vec![
+            (
+                Control::OpenChat {
+                    cwd: "/r".into(),
+                    resume: Some("s".into()),
+                    mode: Some(ChatMode::AcceptEdits),
+                },
+                r#"{"type":"open_chat","cwd":"/r","resume":"s","mode":"accept_edits"}"#,
+            ),
+            (
+                Control::ChatOpened {
+                    chat: 2,
+                    cwd: "/r".into(),
+                    session: Some("s".into()),
+                    model: Some("m".into()),
+                    mode: ChatMode::Plan,
+                    commands: vec!["compact".into()],
+                    api_key_source: None,
+                },
+                r#"{"type":"chat_opened","chat":2,"cwd":"/r","session":"s","model":"m","mode":"plan","commands":["compact"],"api_key_source":null}"#,
+            ),
+            (
+                Control::ChatSend {
+                    chat: 2,
+                    text: "hi".into(),
+                    images: vec![image.clone()],
+                },
+                r#"{"type":"chat_send","chat":2,"text":"hi","images":[{"media_type":"image/png","data":"iVBO"}]}"#,
+            ),
+            (
+                Control::ChatEntries {
+                    chat: 2,
+                    entries: vec![
+                        entry,
+                        ChatEntry {
+                            id: 4,
+                            kind: ChatEntryKind::Usage,
+                            text: "1 s".into(),
+                            tool: None,
+                            parent: None,
+                            status: Some(ToolStatus::Error),
+                            output: Some("o".into()),
+                            image: Some(image),
+                        },
+                    ],
+                    replace_last: true,
+                },
+                r#"{"type":"chat_entries","chat":2,"entries":[{"id":3,"kind":"tool","text":"cargo test","tool":"Bash","parent":"toolu_1","status":"running","output":null,"image":null},{"id":4,"kind":"usage","text":"1 s","tool":null,"parent":null,"status":"error","output":"o","image":{"media_type":"image/png","data":"iVBO"}}],"replace_last":true}"#,
+            ),
+            (
+                Control::ChatRequest { chat: 2, request },
+                r#"{"type":"chat_request","chat":2,"request":{"id":"req_8","kind":"question","tool":"AskUserQuestion","detail":"{}","reason":null,"questions":[{"question":"Which?","header":"Lang","multi":true,"options":[{"label":"English","description":"en"}]}],"plan":"1. x"}}"#,
+            ),
+            (
+                Control::ChatAnswer {
+                    chat: 2,
+                    request: "req_7".into(),
+                    answer: ChatAnswer::Allow,
+                },
+                r#"{"type":"chat_answer","chat":2,"request":"req_7","answer":{"kind":"allow"}}"#,
+            ),
+            (
+                Control::ChatAnswer {
+                    chat: 2,
+                    request: "req_7".into(),
+                    answer: ChatAnswer::Deny {
+                        message: Some("no".into()),
+                    },
+                },
+                r#"{"type":"chat_answer","chat":2,"request":"req_7","answer":{"kind":"deny","message":"no"}}"#,
+            ),
+            (
+                Control::ChatAnswer {
+                    chat: 2,
+                    request: "req_8".into(),
+                    answer: ChatAnswer::Answers {
+                        answers: vec![vec!["English".into()]],
+                    },
+                },
+                r#"{"type":"chat_answer","chat":2,"request":"req_8","answer":{"kind":"answers","answers":[["English"]]}}"#,
+            ),
+            (
+                Control::ChatAnswer {
+                    chat: 2,
+                    request: "req_9".into(),
+                    answer: ChatAnswer::ApprovePlan { accept_edits: true },
+                },
+                r#"{"type":"chat_answer","chat":2,"request":"req_9","answer":{"kind":"approve_plan","accept_edits":true}}"#,
+            ),
+            (
+                Control::ChatAnswer {
+                    chat: 2,
+                    request: "req_9".into(),
+                    answer: ChatAnswer::KeepPlanning {
+                        feedback: "shorter".into(),
+                    },
+                },
+                r#"{"type":"chat_answer","chat":2,"request":"req_9","answer":{"kind":"keep_planning","feedback":"shorter"}}"#,
+            ),
+            (
+                Control::ChatRequestGone {
+                    chat: 2,
+                    request: "req_7".into(),
+                },
+                r#"{"type":"chat_request_gone","chat":2,"request":"req_7"}"#,
+            ),
+            (
+                Control::ChatInterrupt { chat: 2 },
+                r#"{"type":"chat_interrupt","chat":2}"#,
+            ),
+            (
+                Control::ChatSetMode {
+                    chat: 2,
+                    mode: ChatMode::Default,
+                },
+                r#"{"type":"chat_set_mode","chat":2,"mode":"default"}"#,
+            ),
+            (
+                Control::ChatStatus {
+                    chat: 2,
+                    busy: true,
+                    mode: ChatMode::Default,
+                    model: None,
+                    retry: Some("Retrying 2/10…".into()),
+                    compacting: false,
+                    session: None,
+                    api_key_source: Some("ANTHROPIC_API_KEY".into()),
+                },
+                r#"{"type":"chat_status","chat":2,"busy":true,"mode":"default","model":null,"retry":"Retrying 2/10…","compacting":false,"session":null,"api_key_source":"ANTHROPIC_API_KEY"}"#,
+            ),
+            (
+                Control::CloseChat { chat: 2 },
+                r#"{"type":"close_chat","chat":2}"#,
+            ),
+            (
+                Control::ChatClosed {
+                    chat: 2,
+                    error: Some("boom".into()),
+                },
+                r#"{"type":"chat_closed","chat":2,"error":"boom"}"#,
+            ),
+            (
+                Control::ConfirmChatFolder {
+                    chat: 2,
+                    cwd: "/r".into(),
+                    accepted: None,
+                },
+                r#"{"type":"confirm_chat_folder","chat":2,"cwd":"/r"}"#,
+            ),
+            (
+                Control::ConfirmChatFolder {
+                    chat: 2,
+                    cwd: "/r".into(),
+                    accepted: Some(false),
+                },
+                r#"{"type":"confirm_chat_folder","chat":2,"cwd":"/r","accepted":false}"#,
+            ),
+        ];
+        for (message, json) in cases {
+            assert_eq!(&Frame::control(2, &message).payload[..], json.as_bytes());
+            assert_eq!(serde_json::from_str::<Control>(json).unwrap(), message);
+        }
+        // Absent options read as none, like the app may send them.
+        assert_eq!(
+            serde_json::from_str::<Control>(r#"{"type":"open_chat","cwd":"/r"}"#).unwrap(),
+            Control::OpenChat {
+                cwd: "/r".into(),
+                resume: None,
+                mode: None
+            }
+        );
+    }
+
     #[test]
     fn transcript_messages_are_tagged_json() {
         let transcript = Control::Transcript {
@@ -1484,12 +1966,16 @@ mod tests {
             sessions: vec![OpenSession {
                 id: "s".into(),
                 cwd: "/r".into(),
+                kind: SessionKind::Chat,
             }],
         };
         assert_eq!(
             &Frame::control(0, &restore).payload[..],
-            br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r"}]}"#
+            br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r","kind":"chat"}]}"#
         );
+        // Kept before chats existed: a terminal's.
+        let old: OpenSession = serde_json::from_str(r#"{"id":"s","cwd":"/r"}"#).unwrap();
+        assert_eq!(old.kind, SessionKind::Terminal);
         for message in [
             Control::AgentTitle {
                 id: "s".into(),
@@ -1675,6 +2161,53 @@ mod tests {
     }
 
     #[test]
+    fn create_and_rename_messages_are_tagged_json() {
+        let create = Control::CreateFile {
+            worktree: "/r".into(),
+            folder: "d".into(),
+            name: "a".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &create).payload[..],
+            br#"{"type":"create_file","worktree":"/r","folder":"d","name":"a"}"#
+        );
+        let created = Control::FileCreated {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &created).payload[..],
+            br#"{"type":"file_created","worktree":"/r","path":"d/a"}"#
+        );
+        let rename = Control::RenameFile {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+            name: "b".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &rename).payload[..],
+            br#"{"type":"rename_file","worktree":"/r","path":"d/a","name":"b"}"#
+        );
+        let renamed = Control::FileRenamed {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+            to: "d/b".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &renamed).payload[..],
+            br#"{"type":"file_renamed","worktree":"/r","path":"d/a","to":"d/b"}"#
+        );
+        let failed = Control::FileOpFailed {
+            worktree: "/r".into(),
+            message: "m".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &failed).payload[..],
+            br#"{"type":"file_op_failed","worktree":"/r","message":"m"}"#
+        );
+    }
+
+    #[test]
     fn project_scripts_read_partial_and_write_whole() {
         let read: ProjectSettings =
             serde_json::from_str(r#"{"scripts":{"run":[{"name":"dev","command":"bun dev"}]}}"#)
@@ -1687,10 +2220,22 @@ mod tests {
             }],
             archive: None,
         };
-        assert_eq!(read, ProjectSettings { scripts });
+        let mut project = ProjectSettings {
+            scripts,
+            chat_confirmed: false,
+        };
+        assert_eq!(read, project);
         assert_eq!(
             serde_json::to_string(&read).unwrap(),
             r#"{"scripts":{"setup":null,"run":[{"name":"dev","command":"bun dev"}],"archive":null}}"#
+        );
+        // Written only once chats are confirmed.
+        project.chat_confirmed = true;
+        let json = serde_json::to_string(&project).unwrap();
+        assert!(json.ends_with(r#""chat_confirmed":true}"#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<ProjectSettings>(&json).unwrap(),
+            project
         );
     }
 

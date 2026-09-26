@@ -158,6 +158,98 @@ fn write_temp(mut file: File, content: &str, mode: u32) -> io::Result<()> {
     file.sync_all()
 }
 
+/// Longest file name, Linux's `NAME_MAX`.
+const NAME_LIMIT: usize = 255;
+
+/// A file name from the app: one component, not `.` or `..`, without a separator (`\` too,
+/// a separator for Windows) or NUL, at most [`NAME_LIMIT`] bytes.
+fn file_name(name: &str) -> io::Result<&str> {
+    let one = !matches!(name, "" | "." | "..") && !name.contains(['/', '\\', '\0']);
+    if !one || name.len() > NAME_LIMIT {
+        return Err(io::Error::other("not a valid file name"));
+    }
+    Ok(name)
+}
+
+/// `path` (resolved, inside `root`) relative to `root`, as the tree lists it.
+fn relative_to(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `err`, with a clearer message when the target name is taken.
+fn taken(name: &str) -> impl FnOnce(io::Error) -> io::Error {
+    move |err| match err.kind() {
+        io::ErrorKind::AlreadyExists => io::Error::other(format!("{name} already exists")),
+        _ => err,
+    }
+}
+
+/// Creates the empty file `name` in `folder` of the worktree at `dir` (empty: its root), never
+/// over an existing one (`O_EXCL`, which also refuses a symlink). The folder must resolve
+/// inside `dir`. Returns the new file's path relative to the worktree.
+pub fn create(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
+    let name = file_name(name)?;
+    let root = dir.canonicalize()?;
+    let parent = match folder {
+        "" => root.clone(),
+        folder => inside(dir, &dir.join(relative(folder)?))?,
+    };
+    let path = parent.join(name);
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(taken(name))?;
+    let _ = File::open(&parent).and_then(|folder| folder.sync_all());
+    Ok(relative_to(&root, &path))
+}
+
+/// Renames the regular file `path` of the worktree at `dir` to `name` in the same folder,
+/// never over an existing entry. Returns the new path relative to the worktree.
+pub fn rename(dir: &Path, path: &str, name: &str) -> io::Result<String> {
+    rename_with(dir, path, name, &|from| fs::remove_file(from))
+}
+
+/// [`rename`] with the removal of the old name passed in, so its failure can be tested.
+///
+/// A hard link to the new name (which fails when it exists, where `rename(2)` would replace
+/// it), then the old name removed; when that fails, the new link goes again.
+// ponytail: both names exist for a moment, and a file system without hard links refuses;
+// `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)` if either matters.
+pub fn rename_with(
+    dir: &Path,
+    path: &str,
+    name: &str,
+    unlink: &dyn Fn(&Path) -> io::Result<()>,
+) -> io::Result<String> {
+    let name = file_name(name)?;
+    let rel = relative(path)?;
+    let root = dir.canonicalize()?;
+    // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
+    let joined = dir.join(rel);
+    let parent = inside(dir, joined.parent().unwrap_or(dir))?;
+    let from = parent.join(joined.file_name().unwrap_or_default());
+    // The entry itself, not what a symlink points to.
+    if !from.symlink_metadata()?.is_file() {
+        return Err(io::Error::other(format!("{path} is not a regular file")));
+    }
+    let to = parent.join(name);
+    fs::hard_link(&from, &to).map_err(taken(name))?;
+    match unlink(&from) {
+        // Someone else removed the old name meanwhile: the file is only at `to` now.
+        Err(err) if err.kind() != io::ErrorKind::NotFound => {
+            let _ = fs::remove_file(&to);
+            return Err(err);
+        }
+        _ => {}
+    }
+    let _ = File::open(&parent).and_then(|folder| folder.sync_all());
+    Ok(relative_to(&root, &to))
+}
+
 /// The system that opens files for the app: Windows through WSL, or macOS itself.
 #[cfg(target_os = "linux")]
 const SYSTEM: &str = "Windows";
@@ -602,6 +694,135 @@ mod tests {
         let run = "macOS would run a .app file instead of opening it in an editor";
         assert_eq!(at("Some.APP"), Err(run.to_owned()));
         assert_eq!(at("nope"), Err("nope does not exist".to_owned()));
+    }
+
+    #[test]
+    fn file_names_are_one_component() {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "a\0b",
+            &"x".repeat(NAME_LIMIT + 1),
+        ] {
+            let err = file_name(bad).unwrap_err().to_string();
+            assert_eq!(err, "not a valid file name", "{bad:?}");
+        }
+        for good in ["a", ".env", "...", "a b.ts", &"x".repeat(NAME_LIMIT)] {
+            assert_eq!(file_name(good).unwrap(), good);
+        }
+    }
+
+    #[test]
+    fn a_file_is_created_empty_and_never_over_another() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        assert_eq!(create(dir.path(), "", "a.ts").unwrap(), "a.ts");
+        assert_eq!(create(dir.path(), "src", "b.ts").unwrap(), "src/b.ts");
+        assert_eq!(std::fs::read(dir.path().join("src/b.ts")).unwrap(), b"");
+        std::fs::write(dir.path().join("a.ts"), "kept").unwrap();
+        let err = create(dir.path(), "", "a.ts").unwrap_err().to_string();
+        assert_eq!(err, "a.ts already exists");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.ts")).unwrap(),
+            "kept"
+        );
+        // Not even over a dangling symlink.
+        std::os::unix::fs::symlink("/nonexistent/x", dir.path().join("l")).unwrap();
+        assert_eq!(
+            create(dir.path(), "", "l").unwrap_err().to_string(),
+            "l already exists"
+        );
+        assert!(create(dir.path(), "", "../x").is_err());
+        assert!(create(dir.path(), "../", "x").is_err());
+        assert!(create(dir.path(), "nope", "x").is_err());
+        assert!(create(&dir.path().join("gone"), "", "x").is_err());
+        // Any other failure is told as it is.
+        let err = create(dir.path(), "a.ts", "x").unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn a_file_is_not_created_through_a_symlink_outside() {
+        let outside = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+        let err = create(dir.path(), "out", "x").unwrap_err().to_string();
+        assert_eq!(err, "the file resolves outside the worktree");
+        assert!(!outside.path().join("x").exists());
+        // A symlinked folder inside the worktree is named by where it resolves.
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        std::os::unix::fs::symlink("real", dir.path().join("alias")).unwrap();
+        assert_eq!(create(dir.path(), "alias", "y").unwrap(), "real/y");
+    }
+
+    #[test]
+    fn a_file_is_renamed_in_its_folder_never_over_another() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/a.ts"), "a").unwrap();
+        std::fs::write(dir.path().join("src/b.ts"), "b").unwrap();
+        assert_eq!(rename(dir.path(), "src/a.ts", "c.ts").unwrap(), "src/c.ts");
+        assert!(!dir.path().join("src/a.ts").exists());
+        let c = std::fs::read_to_string(dir.path().join("src/c.ts")).unwrap();
+        assert_eq!(c, "a");
+        let err = rename(dir.path(), "src/c.ts", "b.ts")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "b.ts already exists");
+        let b = std::fs::read_to_string(dir.path().join("src/b.ts")).unwrap();
+        assert_eq!(
+            (b.as_str(), dir.path().join("src/c.ts").exists()),
+            ("b", true)
+        );
+        assert_eq!(
+            rename(dir.path(), "top", "x").unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(rename(dir.path(), "../x", "y").is_err());
+        assert!(rename(dir.path(), "src/c.ts", "../y").is_err());
+        assert!(rename(&dir.path().join("gone"), "src/c.ts", "y").is_err());
+        let not_file = rename(dir.path(), "src", "lib").unwrap_err().to_string();
+        assert_eq!(not_file, "src is not a regular file");
+        // A symlink is not followed to its target.
+        std::os::unix::fs::symlink("src/c.ts", dir.path().join("l")).unwrap();
+        let link = rename(dir.path(), "l", "m").unwrap_err().to_string();
+        assert_eq!(link, "l is not a regular file");
+        // Any other failure is told as it is.
+        std::fs::set_permissions(dir.path().join("src"), fs::Permissions::from_mode(0o555))
+            .unwrap();
+        let err = rename(dir.path(), "src/c.ts", "d.ts").unwrap_err();
+        std::fs::set_permissions(dir.path().join("src"), fs::Permissions::from_mode(0o755))
+            .unwrap();
+        assert_ne!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn a_file_is_not_renamed_through_a_symlink_outside() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("a"), "a").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+        let err = rename(dir.path(), "out/a", "b").unwrap_err().to_string();
+        assert_eq!(err, "the file resolves outside the worktree");
+        assert!(outside.path().join("a").exists());
+    }
+
+    #[test]
+    fn a_failed_rename_leaves_the_old_name_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a"), "a").unwrap();
+        let fail = |_: &Path| -> io::Result<()> { Err(io::Error::other("no")) };
+        let err = rename_with(dir.path(), "a", "b", &fail).unwrap_err();
+        assert_eq!(err.to_string(), "no");
+        assert!(dir.path().join("a").exists());
+        assert!(!dir.path().join("b").exists());
+        // The old name gone meanwhile: the file is at the new one.
+        let gone = |_: &Path| -> io::Result<()> { Err(io::Error::from(io::ErrorKind::NotFound)) };
+        assert_eq!(rename_with(dir.path(), "a", "b", &gone).unwrap(), "b");
+        assert!(dir.path().join("b").exists());
     }
 
     #[test]
