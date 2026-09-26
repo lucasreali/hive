@@ -3,6 +3,24 @@
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": { "includes": ["src/**", "test/**", "e2e/**", "*.ts", "*.json", "!src-tauri"] },
   "formatter": { "enabled": true, "indentStyle": "space", "lineWidth": 100 },
-  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noRestrictedGlobals": {
+          "level": "error",
+          "options": {
+            "deniedGlobals": {
+              "alert": "Use a Hive dialog (`ask` in src/store.ts), never the WebView's alert.",
+              "confirm": "Use a Hive dialog (`ask` in src/store.ts), never the WebView's confirm.",
+              "prompt": "Use a Hive dialog, never the WebView's prompt."
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": ["./biome/no-native-dialogs.grit"],
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }
 }

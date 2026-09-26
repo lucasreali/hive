@@ -11,6 +11,32 @@ async function openReadme(page: Page) {
   return { panel, view };
 }
 
+test("editing: closing unsaved edits asks in a Hive dialog, never the browser's (8.20)", async ({
+  page,
+}) => {
+  const native: string[] = [];
+  page.on("dialog", (d) => {
+    native.push(d.message());
+    void d.dismiss();
+  });
+  await page.goto("/");
+  const { view } = await openReadme(page);
+  await view.locator(".cm-line").first().click();
+  await page.keyboard.type("// mine\n");
+  const unsaved = page.getByRole("button", { name: "Close file README.md (unsaved changes)" });
+  await unsaved.click();
+  const asked = page.getByRole("dialog", { name: "Discard changes?" });
+  await expect(asked).toContainText("Your unsaved changes to README.md will be lost.");
+  await expect(asked.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Enter"); // Cancel has the focus.
+  await expect(asked).toBeHidden();
+  await expect(view).toBeVisible();
+  await unsaved.click();
+  await asked.getByRole("button", { name: "Discard" }).click();
+  await expect(view).toBeHidden();
+  expect(native).toEqual([]);
+});
+
 test("editing: a file without changes is edited and saved with Ctrl+S", async ({ page }) => {
   await page.goto("/");
   const { panel, view } = await openReadme(page);

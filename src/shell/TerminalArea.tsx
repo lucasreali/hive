@@ -386,7 +386,7 @@ export function TerminalArea() {
         <div className="tabs-actions">
           <button
             type="button"
-            className="ghost"
+            className="ghost unpressed-look"
             title={keyText("Files, diff and sessions (Ctrl+Shift+B)")}
             aria-pressed={open}
             onClick={() => setRightPanel(open ? null : "files")}

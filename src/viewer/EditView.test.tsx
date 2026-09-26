@@ -3,6 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { asMac } from "../../test/mac";
+import { ConfirmDialog } from "../shell/ConfirmDialog";
 import { TerminalArea } from "../shell/TerminalArea";
 import { apply, type FileText, initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
@@ -194,21 +195,27 @@ test("the file view's tooltips name each platform's keys and default app", () =>
   );
 });
 
-test("unsaved edits are dropped only when the user agrees", () => {
+test("unsaved edits are dropped only when the user agrees, in a Hive dialog", () => {
+  const native = spyOn(window, "confirm");
+  const asked = () => screen.queryByRole("dialog", { name: "Discard changes?" });
   editing();
-  const confirm = spyOn(window, "confirm").mockImplementation(() => false);
+  render(<ConfirmDialog />);
   fireEvent.click(button("Close file a.ts"));
-  expect(confirm).not.toHaveBeenCalled(); // Clean: closes at once.
+  expect(asked()).toBeNull(); // Clean: closes at once.
   expect(useHive.getState().openFile).toBeNull();
 
   cleanup();
   editing();
+  render(<ConfirmDialog />);
   type("mine\n");
   fireEvent.click(button("Close file a.ts (unsaved changes)"));
-  expect(confirm.mock.calls).toEqual([["Discard your unsaved changes to a.ts?"]]);
+  expect(asked()?.textContent).toContain("Your unsaved changes to a.ts will be lost.");
+  fireEvent.click(button("Cancel"));
   expect(useHive.getState().openFile).not.toBeNull();
-  confirm.mockImplementation(() => true);
+  expect(dirty()).not.toBeNull();
   fireEvent.click(button("Close file a.ts (unsaved changes)"));
+  fireEvent.click(button("Discard"));
   expect(useHive.getState().openFile).toBeNull();
   expect(screen.queryByRole("region", { name: "a.ts" })).toBeNull();
+  expect(native).not.toHaveBeenCalled();
 });
