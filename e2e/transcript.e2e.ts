@@ -20,7 +20,7 @@ test("transcript: clicking a subagent shows its conversation; Back returns to th
     .click();
   const view = page.getByRole("region", { name: "Subagent conversation" });
   await expect(view.locator(".file-view-bar")).toContainText("subagent: Explore");
-  await expect(view.locator(".state-icon")).toHaveAttribute("data-state", "idle");
+  await expect(view.locator(".state-icon")).toHaveAttribute("data-state", "waiting_answer");
   const entries = view.locator(".transcript-entry");
   await expect(entries).toHaveCount(4);
   await expect(entries.first()).toContainText("Find where the login form is handled (a4).");

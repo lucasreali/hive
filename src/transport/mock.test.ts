@@ -277,16 +277,24 @@ test("worktree-remove drops that Claude worktree and sends the new list", async 
 
 test("agent states carry the service's urgency and pending flag", () => {
   const calm = ["ended", "idle", "working", "with_subagents"] as const;
-  const pending = ["waiting_you", "error", "waiting_permission"] as const;
+  const pending = [
+    "waiting_you",
+    "error",
+    "waiting_answer",
+    "waiting_plan",
+    "waiting_permission",
+  ] as const;
   const doing = { activity: null, since_ms: 0 };
   expect([...calm, ...pending].map((s) => agentStatus(s))).toEqual([
-    { state: "ended", urgency: 0, pending: false, ...doing },
-    { state: "idle", urgency: 1, pending: false, ...doing },
-    { state: "working", urgency: 2, pending: false, ...doing },
-    { state: "with_subagents", urgency: 3, pending: false, ...doing },
-    { state: "waiting_you", urgency: 4, pending: true, ...doing },
-    { state: "error", urgency: 5, pending: true, ...doing },
-    { state: "waiting_permission", urgency: 6, pending: true, ...doing },
+    { state: "ended", urgency: 0, pending: false, interrupted: false, ...doing },
+    { state: "idle", urgency: 1, pending: false, interrupted: false, ...doing },
+    { state: "working", urgency: 2, pending: false, interrupted: false, ...doing },
+    { state: "with_subagents", urgency: 3, pending: false, interrupted: false, ...doing },
+    { state: "waiting_you", urgency: 4, pending: true, interrupted: false, ...doing },
+    { state: "error", urgency: 5, pending: true, interrupted: false, ...doing },
+    { state: "waiting_answer", urgency: 6, pending: true, interrupted: false, ...doing },
+    { state: "waiting_plan", urgency: 7, pending: true, interrupted: false, ...doing },
+    { state: "waiting_permission", urgency: 8, pending: true, interrupted: false, ...doing },
   ]);
   expect(agentStatus("working", "Run tests", 7)).toMatchObject({
     activity: "Run tests",
