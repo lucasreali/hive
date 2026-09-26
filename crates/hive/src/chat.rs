@@ -672,11 +672,12 @@ impl Chat {
             .stderr(Stdio::piped())
             .process_group(0)
             .spawn()?;
-        let missing = || io::Error::other("claude started without its pipes");
-        let stdin = child.stdin.take().ok_or_else(missing)?;
-        let stdout = child.stdout.take().ok_or_else(missing)?;
-        let stderr = child.stderr.take().ok_or_else(missing)?;
-        let group = child.id().ok_or_else(missing)? as i32;
+        // Always there: every stream is piped and the child was not waited for yet.
+        let missing = io::ErrorKind::BrokenPipe;
+        let stdin = child.stdin.take().ok_or(missing)?;
+        let stdout = child.stdout.take().ok_or(missing)?;
+        let stderr = child.stderr.take().ok_or(missing)?;
+        let group = child.id().ok_or(missing)? as i32;
         let (lines, input) = mpsc::unbounded_channel();
         tokio::spawn(feed(stdin, input));
         let _ = lines.send(stream.initialize());
