@@ -63,7 +63,7 @@ mod tests {
             parent: None,
             status: None,
             output: None,
-            image: None,
+            images: vec![],
         }
     }
 
@@ -133,21 +133,28 @@ mod tests {
                 block(&over), block(gif),
             ]}}),
             json!({"type": "user", "message": {"content": [block(&big)]}}),
+            // Within a turn's caps: 3 MiB of images together, at most 10.
+            json!({"type": "user", "message": {"content": [block(&big), block(png)]}}),
+            json!({"type": "user", "message": {"content": vec![block(png); 11]}}),
         ]);
         let out = stream.history(&records, false);
         let shown: Vec<_> = entries(&out)
             .into_iter()
-            .map(|e| (e.id, e.text, e.image.map(|i| (i.media_type, i.data.len()))))
+            .map(|e| {
+                let images = e.images.into_iter().map(|i| (i.media_type, i.data.len()));
+                (e.id, e.text, images.collect::<Vec<_>>())
+            })
             .collect();
-        let png = Some(("image/png".to_owned(), png.len()));
-        let gif = Some(("image/gif".to_owned(), gif.len()));
-        let big = Some(("image/png".to_owned(), big.len()));
+        let png = ("image/png".to_owned(), png.len());
+        let gif = ("image/gif".to_owned(), gif.len());
+        let big = ("image/png".to_owned(), big.len());
         assert_eq!(
             shown,
             vec![
-                (1, "look".into(), png),
-                (2, String::new(), gif),
-                (3, String::new(), big)
+                (1, "look".into(), vec![png.clone(), gif]),
+                (2, String::new(), vec![big.clone()]),
+                (3, String::new(), vec![big]),
+                (4, String::new(), vec![png; 10]),
             ]
         );
     }

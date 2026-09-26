@@ -555,7 +555,7 @@ impl Stream {
             parent: parent.map(str::to_owned),
             status: None,
             output: None,
-            image: None,
+            images: Vec::new(),
         }
     }
 
@@ -629,16 +629,9 @@ impl Stream {
                 "parent_tool_use_id": null,
                 "session_id": "default",
             }));
-            // The first image goes with the text, the others after it (as the app's mock).
-            let mut images = images.into_iter();
             let mut user = chat.entry(ChatEntryKind::User, text, None);
-            user.image = images.next();
+            user.images = images;
             entries.push(user);
-            for image in images {
-                let mut entry = chat.entry(ChatEntryKind::User, "", None);
-                entry.image = Some(image);
-                entries.push(entry);
-            }
             chat.busy = true;
         })
     }
@@ -1056,8 +1049,8 @@ impl Stream {
                 Some("text") => {
                     entries.push(self.entry(ChatEntryKind::User, text(&block["text"]), parent));
                 }
-                // A resumed session's own images (7.3j history; replays are left out above): the
-                // first goes with the message's text, the others after it, as `send` shows them.
+                // A resumed session's own images (7.3j history; replays are left out above) go
+                // with the message's text, within a turn's caps, as `send` shows them.
                 Some("image") => {
                     let data = text(&block["source"]["data"]);
                     let Some(shown) = (data.len() <= MAX_IMAGE_DATA)
@@ -1067,15 +1060,17 @@ impl Stream {
                         continue;
                     };
                     let with_text = entries[first..]
-                        .last_mut()
-                        .filter(|entry| entry.kind == ChatEntryKind::User && entry.image.is_none());
-                    match with_text {
-                        Some(entry) => entry.image = Some(shown),
-                        None => {
-                            let mut entry = self.entry(ChatEntryKind::User, "", parent);
-                            entry.image = Some(shown);
-                            entries.push(entry);
-                        }
+                        .last()
+                        .is_some_and(|entry| entry.kind == ChatEntryKind::User);
+                    if !with_text {
+                        entries.push(self.entry(ChatEntryKind::User, "", parent));
+                    }
+                    let last = entries.len() - 1;
+                    let entry = &mut entries[last];
+                    let data: usize = entry.images.iter().map(|image| image.data.len()).sum();
+                    if entry.images.len() < MAX_IMAGES && data + shown.data.len() <= MAX_IMAGE_DATA
+                    {
+                        entry.images.push(shown);
                     }
                 }
                 Some("tool_result") => {
@@ -1090,7 +1085,7 @@ impl Stream {
                     let (output, image) = output(&block["content"]);
                     entry.status = Some(status);
                     entry.output = Some(cut(&output, MAX_TEXT));
-                    entry.image = image;
+                    entry.images = image.into_iter().collect();
                     entries.push(entry);
                 }
                 _ => {}

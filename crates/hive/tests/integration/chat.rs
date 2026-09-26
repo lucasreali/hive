@@ -132,7 +132,7 @@ fn entry(id: u32, kind: ChatEntryKind, text: &str) -> ChatEntry {
         parent: None,
         status: None,
         output: None,
-        image: None,
+        images: vec![],
     }
 }
 
