@@ -15,8 +15,8 @@ use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AgentEvent, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, OpenSession,
-    PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget,
+    AgentEvent, ChatMode, Control, EventKind, Frame, FrameCodec, FrameError, FrameType,
+    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -28,6 +28,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
+use crate::chat::{self, Chat};
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
@@ -69,6 +70,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     };
     let state = State::new(
         paths.bin_dir(),
+        paths.hooks_settings(),
         projects,
         sessions,
         settings,
@@ -122,7 +124,17 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
         .values()
         .map(|t| t.session)
         .collect();
-    terminal::end_sessions(&sessions).await;
+    let chats: Vec<i32> = state
+        .chats
+        .lock()
+        .await
+        .values_mut()
+        .map(|chat| {
+            chat.close();
+            chat.group()
+        })
+        .collect();
+    tokio::join!(terminal::end_sessions(&sessions), chat::end(chats));
     Ok(())
 }
 
@@ -131,6 +143,11 @@ struct State {
     app: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
+    /// Open chats (7.3) by channel; they share the terminals' channels. Locked after
+    /// `terminals` and before `confirming` and `agents` when several are needed.
+    chats: Mutex<HashMap<u32, Chat>>,
+    /// Chats waiting for the human to allow chats in their project (`confirm_chat_folder`).
+    confirming: Mutex<HashMap<u32, chat::Open>>,
     /// Detected agents by session id, with their terminal and state. Locked after `terminals`
     /// when both are needed.
     agents: Mutex<HashMap<String, Agent>>,
@@ -142,6 +159,8 @@ struct State {
     /// terminal channels start at 1.
     watched: AtomicU32,
     bin_dir: PathBuf,
+    /// The hooks settings the wrapper passes to `claude` (#21); chats pass them too.
+    hooks_settings: PathBuf,
     projects: Projects,
     /// Claude Code's session logs of the followed projects.
     sessions: Sessions,
@@ -163,6 +182,7 @@ struct Restore {
 impl State {
     fn new(
         bin_dir: PathBuf,
+        hooks_settings: PathBuf,
         projects: Projects,
         sessions: Sessions,
         settings: settings::Store,
@@ -172,11 +192,14 @@ impl State {
         Self {
             app: Mutex::new(None),
             terminals: Mutex::new(HashMap::new()),
+            chats: Mutex::new(HashMap::new()),
+            confirming: Mutex::new(HashMap::new()),
             agents: Mutex::new(HashMap::new()),
             watching: Mutex::new(None),
             transcript: Mutex::new(None),
             watched: AtomicU32::new(0),
             bin_dir,
+            hooks_settings,
             projects,
             sessions,
             settings,
@@ -292,11 +315,17 @@ impl State {
     /// terminal's exit arriving while git runs waits and removes it afterwards.
     async fn detect(&self, channel: u32, event: &AgentEvent) {
         let mut terminals = self.terminals.lock().await;
-        let Some(terminal) = terminals.get_mut(&channel) else {
-            return;
+        let claude_dir = match terminals.get_mut(&channel) {
+            Some(terminal) => {
+                terminal.watch.hooked();
+                terminal.claude_dir.clone()
+            }
+            // A chat's `claude` (7.3), on a channel of its own.
+            None => match self.chats.lock().await.get(&channel) {
+                Some(chat) => chat.claude_dir.clone(),
+                None => return,
+            },
         };
-        terminal.watch.hooked();
-        let claude_dir = terminal.claude_dir.clone();
         let Some(id) = agent_id(event) else { return };
         let mut agents = self.agents.lock().await;
         // Other terminals keep working meanwhile.
@@ -413,6 +442,7 @@ impl State {
             match terminals.entry(channel) {
                 _ if channel == 0 => Err("terminal channels start at 1".to_owned()),
                 Entry::Occupied(_) => Err(format!("terminal {channel} is already open")),
+                _ if self.chat_on(channel).await => Err(format!("chat {channel} is open")),
                 Entry::Vacant(slot) => {
                     terminal::spawn(channel, cwd, cols, rows, &self.bin_dir, &env).map(
                         |(mut terminal, pty, child)| {
@@ -548,6 +578,163 @@ impl State {
             .is_some_and(|w| w.agent == agent && w.subagent == subagent)
         {
             *watching = None;
+        }
+    }
+
+    /// Whether a chat, open or waiting for its confirmation, has `channel`.
+    async fn chat_on(&self, channel: u32) -> bool {
+        self.chats.lock().await.contains_key(&channel)
+            || self.confirming.lock().await.contains_key(&channel)
+    }
+
+    /// `open_chat` (7.3): only in a worktree of an added project, and once the human allowed
+    /// chats in that project (asked with `confirm_chat_folder` the first time).
+    async fn open_chat(
+        self: &Arc<Self>,
+        channel: u32,
+        cwd: String,
+        resume: Option<String>,
+        mode: Option<ChatMode>,
+    ) {
+        let taken = match channel {
+            0 => Some("chat channels start at 1".to_owned()),
+            _ if self.terminals.lock().await.contains_key(&channel) => {
+                Some(format!("terminal {channel} is open"))
+            }
+            _ if self.chat_on(channel).await => Some(format!("chat {channel} is already open")),
+            _ => None,
+        };
+        if let Some(message) = taken {
+            return self.to_app(channel, &Control::Error { message }).await;
+        }
+        let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), &cwd));
+        let open = match place {
+            Some((project, worktree)) if worktree == cwd => Ok(chat::Open {
+                cwd,
+                project,
+                resume,
+                mode: mode.unwrap_or(ChatMode::Default),
+            }),
+            _ => Err(format!(
+                "{cwd} is not a worktree of an added project: chats open only there"
+            )),
+        };
+        let open = open.and_then(|open| match open.resume.as_deref() {
+            Some(id) if !chat::is_session(id) => Err("not a session id to resume".to_owned()),
+            _ => Ok(open),
+        });
+        match open {
+            Err(error) => self.chat_closed(channel, Some(error)).await,
+            Ok(open) if self.settings.chat_confirmed(&open.project) => {
+                self.start_chat(channel, open).await
+            }
+            Ok(open) => {
+                let cwd = open.cwd.clone();
+                self.confirming.lock().await.insert(channel, open);
+                let ask = Control::ConfirmChatFolder {
+                    chat: channel,
+                    cwd,
+                    accepted: None,
+                };
+                self.to_app(channel, &ask).await;
+            }
+        }
+    }
+
+    /// The human's answer to `confirm_chat_folder`: allowed chats in the project are
+    /// remembered in the settings, which the app gets again.
+    async fn confirm_chat(self: &Arc<Self>, channel: u32, cwd: String, accepted: Option<bool>) {
+        let open = match self.confirming.lock().await.entry(channel) {
+            Entry::Occupied(waiting) if waiting.get().cwd == cwd => Some(waiting.remove()),
+            _ => None,
+        };
+        let Some(open) = open else {
+            let message = "no chat waits for this folder".to_owned();
+            return self.to_app(channel, &Control::Error { message }).await;
+        };
+        if accepted != Some(true) {
+            return self.chat_closed(channel, None).await;
+        }
+        let saved = tokio::task::block_in_place(|| self.settings.confirm_chat(&open.project));
+        match saved {
+            Ok(settings) => {
+                self.to_app(0, &Control::Settings { settings }).await;
+                self.start_chat(channel, open).await;
+            }
+            Err(error) => self.chat_closed(channel, Some(error)).await,
+        }
+    }
+
+    /// Starts the chat's `claude` with a terminal's environment in its worktree (its space's
+    /// and its worktree's `HIVE_*`), found as the wrapper finds it.
+    async fn start_chat(self: &Arc<Self>, channel: u32, open: chat::Open) {
+        let cwd = &open.cwd;
+        let (mut env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
+        env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
+        let path = std::env::var_os("PATH");
+        let claude = wrapper::real_claude(path.as_deref(), &self.bin_dir);
+        let started = claude.ok_or_else(|| "no claude found on PATH".to_owned());
+        let started = started.and_then(|claude| {
+            let args = chat::args(&self.hooks_settings, open.mode, open.resume.as_deref());
+            let stream = chat::Stream::new(channel, cwd.clone(), open.mode, open.resume.clone());
+            let started = Chat::start(stream, &claude, &args, cwd, &env);
+            started.map_err(|err| format!("cannot start claude in {cwd}: {err}"))
+        });
+        match started {
+            Ok((mut chat, pipes)) => {
+                chat.claude_dir = claude_dir;
+                self.chats.lock().await.insert(channel, chat);
+                tokio::spawn(chat_pump(self.clone(), channel, pipes));
+            }
+            Err(error) => self.chat_closed(channel, Some(error)).await,
+        }
+    }
+
+    async fn chat_closed(&self, channel: u32, error: Option<String>) {
+        let closed = Control::ChatClosed {
+            chat: channel,
+            error,
+        };
+        self.to_app(channel, &closed).await;
+    }
+
+    /// Acts on the chat on `channel`.
+    async fn chat(&self, channel: u32, act: impl FnOnce(&mut Chat) -> chat::Out) {
+        let out = self.chats.lock().await.get_mut(&channel).map(|chat| {
+            let out = act(chat);
+            chat.run(out)
+        });
+        match out {
+            Some(out) => self.chat_out(channel, out).await,
+            None => {
+                let message = format!("no chat is open on channel {channel}");
+                self.to_app(channel, &Control::Error { message }).await;
+            }
+        }
+    }
+
+    /// Sends what a chat has for the app; the end of a turn updates its agent's state.
+    async fn chat_out(&self, channel: u32, out: chat::Out) {
+        for message in &out.app {
+            self.to_app(channel, message).await;
+        }
+        if let Some(event) = &out.turn {
+            self.saw(event).await;
+        }
+    }
+
+    /// `close_chat`: closes claude's stdin, then signals it until it ends ([`chat::stop`]);
+    /// its exit is reported by [`chat_pump`]. A chat still waiting for its confirmation just
+    /// closes.
+    async fn close_chat(&self, channel: u32) {
+        if self.confirming.lock().await.remove(&channel).is_some() {
+            return self.chat_closed(channel, None).await;
+        }
+        let mut chats = self.chats.lock().await;
+        if let Some(chat) = chats.get_mut(&channel)
+            && chat.close()
+        {
+            tokio::spawn(chat::stop(chat.group(), chat::GRACE));
         }
     }
 
@@ -703,6 +890,41 @@ async fn pump(
     state
         .to_app(channel, &Control::TerminalExited { code })
         .await;
+}
+
+/// Turns a chat's stdout into messages until it closes, then reports its exit.
+async fn chat_pump(state: Arc<State>, channel: u32, pipes: chat::Pipes) {
+    let chat::Pipes {
+        mut child,
+        stdout,
+        stderr,
+    } = pipes;
+    let stderr = tokio::spawn(chat::tail(stderr));
+    let mut stdout = tokio::io::BufReader::new(stdout);
+    let mut buf = Vec::new();
+    while let Ok(Some(whole)) = chat::next_line(&mut stdout, &mut buf, chat::MAX_LINE).await {
+        let line = whole.then_some(buf.as_slice());
+        let mut chats = state.chats.lock().await;
+        let out = chats.get_mut(&channel).map(|chat| {
+            let out = chat.stream.line(line);
+            chat.run(out)
+        });
+        drop(chats);
+        state.chat_out(channel, out.unwrap_or_default()).await;
+    }
+    let status = child.wait().await.ok();
+    let stderr = stderr.await.unwrap_or_default();
+    let closing = {
+        let mut chats = state.chats.lock().await;
+        let closed = chats.remove(&channel);
+        let mut agents = state.agents.lock().await;
+        for (id, _) in agents.extract_if(|_, a| a.channel == channel) {
+            state.to_app(channel, &Control::AgentRemoved { id }).await;
+        }
+        closed.is_some_and(|chat| chat.closing)
+    };
+    let error = chat::ended(status, closing, &stderr);
+    state.chat_closed(channel, error).await;
 }
 
 async fn connection(stream: UnixStream, state: Arc<State>, app_gone: mpsc::Sender<()>) {
@@ -1148,17 +1370,28 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 windows_path: located.ok(),
             }
         }),
-        // The chat (7.3) arrives with 7.3c.
-        Ok(
-            Control::OpenChat { .. }
-            | Control::ChatSend { .. }
-            | Control::ChatAnswer { .. }
-            | Control::ChatInterrupt { .. }
-            | Control::ChatSetMode { .. }
-            | Control::CloseChat { .. }
-            | Control::ConfirmChatFolder { .. },
-        ) => {
-            let message = "chat not available yet".to_owned();
+        // The chat (7.3): its channel is its id.
+        Ok(Control::OpenChat { cwd, resume, mode }) => {
+            state.open_chat(channel, cwd, resume, mode).await
+        }
+        Ok(Control::ConfirmChatFolder { cwd, accepted, .. }) => {
+            state.confirm_chat(channel, cwd, accepted).await
+        }
+        Ok(Control::ChatSend { text, images, .. }) => {
+            state
+                .chat(channel, |chat| chat.stream.send(&text, &images))
+                .await
+        }
+        Ok(Control::ChatInterrupt { .. }) => {
+            state.chat(channel, |chat| chat.stream.interrupt()).await
+        }
+        Ok(Control::ChatSetMode { mode, .. }) => {
+            state.chat(channel, |chat| chat.stream.set_mode(mode)).await
+        }
+        Ok(Control::CloseChat { .. }) => state.close_chat(channel).await,
+        // Every request is denied until 7.3e, so none is pending.
+        Ok(Control::ChatAnswer { .. }) => {
+            let message = "no such pending request".to_owned();
             state.to_app(channel, &Control::Error { message }).await;
         }
         _ => {
@@ -1236,6 +1469,7 @@ mod tests {
         let projects = Projects::load(dir.join("spaces.json"), &dir.join("projects.json"));
         Arc::new(State::new(
             dir.into(),
+            dir.join("hive-hooks.json"),
             projects,
             Sessions::new(None),
             settings::Store::load(dir.join("settings.json")),

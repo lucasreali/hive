@@ -978,6 +978,14 @@ pub struct WorktreeSettings {
 #[serde(default)]
 pub struct ProjectSettings {
     pub scripts: ProjectScripts,
+    /// The human allowed chats (7.3) in this project: the first one asks
+    /// (`confirm_chat_folder`), since `claude -p` shows no workspace trust dialog.
+    #[serde(skip_serializing_if = "is_false")]
+    pub chat_confirmed: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// The user's scripts for a project's worktrees. They live only in the settings, never in the
@@ -2167,10 +2175,22 @@ mod tests {
             }],
             archive: None,
         };
-        assert_eq!(read, ProjectSettings { scripts });
+        let mut project = ProjectSettings {
+            scripts,
+            chat_confirmed: false,
+        };
+        assert_eq!(read, project);
         assert_eq!(
             serde_json::to_string(&read).unwrap(),
             r#"{"scripts":{"setup":null,"run":[{"name":"dev","command":"bun dev"}],"archive":null}}"#
+        );
+        // Written only once chats are confirmed.
+        project.chat_confirmed = true;
+        let json = serde_json::to_string(&project).unwrap();
+        assert!(json.ends_with(r#""chat_confirmed":true}"#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<ProjectSettings>(&json).unwrap(),
+            project
         );
     }
 
