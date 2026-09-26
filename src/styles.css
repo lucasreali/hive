@@ -1688,29 +1688,6 @@ li:not(:last-child) > .owned::before {
   border-top: 1px solid var(--border-subtle);
 }
 
-/* New worktree (screens 1c/1d) */
-.new-worktree {
-  display: none;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 6px 0 4px;
-  border-radius: var(--radius);
-  background: var(--selected);
-  color: var(--text);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.new-worktree:hover {
-  background: var(--selected-hover);
-}
-
-.tree-row.project:hover .new-worktree,
-.tree-row.project:focus-within .new-worktree {
-  display: flex;
-}
-
 /* A worktree row's "+": a new chat (a terminal running claude), shown on hover. */
 .new-chat {
   display: none;
@@ -2275,6 +2252,11 @@ li:not(:last-child) > .owned::before {
 
 .context-menu .danger:not(:disabled) {
   color: var(--state-error);
+}
+
+.context-menu [role="menuitem"] kbd {
+  float: right;
+  margin: 5px 0 0 16px;
 }
 
 .context-menu hr {

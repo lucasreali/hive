@@ -180,15 +180,6 @@ function ProjectNode({ project }: { project: Project }) {
           <span className="label">{project.name}</span>
           {!open && <Rollup agents={(a) => project.worktrees.some((w) => w.id === a.worktree)} />}
         </button>
-        <button
-          type="button"
-          className="new-worktree"
-          title={keyText("New worktree (Ctrl+Shift+N)")}
-          onClick={() => openModal("new-worktree", project.id)}
-        >
-          <PlusIcon size={10} />
-          New worktree
-        </button>
       </div>
       {open && (
         <ul>
