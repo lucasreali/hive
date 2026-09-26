@@ -1,6 +1,6 @@
 # Chat with Claude inside the app — design spike (TODO 7.3a)
 
-Status: **proposal for the human.** No product code. Written on 2026-09-25 from the official
+Status: **approved for v0.3.0 (human, 2026-09-25)** with the defaults of section 14.1; section 15 lists what is still open. No product code. Written on 2026-09-25 from the official
 documentation and the open-source Agent SDK; **no real session was recorded yet**. Every example
 below is the documented shape and is marked *to be recorded* until
 `scripts/spike/record-chat.py` (section 11) has been run and the examples replaced by real lines.
@@ -39,13 +39,13 @@ Sources (fetched 2026-09-25):
   subscription limits, like the terminal. Anthropic announced, then **paused** (2026-06-15), a
   split that would move `claude -p` and SDK usage to a separate monthly credit. If it comes back,
   chat usage would be billed differently from terminal usage: that is the same risk that got the
-  SDK revoked. **The human must accept this risk before 7.3b.**
+  SDK revoked. **The human accepted the chat for v0.3.0 on 2026-09-25; this risk stays open (section 15, Q2).**
 - **The wire protocol for permissions and interrupts is not in the CLI reference.** It is the
   SDK's protocol, read from the open-source SDK. It is stable enough for the SDK to depend on it,
   but it can change with a Claude Code release (section 10).
 
-Recommendation: approve the chat as an **optional** tab, keep the terminals observe-only, run
-the recording script, then implement 7.3b–7.3i (section 14). If the billing split returns, the
+Recommendation (approved 2026-09-25): the chat as an **optional** tab, keep the terminals observe-only, run
+the recording script, then implement 7.3b–7.3j (section 14). If the billing split returns, the
 fallback is option B (section 12): answer permissions and questions of the **interactive**
 `claude` from the app through hooks, which keeps interactive billing.
 
@@ -573,19 +573,7 @@ The app never parses stream-json. The service turns it into typed Hive messages;
 renders entries, keeps the draft and UI state, and sends user actions (`chat_send`, `chat_answer`,
 `chat_interrupt`, `chat_set_mode`). Validation of answers and images is the service's.
 
-Draft protocol (names for 7.3b, to be refined there and recorded in `docs/architecture.md`):
-
-| Message | Direction | Fields |
-|---|---|---|
-| `open_chat` | app → service | `worktree`, `resume?` (session id), `mode?`, `model?` |
-| `chat_opened` | service → app | `chat` (channel), `session?`, `model`, `mode`, `commands[]` |
-| `chat_send` | app → service | `chat`, `text`, `images[] {media_type, data}` |
-| `chat_entries` | service → app | `chat`, `entries[]`, `replace_from?` (for the growing last entry) |
-| `chat_request` | service → app | `chat`, `request` (id), `kind: permission|question|plan`, fields per kind |
-| `chat_answer` | app → service | `chat`, `request`, `allow|deny{message}|answers{…}`, `always?` |
-| `chat_request_gone` | service → app | `chat`, `request` |
-| `chat_interrupt` / `chat_set_mode` / `chat_set_model` | app → service | `chat`, … |
-| `close_chat` / `chat_closed` | both | `chat`, `exit?`, `error?` |
+The protocol (message names and fields) is defined once in section 14.3.
 
 ---
 
@@ -634,11 +622,12 @@ Draft protocol (names for 7.3b, to be refined there and recorded in `docs/archit
   project's `.claude/settings.json` and connects the servers in its `.mcp.json`, even in a folder
   you've never trusted. A `-p` session shows no workspace trust dialog". The terminal asks; the
   chat would not. Proposal: chats only in projects the human added to Hive, and the first chat in
-  a project whose folder Claude has not trusted yet shows Hive's own confirmation (Q4).
+  a project shows Hive's own confirmation, remembered in Hive's settings file (Hive does not read
+  Claude's trust state in `~/.claude.json`) (Q4).
 - **Untrusted output:** model and tool text may carry escape sequences, HTML, huge lines or
   prompt-injected instructions. Rendered as text, bounded (5.5); AskUserQuestion previews off.
 - **Process:** argument vector only; the session id passed to `--resume` must be a UUID; the
-  cwd is a worktree the service knows; the `security-reviewer` agent reviews 7.3b and 7.3c.
+  cwd is a worktree the service knows; the `security-reviewer` agent reviews 7.3c, 7.3e and 7.3g.
 
 ---
 
@@ -730,7 +719,7 @@ is `hive.md`'s Fase 2 "Interações ricas". It stays the fallback if the billing
 | 43 | **Saída do chat é entrada não confiável**: linha ≤ 16 MiB, texto por entrada cortado em 64 KiB, plano em 256 KiB; imagens enviadas por mim ≤ 5 MiB, no máximo 10 por mensagem, tipo conferido pelo conteúdo; nada é renderizado como HTML; prompts e saídas de ferramentas fora dos logs no nível padrão | Mesmas regras de hooks e mensagens do socket (linha de base do código) |
 | 44 | **Retomada do chat**: o `session_id` do `system/init` fica no chat; reabrir usa `--resume <id>`; o histórico vem do arquivo da sessão (leitor da 6.10); o `open-sessions.json` (4.12) guarda o tipo (terminal ou chat) e o chat volta como chat | Mesmo comportamento dos terminais depois de reiniciar o app |
 | 45 | **Cobrança do chat**: usa o meu login do `claude` (o Hive nunca lê credenciais); o cabeçalho avisa quando o `apiKeySource` indica chave de API em vez da assinatura; o `total_cost_usd` (estimativa) não é mostrado como valor cobrado | Hoje o `claude -p` consome os limites da assinatura (nota da Anthropic de 16/06/2026); a separação anunciada foi pausada e pode voltar |
-| 46 | **Pastas não confiáveis**: chat só em projetos adicionados ao Hive; no primeiro chat numa pasta que o Claude ainda não marcou como confiável, o Hive pede confirmação | O `-p` não mostra o diálogo de confiança e já roda hooks e servidores MCP do projeto |
+| 46 | **Pastas não confiáveis**: chat só em projetos adicionados ao Hive; no primeiro chat de cada projeto, o Hive pede confirmação (lembrada no arquivo de configurações do Hive) | O `-p` não mostra o diálogo de confiança e já roda hooks e servidores MCP do projeto |
 
 **🗑️ Decisões revogadas — nova linha:**
 
@@ -753,35 +742,104 @@ is `hive.md`'s Fase 2 "Interações ricas". It stays the fallback if the billing
 
 ---
 
-## 14. Draft implementation tasks (not in TODO.md until the human approves)
+## 14. Implementation tasks 7.3b–7.3j (for the orchestrator)
 
-- [ ] **7.3b Chat process in the service.** `task/7.3b-chat-service` — `hive::chat`: spawn the real `claude` headless (section 3.1) with pipes in a new process group, `HIVE_TERMINAL_ID` = chat channel, Hive's hook settings; bounded line reader (16 MiB), stream-json → typed entries (text, thinking, tool + result, error, divider, note), unknown types dropped; `initialize` on start; close/stop escalation (5.6); dies with the app (#18). Protocol: `open_chat`, `chat_opened`, `chat_send` (text only), `chat_entries`, `close_chat`, `chat_closed`; states from the stream (5.4). Tests drive a fake `claude` (copied `/usr/bin/dash` script or a small Rust test binary) replaying the recorded fixtures. Run the `security-reviewer`.
-- [ ] **7.3c Permissions, questions and plans.** `task/7.3c-chat-requests` — `--permission-prompt-tool stdio`; pending request table; `chat_request` / `chat_answer` / `chat_request_gone`; answer validation (5.5); deny on close; 🟡 while pending; `set_permission_mode`. Run the `security-reviewer`.
-- [ ] **7.3d Conversation view and composer.** `task/7.3d-chat-view` — generalize `TranscriptView` into `ConversationView` (entry kinds, 6.10 stays read-only), chat tab in the tab bar, composer (Enter/Shift+Enter, Send ↔ Stop), mock transport scripted chat, e2e.
-- [ ] **7.3e Cards.** `task/7.3e-chat-cards` — permission, question (single/multi/Other) and plan cards, pinned above the composer while pending, keyboard (Enter/Esc), focus handling; e2e for each.
-- [ ] **7.3f Images.** `task/7.3f-chat-images` — paste/drag in the composer, service validation by content and size, thumbnails in bubbles and tool results, CSP check.
-- [ ] **7.3g Resume and restore.** `task/7.3g-chat-resume` — `--resume`, history from the transcript file, `open-sessions.json` `kind`, "Open as chat" in the Sessions panel, "Resume" on an ended chat.
-- [ ] **7.3h Live text.** `task/7.3h-chat-streaming` — `--include-partial-messages`, coalesced deltas (≤ one update per 50 ms per chat), growing last entry.
-- [ ] **7.3i Stop, modes, models, commands.** `task/7.3i-chat-controls` — `interrupt` with `cancel_queued`, mode selector, `set_model`, `/` command list from `init` and `commands_changed`, subscription/API-key warning from `apiKeySource`.
-- 7.5's "+" → **Agent** opens a chat once 7.3d lands.
+Human decision 2026-09-25: the chat is implemented for v0.3.0 with this spike's recommendations
+as the defaults (section 15 lists them; the human can still override any). Not added to
+`TODO.md` by this spike: the orchestrator copies them there.
+
+### 14.1 Defaults taken (until the human says otherwise)
+
+Starting mode `default`; selector offers Default / Accept edits / Plan (no `auto`, never
+`bypassPermissions`); "Always allow" **off** in v0.3.0; chats only in added projects, with a Hive
+confirmation the first time a chat opens in a project (remembered in the service's settings file,
+not by reading `~/.claude.json`); **plain text** rendering (no Markdown dependency; fenced code in
+monospace); thinking collapsed; live text on; no dollar value; limits of section 5.5.
+
+### 14.2 Recordings are not available yet
+
+The implementation starts from the documented shapes. **7.3b writes the fixtures**
+`crates/hive/tests/fixtures/chat/<scenario>.jsonl` (same scenario names as
+`scripts/spike/record-chat.py`, each line a documented message from section 4) and every
+parser test reads them. When the human runs the recorder, a follow-up replaces the fixtures with
+the real `rec/<scenario>.out.jsonl` lines and fixes what differs. Parsers must therefore ignore
+unknown fields and unknown `type`/`subtype` values (never fail on them).
+
+### 14.3 Protocol (defined once, in 7.3b, so the other tasks can run in parallel)
+
+New `Control` variants in `crates/hive-protocol/src/lib.rs` (serde `snake_case`, same style as
+`WatchTranscript`), all listed in `docs/architecture.md`'s message catalog by 7.3b:
+
+| Message | Direction | Fields |
+|---|---|---|
+| `open_chat` | app → service | `cwd` (worktree path), `resume: Option<String>` (session id), `mode: Option<ChatMode>` |
+| `chat_opened` | service → app | `chat: u32` (channel, shared with terminals), `cwd`, `session: Option<String>`, `model: Option<String>`, `mode: ChatMode`, `commands: Vec<String>`, `api_key_source: Option<String>` |
+| `chat_send` | app → service | `chat`, `text: String`, `images: Vec<ChatImage>` |
+| `chat_entries` | service → app | `chat`, `entries: Vec<ChatEntry>`, `replace_last: bool` (true = the first entry replaces the app's last one: live text) |
+| `chat_request` | service → app | `chat`, `request: ChatRequest` |
+| `chat_answer` | app → service | `chat`, `request: String` (id), `answer: ChatAnswer` |
+| `chat_request_gone` | service → app | `chat`, `request: String` |
+| `chat_interrupt` | app → service | `chat` |
+| `chat_set_mode` | app → service | `chat`, `mode: ChatMode` |
+| `chat_status` | service → app | `chat`, `busy: bool`, `mode: ChatMode`, `model: Option<String>`, `retry: Option<String>` ("Retrying 2/10…"), `compacting: bool`, `session: Option<String>` |
+| `close_chat` | app → service | `chat` |
+| `chat_closed` | service → app | `chat`, `error: Option<String>` (last stderr lines when it failed) |
+| `confirm_chat_folder` | service → app / app → service | `cwd` / `cwd`, `accepted: bool` (first chat in a project, 14.1) |
+
+Types:
+
+- `ChatMode = default | accept_edits | plan` (mapped to `default`, `acceptEdits`, `plan`).
+- `ChatImage { media_type: String, data: String /* base64 */ }`.
+- `ChatEntry { id: u32 /* per chat, increasing */, kind: ChatEntryKind, text: String, tool: Option<String>, parent: Option<String> /* parent_tool_use_id: subagent grouping */, status: Option<ToolStatus /* running|ok|error */>, output: Option<String>, image: Option<ChatImage> }`
+  with `ChatEntryKind = user | assistant | thinking | tool | error | note | divider | usage`.
+  A tool result updates its tool entry: the service re-sends the entry with the same `id`
+  (the app replaces by `id`).
+- `ChatRequest { id: String, kind: permission | question | plan, tool: String, detail: String /* full command/path/JSON */, reason: Option<String>, questions: Vec<ChatQuestion>, plan: Option<String> }`,
+  `ChatQuestion { question, header, multi: bool, options: Vec<{label, description}> }`.
+- `ChatAnswer = allow | deny { message: Option<String> } | answers { answers: Vec<Vec<String>> /* per question, labels or one free text */ } | approve_plan { accept_edits: bool } | keep_planning { feedback: String }`.
+- TS mirrors in `src/transport/index.ts` (`Transport` methods `openChat`, `chatSend`,
+  `chatAnswer`, `chatInterrupt`, `chatSetMode`, `closeChat`, `confirmChatFolder`); Tauri
+  commands in `src-tauri/src/lib.rs`, registered in `src-tauri/src/main.rs`; the mock
+  (`src/transport/mock.ts`) answers each with a scripted chat (14.5).
+
+### 14.4 Tasks
+
+Waves (at most 4 agents at a time): **7.3b** → **7.3c · 7.3d** → **7.3e · 7.3f · 7.3g · 7.3h** →
+**7.3i · 7.3j**. Every task: fast checks locally, CI green, gate-integrity review; service tasks
+also the `security-reviewer`.
+
+- [ ] **7.3b Chat protocol and mock.** `task/7.3b-chat-protocol` — *wave 1, blocks everything.* All messages and types of 14.3 in `crates/hive-protocol/src/lib.rs` with round-trip serde tests (one per variant, like the existing ones near `restore_sessions`); `docs/architecture.md` catalog; TS types + `Transport` methods in `src/transport/index.ts`, `tauri.ts` (invoke the new commands) and `mock.ts`; Tauri commands in `src-tauri/src/lib.rs` + `main.rs` forwarding to the service. The daemon answers every chat request with `error {message: "chat not available yet"}` until 7.3c. Mock: `src/transport/mockChat.ts` — a scripted chat (user → thinking → assistant → tool running → tool ok → assistant → usage; a permission request, a question, a plan, an error, a subagent group, a divider) emitted with small delays, and every answer acknowledged with `chat_request_gone`; used by the UI tasks' unit and e2e tests. Fixtures of 14.2 (`crates/hive/tests/fixtures/chat/*.jsonl`). Tests: protocol unit tests; `src/transport/*.test.ts` for the new methods; `mockChat.test.ts`. No UI.
+- [ ] **7.3c Chat process in the service.** `task/7.3c-chat-service` — *wave 2, needs 7.3b.* New `crates/hive/src/chat.rs` (+ `pub mod chat` in `lib.rs`): spawn the real `claude` (`wrapper::real_claude`) with the argument vector of 3.1 minus `--include-partial-messages` (added by 7.3h), `--permission-prompt-tool stdio` included (requests are denied with "not supported yet" until 7.3e), cwd = the worktree, new process group, env `HIVE_TERMINAL_ID=<chat channel>`, `HIVE_WRAPPED=1`, Hive's hook settings file (`wrapper` already writes it). `initialize` first; reader thread with the 16 MiB line bound (5.2); `parse(line) -> Vec<Event>` pure function mapping section 4.1–4.4, 4.9, 4.10, 4.12, 4.15 to `ChatEntry`/`chat_status` (text 64 KiB cap, tool summary 500 chars, ≤ 200 entries per message); writer channel; `chat_send` text (≤ 1 MiB; images refused until 7.3f); close/stop escalation (5.6) and kill with the app (#18); channel allocated from the daemon's terminal channel counter (`daemon.rs`); states of 5.4 fed into `states::Agent` like hook events (`result` → 🟠, error → 🔴, exit → ⚫); `confirm_chat_folder` (14.1) stored in `settings.rs`. Tests: unit tests of `parse` on every fixture line (and on garbage, oversized, unknown types); a `ChatProcess` trait (spawn/stdin/stdout) so lifecycle and escalation are unit-tested without processes; one integration test in `crates/hive/tests/integration/chat.rs` with a fake `claude` on `PATH` (a copied `/usr/bin/dash` running a script that answers `initialize`, replays `fixtures/chat/text.jsonl` after the first user line, exits on EOF), asserting `chat_opened` → `chat_entries` → `chat_closed`. `security-reviewer`.
+- [ ] **7.3d Conversation view and composer.** `task/7.3d-chat-view` — *wave 2, needs 7.3b (mock only).* Store (`src/store.ts`): `Tab` gains `kind: "terminal" | "chat"`; `chats: Record<number, {entries (≤ 2000, replace by id / replace_last), status, pending requests}>`; actions for every chat message. `src/shell/ConversationView.tsx`: generalizes `TranscriptView` (TanStack Virtual, keep-to-bottom) with one row component per `ChatEntryKind` (thinking collapsed, tool row expandable to output with running/ok/error, subagent entries grouped under their `Agent` tool row by `parent`, divider, error, usage footer); `TranscriptView` becomes a thin read-only wrapper (6.10 e2e must stay green). `src/shell/ChatComposer.tsx`: textarea (Enter sends, Shift+Enter newline), Send ↔ Stop from `chat_status.busy` (Stop calls `chatInterrupt`, wired for 7.3i), disabled when closed. Chat tabs render in `TerminalArea.tsx` in place of the xterm for `kind: "chat"`; a temporary "New chat" entry in the tab bar's "+" until 7.5 (Agent). The folder confirmation dialog (`confirm_chat_folder`). Tests: `ConversationView.test.tsx`, `ChatComposer.test.tsx`, store tests; `e2e/chat.e2e.ts` against `mockChat` (send, entries appear, tool expands, Stop visible while busy). Styling from `docs/ui-reference.md`; icons Phosphor if 7.7 landed, else existing `icons.tsx`.
+- [ ] **7.3e Permissions, questions and plans (service).** `task/7.3e-chat-requests` — *wave 3, needs 7.3c.* In `chat.rs`: `can_use_tool` → pending table `{request_id → kind, input}` → `chat_request` (detail = full command/path, or compact JSON cut at 64 KiB with a visible note); `chat_answer` accepted once, only for a pending id of that chat; builds the `control_response` of 4.5/4.6/4.7 (`updatedInput` = claude's own input; AskUserQuestion answers validated: labels exist, one unless `multi`, free text ≤ 4 KiB; deny message ≤ 4 KiB); `approve_plan {accept_edits: true}` also sends `set_permission_mode acceptEdits`; `keep_planning` = deny with the feedback; `control_cancel_request` → `chat_request_gone`; close/app exit deny every pending one; 🟡 while any is pending; `chat_set_mode` → `set_permission_mode`. Tests: unit tests per answer kind and every refusal; integration test with the fake `claude` replaying `permission.jsonl` and checking the exact `control_response` line it receives. `security-reviewer`.
+- [ ] **7.3f Cards (UI).** `task/7.3f-chat-cards` — *wave 3, needs 7.3d.* `src/shell/ChatRequestCard.tsx`: permission (tool, full detail, reason, Allow / Deny with optional message), question (per question: header, text, options as buttons or checkboxes when `multi`, "Other…" text field, Send), plan (plan text, Approve / Approve and accept edits / Keep planning with feedback). Pinned above the composer while pending (also kept in the list after), focus moves to the card, Enter = primary, Esc = deny; `chat_request_gone` removes it. Mode selector in the composer bar (`chatSetMode`). Tests: unit per card and keyboard path; `e2e/chat.e2e.ts` cases for each card against `mockChat`.
+- [ ] **7.3g Images.** `task/7.3g-chat-images` — *wave 3, needs 7.3c and 7.3d.* Service: `chat_send.images` validated by magic bytes (PNG/JPEG/GIF/WebP), ≤ 5 MiB decoded, ≤ 10 per turn, sent as `image` blocks (4.11); images in tool results forwarded when ≤ 3 MiB encoded, else a note. UI: paste and drag-drop into the composer (thumbnails, remove button), image entries rendered from `data:` URLs, click to enlarge. Tests: service unit tests for each refusal; UI unit tests; e2e paste of a small PNG. `security-reviewer`.
+- [ ] **7.3h Live text.** `task/7.3h-chat-streaming` — *wave 3, needs 7.3c and 7.3d.* Add `--include-partial-messages`; accumulate `text_delta`/`thinking_delta` per block; at most one `chat_entries {replace_last: true}` per chat every 50 ms (coalescing timer tested with an injected clock); the final `assistant` entry replaces the growing one; `input_json_delta` ignored. UI: replace-last in the store without re-rendering other rows. Tests: service unit tests on a delta sequence fixture; store unit test; e2e sees text grow in the mock.
+- [ ] **7.3i Stop, mode and commands.** `task/7.3i-chat-controls` — *wave 4, needs 7.3e and 7.3f.* `chat_interrupt` → `interrupt` with `cancel_queued: true` when `capabilities` has `interrupt_cancel_queued_v1`; Esc in the composer stops; `/` in the composer lists `commands` (from `init` and `commands_changed`) with keyboard selection; header shows model and mode, a warning when `api_key_source` is an API key rather than the subscription login; "Compacting…" and retry status from `chat_status`. Tests: service unit tests; UI unit tests; e2e Stop and `/` list.
+- [ ] **7.3j Resume and restore.** `task/7.3j-chat-resume` — *wave 4, needs 7.3c and 7.3d.* `open_chat {resume}` → `--resume <id>` (id must be a UUID); history loaded from the session's transcript file with `hive::transcript` (same root checks, 8 MiB tail) mapped to `ChatEntry`; `open-sessions.json` entries gain `kind: "terminal" | "chat"` (old files without it = terminal) and `restore_sessions` carries it, so chats come back as chats; Sessions panel (`SessionsView.tsx`) gains "Open as chat"; an ended chat tab shows "Resume". Tests: service unit tests (UUID check, history mapping, old `open-sessions.json`); integration test resume with the fake `claude`; e2e "Open as chat" in the mock.
+- 7.5's "+" → **Agent** opens a chat once 7.3d is merged (7.5 replaces 7.3d's temporary entry).
+- After the recordings: a small task replaces the fixtures with real lines and fixes the parsers (14.2).
+
 
 ---
 
 ## 15. Questions for the human
 
-1. **Concept:** approve the chat (Hive talks to Claude in chat tabs) while terminals stay
-   observe-only? (Changes Conceito central, #1, the SDK revocation note, Fase 2 item 2.)
+Decided 2026-09-25: the chat is built for v0.3.0 with the defaults of 14.1. Still open (each has
+the default the implementation takes until the human answers):
+
+1. **`docs/hive.md` and `CLAUDE.md`:** apply the rows of section 13 (the human edits both files).
 2. **Billing:** accept that chat usage follows the `claude -p` billing (subscription today, a
-   separate credit if the paused split returns)? What should Hive do if it returns: hide the chat,
-   warn, or nothing? Show no dollar value on a subscription (recommended)?
-3. **Permissions:** starting mode `default` (recommended); offer `acceptEdits` and `plan`;
-   offer `auto`? Offer "Always allow" (writes `.claude/settings.local.json`)? Never
-   `bypassPermissions` (recommended).
-4. **Untrusted folders:** chats only in added projects plus a Hive confirmation for a folder
-   Claude has not trusted yet (recommended), or load no project settings in chats
-   (`--setting-sources user`, different behaviour from the terminal)?
-5. **Markdown:** render assistant text as Markdown (a new dependency, e.g. a small sanitizing
-   renderer, to be named in 7.3d) or plain text with code blocks in monospace?
-6. **Live text (7.3h):** needed in the first version, or is one entry per finished block enough?
-7. **Thinking:** show collapsed (recommended) or hide like 6.10?
-8. **Recording:** please run `python3 scripts/spike/record-chat.py` and share the `rec/` folder.
+   separate credit if the paused split returns)? If it returns: hide the chat, warn, or nothing?
+   *Default: nothing now; no dollar value shown.*
+3. **Permissions:** *default: starting mode `default`; Default / Accept edits / Plan in the
+   selector; no `auto`; no "Always allow"; never `bypassPermissions`.* Offer `auto` or "Always
+   allow" (writes `.claude/settings.local.json`)?
+4. **Untrusted folders:** *default: chats only in added projects, Hive confirmation on the first
+   chat of each project.* Or load no project settings in chats (`--setting-sources user`,
+   different behaviour from the terminal)?
+5. **Markdown:** *default: plain text, fenced code in monospace.* Add a sanitizing Markdown
+   renderer (a new dependency, named before adding)?
+6. **Thinking:** *default: shown collapsed.* Or hidden like 6.10?
+7. **Recording:** please run `python3 scripts/spike/record-chat.py` and share the `rec/` folder;
+   the fixtures of 14.2 are then replaced by real lines.
