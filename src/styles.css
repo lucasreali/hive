@@ -285,13 +285,6 @@ label:has(> input[type="checkbox"]:disabled) {
   overflow-y: auto;
 }
 
-.inbox [role="menuitem"] {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-}
-
 .inbox-meta {
   color: var(--text-3);
   font-size: 11px;
@@ -1844,6 +1837,9 @@ li:not(:last-child) > .owned::before {
 }
 
 .settings-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   height: 26px;
   padding: 0 8px;
   border-radius: var(--radius);
@@ -2271,6 +2267,9 @@ li:not(:last-child) > .owned::before {
 }
 
 .palette-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   padding: 8px 8px 4px;
   font-size: var(--fs-meta);
@@ -2308,6 +2307,10 @@ li:not(:last-child) > .owned::before {
 }
 
 .context-menu [role="menuitem"] {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
   height: 26px;
   padding: 0 10px;
   text-align: left;
@@ -2330,8 +2333,17 @@ li:not(:last-child) > .owned::before {
 }
 
 .context-menu [role="menuitem"] kbd {
-  float: right;
-  margin: 5px 0 0 16px;
+  margin-left: auto;
+}
+
+/* A menu item's leading icon (7.7), muted; agent state icons keep their color. */
+.context-menu [role="menuitem"] > svg:not(.state-icon) {
+  flex: none;
+  color: var(--text-2);
+}
+
+.context-menu .danger:not(:disabled) > svg {
+  color: inherit;
 }
 
 .context-menu hr {

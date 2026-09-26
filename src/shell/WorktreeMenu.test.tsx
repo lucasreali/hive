@@ -54,6 +54,10 @@ test("a worktree's right click opens its menu at the pointer; main and foreign o
     ["Rename…", false],
     ["Delete…", false],
   ]);
+  // Each item leads with a decorative icon (7.7): its name stays the text.
+  for (const i of screen.getAllByRole("menuitem")) {
+    expect(i.firstElementChild?.getAttribute("aria-hidden")).toBe("true");
+  }
   expect(document.activeElement).toBe(item("New terminal here"));
   expect((menu() as HTMLElement).style.left).toBe("40px");
   expect((menu() as HTMLElement).style.top).toBe("60px");

@@ -76,6 +76,8 @@ IBM Plex Sans and IBM Plex Mono, weights 400/500/600, bundled with `@fontsource/
 
 Row heights: project 26px, worktree 24px, sub-worktree 22px, file row 22px, picker row 30px, branch row 24px. Indents: project 6px, worktree 20px, agent 40px, subagent 56px. Buttons: primary/secondary 28px high (empty-state primary 30px), ghost 24px, icon 26×24, window buttons 46px wide. Text fields 30px. Dialog 520px wide, 120px from the top; picker 560px wide, 44px from the top.
 
+Icons (7.7): Phosphor only (`@phosphor-icons/react`), regular weight at 14px (`ICON` in `src/shell/icons.tsx`), `currentColor`, `aria-hidden` when decorative, and an accessible name (`title` or `aria-label`) on icon-only buttons. Exceptions: chevrons and stepper carets 10px bold, inline plus/check beside text 12px, the dialogs' close cross 15px bold, the title bar's update and bell 16px bold, the window buttons light, empty-state icons 28–32px light. Agent states use their own Phosphor set (above). Files and folders in the file tree use `@react-symbols/icons`; the Hive logo is the only hand-drawn SVG. Leading icons go on context-menu items (muted `--text-2`, danger items in their color), settings sections and palette group headings; not on every button.
+
 ## Glossary (PT → EN)
 
 ### Core terms
