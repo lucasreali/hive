@@ -90,6 +90,35 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
   }, DOT);
   const thumbs = chat.getByRole("list", { name: "Images to send" }).getByRole("img");
   await expect(thumbs).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
+
+  // One box (7.16): thumbnails, message and toolbar inside it; mode and Send on one row.
+  const box = await chat.locator("form.chat-composer").boundingBox();
+  const inner = await Promise.all(
+    [
+      thumbs,
+      input,
+      chat.getByRole("button", { name: "Attach image" }),
+      chat.getByRole("combobox", { name: "Permission mode" }),
+      chat.getByRole("button", { name: "Send" }),
+    ].map((part) => part.boundingBox()),
+  );
+  for (const part of inner) {
+    expect(part?.x).toBeGreaterThanOrEqual(box?.x as number);
+    expect(part?.y).toBeGreaterThanOrEqual(box?.y as number);
+    expect((part?.x as number) + (part?.width as number)).toBeLessThanOrEqual(
+      (box?.x as number) + (box?.width as number),
+    );
+    expect((part?.y as number) + (part?.height as number)).toBeLessThanOrEqual(
+      (box?.y as number) + (box?.height as number),
+    );
+  }
+  const [, message, attach, mode, send] = inner;
+  const middle = (b: typeof box) => (b?.y as number) + (b?.height as number) / 2;
+  expect(Math.abs(middle(mode) - middle(send))).toBeLessThan(2);
+  expect(Math.abs(middle(attach) - middle(send))).toBeLessThan(2);
+  expect(mode?.y).toBeGreaterThan((message?.y as number) + (message?.height as number) - 1);
+  expect(send?.x).toBeGreaterThan(mode?.x as number);
+
   await input.fill("what is this?");
   await input.press("Enter");
   await expect(chat.getByRole("list", { name: "Images to send" })).toBeHidden();
@@ -100,6 +129,16 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
   await expect(image.locator("img")).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
   await image.click();
   await expect(sent.getByTitle("Shrink the image")).toHaveAttribute("aria-pressed", "true");
+
+  // Attach image opens a picker; its image joins the next message.
+  const chooser = page.waitForEvent("filechooser");
+  await chat.getByRole("button", { name: "Attach image" }).click();
+  await (await chooser).setFiles({
+    name: "dot.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(DOT, "base64"),
+  });
+  await expect(thumbs).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
 });
 
 test("chat: permission, question and plan cards pin above the composer and answer by keyboard", async ({

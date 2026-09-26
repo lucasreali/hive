@@ -1049,23 +1049,46 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-2);
 }
 
+/* The composer (7.16): one rounded box, like Zed's agent panel input, holding the thumbnails,
+   an error, the message and a toolbar. */
 .chat-composer {
+  position: relative;
   flex: none;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--panel);
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 12px 12px;
+  padding: 8px 8px 6px;
+  background: color-mix(in srgb, var(--panel) 94%, white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 
-/* Images to send and a refusal take their own line above the input. */
+.chat-composer:focus-within {
+  border-color: var(--focus);
+}
+
 .chat-attachments,
 .chat-composer-error {
-  flex: 0 0 100%;
-  order: -1;
   margin: 0;
+  padding: 0 2px;
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-toolbar .chat-mode {
+  margin-left: auto;
+}
+
+.chat-toolbar .chat-icon {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  justify-content: center;
 }
 
 .chat-attachments {
@@ -1133,43 +1156,34 @@ label:has(> input[type="checkbox"]:disabled) {
   margin-left: 92px;
 }
 
+/* The message grows with its text (ChatComposer sets the height) up to max-height, then scrolls. */
 .chat-composer textarea {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  display: block;
+  max-height: 200px;
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--fs-body);
+  line-height: 20px;
   outline: none;
   resize: none;
 }
 
-.chat-composer textarea:focus {
-  border-color: var(--focus);
-  box-shadow: 0 0 0 1px var(--focus);
+.chat-composer textarea::placeholder {
+  color: var(--text-3);
 }
 
 .chat-composer textarea:disabled {
   color: var(--text-3);
 }
 
-.chat-composer .chat-mode {
-  flex: none;
-  width: 130px;
-}
-
 /* Chat controls (7.3i): the `/` list above the composer, the header's model, mode and warnings. */
-.chat-composer {
-  position: relative;
-}
-
 .chat-composer .chat-commands {
   position: absolute;
-  bottom: calc(100% + 2px);
-  left: 12px;
+  bottom: calc(100% + 4px);
+  left: 0;
   min-width: 200px;
   max-height: 240px;
 }
@@ -2428,6 +2442,29 @@ li:not(:last-child) > .owned::before {
 
 .space-select .select-trigger:hover {
   background: var(--hover);
+}
+
+/* The chat's mode selector (7.16): borderless text with a caret, in the composer's toolbar. */
+.chat-mode .select-trigger {
+  height: 24px;
+  gap: 4px;
+  padding: 0 6px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.chat-mode .select-trigger:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.chat-mode .select-trigger:focus-visible,
+.chat-mode .select-trigger[aria-expanded="true"] {
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--focus);
 }
 
 .dialog footer .space-delete {

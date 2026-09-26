@@ -163,6 +163,34 @@ test("dropped files are added; other files, too many or too large ones are refus
   expect([screen.getByRole("alert").textContent, read.mock.calls.length]).toEqual([tooMany, 0]);
 });
 
+test("Attach image opens a picker for images, whose files go through the same checks", async () => {
+  const { input } = composer();
+  const attach = screen.getByRole("button", { name: "Attach image" }) as HTMLButtonElement;
+  expect(attach.disabled).toBe(true);
+  open();
+  expect(attach.disabled).toBe(false);
+  const picker = input.closest("form")?.querySelector('input[type="file"]') as HTMLInputElement;
+  expect([picker.accept, picker.multiple]).toEqual([
+    "image/png,image/jpeg,image/gif,image/webp",
+    true,
+  ]);
+  const click = spyOn(picker, "click");
+  fireEvent.click(attach);
+  expect(click).toHaveBeenCalledTimes(1);
+  const pick = (files: File[]) =>
+    act(async () => {
+      fireEvent.change(picker, { target: { files } });
+    });
+  await pick([]);
+  expect(screen.queryByRole("list", { name: "Images to send" })).toBeNull();
+  await pick([png()]);
+  expect(screen.getAllByRole("img")).toHaveLength(1);
+  await pick([new File(["x"], "a.txt", { type: "text/plain" })]);
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Only PNG, JPEG, GIF and WebP images can be added.",
+  );
+});
+
 test("a message the app could not send says why", async () => {
   const { send, input } = composer();
   send.mockRejectedValue("frame payload too large");
