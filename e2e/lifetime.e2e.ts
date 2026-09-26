@@ -39,7 +39,7 @@ test("closing with a working agent asks first: cancel keeps the app, confirm clo
   await expect(tree.getByRole("img", { name: "working" })).toHaveCount(1);
   await close.click();
   await expect(dialog).toContainText("1 agent is running.");
-  await dialog.getByRole("button", { name: "Cancel Esc" }).click();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
   expect(await closed(page)).toBe(false);
 

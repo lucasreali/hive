@@ -3281,6 +3281,15 @@ body[data-resizing] {
   height: 20px;
 }
 
+/* Where a dragged agent lands (8.2). */
+.tree-row[data-drop="before"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tree-row[data-drop="after"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
 /* Claude's messages as Markdown (8.6). */
 .markdown {
   white-space: normal;

@@ -116,10 +116,10 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
             </button>
           )}
           <button type="button" className="secondary" onClick={close}>
-            Cancel <kbd>Esc</kbd>
+            Cancel
           </button>
           <button type="submit" className="primary">
-            {editing ? "Save" : "Create space"} <kbd>Enter</kbd>
+            {editing ? "Save" : "Create space"}
           </button>
         </footer>
       </form>

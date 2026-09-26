@@ -30,12 +30,13 @@ test("a permission card shows the tool, the full command and the reason, and tak
   expect(region.querySelector(".chat-card-tool")?.textContent).toBe("Bash");
   expect(region.querySelector("pre")?.textContent).toBe("rm -rf target");
   expect(screen.getByText("Bash commands need approval in the default mode")).toBeDefined();
+  expect(region.querySelector("button kbd")).toBeNull();
   // Enter on the card allows; the answer goes once, then every button is off.
   fireEvent.keyDown(region, { key: "Enter" });
   fireEvent.keyDown(region, { key: "Enter" });
-  fireEvent.click(button("Deny Esc"));
+  fireEvent.click(button("Deny"));
   expect(answers()).toEqual([[4, "req_1", { kind: "allow" }]]);
-  expect(button("Allow Enter").disabled).toBe(true);
+  expect(button("Allow").disabled).toBe(true);
 });
 
 test("Esc or Deny denies a permission, with the message when one was written", () => {
@@ -46,7 +47,7 @@ test("Esc or Deny denies a permission, with the message when one was written", (
 
   const second = card("permission");
   fireEvent.change(text("Deny message"), { target: { value: " not now " } });
-  fireEvent.click(button("Deny Esc"));
+  fireEvent.click(button("Deny"));
   expect(second.answers()).toEqual([[4, "req_1", { kind: "deny", message: "not now" }]]);
 });
 
@@ -55,7 +56,7 @@ test("Enter in the deny message denies with it; empty, it allows", () => {
   const message = text("Deny message");
   // Shift+Enter, a button's own Enter and a composition do nothing.
   fireEvent.keyDown(message, { key: "Enter", shiftKey: true });
-  fireEvent.keyDown(button("Allow Enter"), { key: "Enter" });
+  fireEvent.keyDown(button("Allow"), { key: "Enter" });
   fireEvent.keyDown(message, { key: "Enter", isComposing: true });
   fireEvent.keyDown(message, { key: "a" });
   expect(answers()).toEqual([]);
@@ -66,7 +67,7 @@ test("Enter in the deny message denies with it; empty, it allows", () => {
 
   const second = card("permission");
   fireEvent.keyDown(text("Deny message"), { key: "Enter" });
-  fireEvent.click(button("Allow Enter"));
+  fireEvent.click(button("Allow"));
   expect(second.answers()).toEqual([[4, "req_1", { kind: "allow" }]]);
 });
 
@@ -76,7 +77,8 @@ test("a question card sends a label, the checked labels, or the free text, per q
   expect(screen.getByText("Which language should I greet you in?")).toBeDefined();
   expect(button("English").title).toBe("Greet in English");
   // Send waits for every question.
-  expect(button("Send Enter").disabled).toBe(true);
+  expect(button("Send").disabled).toBe(true);
+  expect(region.querySelector("button kbd")).toBeNull();
   fireEvent.keyDown(region, { key: "Enter" });
   fireEvent.click(button("English"));
   fireEvent.click(button("Portuguese"));
@@ -108,7 +110,7 @@ test("a question card sends a label, the checked labels, or the free text, per q
 
 test("Dismiss or Esc denies a question", () => {
   const { answers } = card("question");
-  fireEvent.click(button("Dismiss Esc"));
+  fireEvent.click(button("Dismiss"));
   expect(answers()).toEqual([[4, "req_1", { kind: "deny", message: null }]]);
   cleanup();
   const second = card("question");

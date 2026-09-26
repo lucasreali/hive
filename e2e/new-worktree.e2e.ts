@@ -23,7 +23,7 @@ test("create a worktree from a project's menu: name check, branch filter, tree u
   // The service's (here the mock's) verdict, worded as the CLI says it.
   await name.fill("Fix Cart");
   await expect(dialog.getByRole("alert")).toContainText('invalid worktree name "Fix Cart"');
-  await expect(dialog.getByRole("button", { name: "Create worktree Enter" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Create worktree" })).toBeDisabled();
   await page.screenshot({ path: "target/e2e/new-worktree-error.png" });
   await name.fill("fix-login");
   await expect(dialog.getByRole("alert")).toContainText('worktree "fix-login" already exists');

@@ -29,7 +29,7 @@ test('the "+" menu: from the keyboard, an agent and a new file', async ({ page }
   // Agent: the in-app chat (7.3), after the first chat's folder confirmation.
   await plus.click();
   await item("Agent").click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
   await expect(page.getByRole("region", { name: "Chat" })).toBeVisible();
 
   // New file: its name first, then it opens in the editor.

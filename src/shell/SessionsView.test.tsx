@@ -169,7 +169,6 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   const located = spyOn(transport, "locateSession").mockResolvedValue();
   const deleted = spyOn(transport, "deleteSession").mockResolvedValue();
   const writeText = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-  spyOn(window, "confirm").mockReturnValue(true);
   show(shop.id);
   act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null }));
   const menu = () => screen.queryByRole("menu");
@@ -213,6 +212,8 @@ test("⋯ and a right click open a session's menu of actions", async () => {
     [checkout.id, "folder"],
   ]);
   pick("Delete", name);
+  expect(deleted).not.toHaveBeenCalled(); // Asked first (sessions.test.ts).
+  fireEvent.click(screen.getByRole("button", { name: "Delete" })); // The Hive dialog.
   expect(deleted).toHaveBeenCalledWith(checkout.id);
 
   act(() => select(api.worktrees[1].id));

@@ -239,15 +239,15 @@ export function NewWorktreeDialog() {
         <footer>
           {created ? (
             <button type="submit" className="primary">
-              Close <kbd>Enter</kbd>
+              Close
             </button>
           ) : (
             <>
               <button type="button" className="secondary" onClick={close}>
-                Cancel <kbd>Esc</kbd>
+                Cancel
               </button>
               <button type="submit" className="primary" disabled={!canCreate}>
-                Create worktree <kbd>Enter</kbd>
+                Create worktree
               </button>
             </>
           )}

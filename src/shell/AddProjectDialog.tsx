@@ -188,10 +188,10 @@ export function AddProjectDialog() {
         </div>
         <footer>
           <button type="button" className="secondary" onClick={close}>
-            Cancel <kbd>Esc</kbd>
+            Cancel
           </button>
           <button type="submit" className="primary" disabled={!target}>
-            Add project <kbd>Enter</kbd>
+            Add project
           </button>
         </footer>
       </form>
