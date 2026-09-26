@@ -37,6 +37,8 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 
 **Where they run (human decision 2026-09-25, TODO 5.11):** heavy gates (llvm-cov, mutants, e2e) run on GitHub Actions (`.github/workflows/ci.yml`, `macos.yml`), triggered by pushing the task branch; running them locally in parallel has restarted the WSL VM. Locally run only the fast checks (fmt, clippy, `cargo test` of the crate you touched, `bun` lint/typecheck/test). A task merges into `main` only when CI is green on its branch tip. `scripts/gates.sh` stays as the optional local equivalent, one at a time.
 
+**Mutation testing (TODO 7.1):** CI tests every mutant of the branch's diff in shards (`.github/workflows/mutants.yml`: about one shard per 25 mutants, 1–20, so a large change takes about as long as a small one); the nightly `mutants-full.yml` tests every mutant of `main` and opens an issue for the survivors. Both use `.cargo/mutants.toml` (nextest, `[profile.mutants]`), so a local run needs `cargo-nextest`.
+
 Rust:
 
 ```
@@ -47,7 +49,7 @@ cargo check --workspace --locked
 cargo deny check
 cargo machete
 cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'   # exclusions: COVERAGE_EXCLUSIONS.md
-cargo mutants --in-diff <(git diff main -- '*.rs')     # no "missed" mutants
+cargo mutants --in-diff <(git diff main -- '*.rs')     # no "missed" or "timeout" mutants (CI: sharded)
 ```
 
 Frontend (from Stage 1):

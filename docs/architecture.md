@@ -398,7 +398,7 @@ export PATH=$HOME/.cargo/bin:$PATH
 cargo build -p hive                         # target/debug/hive
 cargo test --workspace                      # unit + integration (tests/integration)
 cargo llvm-cov --workspace --fail-under-lines 100
-cargo mutants --gitignore true --in-diff <(git diff main -- '*.rs')   # TMPDIR on disk: /tmp is a small tmpfs
+cargo mutants --gitignore true --in-diff <(git diff main -- '*.rs')   # needs cargo-nextest; TMPDIR on disk: /tmp is a small tmpfs
 cargo bench -p hive --bench hook_latency    # p99 target < 20 ms
 cargo bench -p hive-protocol                # codec throughput (criterion)
 cd crates/hive-protocol && cargo +nightly fuzz run --target x86_64-unknown-linux-gnu decode
