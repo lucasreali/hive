@@ -23,20 +23,22 @@ test("inbox: the bell lists pending agents and past alerts; an item goes to its 
   await page.goto("/");
   const tabs = page.getByRole("tablist");
   const bell = page.locator(".pending-bell");
-  const dot = bell.locator(".unread-dot");
+  const badge = bell.locator(".pending-count");
   await expect(bell).toHaveAccessibleName("Notifications");
-  await expect(dot).toHaveCount(0);
+  await expect(badge).toHaveCount(0);
 
   await agentIn(page, "fix-login", "waiting_permission");
   await agentIn(page, "feat-checkout", "waiting_you");
   await expect(bell).toHaveAccessibleName("2 pending: notifications");
-  await expect(dot).toBeVisible();
+  await expect(badge).toHaveText("2");
+  await expect(bell.locator(".unread-dot")).toHaveCount(0);
 
-  // Keyboard only: Enter opens it on its first item and marks everything read.
+  // Keyboard only: Enter opens it on its first item and marks everything seen: no badge.
   await bell.focus();
   await page.keyboard.press("Enter");
   const menu = page.getByRole("menu", { name: "Notifications" });
-  await expect(dot).toHaveCount(0);
+  await expect(badge).toHaveCount(0);
+  await expect(bell).toHaveAccessibleName("Notifications");
   const items = menu.getByRole("menuitem");
   await expect(items).toHaveText([
     /Claude\s*waiting for permission$/,
