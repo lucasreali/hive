@@ -3,6 +3,7 @@ import { chatSession, resumeChat } from "../chats";
 import { type Chat, useHive } from "../store";
 import { transport } from "../transport";
 import { ChatComposer } from "./ChatComposer";
+import { ChatRequestCard } from "./ChatRequestCard";
 import { CHAT_LABELS, ConversationView } from "./ConversationView";
 import { ChatIcon, CloseIcon } from "./icons";
 
@@ -106,6 +107,13 @@ export function ChatView({ id }: { id: number }) {
           <button type="button" className="secondary" onClick={() => void resumeChat(id)}>
             Resume
           </button>
+        </div>
+      )}
+      {chat.requests.length > 0 && (
+        <div className="chat-requests">
+          {chat.requests.map((request) => (
+            <ChatRequestCard key={request.id} chat={id} request={request} />
+          ))}
         </div>
       )}
       <ChatComposer chat={id} />

@@ -57,6 +57,66 @@ test("chat: confirm the folder, send, entries arrive, a tool opens, Stop while b
   await expect(tabs.getByRole("tab")).toHaveCount(0);
 });
 
+test("chat: permission, question and plan cards pin above the composer and answer by keyboard", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  const chat = page.getByRole("region", { name: "Chat" });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  await expect(input).toBeEnabled();
+  const reply = chat.locator('[data-role="assistant"]').last();
+
+  // A permission takes the focus; Enter allows it and the card goes.
+  await input.fill("ask permission to clean");
+  await input.press("Enter");
+  const permission = chat.getByRole("region", { name: "Permission request" });
+  await expect(permission).toBeFocused();
+  await expect(permission.locator("pre")).toHaveText("rm -rf target");
+  await page.keyboard.press("Enter");
+  await expect(permission).toBeHidden();
+  await expect(reply).toHaveText(/Allowed, so I went ahead\./);
+
+  // Esc denies, with the message written.
+  await input.fill("permission again");
+  await input.press("Enter");
+  await permission.getByRole("textbox", { name: "Deny message" }).fill("not now");
+  await page.keyboard.press("Escape");
+  await expect(permission).toBeHidden();
+  await expect(reply).toHaveText(/Denied: not now\. I stopped\./);
+
+  // A question: a button per option, checkboxes for several, Enter sends.
+  await input.fill("a question");
+  await input.press("Enter");
+  const question = chat.getByRole("region", { name: "Question" });
+  await question.getByRole("button", { name: "Portuguese" }).click();
+  await question.getByRole("checkbox", { name: "README.md" }).check();
+  await question.getByRole("checkbox", { name: "CONTRIBUTING.md" }).check();
+  await question.getByRole("checkbox", { name: "CONTRIBUTING.md" }).press("Enter");
+  await expect(question).toBeHidden();
+  await expect(reply).toHaveText(/You chose: Portuguese \/ README\.md, CONTRIBUTING\.md\./);
+
+  // A plan: approving and accepting edits changes the mode the selector shows.
+  const mode = chat.getByRole("combobox", { name: "Permission mode" });
+  await expect(mode).toHaveText("Default");
+  await input.fill("make a plan");
+  await input.press("Enter");
+  const plan = chat.getByRole("region", { name: "Plan approval" });
+  await expect(plan.locator("pre")).toContainText("## Add CONTRIBUTING.md");
+  await plan.getByRole("button", { name: "Approve and accept edits" }).click();
+  await expect(plan).toBeHidden();
+  await expect(mode).toHaveText("Accept edits");
+
+  // The selector asks the service for another mode.
+  await mode.click();
+  await page.getByRole("option", { name: "Plan only" }).click();
+  await expect(mode).toHaveText("Plan only");
+});
+
 test("chat: a session opens as a chat with its history, and an ended chat resumes", async ({
   page,
 }) => {

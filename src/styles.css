@@ -1058,6 +1058,124 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
+.chat-composer .chat-mode {
+  flex: none;
+  width: 130px;
+}
+
+/* Chat requests (7.3): permission, question and plan cards pinned above the composer. */
+.chat-requests {
+  flex: none;
+  max-height: 60%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.chat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--state-permission);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
+.chat-card:focus {
+  border-color: var(--focus);
+  border-left-color: var(--state-permission);
+}
+
+.chat-card > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--state-permission);
+}
+
+.chat-card-tool {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 400;
+  color: var(--text);
+}
+
+.chat-card-text {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-card-reason,
+.chat-question p {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.chat-card input[type="text"] {
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: var(--fs-body);
+  outline: none;
+}
+
+.chat-card input[type="text"]:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.chat-card > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chat-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.chat-question legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
+.chat-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat-options button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tool-status.spin {
     animation: none;
