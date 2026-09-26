@@ -78,12 +78,6 @@ export function WorktreePicker() {
         <span>
           <kbd>↑↓</kbd>navigate
         </span>
-        <span>
-          <kbd>Enter</kbd>open terminal
-        </span>
-        <span>
-          <kbd>Esc</kbd>close
-        </span>
       </footer>
     </dialog>
   );

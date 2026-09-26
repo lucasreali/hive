@@ -94,10 +94,10 @@ function FolderDialog({ chat, cwd }: { chat: number; cwd: string }) {
         </div>
         <footer>
           <button type="button" className="secondary" onClick={() => answer(false)}>
-            Cancel <kbd>Esc</kbd>
+            Cancel
           </button>
           <button type="submit" className="primary">
-            Start chat <kbd>Enter</kbd>
+            Start chat
           </button>
         </footer>
       </form>
