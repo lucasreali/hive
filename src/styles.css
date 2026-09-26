@@ -347,12 +347,12 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 .ghost:hover:not(:disabled),
-.ghost[aria-pressed="true"] {
+.ghost[aria-pressed="true"]:not(.unpressed-look) {
   background: var(--hover);
   color: var(--text);
 }
 
-.ghost[aria-pressed="true"] {
+.ghost[aria-pressed="true"]:not(.unpressed-look) {
   background: var(--selected);
 }
 
