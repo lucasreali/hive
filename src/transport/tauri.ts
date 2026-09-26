@@ -48,4 +48,12 @@ export const tauriTransport: Transport = {
   getDiagnostics: () => invoke("get_diagnostics"),
   checkUpdate: () => invoke("check_update"),
   installUpdate: () => invoke("install_update"),
+  openChat: (cwd, resume, mode) => invoke<number>("open_chat", { cwd, resume, mode }),
+  chatSend: (chat, text, images) => invoke("chat_send", { chat, text, images }),
+  chatAnswer: (chat, request, answer) => invoke("chat_answer", { chat, request, answer }),
+  chatInterrupt: (chat) => invoke("chat_interrupt", { chat }),
+  chatSetMode: (chat, mode) => invoke("chat_set_mode", { chat, mode }),
+  closeChat: (chat) => invoke("close_chat", { chat }),
+  confirmChatFolder: (chat, cwd, accepted) =>
+    invoke("confirm_chat_folder", { chat, cwd, accepted }),
 };

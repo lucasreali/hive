@@ -1148,6 +1148,19 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 windows_path: located.ok(),
             }
         }),
+        // The chat (7.3) arrives with 7.3c.
+        Ok(
+            Control::OpenChat { .. }
+            | Control::ChatSend { .. }
+            | Control::ChatAnswer { .. }
+            | Control::ChatInterrupt { .. }
+            | Control::ChatSetMode { .. }
+            | Control::CloseChat { .. }
+            | Control::ConfirmChatFolder { .. },
+        ) => {
+            let message = "chat not available yet".to_owned();
+            state.to_app(channel, &Control::Error { message }).await;
+        }
         _ => {
             let message = "unexpected message from the app".to_owned();
             state.to_app(channel, &Control::Error { message }).await;
