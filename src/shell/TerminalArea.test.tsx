@@ -325,3 +325,12 @@ test("a tab's menu splits it right, marks both tabs and shows a divider; Unsplit
   expect(screen.queryByRole("menu")).toBeNull();
   close.mockRestore();
 });
+
+test("the right panel's toggle keeps aria-pressed but opts out of the pressed look (8.17)", () => {
+  show();
+  const toggle = screen.getByTitle(/^Files, diff and sessions/);
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(toggle.classList.contains("unpressed-look")).toBe(true);
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+});

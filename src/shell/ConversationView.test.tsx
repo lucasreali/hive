@@ -122,6 +122,15 @@ test("live text renders its own row again, not the others", () => {
   expect(texts.map((t) => t.textContent)).toEqual(["Hi", "The text"]);
 });
 
+test("Claude's messages render Markdown; the user's stay plain text", () => {
+  const list = [entry(1, "user", "**raw** <b>x</b>"), entry(2, "assistant", "**bold** text")];
+  const view = render(<ConversationView entries={list} labels={CHAT_LABELS} />);
+  const [user, claude] = [...view.container.querySelectorAll(".transcript-text")];
+  expect(user?.textContent).toBe("**raw** <b>x</b>");
+  expect(user?.querySelector("strong, b, .markdown")).toBeNull();
+  expect(claude?.querySelector(".markdown strong")?.textContent).toBe("bold");
+});
+
 test("images show from data: URLs, in messages and tool results, and grow when clicked", () => {
   const image = { media_type: "image/png", data: "iVBORw0KGgo=" };
   const gif = { media_type: "image/gif", data: "R0lGODlh" };
