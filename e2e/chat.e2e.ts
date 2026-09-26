@@ -151,16 +151,21 @@ test("chat: permission, question and plan cards pin above the composer and answe
   await page.getByRole("menuitem", { name: "Agent" }).click();
   await page.getByRole("button", { name: "Start chat Enter" }).click();
   const chat = page.getByRole("region", { name: "Chat" });
-  const input = chat.getByRole("textbox", { name: "Message" });
+  const input = chat.getByRole("textbox", { name: "Message", exact: true });
   await expect(input).toBeEnabled();
   const reply = chat.locator('[data-role="assistant"]').last();
 
-  // A permission takes the focus; Enter allows it and the card goes.
+  // A permission leaves the focus in the composer (8.10): typing goes on there. Once the
+  // user clicks the card, Enter allows it and the card goes.
   await input.fill("ask permission to clean");
   await input.press("Enter");
   const permission = chat.getByRole("region", { name: "Permission request" });
-  await expect(permission).toBeFocused();
   await expect(permission.locator("pre")).toHaveText("rm -rf target");
+  await expect(input).toBeFocused();
+  await page.keyboard.type("draft");
+  await expect(input).toHaveValue("draft");
+  await permission.locator("pre").click();
+  await expect(permission).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(permission).toBeHidden();
   await expect(reply).toHaveText(/Allowed, so I went ahead\./);
