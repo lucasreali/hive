@@ -109,10 +109,17 @@ impl Store {
     }
 }
 
+/// The terminal font default before 7.11. A file still holding it gets today's default: it
+/// was saved with the old default, not chosen.
+const OLD_FONT_DEFAULT: &str = "\"IBM Plex Mono\", monospace";
+
 fn read(file: &Path) -> io::Result<Settings> {
     let bytes = read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
-    let settings = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    let mut settings: Settings = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
     check(&settings).map_err(io::Error::other)?;
+    if settings.terminal.font_family == OLD_FONT_DEFAULT {
+        settings.terminal.font_family = Settings::default().terminal.font_family;
+    }
     Ok(settings)
 }
 
@@ -266,6 +273,26 @@ mod tests {
         let mut expected = Settings::default();
         expected.notifications.volume = 0;
         assert_eq!(Store::load(file).get(), (expected, None));
+    }
+
+    #[test]
+    fn the_old_default_font_becomes_the_new_default_and_a_chosen_one_stays() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("settings.json");
+        std::fs::write(
+            &file,
+            r#"{"terminal":{"font_family":"\"IBM Plex Mono\", monospace","font_size":15}}"#,
+        )
+        .unwrap();
+        let settings = Store::load(file.clone()).get().0;
+        assert_eq!(
+            settings.terminal.font_family,
+            "\"Hive Mono\", \"Symbols Nerd Font\", monospace"
+        );
+        assert_eq!(settings.terminal.font_size, 15);
+        std::fs::write(&file, r#"{"terminal":{"font_family":"\"IBM Plex Mono\""}}"#).unwrap();
+        let settings = Store::load(file).get().0;
+        assert_eq!(settings.terminal.font_family, "\"IBM Plex Mono\"");
     }
 
     #[test]

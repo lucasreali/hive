@@ -908,7 +908,7 @@ pub struct TerminalSettings {
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
-            font_family: "\"IBM Plex Mono\", monospace".to_owned(),
+            font_family: "\"Hive Mono\", \"Symbols Nerd Font\", monospace".to_owned(),
             font_size: 13,
             scrollback: 5000,
             cursor_style: CursorStyle::Block,
@@ -2248,7 +2248,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"IBM Plex Mono\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"unknown":1}}"#,

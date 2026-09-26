@@ -559,7 +559,7 @@ export const scriptsOf = (settings: Settings, id: string | undefined): ProjectSc
 /** The service's defaults, used until its `settings` arrive. */
 export const DEFAULT_SETTINGS: Settings = {
   terminal: {
-    font_family: '"IBM Plex Mono", monospace',
+    font_family: '"Hive Mono", "Symbols Nerd Font", monospace',
     font_size: 13,
     scrollback: 5000,
     cursor_style: "block",

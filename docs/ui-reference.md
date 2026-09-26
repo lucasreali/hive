@@ -48,7 +48,7 @@ Git status colors in the files panel: modified `#DEC184`, added `#A1C181`, delet
 
 ### Typography
 
-IBM Plex Sans and IBM Plex Mono, weights 400/500/600, bundled with `@fontsource/*` (no Google Fonts).
+IBM Plex Sans and IBM Plex Mono, weights 400/500/600, bundled with `@fontsource/*` (no Google Fonts), for the UI. The terminal and the editor use **Hive Mono** (IBM Plex Mono with Fira Code ligatures, renamed for the OFL; regular and bold) with **Symbols Nerd Font** as the fallback for Nerd Font icons, both in `src/assets/fonts/` (built by `scripts/build-terminal-font.sh`, licences next to them); the editor via `--font-code`.
 
 | Token | Size | Use |
 |---|---|---|

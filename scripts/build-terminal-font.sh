@@ -101,7 +101,8 @@ fira = fontforge.open(sys.argv[2])
 seqs = sorted({"".join(char_dict[c] for c in l["chars"]) for l in ligatures
                if l["firacode_ligature_name"] and l["firacode_ligature_name"] in fira},
               key=lambda s: (-len(s), s))
-json.dump(seqs, open(sys.argv[3], "w"), indent=0)
+json.dump(seqs, open(sys.argv[3], "w"), indent=2)
+open(sys.argv[3], "a").write("\n")
 EOF
 
 for w in $WEIGHTS; do
