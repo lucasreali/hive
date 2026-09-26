@@ -261,3 +261,64 @@ async fn files_are_created_and_renamed_inside_a_followed_worktree() {
     drop(conn);
     stop(daemon);
 }
+
+#[tokio::test]
+async fn files_are_moved_and_folders_created_inside_a_followed_worktree() {
+    let repo = Repo::new();
+    repo.commit("a.txt", "one\n");
+    let root = repo.root.display().to_string();
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    let mkdir = |name: &str| Control::CreateFolder {
+        worktree: root.clone(),
+        folder: String::new(),
+        name: name.to_owned(),
+    };
+    let moving = |path: &str, folder: &str| Control::MoveFile {
+        worktree: root.clone(),
+        path: path.to_owned(),
+        folder: folder.to_owned(),
+    };
+    let failed = |message: &str| Control::FileOpFailed {
+        worktree: root.clone(),
+        message: message.to_owned(),
+    };
+    // Not a followed worktree yet.
+    conn.send(0, mkdir("d")).await;
+    assert!(matches!(
+        conn.control().await.1,
+        Control::FileOpFailed { .. }
+    ));
+    conn.send(0, moving("a.txt", "")).await;
+    assert!(matches!(
+        conn.control().await.1,
+        Control::FileOpFailed { .. }
+    ));
+    follow(&mut conn, &root).await;
+
+    conn.send(0, mkdir("d")).await;
+    let created = Control::FolderCreated {
+        worktree: root.clone(),
+        path: "d".to_owned(),
+    };
+    assert_eq!(conn.control().await.1, created);
+    assert!(repo.root.join("d").is_dir());
+    conn.send(0, mkdir("d")).await;
+    assert_eq!(conn.control().await.1, failed("d already exists"));
+
+    conn.send(0, moving("a.txt", "d")).await;
+    let moved = Control::FileRenamed {
+        worktree: root.clone(),
+        path: "a.txt".to_owned(),
+        to: "d/a.txt".to_owned(),
+    };
+    assert_eq!(conn.control().await.1, moved);
+    assert_eq!(sides(&mut conn, &root, "d/a.txt").await.0, text("one\n"));
+    conn.send(0, moving("d/a.txt", "..")).await;
+    assert_eq!(
+        conn.control().await.1,
+        failed("not a relative path inside the worktree")
+    );
+    drop(conn);
+    stop(daemon);
+}

@@ -1496,6 +1496,38 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 },
             }
         }),
+        Ok(Control::MoveFile {
+            worktree,
+            path,
+            folder,
+        }) => state.projects(move |projects| {
+            let moved = projects
+                .worktree(&worktree)
+                .and_then(|dir| file::move_to(&dir, &path, &folder));
+            match moved {
+                Ok(to) => Control::FileRenamed { worktree, path, to },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }),
+        Ok(Control::CreateFolder {
+            worktree,
+            folder,
+            name,
+        }) => state.projects(move |projects| {
+            let created = projects
+                .worktree(&worktree)
+                .and_then(|dir| file::create_folder(&dir, &folder, &name));
+            match created {
+                Ok(path) => Control::FolderCreated { worktree, path },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }),
         Ok(Control::OpenInEditor { worktree, path }) => state.projects(move |projects| {
             let located = projects
                 .worktree(&worktree)

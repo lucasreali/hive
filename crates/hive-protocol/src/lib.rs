@@ -568,7 +568,28 @@ pub enum Control {
         path: String,
         to: String,
     },
-    /// Nothing was created or renamed. Shown as is.
+    /// App → service: move the file `path` into `folder` (relative to the worktree, empty for
+    /// its root), keeping its name (8.3). Never overwrites. Answered by `FileRenamed` or
+    /// `FileOpFailed`.
+    MoveFile {
+        worktree: String,
+        path: String,
+        folder: String,
+    },
+    /// App → service: create the folder `name` in `folder` (relative to the worktree, empty
+    /// for its root) (8.3). Never over an existing entry. Answered by `FolderCreated` or
+    /// `FileOpFailed`.
+    CreateFolder {
+        worktree: String,
+        folder: String,
+        name: String,
+    },
+    /// The folder was created at `path` (relative to the worktree).
+    FolderCreated {
+        worktree: String,
+        path: String,
+    },
+    /// Nothing was created, renamed or moved. Shown as is.
     FileOpFailed {
         worktree: String,
         message: String,
@@ -2161,7 +2182,7 @@ mod tests {
     }
 
     #[test]
-    fn create_and_rename_messages_are_tagged_json() {
+    fn create_rename_and_move_messages_are_tagged_json() {
         let create = Control::CreateFile {
             worktree: "/r".into(),
             folder: "d".into(),
@@ -2204,6 +2225,32 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &failed).payload[..],
             br#"{"type":"file_op_failed","worktree":"/r","message":"m"}"#
+        );
+        let moving = Control::MoveFile {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+            folder: "e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &moving).payload[..],
+            br#"{"type":"move_file","worktree":"/r","path":"d/a","folder":"e"}"#
+        );
+        let folder = Control::CreateFolder {
+            worktree: "/r".into(),
+            folder: "d".into(),
+            name: "e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &folder).payload[..],
+            br#"{"type":"create_folder","worktree":"/r","folder":"d","name":"e"}"#
+        );
+        let created = Control::FolderCreated {
+            worktree: "/r".into(),
+            path: "d/e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &created).payload[..],
+            br#"{"type":"folder_created","worktree":"/r","path":"d/e"}"#
         );
     }
 

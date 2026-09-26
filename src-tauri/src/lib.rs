@@ -490,6 +490,31 @@ impl Hive {
         self.link().send(0, &rename)
     }
 
+    /// The answer arrives as `file_renamed` or `file_op_failed`.
+    pub fn move_file(&self, worktree: String, path: String, folder: String) -> Result<(), String> {
+        let moving = Control::MoveFile {
+            worktree,
+            path,
+            folder,
+        };
+        self.link().send(0, &moving)
+    }
+
+    /// The answer arrives as `folder_created` or `file_op_failed`.
+    pub fn create_folder(
+        &self,
+        worktree: String,
+        folder: String,
+        name: String,
+    ) -> Result<(), String> {
+        let create = Control::CreateFolder {
+            worktree,
+            folder,
+            name,
+        };
+        self.link().send(0, &create)
+    }
+
     /// The answer arrives as `editor_target`.
     pub fn open_in_editor(&self, worktree: String, path: String) -> Result<(), String> {
         self.link()
@@ -945,6 +970,26 @@ pub mod commands {
         name: String,
     ) -> Result<(), String> {
         hive.rename_file(worktree, path, name)
+    }
+
+    #[tauri::command]
+    pub fn move_file(
+        hive: State<'_, Hive>,
+        worktree: String,
+        path: String,
+        folder: String,
+    ) -> Result<(), String> {
+        hive.move_file(worktree, path, folder)
+    }
+
+    #[tauri::command]
+    pub fn create_folder(
+        hive: State<'_, Hive>,
+        worktree: String,
+        folder: String,
+        name: String,
+    ) -> Result<(), String> {
+        hive.create_folder(worktree, folder, name)
     }
 
     #[tauri::command]
