@@ -4,7 +4,7 @@
 # neighbours worth cataloguing.
 SPIKE_EVENTS="SessionStart UserPromptSubmit PreToolUse PostToolUse PostToolUseFailure PostToolBatch
 PermissionRequest PermissionDenied Notification Stop StopFailure SubagentStart SubagentStop
-SessionEnd PreCompact PostCompact CwdChanged"
+SessionEnd PreCompact PostCompact CwdChanged Elicitation ElicitationResult TaskCreated TaskCompleted"
 
 # write_settings <out.json> <hive binary> <records.jsonl> [worktree hooks bin dir]
 # Every event runs `hive hook <Event> --record <records.jsonl>` (exec form, no shell).
