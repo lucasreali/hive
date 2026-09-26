@@ -156,6 +156,19 @@ button:disabled {
   opacity: 0.5;
 }
 
+/* Checkboxes, sliders and the labels that toggle them point like buttons (7.10). */
+input[type="checkbox"],
+input[type="range"],
+label:has(> input[type="checkbox"]) {
+  cursor: pointer;
+}
+
+input[type="checkbox"]:disabled,
+input[type="range"]:disabled,
+label:has(> input[type="checkbox"]:disabled) {
+  cursor: not-allowed;
+}
+
 .app {
   height: 100%;
   display: flex;
@@ -1326,7 +1339,6 @@ button.chevron:hover {
 .merged-item label {
   flex: 1;
   min-width: 0;
-  cursor: pointer;
 }
 
 /* Agent and subagent rows: state icon, then the title over the state's name. */
