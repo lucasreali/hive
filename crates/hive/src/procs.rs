@@ -395,14 +395,18 @@ mod tests {
         assert!(found.iter().any(|p| p.pid == me), "{found:?}");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn the_system_tells_this_process_arguments_and_open_files() {
         let me = std::process::id() as i32;
-        let args = Source::System.args(me).unwrap();
-        assert_eq!(args, std::env::args().collect::<Vec<_>>());
         let log = tempfile::NamedTempFile::new().unwrap();
-        let files = Source::System.open_files(me);
-        assert!(files.iter().any(|f| f == log.path()), "{files:?}");
+        let (args, files) = (Source::System.args(me), Source::System.open_files(me));
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(args, Some(std::env::args().collect()));
+            assert!(files.iter().any(|f| f == log.path()), "{files:?}");
+        }
+        // macOS: only Claude's record tells.
+        #[cfg(target_os = "macos")]
+        assert_eq!((args, files, log.path().exists()), (None, vec![], true));
     }
 }
