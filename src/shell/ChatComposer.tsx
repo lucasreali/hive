@@ -63,6 +63,9 @@ export function ChatComposer({ chat }: { chat: number }) {
   };
   const add = async (files: File[]) => {
     if (files.some((file) => !IMAGE_TYPES.includes(file.type))) return setError(NOT_IMAGES);
+    // A huge file is refused before it is read into memory.
+    const bytes = files.reduce((sum, file) => sum + file.size, 0);
+    if (bytes > MAX_IMAGE_DATA) return setError(TOO_MANY);
     const read = await Promise.all(
       files.map(async (file) => ({
         key: ++attached,

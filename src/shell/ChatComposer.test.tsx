@@ -153,6 +153,13 @@ test("dropped files are added; other files, too many or too large ones are refus
   expect(screen.getAllByRole("img")).toHaveLength(1);
   await drop([png()]);
   expect(screen.getByRole("alert").textContent).toBe(tooMany);
+  // A file larger than the limit is not even read.
+  fireEvent.click(screen.getByTitle("Remove image 1"));
+  const huge = png();
+  const read = spyOn(huge, "arrayBuffer");
+  Object.defineProperty(huge, "size", { value: MAX_IMAGE_DATA + 1 });
+  await drop([huge]);
+  expect([screen.getByRole("alert").textContent, read.mock.calls.length]).toEqual([tooMany, 0]);
 });
 
 test("a message the app could not send says why", async () => {

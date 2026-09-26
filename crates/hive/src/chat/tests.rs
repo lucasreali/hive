@@ -288,6 +288,24 @@ fn a_tool_result_image_goes_with_its_entry() {
     );
 }
 
+#[test]
+fn the_largest_tool_entry_fits_in_a_frame() {
+    // Control characters grow six times in JSON (`\u0001`).
+    let wide = |len: usize| "\u{1}".repeat(len);
+    let mut stream = stream();
+    let call = json!({"type": "assistant", "parent_tool_use_id": "p".repeat(MAX_ID),
+        "message": {"content": [{"type": "tool_use", "id": "t1", "name": wide(1000),
+        "input": {"command": wide(1000)}}]}});
+    stream.line(Some(call.to_string().as_bytes()));
+    let image = json!({"type": "image", "source": {"data": encoded(PNG, LARGEST)}});
+    let result = json!({"type": "user", "message": {"content": [{"type": "tool_result",
+        "tool_use_id": "t1", "content": [{"type": "text", "text": wide(MAX_TEXT * 2)}, image]}]}});
+    let out = stream.line(Some(result.to_string().as_bytes()));
+    assert!(entries(&out)[0].image.is_some());
+    let json = serde_json::to_vec(&out.app[0]).unwrap();
+    assert!(json.len() <= hive_protocol::MAX_PAYLOAD, "{}", json.len());
+}
+
 fn sent(out: &Out) -> Value {
     assert_eq!(out.write.len(), 1);
     out.write[0]["message"]["content"].clone()
