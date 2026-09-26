@@ -1,6 +1,13 @@
 # What every Rust job of ci.yml needs before cargo runs.
 name: setup-rust
 description: Rust toolchain and cargo tools, Tauri's Linux libraries, fish 4 and the built frontend.
+inputs:
+  cache-key:
+    description: Extra key for Swatinem/rust-cache (jobs that build another profile).
+    default: ""
+  cache-save:
+    description: Whether this job saves the cache ("true"/"false").
+    default: "true"
 runs:
   using: composite
   steps:
@@ -16,8 +23,11 @@ runs:
         components: rustfmt, clippy, llvm-tools-preview
     - uses: taiki-e/install-action@v2
       with:
-        tool: cargo-deny,cargo-machete,cargo-llvm-cov,cargo-mutants
+        tool: cargo-deny,cargo-machete,cargo-llvm-cov,cargo-mutants,cargo-nextest
     - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.cache-key }}
+        save-if: ${{ inputs.cache-save }}
     - uses: oven-sh/setup-bun@v2
     # `tauri::generate_context!` needs the built frontend (`dist`).
     - shell: bash

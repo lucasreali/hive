@@ -1,0 +1,50 @@
+# Every mutant of the workspace, nightly on `main` (TODO 7.1). Does not block anything: it covers
+# the blind spot of the per-branch `--in-diff` run (a change can leave code outside its diff
+# untested). Surviving mutants open a GitHub issue, or comment on the one still open.
+name: mutants-full
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: mutants-full
+  cancel-in-progress: true
+
+jobs:
+  mutants:
+    uses: ./.github/workflows/mutants.yml
+    with:
+      in-diff: false
+
+  report:
+    needs: mutants
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: mutants-out
+          path: mutants.out
+        continue-on-error: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Nightly mutation testing: surviving mutants"
+          {
+            echo "Run: $RUN"
+            echo
+            echo "Missed:"; echo '```'; cat mutants.out/missed.txt 2>/dev/null || echo "(no report: see the run)"; echo '```'
+            echo "Timeout:"; echo '```'; cat mutants.out/timeout.txt 2>/dev/null; echo '```'
+          } > body.md
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi

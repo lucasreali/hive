@@ -29,7 +29,8 @@ case "${1:-}" in
     done
     failed=0
     runs | while read -r id url; do
-      if gh run watch "$id" --exit-status >/dev/null; then
+      # Poll every 2 min: the gh API quota is shared with the human's other work.
+      if gh run watch "$id" --interval 120 --exit-status >/dev/null; then
         echo "green $url"
       else
         echo "FAILED $url (scripts/ci.sh logs $id)"

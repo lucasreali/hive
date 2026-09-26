@@ -8,6 +8,11 @@ on:
   push:
     branches: [main, "task/**"]
   workflow_dispatch:
+    inputs:
+      mutants-base:
+        description: Diff base for the mutants (default the merge base with main)
+        type: string
+        default: ""
 
 # A newer push to the same branch supersedes the running checks.
 concurrency:
@@ -39,29 +44,13 @@ jobs:
       # Exclusions: COVERAGE_EXCLUSIONS.md (same regex as scripts/gates.sh).
       - run: cargo llvm-cov --workspace --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'
 
+  # The diff's mutants, sharded by their number (mutants.yml, TODO 7.1). `mutants-base` re-runs
+  # them for another range (e.g. to measure a change to the mutants setup).
   mutants:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-rust
-      # A task branch: the mutants of its own diff since it left `main` (merge base, so
-      # commits that landed on `main` meanwhile are not counted). On `main` itself nothing
-      # runs: every commit arrives by fast-forward from a task branch whose run already
-      # tested its mutants. Exit code 2 (missed) or 3 (timeout) fails the job.
-      - name: cargo mutants --in-diff
-        if: github.ref != 'refs/heads/main'
-        run: |
-          git diff "$(git merge-base origin/main HEAD)" -- '*.rs' > "$RUNNER_TEMP/diff.patch"
-          if [ ! -s "$RUNNER_TEMP/diff.patch" ]; then echo "no Rust changes"; exit 0; fi
-          cargo mutants --gitignore true -j 2 --timeout 120 --in-diff "$RUNNER_TEMP/diff.patch"
-      - if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: mutants-out
-          path: mutants.out
-          retention-days: 7
+    uses: ./.github/workflows/mutants.yml
+    with:
+      in-diff: true
+      base: ${{ inputs.mutants-base }}
 
   frontend:
     runs-on: ubuntu-latest
