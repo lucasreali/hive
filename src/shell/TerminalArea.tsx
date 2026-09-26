@@ -1,4 +1,4 @@
-import { ChatTeardropTextIcon, TerminalWindowIcon } from "@phosphor-icons/react";
+import { SquareSplitHorizontalIcon, TerminalWindowIcon, XIcon } from "@phosphor-icons/react";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -37,8 +37,10 @@ import { isMac, keyText } from "../window";
 import { ChatView } from "./ChatView";
 import {
   AddFolderIcon,
+  ChatIcon,
   CloseIcon,
   FileIcon,
+  ICON,
   PanelIcon,
   PlusIcon,
   StateIcon,
@@ -71,8 +73,6 @@ function EmptyState() {
     </div>
   );
 }
-
-const ChatIcon = () => <ChatTeardropTextIcon size={13} aria-hidden="true" />;
 
 /** The worktree at `path` and its project, as the service reports them. */
 function find(s: HiveState, path: string) {
@@ -232,9 +232,11 @@ function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
       <button type="button" role="menuitem" onClick={act(() => void splitTerminal(menu.tab))}>
+        <SquareSplitHorizontalIcon {...ICON} />
         {split ? "Unsplit" : "Split right"}
       </button>
       <button type="button" role="menuitem" onClick={act(() => closeTerminal(menu.tab))}>
+        <XIcon {...ICON} />
         Close terminal
       </button>
     </ContextMenu>

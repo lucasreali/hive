@@ -1,3 +1,14 @@
+import {
+  BellIcon,
+  FolderSimpleIcon,
+  GitBranchIcon,
+  type Icon,
+  InfoIcon,
+  KeyboardIcon,
+  PaletteIcon,
+  RobotIcon,
+  TerminalWindowIcon,
+} from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useState } from "react";
 import { version as appVersion } from "../../package.json";
 import { COMMANDS } from "../shortcuts";
@@ -6,7 +17,7 @@ import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { keyText } from "../window";
-import { CloseIcon } from "./icons";
+import { CloseIcon, ICON } from "./icons";
 
 const close = () => openModal(null);
 
@@ -24,6 +35,17 @@ export const SECTIONS = [
   "About",
 ] as const;
 type Section = (typeof SECTIONS)[number];
+
+const SECTION_ICON: Record<Section, Icon> = {
+  Terminal: TerminalWindowIcon,
+  Appearance: PaletteIcon,
+  Notifications: BellIcon,
+  Agents: RobotIcon,
+  Worktrees: GitBranchIcon,
+  Projects: FolderSimpleIcon,
+  Shortcuts: KeyboardIcon,
+  About: InfoIcon,
+};
 
 /** Sends the whole settings with `change` made to the ones in use (#37: the service checks). */
 function save(change: (next: Settings) => void): void {
@@ -621,20 +643,24 @@ export function SettingsDialog() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {SECTIONS.map((name) => (
-            <button
-              type="button"
-              className="settings-section"
-              key={name}
-              aria-current={!query && name === section ? "page" : undefined}
-              onClick={() => {
-                setSection(name);
-                setQuery("");
-              }}
-            >
-              {name}
-            </button>
-          ))}
+          {SECTIONS.map((name) => {
+            const Shape = SECTION_ICON[name];
+            return (
+              <button
+                type="button"
+                className="settings-section"
+                key={name}
+                aria-current={!query && name === section ? "page" : undefined}
+                onClick={() => {
+                  setSection(name);
+                  setQuery("");
+                }}
+              >
+                <Shape {...ICON} />
+                {name}
+              </button>
+            );
+          })}
         </nav>
         <div className="dialog-body settings-body">
           {error && (

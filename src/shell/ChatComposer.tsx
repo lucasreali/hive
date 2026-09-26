@@ -2,6 +2,7 @@ import { PaperPlaneRightIcon, StopIcon } from "@phosphor-icons/react";
 import { type KeyboardEvent, useState } from "react";
 import { useHive } from "../store";
 import { transport } from "../transport";
+import { ICON } from "./icons";
 
 /**
  * A chat's input (7.3): Enter sends, Shift+Enter starts a new line. While a turn runs, Send
@@ -45,11 +46,11 @@ export function ChatComposer({ chat }: { chat: number }) {
           title="Stop the turn"
           onClick={() => void transport.chatInterrupt(chat)}
         >
-          <StopIcon size={14} weight="fill" aria-hidden="true" /> Stop
+          <StopIcon {...ICON} /> Stop
         </button>
       ) : (
         <button type="submit" className="primary" disabled={!ready || text.trim() === ""}>
-          <PaperPlaneRightIcon size={14} aria-hidden="true" /> Send
+          <PaperPlaneRightIcon {...ICON} /> Send
         </button>
       )}
     </form>

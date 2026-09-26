@@ -1,10 +1,9 @@
-import { ChatTeardropTextIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { type Chat, useHive } from "../store";
 import { transport } from "../transport";
 import { ChatComposer } from "./ChatComposer";
 import { CHAT_LABELS, ConversationView } from "./ConversationView";
-import { CloseIcon } from "./icons";
+import { ChatIcon, CloseIcon } from "./icons";
 
 /** The chat's state in its bar. */
 function stateText(chat: Chat): string {
@@ -81,7 +80,7 @@ export function ChatView({ id }: { id: number }) {
   return (
     <section className="file-view transcript-view chat-view" aria-label="Chat">
       <div className="file-view-bar">
-        <ChatTeardropTextIcon size={14} aria-hidden="true" />
+        <ChatIcon />
         <span className="path">
           chat: {chat.cwd}
           <span className="state-label" data-state={state}>
