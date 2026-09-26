@@ -28,7 +28,7 @@ test("placeholders are never selected; typed text still is", async ({ page }) =>
     .click();
   await page.getByTitle("New terminal, agent or file").click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
   const input = page
     .getByRole("region", { name: "Chat" })
     .getByRole("textbox", { name: "Message" });
