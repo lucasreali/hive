@@ -374,7 +374,7 @@ const said = (texts: string[]) =>
         parent: null,
         status: null,
         output: null,
-        image: null,
+        images: [],
       })),
       replace_last: false,
     }),

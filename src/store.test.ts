@@ -652,7 +652,7 @@ const chatEntry = (id: number, text: string, more: Partial<ChatEntry> = {}): Cha
   parent: null,
   status: null,
   output: null,
-  image: null,
+  images: [],
   ...more,
 });
 

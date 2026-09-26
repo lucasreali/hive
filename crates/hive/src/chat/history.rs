@@ -63,7 +63,7 @@ mod tests {
             parent: None,
             status: None,
             output: None,
-            image: None,
+            images: vec![],
         }
     }
 
@@ -126,6 +126,8 @@ mod tests {
         big[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
         let big = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, big);
         let over = format!("{big}AAAA");
+        // Two halves fill a turn's 3 MiB exactly.
+        let half = &big[..big.len() / 2];
         let block = |data: &str| json!({"type": "image", "source": {"data": data}});
         let records = lines(&[
             json!({"type": "user", "message": {"content": [
@@ -133,23 +135,46 @@ mod tests {
                 block(&over), block(gif),
             ]}}),
             json!({"type": "user", "message": {"content": [block(&big)]}}),
+            // Within a turn's caps: 3 MiB of images together, at most 10.
+            json!({"type": "user", "message": {"content": [block(&big), block(png)]}}),
+            json!({"type": "user", "message": {"content": vec![block(png); 11]}}),
+            json!({"type": "user", "message": {"content": [block(half), block(half)]}}),
         ]);
         let out = stream.history(&records, false);
         let shown: Vec<_> = entries(&out)
             .into_iter()
-            .map(|e| (e.id, e.text, e.image.map(|i| (i.media_type, i.data.len()))))
+            .map(|e| {
+                let images = e.images.into_iter().map(|i| (i.media_type, i.data.len()));
+                (e.id, e.text, images.collect::<Vec<_>>())
+            })
             .collect();
-        let png = Some(("image/png".to_owned(), png.len()));
-        let gif = Some(("image/gif".to_owned(), gif.len()));
-        let big = Some(("image/png".to_owned(), big.len()));
+        let png = ("image/png".to_owned(), png.len());
+        let gif = ("image/gif".to_owned(), gif.len());
+        let largest = ("image/png".to_owned(), big.len());
         assert_eq!(
             shown,
             vec![
-                (1, "look".into(), png),
-                (2, String::new(), gif),
-                (3, String::new(), big)
+                (1, "look".into(), vec![png.clone(), gif]),
+                (2, String::new(), vec![largest.clone()]),
+                (3, String::new(), vec![largest]),
+                (4, String::new(), vec![png; 10]),
+                (
+                    5,
+                    String::new(),
+                    vec![("image/png".to_owned(), half.len()); 2]
+                ),
             ]
         );
+        // The largest resumed user entry (control characters grow six times in JSON) fits
+        // in a frame.
+        let wide = "\u{1}".repeat(1 << 20);
+        let records = lines(&[json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": wide}, block(&big),
+        ]}})]);
+        let out = Stream::new(3, "/r".into(), ChatMode::Default, None).history(&records, false);
+        assert_eq!(entries(&out)[0].images.len(), 1);
+        let json = serde_json::to_vec(&out.app[0]).unwrap();
+        assert!(json.len() <= hive_protocol::MAX_PAYLOAD, "{}", json.len());
     }
 
     #[test]

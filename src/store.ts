@@ -343,7 +343,7 @@ export type ChatEntry = {
   parent: string | null;
   status: ToolStatus | null;
   output: string | null;
-  image: ChatImage | null;
+  images: ChatImage[];
 };
 /** Mirrors `hive_protocol::ChatQuestion`: one question of an `AskUserQuestion`. */
 export type ChatQuestion = {
