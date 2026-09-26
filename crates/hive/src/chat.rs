@@ -10,6 +10,8 @@ use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use hive_protocol::{
     AgentEvent, ChatEntry, ChatEntryKind, ChatImage, ChatMode, Control, EventKind, ToolStatus,
 };
@@ -36,6 +38,11 @@ const MAX_ID: usize = 128;
 const MAX_ENTRIES: usize = 200;
 /// Most JSON bytes of entries in one `chat_entries`, well under a frame (`MAX_PAYLOAD`).
 const MAX_BATCH: usize = 3 << 20;
+/// Most images in one user turn.
+const MAX_IMAGES: usize = 10;
+/// Most base64 bytes of images in one message: a user turn's together (with its text it must
+/// fit in one `chat_send` frame, `MAX_PAYLOAD` = 4 MiB), or one image of a tool result.
+pub const MAX_IMAGE_DATA: usize = 3 << 20;
 /// Most slash commands kept.
 const MAX_COMMANDS: usize = 500;
 /// Most tool calls of a turn waiting for their result.
@@ -141,20 +148,78 @@ fn summary(tool: &str, input: &Value) -> String {
     )
 }
 
-/// A tool result's text; images are not shown yet (7.3g).
-fn output(content: &Value) -> String {
-    if let Some(text) = content.as_str() {
-        return text.to_owned();
+/// An image's media type, read from its first bytes: PNG, JPEG, GIF or WebP.
+fn sniff(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("image/png"),
+        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+        [b'G', b'I', b'F', b'8', b'7' | b'9', b'a', ..] => Some("image/gif"),
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => Some("image/webp"),
+        _ => None,
     }
-    let parts: Vec<&str> = blocks(content)
-        .iter()
-        .filter_map(|block| match block["type"].as_str() {
-            Some("text") => block["text"].as_str(),
-            Some("image") => Some("(image not shown)"),
-            _ => None,
-        })
-        .collect();
-    parts.join("\n")
+}
+
+/// `data` (strict base64) as an image, typed by its content, never by the type it claims.
+fn image(data: &str) -> Option<ChatImage> {
+    let bytes = STANDARD.decode(data).ok()?;
+    Some(ChatImage {
+        media_type: sniff(&bytes)?.to_owned(),
+        data: data.to_owned(),
+    })
+}
+
+/// A tool result's text, and its first image when it fits [`MAX_IMAGE_DATA`]; the text names
+/// the others.
+fn output(content: &Value) -> (String, Option<ChatImage>) {
+    if let Some(text) = content.as_str() {
+        return (text.to_owned(), None);
+    }
+    let (mut parts, mut shown) = (Vec::new(), None);
+    for block in blocks(content) {
+        match block["type"].as_str() {
+            Some("text") => parts.extend(block["text"].as_str().map(str::to_owned)),
+            Some("image") => {
+                let data = text(&block["source"]["data"]);
+                let fits = shown.is_none() && data.len() <= MAX_IMAGE_DATA;
+                match fits.then(|| image(data)).flatten() {
+                    Some(image) => shown = Some(image),
+                    None => {
+                        let size = data.len().div_ceil(1024);
+                        parts.push(format!("(image of {size} KiB not shown)"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (parts.join("\n"), shown)
+}
+
+/// A user turn's `content` (spike 4.11): the text alone, or content blocks with its images.
+fn content(text: &str, images: &[ChatImage]) -> Value {
+    if images.is_empty() {
+        return json!(text);
+    }
+    let text = (!text.is_empty()).then(|| json!({"type": "text", "text": text}));
+    let images = images.iter().map(|image| {
+        let source = json!({"type": "base64", "media_type": image.media_type, "data": image.data});
+        json!({"type": "image", "source": source})
+    });
+    Value::Array(text.into_iter().chain(images).collect())
 }
 
 /// Tokens in the context of an API call: its input, read from and written to the cache.
@@ -321,11 +386,14 @@ impl Stream {
         out
     }
 
-    /// A user turn. Images are refused until 7.3g.
+    /// A user turn: its text and images, checked by content (spike 4.11).
     pub fn send(&mut self, text: &str, images: &[ChatImage]) -> Out {
         self.changed(|chat, entries, out| {
-            let refused = if !images.is_empty() {
-                Some("Images cannot be sent yet.")
+            let data: usize = images.iter().map(|image| image.data.len()).sum();
+            let refused = if images.len() > MAX_IMAGES {
+                Some("At most 10 images can be sent at once.")
+            } else if data > MAX_IMAGE_DATA {
+                Some("The images are larger than 3 MiB together.")
             } else if text.len() > MAX_TURN {
                 Some("The message is longer than 1 MiB.")
             } else {
@@ -334,13 +402,27 @@ impl Stream {
             if let Some(why) = refused {
                 return entries.push(chat.entry(ChatEntryKind::Error, why, None));
             }
+            let checked = images.iter().map(|given| image(&given.data));
+            let Some(images) = checked.collect::<Option<Vec<ChatImage>>>() else {
+                let why = "Only PNG, JPEG, GIF and WebP images can be sent.";
+                return entries.push(chat.entry(ChatEntryKind::Error, why, None));
+            };
             out.write.push(json!({
                 "type": "user",
-                "message": {"role": "user", "content": text},
+                "message": {"role": "user", "content": content(text, &images)},
                 "parent_tool_use_id": null,
                 "session_id": "default",
             }));
-            entries.push(chat.entry(ChatEntryKind::User, text, None));
+            // The first image goes with the text, the others after it (as the app's mock).
+            let mut images = images.into_iter();
+            let mut user = chat.entry(ChatEntryKind::User, text, None);
+            user.image = images.next();
+            entries.push(user);
+            for image in images {
+                let mut entry = chat.entry(ChatEntryKind::User, "", None);
+                entry.image = Some(image);
+                entries.push(entry);
+            }
             chat.busy = true;
         })
     }
@@ -544,8 +626,10 @@ impl Stream {
                     } else {
                         ToolStatus::Ok
                     };
+                    let (output, image) = output(&block["content"]);
                     entry.status = Some(status);
-                    entry.output = Some(cut(&output(&block["content"]), MAX_TEXT));
+                    entry.output = Some(cut(&output, MAX_TEXT));
+                    entry.image = image;
                     entries.push(entry);
                 }
                 _ => {}
