@@ -74,7 +74,7 @@ test("a new space is created with its environment, and a refusal is shown", () =
   fireEvent.change(email, { target: { value: "me@home" } });
   fireEvent.change(screen.getByLabelText("Git name"), { target: { value: "x" } });
   fireEvent.change(screen.getByLabelText("Git name"), { target: { value: "" } });
-  fireEvent.click(screen.getByRole("button", { name: "Create space Enter" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create space" }));
   expect(create).toHaveBeenCalledWith("Work", { ...NO_ENV, git_email: "me@home" });
   act(() => apply({ type: "space_failed", message: "The name is too long" }));
   expect(screen.getByRole("alert").textContent).toBe("The name is too long");
@@ -94,10 +94,11 @@ test("the current space is edited; only an empty one can be deleted", () => {
   expect((screen.getByLabelText("Git email") as HTMLInputElement).value).toBe("me@work");
   const del = screen.getByRole("button", { name: "Delete space" }) as HTMLButtonElement;
   expect(del.disabled).toBe(true);
+  expect(document.querySelector("dialog button kbd")).toBeNull();
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Job" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save Enter" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(update).toHaveBeenCalledWith("w", "Job", work.env);
-  fireEvent.click(screen.getByRole("button", { name: "Cancel Esc" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
 
   act(() => apply({ type: "spaces", spaces: [home, work, empty], current: "e" }));

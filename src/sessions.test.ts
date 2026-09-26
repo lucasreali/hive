@@ -150,19 +150,23 @@ test("copying says so in the status bar, or why not", async () => {
   writeText.mockRestore();
 });
 
-test("deleting asks first", () => {
+test("deleting asks first in a Hive dialog, never the WebView's", () => {
   const deleted = spyOn(transport, "deleteSession").mockResolvedValue();
-  const confirm = spyOn(window, "confirm").mockReturnValue(false);
+  const native = spyOn(window, "confirm");
   remove(session);
-  expect(confirm.mock.calls[0]?.[0]).toBe(
-    'Delete the session "Fix the login redirect"? Its log is removed and it cannot be resumed.',
-  );
+  const { modal, question } = useHive.getState();
+  expect(modal).toBe("confirm");
+  expect([question?.title, question?.text, question?.action]).toEqual([
+    "Delete session?",
+    'Delete "Fix the login redirect"? Its log is removed and it cannot be resumed.',
+    "Delete",
+  ]);
   expect(deleted).not.toHaveBeenCalled();
-  confirm.mockReturnValue(true);
-  remove(session);
+  question?.run();
   expect(deleted).toHaveBeenCalledWith(session.id);
+  expect(native).not.toHaveBeenCalled();
   deleted.mockRestore();
-  confirm.mockRestore();
+  native.mockRestore();
 });
 
 test("token counts are short, and a session without usage shows none", () => {

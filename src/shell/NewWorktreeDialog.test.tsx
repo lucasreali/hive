@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
 import { apply, DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "../store";
 import { closeTerminal } from "../terminals";
@@ -43,8 +43,7 @@ function open(project: string | null = shop.id) {
 
 const nameField = () => screen.getByLabelText("Worktree name") as HTMLInputElement;
 const filter = () => screen.getByLabelText("Base branch") as HTMLInputElement;
-const create = () =>
-  screen.getByRole("button", { name: "Create worktree Enter" }) as HTMLButtonElement;
+const create = () => screen.getByRole("button", { name: "Create worktree" }) as HTMLButtonElement;
 const picked = () =>
   document.querySelector(".branch-row[aria-pressed=true] .branch-name")?.textContent;
 const branchNames = () => [...document.querySelectorAll(".branch-name")].map((b) => b.textContent);
@@ -252,7 +251,7 @@ test("the service's notes keep the dialog open until it is closed", async () => 
   expect(document.querySelector(".created")?.textContent).toBe(`Created ${path}`);
   expect(document.querySelector(".notes")?.textContent).toBe(notes[0]);
   expect(useHive.getState().modal).toBe("new-worktree");
-  fireEvent.click(screen.getByRole("button", { name: "Close Enter" }));
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
   expect(useHive.getState().modal).toBeNull();
 });
 
@@ -292,10 +291,11 @@ test("another project asks for its branches; a failure to list them is shown", a
 });
 
 test("close, cancel and Esc close the dialog; it needs a project and a connection", () => {
-  for (const how of ["Close (Esc)", "Cancel Esc", "Escape"]) {
+  for (const how of ["Close (Esc)", "Cancel", "Escape"]) {
     const dialog = open();
+    expect(dialog.querySelector("button kbd")).toBeNull();
     if (how === "Escape") fireEvent(dialog, new Event("close"));
-    else if (how === "Cancel Esc") fireEvent.click(screen.getByRole("button", { name: how }));
+    else if (how === "Cancel") fireEvent.click(screen.getByRole("button", { name: how }));
     else fireEvent.click(screen.getByTitle(how));
     expect(useHive.getState().modal).toBeNull();
     cleanup();

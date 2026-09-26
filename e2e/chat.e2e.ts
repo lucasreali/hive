@@ -149,7 +149,7 @@ test("chat: permission, question and plan cards pin above the composer and answe
   await tree.getByRole("button", { name: "fix-login" }).click();
   await page.getByTitle("New terminal, agent or file").click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
   const chat = page.getByRole("region", { name: "Chat" });
   const input = chat.getByRole("textbox", { name: "Message" });
   await expect(input).toBeEnabled();
@@ -209,7 +209,7 @@ test("chat: the header shows model and mode, Esc stops a turn, / lists the comma
   await tree.getByRole("button", { name: "fix-login" }).click();
   await page.getByTitle("New terminal, agent or file").click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
   const chat = page.getByRole("region", { name: "Chat" });
   const input = chat.getByRole("textbox", { name: "Message" });
   await expect(input).toBeEnabled();
@@ -252,7 +252,7 @@ test("chat: a session opens as a chat with its history, and an ended chat resume
   await page.getByRole("tab", { name: "Sessions" }).click();
   await page.getByRole("button", { name: "Actions for Checkout totals" }).click();
   await page.getByRole("menuitem", { name: "Open as Chat" }).click();
-  await page.getByRole("button", { name: "Start chat Enter" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
 
   const chat = page.getByRole("region", { name: "Chat" });
   const entries = chat.locator(".transcript-entry");
@@ -269,4 +269,40 @@ test("chat: a session opens as a chat with its history, and an ended chat resume
   await expect(
     page.getByRole("tablist", { name: "Open terminals and files" }).getByRole("tab"),
   ).toHaveCount(1);
+});
+
+test("chat: Claude's Markdown renders, and a wide table scrolls inside its message", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await expect(page.getByRole("dialog", { name: "Chat in this folder?" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  const chat = page.getByRole("region", { name: "Chat" });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  await input.fill("show markdown");
+  await input.press("Enter");
+
+  const message = chat.locator(".markdown", { has: page.locator("table") });
+  await expect(message.getByRole("heading", { name: "Context Usage" })).toBeVisible();
+  await expect(message.locator("strong")).toHaveText("Model:");
+  await expect(message.locator("pre code")).toHaveText("bun test --coverage");
+  await expect(message.locator("td").nth(1)).toHaveCSS("text-align", "right");
+  // The table is wider than the chat: its box scrolls sideways, the conversation does not.
+  const scroller = message.locator(".md-table");
+  const sizes = await scroller.evaluate((el) => {
+    const transcript = el.closest(".transcript") as HTMLElement;
+    return {
+      wide: el.scrollWidth > el.clientWidth,
+      overflow: transcript.scrollWidth - transcript.clientWidth,
+    };
+  });
+  expect(sizes).toEqual({ wide: true, overflow: 0 });
+  await scroller.evaluate((el) => el.scrollBy(200, 0));
+  await expect.poll(() => scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
 });

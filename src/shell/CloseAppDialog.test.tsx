@@ -24,7 +24,7 @@ function closeWith(agents: string[]) {
 }
 
 const dialog = () => screen.getByRole("dialog", { name: "Close Hive?" }) as HTMLDialogElement;
-const confirm = () => screen.getByRole("button", { name: "Close Hive Enter" });
+const confirm = () => screen.getByRole("button", { name: "Close Hive" });
 
 test("with no agent the app closes at once", () => {
   closeWith([]);
@@ -55,7 +55,8 @@ test("with confirm_close off the app closes at once, agents or not", () => {
 
 test("cancel, the header button and Esc keep the app open", () => {
   closeWith(["a"]);
-  fireEvent.click(screen.getByRole("button", { name: "Cancel Esc" }));
+  expect(document.querySelector("button kbd")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(screen.getByTitle("Close"));
   fireEvent.click(screen.getByTitle("Close (Esc)"));
@@ -68,7 +69,7 @@ test("cancel, the header button and Esc keep the app open", () => {
 
 test("a removed agent no longer asks", () => {
   closeWith(["a"]);
-  fireEvent.click(screen.getByRole("button", { name: "Cancel Esc" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   act(() => apply({ type: "agent_removed", channel: 1, id: "a" }));
   fireEvent.click(screen.getByTitle("Close"));
   expect(screen.queryByRole("dialog")).toBeNull();

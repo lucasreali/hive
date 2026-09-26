@@ -605,7 +605,13 @@ export type Modal =
   | "remove-merged"
   | "palette"
   | "file-name"
+  | "confirm"
   | null;
+/**
+ * A yes/no question asked in a Hive dialog (8.20), never the WebView's `confirm`: `run` happens
+ * only when the user picks `action` (e.g. "Discard", "Delete").
+ */
+export type Question = { title: string; text: string; action: string; run: () => void };
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
 /** A project row's context menu, at the pointer. */
@@ -622,6 +628,8 @@ export type HiveState = {
   sessionMenu: SessionMenu | null;
   fileMenu: (FileTarget & { x: number; y: number }) | null;
   fileDialog: FileDialog | null;
+  /** The question of the "confirm" modal (`ask`). */
+  question: Question | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
   /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
@@ -732,6 +740,7 @@ export const initialState: HiveState = {
   sessionMenu: null,
   fileMenu: null,
   fileDialog: null,
+  question: null,
   notice: null,
   update: null,
   rightPanel: "files",
@@ -1264,6 +1273,8 @@ export const openFileDialog = (target: FileTarget, renaming = false) =>
     modal: "file-name",
     fileDialog: { ...target, renaming, error: null },
   });
+/** Asks `question` in the confirm dialog (`ConfirmDialog`). */
+export const ask = (question: Question) => useHive.setState({ modal: "confirm", question });
 /** Keeps an alert in the inbox, the newest first. */
 export const addToInbox = (item: Omit<InboxItem, "id">) =>
   useHive.setState((s) => ({

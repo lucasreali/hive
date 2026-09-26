@@ -680,7 +680,7 @@ export function SettingsDialog() {
           Open settings file
         </button>
         <button type="button" className="secondary" onClick={close}>
-          Close <kbd>Esc</kbd>
+          Close
         </button>
       </footer>
     </dialog>
