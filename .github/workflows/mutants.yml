@@ -138,10 +138,12 @@ jobs:
         with:
           pattern: mutants-shard-*
           path: shards
+      # A lone matched artifact is extracted straight into `shards/`, several each into
+      # `shards/<name>/`: `find` reads both layouts.
       - run: |
-          mkdir mutants.out
+          mkdir -p mutants.out shards
           for f in caught missed timeout unviable; do
-            cat shards/*/"$f.txt" > "mutants.out/$f.txt" 2>/dev/null || true
+            find shards -name "$f.txt" -exec cat {} + > "mutants.out/$f.txt"
           done
           mv shards mutants.out/
           for f in caught missed timeout unviable; do
@@ -157,7 +159,8 @@ jobs:
           SHARDS: ${{ needs.shard.result }}
           SHARDS_EXPECTED: ${{ needs.plan.outputs.n }}
         run: |
-          got=$(find mutants.out/shards -mindepth 1 -maxdepth 1 -type d | wc -l)
+          # Every shard that ran to the end wrote its `outcomes.json`.
+          got=$(find mutants.out/shards -name outcomes.json | wc -l)
           if [ "$SHARDS" != success ] || [ "$got" != "$SHARDS_EXPECTED" ] \
             || [ -s mutants.out/missed.txt ] || [ -s mutants.out/timeout.txt ]; then
             echo "mutants failed: shards $SHARDS ($got of $SHARDS_EXPECTED reported)"; exit 1
