@@ -3,6 +3,7 @@ import { version as appVersion } from "../../package.json";
 import { COMMANDS } from "../shortcuts";
 import { openModal, type ProjectScripts, type Settings, scriptsOf, useHive } from "../store";
 import { transport } from "../transport";
+import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { keyText } from "../window";
 import { CloseIcon } from "./icons";
@@ -44,6 +45,8 @@ function Typed(props: {
   max?: number;
   placeholder?: string;
   "aria-label"?: string;
+  /** A number field's name, for its stepper buttons. */
+  label?: string;
 }) {
   const { value, onSave } = props;
   const [draft, setDraft] = useState(value);
@@ -66,6 +69,18 @@ function Typed(props: {
       />
     );
   }
+  if (props.type === "number") {
+    return (
+      <NumberInput
+        id={props.id}
+        value={draft}
+        onChange={setDraft}
+        min={props.min ?? 0}
+        max={props.max ?? Number.MAX_SAFE_INTEGER}
+        label={props.label ?? ""}
+      />
+    );
+  }
   return (
     <input
       id={props.id}
@@ -85,6 +100,7 @@ function Typed(props: {
 /** A number field for `get`/`set` of the settings; blank or non-numeric text is not sent. */
 function NumberSetting(props: {
   id: string;
+  label: string;
   get: (s: Settings) => number;
   set: (s: Settings, n: number) => void;
   min: number;
@@ -97,6 +113,7 @@ function NumberSetting(props: {
     <Typed
       id={props.id}
       type={props.type ?? "number"}
+      label={props.label}
       min={props.min}
       max={props.max}
       value={String(value)}
@@ -129,7 +146,7 @@ type Field = {
   label: string;
   help?: string;
   check?: boolean;
-  control: (id: string) => ReactNode;
+  control: (id: string, label: string) => ReactNode;
 };
 
 const CURSORS = [
@@ -153,9 +170,10 @@ const FIELDS: Field[] = [
     section: "Terminal",
     label: "Font size",
     help: "8 to 32.",
-    control: (id) => (
+    control: (id, label) => (
       <NumberSetting
         id={id}
+        label={label}
         min={8}
         max={32}
         get={(s) => s.terminal.font_size}
@@ -169,9 +187,10 @@ const FIELDS: Field[] = [
     section: "Terminal",
     label: "Scrollback lines",
     help: "1000 to 100000.",
-    control: (id) => (
+    control: (id, label) => (
       <NumberSetting
         id={id}
+        label={label}
         min={1000}
         max={100000}
         get={(s) => s.terminal.scrollback}
@@ -219,9 +238,10 @@ const FIELDS: Field[] = [
     section: "Notifications",
     label: "Alert volume",
     help: "0 mutes the tone.",
-    control: (id) => (
+    control: (id, label) => (
       <NumberSetting
         id={id}
+        label={label}
         type="range"
         min={0}
         max={100}
@@ -236,9 +256,10 @@ const FIELDS: Field[] = [
     section: "Agents",
     label: "Silence before waiting for you (seconds)",
     help: "2 to 60: how long a working agent's terminal stays quiet before it needs you.",
-    control: (id) => (
+    control: (id, label) => (
       <NumberSetting
         id={id}
+        label={label}
         min={2}
         max={60}
         get={(s) => s.agents.silence_secs}
@@ -343,7 +364,7 @@ function Fields({ fields }: { fields: Field[] }) {
             {f.label}
           </label>
         )}
-        {f.control(id)}
+        {f.control(id, f.label)}
         {f.help && <p className="field-help">{f.help}</p>}
       </div>
     );
