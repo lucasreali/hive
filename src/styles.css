@@ -1017,11 +1017,85 @@ label:has(> input[type="checkbox"]:disabled) {
 .chat-composer {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: flex-end;
   padding: 8px 12px;
   border-top: 1px solid var(--border-subtle);
   background: var(--panel);
+}
+
+/* Images to send and a refusal take their own line above the input. */
+.chat-attachments,
+.chat-composer-error {
+  flex: 0 0 100%;
+  order: -1;
+  margin: 0;
+}
+
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-attachments li {
+  position: relative;
+}
+
+.chat-attachments img {
+  display: block;
+  height: 56px;
+  max-width: 120px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.chat-attachments .ghost {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  background: var(--panel);
+}
+
+/* An entry's image: a thumbnail that grows to the row's width when clicked. */
+.chat-image {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.chat-image img {
+  display: block;
+  max-width: 240px;
+  max-height: 160px;
+}
+
+.chat-image[aria-pressed="true"] {
+  cursor: zoom-out;
+}
+
+.chat-image[aria-pressed="true"] img {
+  max-width: 100%;
+  max-height: none;
+}
+
+.chat-image:focus-visible {
+  outline: 1px solid var(--focus);
+}
+
+.tool-details > .chat-image {
+  margin-left: 92px;
 }
 
 .chat-composer textarea {
