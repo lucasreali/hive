@@ -126,6 +126,11 @@
   box-sizing: border-box;
 }
 
+/* A placeholder is never selected (8.19): Ctrl+A or a drag over the page would highlight it. */
+::placeholder {
+  user-select: none;
+}
+
 html,
 body,
 #root {
