@@ -77,7 +77,9 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         ports,
         restore,
     );
-    let result = serve(listener, terminate, Arc::new(state)).await;
+    let state = Arc::new(state);
+    state.ask_user_path();
+    let result = serve(listener, terminate, state).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -169,9 +171,11 @@ struct State {
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
-    /// The user's `PATH` ([`wrapper::user_path`]) once asked for; asked again while no
-    /// `claude` is on it.
-    user_path: Mutex<Option<OsString>>,
+    /// The user's `PATH` ([`wrapper::user_path`]), asked for at start and again, in the
+    /// background, while no `claude` is on it: the user's shell never holds up the frames.
+    user_path: tokio::sync::watch::Sender<Option<OsString>>,
+    /// Whether the user's `PATH` is being asked for.
+    asking_path: std::sync::atomic::AtomicBool,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -209,25 +213,37 @@ impl State {
             ports,
             restore,
             sent: Default::default(),
-            user_path: Mutex::new(None),
+            user_path: tokio::sync::watch::Sender::new(None),
+            asking_path: Default::default(),
+        }
+    }
+
+    /// Asks for the user's `PATH` in the background, unless it is already being asked for.
+    fn ask_user_path(self: &Arc<Self>) {
+        if !self.asking_path.swap(true, Ordering::SeqCst) {
+            let state = self.clone();
+            tokio::spawn(async move {
+                let var = std::env::var_os;
+                let (shell, timeout) = (wrapper::path_shell(), wrapper::SHELL_TIMEOUT);
+                let path = wrapper::user_path(shell, var("PATH"), var("HOME"), timeout).await;
+                state.user_path.send_replace(Some(path));
+                state.asking_path.store(false, Ordering::SeqCst);
+            });
         }
     }
 
     /// The real `claude` the user's terminals would run, and the user's `PATH` it was
-    /// looked for on (see [`wrapper::user_path`]).
-    async fn user_claude(&self) -> (Option<PathBuf>, OsString) {
-        let mut cached = self.user_path.lock().await;
-        if let Some(path) = cached.as_ref()
-            && let Some(claude) = wrapper::real_claude(Some(path), &self.bin_dir)
-        {
-            return (Some(claude), path.clone());
+    /// looked for on (waits only for the first answer, at start). None found: the `PATH` is
+    /// asked for again, for the next time.
+    async fn user_claude(self: &Arc<Self>) -> (Option<PathBuf>, OsString) {
+        let mut known = self.user_path.subscribe();
+        let path = known.wait_for(Option::is_some).await.ok();
+        let path = path.and_then(|path| path.clone()).unwrap_or_default();
+        let claude = wrapper::real_claude(Some(&path), &self.bin_dir);
+        if claude.is_none() {
+            self.ask_user_path();
         }
-        let var = std::env::var_os;
-        let shell = wrapper::path_shell();
-        let path = wrapper::user_path(shell, var("PATH"), var("HOME"), wrapper::SHELL_TIMEOUT);
-        let path = path.await;
-        *cached = Some(path.clone());
-        (wrapper::real_claude(Some(&path), &self.bin_dir), path)
+        (claude, path)
     }
 
     fn sent(&self) -> std::sync::MutexGuard<'_, health::Sent> {

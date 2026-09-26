@@ -674,17 +674,31 @@ async fn claude_is_found_and_run_on_the_path_of_the_users_shell() {
     let script = fake_claude(&fake).replacen("#!/bin/sh\n", &record, 1);
     std::fs::remove_file(fake.join("claude")).unwrap();
     write_claude(&user, &script);
+    let mut daemon = repo.env.daemon_on_path(&fake);
+    let mut app = repo.env.connect(Role::App).await;
+    async fn diagnosed(app: &mut Conn) -> Option<String> {
+        app.send(0, Control::GetDiagnostics).await;
+        let (0, Control::Diagnostics { claude, .. }) = app.control().await else {
+            panic!("no diagnostics")
+        };
+        claude
+    }
+    assert_eq!(diagnosed(&mut app).await, None);
+
+    // Once the config puts it on the user's `PATH`, it is found: missing, the `PATH` is
+    // asked for again in the background.
     let fish = repo.env.path("config/fish");
     std::fs::create_dir_all(&fish).unwrap();
     let config = format!("set -gx PATH '{}' $PATH\n", user.display());
     std::fs::write(fish.join("config.fish"), config).unwrap();
-    let mut daemon = repo.env.daemon_on_path(&fake);
-    let mut app = repo.env.connect(Role::App).await;
-
-    app.send(0, Control::GetDiagnostics).await;
-    let (0, Control::Diagnostics { claude, .. }) = app.control().await else {
-        panic!("no diagnostics")
-    };
+    let mut claude = None;
+    for _ in 0..100 {
+        claude = diagnosed(&mut app).await;
+        if claude.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert_eq!(claude, Some(user.join("claude").display().to_string()));
     app.send(0, Control::AddProject { path: root.clone() })
         .await;
