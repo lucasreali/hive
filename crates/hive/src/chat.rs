@@ -634,8 +634,9 @@ pub struct Chat {
     pub claude_dir: Option<String>,
     /// Lines to claude's stdin; dropped (stdin closes) when the chat is closed.
     stdin: Option<mpsc::UnboundedSender<Value>>,
-    /// claude's process group.
-    group: i32,
+    /// claude's process group: its pid, as the system gave it. A field, not a method, so no
+    /// mutant can turn it into 0 (the service's own group) or 1 (every process).
+    pub group: i32,
     /// The app closed it: its exit is not a failure.
     pub closing: bool,
 }
@@ -712,10 +713,6 @@ impl Chat {
     pub fn close(&mut self) -> bool {
         self.closing = true;
         self.stdin.take().is_some()
-    }
-
-    pub fn group(&self) -> i32 {
-        self.group
     }
 }
 

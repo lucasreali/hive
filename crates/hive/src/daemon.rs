@@ -131,7 +131,7 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
         .values_mut()
         .map(|chat| {
             chat.close();
-            chat.group()
+            chat.group
         })
         .collect();
     tokio::join!(terminal::end_sessions(&sessions), chat::end(chats));
@@ -700,7 +700,9 @@ impl State {
 
     /// Acts on the chat on `channel`.
     async fn chat(&self, channel: u32, act: impl FnOnce(&mut Chat) -> chat::Out) {
-        let out = self.chats.lock().await.get_mut(&channel).map(|chat| {
+        // Sent under the lock, so its messages come before the chat's `chat_closed`.
+        let mut chats = self.chats.lock().await;
+        let out = chats.get_mut(&channel).map(|chat| {
             let out = act(chat);
             chat.run(out)
         });
@@ -734,7 +736,7 @@ impl State {
         if let Some(chat) = chats.get_mut(&channel)
             && chat.close()
         {
-            tokio::spawn(chat::stop(chat.group(), chat::GRACE));
+            tokio::spawn(chat::stop(chat.group, chat::GRACE));
         }
     }
 
@@ -909,8 +911,8 @@ async fn chat_pump(state: Arc<State>, channel: u32, pipes: chat::Pipes) {
             let out = chat.stream.line(line);
             chat.run(out)
         });
-        drop(chats);
         state.chat_out(channel, out.unwrap_or_default()).await;
+        drop(chats);
     }
     let status = child.wait().await.ok();
     let stderr = stderr.await.unwrap_or_default();

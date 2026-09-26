@@ -890,7 +890,7 @@ async fn claude_runs_in_its_worktree_and_group_with_the_chats_environment() {
 while read -r line; do printf 'got %s\n' "$line"; done"#;
     let env = [("CLAUDECODE", "1".to_owned()), ("SPACE", "work".to_owned())];
     let (mut chat, pipes) = start(script, &dir, &env);
-    assert!(chat.group() > 1);
+    assert!(chat.group > 1);
     let out = chat.stream.send("hi", &[]);
     let out = chat.run(out);
     assert!(out.write.is_empty());
@@ -934,7 +934,7 @@ async fn stopped(traps: &str) -> (String, Option<ExitStatus>, Duration) {
     chat.close();
     let started = std::time::Instant::now();
     let reaping = tokio::spawn(read_all(pipes));
-    stop(chat.group(), Duration::from_millis(300)).await;
+    stop(chat.group, Duration::from_millis(300)).await;
     let (out, status) = reaping.await.unwrap();
     (out, status, started.elapsed())
 }
@@ -953,11 +953,28 @@ async fn closing_escalates_from_sigint_to_sigkill() {
     assert!(took >= Duration::from_millis(600), "{took:?}");
 }
 
+#[test]
+fn a_message_with_several_blocks_is_one_batch() {
+    let mut stream = stream();
+    let two = json!({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}});
+    let out = stream.line(Some(two.to_string().as_bytes()));
+    let batch = vec![entry(1, Assistant, "a"), entry(2, Assistant, "b")];
+    assert_eq!(
+        out.app,
+        [Control::ChatEntries {
+            chat: 7,
+            entries: batch,
+            replace_last: false,
+        }]
+    );
+}
+
 #[tokio::test]
 async fn a_group_already_gone_is_not_waited_for() {
     let dir = tempfile::tempdir().unwrap();
     let (mut chat, pipes) = start("exit 0", dir.path(), &[]);
-    let group = chat.group();
+    let group = chat.group;
     chat.close();
     read_all(pipes).await;
     let started = std::time::Instant::now();
@@ -976,7 +993,7 @@ async fn the_service_ending_kills_every_chat() {
     chat.close();
     let reaping = tokio::spawn(read_all(pipes));
     let started = std::time::Instant::now();
-    end(vec![chat.group()]).await;
+    end(vec![chat.group]).await;
     let took = started.elapsed();
     let (_, status) = reaping.await.unwrap();
     use std::os::unix::process::ExitStatusExt;
