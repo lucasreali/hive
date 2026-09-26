@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
-import type { ChatEntry } from "../store";
-import { CHAT_LABELS, ConversationView, ordered } from "./ConversationView";
+import { type ChatEntry, mergeEntries } from "../store";
+import { CHAT_LABELS, ConversationView, type Labels, ordered } from "./ConversationView";
 
 beforeAll(() => {
   // happy-dom has no layout: give the list its CSS size so the virtualizer shows entries.
@@ -102,4 +102,22 @@ test("each kind of entry has its row: text, collapsed thinking, tools with statu
     <ConversationView entries={[entry(1, "tool", "x", { tool: "Grep" })]} labels={CHAT_LABELS} />,
   );
   expect(view.container.querySelector(".tool-status")).toBeNull();
+});
+
+test("live text renders its own row again, not the others", () => {
+  let reads = 0;
+  const labels = new Proxy(CHAT_LABELS, {
+    get: (target, key: keyof Labels) => {
+      reads += 1;
+      return target[key];
+    },
+  });
+  const [a, b] = [entry(1, "user", "Hi"), entry(2, "assistant", "The te")];
+  const view = render(<ConversationView entries={[a, b]} labels={labels} />);
+  const before = reads;
+  const grown = mergeEntries([a, b], [{ ...b, text: "The text" }], true);
+  view.rerender(<ConversationView entries={grown} labels={labels} />);
+  expect(reads - before).toBe(1);
+  const texts = [...view.container.querySelectorAll(".transcript-text")];
+  expect(texts.map((t) => t.textContent)).toEqual(["Hi", "The text"]);
 });

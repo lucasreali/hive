@@ -29,6 +29,12 @@ test("chat: confirm the folder, send, entries arrive, a tool opens, Stop while b
   await expect(input).toHaveValue("");
   // While the turn runs, Send turns into Stop.
   await expect(chat.getByRole("button", { name: "Stop" })).toBeVisible();
+  // Live text (7.3h): the reply shows as it grows (checked every frame: it lasts one step).
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('[data-role="assistant"]')].some(
+      (row) => row.textContent === "ClaudeThe worktree has",
+    ),
+  );
   const entries = chat.locator(".transcript-entry");
   await expect(entries.first()).toHaveText("Youlist the files");
   const tool = chat.locator('.transcript-entry[data-role="tool"]');

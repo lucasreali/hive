@@ -665,7 +665,10 @@ test("chat entries are added, replace theirs by id, or the last one for live tex
   // Live text: the first entry replaces the last, whatever its id; the rest follow.
   const grown = chatEntry(3, "b grown");
   const c = chatEntry(4, "c");
-  expect(mergeEntries([a, b], [grown, c], true)).toEqual([a, grown, c]);
+  const live = mergeEntries([a, b], [grown, c], true);
+  expect(live).toEqual([a, grown, c]);
+  // The other entries stay the same objects, so their rows do not render again.
+  expect(live[0]).toBe(a);
   expect(mergeEntries([], [a], true)).toEqual([a]);
   const many = Array.from({ length: CHAT_LIMIT }, (_, i) => chatEntry(i + 10, "n"));
   const merged = mergeEntries([a], many, false);

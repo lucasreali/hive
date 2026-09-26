@@ -1,6 +1,6 @@
 import { CheckIcon, CircleNotchIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type ReactNode, useEffect, useRef } from "react";
+import { memo, type ReactNode, useEffect, useRef } from "react";
 import type { ChatEntry, ToolStatus } from "../store";
 
 /** How a message's author is named: a chat's own, and a subagent's (6.10, nested ones). */
@@ -37,8 +37,11 @@ export function ordered(entries: ChatEntry[]): ChatEntry[] {
   return rows.flat();
 }
 
-/** One entry, by its kind (plain text: no Markdown, 7.3 decision). */
-function Row({ entry, labels }: { entry: ChatEntry; labels: Labels }) {
+/**
+ * One entry, by its kind (plain text: no Markdown, 7.3 decision). Memoized: live text (7.3h)
+ * replaces one entry, and the store keeps the others, so only its row renders again.
+ */
+const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Labels }) {
   const names = entry.parent === null ? labels : SUBAGENT_LABELS;
   switch (entry.kind) {
     case "user":
@@ -86,7 +89,7 @@ function Row({ entry, labels }: { entry: ChatEntry; labels: Labels }) {
       // A note ("Interrupted"), a divider ("Conversation compacted") or a turn's usage.
       return <span className="transcript-text">{entry.text}</span>;
   }
-}
+});
 
 /**
  * A conversation's entries (6.10's subagent view and the chat, 7.3), newest last, virtualized;
