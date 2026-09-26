@@ -209,6 +209,24 @@ test("Ctrl+Shift+D and closing follow the bar's order", async () => {
   expect(s().split).toEqual({ left: 1, right: 3 });
 });
 
+test("a file moved into another folder (8.3) keeps its tab, its place and its unsaved edits", () => {
+  setOpenFile(file("a.ts"), true);
+  answer("a.ts", "a\n");
+  type("mine\n");
+  addTab(1, W);
+  setOpenFile(file("b.ts"));
+  // Moved while in the background, then while shown.
+  apply({ type: "file_renamed", worktree: W, path: "a.ts", to: "lib/a.ts" });
+  expect(bar()).toEqual(["lib/a.ts", 1, "b.ts"]);
+  setOpenFile(file("lib/a.ts"));
+  expect(s().edit?.doc.toString()).toBe("mine\n");
+  expect(s().edit?.path).toBe("lib/a.ts");
+  apply({ type: "file_renamed", worktree: W, path: "lib/a.ts", to: "src/lib/a.ts" });
+  expect([s().openFile, s().edit?.path]).toEqual([file("src/lib/a.ts"), "src/lib/a.ts"]);
+  expect(s().edit?.doc.toString()).toBe("mine\n");
+  expect(s().tabOrder).toEqual([`file:${W}\nsrc/lib/a.ts`, "tab:1", `file:${W}\nb.ts`]);
+});
+
 test("a renamed or moved file keeps its tab and its place; a deleted one's tab closes", () => {
   const listing = (files: string[], truncated = false) =>
     apply({ type: "files", path: W, files, truncated });
