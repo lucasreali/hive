@@ -142,6 +142,7 @@ fn status(chat: u32, busy: bool, mode: ChatMode, model: bool) -> (u32, Control) 
         retry: None,
         compacting: false,
         session: Some(SESSION.into()),
+        api_key_source: None,
     };
     (chat, status)
 }

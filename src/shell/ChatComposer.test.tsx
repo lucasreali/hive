@@ -18,6 +18,7 @@ const status = (busy: boolean): ChatStatus => ({
   model: null,
   retry: null,
   compacting: false,
+  api_key_source: null,
   session: null,
 });
 
@@ -30,7 +31,7 @@ function composer() {
   return { send, stop, input };
 }
 
-const open = () =>
+const open = (commands: string[] = []) =>
   act(() =>
     apply({
       type: "chat_opened",
@@ -40,7 +41,7 @@ const open = () =>
       session: null,
       model: null,
       mode: "default",
-      commands: [],
+      commands,
       api_key_source: null,
     }),
   );
@@ -99,12 +100,88 @@ test("the mode selector shows the service's mode and asks it for another", () =>
   expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
     "Default",
     "Accept edits",
-    "Plan only",
+    "Plan",
   ]);
-  fireEvent.click(screen.getByRole("option", { name: "Plan only" }));
+  fireEvent.click(screen.getByRole("option", { name: "Plan" }));
   expect(setMode.mock.calls).toEqual([[3, "plan"]]);
   // The selector follows the service, not the click.
   expect(select.textContent).toBe("Default");
   act(() => apply({ type: "chat_status", channel: 3, ...status(false), mode: "plan" }));
-  expect(select.textContent).toBe("Plan only");
+  expect(select.textContent).toBe("Plan");
+});
+
+test("Esc in the message stops a running turn, and only then", () => {
+  const { stop, input } = composer();
+  open();
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(stop).not.toHaveBeenCalled();
+  act(() => apply({ type: "chat_status", channel: 3, ...status(true) }));
+  fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+  expect(stop).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(stop.mock.calls).toEqual([[3]]);
+  expect(screen.getByRole("button", { name: "Stop" }).title).toBe("Stop the turn (Esc)");
+});
+
+test("/ lists the commands that start with what follows it, picked by keyboard or click", () => {
+  const { send, stop, input } = composer();
+  open(["compact", "clear", "review"]);
+  const list = () => screen.queryByRole("listbox", { name: "Commands" });
+  const options = () => screen.getAllByRole("option").map((o) => o.textContent);
+  const selected = () => screen.getByRole("option", { selected: true }).textContent;
+  fireEvent.change(input, { target: { value: "/" } });
+  expect(options()).toEqual(["/compact", "/clear", "/review"]);
+  expect(input.getAttribute("aria-controls")).toBe(list()?.id ?? "");
+  expect(input.getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("option", { selected: true }).id,
+  );
+  fireEvent.change(input, { target: { value: "/c" } });
+  expect(options()).toEqual(["/compact", "/clear"]);
+  expect(selected()).toBe("/compact");
+  // ↑/↓ wrap around; Enter picks without sending.
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(selected()).toBe("/clear");
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(selected()).toBe("/compact");
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect([input.value, list(), send.mock.calls]).toEqual(["/clear ", null, []]);
+  // Then Enter sends as usual.
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(send.mock.calls).toEqual([[3, "/clear ", []]]);
+
+  // Tab picks too; no match or a space hides the list.
+  fireEvent.change(input, { target: { value: "/r" } });
+  fireEvent.keyDown(input, { key: "Tab" });
+  expect(input.value).toBe("/review ");
+  fireEvent.change(input, { target: { value: "/x" } });
+  expect(list()).toBeNull();
+  fireEvent.change(input, { target: { value: "hi /c" } });
+  expect(list()).toBeNull();
+
+  // A click picks (the mouse moves the selection); a press on the list keeps the focus.
+  fireEvent.change(input, { target: { value: "/" } });
+  const review = screen.getByRole("option", { name: "/review" });
+  fireEvent.mouseMove(review);
+  expect(selected()).toBe("/review");
+  const pressed = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+  review.dispatchEvent(pressed);
+  expect(pressed.defaultPrevented).toBe(true);
+  fireEvent.click(review);
+  expect(input.value).toBe("/review ");
+
+  // Esc hides the list (and stops nothing, even while busy) until the text changes.
+  act(() => apply({ type: "chat_status", channel: 3, ...status(true) }));
+  fireEvent.change(input, { target: { value: "/co" } });
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect([list(), stop.mock.calls]).toEqual([null, []]);
+  // Arrows and Enter are the textarea's again.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+  expect(input.value).toBe("/co");
+  fireEvent.change(input, { target: { value: "/c" } });
+  expect(options()).toEqual(["/compact", "/clear"]);
+  // Shift+Enter is a new line, not a pick.
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+  expect(input.value).toBe("/c");
 });

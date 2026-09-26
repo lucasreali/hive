@@ -117,6 +117,7 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
       model: MOCK_CHAT_MODEL,
       retry: extra.retry ?? null,
       compacting: extra.compacting ?? false,
+      api_key_source: null,
       session: chat.session,
     });
   const entry = (

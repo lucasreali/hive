@@ -76,6 +76,7 @@ fn status(busy: bool, session: bool) -> Control {
         retry: None,
         compacting: false,
         session: session.then(|| SESSION.into()),
+        api_key_source: None,
     }
 }
 
@@ -1186,6 +1187,7 @@ fn the_end_of_a_turn_clears_its_transient_status() {
         retry: Some("Retrying 2/9…".into()),
         compacting: true,
         session: None,
+        api_key_source: None,
     };
     assert_eq!(out.app, [retrying]);
     let out = line(json!({"type": "result", "subtype": "success"}));
@@ -1197,6 +1199,7 @@ fn the_end_of_a_turn_clears_its_transient_status() {
         retry: None,
         compacting: false,
         session: None,
+        api_key_source: None,
     };
     assert_eq!(out.app.last(), Some(&idle));
 }
@@ -1325,6 +1328,85 @@ fn slash_commands_are_bounded() {
     assert_eq!(
         (&commands[0][..], &commands[MAX_COMMANDS - 1][..]),
         ("c0", "c499")
+    );
+}
+
+#[test]
+fn an_interrupt_cancels_queued_turns_when_claude_can() {
+    let mut stream = stream();
+    let init = |capabilities: Value| {
+        json!({"type": "system", "subtype": "init", "capabilities": capabilities}).to_string()
+    };
+    let can = init(json!([
+        "interrupt_receipt_v1",
+        "interrupt_cancel_queued_v1"
+    ]));
+    stream.line(Some(can.as_bytes()));
+    assert_eq!(
+        stream.interrupt().write,
+        [json!({"type": "control_request", "request_id": "hive-2",
+            "request": {"subtype": "interrupt", "cancel_queued": true}})]
+    );
+    // A later `init` without it stops asking.
+    stream.line(Some(init(json!(["interrupt_receipt_v1"])).as_bytes()));
+    assert_eq!(
+        stream.interrupt().write,
+        [json!({"type": "control_request", "request_id": "hive-3",
+            "request": {"subtype": "interrupt"}})]
+    );
+}
+
+#[test]
+fn an_api_key_shows_in_the_status_and_the_subscription_does_not() {
+    let mut stream = stream();
+    let mut source = |value: Value| {
+        let init = json!({"type": "system", "subtype": "init", "apiKeySource": value});
+        stream.line(Some(init.to_string().as_bytes()));
+        match stream.status() {
+            Control::ChatStatus { api_key_source, .. } => api_key_source,
+            other => panic!("{other:?}"),
+        }
+    };
+    let key = source(json!("ANTHROPIC_API_KEY"));
+    assert_eq!(key.as_deref(), Some("ANTHROPIC_API_KEY"));
+    assert_eq!(source(json!("none")), None);
+    let managed = source(json!("/login managed key"));
+    assert_eq!(managed.as_deref(), Some("/login managed key"));
+    assert_eq!(source(json!("")), None);
+    // Judged as shown: blanks and invisible characters around "none" do not make it a key.
+    assert_eq!(source(json!(" none\u{200b} ")), None);
+    assert_eq!(source(json!("\u{200b}")), None);
+    let long = source(json!("k".repeat(MAX_ID + 50)));
+    assert_eq!(long.map(|s| s.chars().count()), Some(MAX_ID));
+    assert_eq!(source(json!(null)), None);
+}
+
+#[test]
+fn changed_commands_open_the_chat_again_with_the_new_list() {
+    let mut stream = stream();
+    let changed = json!({"type": "system", "subtype": "commands_changed",
+        "commands": ["review", {"name": "deploy"}, {"name": "has space"}, 3]});
+    let changed = changed.to_string();
+    // Before `initialize` is answered: its answer brings the list.
+    assert_eq!(stream.line(Some(changed.as_bytes())), Out::default());
+    let answer = json!({"type": "control_response", "response": {"subtype": "success",
+        "request_id": "hive-1", "response": {"commands": [{"name": "compact"}]}}});
+    stream.line(Some(answer.to_string().as_bytes()));
+    let init = json!({"type": "system", "subtype": "init", "apiKeySource": "apiKeyHelper",
+        "model": "claude-haiku-4-5"});
+    stream.line(Some(init.to_string().as_bytes()));
+    let out = stream.line(Some(changed.as_bytes()));
+    assert_eq!(
+        out.app,
+        [Control::ChatOpened {
+            chat: 7,
+            cwd: CWD.into(),
+            session: None,
+            model: Some("claude-haiku-4-5".into()),
+            mode: ChatMode::Default,
+            commands: vec!["review".into(), "deploy".into()],
+            api_key_source: Some("apiKeyHelper".into()),
+        }]
     );
 }
 

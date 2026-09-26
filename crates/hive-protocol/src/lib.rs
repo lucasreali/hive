@@ -713,6 +713,9 @@ pub enum Control {
         retry: Option<String>,
         compacting: bool,
         session: Option<String>,
+        /// Set when the chat runs on an API key rather than the subscription login (known from
+        /// the first turn's `system/init`).
+        api_key_source: Option<String>,
     },
     /// App → service: end the chat.
     CloseChat {
@@ -1788,8 +1791,9 @@ mod tests {
                     retry: Some("Retrying 2/10…".into()),
                     compacting: false,
                     session: None,
+                    api_key_source: Some("ANTHROPIC_API_KEY".into()),
                 },
-                r#"{"type":"chat_status","chat":2,"busy":true,"mode":"default","model":null,"retry":"Retrying 2/10…","compacting":false,"session":null}"#,
+                r#"{"type":"chat_status","chat":2,"busy":true,"mode":"default","model":null,"retry":"Retrying 2/10…","compacting":false,"session":null,"api_key_source":"ANTHROPIC_API_KEY"}"#,
             ),
             (
                 Control::CloseChat { chat: 2 },

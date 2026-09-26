@@ -420,6 +420,12 @@ pub struct Stream {
     busy: bool,
     compacting: bool,
     retry: Option<String>,
+    /// How `system/init` says claude is billed, when it is an API key (not the subscription).
+    api_key_source: Option<String>,
+    /// claude drops queued turns on an interrupt (`interrupt_cancel_queued_v1`).
+    cancel_queued: bool,
+    /// `chat_opened` was sent: changed commands send it again.
+    opened: bool,
     /// The turn already showed its error (`assistant.error`): its result adds none.
     failed: bool,
     /// The chat is closing: every request is denied.
@@ -449,6 +455,9 @@ impl Stream {
             busy: false,
             compacting: false,
             retry: None,
+            api_key_source: None,
+            cancel_queued: false,
+            opened: false,
             failed: false,
             closed: false,
             context: 0,
@@ -494,6 +503,23 @@ impl Stream {
             retry: self.retry.clone(),
             compacting: self.compacting,
             session: self.session.clone(),
+            api_key_source: self.api_key_source.clone(),
+        }
+    }
+
+    /// `chat_opened`, with the slash commands `list` holds (names, or objects with a name).
+    fn opened(&mut self, list: &Value) -> Control {
+        self.opened = true;
+        let names = blocks(list).iter();
+        let names = names.filter_map(|command| id_of(&command["name"]).or(id_of(command)));
+        Control::ChatOpened {
+            chat: self.chat,
+            cwd: self.cwd.clone(),
+            session: self.session.clone(),
+            model: self.model.clone(),
+            mode: self.mode,
+            commands: names.take(MAX_COMMANDS).map(str::to_owned).collect(),
+            api_key_source: self.api_key_source.clone(),
         }
     }
 
@@ -535,9 +561,14 @@ impl Stream {
         })
     }
 
-    /// Stops the running turn (spike 4.13); its `result` follows.
+    /// Stops the running turn (spike 4.13), and the turns queued after it when claude can; its
+    /// `result` follows.
     pub fn interrupt(&mut self) -> Out {
-        let interrupt = self.request(json!({"subtype": "interrupt"}));
+        let mut request = json!({"subtype": "interrupt"});
+        if self.cancel_queued {
+            request["cancel_queued"] = json!(true);
+        }
+        let interrupt = self.request(request);
         Out {
             write: vec![interrupt],
             ..Out::default()
@@ -608,6 +639,11 @@ impl Stream {
                 let (attempt, most) = (count("attempt"), count("max_retries"));
                 self.retry = Some(format!("Retrying {attempt}/{most}…"));
             }
+            // Shape to be recorded: taken as a list of names or of `{name}`, like `initialize`'s.
+            ("system", "commands_changed") if self.opened => {
+                let opened = self.opened(&message["commands"]);
+                out.app.push(opened);
+            }
             ("system", "informational") => {
                 let note = text(&message["content"]);
                 entries.push(self.entry(ChatEntryKind::Note, note, None));
@@ -635,18 +671,8 @@ impl Stream {
             let error = format!("claude did not start: {}", text(&response["error"]));
             entries.push(self.entry(ChatEntryKind::Error, &error, None));
         }
-        let names = blocks(&response["response"]["commands"]).iter();
-        let names = names.filter_map(|command| id_of(&command["name"]));
-        out.app.push(Control::ChatOpened {
-            chat: self.chat,
-            cwd: self.cwd.clone(),
-            session: self.session.clone(),
-            model: self.model.clone(),
-            mode: self.mode,
-            commands: names.take(MAX_COMMANDS).map(str::to_owned).collect(),
-            // Only in `system/init`, which comes with the first turn (7.3i).
-            api_key_source: None,
-        });
+        let opened = self.opened(&response["response"]["commands"]);
+        out.app.push(opened);
     }
 
     /// A request to us: a permission prompt, question or plan waits for the human (at most
@@ -799,6 +825,11 @@ impl Stream {
         if let Some(mode) = message["permissionMode"].as_str().and_then(mode_of) {
             self.mode = mode;
         }
+        // "none" is the subscription login (#45); anything else is an API key.
+        let source = message["apiKeySource"].as_str().map(|s| clip(s, MAX_ID));
+        self.api_key_source = source.filter(|s| !s.is_empty() && s != "none");
+        let capabilities = blocks(&message["capabilities"]);
+        self.cancel_queued = capabilities.contains(&json!("interrupt_cancel_queued_v1"));
     }
 
     /// One entry per content block: text, thinking, tool call (spike 4.2–4.4).

@@ -64,6 +64,7 @@ test("a chat tab shows the chat in place of the terminals, from start to end", (
       model: null,
       retry: null,
       compacting: false,
+      api_key_source: null,
       session: null,
     }),
   );
@@ -130,4 +131,39 @@ test("pending requests pin above the composer until the service says they are go
   expect(screen.getByRole("region", { name: "Permission request" })).toBeDefined();
   act(() => apply({ type: "chat_request_gone", channel: 5, chat: 5, request: "req_1" }));
   expect(screen.queryByRole("region", { name: "Permission request" })).toBeNull();
+});
+
+test("the header shows the model and mode, what else runs, and warns of an API key", () => {
+  const view = chatTab();
+  const meta = () => view.querySelector(".chat-meta")?.textContent;
+  expect(meta()).toBe("");
+  act(() => apply(opened));
+  expect(meta()).toBe("Default");
+  const status = {
+    type: "chat_status",
+    channel: 5,
+    chat: 5,
+    busy: true,
+    mode: "plan",
+    model: "claude-haiku-4-5",
+    retry: null,
+    compacting: false,
+    session: null,
+    api_key_source: null,
+  } as const;
+  act(() => apply(status));
+  expect(meta()).toBe("claude-haiku-4-5 · Plan");
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByRole("note")).toBeNull();
+  act(() => apply({ ...status, retry: "Retrying 2/10…" }));
+  expect(screen.getByRole("status").textContent).toBe("Retrying 2/10…");
+  act(() => apply({ ...status, retry: "Retrying 2/10…", compacting: true }));
+  expect(screen.getByRole("status").textContent).toBe("Compacting…");
+  act(() => apply({ ...status, api_key_source: "ANTHROPIC_API_KEY" }));
+  const warning = screen.getByRole("note");
+  expect(warning.textContent).toBe(" API key");
+  expect(warning.title).toBe(
+    "This chat runs on an API key (ANTHROPIC_API_KEY), not your subscription login: it may be billed separately.",
+  );
+  expect(meta()).toBe(" API keyclaude-haiku-4-5 · Plan");
 });
