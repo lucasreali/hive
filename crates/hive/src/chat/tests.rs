@@ -582,6 +582,14 @@ fn questions_are_answered_with_their_labels_or_a_free_text() {
             "Choose an option or write an answer.",
         ),
         (answers(&[&[&long]]), "The answer is longer than 4 KiB."),
+        (
+            answers(&[&["English", "English"]]),
+            "Choose each option once.",
+        ),
+        (
+            answers(&[&["English", "Portuguese", "x"]]),
+            "Choose each option once.",
+        ),
         (ChatAnswer::Allow, "This answer does not fit the request."),
     ] {
         assert_eq!(stream.answer("req_3", &answer), refused(why), "{answer:?}");
@@ -812,6 +820,15 @@ fn a_cancelled_request_goes_and_a_closed_chat_denies_every_one() {
         }
     );
     assert_eq!(stream.deny_all(), Out::default());
+    // A request after the close is denied, never shown.
+    let out = ask(&mut stream, "late", "Bash", json!({}));
+    assert_eq!(
+        out,
+        Out {
+            write: vec![denied("late", closed)],
+            ..Out::default()
+        }
+    );
 }
 
 #[test]

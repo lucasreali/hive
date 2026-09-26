@@ -298,6 +298,12 @@ fn answered(
     }
     let mut map = serde_json::Map::new();
     for ((question, asked), chosen) in questions.iter().zip(asked).zip(answers) {
+        // Checked by length first, so a long list is refused without comparing it.
+        let repeated = chosen.len() > question.options.len().max(1)
+            || (chosen.iter().enumerate()).any(|(i, c)| chosen[..i].contains(c));
+        if repeated {
+            return Err("Choose each option once.");
+        }
         let labels: Option<Vec<Value>> = chosen
             .iter()
             .map(|label| {
@@ -399,6 +405,8 @@ pub struct Stream {
     retry: Option<String>,
     /// The turn already showed its error (`assistant.error`): its result adds none.
     failed: bool,
+    /// The chat is closing: every request is denied.
+    closed: bool,
     /// Context tokens of the last main-thread API call.
     context: u64,
 }
@@ -421,6 +429,7 @@ impl Stream {
             compacting: false,
             retry: None,
             failed: false,
+            closed: false,
             context: 0,
         }
     }
@@ -632,9 +641,14 @@ impl Stream {
             // Already asked: it is answered once.
             return;
         }
-        if self.pending.len() == MAX_PENDING {
-            let denied = denial("Too many requests are waiting.");
-            return out.write.push(reply(id, denied));
+        let full = match self.closed {
+            true => Some("The chat was closed."),
+            false => {
+                (self.pending.len() == MAX_PENDING).then_some("Too many requests are waiting.")
+            }
+        };
+        if let Some(why) = full {
+            return out.write.push(reply(id, denial(why)));
         }
         let tool = clip(text(&request["tool_name"]), MAX_ID);
         let input = request["input"].clone();
@@ -736,8 +750,10 @@ impl Stream {
         });
     }
 
-    /// Denies every pending request (the chat closes: default is deny).
+    /// Denies every pending request, and every later one (the chat closes: default is deny).
     pub fn deny_all(&mut self) -> Out {
+        // Later requests (claude finishing its turn) are denied as they come.
+        self.closed = true;
         let denials = self
             .pending
             .drain(..)
