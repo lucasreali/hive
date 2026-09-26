@@ -84,6 +84,16 @@ export interface Transport {
    */
   saveFile(worktree: string, path: string, content: string, version: string | null): Promise<void>;
   /**
+   * Creates the empty file `name` in `folder` ("" for the worktree's root), never over another;
+   * answered by `file_created` (the file then opens) or `file_op_failed`.
+   */
+  createFile(worktree: string, folder: string, name: string): Promise<void>;
+  /**
+   * Renames the file `path` to `name` in its folder, never over another; answered by
+   * `file_renamed` or `file_op_failed`.
+   */
+  renameFile(worktree: string, path: string, name: string): Promise<void>;
+  /**
    * The file's Windows path for an external editor (an empty `path`: the worktree's folder);
    * answered by `editor_target`.
    */

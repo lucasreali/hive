@@ -1,5 +1,13 @@
 import { create } from "zustand";
-import { type EditBuffer, failed, fromDisk, isFor, saved, startEdit } from "./viewer/buffer";
+import {
+  type EditBuffer,
+  failed,
+  fromDisk,
+  isDirty,
+  isFor,
+  saved,
+  startEdit,
+} from "./viewer/buffer";
 
 // The one store (#30, #38). UI state is set by components; service data changes
 // only through `apply`, which stores what the service sent without deriving anything (#37).
@@ -69,6 +77,9 @@ export type ServiceMessage =
   | { type: "delete_session_failed"; id: string; message: string }
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
+  | { type: "file_created"; worktree: string; path: string }
+  | { type: "file_renamed"; worktree: string; path: string; to: string }
+  | { type: "file_op_failed"; worktree: string; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
   // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
   // settings file.
@@ -238,6 +249,13 @@ export type Session = {
 export type SessionTarget = "log" | "folder";
 /** A session's context menu, at the pointer. */
 export type SessionMenu = { session: string; x: number; y: number };
+/**
+ * A file tree's menu target: new files go in `folder` (relative to the worktree, "" for its
+ * root); `path` is the file to rename, null for a folder or the tree's background.
+ */
+export type FileTarget = { worktree: string; folder: string; path: string | null };
+/** The "New file" / "Rename file" dialog: its target and the service's refusal, if any. */
+export type FileDialog = FileTarget & { renaming: boolean; error: string | null };
 
 /** A line of a file holding the searched text (`line` is 1-based). */
 export type SearchMatch = { path: string; line: number; text: string };
@@ -465,6 +483,7 @@ export type Modal =
   | "settings"
   | "remove-merged"
   | "palette"
+  | "file-name"
   | null;
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
@@ -480,6 +499,8 @@ export type HiveState = {
   menu: WorktreeMenu | null;
   projectMenu: ProjectMenu | null;
   sessionMenu: SessionMenu | null;
+  fileMenu: (FileTarget & { x: number; y: number }) | null;
+  fileDialog: FileDialog | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
   notice: string | null;
   /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
@@ -584,6 +605,8 @@ export const initialState: HiveState = {
   menu: null,
   projectMenu: null,
   sessionMenu: null,
+  fileMenu: null,
+  fileDialog: null,
   notice: null,
   update: null,
   rightPanel: "files",
@@ -886,6 +909,27 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return s.edit && isFor(s.edit, m) ? { edit: saved(s.edit, m.version) } : {};
     case "save_failed":
       return s.edit && isFor(s.edit, m) ? { edit: failed(s.edit, m.error, m.message) } : {};
+    case "file_created": {
+      // The new file opens as editable text, unless that would drop unsaved edits.
+      const keep = s.edit && isDirty(s.edit);
+      const open = keep ? {} : opened(s, { worktree: m.worktree, path: m.path }, true);
+      return { ...open, ...fileDialogDone(s, m.worktree) };
+    }
+    case "file_renamed": {
+      // The open file, its text and its edits follow the rename.
+      const moved = <T extends OpenFile>(f: T | null) =>
+        f && isFor(f, m) ? { ...f, path: m.to } : f;
+      return {
+        openFile: moved(s.openFile),
+        file: moved(s.file),
+        edit: moved(s.edit),
+        ...fileDialogDone(s, m.worktree),
+      };
+    }
+    case "file_op_failed":
+      return s.fileDialog?.worktree === m.worktree
+        ? { fileDialog: { ...s.fileDialog, error: m.message } }
+        : {};
     case "transcript": {
       const { type: _, ...transcript } = m;
       return { transcript };
@@ -928,6 +972,11 @@ function editFor(s: HiveState, file: FileText | null): EditBuffer | null {
   return s.edit ? fromDisk(s.edit, file) : startEdit(file);
 }
 
+/** Closes the file dialog when the answer is for its worktree. */
+function fileDialogDone(s: HiveState, worktree: string): Partial<HiveState> {
+  return s.fileDialog?.worktree === worktree ? { fileDialog: null, modal: null } : {};
+}
+
 /** The only way service data enters the store. */
 export function apply(message: ServiceMessage): void {
   useHive.setState((s) => reduce(s, message));
@@ -951,6 +1000,13 @@ export const openProjectMenu = (projectMenu: ProjectMenu | null) =>
   useHive.setState({ projectMenu });
 export const openSessionMenu = (sessionMenu: SessionMenu | null) =>
   useHive.setState({ sessionMenu });
+export const openFileMenu = (fileMenu: HiveState["fileMenu"]) => useHive.setState({ fileMenu });
+/** The "New file" dialog for `target`, or "Rename file" for its `path` when `renaming`. */
+export const openFileDialog = (target: FileTarget, renaming = false) =>
+  useHive.setState({
+    modal: "file-name",
+    fileDialog: { ...target, renaming, error: null },
+  });
 /** Keeps an alert in the inbox, the newest first. */
 export const addToInbox = (item: Omit<InboxItem, "id">) =>
   useHive.setState((s) => ({
@@ -967,20 +1023,27 @@ export const setPanelView = (panelView: PanelView) => useHive.setState({ panelVi
  * dropping the previous file's edit buffer. The file already open stays as it is.
  */
 export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: number) =>
-  useHive.setState((s) => {
-    const gotoLine = openFile && line ? { ...openFile, line } : null;
-    return openFile && s.openFile && isFor(openFile, s.openFile)
-      ? { fileShown: true, gotoLine, transcriptShown: null }
-      : {
-          openFile,
-          fileShown: openFile !== null,
-          transcriptShown: openFile ? null : s.transcriptShown,
-          editing,
-          edit: null,
-          editorNotice: null,
-          gotoLine,
-        };
-  });
+  useHive.setState((s) => opened(s, openFile, editing, line));
+
+function opened(
+  s: HiveState,
+  openFile: OpenFile | null,
+  editing: boolean,
+  line?: number,
+): Partial<HiveState> {
+  const gotoLine = openFile && line ? { ...openFile, line } : null;
+  return openFile && s.openFile && isFor(openFile, s.openFile)
+    ? { fileShown: true, gotoLine, transcriptShown: null }
+    : {
+        openFile,
+        fileShown: openFile !== null,
+        transcriptShown: openFile ? null : s.transcriptShown,
+        editing,
+        edit: null,
+        editorNotice: null,
+        gotoLine,
+      };
+}
 /** The line asked for was shown. */
 export const clearGotoLine = () => useHive.setState({ gotoLine: null });
 export const showFile = () => useHive.setState({ fileShown: true, transcriptShown: null });

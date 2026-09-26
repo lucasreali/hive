@@ -10,6 +10,8 @@ import {
   fileVisible,
   hideTranscript,
   initialState,
+  openFileDialog,
+  openFileMenu,
   openModal,
   panelWorktree,
   removeTab,
@@ -419,6 +421,43 @@ test("editing keeps a buffer for the open file, fed by its answers", () => {
   apply({ type: "file_saved", worktree: "/w", path: "b.ts", version: "v" });
   apply({ type: "save_failed", worktree: "/w", path: "b.ts", error: "io", message: "m" });
   expect(edit()).toBeNull();
+});
+
+test("a created file opens as editable text unless unsaved edits would be lost", () => {
+  const s = () => useHive.getState();
+  openFileDialog({ worktree: "/w", folder: "", path: null });
+  apply({ type: "file_created", worktree: "/w", path: "new.ts" });
+  expect(s()).toMatchObject({ modal: null, fileDialog: null, editing: true, fileShown: true });
+  expect(s().openFile).toEqual({ worktree: "/w", path: "new.ts" });
+  // Unsaved edits of the open file stay; the dialog of another worktree stays open.
+  apply(fileAnswer("one\n", "new.ts"));
+  setEdit({ ...(s().edit as EditBuffer), doc: toText("mine\n") });
+  openFileDialog({ worktree: "/x", folder: "", path: null });
+  apply({ type: "file_created", worktree: "/w", path: "other.ts" });
+  expect(s().openFile?.path).toBe("new.ts");
+  expect(s()).toMatchObject({ modal: "file-name", fileDialog: { worktree: "/x" } });
+});
+
+test("a rename carries the open file, its text and its edits to the new path", () => {
+  const s = () => useHive.getState();
+  setOpenFile({ worktree: "/w", path: "a.ts" }, true);
+  apply(fileAnswer("one\n"));
+  openFileDialog({ worktree: "/w", folder: "", path: "a.ts" }, true);
+  expect(s().fileDialog).toMatchObject({ renaming: true, error: null });
+  apply({ type: "file_renamed", worktree: "/w", path: "b.ts", to: "c.ts" });
+  expect([s().openFile?.path, s().modal]).toEqual(["a.ts", null]);
+  apply({ type: "file_renamed", worktree: "/w", path: "a.ts", to: "d.ts" });
+  expect([s().openFile?.path, s().file?.path, s().edit?.path]).toEqual(["d.ts", "d.ts", "d.ts"]);
+  expect(s().edit?.doc.toString()).toBe("one\n");
+  // Nothing open: nothing moves.
+  setOpenFile(null);
+  apply({ type: "file_renamed", worktree: "/w", path: "d.ts", to: "e.ts" });
+  expect(s().openFile).toBeNull();
+  // A refusal without a dialog for its worktree changes nothing.
+  apply({ type: "file_op_failed", worktree: "/w", message: "no" });
+  expect(s().fileDialog).toBeNull();
+  openFileMenu({ worktree: "/w", folder: "", path: null, x: 1, y: 2 });
+  expect(s().fileMenu).toMatchObject({ x: 1 });
 });
 
 test("Edit starts the buffer from the last answer; Diff drops it", () => {
