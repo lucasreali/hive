@@ -4,6 +4,7 @@
 #   scripts/ci.sh push          push the branch (sets upstream)
 #   scripts/ci.sh watch         wait for every run of HEAD (ci, macos); exit 1 if one failed
 #   scripts/ci.sh logs <run-id> the failed steps' logs
+#   scripts/ci.sh log <job-id>  one job's full log (e.g. the mutants gather counts)
 set -eu
 branch=$(git rev-parse --abbrev-ref HEAD)
 case "$branch" in
@@ -40,5 +41,6 @@ case "${1:-}" in
     exit "$failed"
     ;;
   logs) gh run view "${2:?run id}" --log-failed ;;
-  *) echo "usage: scripts/ci.sh push | watch | logs <run-id>" >&2; exit 2 ;;
+  log) gh api "repos/{owner}/{repo}/actions/jobs/${2:?job id}/logs" ;;
+  *) echo "usage: scripts/ci.sh push | watch | logs <run-id> | log <job-id>" >&2; exit 2 ;;
 esac
