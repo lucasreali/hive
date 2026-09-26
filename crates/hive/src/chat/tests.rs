@@ -563,7 +563,8 @@ fn the_end_of_a_turn_clears_its_transient_status() {
     let mut stream = stream();
     let mut line = |value: Value| stream.line(Some(value.to_string().as_bytes()));
     line(json!({"type": "system", "subtype": "status", "status": "compacting"}));
-    let out = line(json!({"type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 9}));
+    let out =
+        line(json!({"type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 9}));
     let retrying = Control::ChatStatus {
         chat: 7,
         busy: false,
