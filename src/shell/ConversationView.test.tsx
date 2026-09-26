@@ -1,19 +1,26 @@
-import { afterEach, beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { type ChatEntry, mergeEntries } from "../store";
 import { CHAT_LABELS, ConversationView, imageUrl, type Labels, ordered } from "./ConversationView";
 
 beforeAll(() => {
-  // happy-dom has no layout: give the list its CSS size so the virtualizer shows entries.
+  // happy-dom has no layout: give the list its CSS size so the virtualizer shows entries, and each
+  // entry a height so a scrolled list has a top row.
   for (const [key, size] of [
     ["offsetHeight", 2000],
     ["offsetWidth", 600],
+    ["clientHeight", 2000],
+    ["scrollHeight", 6000],
   ] as const) {
-    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)?.get;
+    const original =
+      Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)?.get ??
+      Object.getOwnPropertyDescriptor(Element.prototype, key)?.get;
     Object.defineProperty(HTMLElement.prototype, key, {
       configurable: true,
       get(this: HTMLElement) {
-        return this.classList.contains("transcript") ? size : original?.call(this);
+        if (this.classList.contains("transcript")) return size;
+        if (key === "offsetHeight" && this.classList.contains("transcript-entry")) return 100;
+        return original?.call(this);
       },
     });
   }
@@ -149,4 +156,103 @@ test("images show from data: URLs, in messages and tool results, and grow when c
   fireEvent.click(view.getByTitle("Shrink the image"));
   expect(button.getAttribute("aria-pressed")).toBe("false");
   expect(imageUrl(gif)).toBe("data:image/gif;base64,R0lGODlh");
+});
+
+/** 30 turns of a prompt and its reply, 100 px each (rows 2k and 2k + 1); row 11 is a subagent's. */
+const turns = (count = 30) =>
+  Array.from({ length: count }, (_, k) => [
+    entry(2 * k, "user", `Prompt ${k}\nsecond line`, {
+      image: { media_type: "image/png", data: "iVBORw0KGgo=" },
+    }),
+    k === 5
+      ? entry(2 * k + 1, "user", "a subagent's prompt", { parent: "A" })
+      : entry(2 * k + 1, "assistant", `Reply ${k}`),
+  ]).flat();
+
+/** The scroller (6000 px of content in a 2000 px view) and a spy for the virtualizer's scrolls. */
+function scroller(container: HTMLElement) {
+  const el = container.querySelector(".transcript") as HTMLElement;
+  const scrollTo = mock((_: ScrollToOptions) => {});
+  el.scrollTo = scrollTo as unknown as typeof el.scrollTo;
+  const scroll = (top: number) => {
+    el.scrollTop = top;
+    fireEvent.scroll(el);
+  };
+  return { scrollTo, scroll };
+}
+
+test("scrolled up, a button and the prompt of the view's top show; at the bottom they go", () => {
+  const onScroll = mock((_offset: number, _atBottom: boolean) => {});
+  const view = render(
+    <ConversationView entries={turns()} labels={CHAT_LABELS} onScroll={onScroll} />,
+  );
+  const { scroll } = scroller(view.container);
+  expect(view.queryByTitle("Scroll to the bottom")).toBeNull();
+  expect(view.container.querySelector(".conversation-prompt")).toBeNull();
+
+  scroll(1050); // the top row is prompt 5
+  expect(view.getByTitle("Scroll to the bottom")).toBeDefined();
+  const bar = view.getByTitle("Scroll to this message");
+  expect(bar.querySelector(".transcript-role")?.textContent).toBe("You");
+  // Text only: no image, and CSS keeps it to one line.
+  expect(bar.querySelector(".conversation-prompt-text")?.textContent).toBe("Prompt 5\nsecond line");
+  expect(bar.querySelector("img")).toBeNull();
+  expect(onScroll).toHaveBeenLastCalledWith(1050, false);
+
+  scroll(1150); // a subagent's prompt is not the user's
+  expect(bar.textContent).toContain("Prompt 5");
+  scroll(1250);
+  expect(bar.textContent).toContain("Prompt 6");
+
+  scroll(3990); // within a line of the bottom (6000 - 2000)
+  expect(view.queryByTitle("Scroll to the bottom")).toBeNull();
+  expect(view.queryByTitle("Scroll to this message")).toBeNull();
+  expect(onScroll).toHaveBeenLastCalledWith(3990, true);
+});
+
+test("new entries keep a scrolled-up view in place, and follow at the bottom", () => {
+  const list = turns();
+  const view = render(<ConversationView entries={list} labels={CHAT_LABELS} />);
+  const { scrollTo, scroll } = scroller(view.container);
+  scroll(1050);
+  scrollTo.mockClear();
+  const more = [...list, entry(100, "assistant", "More")];
+  view.rerender(<ConversationView entries={more} labels={CHAT_LABELS} />);
+  expect(scrollTo).not.toHaveBeenCalled();
+
+  scroll(4000);
+  view.rerender(
+    <ConversationView entries={[...more, entry(101, "assistant", "Again")]} labels={CHAT_LABELS} />,
+  );
+  expect(scrollTo).toHaveBeenCalled();
+});
+
+test("the button scrolls smoothly to the newest entry, the bar to its prompt", () => {
+  const view = render(<ConversationView entries={turns()} labels={CHAT_LABELS} />);
+  const { scrollTo, scroll } = scroller(view.container);
+  scroll(1250);
+  scrollTo.mockClear();
+  fireEvent.click(view.getByTitle("Scroll to this message"));
+  // Prompt 6 starts at 1200, shown below the bar.
+  expect(scrollTo.mock.calls[0]?.[0]).toMatchObject({ top: 1200 - 32 });
+
+  scrollTo.mockClear();
+  fireEvent.click(view.getByTitle("Scroll to the bottom"));
+  expect(scrollTo.mock.calls[0]?.[0]).toMatchObject({ top: 4000, behavior: "smooth" });
+});
+
+test("a view can start at a saved offset instead of the bottom", () => {
+  const scrollTo = mock((_: ScrollToOptions) => {});
+  const original = HTMLElement.prototype.scrollTo;
+  HTMLElement.prototype.scrollTo = scrollTo as unknown as typeof original;
+  try {
+    const view = render(
+      <ConversationView entries={turns()} labels={CHAT_LABELS} initialOffset={1050} />,
+    );
+    // Then the virtualizer keeps that content in place as rows above it are measured.
+    expect(scrollTo.mock.calls[0]?.[0].top).toBe(1050);
+    expect(view.getByTitle("Scroll to the bottom")).toBeDefined();
+  } finally {
+    HTMLElement.prototype.scrollTo = original;
+  }
 });
