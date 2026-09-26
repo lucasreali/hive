@@ -371,38 +371,492 @@ fn a_tool_result_updates_its_calls_entry() {
     assert_eq!(kinds(&out).len(), 6);
 }
 
-#[test]
-fn permission_requests_are_denied_until_the_app_can_answer_them() {
-    for (name, tools) in [
-        ("permission", vec![("req_1", "Write"), ("req_2", "Bash")]),
-        ("question", vec![("req_3", "AskUserQuestion")]),
-        ("plan", vec![("req_4", "ExitPlanMode"), ("req_5", "Write")]),
-    ] {
-        let mut stream = stream();
-        let out = replay(&mut stream, name);
-        let why = "Denied: the app cannot answer permission requests yet.";
-        let denials: Vec<Value> = tools
-            .iter()
-            .map(|(id, _)| {
-                json!({"type": "control_response", "response": {"subtype": "success",
-                    "request_id": id, "response": {"behavior": "deny", "message": why,
-                    "interrupt": false}}})
-            })
-            .collect();
-        assert_eq!(out.write, denials, "{name}");
-        let notes: Vec<String> = kinds(&out)
-            .into_iter()
-            .filter(|(kind, _)| *kind == Note)
-            .map(|(_, text)| text)
-            .collect();
-        let expected: Vec<String> = tools
-            .iter()
-            .map(|(_, tool)| {
-                format!("{tool} was denied: Hive cannot answer permission requests yet.")
-            })
-            .collect();
-        assert_eq!(notes, expected, "{name}");
+/// The requests a replay asked for.
+fn requests(out: &Out) -> Vec<ChatRequest> {
+    let asked = out.app.iter().filter_map(|message| match message {
+        Control::ChatRequest { chat: 7, request } => Some(request.clone()),
+        _ => None,
+    });
+    asked.collect()
+}
+
+fn gone(id: &str) -> Control {
+    Control::ChatRequestGone {
+        chat: 7,
+        request: id.into(),
     }
+}
+
+/// A request answered: the note of what was decided, then its card goes.
+fn noted(id: u32, note: &str, request: &str) -> Vec<Control> {
+    let entries = vec![entry(id, Note, note)];
+    vec![
+        Control::ChatEntries {
+            chat: 7,
+            entries,
+            replace_last: false,
+        },
+        gone(request),
+    ]
+}
+
+fn refused(message: &str) -> Out {
+    Out {
+        app: vec![Control::Error {
+            message: message.into(),
+        }],
+        ..Out::default()
+    }
+}
+
+fn allowed(id: &str, input: Value) -> Value {
+    json!({"type": "control_response", "response": {"subtype": "success", "request_id": id,
+        "response": {"behavior": "allow", "updatedInput": input}}})
+}
+
+fn denied(id: &str, message: &str) -> Value {
+    json!({"type": "control_response", "response": {"subtype": "success", "request_id": id,
+        "response": {"behavior": "deny", "message": message, "interrupt": false}}})
+}
+
+fn waiting(tool: &str) -> Option<AgentEvent> {
+    turn(EventKind::PermissionRequested {
+        tool: Some(tool.into()),
+    })
+}
+
+fn working() -> Option<AgentEvent> {
+    turn(EventKind::ToolFinished { tool: None })
+}
+
+fn ask(stream: &mut Stream, id: &str, tool: &str, input: Value) -> Out {
+    let line = json!({"type": "control_request", "request_id": id,
+        "request": {"subtype": "can_use_tool", "tool_name": tool, "input": input}});
+    stream.line(Some(line.to_string().as_bytes()))
+}
+
+fn deny(message: Option<&str>) -> ChatAnswer {
+    ChatAnswer::Deny {
+        message: message.map(str::to_owned),
+    }
+}
+
+#[test]
+fn permission_requests_wait_for_the_humans_answer_given_once() {
+    let mut stream = stream();
+    let out = replay(&mut stream, "permission");
+    assert!(out.write.is_empty());
+    let request = |id: &str, tool: &str, detail: &str, reason: Option<&str>| ChatRequest {
+        id: id.into(),
+        kind: ChatRequestKind::Permission,
+        tool: tool.into(),
+        detail: detail.into(),
+        reason: reason.map(str::to_owned),
+        questions: vec![],
+        plan: None,
+    };
+    assert_eq!(
+        requests(&out),
+        [
+            request(
+                "req_1",
+                "Write",
+                "/home/u/proj/hello.txt",
+                Some("Write requires approval in default mode")
+            ),
+            request("req_2", "Bash", "touch made-by-bash.txt", None),
+        ]
+    );
+
+    // Allowed with claude's own input; the other one still waits.
+    let out = stream.answer("req_1", &ChatAnswer::Allow);
+    let input = json!({"file_path": "/home/u/proj/hello.txt", "content": "hi"});
+    assert_eq!(
+        out,
+        Out {
+            app: noted(5, "Allowed Write: /home/u/proj/hello.txt", "req_1"),
+            write: vec![allowed("req_1", input)],
+            turn: waiting("Bash"),
+        }
+    );
+    // Once only; never an id of no pending request.
+    assert_eq!(
+        stream.answer("req_1", &ChatAnswer::Allow),
+        refused("no such pending request")
+    );
+    assert_eq!(
+        stream.answer("hive-1", &deny(None)),
+        refused("no such pending request")
+    );
+    // Only answers that fit a permission.
+    for answer in [
+        ChatAnswer::Answers {
+            answers: vec![vec!["a".into()]],
+        },
+        ChatAnswer::ApprovePlan {
+            accept_edits: false,
+        },
+        ChatAnswer::KeepPlanning {
+            feedback: "x".into(),
+        },
+    ] {
+        let out = stream.answer("req_2", &answer);
+        assert_eq!(out, refused("This answer does not fit the request."));
+    }
+    let long = "m".repeat(MAX_ANSWER + 1);
+    assert_eq!(
+        stream.answer("req_2", &deny(Some(&long))),
+        refused("The message is longer than 4 KiB.")
+    );
+    let out = stream.answer("req_2", &deny(None));
+    assert_eq!(
+        out,
+        Out {
+            app: noted(6, "Denied Bash: touch made-by-bash.txt", "req_2"),
+            write: vec![denied("req_2", "The user denied this.")],
+            turn: working(),
+        }
+    );
+}
+
+#[test]
+fn a_deny_message_is_passed_on_up_to_4_kib() {
+    let mut stream = stream();
+    ask(&mut stream, "r1", "Bash", json!({"command": "ls"}));
+    ask(&mut stream, "r2", "Bash", json!({"command": "ls"}));
+    let most = "m".repeat(MAX_ANSWER);
+    let out = stream.answer("r1", &deny(Some(&most)));
+    assert_eq!(out.write, [denied("r1", &most)]);
+    let out = stream.answer("r2", &deny(Some("")));
+    assert_eq!(out.write, [denied("r2", "The user denied this.")]);
+}
+
+#[test]
+fn questions_are_answered_with_their_labels_or_a_free_text() {
+    let mut stream = stream();
+    let out = replay(&mut stream, "question");
+    let question = "Which language should I greet you in?";
+    let option = |label: &str, description: &str| ChatOption {
+        label: label.into(),
+        description: description.into(),
+    };
+    let asked = requests(&out);
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].kind, ChatRequestKind::Question);
+    assert_eq!(asked[0].tool, "AskUserQuestion");
+    assert_eq!(
+        asked[0].questions,
+        [ChatQuestion {
+            question: question.into(),
+            header: "Language".into(),
+            multi: false,
+            options: vec![
+                option("English", "Greet in English"),
+                option("Portuguese", "Greet in Portuguese"),
+            ],
+        }]
+    );
+    let input: Value = json!({"questions": [{"question": question, "header": "Language",
+        "multiSelect": false, "options": [
+            {"label": "English", "description": "Greet in English"},
+            {"label": "Portuguese", "description": "Greet in Portuguese"}]}]});
+    assert_eq!(asked[0].detail, input.to_string());
+    let answers = |answers: &[&[&str]]| ChatAnswer::Answers {
+        answers: answers
+            .iter()
+            .map(|a| a.iter().map(|&s| s.to_owned()).collect())
+            .collect(),
+    };
+    let long = "t".repeat(MAX_ANSWER + 1);
+    for (answer, why) in [
+        (answers(&[]), "Answer every question."),
+        (
+            answers(&[&["English"], &["English"]]),
+            "Answer every question.",
+        ),
+        (answers(&[&["English", "Portuguese"]]), "Choose one option."),
+        (answers(&[&[]]), "Choose an option or write an answer."),
+        (answers(&[&[""]]), "Choose an option or write an answer."),
+        (
+            answers(&[&["English", "Klingon"]]),
+            "Choose an option or write an answer.",
+        ),
+        (answers(&[&[&long]]), "The answer is longer than 4 KiB."),
+        (
+            answers(&[&["English", "English"]]),
+            "Choose each option once.",
+        ),
+        (
+            answers(&[&["English", "Portuguese", "x"]]),
+            "Choose each option once.",
+        ),
+        (ChatAnswer::Allow, "This answer does not fit the request."),
+    ] {
+        assert_eq!(stream.answer("req_3", &answer), refused(why), "{answer:?}");
+    }
+    let chosen = |value: Value| {
+        let mut input = input.clone();
+        input["answers"] = json!({question: value});
+        allowed("req_3", input)
+    };
+    let out = stream.answer("req_3", &answers(&[&["Portuguese"]]));
+    assert_eq!(
+        out,
+        Out {
+            app: noted(4, "Answered: Portuguese", "req_3"),
+            write: vec![chosen(json!("Portuguese"))],
+            turn: working(),
+        }
+    );
+    // A free text, up to 4 KiB.
+    let most = "t".repeat(MAX_ANSWER);
+    let out = replay(&mut stream, "question");
+    assert_eq!(requests(&out).len(), 1);
+    let out = stream.answer("req_3", &answers(&[&[&most]]));
+    assert_eq!(out.write, [chosen(json!(most))]);
+}
+
+#[test]
+fn multiple_choices_are_answered_with_every_label_as_claude_wrote_it() {
+    let mut stream = stream();
+    let label = "L".repeat(MAX_ANSWER + 1);
+    let input = json!({"questions": [
+        {"question": "Which?", "header": "Pick", "multiSelect": true,
+         "options": [{"label": "a", "description": ""}, {"label": label}]},
+        {"question": "One?", "options": [{"label": "x"}, {"label": "y"}]}]});
+    let out = ask(&mut stream, "q", "AskUserQuestion", input.clone());
+    let asked = &requests(&out)[0];
+    let shown = cut(&label, MAX_ANSWER);
+    assert_eq!(asked.questions[0].options[1].label, shown);
+    assert!(asked.questions[0].multi);
+    assert!(!asked.questions[1].multi);
+    assert_eq!(asked.questions[1].header, "");
+    let answer = ChatAnswer::Answers {
+        answers: vec![vec!["a".into(), shown], vec!["y".into()]],
+    };
+    let out = stream.answer("q", &answer);
+    let mut expected = input;
+    expected["answers"] = json!({"Which?": ["a", label], "One?": "y"});
+    assert_eq!(out.write, [allowed("q", expected)]);
+    // One label of a multiple choice is a list too.
+    let input = json!({"questions": [{"question": "Q", "multiSelect": true,
+        "options": [{"label": "a"}]}]});
+    ask(&mut stream, "q2", "AskUserQuestion", input.clone());
+    let answer = ChatAnswer::Answers {
+        answers: vec![vec!["a".into()]],
+    };
+    let mut expected = input;
+    expected["answers"] = json!({"Q": ["a"]});
+    assert_eq!(
+        stream.answer("q2", &answer).write,
+        [allowed("q2", expected)]
+    );
+}
+
+#[test]
+fn questions_are_bounded_and_a_question_without_any_is_a_permission() {
+    let mut stream = stream();
+    let options: Vec<Value> = (0..=MAX_QUESTIONS)
+        .map(|i| json!({"label": i.to_string()}))
+        .collect();
+    let long = "?".repeat(MAX_ANSWER + 1);
+    let question = json!({"question": long, "options": options});
+    let input = json!({"questions": vec![question; MAX_QUESTIONS + 1]});
+    let asked = &requests(&ask(&mut stream, "q", "AskUserQuestion", input))[0];
+    assert_eq!(asked.questions.len(), MAX_QUESTIONS);
+    assert_eq!(asked.questions[0].options.len(), MAX_QUESTIONS);
+    assert_eq!(asked.questions[0].question, cut(&long, MAX_ANSWER));
+    let out = ask(
+        &mut stream,
+        "p",
+        "AskUserQuestion",
+        json!({"questions": []}),
+    );
+    let asked = &requests(&out)[0];
+    assert_eq!(asked.kind, ChatRequestKind::Permission);
+    assert_eq!(asked.detail, r#"{"questions":[]}"#);
+    // Only `AskUserQuestion` asks questions.
+    let input = json!({"questions": [{"question": "Q", "options": [{"label": "a"}]}]});
+    let asked = &requests(&ask(&mut stream, "o", "Other", input))[0];
+    assert_eq!(
+        (asked.kind, asked.questions.len()),
+        (ChatRequestKind::Permission, 0)
+    );
+}
+
+#[test]
+fn plans_are_approved_or_sent_back_with_feedback() {
+    let mut stream = stream();
+    let out = replay(&mut stream, "plan");
+    let plan = "## Add CONTRIBUTING.md\n1. Create CONTRIBUTING.md.\n\
+                2. Add a \"Commit messages\" section with two lines.";
+    let asked = requests(&out);
+    assert_eq!(asked[0].kind, ChatRequestKind::Plan);
+    assert_eq!(asked[0].plan.as_deref(), Some(plan));
+    assert_eq!(asked[1].kind, ChatRequestKind::Permission);
+    // Its approval left plan mode (`system/status`).
+    let modes: Vec<ChatMode> = (out.app.iter())
+        .filter_map(|s| match s {
+            Control::ChatStatus { mode, .. } => Some(*mode),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(modes, [ChatMode::Plan, ChatMode::Default]);
+    let input = json!({"plan": plan, "planFilePath": "/home/u/.claude/plans/contributing.md"});
+    for answer in [ChatAnswer::Allow, ChatAnswer::Answers { answers: vec![] }] {
+        let out = stream.answer("req_4", &answer);
+        assert_eq!(out, refused("This answer does not fit the request."));
+    }
+    let long = "f".repeat(MAX_ANSWER + 1);
+    let keep = |feedback: &str| ChatAnswer::KeepPlanning {
+        feedback: feedback.into(),
+    };
+    assert_eq!(
+        stream.answer("req_4", &keep(&long)),
+        refused("The message is longer than 4 KiB.")
+    );
+    let out = stream.answer("req_4", &keep("Shorter, please."));
+    assert_eq!(out.write, [denied("req_4", "Shorter, please.")]);
+    assert_eq!(
+        out.app,
+        noted(5, "Kept planning: Shorter, please.", "req_4")
+    );
+    assert_eq!(out.turn, waiting("Write"));
+
+    // Approving keeps the mode, or also accepts edits.
+    ask(&mut stream, "p1", "ExitPlanMode", input.clone());
+    let approve = |accept_edits| ChatAnswer::ApprovePlan { accept_edits };
+    let out = stream.answer("p1", &approve(false));
+    assert_eq!(out.app, noted(6, "Plan approved", "p1"));
+    assert_eq!(out.write, [allowed("p1", input.clone())]);
+    ask(&mut stream, "p2", "ExitPlanMode", input.clone());
+    let out = stream.answer("p2", &approve(true));
+    let accept = json!({"type": "control_request", "request_id": "hive-2",
+        "request": {"subtype": "set_permission_mode", "mode": "acceptEdits"}});
+    assert_eq!(out.write, [allowed("p2", input.clone()), accept]);
+    assert!(matches!(
+        out.app[0],
+        Control::ChatStatus {
+            mode: ChatMode::AcceptEdits,
+            ..
+        }
+    ));
+    let accepted = noted(7, "Plan approved, accepting edits", "p2");
+    assert_eq!(out.app[1..], accepted);
+    ask(&mut stream, "p3", "ExitPlanMode", input);
+    let out = stream.answer("p3", &keep(""));
+    assert_eq!(
+        out.write,
+        [denied("p3", "The user wants to keep planning.")]
+    );
+}
+
+#[test]
+fn a_dismissed_question_or_plan_is_noted_as_such() {
+    let mut stream = stream();
+    let input = json!({"questions": [{"question": "Q", "options": [{"label": "a"}]}]});
+    ask(&mut stream, "q", "AskUserQuestion", input);
+    ask(&mut stream, "p", "ExitPlanMode", json!({"plan": "x"}));
+    let out = stream.answer("q", &deny(None));
+    assert_eq!(out.write, [denied("q", "The user denied this.")]);
+    assert_eq!(out.app, noted(1, "Question dismissed", "q"));
+    let out = stream.answer("p", &deny(None));
+    assert_eq!(out.write, [denied("p", "The user denied this.")]);
+    assert_eq!(out.app, noted(2, "Plan rejected", "p"));
+}
+
+#[test]
+fn a_plan_detail_and_reason_are_bounded() {
+    let mut stream = stream();
+    let big = "p".repeat(MAX_PLAN + 1);
+    let line = json!({"type": "control_request", "request_id": "r",
+        "request": {"subtype": "can_use_tool", "tool_name": "ExitPlanMode",
+                    "input": {"plan": big}, "decision_reason": big}});
+    let out = stream.line(Some(line.to_string().as_bytes()));
+    let asked = &requests(&out)[0];
+    assert_eq!(asked.plan.as_deref(), Some(cut(&big, MAX_PLAN).as_str()));
+    assert_eq!(asked.reason.as_deref(), Some(cut(&big, MAX_TEXT).as_str()));
+    let detail = json!({"plan": big}).to_string();
+    assert_eq!(asked.detail, cut(&detail, MAX_TEXT));
+}
+
+#[test]
+fn a_cancelled_request_goes_and_a_closed_chat_denies_every_one() {
+    let mut stream = stream();
+    replay(&mut stream, "permission");
+    let cancel = |id: &str| {
+        json!({"type": "control_cancel_request", "request_id": id})
+            .to_string()
+            .into_bytes()
+    };
+    assert_eq!(stream.line(Some(&cancel("nope"))), Out::default());
+    let out = stream.line(Some(&cancel("req_1")));
+    assert_eq!(
+        out,
+        Out {
+            app: vec![
+                gone("req_1"),
+                Control::ChatEntries {
+                    chat: 7,
+                    entries: vec![entry(5, Note, "Request cancelled: Write")],
+                    replace_last: false,
+                },
+            ],
+            turn: waiting("Bash"),
+            ..Out::default()
+        }
+    );
+    assert_eq!(
+        stream.answer("req_1", &ChatAnswer::Allow),
+        refused("no such pending request")
+    );
+    ask(&mut stream, "r3", "Edit", json!({}));
+    let closed = "The chat was closed.";
+    assert_eq!(
+        stream.deny_all(),
+        Out {
+            write: vec![denied("req_2", closed), denied("r3", closed)],
+            ..Out::default()
+        }
+    );
+    assert_eq!(stream.deny_all(), Out::default());
+    // A request after the close is denied, never shown.
+    let out = ask(&mut stream, "late", "Bash", json!({}));
+    assert_eq!(
+        out,
+        Out {
+            write: vec![denied("late", closed)],
+            ..Out::default()
+        }
+    );
+}
+
+#[test]
+fn pending_requests_are_bounded_and_asked_once() {
+    let mut stream = stream();
+    for i in 0..MAX_PENDING {
+        let out = ask(&mut stream, &format!("r{i}"), "Bash", json!({}));
+        assert_eq!(requests(&out).len(), 1);
+    }
+    let out = ask(&mut stream, "r0", "Bash", json!({"command": "again"}));
+    assert_eq!(out, Out::default());
+    let out = ask(&mut stream, "over", "Bash", json!({}));
+    assert_eq!(
+        out,
+        Out {
+            write: vec![denied("over", "Too many requests are waiting.")],
+            ..Out::default()
+        }
+    );
+    assert_eq!(stream.deny_all().write.len(), MAX_PENDING);
+}
+
+#[test]
+fn requests_before_the_session_is_known_change_no_state() {
+    let mut stream = stream();
+    let out = ask(&mut stream, "r", "Bash", json!({"command": "ls"}));
+    assert_eq!(requests(&out).len(), 1);
+    assert_eq!(out.turn, None);
 }
 
 #[test]
@@ -895,6 +1349,10 @@ while read -r line; do printf 'got %s\n' "$line"; done"#;
     let out = chat.run(out);
     assert!(out.write.is_empty());
     assert_eq!(out.app.len(), 2);
+    // Closing denies what waits for the human first.
+    let asked = json!({"type": "control_request", "request_id": "r",
+        "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {}}});
+    chat.stream.line(Some(asked.to_string().as_bytes()));
     assert!(chat.close());
     assert!(!chat.close());
     assert!(chat.closing);
@@ -904,10 +1362,11 @@ while read -r line; do printf 'got %s\n' "$line"; done"#;
     let (out, status) = read_all(pipes).await;
     let initialize = r#"{"request":{"hooks":null,"subtype":"initialize"},"request_id":"hive-1","type":"control_request"}"#;
     let user = r#"{"message":{"content":"hi","role":"user"},"parent_tool_use_id":null,"session_id":"default","type":"user"}"#;
+    let denied = r#"{"response":{"request_id":"r","response":{"behavior":"deny","interrupt":false,"message":"The chat was closed."},"subtype":"success"},"type":"control_response"}"#;
     assert_eq!(
         out,
         format!(
-            "7|1|unset|work|{}\nleader\ngot {initialize}\ngot {user}\n",
+            "7|1|unset|work|{}\nleader\ngot {initialize}\ngot {user}\ngot {denied}\n",
             dir.display()
         )
     );

@@ -1440,10 +1440,13 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.chat(channel, |chat| chat.stream.set_mode(mode)).await
         }
         Ok(Control::CloseChat { .. }) => state.close_chat(channel).await,
-        // Every request is denied until 7.3e, so none is pending.
-        Ok(Control::ChatAnswer { .. }) => {
-            let message = "no such pending request".to_owned();
-            state.to_app(channel, &Control::Error { message }).await;
+        // Only a request pending on this channel's chat can be answered.
+        Ok(Control::ChatAnswer {
+            request, answer, ..
+        }) => {
+            state
+                .chat(channel, |chat| chat.stream.answer(&request, &answer))
+                .await
         }
         _ => {
             let message = "unexpected message from the app".to_owned();
