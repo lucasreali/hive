@@ -203,3 +203,61 @@ async fn a_save_writes_only_over_the_version_the_app_read() {
     drop(conn);
     stop(daemon);
 }
+
+#[tokio::test]
+async fn files_are_created_and_renamed_inside_a_followed_worktree() {
+    let repo = Repo::new();
+    repo.commit("a.txt", "one\n");
+    let root = repo.root.display().to_string();
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    let create = |name: &str| Control::CreateFile {
+        worktree: root.clone(),
+        folder: String::new(),
+        name: name.to_owned(),
+    };
+    let rename = |path: &str, name: &str| Control::RenameFile {
+        worktree: root.clone(),
+        path: path.to_owned(),
+        name: name.to_owned(),
+    };
+    let failed = |message: &str| Control::FileOpFailed {
+        worktree: root.clone(),
+        message: message.to_owned(),
+    };
+    // Not a followed worktree yet.
+    conn.send(0, create("b.txt")).await;
+    assert!(matches!(
+        conn.control().await.1,
+        Control::FileOpFailed { .. }
+    ));
+    conn.send(0, rename("a.txt", "c.txt")).await;
+    assert!(matches!(
+        conn.control().await.1,
+        Control::FileOpFailed { .. }
+    ));
+    follow(&mut conn, &root).await;
+
+    conn.send(0, create("b.txt")).await;
+    let created = Control::FileCreated {
+        worktree: root.clone(),
+        path: "b.txt".to_owned(),
+    };
+    assert_eq!(conn.control().await.1, created);
+    assert_eq!(std::fs::read(repo.root.join("b.txt")).unwrap(), b"");
+    conn.send(0, create("a.txt")).await;
+    assert_eq!(conn.control().await.1, failed("a.txt already exists"));
+
+    conn.send(0, rename("a.txt", "c.txt")).await;
+    let renamed = Control::FileRenamed {
+        worktree: root.clone(),
+        path: "a.txt".to_owned(),
+        to: "c.txt".to_owned(),
+    };
+    assert_eq!(conn.control().await.1, renamed);
+    assert_eq!(sides(&mut conn, &root, "c.txt").await.0, text("one\n"));
+    conn.send(0, rename("c.txt", "b.txt")).await;
+    assert_eq!(conn.control().await.1, failed("b.txt already exists"));
+    drop(conn);
+    stop(daemon);
+}
