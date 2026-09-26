@@ -16,7 +16,6 @@ import {
   ago,
   copy,
   locate,
-  OUTSIDE,
   openAsChat,
   remove,
   resume,
@@ -24,7 +23,7 @@ import {
   sessionName,
   sessionTokens,
 } from "../sessions";
-import { openSessionMenu, type Session, useHive } from "../store";
+import { type HiveState, openSessionMenu, type Session, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { ContextMenu } from "./WorktreeMenu";
@@ -105,11 +104,21 @@ export function SessionsView({ worktree }: { worktree: string }) {
   );
 }
 
+/** Whether the session runs in a Hive chat (7.3), not a terminal. */
+const inChat = (s: HiveState, id: string) =>
+  s.tabs.find((t) => t.id === s.agents[id]?.terminal)?.kind === "chat";
+
 function SessionRow({ session: x, live }: { session: Session; live: boolean }) {
-  // A session in a Hive terminal has its live state; any other, the one its log tells.
+  // A session in a Hive terminal or chat has its live state; any other, the one its log tells.
   const state = useHive((s) => (live ? (s.agentStates[x.id]?.state ?? "idle") : x.state));
+  const chat = useHive((s) => inChat(s, x.id));
   const menu = menuAt(x);
-  const title = live ? "Show its terminal" : x.running ? OUTSIDE : "Resume in its worktree";
+  // Running outside Hive: nothing to do here, and nothing said.
+  const title = live
+    ? `Show its ${chat ? "chat" : "terminal"}`
+    : x.running
+      ? undefined
+      : "Resume in its worktree";
   return (
     <li className="session" data-live={live} data-running={x.running}>
       <button
@@ -154,7 +163,9 @@ export function SessionMenu() {
   const menu = useHive((s) => s.sessionMenu);
   const x = useHive((s) => s.sessions?.find((y) => y.id === s.sessionMenu?.session));
   const live = useHive((s) => !!x && !!s.agents[x.id]);
+  const chat = useHive((s) => !!x && inChat(s, x.id));
   if (!menu || !x) return null;
+  // Running outside Hive: not resumed, opened as a chat or deleted here, with no text.
   const outside = x.running && !live;
   const item = (Shape: Icon, label: string, action: () => void, extra: object = {}) => (
     <button
@@ -173,17 +184,14 @@ export function SessionMenu() {
   return (
     <ContextMenu at={menu} label={`Session ${sessionName(x)}`} onClose={closeMenu}>
       {item(
-        live ? TerminalWindowIcon : PlayIcon,
-        live ? "Show Its Terminal" : "Resume in Worktree",
+        live ? (chat ? ChatTeardropTextIcon : TerminalWindowIcon) : PlayIcon,
+        live ? `Show Its ${chat ? "Chat" : "Terminal"}` : "Resume in Worktree",
         () => void resume(x),
-        {
-          disabled: outside,
-          title: outside ? OUTSIDE : undefined,
-        },
+        { disabled: outside },
       )}
       {item(ChatTeardropTextIcon, "Open as Chat", () => void openAsChat(x), {
-        disabled: live || x.running,
-        title: live || x.running ? "End the session before opening it as a chat" : undefined,
+        disabled: live || outside,
+        title: live ? "End the session before opening it as a chat" : undefined,
       })}
       {item(ArrowBendUpRightIcon, "Continue in New Session", () => void resume(x, true))}
       {item(CopyIcon, "Copy Resume Command", () => void copy(resumeCommand(x), "resume command"))}
@@ -197,8 +205,8 @@ export function SessionMenu() {
       <hr />
       {item(TrashIcon, "Delete", () => remove(x), {
         className: "danger",
-        disabled: live || x.running,
-        title: live || x.running ? "End the session before deleting it" : undefined,
+        disabled: live || outside,
+        title: live ? "End the session before deleting it" : undefined,
       })}
     </ContextMenu>
   );
