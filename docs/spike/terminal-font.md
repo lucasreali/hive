@@ -45,7 +45,7 @@ Top terminal: joiner on (`=>` `!==` `->` `<=` `===` become ligatures). Bottom: s
 | Ligaturizer v5 | GPL-3.0 | Build tool only; not shipped. The GPL does not cover the fonts it outputs. |
 | Nerd Fonts font-patcher / Symbols Nerd Font 3.5.1 | MIT for the project; each icon set keeps its own licence | Icons: Codicons and Font Awesome **CC BY 4.0** (attribution), Material Design **Apache 2.0**, Octicons/Devicons/Seti/Powerline MIT, Weather Icons and Pomicons OFL, Font Logos "unlicensed" (brand logos, trademarks of their owners). An attribution line (e.g. in an about/licences file) covers CC BY. |
 
-The output family is **"Hive Mono"** (patched variant: "HiveMono Nerd Font"); the build refuses a `FAMILY` containing "Plex". The name table keeps IBM's copyright and the trademark notice (`IBM Plex® is a trademark of IBM Corp`), which is a notice, not a font name. `LICENSE-IBM-Plex-Mono.txt` is written next to the fonts and must ship with them.
+The output family is **"Hive Mono"** (patched variant: "HiveMono Nerd Font"); the build refuses a `FAMILY` containing "Plex". The name table keeps IBM's copyright and the trademark notice (`IBM Plex® is a trademark of IBM Corp`), which is a notice, not a font name. The script writes the licence files next to the fonts; they must ship with them.
 
 ## 4. Size
 
@@ -71,7 +71,7 @@ Weights: xterm uses `fontWeight` normal (400) and `fontWeightBold` `"bold"` (700
 
 - Downloads pinned inputs and checks each sha256: IBM Plex Mono 2.5.0 (release zip), Ligaturizer v5 (`c406518`), Fira Code 3.1 OTFs (the commit Ligaturizer pins), Nerd Fonts 3.5.1 `NerdFontsSymbolsOnly.tar.xz` (and `FontPatcher.zip` with `NERD_PATCH=1`), FontForge 20251009.
 - **FontForge**: uses `$FONTFORGE` if set (`sudo apt install fontforge python3-fontforge`, `brew install fontforge`); otherwise, on Linux x86_64, downloads the official AppImage and runs it extracted in the work dir. Nothing is installed on the system. Docker was not needed (and is not available in this WSL).
-- Writes `HiveMono-<Weight>.woff2`, `SymbolsNerdFont-Regular.woff2`, `ligatures.json`, `LICENSE-IBM-Plex-Mono.txt`; with `NERD_PATCH=1` also `HiveMonoNerdFont-<Weight>.woff2` (Nerd Fonts `font-patcher --complete`, ~1 min per weight). Env: `WEIGHTS`, `FAMILY`.
+- Writes `HiveMono-<Weight>.woff2`, `SymbolsNerdFont-Regular.woff2`, `ligatures.json`, and the licences that ship with them (`LICENSE-IBM-Plex-Mono.txt`, `LICENSE-Fira-Code.txt`, `LICENSE-Symbols-Nerd-Font.txt`, `README-Symbols-Nerd-Font.md` with the icon sets' licences); with `NERD_PATCH=1` also `HiveMonoNerdFont-<Weight>.woff2` (Nerd Fonts `font-patcher --complete`, ~1 min per weight). Env: `WEIGHTS`, `FAMILY`. Byte-reproducible: `SOURCE_DATE_EPOCH` is fixed, so two runs give identical woff2 (checked).
 - Ran here: default build in 9 s (inputs cached), patched build ≈ 3.5 min for 4 weights. Checked with FontForge: 136 `calt` ligature lookups in the output, every spacing glyph 600 units wide, Nerd code points (U+E0A0, U+F07B, U+F0001) present in the patched fonts.
 - Finding: Fira Code **6.2** cannot be used — it ships only TTFs, and FontForge (2023 and 2025 builds) segfaults on save after Ligaturizer pastes its ligatures. The OTFs of Fira Code 3.1 work; Ligaturizer's ligature list targets that version anyway.
 

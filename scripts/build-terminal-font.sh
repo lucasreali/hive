@@ -5,6 +5,7 @@
 #   <FAMILY>-<Weight>.woff2        IBM Plex Mono + Fira Code ligatures (Ligaturizer)
 #   SymbolsNerdFont-Regular.woff2  the Nerd Fonts icons alone, used as a fallback family
 #   ligatures.json                 the character sequences the fonts join (xterm joiner list)
+#   LICENSE-*.txt, README-Symbols-Nerd-Font.md  the licences that ship with the fonts
 #   <FAMILY>NerdFont-<Weight>.woff2  only with NERD_PATCH=1: the ligature font patched with
 #                                  every Nerd Fonts glyph (font-patcher --complete), ~1 MB each
 #
@@ -18,6 +19,8 @@
 # Env: WEIGHTS (default "Regular Medium SemiBold Bold"), FAMILY (default "Hive Mono"; must not
 # contain "Plex", the Reserved Font Name of IBM Plex's OFL licence), NERD_PATCH=1.
 set -euo pipefail
+# FontForge stamps this time into the fonts instead of now: same inputs, same bytes.
+export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1758758400}
 
 FAMILY=${FAMILY:-Hive Mono}
 WEIGHTS=${WEIGHTS:-Regular Medium SemiBold Bold}
@@ -26,7 +29,8 @@ PLEX_URL='https://github.com/IBM/plex/releases/download/%40ibm/plex-mono%402.5.0
 PLEX_SHA=6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c
 # Fira Code v3.1 OTFs: the revision Ligaturizer v5 pins as its submodule. Fira Code 6.x ships
 # only TTFs, and saving a font with their ligatures pasted in crashes FontForge.
-FIRA_URL='https://raw.githubusercontent.com/tonsky/FiraCode/e9943d2d631a4558613d7a77c58ed1d3cb790992/distr/otf'
+FIRA_URL='https://raw.githubusercontent.com/tonsky/FiraCode/e9943d2d631a4558613d7a77c58ed1d3cb790992'
+FIRA_LICENSE_SHA=1d41e10031ab125302780a05ec4c91d218e47db0c7e37cf315cce5e608cdc25c
 fira_sha() { # (bash 3 on macOS has no associative arrays)
   case $1 in
     Regular) echo b5639c832c98f9f4dc5bd6c0806ca0761e0af495bf1ffadf44943b0c2d634507 ;;
@@ -104,7 +108,7 @@ for w in $WEIGHTS; do
   src=$work/plex/ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-$w.ttf
   sha=$(fira_sha "$w")
   [[ -f $src && -n $sha ]] || die "no Plex Mono / Fira Code weight \"$w\""
-  fetch "$FIRA_URL/FiraCode-$w.otf" "$sha" "FiraCode-$w.otf"
+  fetch "$FIRA_URL/distr/otf/FiraCode-$w.otf" "$sha" "FiraCode-$w.otf"
   rm -rf "$work/liga-$w"
   mkdir -p "$work/liga-$w"
   echo "== $w: ligatures"
@@ -136,6 +140,12 @@ done
 
 ff "$work/woff2.py" "$work/symbols/SymbolsNerdFont-Regular.ttf" "$out/SymbolsNerdFont-Regular.woff2" \
   >/dev/null 2>&1 || die "woff2 conversion of the Nerd Fonts symbols failed"
+fetch "$FIRA_URL/LICENSE" "$FIRA_LICENSE_SHA" fira-license.txt
+# The OFL travels with the fonts; the icon sets' licences (CC BY 4.0 among them) are listed in
+# the symbols README.
 cp "$work/plex/ibm-plex-mono/fonts/complete/ttf/license.txt" "$out/LICENSE-IBM-Plex-Mono.txt"
+cp "$work/fira-license.txt" "$out/LICENSE-Fira-Code.txt"
+cp "$work/symbols/LICENSE" "$out/LICENSE-Symbols-Nerd-Font.txt"
+cp "$work/symbols/README.md" "$out/README-Symbols-Nerd-Font.md"
 ls -l "$out"/*.woff2 "$out/ligatures.json"
 echo "Output: $out (work files in $out/work; delete it when done)"
