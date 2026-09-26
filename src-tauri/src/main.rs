@@ -55,6 +55,8 @@ fn main() {
             commands::locate_session,
             commands::delete_session,
             commands::save_file,
+            commands::create_file,
+            commands::rename_file,
             commands::open_in_editor,
             commands::get_settings,
             commands::set_settings,

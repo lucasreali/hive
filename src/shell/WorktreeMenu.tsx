@@ -281,7 +281,7 @@ export function RemoveMergedDialog() {
 }
 
 /** Opens a native modal dialog once and focuses `focus` inside it. */
-const showModal = (focus: string) => (dialog: HTMLDialogElement | null) => {
+export const showModal = (focus: string) => (dialog: HTMLDialogElement | null) => {
   if (dialog && !dialog.open) {
     dialog.showModal();
     dialog.querySelector<HTMLElement>(focus)?.focus();

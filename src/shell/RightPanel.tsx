@@ -8,6 +8,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type KeyboardEvent,
   lazy,
+  type MouseEvent,
   type ReactNode,
   Suspense,
   useEffect,
@@ -21,7 +22,9 @@ import {
   agentWorkingIn,
   type ChangedFile,
   type FileStatus,
+  type FileTarget,
   type OpenFile,
+  openFileMenu,
   type PanelView,
   panelWorktree,
   type SearchMatch,
@@ -62,6 +65,8 @@ export type FileRow =
   | {
       kind: "folder";
       key: string;
+      /** Relative to the worktree. */
+      path: string;
       name: string;
       depth: number;
       open: boolean;
@@ -118,7 +123,8 @@ export function fileRows(
     for (const [name, inner] of [...folder.folders].sort(([a], [b]) => (a < b ? -1 : 1))) {
       const key = `${tree}:${worktree}/${prefix}${name}`;
       const open = collapsed[key] === false;
-      rows.push({ kind: "folder", key, name, depth, open, status: strongest(inner) });
+      const path = `${prefix}${name}`;
+      rows.push({ kind: "folder", key, path, name, depth, open, status: strongest(inner) });
       if (open) walk(inner, `${prefix}${name}/`, depth + 1);
     }
     for (const file of folder.files) {
@@ -133,6 +139,30 @@ export function fileRows(
   };
   walk(root, "", 0);
   return rows;
+}
+
+/**
+ * What the tree's menu acts on for `row`: new files go in the folder, or the file's folder, or
+ * the root (no row: the tree's background); only a file still on disk can be renamed.
+ */
+export function fileTarget(worktree: string, row: FileRow | undefined): FileTarget {
+  if (!row) return { worktree, folder: "", path: null };
+  if (row.kind === "folder") return { worktree, folder: row.path, path: null };
+  const folder = row.key.slice(0, Math.max(row.key.lastIndexOf("/"), 0));
+  return { worktree, folder, path: row.file.status === "deleted" ? null : row.key };
+}
+
+/** Opens the tree's menu for `row` at the pointer, or under `at` (the Menu key or Shift+F10). */
+function openTreeMenu(worktree: string, row: FileRow | undefined, at?: Element | null) {
+  return (event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const box = (at ?? event.currentTarget).getBoundingClientRect();
+    const pointer = event.clientX || event.clientY;
+    const x = pointer ? event.clientX : box.left;
+    const y = pointer ? event.clientY : box.bottom;
+    openFileMenu({ ...fileTarget(worktree, row), x, y });
+  };
 }
 
 /** The status of highest rank inside a folder; null when nothing inside changed. */
@@ -564,6 +594,12 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
         tabIndex={0}
         aria-activedescendant={rows[at] ? `${id}-${at}` : undefined}
         onKeyDown={onKeyDown}
+        // On the tree itself: a click below the rows (the root), or the Menu key (the active row).
+        onContextMenu={(e) => {
+          const key = !(e.clientX || e.clientY);
+          const row = key ? document.getElementById(`${id}-${at}`) : null;
+          openTreeMenu(worktree, key ? rows[at] : undefined, row)(e);
+        }}
         style={{ height: virtual.getTotalSize(), position: "relative" }}
       >
         {virtual.getVirtualItems().map((item) => {
@@ -587,6 +623,10 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
               onClick={() => {
                 setActive(item.index);
                 pick(row);
+              }}
+              onContextMenu={(e) => {
+                setActive(item.index);
+                openTreeMenu(worktree, row)(e);
               }}
             >
               {row.kind === "folder" ? (
