@@ -8,13 +8,16 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useReorder } from "../reorder";
 import {
   type Agent,
   type AgentState,
   type AgentUsage,
   activateTab,
   type Doing,
+  inAgentOrder,
   mostUrgent,
+  moveAgent,
   openMenu,
   openModal,
   openProjectMenu,
@@ -23,6 +26,7 @@ import {
   select,
   showTranscript,
   spaceProjects,
+  stepAgent,
   toggleCollapsed,
   useHive,
   type Worktree,
@@ -48,6 +52,8 @@ import { ResizeHandle } from "./resize";
  * project; Enter selects (the rows are buttons).
  */
 function moveInTree(event: KeyboardEvent<HTMLElement>): void {
+  // An agent row took Alt+↑/↓ to reorder itself (8.2).
+  if (event.defaultPrevented) return;
   const rows = [...event.currentTarget.querySelectorAll<HTMLElement>(".row-main")];
   const row = rows.indexOf(document.activeElement as HTMLElement);
   if (row < 0) return;
@@ -145,7 +151,10 @@ function SpacePicker() {
 function ProjectNode({ project }: { project: Project }) {
   const open = useHive((s) => !s.collapsed[project.id]);
   const selection = useHive((s) => s.selection);
-  const agents = Object.values(useHive((s) => s.agents));
+  const agents = inAgentOrder(
+    Object.values(useHive((s) => s.agents)),
+    useHive((s) => s.agentOrder),
+  );
   const states = Object.values(useHive((s) => s.agentStates));
   // A subagent's own worktree shows as its parent row instead (#22), unless an agent runs there.
   const owned = new Set(states.flatMap((st) => st.subagents.map((sub) => sub.worktree)));
@@ -232,6 +241,8 @@ function Health({ status: s }: { status: WorktreeStatus }) {
 function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Agent[] }) {
   const open = useHive((s) => !s.collapsed[`worktree:${w.id}`]);
   const selected = useHive((s) => s.selection === w.id);
+  // Agents move only among their worktree's: the service places each by its cwd (8.2).
+  const drag = useReorder(`agents:${w.id}`, moveAgent);
   return (
     <li>
       <div className="tree-row worktree" title={w.path} data-selected={selected}>
@@ -276,7 +287,7 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
       {open && (
         <ul>
           {agents.map((a) => (
-            <AgentRow key={a.id} agent={a} />
+            <AgentRow key={a.id} agent={a} drag={drag(a.id)} />
           ))}
         </ul>
       )}
@@ -360,7 +371,13 @@ function StateLines({
  * agent shows its terminal, clicking a subagent its conversation (6.10). States are the service's (#37); until the first
  * `agent_state` arrives the agent shows as idle, as `SessionStart` leaves it.
  */
-function AgentRow({ agent }: { agent: Agent }) {
+function AgentRow({
+  agent,
+  drag,
+}: {
+  agent: Agent;
+  drag: ReturnType<ReturnType<typeof useReorder>>;
+}) {
   const tab = useHive((s) => s.tabs.find((t) => t.id === agent.terminal));
   const picked = useHive((s) => s.selection === agent.id);
   // While a subagent's conversation shows, its row is the selected one.
@@ -384,8 +401,24 @@ function AgentRow({ agent }: { agent: Agent }) {
         className="tree-row agent"
         title={agent.cwd ?? undefined}
         data-selected={shown}
+        {...drag}
       >
-        <button type="button" className="row-main" aria-current={shown} onClick={show}>
+        <button
+          type="button"
+          className="row-main"
+          aria-current={shown}
+          onClick={show}
+          onKeyDown={(e) => {
+            // Alt+↑/↓ moves the agent among its worktree's, as dragging does (8.2).
+            const step = { ArrowUp: -1, ArrowDown: 1 }[e.key] as -1 | 1 | undefined;
+            if (!e.altKey || !step) return;
+            e.preventDefault();
+            const button = e.currentTarget;
+            stepAgent(agent.id, step);
+            // Reordering may move this row's element, which loses the focus.
+            setTimeout(() => button.focus());
+          }}
+        >
           <StateLines state={status?.state ?? "idle"} doing={status} usage={usage} title={name} />
           {badge && (
             <span className="tab-badge label-badge" title="Set with hive badge">
