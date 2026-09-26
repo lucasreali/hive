@@ -138,13 +138,11 @@ export function Palette() {
     worktree && s.searchResults?.worktree === worktree && s.searchResults.query === q
       ? s.searchResults
       : null;
-  // As the Files panel opens them: a changed file as its diff, any other as editable text.
-  const changed = new Set(s.changes[worktree ?? ""]?.files.map((f) => f.path));
   const files: PaletteItem[] = (results?.matches ?? []).slice(0, FILE_LIMIT).map((m) => ({
     label: `${m.path}:${m.line}`,
     detail: m.text.trim(),
-    run: () =>
-      leaveFile({ worktree: results?.worktree ?? "", path: m.path }, !changed.has(m.path), m.line),
+    // As the Files panel opens them: editable text, changed or not.
+    run: () => leaveFile({ worktree: results?.worktree ?? "", path: m.path }, true, m.line),
   }));
   const groups: Group[] = [
     { name: "Commands", items: rank(paletteCommands(s), q) },

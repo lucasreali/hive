@@ -25,7 +25,7 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
-import { allFiles, FilesView, fileRows, NAME_LIMIT, RightPanel } from "./RightPanel";
+import { allFiles, FilesView, fileRows, leaveFile, NAME_LIMIT, RightPanel } from "./RightPanel";
 import { TerminalArea } from "./TerminalArea";
 
 beforeAll(() => {
@@ -116,7 +116,7 @@ test("rows group paths into folders, folders first, with the strongest status in
     [0, "test/", "renamed", false],
     [0, "README.md"],
   ]);
-  const open = { "folder:/w/src": false, "folder:/w/src/b": false, "folder:/w/test": false };
+  const open = { "files:/w/src": false, "files:/w/src/b": false, "files:/w/test": false };
   expect(shape(open)).toEqual([
     [0, "src/", "deleted", true],
     [1, "b/", "deleted", true],
@@ -129,7 +129,7 @@ test("rows group paths into folders, folders first, with the strongest status in
     [1, "u.ts"],
     [0, "README.md"],
   ]);
-  expect(shape({ ...open, "folder:/w/src/b": true, "folder:/other/test": true })).toEqual([
+  expect(shape({ ...open, "files:/w/src/b": true, "files:/other/test": true })).toEqual([
     [0, "src/", "deleted", true],
     [1, "b/", "deleted", false],
     [1, "a.ts"],
@@ -140,7 +140,14 @@ test("rows group paths into folders, folders first, with the strongest status in
     [0, "README.md"],
   ]);
   const key = fileRows("/w", files, open)[1].key;
-  expect(key).toBe("folder:/w/src/b");
+  expect(key).toBe("files:/w/src/b");
+  // The Diff tree keeps its own folders: the Files tree's open ones stay closed there.
+  const diff = fileRows("/w", files, open, "changes");
+  expect(diff.map((r) => r.kind === "folder" && [r.key, r.open])).toEqual([
+    ["changes:/w/src", false],
+    ["changes:/w/test", false],
+    false,
+  ]);
 });
 
 test("without a worktree the panel says what to select", () => {
@@ -317,6 +324,48 @@ test("the open file's text shows as a diff when changed, else as is, or why not"
   }
 });
 
+test("the Files tree opens a changed file as editable text, the Diff tab as its diff", () => {
+  spyOn(transport, "listChanges").mockImplementation(async () => {});
+  apply({ type: "projects", projects: [shop, api] });
+  act(() => select(fixLogin.id));
+  const withTabs = (panel: ReactElement) =>
+    render(
+      <>
+        {panel}
+        <TerminalArea />
+      </>,
+    );
+  const files = withTabs(<FilesView worktree={fixLogin.path} />);
+  act(() => apply({ type: "files", path: fixLogin.path, files: ["src/a.ts"], truncated: false }));
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/a.ts")]) }));
+  const open = { worktree: fixLogin.path, path: "src/a.ts" };
+  const answer = { ...open, content: "new\n", base: "old\n", version: "v" };
+  const body = () => document.querySelector(".file-view-body") as HTMLElement;
+  expand();
+  fireEvent.click(screen.getByRole("treeitem", { name: /a\.ts/ }));
+  act(() => apply({ type: "file", ...answer, binary: false, too_large: false, error: null }));
+  expect(useHive.getState().editing).toBe(true);
+  expect(body().querySelector(".cm-merge-b")).toBeNull();
+  expect(body().querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
+  files.unmount();
+
+  // The same file, open as text, switches to its diff when picked in the Diff tab.
+  setPanelView("changes");
+  withTabs(<RightPanel />);
+  expand();
+  fireEvent.click(screen.getByRole("treeitem", { name: /a\.ts/ }));
+  expect(useHive.getState().editing).toBe(false);
+  expect(body().querySelector(".cm-merge-b")).not.toBeNull();
+
+  // Back to text; unsaved edits stay in the editor whichever tree picks the file.
+  act(() => leaveFile(open, true));
+  expect(useHive.getState().editing).toBe(true);
+  act(() => useHive.setState((s) => ({ edit: s.edit && { ...s.edit, saved: null } })));
+  fireEvent.click(screen.getByRole("treeitem", { name: /a\.ts/ }));
+  expect(useHive.getState().editing).toBe(true);
+  expect(body().querySelector(".cm-merge-b")).toBeNull();
+});
+
 test("review comments on the open file mark its lines and are listed under it", () => {
   panel();
   act(() => select(refactor.id));
@@ -489,13 +538,19 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
   expect(asked).not.toHaveBeenCalled();
   view.unmount();
   setPanelView("changes");
-  render(<RightPanel />);
+  const diff = render(<RightPanel />);
+  // Folders opened in Files stay closed in Diff, and back.
+  expect(rows()).toEqual([["src", "M"]]);
+  expect(screen.queryByText(/cut short/)).toBeNull();
+  expand();
+  fireEvent.click(screen.getByText("auth"));
   expect(rows()).toEqual([
     ["src", "M"],
     ["auth", "M"],
-    ["session.ts+1M", "M"],
   ]);
-  expect(screen.queryByText(/cut short/)).toBeNull();
+  diff.unmount();
+  render(<FilesView worktree={fixLogin.path} />);
+  expect(rows().map(([name]) => name)).toEqual(["lib", "x.ts", "src", "auth", "session.ts+1M"]);
 });
 
 function filesView() {
@@ -531,12 +586,13 @@ test("Names lists the files whose path holds the text; one opens as the tree ope
     ["session.tssrc/authM", "M"],
   ]);
   expect(screen.queryByRole("tree")).toBeNull();
+  // Changed or not, a file opens as editable text.
   fireEvent.click(screen.getByTitle("src/auth/session.ts"));
   expect(useHive.getState().openFile).toEqual({
     worktree: fixLogin.path,
     path: "src/auth/session.ts",
   });
-  expect(useHive.getState().editing).toBe(false);
+  expect(useHive.getState().editing).toBe(true);
   fireEvent.click(screen.getByTitle("docs/session-notes.md"));
   expect(useHive.getState().editing).toBe(true);
   find("nothing-like-it");
@@ -609,14 +665,14 @@ test("Contents asks the service once typing pauses and opens a line where it is"
     "1",
   ]);
   expect(found.textContent).toContain("Too many matches: only the first 3 show.");
-  // The changed file opens as its diff at the line; one git no longer lists opens editable.
+  // A match opens its file as editable text at the line, changed or not.
   fireEvent.click(screen.getByTitle("src/auth/session.ts:9"));
   expect(useHive.getState().gotoLine).toEqual({
     worktree: fixLogin.path,
     path: "src/auth/session.ts",
     line: 9,
   });
-  expect(useHive.getState().editing).toBe(false);
+  expect(useHive.getState().editing).toBe(true);
   fireEvent.click(screen.getByTitle("gone.ts:1"));
   expect(useHive.getState().editing).toBe(true);
 });

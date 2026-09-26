@@ -248,7 +248,7 @@ test("files: the selected worktree's lines holding the text, once typing pauses"
   expect(useHive.getState()).toMatchObject({
     modal: null,
     openFile: { worktree: fixLogin.path, path: "src/auth/session.ts" },
-    // Unchanged: editable text, as the Files panel opens it.
+    // Editable text, as the Files panel opens it.
     editing: true,
     gotoLine: { line: 3 },
   });
