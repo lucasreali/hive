@@ -1050,10 +1050,33 @@ impl Stream {
         if let Some(text) = content.as_str() {
             return entries.push(self.entry(ChatEntryKind::User, text, parent));
         }
+        let first = entries.len();
         for block in blocks(content) {
             match block["type"].as_str() {
                 Some("text") => {
                     entries.push(self.entry(ChatEntryKind::User, text(&block["text"]), parent));
+                }
+                // A resumed session's own images (7.3j history; replays are left out above): the
+                // first goes with the message's text, the others after it, as `send` shows them.
+                Some("image") => {
+                    let data = text(&block["source"]["data"]);
+                    let Some(shown) = (data.len() <= MAX_IMAGE_DATA)
+                        .then(|| image(data))
+                        .flatten()
+                    else {
+                        continue;
+                    };
+                    let with_text = entries[first..]
+                        .last_mut()
+                        .filter(|entry| entry.kind == ChatEntryKind::User && entry.image.is_none());
+                    match with_text {
+                        Some(entry) => entry.image = Some(shown),
+                        None => {
+                            let mut entry = self.entry(ChatEntryKind::User, "", parent);
+                            entry.image = Some(shown);
+                            entries.push(entry);
+                        }
+                    }
                 }
                 Some("tool_result") => {
                     let call = id_of(&block["tool_use_id"]).and_then(|id| self.tools.remove(id));

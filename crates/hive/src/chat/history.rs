@@ -117,6 +117,42 @@ mod tests {
     }
 
     #[test]
+    fn the_images_sent_come_back_with_their_message() {
+        let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None);
+        let png = "iVBORw0KGgo=";
+        let gif = "R0lGODlh";
+        // Exactly the limit: a PNG signature padded to 3 MiB of base64.
+        let mut big = vec![0u8; (crate::chat::MAX_IMAGE_DATA / 4) * 3];
+        big[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        let big = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, big);
+        let over = format!("{big}AAAA");
+        let block = |data: &str| json!({"type": "image", "source": {"data": data}});
+        let records = lines(&[
+            json!({"type": "user", "message": {"content": [
+                {"type": "text", "text": "look"}, block(png), block("bm90IGFuIGltYWdl"),
+                block(&over), block(gif),
+            ]}}),
+            json!({"type": "user", "message": {"content": [block(&big)]}}),
+        ]);
+        let out = stream.history(&records, false);
+        let shown: Vec<_> = entries(&out)
+            .into_iter()
+            .map(|e| (e.id, e.text, e.image.map(|i| (i.media_type, i.data.len()))))
+            .collect();
+        let png = Some(("image/png".to_owned(), png.len()));
+        let gif = Some(("image/gif".to_owned(), gif.len()));
+        let big = Some(("image/png".to_owned(), big.len()));
+        assert_eq!(
+            shown,
+            vec![
+                (1, "look".into(), png),
+                (2, String::new(), gif),
+                (3, String::new(), big)
+            ]
+        );
+    }
+
+    #[test]
     fn what_the_history_left_open_does_not_reach_the_live_turn() {
         let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None);
         let records = lines(&[
