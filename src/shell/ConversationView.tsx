@@ -1,7 +1,13 @@
-import { CheckIcon, CircleNotchIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import {
+  ArrowDownIcon,
+  CheckIcon,
+  CircleNotchIcon,
+  WarningCircleIcon,
+} from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 import type { ChatEntry, ChatImage, ToolStatus } from "../store";
+import { ICON } from "./icons";
 import { Markdown } from "./Markdown";
 
 /** How a message's author is named: a chat's own, and a subagent's (6.10, nested ones). */
@@ -129,53 +135,114 @@ const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Lab
   }
 });
 
+/** How close to the bottom (px, about one line) a view still counts as at the bottom (8.13). */
+const AT_BOTTOM = 24;
+
 /**
  * A conversation's entries (6.10's subagent view and the chat, 7.3), newest last, virtualized;
  * the list keeps to the bottom while new ones arrive. `children` show above the entries (hints).
+ * Scrolled up (8.13), it stays put and shows a "back to bottom" button and a bar with the user's
+ * prompt the view's top belongs to. `initialOffset` starts the view at that offset instead of the
+ * bottom; `onScroll` reports each scroll's offset and whether it is at the bottom (for 8.14).
  */
 export function ConversationView({
   entries,
   labels,
   children,
+  initialOffset,
+  onScroll,
 }: {
   entries: ChatEntry[];
   labels: Labels;
   children?: ReactNode;
+  initialOffset?: number;
+  onScroll?: (offset: number, atBottom: boolean) => void;
 }) {
   const rows = ordered(entries);
   const scroller = useRef<HTMLDivElement>(null);
+  // Read by the effect below without re-running it on every scroll.
+  const follow = useRef(initialOffset === undefined);
+  const [atBottom, setAtBottom] = useState(follow.current);
   const virtual = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller.current,
     estimateSize: () => 64,
     getItemKey: (i) => (rows[i] as ChatEntry).id,
     overscan: 6,
+    // A prompt scrolled to shows below the prompt bar, not under it.
+    scrollPaddingStart: 32,
+    // The virtualizer scrolls there when it mounts.
+    initialOffset: initialOffset ?? 0,
   });
   useEffect(() => {
-    if (rows.length > 0) virtual.scrollToIndex(rows.length - 1, { align: "end" });
+    if (follow.current && rows.length > 0) virtual.scrollToIndex(rows.length - 1, { align: "end" });
   }, [rows.length, virtual]);
+  const items = virtual.getVirtualItems();
+  // The last prompt at or above the view's top row; rows off-screen are found by index.
+  const top = virtual.range?.startIndex ?? -1;
+  const prompt = atBottom
+    ? undefined
+    : rows
+        .slice(0, top + 1)
+        .reverse()
+        .find((entry) => entry.kind === "user" && entry.parent === null);
   return (
-    <div className="transcript hive-scroll" ref={scroller}>
-      {children}
-      <ol style={{ height: virtual.getTotalSize(), position: "relative" }}>
-        {virtual.getVirtualItems().map((item) => {
-          const entry = rows[item.index] as ChatEntry;
-          return (
-            <li
-              key={item.key}
-              ref={virtual.measureElement}
-              data-index={item.index}
-              className="transcript-entry"
-              data-role={entry.kind}
-              data-status={entry.status ?? undefined}
-              data-nested={entry.parent !== null || undefined}
-              style={{ transform: `translateY(${item.start}px)` }}
-            >
-              <Row entry={entry} labels={labels} />
-            </li>
-          );
-        })}
-      </ol>
+    <div className="conversation">
+      <div
+        className="transcript hive-scroll"
+        ref={scroller}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          const bottom = el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM;
+          follow.current = bottom;
+          setAtBottom(bottom);
+          onScroll?.(el.scrollTop, bottom);
+        }}
+      >
+        {children}
+        <ol style={{ height: virtual.getTotalSize(), position: "relative" }}>
+          {items.map((item) => {
+            const entry = rows[item.index] as ChatEntry;
+            return (
+              <li
+                key={item.key}
+                ref={virtual.measureElement}
+                data-index={item.index}
+                className="transcript-entry"
+                data-role={entry.kind}
+                data-status={entry.status ?? undefined}
+                data-nested={entry.parent !== null || undefined}
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                <Row entry={entry} labels={labels} />
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+      {prompt && (
+        <button
+          type="button"
+          className="conversation-prompt"
+          title="Scroll to this message"
+          onClick={() => virtual.scrollToIndex(rows.indexOf(prompt), { align: "start" })}
+        >
+          <span className="transcript-role">{labels.user}</span>
+          <span className="conversation-prompt-text">{prompt.text}</span>
+        </button>
+      )}
+      {!atBottom && (
+        <button
+          type="button"
+          className="conversation-bottom"
+          title="Scroll to the bottom"
+          onClick={() =>
+            virtual.scrollToIndex(rows.length - 1, { align: "end", behavior: "smooth" })
+          }
+        >
+          <ArrowDownIcon {...ICON} />
+        </button>
+      )}
     </div>
   );
 }

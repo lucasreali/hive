@@ -126,6 +126,11 @@
   box-sizing: border-box;
 }
 
+/* A placeholder is never selected (8.19): Ctrl+A or a drag over the page would highlight it. */
+::placeholder {
+  user-select: none;
+}
+
 html,
 body,
 #root {
@@ -894,6 +899,15 @@ label:has(> input[type="checkbox"]:disabled) {
   align-items: baseline;
 }
 
+/* The scroller and what floats over it when scrolled up (8.13). */
+.conversation {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .transcript {
   flex: 1;
   min-height: 0;
@@ -935,6 +949,7 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text);
 }
 
+.conversation-prompt .transcript-role,
 .transcript-entry[data-role="user"] .transcript-role {
   color: var(--accent);
 }
@@ -1026,6 +1041,57 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Scrolled up (8.13): the prompt bar at the top and the round "back to bottom" button. */
+.conversation-prompt {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: var(--fs-body);
+  text-align: left;
+  color: var(--text);
+}
+
+.conversation-prompt:hover {
+  background: var(--hover);
+}
+
+.conversation-prompt-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.conversation-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text-2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.conversation-bottom:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
 .chat-view > .files-error {
