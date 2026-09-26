@@ -102,10 +102,10 @@ export function ChatRequestCard({ chat, request }: { chat: number; request: Chat
           {noteField("Deny message", "Message for Claude when denying (optional)")}
           <footer>
             <button type="button" className="secondary" disabled={sent} onClick={deny}>
-              Deny <kbd>Esc</kbd>
+              Deny
             </button>
             <button type="button" className="primary" disabled={sent} onClick={primary}>
-              Allow <kbd>Enter</kbd>
+              Allow
             </button>
           </footer>
         </>
@@ -152,7 +152,7 @@ export function ChatRequestCard({ chat, request }: { chat: number; request: Chat
           ))}
           <footer>
             <button type="button" className="secondary" disabled={sent} onClick={deny}>
-              Dismiss <kbd>Esc</kbd>
+              Dismiss
             </button>
             <button
               type="button"
@@ -160,7 +160,7 @@ export function ChatRequestCard({ chat, request }: { chat: number; request: Chat
               disabled={sent || !complete}
               onClick={primary}
             >
-              Send <kbd>Enter</kbd>
+              Send
             </button>
           </footer>
         </>
@@ -187,7 +187,7 @@ export function ChatRequestCard({ chat, request }: { chat: number; request: Chat
               Approve and accept edits
             </button>
             <button type="button" className="primary" disabled={sent} onClick={primary}>
-              Approve <kbd>Enter</kbd>
+              Approve
             </button>
           </footer>
         </>

@@ -3,6 +3,7 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { openChat } from "./chats";
 import {
   activateTab,
+  ask,
   type OpenSession,
   type ServiceMessage,
   type Session,
@@ -117,10 +118,12 @@ export const sessionName = (session: Session) => session.title ?? session.id;
 
 /** Deletes the session's log once the user agrees. */
 export function remove(session: Session): void {
-  const sure = window.confirm(
-    `Delete the session "${sessionName(session)}"? Its log is removed and it cannot be resumed.`,
-  );
-  if (sure) void transport.deleteSession(session.id);
+  ask({
+    title: "Delete session?",
+    text: `Delete "${sessionName(session)}"? Its log is removed and it cannot be resumed.`,
+    action: "Delete",
+    run: () => void transport.deleteSession(session.id),
+  });
 }
 
 /** A token count, short: "950", "84k", "1.2M". */

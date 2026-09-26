@@ -287,10 +287,10 @@ export function RemoveMergedDialog() {
         </div>
         <footer>
           <button type="button" className="secondary" onClick={close}>
-            Close <kbd>Esc</kbd>
+            Close
           </button>
           <button type="submit" className="primary danger" disabled={chosen.length === 0}>
-            Remove ({chosen.length}) <kbd>Enter</kbd>
+            Remove ({chosen.length})
           </button>
         </footer>
       </form>
@@ -352,10 +352,10 @@ export function RemoveWorktreeDialog() {
         </div>
         <footer>
           <button type="button" className="secondary" onClick={close}>
-            Cancel <kbd>Esc</kbd>
+            Cancel
           </button>
           <button type="submit" className="primary danger">
-            {failed ? "Delete anyway" : "Delete"} <kbd>Enter</kbd>
+            {failed ? "Delete anyway" : "Delete"}
           </button>
         </footer>
       </form>
@@ -432,10 +432,10 @@ export function RenameWorktreeDialog() {
         </div>
         <footer>
           <button type="button" className="secondary" onClick={close}>
-            Cancel <kbd>Esc</kbd>
+            Cancel
           </button>
           <button type="submit" className="primary" disabled={!canRename}>
-            Rename <kbd>Enter</kbd>
+            Rename
           </button>
         </footer>
       </form>

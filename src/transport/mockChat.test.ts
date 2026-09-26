@@ -6,6 +6,7 @@ import {
   MOCK_CHAT_COMMANDS,
   MOCK_CHAT_MODEL,
   MOCK_CHAT_REQUESTS,
+  MOCK_MARKDOWN,
 } from "./mockChat";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -137,9 +138,9 @@ test("a turn plays the scripted entries, then ends idle with its usage", async (
   expect(take()).toEqual([]);
 });
 
-test("words in the turn add a subagent, a compaction and an error", async () => {
+test("words in the turn add a subagent, Markdown, a compaction and an error", async () => {
   const { chat, take } = await opened();
-  chat.send(1, "subagent compact error", []);
+  chat.send(1, "subagent compact error markdown", []);
   await settle();
   const messages = take();
   const entries = entriesOf(messages);
@@ -157,6 +158,8 @@ test("words in the turn add a subagent, a compaction and an error", async () => 
     "Conversation compacted (150k tokens)",
   );
   expect(entries.find((e) => e.kind === "error")?.text).toBe("API Error: 529 overloaded");
+  expect(entries.filter((e) => e.text === MOCK_MARKDOWN).map((e) => e.kind)).toEqual(["assistant"]);
+  expect(MOCK_MARKDOWN).toContain("| --- | ---: |");
   expect(messages).toContainEqual(status(true, { compacting: true }));
   expect(messages).toContainEqual(status(true, { retry: "Retrying 2/10…" }));
   expect(messages.at(-1)).toEqual(status(false));

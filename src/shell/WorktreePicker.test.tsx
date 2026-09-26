@@ -46,7 +46,7 @@ test("lists every worktree of every project, the first one picked", () => {
     ["refactor-auth", "api", "false"],
   ]);
   expect(document.querySelector(".picker-path")?.textContent).toBe(shop.worktrees[0].path);
-  expect(dialog.querySelector("footer")?.textContent).toBe("↑↓navigateEnteropen terminalEscclose");
+  expect(dialog.querySelector("footer")?.textContent).toBe("↑↓navigate");
 });
 
 test("filters by worktree or project name; arrows move within the list", () => {

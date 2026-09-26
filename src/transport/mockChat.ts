@@ -91,12 +91,28 @@ type MockChat = {
   resumed: boolean;
 };
 
+/** The `markdown` word's reply: a heading, a table wider than the chat, a code block. */
+export const MOCK_MARKDOWN = [
+  "## Context Usage",
+  "",
+  "**Model:** claude-opus",
+  "",
+  `| Category | Tokens | ${Array.from({ length: 12 }, (_, i) => `Column ${i + 1}`).join(" | ")} |`,
+  `| --- | ---: | ${Array(12).fill("---").join(" | ")} |`,
+  `| System prompt | 3,100 | ${Array(12).fill("a rather long cell").join(" | ")} |`,
+  "",
+  "```sh",
+  "bun test --coverage",
+  "```",
+].join("\n");
+
 /**
  * A scripted chat (7.3b) standing in for the service's `hive::chat`, so the UI can be built and
  * tested without `claude`. Every turn: user → thinking → assistant → tool running → tool ok →
  * live assistant text → usage. Words in the turn's text add more: `permission`, `question` or
  * `plan` end the turn on a request (answered with `chat_request_gone` and a reply),
- * `subagent` adds an `Agent` call with its subagent's entries, `compact` a divider, `error`
+ * `subagent` adds an `Agent` call with its subagent's entries, `markdown` a reply with a heading,
+ * a wide table and a code block (8.6), `compact` a divider, `error`
  * a retry and an error entry, `crash` closes the chat with an error. The first chat in each
  * folder asks `confirm_chat_folder`.
  */
@@ -204,6 +220,7 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
       tool("Read", "notes.txt", "alpha\nbeta\n", parent);
       show([{ ...call, status: "ok", output: "notes.txt has 2 lines." }]);
     }
+    if (has("markdown")) show([entry(chat, "assistant", MOCK_MARKDOWN)]);
     if (has("compact")) {
       steps.push(() => status(id, chat, { compacting: true }));
       const divider = entry(chat, "divider", "Conversation compacted (150k tokens)");

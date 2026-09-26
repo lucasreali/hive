@@ -2,6 +2,7 @@ import { CheckIcon, CircleNotchIcon, WarningCircleIcon } from "@phosphor-icons/r
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 import type { ChatEntry, ChatImage, ToolStatus } from "../store";
+import { Markdown } from "./Markdown";
 
 /** How a message's author is named: a chat's own, and a subagent's (6.10, nested ones). */
 export type Labels = { user: string; assistant: string };
@@ -70,7 +71,8 @@ function Pictures({ images }: { images: ChatImage[] }) {
 }
 
 /**
- * One entry, by its kind (plain text: no Markdown, 7.3 decision). Memoized: live text (7.3h)
+ * One entry, by its kind: Claude's messages as Markdown (8.6), everything else plain text (the
+ * user's own messages too). Memoized: live text (7.3h)
  * replaces one entry, and the store keeps the others, so only its row renders again.
  */
 const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Labels }) {
@@ -82,7 +84,7 @@ const Row = memo(function Row({ entry, labels }: { entry: ChatEntry; labels: Lab
         <>
           <span className="transcript-role">{names[entry.kind]}</span>
           <span className="transcript-text">
-            {entry.text}
+            {entry.kind === "assistant" ? <Markdown text={entry.text} /> : entry.text}
             <Pictures images={entry.images} />
           </span>
         </>
