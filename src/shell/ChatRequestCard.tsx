@@ -13,7 +13,8 @@ const KINDS = {
 
 /**
  * A permission, question or plan waiting on the human (7.3), pinned above the composer until
- * the service sends `chat_request_gone`. It takes the focus when it appears; Enter answers with
+ * the service sends `chat_request_gone`. It takes the focus when it appears, unless the user is
+ * typing somewhere (8.10): then it only shows, and its keys work once focused. Enter answers with
  * the primary action (in the message or feedback field: deny with it, or keep planning), Esc
  * denies. The service validates the answer; the card only sends it, once.
  */
@@ -24,7 +25,14 @@ export function ChatRequestCard({ chat, request }: { chat: number; request: Chat
   const [picked, setPicked] = useState<string[][]>(() => request.questions.map(() => []));
   const [other, setOther] = useState<string[]>(() => request.questions.map(() => ""));
   const card = useRef<HTMLElement>(null);
-  useEffect(() => card.current?.focus(), []);
+  useEffect(() => {
+    const active = document.activeElement;
+    const typing =
+      active instanceof HTMLTextAreaElement ||
+      active instanceof HTMLInputElement ||
+      (active instanceof HTMLElement && active.isContentEditable);
+    if (!typing) card.current?.focus();
+  }, []);
 
   const answer = (value: ChatAnswer) => {
     if (sent) return;

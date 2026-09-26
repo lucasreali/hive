@@ -568,7 +568,28 @@ pub enum Control {
         path: String,
         to: String,
     },
-    /// Nothing was created or renamed. Shown as is.
+    /// App → service: move the file `path` into `folder` (relative to the worktree, empty for
+    /// its root), keeping its name (8.3). Never overwrites. Answered by `FileRenamed` or
+    /// `FileOpFailed`.
+    MoveFile {
+        worktree: String,
+        path: String,
+        folder: String,
+    },
+    /// App → service: create the folder `name` in `folder` (relative to the worktree, empty
+    /// for its root) (8.3). Never over an existing entry. Answered by `FolderCreated` or
+    /// `FileOpFailed`.
+    CreateFolder {
+        worktree: String,
+        folder: String,
+        name: String,
+    },
+    /// The folder was created at `path` (relative to the worktree).
+    FolderCreated {
+        worktree: String,
+        path: String,
+    },
+    /// Nothing was created, renamed or moved. Shown as is.
     FileOpFailed {
         worktree: String,
         message: String,
@@ -770,7 +791,8 @@ pub struct ChatEntry {
     pub status: Option<ToolStatus>,
     /// A tool's result.
     pub output: Option<String>,
-    pub image: Option<ChatImage>,
+    /// A user turn's images, or a tool result's one image.
+    pub images: Vec<ChatImage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1660,7 +1682,7 @@ mod tests {
             parent: Some("toolu_1".into()),
             status: Some(ToolStatus::Running),
             output: None,
-            image: None,
+            images: vec![],
         };
         let request = ChatRequest {
             id: "req_8".into(),
@@ -1721,12 +1743,12 @@ mod tests {
                             parent: None,
                             status: Some(ToolStatus::Error),
                             output: Some("o".into()),
-                            image: Some(image),
+                            images: vec![image],
                         },
                     ],
                     replace_last: true,
                 },
-                r#"{"type":"chat_entries","chat":2,"entries":[{"id":3,"kind":"tool","text":"cargo test","tool":"Bash","parent":"toolu_1","status":"running","output":null,"image":null},{"id":4,"kind":"usage","text":"1 s","tool":null,"parent":null,"status":"error","output":"o","image":{"media_type":"image/png","data":"iVBO"}}],"replace_last":true}"#,
+                r#"{"type":"chat_entries","chat":2,"entries":[{"id":3,"kind":"tool","text":"cargo test","tool":"Bash","parent":"toolu_1","status":"running","output":null,"images":[]},{"id":4,"kind":"usage","text":"1 s","tool":null,"parent":null,"status":"error","output":"o","images":[{"media_type":"image/png","data":"iVBO"}]}],"replace_last":true}"#,
             ),
             (
                 Control::ChatRequest { chat: 2, request },
@@ -2163,7 +2185,7 @@ mod tests {
     }
 
     #[test]
-    fn create_and_rename_messages_are_tagged_json() {
+    fn create_rename_and_move_messages_are_tagged_json() {
         let create = Control::CreateFile {
             worktree: "/r".into(),
             folder: "d".into(),
@@ -2206,6 +2228,32 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &failed).payload[..],
             br#"{"type":"file_op_failed","worktree":"/r","message":"m"}"#
+        );
+        let moving = Control::MoveFile {
+            worktree: "/r".into(),
+            path: "d/a".into(),
+            folder: "e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &moving).payload[..],
+            br#"{"type":"move_file","worktree":"/r","path":"d/a","folder":"e"}"#
+        );
+        let folder = Control::CreateFolder {
+            worktree: "/r".into(),
+            folder: "d".into(),
+            name: "e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &folder).payload[..],
+            br#"{"type":"create_folder","worktree":"/r","folder":"d","name":"e"}"#
+        );
+        let created = Control::FolderCreated {
+            worktree: "/r".into(),
+            path: "d/e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &created).payload[..],
+            br#"{"type":"folder_created","worktree":"/r","path":"d/e"}"#
         );
     }
 

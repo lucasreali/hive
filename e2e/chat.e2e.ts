@@ -81,13 +81,15 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
   const input = chat.getByRole("textbox", { name: "Message" });
   await expect(input).toBeEnabled();
 
-  await input.evaluate((element, dot) => {
-    const bytes = Uint8Array.from(atob(dot), (c) => c.charCodeAt(0));
-    const clipboardData = new DataTransfer();
-    clipboardData.items.add(new File([bytes], "dot.png", { type: "image/png" }));
-    const paste = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
-    element.dispatchEvent(paste);
-  }, DOT);
+  const paste = () =>
+    input.evaluate((element, dot) => {
+      const bytes = Uint8Array.from(atob(dot), (c) => c.charCodeAt(0));
+      const clipboardData = new DataTransfer();
+      clipboardData.items.add(new File([bytes], "dot.png", { type: "image/png" }));
+      const paste = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
+      element.dispatchEvent(paste);
+    }, DOT);
+  await paste();
   const thumbs = chat.getByRole("list", { name: "Images to send" }).getByRole("img");
   await expect(thumbs).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
 
@@ -119,13 +121,25 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
   expect(mode?.y).toBeGreaterThan((message?.y as number) + (message?.height as number) - 1);
   expect(send?.x).toBeGreaterThan(mode?.x as number);
 
+  // A second image: the message with both is one "You" row, its thumbnails side by side (8.18).
+  await paste();
+  await expect(thumbs).toHaveCount(2);
   await input.fill("what is this?");
   await input.press("Enter");
   await expect(chat.getByRole("list", { name: "Images to send" })).toBeHidden();
 
-  const sent = chat.locator('.transcript-entry[data-role="user"]').first();
+  const users = chat.locator('.transcript-entry[data-role="user"]');
+  await expect(users).toHaveCount(1);
+  const sent = users.first();
   await expect(sent).toContainText("what is this?");
-  const image = sent.getByTitle("Enlarge the image");
+  const images = sent.getByTitle("Enlarge the image");
+  await expect(images).toHaveCount(2);
+  const [left, right] = await Promise.all(
+    [images.nth(0), images.nth(1)].map((i) => i.boundingBox()),
+  );
+  expect(right?.y).toBe(left?.y);
+  expect(right?.x).toBeGreaterThan((left?.x as number) + (left?.width as number));
+  const image = images.first();
   await expect(image.locator("img")).toHaveAttribute("src", `data:image/png;base64,${DOT}`);
   await image.click();
   await expect(sent.getByTitle("Shrink the image")).toHaveAttribute("aria-pressed", "true");
@@ -151,16 +165,21 @@ test("chat: permission, question and plan cards pin above the composer and answe
   await page.getByRole("menuitem", { name: "Agent" }).click();
   await page.getByRole("button", { name: "Start chat" }).click();
   const chat = page.getByRole("region", { name: "Chat" });
-  const input = chat.getByRole("textbox", { name: "Message" });
+  const input = chat.getByRole("textbox", { name: "Message", exact: true });
   await expect(input).toBeEnabled();
   const reply = chat.locator('[data-role="assistant"]').last();
 
-  // A permission takes the focus; Enter allows it and the card goes.
+  // A permission leaves the focus in the composer (8.10): typing goes on there. Once the
+  // user clicks the card, Enter allows it and the card goes.
   await input.fill("ask permission to clean");
   await input.press("Enter");
   const permission = chat.getByRole("region", { name: "Permission request" });
-  await expect(permission).toBeFocused();
   await expect(permission.locator("pre")).toHaveText("rm -rf target");
+  await expect(input).toBeFocused();
+  await page.keyboard.type("draft");
+  await expect(input).toHaveValue("draft");
+  await permission.locator("pre").click();
+  await expect(permission).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(permission).toBeHidden();
   await expect(reply).toHaveText(/Allowed, so I went ahead\./);
@@ -305,4 +324,106 @@ test("chat: Claude's Markdown renders, and a wide table scrolls inside its messa
   expect(sizes).toEqual({ wide: true, overflow: 0 });
   await scroller.evaluate((el) => el.scrollBy(200, 0));
   await expect.poll(() => scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+});
+
+test("chat: scrolled up, a back-to-bottom button and the prompt bar show, and new entries wait", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await expect(page.getByRole("dialog", { name: "Chat in this folder?" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  const chat = page.getByRole("region", { name: "Chat" });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  const usages = chat.locator('[data-role="usage"]');
+  await expect(input).toBeEnabled();
+  // A turn: Send turns into Stop while it runs (rows off-screen are not rendered to count).
+  const send = async (text: string) => {
+    await input.fill(text);
+    await input.press("Enter");
+    await expect(chat.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(chat.getByRole("button", { name: "Send" })).toBeVisible();
+  };
+  const long = `first message ${"and more words ".repeat(40)}\nwith a second line`;
+  for (const text of [long, ...Array.from({ length: 9 }, (_, i) => `message ${i + 2}`)]) {
+    await send(text);
+  }
+  const transcript = chat.locator(".transcript");
+  const down = chat.getByTitle("Scroll to the bottom");
+  const bar = chat.getByTitle("Scroll to this message");
+  // At the bottom, neither shows.
+  await expect(down).toBeHidden();
+  await expect(bar).toBeHidden();
+
+  // Wheel to the top: the first prompt, on one clamped line, and the button.
+  await transcript.hover();
+  await page.mouse.wheel(0, -20000);
+  await expect(down).toBeVisible();
+  await expect(bar).toContainText("first message and more words");
+  expect((await bar.boundingBox())?.height).toBeLessThan(40);
+  expect(
+    await bar
+      .locator(".conversation-prompt-text")
+      .evaluate((el) => el.scrollWidth > el.clientWidth),
+  ).toBe(true);
+
+  // A little into message 3's turn, the bar shows it; a click brings it back below the bar.
+  const third = chat.locator('.transcript-entry[data-role="user"]', { hasText: "message 3" });
+  await third.evaluate((el) => el.scrollIntoView());
+  await page.mouse.wheel(0, 40);
+  await expect(bar).toContainText("message 3");
+  await page.mouse.wheel(0, 150);
+  await bar.click();
+  await expect
+    .poll(async () => {
+      const [row, top] = [await third.boundingBox(), await bar.boundingBox()];
+      return Math.round((row?.y ?? 0) - ((top?.y ?? 0) + (top?.height ?? 0)));
+    })
+    .toBeGreaterThanOrEqual(-1);
+  await expect(third).toBeInViewport();
+
+  // New entries do not move a scrolled-up view.
+  const offset = await transcript.evaluate((el) => el.scrollTop);
+  await send("message 11");
+  expect(await transcript.evaluate((el) => el.scrollTop)).toBe(offset);
+  await expect(down).toBeVisible();
+
+  // The button goes back to the newest entry, and the view follows again.
+  await down.click();
+  await expect(down).toBeHidden();
+  await expect(bar).toBeHidden();
+  await expect(usages.last()).toBeInViewport();
+  await send("message 12");
+  await expect(usages.last()).toBeInViewport();
+});
+
+test("chat: the draft and its caret come back after another tab was shown", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  const plus = page.getByTitle("New terminal, agent or file");
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await page.keyboard.press("Enter");
+  const input = page
+    .getByRole("region", { name: "Chat" })
+    .getByRole("textbox", { name: "Message" });
+  await input.fill("half a thought");
+  await input.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 6));
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" }).getByRole("tab");
+  await plus.click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
+  await expect(input).toBeHidden();
+  await tabs.first().click();
+  await expect(input).toHaveValue("half a thought");
+  expect(
+    await input.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd]),
+  ).toEqual([5, 6]);
 });

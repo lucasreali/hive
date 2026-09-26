@@ -7,7 +7,15 @@ import {
   getIconForFile,
   getIconForFolder,
 } from "@react-symbols/icons/utils";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -30,6 +38,7 @@ import {
   FilesView,
   fileRows,
   fileTarget,
+  HOVER_OPEN_MS,
   leaveFile,
   NAME_LIMIT,
   RightPanel,
@@ -752,4 +761,107 @@ test("a right click opens the files menu for its row, below the rows for the roo
   // On a row without the pointer: under the row itself.
   fireEvent.contextMenu(screen.getByRole("treeitem", { name: "src" }));
   expect(menu()).toMatchObject({ folder: "src", path: null, x: 0, y: 0 });
+});
+
+test("folders created from the tree show even when git lists nothing in them", () => {
+  const rows = fileRows("/w", [file("a/x.ts")], { "files:/w/new": false }, "files", [
+    "new/inner",
+    "a",
+  ]);
+  expect(rows.map((r) => [r.kind, r.name, r.depth])).toEqual([
+    ["folder", "a", 0],
+    ["folder", "new", 0],
+    ["folder", "inner", 1],
+  ]);
+  filesView();
+  act(() => apply({ type: "folder_created", worktree: fixLogin.path, path: "src/empty" }));
+  expect(screen.getByRole("treeitem", { name: "empty" }).getAttribute("aria-expanded")).toBe(
+    "false",
+  );
+  // Only the Files tree shows them, not the Diff one.
+  cleanup();
+  setPanelView("changes");
+  render(<RightPanel />);
+  expand();
+  expect(screen.queryByRole("treeitem", { name: "empty" })).toBeNull();
+});
+
+test("a file dragged onto a folder, a file or below the rows moves there", async () => {
+  const moved = spyOn(transport, "moveFile").mockResolvedValue();
+  filesView();
+  const row = (name: string | RegExp) => screen.getByRole("treeitem", { name });
+  const dataTransfer = {};
+  // The events' own data transfer (the testing library copies the one passed).
+  let last: DataTransfer | null = null;
+  const seen = (e: Event) => {
+    last = (e as DragEvent).dataTransfer;
+  };
+  for (const type of ["dragstart", "dragover"]) document.addEventListener(type, seen);
+  const readme = row(/^README/);
+  expect(readme.getAttribute("draggable")).toBe("true");
+  expect(row("src").getAttribute("draggable")).toBe("false");
+  // A drag from outside the tree (e.g. a file of the system) is not a move.
+  fireEvent.dragOver(row("src"), { dataTransfer });
+  fireEvent.drop(row("src"), { dataTransfer });
+  expect(moved).not.toHaveBeenCalled();
+
+  fireEvent.dragStart(readme, { dataTransfer });
+  const started = last as unknown as DataTransfer;
+  expect([started.getData("text/plain"), started.effectAllowed]).toEqual(["README.md", "move"]);
+  fireEvent.dragOver(row("src"), { dataTransfer });
+  expect([row("src").dataset.fileDrop, (last as unknown as DataTransfer).dropEffect]).toEqual([
+    "true",
+    "move",
+  ]);
+  // A closed folder hovered for a moment opens.
+  await waitFor(() => expect(row("src").getAttribute("aria-expanded")).toBe("true"), {
+    timeout: HOVER_OPEN_MS * 3,
+  });
+  fireEvent.drop(row("src"), { dataTransfer });
+  expect(moved).toHaveBeenCalledWith(fixLogin.path, "README.md", "src");
+  expect(row("src").dataset.fileDrop).toBe("false");
+
+  // Onto a file: its folder. Its own folder does nothing.
+  fireEvent.dragStart(row("main.ts"), { dataTransfer });
+  fireEvent.dragOver(readme, { dataTransfer });
+  const scroller = document.querySelector(".files-tree") as HTMLElement;
+  expect(scroller.dataset.fileDrop).toBe("true");
+  fireEvent.drop(readme, { dataTransfer });
+  expect(moved).toHaveBeenLastCalledWith(fixLogin.path, "src/main.ts", "");
+  fireEvent.dragStart(row("main.ts"), { dataTransfer });
+  fireEvent.drop(row("auth"), { dataTransfer });
+  expect(moved).toHaveBeenLastCalledWith(fixLogin.path, "src/main.ts", "src/auth");
+  fireEvent.dragStart(row("main.ts"), { dataTransfer });
+  fireEvent.drop(row("src"), { dataTransfer });
+  expect(moved).toHaveBeenCalledTimes(3);
+  // Below the rows: the root.
+  fireEvent.dragStart(row("main.ts"), { dataTransfer });
+  fireEvent.drop(tree(), { dataTransfer });
+  expect(moved).toHaveBeenLastCalledWith(fixLogin.path, "src/main.ts", "");
+
+  // Leaving the tree, or hovering another row, cancels a pending open; the drag's end clears it.
+  fireEvent.dragStart(readme, { dataTransfer });
+  fireEvent.dragOver(row("docs"), { dataTransfer });
+  fireEvent.dragOver(row("docs"), { dataTransfer });
+  // happy-dom's drag events carry no `relatedTarget`: set it.
+  const leave = (from: Element, to: Element) => {
+    const event = createEvent.dragLeave(from);
+    Object.defineProperty(event, "relatedTarget", { value: to });
+    fireEvent(from, event);
+  };
+  leave(row("docs"), readme);
+  expect(row("docs").dataset.fileDrop).toBe("true");
+  leave(scroller, document.body);
+  expect(row("docs").dataset.fileDrop).toBe("false");
+  fireEvent.dragOver(row("docs"), { dataTransfer });
+  fireEvent.dragOver(readme, { dataTransfer });
+  fireEvent.dragEnd(readme, { dataTransfer });
+  await new Promise((done) => setTimeout(done, HOVER_OPEN_MS * 1.5));
+  expect(row("docs").getAttribute("aria-expanded")).toBe("false");
+  expect(scroller.dataset.fileDrop).toBe("false");
+  // An open folder does not wait to open.
+  fireEvent.dragStart(readme, { dataTransfer });
+  fireEvent.dragOver(row("src"), { dataTransfer });
+  fireEvent.dragEnd(readme, { dataTransfer });
+  for (const type of ["dragstart", "dragover"]) document.removeEventListener(type, seen);
 });

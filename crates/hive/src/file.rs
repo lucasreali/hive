@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hasher};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -187,16 +187,32 @@ fn taken(name: &str) -> impl FnOnce(io::Error) -> io::Error {
     }
 }
 
+/// `folder` of the worktree at `dir` (empty: its root, `root`), resolved inside it and not in
+/// its `.git`.
+fn folder_in(dir: &Path, root: &Path, folder: &str) -> io::Result<PathBuf> {
+    match folder {
+        "" => Ok(root.to_path_buf()),
+        folder => not_git(root, inside(dir, &dir.join(relative(folder)?))?),
+    }
+}
+
+/// `folder` (resolved, inside `root`), unless it is in the repository's `.git`: a file moved
+/// there could become a hook, one moved out breaks the repository.
+fn not_git(root: &Path, folder: PathBuf) -> io::Result<PathBuf> {
+    let rel = folder.strip_prefix(root).unwrap_or(&folder);
+    if rel.components().any(|c| c.as_os_str() == ".git") {
+        return Err(io::Error::other("Hive does not change what is inside .git"));
+    }
+    Ok(folder)
+}
+
 /// Creates the empty file `name` in `folder` of the worktree at `dir` (empty: its root), never
 /// over an existing one (`O_EXCL`, which also refuses a symlink). The folder must resolve
 /// inside `dir`. Returns the new file's path relative to the worktree.
 pub fn create(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
     let name = file_name(name)?;
     let root = dir.canonicalize()?;
-    let parent = match folder {
-        "" => root.clone(),
-        folder => inside(dir, &dir.join(relative(folder)?))?,
-    };
+    let parent = folder_in(dir, &root, folder)?;
     let path = parent.join(name);
     OpenOptions::new()
         .write(true)
@@ -207,6 +223,36 @@ pub fn create(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
     Ok(relative_to(&root, &path))
 }
 
+/// Creates the folder `name` (0755, less the umask) in `folder` of the worktree at `dir` (empty:
+/// its root), never over an existing entry. The folder must resolve inside `dir`. Returns the
+/// new folder's path relative to the worktree.
+pub fn create_folder(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
+    let name = file_name(name)?;
+    let root = dir.canonicalize()?;
+    let parent = folder_in(dir, &root, folder)?;
+    let path = parent.join(name);
+    fs::DirBuilder::new()
+        .mode(0o755)
+        .create(&path)
+        .map_err(taken(name))?;
+    let _ = File::open(&parent).and_then(|folder| folder.sync_all());
+    Ok(relative_to(&root, &path))
+}
+
+/// The regular file `path` of the worktree at `dir` (resolved: `root`; the entry itself, not
+/// what a symlink points to), in its folder resolved inside `dir` and not in its `.git`.
+fn source(dir: &Path, root: &Path, path: &str) -> io::Result<PathBuf> {
+    let rel = relative(path)?;
+    // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
+    let joined = dir.join(rel);
+    let parent = not_git(root, inside(dir, joined.parent().unwrap_or(dir))?)?;
+    let from = parent.join(joined.file_name().unwrap_or_default());
+    if !from.symlink_metadata()?.is_file() {
+        return Err(io::Error::other(format!("{path} is not a regular file")));
+    }
+    Ok(from)
+}
+
 /// Renames the regular file `path` of the worktree at `dir` to `name` in the same folder,
 /// never over an existing entry. Returns the new path relative to the worktree.
 pub fn rename(dir: &Path, path: &str, name: &str) -> io::Result<String> {
@@ -214,11 +260,6 @@ pub fn rename(dir: &Path, path: &str, name: &str) -> io::Result<String> {
 }
 
 /// [`rename`] with the removal of the old name passed in, so its failure can be tested.
-///
-/// A hard link to the new name (which fails when it exists, where `rename(2)` would replace
-/// it), then the old name removed; when that fails, the new link goes again.
-// ponytail: both names exist for a moment, and a file system without hard links refuses;
-// `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)` if either matters.
 pub fn rename_with(
     dir: &Path,
     path: &str,
@@ -226,28 +267,62 @@ pub fn rename_with(
     unlink: &dyn Fn(&Path) -> io::Result<()>,
 ) -> io::Result<String> {
     let name = file_name(name)?;
-    let rel = relative(path)?;
     let root = dir.canonicalize()?;
-    // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
-    let joined = dir.join(rel);
-    let parent = inside(dir, joined.parent().unwrap_or(dir))?;
-    let from = parent.join(joined.file_name().unwrap_or_default());
-    // The entry itself, not what a symlink points to.
-    if !from.symlink_metadata()?.is_file() {
-        return Err(io::Error::other(format!("{path} is not a regular file")));
+    let from = source(dir, &root, path)?;
+    relink(&root, &from, &from.with_file_name(name), unlink)
+}
+
+/// Moves the regular file `path` of the worktree at `dir` into `folder` (empty: the root),
+/// keeping its name, never over an existing entry; its own folder leaves it where it is.
+/// Returns the new path relative to the worktree.
+pub fn move_to(dir: &Path, path: &str, folder: &str) -> io::Result<String> {
+    move_with(dir, path, folder, &|from| fs::remove_file(from))
+}
+
+/// [`move_to`] with the removal of the old name passed in, so its failure can be tested.
+pub fn move_with(
+    dir: &Path,
+    path: &str,
+    folder: &str,
+    unlink: &dyn Fn(&Path) -> io::Result<()>,
+) -> io::Result<String> {
+    let root = dir.canonicalize()?;
+    let from = source(dir, &root, path)?;
+    let to = folder_in(dir, &root, folder)?.join(from.file_name().unwrap_or_default());
+    if to == from {
+        return Ok(relative_to(&root, &from));
     }
-    let to = parent.join(name);
-    fs::hard_link(&from, &to).map_err(taken(name))?;
-    match unlink(&from) {
+    relink(&root, &from, &to, unlink)
+}
+
+/// Moves the file `from` to `to`: a hard link to `to` (which fails when it exists, where
+/// `rename(2)` would replace it), then `from` removed; when that fails, the new link goes
+/// again. Returns `to` relative to `root`.
+// ponytail: both names exist for a moment, and a file system without hard links refuses;
+// the folders are checked, then used by path, so a process of the same user that swaps one
+// for a symlink in between can make it act outside the worktree. `openat(O_NOFOLLOW)` +
+// `linkat`/`unlinkat` (or `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)`) if either
+// matters.
+fn relink(
+    root: &Path,
+    from: &Path,
+    to: &Path,
+    unlink: &dyn Fn(&Path) -> io::Result<()>,
+) -> io::Result<String> {
+    let name = to.file_name().unwrap_or_default().to_string_lossy();
+    fs::hard_link(from, to).map_err(taken(&name))?;
+    match unlink(from) {
         // Someone else removed the old name meanwhile: the file is only at `to` now.
         Err(err) if err.kind() != io::ErrorKind::NotFound => {
-            let _ = fs::remove_file(&to);
+            let _ = fs::remove_file(to);
             return Err(err);
         }
         _ => {}
     }
-    let _ = File::open(&parent).and_then(|folder| folder.sync_all());
-    Ok(relative_to(&root, &to))
+    for folder in [from, to].into_iter().filter_map(Path::parent) {
+        let _ = File::open(folder).and_then(|folder| folder.sync_all());
+    }
+    Ok(relative_to(root, to))
 }
 
 /// The system that opens files for the app: Windows through WSL, or macOS itself.
@@ -823,6 +898,175 @@ mod tests {
         let gone = |_: &Path| -> io::Result<()> { Err(io::Error::from(io::ErrorKind::NotFound)) };
         assert_eq!(rename_with(dir.path(), "a", "b", &gone).unwrap(), "b");
         assert!(dir.path().join("b").exists());
+    }
+
+    #[test]
+    fn a_folder_is_created_0755_and_never_over_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(create_folder(dir.path(), "", "src").unwrap(), "src");
+        assert_eq!(create_folder(dir.path(), "src", "lib").unwrap(), "src/lib");
+        let meta = std::fs::metadata(dir.path().join("src/lib")).unwrap();
+        assert!(meta.is_dir());
+        // 0755 less the umask, which never adds bits.
+        assert_eq!(meta.permissions().mode() & 0o7022, 0);
+        assert_eq!(meta.permissions().mode() & 0o700, 0o700);
+        std::fs::write(dir.path().join("f"), "kept").unwrap();
+        let err = create_folder(dir.path(), "", "f").unwrap_err().to_string();
+        assert_eq!(err, "f already exists");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f")).unwrap(),
+            "kept"
+        );
+        let err = create_folder(dir.path(), "", "src")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "src already exists");
+        std::os::unix::fs::symlink("/nonexistent/x", dir.path().join("l")).unwrap();
+        let err = create_folder(dir.path(), "", "l").unwrap_err().to_string();
+        assert_eq!(err, "l already exists");
+        for bad in ["", ".", "..", "a/b", "a\\b", "a\0b", &"x".repeat(256)] {
+            let err = create_folder(dir.path(), "", bad).unwrap_err().to_string();
+            assert_eq!(err, "not a valid file name", "{bad:?}");
+        }
+        assert_eq!(
+            create_folder(dir.path(), "", &"x".repeat(255))
+                .unwrap()
+                .len(),
+            255
+        );
+        assert!(create_folder(dir.path(), "../", "x").is_err());
+        assert!(create_folder(dir.path(), "nope", "x").is_err());
+        assert!(create_folder(&dir.path().join("gone"), "", "x").is_err());
+        // A file is no folder to create in; that failure is told as it is.
+        let err = create_folder(dir.path(), "f", "x").unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn a_folder_is_not_created_through_a_symlink_outside() {
+        let outside = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+        let err = create_folder(dir.path(), "out", "x")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "the file resolves outside the worktree");
+        assert!(!outside.path().join("x").exists());
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        std::os::unix::fs::symlink("real", dir.path().join("alias")).unwrap();
+        assert_eq!(create_folder(dir.path(), "alias", "y").unwrap(), "real/y");
+    }
+
+    #[test]
+    fn a_file_is_moved_into_a_folder_never_over_another() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/lib")).unwrap();
+        std::fs::write(dir.path().join("src/a.ts"), "a").unwrap();
+        assert_eq!(
+            move_to(dir.path(), "src/a.ts", "src/lib").unwrap(),
+            "src/lib/a.ts"
+        );
+        assert!(!dir.path().join("src/a.ts").exists());
+        let moved = std::fs::read_to_string(dir.path().join("src/lib/a.ts")).unwrap();
+        assert_eq!(moved, "a");
+        assert_eq!(move_to(dir.path(), "src/lib/a.ts", "").unwrap(), "a.ts");
+        // Its own folder: nothing moves.
+        assert_eq!(move_to(dir.path(), "a.ts", "").unwrap(), "a.ts");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.ts")).unwrap(),
+            "a"
+        );
+        // Never over an existing entry.
+        std::fs::write(dir.path().join("src/a.ts"), "other").unwrap();
+        let err = move_to(dir.path(), "a.ts", "src").unwrap_err().to_string();
+        assert_eq!(err, "a.ts already exists");
+        let other = std::fs::read_to_string(dir.path().join("src/a.ts")).unwrap();
+        assert_eq!(
+            (other.as_str(), dir.path().join("a.ts").exists()),
+            ("other", true)
+        );
+        // Only a regular file moves, never a folder or a symlink.
+        let err = move_to(dir.path(), "src/lib", "").unwrap_err().to_string();
+        assert_eq!(err, "src/lib is not a regular file");
+        std::os::unix::fs::symlink("a.ts", dir.path().join("l")).unwrap();
+        let err = move_to(dir.path(), "l", "src").unwrap_err().to_string();
+        assert_eq!(err, "l is not a regular file");
+        assert_eq!(
+            move_to(dir.path(), "nope", "src").unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(move_to(dir.path(), "../a.ts", "src").is_err());
+        assert!(move_to(dir.path(), "a.ts", "..").is_err());
+        assert!(move_to(dir.path(), "a.ts", "/tmp").is_err());
+        assert!(move_to(dir.path(), "a.ts", "src/../..").is_err());
+        assert!(move_to(dir.path(), "a.ts", "nope").is_err());
+        assert!(move_to(&dir.path().join("gone"), "a.ts", "src").is_err());
+        // A file is no folder to move into.
+        let err = move_to(dir.path(), "src/a.ts", "a.ts").unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(dir.path().join("a.ts").exists() && dir.path().join("src/a.ts").exists());
+    }
+
+    #[test]
+    fn a_file_is_not_moved_through_a_symlink_outside() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("o"), "o").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a"), "a").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+        // Neither out of the worktree nor into it.
+        let err = move_to(dir.path(), "a", "out").unwrap_err().to_string();
+        assert_eq!(err, "the file resolves outside the worktree");
+        let err = move_to(dir.path(), "out/o", "").unwrap_err().to_string();
+        assert_eq!(err, "the file resolves outside the worktree");
+        assert!(dir.path().join("a").exists() && !outside.path().join("a").exists());
+        assert!(outside.path().join("o").exists() && !dir.path().join("o").exists());
+        // A symlinked folder inside the worktree is named by where it resolves.
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        std::os::unix::fs::symlink("real", dir.path().join("alias")).unwrap();
+        assert_eq!(move_to(dir.path(), "a", "alias").unwrap(), "real/a");
+        assert_eq!(move_to(dir.path(), "alias/a", "real").unwrap(), "real/a");
+    }
+
+    #[test]
+    fn nothing_is_created_or_moved_inside_git() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/hooks")).unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("pre-commit"), "x").unwrap();
+        std::fs::write(dir.path().join(".git/config"), "c").unwrap();
+        std::os::unix::fs::symlink(".git/hooks", dir.path().join("hooks")).unwrap();
+        let refused = "Hive does not change what is inside .git";
+        let err = |r: io::Result<String>| r.unwrap_err().to_string();
+        assert_eq!(
+            err(move_to(dir.path(), "pre-commit", ".git/hooks")),
+            refused
+        );
+        assert_eq!(err(move_to(dir.path(), "pre-commit", "hooks")), refused);
+        assert_eq!(err(move_to(dir.path(), ".git/config", "src")), refused);
+        assert_eq!(err(rename(dir.path(), ".git/config", "x")), refused);
+        assert_eq!(err(create(dir.path(), ".git", "x")), refused);
+        assert_eq!(err(create_folder(dir.path(), "hooks", "x")), refused);
+        assert!(!dir.path().join(".git/hooks/pre-commit").exists());
+        assert!(dir.path().join(".git/config").exists());
+        // A name that only starts like it is not `.git`.
+        std::fs::create_dir(dir.path().join(".github")).unwrap();
+        assert_eq!(
+            move_to(dir.path(), "pre-commit", ".github").unwrap(),
+            ".github/pre-commit"
+        );
+    }
+
+    #[test]
+    fn a_failed_move_leaves_the_old_name_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("d")).unwrap();
+        std::fs::write(dir.path().join("a"), "a").unwrap();
+        let fail = |_: &Path| -> io::Result<()> { Err(io::Error::other("no")) };
+        let err = move_with(dir.path(), "a", "d", &fail).unwrap_err();
+        assert_eq!(err.to_string(), "no");
+        assert!(dir.path().join("a").exists());
+        assert!(!dir.path().join("d/a").exists());
     }
 
     #[test]

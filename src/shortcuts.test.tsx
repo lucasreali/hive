@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, waitFor } from "@testing-library/react";
 import { asMac } from "../test/mac";
 import { App } from "./App";
 import { nextPending, shortcut } from "./shortcuts";
@@ -320,6 +320,28 @@ test("the WebView's context menu is off except in text fields and the editor", (
   // Uninstalled with the app.
   cleanup();
   expect(menu(document.body)).toBe(true);
+});
+
+test("a file or link from outside that nothing takes is refused: the WebView would open it", () => {
+  app();
+  const taken = document.body.appendChild(document.createElement("div"));
+  taken.addEventListener("drop", (e) => e.preventDefault());
+  // `fire` returns the event after it went through the window.
+  const fire = (target: Element, kind: "dragOver" | "drop", types: string[]) => {
+    const dataTransfer = { types, dropEffect: "copy" };
+    const event = createEvent[kind](target, { dataTransfer }) as DragEvent;
+    fireEvent(target, event);
+    return [event.defaultPrevented, event.dataTransfer?.dropEffect];
+  };
+  expect(fire(document.body, "dragOver", ["Files"])).toEqual([true, "none"]);
+  expect(fire(document.body, "drop", ["text/uri-list", "text/plain"])).toEqual([true, "none"]);
+  // The app's own drags are left to their targets; one taken on the way keeps its effect.
+  expect(fire(document.body, "dragOver", ["text/plain"])).toEqual([false, "copy"]);
+  expect(fireEvent.dragOver(document.body)).toBe(true);
+  expect(fire(taken, "drop", ["Files"])).toEqual([true, "copy"]);
+  taken.remove();
+  cleanup();
+  expect(fire(document.body, "drop", ["Files"])).toEqual([false, "copy"]);
 });
 
 test("Ctrl+Shift+D splits the active terminal and pressed again un-splits", async () => {

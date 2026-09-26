@@ -605,6 +605,41 @@ test("files are created and renamed as the service does, never over another", as
   ]);
 });
 
+test("files are moved and folders created as the service does, never over another", async () => {
+  const { transport, messages } = await connected();
+  const w = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).path;
+  await transport.watchWorktree(w);
+  await tick();
+  messages.length = 0;
+  await transport.createFolder(w, "", "empty");
+  await transport.createFolder(w, "empty", "inner");
+  await transport.moveFile(w, "README.md", "empty");
+  await tick();
+  const renamed = (path: string, to: string) =>
+    ({ type: "file_renamed", worktree: w, path, to }) as const;
+  expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
+    { type: "folder_created", worktree: w, path: "empty" },
+    { type: "folder_created", worktree: w, path: "empty/inner" },
+    renamed("README.md", "empty/README.md"),
+  ]);
+  messages.length = 0;
+  await transport.moveFile(w, "empty/README.md", "");
+  // Its own folder: nothing moves.
+  await transport.moveFile(w, "README.md", "");
+  await transport.createFolder(w, "", "empty");
+  await transport.createFolder(w, "", "src");
+  await transport.moveFile(w, "gone.ts", "empty");
+  await tick();
+  const failed = (message: string) => ({ type: "file_op_failed", worktree: w, message }) as const;
+  expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
+    renamed("empty/README.md", "README.md"),
+    renamed("README.md", "README.md"),
+    failed("empty already exists"),
+    failed("src already exists"),
+    failed("gone.ts does not exist"),
+  ]);
+});
+
 test("a file's Windows path for an external editor, or why not", async () => {
   const { transport, messages } = await connected();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];

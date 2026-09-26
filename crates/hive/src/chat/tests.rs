@@ -63,7 +63,7 @@ fn entry(id: u32, kind: ChatEntryKind, text: &str) -> ChatEntry {
         parent: None,
         status: None,
         output: None,
-        image: None,
+        images: vec![],
     }
 }
 
@@ -285,8 +285,8 @@ fn a_tool_result_image_goes_with_its_entry() {
     let out = stream.line(Some(result.to_string().as_bytes()));
     let entry = &entries(&out)[0];
     assert_eq!(
-        (entry.output.as_deref(), entry.image.clone()),
-        (Some(""), Some(png(data)))
+        (entry.output.as_deref(), entry.images.clone()),
+        (Some(""), vec![png(data)])
     );
 }
 
@@ -303,7 +303,7 @@ fn the_largest_tool_entry_fits_in_a_frame() {
     let result = json!({"type": "user", "message": {"content": [{"type": "tool_result",
         "tool_use_id": "t1", "content": [{"type": "text", "text": wide(MAX_TEXT * 2)}, image]}]}});
     let out = stream.line(Some(result.to_string().as_bytes()));
-    assert!(entries(&out)[0].image.is_some());
+    assert_eq!(entries(&out)[0].images.len(), 1);
     let json = serde_json::to_vec(&out.app[0]).unwrap();
     assert!(json.len() <= hive_protocol::MAX_PAYLOAD, "{}", json.len());
 }
@@ -328,18 +328,13 @@ fn a_turns_images_are_sent_as_blocks_and_shown_with_it() {
         media_type: "image/gif".into(),
         data: b,
     };
+    // One turn is one entry: its text with every image.
     assert_eq!(
         entries(&out),
-        [
-            ChatEntry {
-                image: Some(png(a.clone())),
-                ..entry(1, User, "look")
-            },
-            ChatEntry {
-                image: Some(gif),
-                ..entry(2, User, "")
-            },
-        ]
+        [ChatEntry {
+            images: vec![png(a.clone()), gif],
+            ..entry(1, User, "look")
+        }]
     );
     // An image alone has no text block; a text alone stays a string.
     assert_eq!(
@@ -376,7 +371,15 @@ fn a_turns_images_are_bounded_and_checked() {
     // Right at the limits it is sent.
     assert_eq!(stream.send("", &vec![small; MAX_IMAGES]).write.len(), 1);
     let largest = png(encoded(PNG, LARGEST));
-    assert_eq!(stream.send("", &[largest]).write.len(), 1);
+    assert_eq!(
+        stream.send("", std::slice::from_ref(&largest)).write.len(),
+        1
+    );
+    // The largest user entry (its text cut, control characters growing six times in JSON)
+    // still fits in a frame.
+    let out = stream.send(&"\u{1}".repeat(MAX_TURN), &[largest]);
+    let json = serde_json::to_vec(&out.app[0]).unwrap();
+    assert!(json.len() <= hive_protocol::MAX_PAYLOAD, "{}", json.len());
 }
 
 #[test]

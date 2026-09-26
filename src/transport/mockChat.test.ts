@@ -112,23 +112,22 @@ test("a turn plays the scripted entries, then ends idle with its usage", async (
   const entries = entriesOf(messages);
   expect(entries.map((e) => [e.id, e.kind, e.text])).toEqual([
     [1, "user", "Hello"],
-    [2, "user", ""],
-    [3, "thinking", "Let me look at the worktree first."],
-    [4, "assistant", "I'll list the files."],
-    [5, "tool", "ls -la"],
-    [5, "tool", "ls -la"],
-    [6, "assistant", "The worktree has"],
-    [6, "assistant", "The worktree has a README.md and a src folder."],
-    [7, "usage", "2.3 s · 40 output tokens · 12% context"],
+    [2, "thinking", "Let me look at the worktree first."],
+    [3, "assistant", "I'll list the files."],
+    [4, "tool", "ls -la"],
+    [4, "tool", "ls -la"],
+    [5, "assistant", "The worktree has"],
+    [5, "assistant", "The worktree has a README.md and a src folder."],
+    [6, "usage", "2.3 s · 40 output tokens · 12% context"],
   ]);
-  expect(entries[0]?.image).toEqual(image);
-  expect(entries[1]?.image).toEqual(other);
-  expect(entries.slice(4, 6).map((e) => [e.tool, e.status, e.output])).toEqual([
+  // One turn is one entry, with every image.
+  expect(entries[0]?.images).toEqual([image, other]);
+  expect(entries.slice(3, 5).map((e) => [e.tool, e.status, e.output])).toEqual([
     ["Bash", "running", null],
     ["Bash", "ok", "README.md\nsrc\n"],
   ]);
   const replaced = messages.filter((m) => m.type === "chat_entries" && m.replace_last);
-  expect(entriesOf(replaced).map((e) => e.id)).toEqual([6]);
+  expect(entriesOf(replaced).map((e) => e.id)).toEqual([5]);
   // Unknown chats are ignored.
   chat.send(9, "x", []);
   chat.setMode(9, "plan");

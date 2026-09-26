@@ -151,3 +151,36 @@ test("editing: the tree's menu renames the open file and creates a new one", asy
   await expect(page.getByRole("region", { name: "todo.md" })).toBeVisible();
   await expect(panel.getByRole("treeitem", { name: "todo.md" })).toBeVisible();
 });
+
+test("files: New Folder shows an empty folder; a dragged file moves into it, its tab follows", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const { panel } = await openReadme(page);
+  await panel.getByRole("treeitem", { name: "README.md" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New Folder…" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading")).toHaveText("New folder");
+  await dialog.getByLabel("Name").fill("notes");
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  const folder = panel.getByRole("treeitem", { name: "notes" });
+  await expect(folder).toHaveAttribute("aria-expanded", "false");
+
+  // Held over the closed folder, it opens; dropped there, the file moves in.
+  const from = await panel.getByRole("treeitem", { name: "README.md" }).boundingBox();
+  const to = await folder.boundingBox();
+  if (!from || !to) throw new Error("the rows are not shown");
+  await page.mouse.move(from.x + 40, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 40, to.y + to.height / 2);
+  await page.mouse.move(to.x + 41, to.y + to.height / 2);
+  await expect(folder).toHaveAttribute("data-file-drop", "true");
+  await expect(folder).toHaveAttribute("aria-expanded", "true");
+  await page.mouse.up();
+  await expect(page.getByRole("region", { name: "notes/README.md" })).toBeVisible();
+  await expect(panel.getByRole("treeitem", { name: "README.md" })).toHaveAttribute(
+    "title",
+    "notes/README.md",
+  );
+});

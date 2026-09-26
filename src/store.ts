@@ -80,6 +80,7 @@ export type ServiceMessage =
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   | { type: "file_created"; worktree: string; path: string }
   | { type: "file_renamed"; worktree: string; path: string; to: string }
+  | { type: "folder_created"; worktree: string; path: string }
   | { type: "file_op_failed"; worktree: string; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
   // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
@@ -279,8 +280,10 @@ export type SessionMenu = { session: string; x: number; y: number };
  * root); `path` is the file to rename, null for a folder or the tree's background.
  */
 export type FileTarget = { worktree: string; folder: string; path: string | null };
-/** The "New file" / "Rename file" dialog: its target and the service's refusal, if any. */
-export type FileDialog = FileTarget & { renaming: boolean; error: string | null };
+/** What the file name dialog does: a new file or folder in `folder`, or rename `path`. */
+export type FileDialogKind = "file" | "folder" | "rename";
+/** The "New file" / "New folder" / "Rename file" dialog: its target and the service's refusal. */
+export type FileDialog = FileTarget & { kind: FileDialogKind; error: string | null };
 
 /** A line of a file holding the searched text (`line` is 1-based). */
 export type SearchMatch = { path: string; line: number; text: string };
@@ -348,7 +351,7 @@ export type ChatEntry = {
   parent: string | null;
   status: ToolStatus | null;
   output: string | null;
-  image: ChatImage | null;
+  images: ChatImage[];
 };
 /** Mirrors `hive_protocol::ChatQuestion`: one question of an `AskUserQuestion`. */
 export type ChatQuestion = {
@@ -414,6 +417,22 @@ export type Chat = {
 };
 /** Entries kept of a chat; older ones are dropped. */
 export const CHAT_LIMIT = 2000;
+
+/**
+ * What is being typed in a chat's composer (8.14, UI state): the text, the images to send
+ * (`key` tells two equal ones apart) and the caret/selection (`start`..`end` in the text). Kept
+ * while the chat's tab is open, so it survives the composer unmounting; cleared on send.
+ */
+export type ChatDraft = {
+  text: string;
+  images: (ChatImage & { key: number })[];
+  start: number;
+  end: number;
+};
+export const EMPTY_DRAFT: ChatDraft = { text: "", images: [], start: 0, end: 0 };
+
+/** Where a chat's conversation was scrolled (8.14); `offset` matters only when not `atBottom`. */
+export type ChatScroll = { offset: number; atBottom: boolean };
 
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
@@ -633,6 +652,12 @@ export type HiveState = {
   sessionMenu: SessionMenu | null;
   fileMenu: (FileTarget & { x: number; y: number }) | null;
   fileDialog: FileDialog | null;
+  /**
+   * Folders created from the tree, by worktree: git lists no empty folder, so the tree shows
+   * these too.
+   */
+  // ponytail: kept for the window's life, even if the folder goes away outside Hive.
+  newFolders: Record<string, string[]>;
   /** The question of the "confirm" modal (`ask`). */
   question: Question | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
@@ -686,6 +711,12 @@ export type HiveState = {
   /** The alerts raised, the newest first (at most `INBOX_LIMIT`), and the newest id seen. */
   inbox: InboxItem[];
   inboxSeen: number;
+  /**
+   * The pending agents seen when the bell was last opened, with the state they were pending in
+   * (8.5): the bell's badge counts the others. An agent leaves it when it stops being pending in
+   * that state, so a new alert counts again.
+   */
+  pendingSeen: Record<string, AgentState>;
   /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
   focused: boolean;
   // Service data
@@ -744,6 +775,10 @@ export type HiveState = {
   transcript: Transcript | null;
   /** Chats (7.3) by their channel, the id of their tab. */
   chats: Record<number, Chat>;
+  /** Chat composers' drafts by chat (8.14); none means empty (`EMPTY_DRAFT`). */
+  drafts: Record<number, ChatDraft>;
+  /** Chats' scroll positions by chat (8.14); none means at the bottom. */
+  chatScrolls: Record<number, ChatScroll>;
 };
 
 export const initialState: HiveState = {
@@ -753,6 +788,7 @@ export const initialState: HiveState = {
   sessionMenu: null,
   fileMenu: null,
   fileDialog: null,
+  newFolders: {},
   question: null,
   notice: null,
   update: null,
@@ -777,6 +813,7 @@ export const initialState: HiveState = {
   split: null,
   inbox: [],
   inboxSeen: 0,
+  pendingSeen: {},
   focused: false,
   connection: { status: "connecting" },
   settings: DEFAULT_SETTINGS,
@@ -815,6 +852,8 @@ export const initialState: HiveState = {
   gotoLine: null,
   transcript: null,
   chats: {},
+  drafts: {},
+  chatScrolls: {},
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -1065,8 +1104,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { [m.id]: __, ...agentStates } = s.agentStates;
       const { [m.id]: ___, ...agentTitles } = s.agentTitles;
       const { [m.id]: ____, ...agentUsage } = s.agentUsage;
+      const { [m.id]: _____, ...pendingSeen } = s.pendingSeen;
       const shown = s.transcriptShown?.agent === m.id ? null : s.transcriptShown;
-      return { agents, agentStates, agentTitles, agentUsage, transcriptShown: shown };
+      return { agents, agentStates, agentTitles, agentUsage, pendingSeen, transcriptShown: shown };
     }
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
@@ -1076,7 +1116,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "agent_state": {
       const { type: _, id, ...status } = m;
-      return { agentStates: { ...s.agentStates, [id]: status } };
+      const agentStates = { ...s.agentStates, [id]: status };
+      if (status.pending && s.pendingSeen[id] === status.state) return { agentStates };
+      const { [id]: __, ...pendingSeen } = s.pendingSeen;
+      return { agentStates, pendingSeen };
     }
     case "projects": {
       const projects = Object.fromEntries(m.projects.map((p) => [p.id, p]));
@@ -1213,6 +1256,19 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         tabOrder: s.tabOrder.map((k) => (k === from ? to : k)),
         file: moved(s.file),
         edit: moved(s.edit),
+        ...fileDialogDone(s, m.worktree),
+      };
+    }
+    case "folder_created": {
+      // It shows at once, even empty, with the folders around it open.
+      const open = m.path
+        .split("/")
+        .slice(0, -1)
+        .map((_, i, parts) => [`files:${m.worktree}/${parts.slice(0, i + 1).join("/")}`, false]);
+      const shown = s.newFolders[m.worktree] ?? [];
+      return {
+        newFolders: { ...s.newFolders, [m.worktree]: [...shown, m.path] },
+        collapsed: { ...s.collapsed, ...Object.fromEntries(open) },
         ...fileDialogDone(s, m.worktree),
       };
     }
@@ -1361,11 +1417,11 @@ export const openProjectMenu = (projectMenu: ProjectMenu | null) =>
 export const openSessionMenu = (sessionMenu: SessionMenu | null) =>
   useHive.setState({ sessionMenu });
 export const openFileMenu = (fileMenu: HiveState["fileMenu"]) => useHive.setState({ fileMenu });
-/** The "New file" dialog for `target`, or "Rename file" for its `path` when `renaming`. */
-export const openFileDialog = (target: FileTarget, renaming = false) =>
+/** The "New file" or "New folder" dialog for `target`, or "Rename file" for its `path`. */
+export const openFileDialog = (target: FileTarget, kind: FileDialogKind = "file") =>
   useHive.setState({
     modal: "file-name",
-    fileDialog: { ...target, renaming, error: null },
+    fileDialog: { ...target, kind, error: null },
   });
 /** Asks `question` in the confirm dialog (`ConfirmDialog`). */
 export const ask = (question: Question) => useHive.setState({ modal: "confirm", question });
@@ -1374,8 +1430,14 @@ export const addToInbox = (item: Omit<InboxItem, "id">) =>
   useHive.setState((s) => ({
     inbox: [{ ...item, id: (s.inbox[0]?.id ?? 0) + 1 }, ...s.inbox].slice(0, INBOX_LIMIT),
   }));
-/** Opening the inbox marks every alert read. */
-export const markInboxRead = () => useHive.setState((s) => ({ inboxSeen: s.inbox[0]?.id ?? 0 }));
+/** Opening the inbox marks every alert read and the pending agents seen (8.5). */
+export const markInboxRead = () =>
+  useHive.setState((s) => ({
+    inboxSeen: s.inbox[0]?.id ?? 0,
+    pendingSeen: Object.fromEntries(
+      pendingAgents(s).map((a) => [a.id, s.agentStates[a.id]?.state as AgentState]),
+    ),
+  }));
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
@@ -1593,8 +1655,27 @@ export const setChat = (id: number, cwd: string | null) =>
   useHive.setState((s) => {
     if (cwd !== null) return patchChat(s, id, () => ({ cwd }));
     const { [id]: _, ...chats } = s.chats;
-    return { chats };
+    const { [id]: _draft, ...drafts } = s.drafts;
+    const { [id]: _scroll, ...chatScrolls } = s.chatScrolls;
+    return { chats, drafts, chatScrolls };
   });
+
+/**
+ * Changes chat `id`'s draft (8.14), or clears it (null, once sent). Read it with
+ * `s.drafts[id] ?? EMPTY_DRAFT`. A chat whose tab closed keeps no draft.
+ */
+export const setDraft = (id: number, patch: Partial<ChatDraft> | null) =>
+  useHive.setState((s) => {
+    if (!s.chats[id]) return {};
+    const { [id]: draft = EMPTY_DRAFT, ...drafts } = s.drafts;
+    return { drafts: patch ? { ...drafts, [id]: { ...draft, ...patch } } : drafts };
+  });
+
+/** Keeps where chat `id`'s conversation is scrolled (8.14), to come back there. */
+export const setChatScroll = (id: number, offset: number, atBottom: boolean) =>
+  useHive.setState((s) =>
+    s.chats[id] ? { chatScrolls: { ...s.chatScrolls, [id]: { offset, atBottom } } } : {},
+  );
 
 /** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
 export const focusPane = (id: number) =>
@@ -1744,6 +1825,9 @@ export function treeAgents(s: HiveState): Agent[] {
 /** Agents that need the user, in tree order: the "N pending" counter and F8's cycle. */
 export const pendingAgents = (s: HiveState): Agent[] =>
   treeAgents(s).filter((a) => s.agentStates[a.id]?.pending);
+/** Pending agents not seen since the bell was last opened: the bell's badge (8.5). */
+export const unseenPending = (s: HiveState): number =>
+  pendingAgents(s).filter((a) => s.pendingSeen[a.id] !== s.agentStates[a.id]?.state).length;
 
 /** The state of highest `urgency` among `agents` (rule 1, for a collapsed node), or null. */
 export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {

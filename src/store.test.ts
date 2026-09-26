@@ -458,8 +458,8 @@ test("a rename carries the open file, its text and its edits to the new path", (
   const s = () => useHive.getState();
   setOpenFile({ worktree: "/w", path: "a.ts" }, true);
   apply(fileAnswer("one\n"));
-  openFileDialog({ worktree: "/w", folder: "", path: "a.ts" }, true);
-  expect(s().fileDialog).toMatchObject({ renaming: true, error: null });
+  openFileDialog({ worktree: "/w", folder: "", path: "a.ts" }, "rename");
+  expect(s().fileDialog).toMatchObject({ kind: "rename", error: null });
   apply({ type: "file_renamed", worktree: "/w", path: "b.ts", to: "c.ts" });
   expect([s().openFile?.path, s().modal]).toEqual(["a.ts", null]);
   apply({ type: "file_renamed", worktree: "/w", path: "a.ts", to: "d.ts" });
@@ -474,6 +474,19 @@ test("a rename carries the open file, its text and its edits to the new path", (
   expect(s().fileDialog).toBeNull();
   openFileMenu({ worktree: "/w", folder: "", path: null, x: 1, y: 2 });
   expect(s().fileMenu).toMatchObject({ x: 1 });
+});
+
+test("a created folder is kept for the tree, with the folders around it open", () => {
+  const s = () => useHive.getState();
+  openFileDialog({ worktree: "/w", folder: "src/lib", path: null }, "folder");
+  apply({ type: "folder_created", worktree: "/w", path: "src/lib/new" });
+  expect(s()).toMatchObject({ modal: null, fileDialog: null });
+  expect(s().newFolders).toEqual({ "/w": ["src/lib/new"] });
+  expect(s().collapsed).toEqual({ "files:/w/src": false, "files:/w/src/lib": false });
+  apply({ type: "folder_created", worktree: "/w", path: "top" });
+  apply({ type: "folder_created", worktree: "/x", path: "top" });
+  expect(s().newFolders).toEqual({ "/w": ["src/lib/new", "top"], "/x": ["top"] });
+  expect(Object.keys(s().collapsed)).toHaveLength(2);
 });
 
 test("Edit starts the buffer from the last answer; Diff drops it", () => {
@@ -656,7 +669,7 @@ const chatEntry = (id: number, text: string, more: Partial<ChatEntry> = {}): Cha
   parent: null,
   status: null,
   output: null,
-  image: null,
+  images: [],
   ...more,
 });
 

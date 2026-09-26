@@ -126,6 +126,11 @@
   box-sizing: border-box;
 }
 
+/* A placeholder is never selected (8.19): Ctrl+A or a drag over the page would highlight it. */
+::placeholder {
+  user-select: none;
+}
+
 html,
 body,
 #root {
@@ -289,18 +294,6 @@ label:has(> input[type="checkbox"]:disabled) {
   font-weight: 700;
   line-height: 15px;
   text-align: center;
-}
-
-/* Alerts raised since the inbox was last opened; left of the bell, clear of the count. */
-.unread-dot {
-  position: absolute;
-  top: 4px;
-  left: 5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--bar);
-  background: var(--accent);
 }
 
 .inbox {
@@ -776,6 +769,12 @@ label:has(> input[type="checkbox"]:disabled) {
   background: var(--selected);
 }
 
+/* Where a dragged file would go (8.3): a folder, or the whole tree for the root. */
+.file-row[data-file-drop="true"],
+.files-tree[data-file-drop="true"] {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .files-tree [role="tree"]:focus-visible .file-row[data-active="true"] {
   box-shadow: inset 0 0 0 1px var(--focus);
 }
@@ -900,6 +899,15 @@ label:has(> input[type="checkbox"]:disabled) {
   align-items: baseline;
 }
 
+/* The scroller and what floats over it when scrolled up (8.13). */
+.conversation {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .transcript {
   flex: 1;
   min-height: 0;
@@ -941,6 +949,7 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text);
 }
 
+.conversation-prompt .transcript-role,
 .transcript-entry[data-role="user"] .transcript-role {
   color: var(--accent);
 }
@@ -1034,6 +1043,57 @@ label:has(> input[type="checkbox"]:disabled) {
   overflow-wrap: anywhere;
 }
 
+/* Scrolled up (8.13): the prompt bar at the top and the round "back to bottom" button. */
+.conversation-prompt {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: var(--fs-body);
+  text-align: left;
+  color: var(--text);
+}
+
+.conversation-prompt:hover {
+  background: var(--hover);
+}
+
+.conversation-prompt-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.conversation-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text-2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.conversation-bottom:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .chat-view > .files-error {
   padding: 6px 12px;
 }
@@ -1121,10 +1181,17 @@ label:has(> input[type="checkbox"]:disabled) {
   background: var(--panel);
 }
 
-/* An entry's image: a thumbnail that grows to the row's width when clicked. */
+/* An entry's images: thumbnails in a row; one grows to the row's width when clicked. */
+.chat-images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .chat-image {
   display: block;
-  margin-top: 6px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1140,6 +1207,8 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 .chat-image[aria-pressed="true"] {
+  flex-basis: 100%;
+  max-width: fit-content;
   cursor: zoom-out;
 }
 
@@ -1152,7 +1221,7 @@ label:has(> input[type="checkbox"]:disabled) {
   outline: 1px solid var(--focus);
 }
 
-.tool-details > .chat-image {
+.tool-details > .chat-images {
   margin-left: 92px;
 }
 
