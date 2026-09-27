@@ -2,16 +2,26 @@ import { ArrowUpIcon, PaperclipIcon, StopIcon, XIcon } from "@phosphor-icons/rea
 import {
   type DragEvent,
   type KeyboardEvent,
+  useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { type ChatDraft, type ChatMode, EMPTY_DRAFT, setDraft, useHive } from "../store";
+import {
+  type ChatDraft,
+  type ChatMode,
+  EMPTY_DRAFT,
+  setDraft,
+  setMentioning,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { imageUrl } from "./ConversationView";
 import { ICON } from "./icons";
+import { FILE_LIMIT, fuzzy } from "./Palette";
 
 /** The permission modes offered (7.3): never `bypassPermissions`. */
 export const MODES: { value: ChatMode; label: string }[] = [
@@ -21,6 +31,32 @@ export const MODES: { value: ChatMode; label: string }[] = [
 ];
 
 const NO_COMMANDS: string[] = [];
+const NO_FILES: string[] = [];
+
+/** A worktree listing's files and the folders holding them (ending in `/`), sorted. */
+export function mentionPaths(files: string[]): string[] {
+  const all = new Set<string>();
+  for (const file of files) {
+    for (let i = file.indexOf("/"); i >= 0; i = file.indexOf("/", i + 1)) {
+      all.add(file.slice(0, i + 1));
+    }
+    all.add(file);
+  }
+  return [...all].sort();
+}
+
+/** The paths matching `query` fuzzily, the best first (ties keep their order), at most `FILE_LIMIT`. */
+export function rankPaths(paths: string[], query: string): string[] {
+  return paths
+    .map((path) => ({ path, score: fuzzy(query, path) }))
+    .filter((e): e is { path: string; score: number } => e.score !== null)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, FILE_LIMIT)
+    .map((e) => e.path);
+}
+
+/** A path as mentioned: quoted when it holds a space, as Claude's terminal writes it. */
+export const mention = (path: string) => (/\s/.test(path) ? `@"${path}"` : `@${path}`);
 
 /**
  * The service's limits (`hive::chat::MAX_IMAGES`, `MAX_IMAGE_DATA`): at most 10 images per
@@ -55,7 +91,9 @@ export async function base64(file: Blob): Promise<string> {
  * Esc stops too; closed (or not started yet) it is disabled. The draft (text, images, caret) is
  * kept in the store by chat (8.14), so it comes back when the tab shows again. Typing `/`
  * lists the chat's slash commands that start with what follows it: ↑/↓ move, Enter or Tab
- * picks, Esc hides the list. Like Claude's terminal (8.8), ↑ on the first line brings back the
+ * picks, Esc hides the list. Typing `@` lists the files and folders of the chat's worktree the
+ * same way, fuzzy-matched, and picking one puts in its `@path` (8.12): Claude reads it itself.
+ * Like Claude's terminal (8.8), ↑ on the first line brings back the
  * messages sent in this chat (↓ walks back to what was being typed), and Ctrl+C with nothing
  * selected stops a running turn or, idle, clears the composer. The mode selector shows the service's mode and asks it for another.
  */
@@ -64,6 +102,8 @@ export function ChatComposer({ chat }: { chat: number }) {
   const { text, images } = draft;
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
+  // Where the caret is, for the `@` list.
+  const [cursor, setCursor] = useState(draft.end);
   // The draft the list was hidden for (Esc); typing shows it again.
   const [hidden, setHidden] = useState<string | null>(null);
   // ↑/↓ history (8.8): how far back (1 = the last message sent) and what was being typed.
@@ -77,12 +117,34 @@ export function ChatComposer({ chat }: { chat: number }) {
   const ready = useHive((s) => !!s.chats[chat]?.opened && !s.chats[chat]?.closed);
   const mode = useHive((s) => s.chats[chat]?.status?.mode ?? s.chats[chat]?.opened?.mode);
   const commands = useHive((s) => s.chats[chat]?.opened?.commands ?? NO_COMMANDS);
+  const cwd = useHive((s) => s.chats[chat]?.cwd);
+  // Only a worktree's files are offered, relative to it: the chat must run at its root.
+  const worktree = useHive((s) =>
+    Object.values(s.projects ?? {}).some((p) => p.worktrees.some((w) => w.path === cwd))
+      ? (cwd as string)
+      : null,
+  );
+  const listed = useHive((s) =>
+    worktree && s.worktreeFiles?.path === worktree ? s.worktreeFiles.files : NO_FILES,
+  );
+  const paths = useMemo(() => mentionPaths(listed), [listed]);
   const typed = /^\/\S*$/.test(text) && text !== hidden ? text.slice(1) : null;
-  const matches = typed === null ? [] : commands.filter((c) => c.startsWith(typed));
+  // The `@` word the caret ends, if any.
+  const word =
+    worktree && typed === null && text !== hidden
+      ? (/(?:^|\s)@([^\s@"]*)$/.exec(text.slice(0, cursor))?.[1] ?? null)
+      : null;
+  const matches =
+    typed !== null
+      ? commands.filter((c) => c.startsWith(typed))
+      : word !== null
+        ? rankPaths(paths, word)
+        : [];
   const at = Math.min(active, matches.length - 1);
   const empty = text.trim() === "" && images.length === 0;
-  const edit = (value: string) => {
+  const edit = (value: string, caret = value.length) => {
     setDraft(chat, { text: value });
+    setCursor(caret);
     setActive(0);
     setRecall(null);
   };
@@ -91,9 +153,28 @@ export function ChatComposer({ chat }: { chat: number }) {
     setDraft(chat, { text: value });
     setRecall(back === 0 ? null : { back, typed });
     caret.current = value.length;
+    setCursor(value.length);
   };
   const setImages = (next: ChatDraft["images"]) => setDraft(chat, { images: next });
-  const pick = (command: string) => edit(`/${command} `);
+  /** Puts in the picked command, or the picked path in place of the `@` word (a file then a space). */
+  const pick = (picked: string) => {
+    if (word === null) return edit(`/${picked} `);
+    const space = picked.endsWith("/") ? "" : " ";
+    const before = `${text.slice(0, cursor - word.length - 1)}${mention(picked)}${space}`;
+    edit(`${before}${text.slice(cursor)}`, before.length);
+    caret.current = before.length;
+  };
+  // The `@` list's worktree is watched while it shows (`followPanel`).
+  const mentioning = word !== null ? worktree : null;
+  useEffect(() => {
+    if (!mentioning) return;
+    setMentioning(mentioning, true);
+    return () => setMentioning(mentioning, false);
+  }, [mentioning]);
+  // The active row stays in view as ↑/↓ move through a long list.
+  useEffect(() => {
+    document.getElementById(`${id}-${at}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [id, at]);
   const send = () => {
     if (!ready || busy || empty) return;
     const sent = images.map(({ media_type, data }) => ({ media_type, data }));
@@ -221,7 +302,7 @@ export function ChatComposer({ chat }: { chat: number }) {
           className="select-list chat-commands"
           role="listbox"
           id={id}
-          aria-label="Commands"
+          aria-label={word !== null ? "Files" : "Commands"}
           // The focus stays in the message.
           onMouseDown={(event) => event.preventDefault()}
         >
@@ -237,7 +318,7 @@ export function ChatComposer({ chat }: { chat: number }) {
               onMouseMove={() => setActive(i)}
               onClick={() => pick(command)}
             >
-              /{command}
+              {word !== null ? `@${command}` : `/${command}`}
             </div>
           ))}
         </div>
@@ -273,7 +354,8 @@ export function ChatComposer({ chat }: { chat: number }) {
         rows={3}
         value={text}
         disabled={!ready}
-        onChange={(event) => edit(event.target.value)}
+        onChange={(event) => edit(event.target.value, event.target.selectionEnd)}
+        onSelect={(event) => setCursor(event.currentTarget.selectionEnd)}
         onKeyDown={keys}
         onPaste={(event) => {
           const pasted = [...event.clipboardData.files];
