@@ -442,6 +442,17 @@ async fn the_menu_removes_and_renames_worktrees() {
         std::path::Path::new(&wt("c")),
         &["switch", "-q", "-c", "other"],
     );
+    // FSEvents (macOS) reports the switch in git's worktree registry, inotify does not: the
+    // `projects` it may send (9.36) comes before the next answer.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    conn.send(0, Control::GetSettings).await;
+    loop {
+        match conn.control().await.1 {
+            Control::Settings { .. } => break,
+            Control::Projects { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
     let renamed = request(&mut conn, rename(&wt("c"), "f")).await;
     assert!(
         matches!(renamed, Control::WorktreeRenamed { .. }),
