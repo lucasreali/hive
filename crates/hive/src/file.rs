@@ -74,16 +74,20 @@ fn on_disk(dir: &Path, rel: &Path) -> io::Result<Side> {
 }
 
 /// Where a save writes `rel`: the file itself (through symlinks), or a new file in a folder
-/// that resolves inside `dir`; with the file's permission bits when it exists.
+/// that resolves inside `dir`; with the file's permission bits when it exists. Never `.git` or
+/// inside it (#56): a committed symlink into `.git` would let a save rewrite its `config`.
 fn target(dir: &Path, rel: &Path) -> io::Result<(PathBuf, Option<u32>)> {
+    let root = dir.canonicalize()?;
     if let Some(real) = resolve(dir, rel)? {
+        let real = not_git(&root, real)?;
         let mode = real.metadata()?.permissions().mode();
         return Ok((real, Some(mode)));
     }
     // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
     let joined = dir.join(rel);
     let folder = inside(dir, joined.parent().unwrap_or(dir))?;
-    Ok((folder.join(joined.file_name().unwrap_or_default()), None))
+    let file = folder.join(joined.file_name().unwrap_or_default());
+    Ok((not_git(&root, file)?, None))
 }
 
 /// Temporary files of saves in progress, so two never share a name.
@@ -1451,8 +1455,24 @@ mod tests {
         assert_eq!(err(rename(dir.path(), ".git/config", "x")), refused);
         assert_eq!(err(create(dir.path(), ".git", "x")), refused);
         assert_eq!(err(create_folder(dir.path(), "hooks", "x")), refused);
+        // Nor saved: through a committed symlink into `.git`, into a symlinked folder, or by name.
+        std::os::unix::fs::symlink("../.git/config", dir.path().join("src/notes")).unwrap();
+        let config = Some(version(b"c"));
+        let saving = |path: &str, version: Option<&str>| save(dir.path(), path, "x", version);
+        for (path, version) in [
+            ("src/notes", config.as_deref()),
+            (".git/config", config.as_deref()),
+            ("hooks/pre-commit", None),
+            (".git/new", None),
+        ] {
+            let failed = (SaveError::InvalidPath, refused.to_string());
+            assert_eq!(saving(path, version), Err(failed), "{path}");
+        }
         assert!(!dir.path().join(".git/hooks/pre-commit").exists());
-        assert!(dir.path().join(".git/config").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/config")).unwrap(),
+            "c"
+        );
         // A name that only starts like it is not `.git`.
         std::fs::create_dir(dir.path().join(".github")).unwrap();
         assert_eq!(
