@@ -265,12 +265,19 @@ impl Entry {
             *self = Self::default();
         }
         log.seek(SeekFrom::Start(self.offset))?;
-        let mut reader = BufReader::new(log.take(LOG_LIMIT.saturating_sub(self.offset)));
+        let limit = LOG_LIMIT.saturating_sub(self.offset);
+        let mut reader = BufReader::new(log.take(limit));
         let mut line = Vec::new();
-        while reader.read_until(b'\n', &mut line).is_ok() && line.ends_with(b"\n") {
-            self.offset += line.len() as u64;
-            self.progress.line(&line);
+        // Each whole line takes at least a byte, so what is left to read bounds the loop.
+        for _ in 0..=limit {
             line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(_) if line.ends_with(b"\n") => {
+                    self.offset += line.len() as u64;
+                    self.progress.line(&line);
+                }
+                _ => break,
+            }
         }
         let mut last = self.progress.clone();
         last.line(&line);
