@@ -365,12 +365,12 @@ fn reviews_and_comments_keep_the_newest() {
 
 #[test]
 fn untrusted_text_is_made_fit_to_show() {
-    assert_eq!(markdown("a\tb\r\n\u{202e}c\u{0}", 100), "a\tb\nc");
-    assert_eq!(markdown("abcd", 4), "abcd");
-    assert_eq!(markdown("abcde", 4), "abcd…");
+    assert_eq!(multiline("a\tb\r\n\u{202e}c\u{0}", 100), "a\tb\nc");
+    assert_eq!(multiline("abcd", 4), "abcd");
+    assert_eq!(multiline("abcde", 4), "abcd…");
     // Never cut inside a character.
-    assert_eq!(markdown("aé", 2), "a…");
-    assert_eq!(markdown("éé", 1), "…");
+    assert_eq!(multiline("aé", 2), "a…");
+    assert_eq!(multiline("éé", 1), "…");
     assert_eq!(
         link("https://github.com/o"),
         Some("https://github.com/o".into())
@@ -393,7 +393,10 @@ fn untrusted_text_is_made_fit_to_show() {
     assert_eq!(check_head(HEAD), Ok(()));
     assert_eq!(check_head(&"a".repeat(64)), Ok(()));
     for bad in ["", "--delete-branch", &HEAD[1..], &"g".repeat(40)] {
-        assert_eq!(check_head(bad), Err(format!("{bad:?} is not a commit")));
+        assert_eq!(
+            check_head(bad),
+            Err("The pull request's head is not a commit".into())
+        );
     }
 }
 
@@ -525,6 +528,7 @@ fn setup(remote: &str) -> Setup {
 for a in "$@"; do printf '%s\037' "$a" >> '{dir}/gh.log'; done
 printf '%s\036' "$PWD" >> '{dir}/gh.log'
 [ "$3" = 13 ] && {{ echo 'GraphQL: Pull request is not mergeable' >&2; exit 1; }}
+[ "$3" = 15 ] && {{ head -c 5000 /dev/zero | tr '\0' e >&2; exit 1; }}
 case "$1 $2" in
   "api graphql") [ -f '{dir}/fail' ] && {{ cat '{dir}/fail' >&2; exit 1; }}; cat '{SEARCH}' ;;
   "pr view") cat '{VIEW}' ;;
@@ -883,6 +887,13 @@ fn details_and_actions_send_the_right_arguments() {
     };
     assert_eq!(setup.act(13, PullAction::Close), [failed]);
     assert_eq!(setup.calls().len(), calls + 1);
+    // gh's error is cut short.
+    let [Control::PullFailed { message, .. }] = &setup.act(15, PullAction::Ready)[..] else {
+        panic!()
+    };
+    assert_eq!(message.len(), ERROR_LIMIT + '…'.len_utf8());
+    assert!(message.starts_with("gh pr ready failed: eee"), "{message}");
+    let calls = calls + 1;
     // A head that is not a commit never reaches gh.
     let bad = PullAction::Merge {
         method: MergeMethod::Merge,
@@ -891,7 +902,7 @@ fn details_and_actions_send_the_right_arguments() {
     let [Control::PullFailed { message, .. }] = &setup.act(7, bad)[..] else {
         panic!()
     };
-    assert_eq!(message, r#""--admin" is not a commit"#);
+    assert_eq!(message, "The pull request's head is not a commit");
     assert_eq!(setup.calls().len(), calls + 1);
 }
 

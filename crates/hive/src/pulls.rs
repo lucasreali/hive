@@ -42,6 +42,8 @@ const LINE_LIMIT: usize = 256;
 const BODY_LIMIT: usize = 64 << 10;
 const NOTE_LIMIT: usize = 16 << 10;
 const URL_LIMIT: usize = 2048;
+/// Most bytes of an error from `gh`.
+const ERROR_LIMIT: usize = 4 << 10;
 /// Most reviews and comments (the newest), checks and files in the details.
 const NOTES_LIMIT: usize = 50;
 const CHECKS_LIMIT: usize = 100;
@@ -368,12 +370,14 @@ fn host(env: &SpaceEnv) -> &str {
         .map_or("github.com", |account| account.host.as_str())
 }
 
-/// `gh <args>` as the space runs it. An error names the command by its first two words: the
-/// rest can be long (the query, a description).
+/// `gh <args>` as the space runs it. An error (`gh`'s stderr) is cut at [`ERROR_LIMIT`] and
+/// names the command by its first two words: the rest can be long (the query, a description).
 fn run(gh: &Gh, env: &SpaceEnv, cwd: &Path, args: &[&str], limit: u64) -> Result<Vec<u8>, String> {
     let short: Vec<&str> = args.iter().take(2).copied().collect();
-    gh.run(env, cwd, args, limit)
-        .map_err(|err| err.replacen(&args.join(" "), &short.join(" "), 1))
+    gh.run(env, cwd, args, limit).map_err(|err| {
+        let err = err.replacen(&args.join(" "), &short.join(" "), 1);
+        multiline(&err, ERROR_LIMIT)
+    })
 }
 
 /// The GitHub repository of the project at `root`, from its remotes on `host`.
@@ -465,9 +469,9 @@ fn line(value: &Value, pointer: &str) -> String {
     clip(text(value, pointer), LINE_LIMIT)
 }
 
-/// Untrusted Markdown to show: its lines and tabs kept, other control and invisible
+/// Untrusted text to show (Markdown, `gh`'s errors): its lines and tabs kept, other control and invisible
 /// characters dropped, cut at `max` bytes (then ending with "…").
-fn markdown(text: &str, max: usize) -> String {
+fn multiline(text: &str, max: usize) -> String {
     let keep = |c: &char| matches!(c, '\n' | '\t') || !invisible(*c);
     let mut clean: String = text.chars().filter(keep).collect();
     if clean.len() > max {
@@ -603,7 +607,7 @@ fn parse_view(out: &[u8], worktrees: &[Worktree]) -> Result<PullDetail, String> 
     });
     Ok(PullDetail {
         summary,
-        body: markdown(text(&view, "/body"), BODY_LIMIT),
+        body: multiline(text(&view, "/body"), BODY_LIMIT),
         head: line(&view, "/headRefOid"),
         additions: number(&view, "/additions"),
         deletions: number(&view, "/deletions"),
@@ -662,7 +666,7 @@ fn notes(view: &Value) -> Vec<PullNote> {
 fn note(item: &Value, at: &str, review: Option<ReviewState>) -> PullNote {
     PullNote {
         author: line(item, "/author/login"),
-        body: markdown(text(item, "/body"), NOTE_LIMIT),
+        body: multiline(text(item, "/body"), NOTE_LIMIT),
         at: line(item, at),
         review,
     }
@@ -673,7 +677,7 @@ fn check_head(head: &str) -> Result<(), String> {
     let hex = head.bytes().all(|b| b.is_ascii_hexdigit());
     match hex && matches!(head.len(), 40 | 64) {
         true => Ok(()),
-        false => Err(format!("{head:?} is not a commit")),
+        false => Err("The pull request's head is not a commit".to_owned()),
     }
 }
 
