@@ -317,7 +317,7 @@ impl Tokens {
 
 /// Context windows by model id, learned from the `result.modelUsage` of Hive's chats: the
 /// transcripts and hook payloads do not carry them.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Windows(HashMap<String, u64>);
 
 impl Windows {

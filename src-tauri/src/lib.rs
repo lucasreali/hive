@@ -565,9 +565,16 @@ impl Hive {
         cwd: String,
         resume: Option<String>,
         mode: Option<ChatMode>,
+        model: Option<String>,
     ) -> Result<u32, String> {
         let mut link = self.link();
-        let id = link.open(&Control::OpenChat { cwd, resume, mode })?;
+        let open = Control::OpenChat {
+            cwd,
+            resume,
+            mode,
+            model,
+        };
+        let id = link.open(&open)?;
         link.chats.insert(id);
         Ok(id)
     }
@@ -597,6 +604,12 @@ impl Hive {
 
     pub fn chat_set_mode(&self, chat: u32, mode: ChatMode) -> Result<(), String> {
         self.link().send(chat, &Control::ChatSetMode { chat, mode })
+    }
+
+    /// Answered by `chat_status` once claude takes it, or an `error` entry.
+    pub fn chat_set_model(&self, chat: u32, model: String) -> Result<(), String> {
+        self.link()
+            .send(chat, &Control::ChatSetModel { chat, model })
     }
 
     /// Answered by `chat_closed`.
@@ -1052,8 +1065,9 @@ pub mod commands {
         cwd: String,
         resume: Option<String>,
         mode: Option<ChatMode>,
+        model: Option<String>,
     ) -> Result<u32, String> {
-        hive.open_chat(cwd, resume, mode)
+        hive.open_chat(cwd, resume, mode, model)
     }
 
     #[tauri::command]
@@ -1084,6 +1098,11 @@ pub mod commands {
     #[tauri::command]
     pub fn chat_set_mode(hive: State<'_, Hive>, chat: u32, mode: ChatMode) -> Result<(), String> {
         hive.chat_set_mode(chat, mode)
+    }
+
+    #[tauri::command]
+    pub fn chat_set_model(hive: State<'_, Hive>, chat: u32, model: String) -> Result<(), String> {
+        hive.chat_set_model(chat, model)
     }
 
     #[tauri::command]

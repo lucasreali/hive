@@ -653,6 +653,7 @@ impl State {
         cwd: String,
         resume: Option<String>,
         mode: Option<ChatMode>,
+        model: Option<String>,
     ) {
         let taken = match channel {
             0 => Some("chat channels start at 1".to_owned()),
@@ -672,11 +673,16 @@ impl State {
                 project,
                 resume,
                 mode: mode.unwrap_or(ChatMode::Default),
+                model,
             }),
             None => Err(not_a_chat_folder(&cwd)),
         };
         let open = open.and_then(|open| match open.resume.as_deref() {
             Some(id) if !chat::is_session(id) => Err("not a session id to resume".to_owned()),
+            _ => Ok(open),
+        });
+        let open = open.and_then(|open| match open.model.as_deref() {
+            Some(model) if !chat::is_model(model) => Err("not a model name".to_owned()),
             _ => Ok(open),
         });
         match open {
@@ -752,8 +758,10 @@ impl State {
         env.insert(0, ("PATH", path.to_string_lossy().into_owned()));
         let started = claude.ok_or_else(|| "no claude found on PATH".to_owned());
         let started = started.and_then(|claude| {
-            let args = chat::args(&self.hooks_settings, open.mode, open.resume.as_deref());
-            let stream = chat::Stream::new(channel, cwd.clone(), open.mode, open.resume.clone());
+            let (model, resume) = (open.model.as_deref(), open.resume.as_deref());
+            let args = chat::args(&self.hooks_settings, open.mode, model, resume);
+            let (model, resume) = (open.model.clone(), open.resume.clone());
+            let stream = chat::Stream::new(channel, cwd.clone(), open.mode, model, resume);
             let started = Chat::start(stream, &claude, &args, cwd, &env);
             started.map_err(|err| format!("cannot start claude in {cwd}: {err}"))
         });
@@ -1571,9 +1579,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             }
         }),
         // The chat (7.3): its channel is its id.
-        Ok(Control::OpenChat { cwd, resume, mode }) => {
-            state.open_chat(channel, cwd, resume, mode).await
-        }
+        Ok(Control::OpenChat {
+            cwd,
+            resume,
+            mode,
+            model,
+        }) => state.open_chat(channel, cwd, resume, mode, model).await,
         Ok(Control::ConfirmChatFolder { cwd, accepted, .. }) => {
             state.confirm_chat(channel, cwd, accepted).await
         }
@@ -1587,6 +1598,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }
         Ok(Control::ChatSetMode { mode, .. }) => {
             state.chat(channel, |chat| chat.stream.set_mode(mode)).await
+        }
+        Ok(Control::ChatSetModel { model, .. }) => {
+            // A copy: the chat's output locks the windows again.
+            let windows = state.windows.lock().await.clone();
+            let set = |chat: &mut Chat| chat.stream.set_model(&model, &windows);
+            state.chat(channel, set).await
         }
         Ok(Control::CloseChat { .. }) => state.close_chat(channel).await,
         // Only a request pending on this channel's chat can be answered.

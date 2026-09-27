@@ -3,9 +3,10 @@
 
 use std::path::Path;
 
-/// The recorder's scenarios, and `streaming`: live text (7.3h), written from the documented
-/// shapes (spike 4.14).
-const SCENARIOS: [&str; 14] = [
+/// The recorder's scenarios, `streaming`: live text (7.3h), written from the documented
+/// shapes (spike 4.14), and `model-switch`: `set_model` taken, then refused (8.9, recorded by
+/// hand; claude 2.1.283).
+const SCENARIOS: [&str; 15] = [
     "text",
     "thinking",
     "tools",
@@ -20,6 +21,7 @@ const SCENARIOS: [&str; 14] = [
     "interrupt",
     "resume",
     "streaming",
+    "model-switch",
 ];
 
 #[test]

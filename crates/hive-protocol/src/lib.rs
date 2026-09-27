@@ -676,6 +676,8 @@ pub enum Control {
         cwd: String,
         resume: Option<String>,
         mode: Option<ChatMode>,
+        /// `claude --model` (8.9), e.g. the model an ended chat ran when it goes on.
+        model: Option<String>,
     },
     /// The chat's `claude` started (`system/init`).
     ChatOpened {
@@ -686,6 +688,8 @@ pub enum Control {
         mode: ChatMode,
         /// Slash commands for the composer's `/` list.
         commands: Vec<String>,
+        /// The models claude offers (its `initialize` answer), for the model selector (8.9).
+        models: Vec<ChatModel>,
         /// Set when the chat runs on an API key rather than the subscription login.
         api_key_source: Option<String>,
     },
@@ -727,12 +731,21 @@ pub enum Control {
         chat: u32,
         mode: ChatMode,
     },
+    /// App → service: switch to the model `model`, the `value` of one of `ChatOpened.models`
+    /// (8.9).
+    ChatSetModel {
+        chat: u32,
+        model: String,
+    },
     ChatStatus {
         chat: u32,
         /// A turn is running.
         busy: bool,
         mode: ChatMode,
+        /// The model claude runs (`system/init.model`), for the header.
         model: Option<String>,
+        /// The entry of `ChatOpened.models` that runs it (its `value`), for the selector.
+        choice: Option<String>,
         /// A transient API retry, e.g. "Retrying 2/10…".
         retry: Option<String>,
         compacting: bool,
@@ -770,6 +783,13 @@ pub enum ChatMode {
     Default,
     AcceptEdits,
     Plan,
+}
+
+/// A model claude offers (8.9): `value` is what `chat_set_model` sends, `name` what is shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatModel {
+    pub value: String,
+    pub name: String,
 }
 
 /// An image of a user turn or a tool result.
@@ -1710,8 +1730,9 @@ mod tests {
                     cwd: "/r".into(),
                     resume: Some("s".into()),
                     mode: Some(ChatMode::AcceptEdits),
+                    model: Some("sonnet".into()),
                 },
-                r#"{"type":"open_chat","cwd":"/r","resume":"s","mode":"accept_edits"}"#,
+                r#"{"type":"open_chat","cwd":"/r","resume":"s","mode":"accept_edits","model":"sonnet"}"#,
             ),
             (
                 Control::ChatOpened {
@@ -1721,9 +1742,13 @@ mod tests {
                     model: Some("m".into()),
                     mode: ChatMode::Plan,
                     commands: vec!["compact".into()],
+                    models: vec![ChatModel {
+                        value: "sonnet".into(),
+                        name: "Sonnet 5".into(),
+                    }],
                     api_key_source: None,
                 },
-                r#"{"type":"chat_opened","chat":2,"cwd":"/r","session":"s","model":"m","mode":"plan","commands":["compact"],"api_key_source":null}"#,
+                r#"{"type":"chat_opened","chat":2,"cwd":"/r","session":"s","model":"m","mode":"plan","commands":["compact"],"models":[{"value":"sonnet","name":"Sonnet 5"}],"api_key_source":null}"#,
             ),
             (
                 Control::ChatSend {
@@ -1822,17 +1847,25 @@ mod tests {
                 r#"{"type":"chat_set_mode","chat":2,"mode":"default"}"#,
             ),
             (
+                Control::ChatSetModel {
+                    chat: 2,
+                    model: "opus".into(),
+                },
+                r#"{"type":"chat_set_model","chat":2,"model":"opus"}"#,
+            ),
+            (
                 Control::ChatStatus {
                     chat: 2,
                     busy: true,
                     mode: ChatMode::Default,
                     model: None,
+                    choice: Some("opus".into()),
                     retry: Some("Retrying 2/10…".into()),
                     compacting: false,
                     session: None,
                     api_key_source: Some("ANTHROPIC_API_KEY".into()),
                 },
-                r#"{"type":"chat_status","chat":2,"busy":true,"mode":"default","model":null,"retry":"Retrying 2/10…","compacting":false,"session":null,"api_key_source":"ANTHROPIC_API_KEY"}"#,
+                r#"{"type":"chat_status","chat":2,"busy":true,"mode":"default","model":null,"choice":"opus","retry":"Retrying 2/10…","compacting":false,"session":null,"api_key_source":"ANTHROPIC_API_KEY"}"#,
             ),
             (
                 Control::CloseChat { chat: 2 },
@@ -1872,7 +1905,8 @@ mod tests {
             Control::OpenChat {
                 cwd: "/r".into(),
                 resume: None,
-                mode: None
+                mode: None,
+                model: None,
             }
         );
     }

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use hive_protocol::{
-    AgentEvent, ChatAnswer, ChatEntry, ChatEntryKind, ChatImage, ChatMode, ChatOption,
+    AgentEvent, ChatAnswer, ChatEntry, ChatEntryKind, ChatImage, ChatMode, ChatModel, ChatOption,
     ChatQuestion, ChatRequest, ChatRequestKind, Control, EventKind, ToolStatus,
 };
 use nix::sys::signal::{Signal, killpg};
@@ -24,6 +24,7 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
 use crate::adapter::clip;
+use crate::transcript::{CONTEXT_LIMIT, Windows};
 
 /// Longest stdout line read; a longer one is skipped (spike 5.2).
 pub const MAX_LINE: usize = 16 << 20;
@@ -46,6 +47,8 @@ const MAX_IMAGES: usize = 10;
 pub const MAX_IMAGE_DATA: usize = 3 << 20;
 /// Most models read from a `result`'s `modelUsage`.
 const MAX_MODELS: usize = 16;
+/// Most models of `initialize`'s list read.
+const MAX_CHOICES: usize = 32;
 /// Most slash commands kept.
 const MAX_COMMANDS: usize = 500;
 /// Most tool calls of a turn waiting for their result.
@@ -83,9 +86,47 @@ fn mode_of(arg: &str) -> Option<ChatMode> {
         .find(|&mode| mode_arg(mode) == arg)
 }
 
+/// A model name or alias as claude takes it (`--model`, 8.9), checked before it is ever passed:
+/// 1 to [`MAX_ID`] ASCII letters, digits and `-._:@[]`, starting with a letter or digit (never
+/// read as an option).
+pub fn is_model(name: &str) -> bool {
+    name.len() <= MAX_ID
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._:@[]".contains(&b))
+}
+
+/// The models `initialize` lists (`models[]`, 8.9): of its first [`MAX_CHOICES`], those whose
+/// `value` is a model name, each shown by its `displayName` (cut at [`MAX_ID`]) and with the model it runs
+/// (`resolvedModel`, else its value).
+fn models(list: &Value) -> Vec<(ChatModel, String)> {
+    let model = |entry: &Value| {
+        let value = Some(text(&entry["value"])).filter(|v| is_model(v))?;
+        let resolved = Some(text(&entry["resolvedModel"])).filter(|r| is_model(r));
+        let name = match text(&entry["displayName"]) {
+            "" => value.to_owned(),
+            name => clip(name, MAX_ID),
+        };
+        let listed = ChatModel {
+            value: value.to_owned(),
+            name,
+        };
+        Some((listed, resolved.unwrap_or(value).to_owned()))
+    };
+    let listed = blocks(list).iter().take(MAX_CHOICES);
+    listed.filter_map(model).collect()
+}
+
 /// `claude`'s arguments (spike 3.1): headless, stream-json both ways, permission prompts on
-/// stdio, Hive's hooks (`settings`, as the wrapper passes them), resuming `resume`.
-pub fn args(settings: &Path, mode: ChatMode, resume: Option<&str>) -> Vec<OsString> {
+/// stdio, Hive's hooks (`settings`, as the wrapper passes them), on `model` (checked with
+/// [`is_model`]), resuming `resume`.
+pub fn args(
+    settings: &Path,
+    mode: ChatMode,
+    model: Option<&str>,
+    resume: Option<&str>,
+) -> Vec<OsString> {
     let fixed = [
         "-p",
         "--input-format",
@@ -103,6 +144,9 @@ pub fn args(settings: &Path, mode: ChatMode, resume: Option<&str>) -> Vec<OsStri
     ];
     let mut args: Vec<OsString> = fixed.into_iter().map(OsString::from).collect();
     args.push(settings.into());
+    if let Some(model) = model {
+        args.extend(["--model".into(), model.into()]);
+    }
     if let Some(id) = resume {
         args.extend(["--resume".into(), id.into()]);
     }
@@ -485,6 +529,15 @@ struct Live {
     changed: bool,
 }
 
+/// A model switch claude has not answered yet: the listed model, the model it runs and its
+/// context window.
+#[derive(Debug)]
+struct Switch {
+    choice: String,
+    model: String,
+    window: u64,
+}
+
 /// A chat's conversation state, built from claude's stdout (pure: no process).
 #[derive(Debug)]
 pub struct Stream {
@@ -500,6 +553,12 @@ pub struct Stream {
     pending: Vec<(ChatRequest, Value)>,
     session: Option<String>,
     model: Option<String>,
+    /// The models claude offers (`initialize`), each with the model it runs.
+    models: Vec<(ChatModel, String)>,
+    /// The value of the listed model the chat runs, when one does.
+    choice: Option<String>,
+    /// Our latest `set_model` request's id and the model it asks for, until it is answered.
+    switching: Option<(String, Switch)>,
     mode: ChatMode,
     busy: bool,
     compacting: bool,
@@ -523,8 +582,14 @@ pub struct Stream {
 }
 
 impl Stream {
-    /// The chat on channel `chat` in `cwd`, resuming `session` if given.
-    pub fn new(chat: u32, cwd: String, mode: ChatMode, session: Option<String>) -> Self {
+    /// The chat on channel `chat` in `cwd`, on `model` if given, resuming `session` if given.
+    pub fn new(
+        chat: u32,
+        cwd: String,
+        mode: ChatMode,
+        model: Option<String>,
+        session: Option<String>,
+    ) -> Self {
         Self {
             chat,
             cwd,
@@ -534,7 +599,10 @@ impl Stream {
             tools: HashMap::new(),
             pending: Vec::new(),
             session,
-            model: None,
+            model,
+            models: Vec::new(),
+            choice: None,
+            switching: None,
             mode,
             busy: false,
             compacting: false,
@@ -584,6 +652,7 @@ impl Stream {
             busy: self.busy,
             mode: self.mode,
             model: self.model.clone(),
+            choice: self.choice.clone(),
             retry: self.retry.clone(),
             compacting: self.compacting,
             session: self.session.clone(),
@@ -603,6 +672,7 @@ impl Stream {
             model: self.model.clone(),
             mode: self.mode,
             commands: names.take(MAX_COMMANDS).map(str::to_owned).collect(),
+            models: self.models.iter().map(|(model, _)| model.clone()).collect(),
             api_key_source: self.api_key_source.clone(),
         }
     }
@@ -675,6 +745,52 @@ impl Stream {
         let mut out = self.changed(|chat, _, _| chat.mode = mode);
         out.write.push(line);
         out
+    }
+
+    /// Switches to the listed model `value` (8.9); a model claude did not offer is refused and
+    /// never sent. The chat's model follows once claude takes it, and its context window with
+    /// it (the new model's in `windows`, else the usual one); a refusal shows claude's message
+    /// and keeps the model.
+    pub fn set_model(&mut self, value: &str, windows: &Windows) -> Out {
+        let listed = self.models.iter().find(|(model, _)| model.value == value);
+        let Some((listed, model)) = listed.cloned() else {
+            let message = format!("{} is not a model this chat offers.", clip(value, MAX_ID));
+            return Out {
+                app: vec![Control::Error { message }],
+                ..Out::default()
+            };
+        };
+        let line = self.request(json!({"subtype": "set_model", "model": listed.value}));
+        let id = text(&line["request_id"]).to_owned();
+        let window = windows.of(&model).unwrap_or(CONTEXT_LIMIT);
+        let choice = listed.value;
+        self.switching = Some((
+            id,
+            Switch {
+                choice,
+                model,
+                window,
+            },
+        ));
+        Out {
+            write: vec![line],
+            ..Out::default()
+        }
+    }
+
+    /// The listed model the chat runs: its choice while that runs the chat's model, else the
+    /// first that does.
+    fn chosen(&mut self) {
+        let model = self.model.as_deref();
+        let runs = |(listed, resolved): &&(ChatModel, String)| {
+            model.is_some_and(|m| m == resolved.as_str() || m == listed.value)
+        };
+        let mut running = self.models.iter().filter(runs);
+        let choice = self.choice.as_ref();
+        let kept = (running.clone()).find(|(listed, _)| Some(&listed.value) == choice);
+        self.choice = kept
+            .or_else(|| running.next())
+            .map(|(l, _)| l.value.clone());
     }
 
     /// One stdout line; `None` for one longer than [`MAX_LINE`], which was skipped.
@@ -753,8 +869,19 @@ impl Stream {
         }
     }
 
-    /// The answer to one of our requests: `initialize`'s opens the chat.
+    /// The answer to one of our requests: `initialize`'s opens the chat; a model switch's sets
+    /// the model, or shows claude's refusal (8.9).
     fn answered(&mut self, response: &Value, entries: &mut Vec<ChatEntry>, out: &mut Out) {
+        let switched = (self.switching).take_if(|(id, _)| response["request_id"] == *id);
+        if let Some((_, switch)) = switched {
+            if response["subtype"] == "error" {
+                let error = text(&response["error"]);
+                return entries.push(self.entry(ChatEntryKind::Error, error, None));
+            }
+            (self.model, self.choice) = (Some(switch.model), Some(switch.choice));
+            out.window = Some(switch.window);
+            return;
+        }
         let ours = self.initialize.as_deref();
         if ours.is_none_or(|id| response["request_id"] != id) {
             // Interrupt receipts and mode changes need nothing.
@@ -765,6 +892,8 @@ impl Stream {
             let error = format!("claude did not start: {}", text(&response["error"]));
             entries.push(self.entry(ChatEntryKind::Error, &error, None));
         }
+        self.models = models(&response["response"]["models"]);
+        self.chosen();
         let opened = self.opened(&response["response"]["commands"]);
         out.app.push(opened);
     }
@@ -915,6 +1044,7 @@ impl Stream {
         }
         if let Some(model) = id_of(&message["model"]) {
             self.model = Some(model.to_owned());
+            self.chosen();
         }
         if let Some(mode) = message["permissionMode"].as_str().and_then(mode_of) {
             self.mode = mode;
@@ -1189,6 +1319,8 @@ pub struct Open {
     pub project: String,
     pub resume: Option<String>,
     pub mode: ChatMode,
+    /// Checked with [`is_model`].
+    pub model: Option<String>,
 }
 
 /// A running chat, as kept in the service registry.
