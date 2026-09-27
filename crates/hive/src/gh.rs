@@ -331,7 +331,8 @@ esac
         }
 
         fn path(&self) -> PathBuf {
-            self.dir.path().to_owned()
+            // Resolved: on macOS the temporary folder is behind a link, and gh sees the real one.
+            self.dir.path().canonicalize().unwrap()
         }
     }
 

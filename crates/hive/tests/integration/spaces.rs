@@ -281,13 +281,17 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
     let other = repo.root.with_file_name("other");
     std::fs::create_dir(&other).unwrap();
     repo.git_in(&other, &["init", "-q", "-b", "main"]);
+    // First on the user's `PATH` through their (temporary) shell config, as a real install
+    // would be: on macOS the login shell puts the system folders, where CI has a real gh,
+    // before the service's own `PATH`.
     let fake = fake_gh(&repo);
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let path = std::iter::once(fake).chain(std::env::split_paths(&path));
-    let path = std::env::join_paths(path).unwrap();
+    let fish = repo.env.path("config/fish");
+    std::fs::create_dir_all(&fish).unwrap();
+    let config = format!("set -gx PATH '{}' $PATH\n", fake.display());
+    std::fs::write(fish.join("config.fish"), config).unwrap();
     // A token in the service's own environment never reaches gh.
     let mut hive = repo.env.hive();
-    hive.env("PATH", path).env("GH_TOKEN", "tok-leaked");
+    hive.env("GH_TOKEN", "tok-leaked");
     let mut daemon = repo.env.daemon_with(&mut hive);
     let mut app = repo.env.connect(Role::App).await;
 
