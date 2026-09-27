@@ -83,6 +83,7 @@ export type ServiceMessage =
   | { type: "file_created"; worktree: string; path: string }
   | { type: "file_renamed"; worktree: string; path: string; to: string }
   | { type: "folder_created"; worktree: string; path: string }
+  | { type: "file_deleted"; worktree: string; path: string }
   | { type: "file_op_failed"; worktree: string; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
   // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
@@ -1136,8 +1137,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "file_renamed": {
       // Its tab, its place in the bar, its text and its edits follow the rename (or move); a
       // folder's `to` moves every path under it, with its folders' open state.
-      const to = (path: string) =>
-        path === m.path || path.startsWith(`${m.path}/`) ? m.to + path.slice(m.path.length) : null;
+      const to = (path: string) => (within(path, m.path) ? m.to + path.slice(m.path.length) : null);
       const moved = <T extends OpenFile>(f: T | null) => {
         const path = f?.worktree === m.worktree ? to(f.path) : null;
         return f && path !== null ? { ...f, path } : f;
@@ -1178,6 +1178,27 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         collapsed: { ...s.collapsed, ...Object.fromEntries(open) },
         ...fileDialogDone(s, m.worktree),
       };
+    }
+    case "file_deleted": {
+      // The entry leaves the tree at once (the next listing confirms it), and the tabs of the
+      // files it held close.
+      const gone = (path: string) => within(path, m.path);
+      const listing = s.worktreeFiles;
+      const shown = s.newFolders[m.worktree];
+      const tree = {
+        ...s,
+        worktreeFiles:
+          listing?.path === m.worktree
+            ? { ...listing, files: listing.files.filter((p) => !gone(p)) }
+            : listing,
+        newFolders: shown
+          ? { ...s.newFolders, [m.worktree]: shown.filter((p) => !gone(p)) }
+          : s.newFolders,
+      };
+      return closeDeleted(
+        tree,
+        s.openFiles.filter((f) => f.worktree === m.worktree && gone(f.path)),
+      );
     }
     case "file_op_failed":
       // Under the dialog's field, else (a drag) in the status bar.
@@ -1252,22 +1273,47 @@ function deletedFiles(s: HiveState, before: WorktreeFiles | null): HiveState {
   const gone = s.openFiles.filter(
     (f) => f.worktree === now.path && was.has(f.path) && !is.has(f.path),
   );
+  return closeDeleted(s, gone);
+}
+
+/**
+ * The tabs of the deleted files `gone` close; those with unsaved edits once the user agrees,
+ * in one question.
+ */
+function closeDeleted(s: HiveState, gone: OpenFile[]): HiveState {
+  const dirty = gone.filter((f) => {
+    const { edit } = fileTabState(s, f);
+    return edit && isDirty(edit);
+  });
+  const next = dropAll(
+    s,
+    gone.filter((f) => !dirty.includes(f)),
+  );
+  if (dirty.length === 0) return next;
+  const [one] = dirty;
+  const text =
+    dirty.length === 1
+      ? `${one?.path} was deleted. Your unsaved changes to it will be lost.`
+      : `${dirty.map((f) => f.path).join(", ")} were deleted. Your unsaved changes to them will be lost.`;
+  const question = {
+    title: "Discard changes?",
+    text,
+    action: "Discard",
+    run: () => useHive.setState((s) => dropAll(s, dirty)),
+  };
+  return { ...next, modal: "confirm", question };
+}
+
+/** `s` with the tabs of `files` closed, one after the other. */
+function dropAll(s: HiveState, files: OpenFile[]): HiveState {
   let next = s;
-  for (const f of gone) {
-    const edit = fileTabState(next, f).edit;
-    const question = {
-      title: "Discard changes?",
-      text: `${f.path} was deleted. Your unsaved changes to it will be lost.`,
-      action: "Discard",
-      run: () => useHive.setState((s) => dropFile(s, f)),
-    };
-    next = {
-      ...next,
-      ...(edit && isDirty(edit) ? { modal: "confirm", question } : dropFile(next, f)),
-    };
-  }
+  for (const f of files) next = { ...next, ...dropFile(next, f) };
   return next;
 }
+
+/** Whether `path` is `folder` or inside it. */
+export const within = (path: string, folder: string) =>
+  path === folder || path.startsWith(`${folder}/`);
 
 /** Closes the file dialog when the answer is for its worktree. */
 function fileDialogDone(s: HiveState, worktree: string): Partial<HiveState> {

@@ -37,6 +37,7 @@ import {
   setRightPanel,
   useHive,
   type Worktree,
+  within,
 } from "../store";
 import { transport } from "../transport";
 import { isDirty } from "../viewer/buffer";
@@ -46,6 +47,7 @@ import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
 import { isMac, keyText } from "../window";
 import { askDiscard } from "./ConfirmDialog";
+import { askDelete } from "./FileMenu";
 import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
 import { ResizeHandle } from "./resize";
 import { SessionsView } from "./SessionsView";
@@ -600,6 +602,8 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
       pick(row);
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if (row.kind === "folder" && row.open === (event.key === "ArrowLeft")) pick(row);
+    } else if (event.key === "Delete") {
+      askDelete(fileTarget(worktree, row));
     } else {
       return;
     }
@@ -692,8 +696,6 @@ export const HOVER_OPEN_MS = 600;
 
 /** The folder holding `path` ("" for the root). */
 const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
-/** Whether `path` is `folder` or inside it. */
-const within = (path: string, folder: string) => path === folder || path.startsWith(`${folder}/`);
 
 /**
  * Dragging a file or a folder of the Files tree onto a folder, a file (its folder) or the tree

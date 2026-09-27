@@ -605,7 +605,18 @@ pub enum Control {
         worktree: String,
         path: String,
     },
-    /// Nothing was created, renamed or moved. Shown as is.
+    /// App → service: delete the file or folder `path` (relative to the worktree) for good
+    /// (9.29). Answered by `FileDeleted` or `FileOpFailed`.
+    DeleteFile {
+        worktree: String,
+        path: String,
+    },
+    /// The file or folder `path` (as the app sent it) is gone, with everything under it.
+    FileDeleted {
+        worktree: String,
+        path: String,
+    },
+    /// Nothing was created, renamed, moved or deleted. Shown as is.
     FileOpFailed {
         worktree: String,
         message: String,
@@ -1847,6 +1858,22 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &created).payload[..],
             br#"{"type":"folder_created","worktree":"/r","path":"d/e"}"#
+        );
+        let delete = Control::DeleteFile {
+            worktree: "/r".into(),
+            path: "d/e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &delete).payload[..],
+            br#"{"type":"delete_file","worktree":"/r","path":"d/e"}"#
+        );
+        let deleted = Control::FileDeleted {
+            worktree: "/r".into(),
+            path: "d/e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &deleted).payload[..],
+            br#"{"type":"file_deleted","worktree":"/r","path":"d/e"}"#
         );
     }
 
