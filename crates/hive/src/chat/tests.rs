@@ -1699,34 +1699,54 @@ fn a_refused_mode_shows_claudes_message_and_keeps_claudes_mode() {
     assert_eq!(kinds(&out), [(Error, refused.into())]);
     assert_eq!(modes(&out)[0], ChatMode::Default);
     assert_eq!(stream.mode, ChatMode::Default);
-    // Two quick switches: the first is confirmed, the second refused, so the first stays.
+    // Three quick switches (Shift+Tab): accept edits and plan are confirmed (a success without
+    // a mode: the switch asked for is taken), auto is refused, so plan stays.
     stream.set_mode(ChatMode::AcceptEdits);
+    stream.set_mode(ChatMode::Plan);
     stream.set_mode(ChatMode::Auto);
     let response = |id: u32, body: &str| {
         format!(r#"{{"type":"control_response","response":{{"request_id":"hive-{id}",{body}}}}}"#)
     };
-    let ok = response(
-        3,
-        r#""subtype":"success","response":{"mode":"acceptEdits"}"#,
-    );
+    // Recorded (claude 2.1.283, sonnet): a success carries the mode; it is not relied on.
+    let ok = response(4, r#""subtype":"success","response":{}"#);
     assert_eq!(feed(&mut stream, &ok), Out::default());
-    // An answer that is not the last switch's (an interrupt's) changes nothing.
+    assert_eq!(stream.confirmed, ChatMode::Plan);
+    // An answer that is none of the switches' (an interrupt's) changes nothing.
     let other = response(9, r#""subtype":"error","error":"x""#);
     assert_eq!(feed(&mut stream, &other), Out::default());
-    let no = response(4, r#""subtype":"error","error":"no""#);
+    let no = response(5, r#""subtype":"error","error":"no""#);
     let out = feed(&mut stream, &no);
     assert_eq!(kinds(&out), [(Error, "no".into())]);
-    assert_eq!(modes(&out), [ChatMode::AcceptEdits]);
+    assert_eq!(modes(&out), [ChatMode::Plan]);
     // Answered once: the same answer again changes nothing.
     assert_eq!(feed(&mut stream, &no), Out::default());
+    // A refusal a later switch overrides shows nothing: the later one decides.
+    stream.set_mode(ChatMode::Auto);
+    stream.set_mode(ChatMode::Default);
+    let no = response(6, r#""subtype":"error","error":"no""#);
+    assert_eq!(feed(&mut stream, &no), Out::default());
+    assert_eq!(stream.mode, ChatMode::Default);
+    let ok = response(7, r#""subtype":"success","response":{"mode":"default"}"#);
+    assert_eq!(feed(&mut stream, &ok), Out::default());
+    assert!(stream.switches.is_empty());
     // A confirmed switch keeps the mode.
     stream.set_mode(ChatMode::Auto);
-    let ok = response(5, r#""subtype":"success","response":{"mode":"auto"}"#);
+    let ok = response(8, r#""subtype":"success","response":{"mode":"auto"}"#);
     assert_eq!(feed(&mut stream, &ok), Out::default());
     assert_eq!(
         (stream.mode, stream.confirmed),
         (ChatMode::Auto, ChatMode::Auto)
     );
+}
+
+#[test]
+fn unanswered_mode_switches_are_bounded() {
+    let mut stream = stream();
+    for _ in 0..=MAX_PENDING {
+        stream.set_mode(ChatMode::Plan);
+    }
+    assert_eq!(stream.switches.len(), MAX_PENDING);
+    assert_eq!(stream.switches[0].0, "hive-3");
 }
 
 #[test]

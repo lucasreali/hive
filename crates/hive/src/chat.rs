@@ -488,10 +488,11 @@ pub struct Stream {
     session: Option<String>,
     model: Option<String>,
     mode: ChatMode,
-    /// The mode claude last reported: a refused switch goes back to it.
+    /// The mode claude last took (reported or a switch it accepted): a refused switch goes back.
     confirmed: ChatMode,
-    /// Our latest `set_permission_mode` request's id, until it is answered.
-    mode_request: Option<String>,
+    /// Our `set_permission_mode` requests (id, mode) waiting for their answer, oldest first
+    /// (at most [`MAX_PENDING`]).
+    switches: Vec<(String, ChatMode)>,
     busy: bool,
     compacting: bool,
     retry: Option<String>,
@@ -528,7 +529,7 @@ impl Stream {
             model: None,
             mode,
             confirmed: mode,
-            mode_request: None,
+            switches: Vec::new(),
             busy: false,
             compacting: false,
             retry: None,
@@ -665,7 +666,11 @@ impl Stream {
     pub fn set_mode(&mut self, mode: ChatMode) -> Out {
         let request = json!({"subtype": "set_permission_mode", "mode": mode_arg(mode)});
         let line = self.request(request);
-        self.mode_request = line["request_id"].as_str().map(str::to_owned);
+        if self.switches.len() == MAX_PENDING {
+            self.switches.remove(0);
+        }
+        let id = text(&line["request_id"]).to_owned();
+        self.switches.push((id, mode));
         let mut out = self.changed(|chat, _, _| chat.mode = mode);
         out.write.push(line);
         out
@@ -756,13 +761,18 @@ impl Stream {
     /// (e.g. auto on a model without it, 8.4) shows claude's message and keeps the mode claude
     /// has.
     fn answered(&mut self, response: &Value, entries: &mut Vec<ChatEntry>, out: &mut Out) {
-        if let Some(mode) = response["response"]["mode"].as_str().and_then(mode_of) {
-            self.confirmed = mode;
-        }
-        let ours = self.mode_request.as_deref();
-        if ours.is_some_and(|id| response["request_id"] == id) {
-            self.mode_request = None;
-            if response["subtype"] == "error" {
+        let switch = self
+            .switches
+            .iter()
+            .position(|(id, _)| response["request_id"] == **id);
+        if let Some(at) = switch {
+            // Answered in order: older switches were answered before.
+            let mode = self.switches[at].1;
+            self.switches.drain(..=at);
+            if response["subtype"] != "error" {
+                self.confirmed = mode;
+            } else if self.switches.is_empty() {
+                // Refused, and no later switch decides the mode: it stays claude's.
                 self.mode = self.confirmed;
                 entries.push(self.entry(ChatEntryKind::Error, text(&response["error"]), None));
             }
