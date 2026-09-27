@@ -59,7 +59,16 @@ impl Store {
     /// Checks and saves `settings`, which are then in use. Nothing changes on a failure.
     pub fn set(&self, settings: Settings) -> Result<Settings, String> {
         check(&settings)?;
-        let mut current = self.current();
+        self.save_in(&mut self.current(), settings)
+    }
+
+    /// Saves `settings` and makes them `current` (held by the caller). Nothing changes on a
+    /// failure.
+    fn save_in(
+        &self,
+        current: &mut (Settings, Option<String>),
+        settings: Settings,
+    ) -> Result<Settings, String> {
         save(&self.file, &settings)
             .map_err(|err| format!("Cannot save {}: {err}", self.file.display()))?;
         *current = (settings.clone(), None);
@@ -102,13 +111,14 @@ impl Store {
     }
 
     /// Drops the settings of the project `id` (9.28): the settings then in use, or `None` when
-    /// it had none (nothing is written).
+    /// it had none (nothing is written). Under one lock, so a save meanwhile is not undone.
     pub fn forget(&self, id: &str) -> Result<Option<Settings>, String> {
-        let mut settings = self.get().0;
+        let mut current = self.current();
+        let mut settings = current.0.clone();
         if settings.projects.remove(id).is_none() {
             return Ok(None);
         }
-        self.set(settings).map(Some)
+        self.save_in(&mut current, settings).map(Some)
     }
 
     /// The scripts of the project `id` (none when it has no settings).
