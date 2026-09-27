@@ -3,6 +3,7 @@ import type {
   ChatAnswer,
   ChatImage,
   ChatMode,
+  DiffBase,
   ServiceMessage,
   SessionTarget,
   Settings,
@@ -61,8 +62,11 @@ export interface Transport {
   removeWorktree(path: string, force: boolean): Promise<void>;
   /** Renames a Claude worktree; answered by `worktree_renamed` or `rename_worktree_failed`. */
   renameWorktree(path: string, name: string): Promise<void>;
-  /** Watches one worktree instead of any other; its files arrive as `files`, again on every change. */
-  watchWorktree(path: string): Promise<void>;
+  /**
+   * Watches one worktree instead of any other; its files arrive as `files`, again on every change,
+   * each time with its `changes` against `base`.
+   */
+  watchWorktree(path: string, base: DiffBase): Promise<void>;
   /** Stops watching (the files panel closed). */
   unwatchWorktree(): Promise<void>;
   /**
@@ -74,8 +78,8 @@ export interface Transport {
   unwatchTranscript(agent: string, subagent: string): Promise<void>;
   /** The terminal shown (null: none, or a file is) and whether the window has the focus. */
   setView(terminal: number | null, focused: boolean): Promise<void>;
-  /** What differs from HEAD in the worktree at `path`; answered by `changes`. */
-  listChanges(path: string): Promise<void>;
+  /** What differs from `base` in the worktree at `path`; answered by `changes`. */
+  listChanges(path: string, base: DiffBase): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */
   listSessions(): Promise<void>;
   /** Where Windows sees a session's log or folder; answered by `session_located`. */
@@ -84,8 +88,8 @@ export interface Transport {
   deleteSession(id: string): Promise<void>;
   /** The lines of a followed worktree's files holding `query`; answered by `search_results`. */
   searchFiles(worktree: string, query: string): Promise<void>;
-  /** A file of a followed worktree on disk and at HEAD; answered by `file`. */
-  openFile(worktree: string, path: string): Promise<void>;
+  /** A file of a followed worktree on disk and at `base`; answered by `file`. */
+  openFile(worktree: string, path: string, base: DiffBase): Promise<void>;
   /**
    * Writes `content` over the file if its bytes on disk still have `version` (null: the file
    * must not exist); answered by `file_saved` or `save_failed`.

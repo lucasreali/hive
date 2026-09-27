@@ -81,7 +81,8 @@ const file = (path: string, status: ChangedFile["status"] = "modified"): Changed
 
 function changes(path: string, files: ChangedFile[], error: string | null = null): Changes {
   const sum = (key: "added" | "removed") => files.reduce((n, f) => n + (f[key] ?? 0), 0);
-  return { path, files, added: sum("added"), removed: sum("removed"), error };
+  const counts = { added: sum("added"), removed: sum("removed") };
+  return { path, base: "head", branch: null, base_error: null, files, ...counts, error };
 }
 
 function panel() {
@@ -176,7 +177,7 @@ test("without a worktree the panel says what to select", () => {
 test("the selected worktree's changes: summary, totals, letters and counts", () => {
   const asked = panel();
   act(() => select(refactor.id));
-  expect(asked).toHaveBeenCalledWith(refactor.path);
+  expect(asked).toHaveBeenCalledWith(refactor.path, "branch");
   expect(screen.getByText("refactor-auth")).toBeDefined();
   // Not its project (5.8): the panel always shows a worktree of the project you are in.
   expect(screen.queryByText("api")).toBeNull();
@@ -218,6 +219,41 @@ test("one file, no changes, and the service's error", () => {
   expect(screen.getByText("No changes in this worktree.")).toBeDefined();
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [], "git status failed") }));
   expect(screen.getByText("git status failed")).toBeDefined();
+});
+
+test("the changes compare with HEAD or the main branch, as picked, or say why not", () => {
+  const asked = panel();
+  act(() => select(fixLogin.id));
+  const toggle = () => screen.queryByRole("group", { name: "Compare with" });
+  const pressed = () =>
+    screen.getAllByRole("button", { pressed: true }).filter((b) => toggle()?.contains(b));
+  // Without a branch to compare with (the main worktree), no toggle.
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, []) }));
+  expect(toggle()).toBeNull();
+
+  const onBranch = { ...changes(fixLogin.path, []), base: "branch", branch: "main" } as const;
+  act(() => apply({ type: "changes", ...onBranch }));
+  expect(pressed().map((b) => b.textContent)).toEqual(["main"]);
+  fireEvent.click(screen.getByRole("button", { name: "HEAD" }));
+  expect(useHive.getState().diffBases).toEqual({ [fixLogin.path]: "head" });
+  expect(asked.mock.calls).toEqual([
+    [fixLogin.path, "branch"],
+    [fixLogin.path, "head"],
+  ]);
+  act(() => apply({ type: "changes", ...onBranch, base: "head" }));
+  expect(pressed().map((b) => b.textContent)).toEqual(["HEAD"]);
+  fireEvent.click(screen.getByRole("button", { name: "main" }));
+  expect(asked.mock.calls.at(-1)).toEqual([fixLogin.path, "branch"]);
+
+  // No common base: HEAD, the branch disabled with the reason.
+  const why = "No commit in common with main";
+  act(() => apply({ type: "changes", ...onBranch, base: "head", base_error: why }));
+  const branch = screen.getByRole("button", { name: "main" }) as HTMLButtonElement;
+  expect([branch.disabled, branch.title]).toEqual([true, why]);
+  // Without a branch to name, it is "Branch".
+  const detached = { ...onBranch, base: "head", branch: null, base_error: why } as const;
+  act(() => apply({ type: "changes", ...detached }));
+  expect((screen.getByRole("button", { name: "Branch" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("the panel follows the selected agent, else the shown terminal", () => {

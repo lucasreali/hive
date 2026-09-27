@@ -1,6 +1,7 @@
 import type {
   AgentState,
   ChangedFile,
+  DiffBase,
   Dirs,
   FileStatus,
   FileText,
@@ -371,17 +372,29 @@ export const MOCK_CHANGES: Record<string, ChangedFile[]> = {
   ],
 };
 
-/** A stand-in for `hive::changes::list`: the fake worktree's changes, or why not. */
-function changes(worktrees: string[], path: string): ServiceMessage {
-  if (!worktrees.includes(path)) {
+/** The service's reason a branch base falls back to HEAD without a branch to compare with. */
+const NO_BRANCH = "No branch to compare with: this is the main worktree, or it is detached";
+
+/** A stand-in for `hive::changes::answer`: the fake worktree's changes, or why not. */
+function changes(projects: Project[], path: string, asked: DiffBase): ServiceMessage {
+  const project = projects.find((p) => p.worktrees.some((w) => w.path === path));
+  if (!project) {
     const error = `${path} is not a worktree of a followed project`;
-    return { type: "changes", path, files: [], added: 0, removed: 0, error };
+    const none = { base: "head", branch: null, base_error: null } as const;
+    return { type: "changes", path, ...none, files: [], added: 0, removed: 0, error };
   }
+  // The same files against either base: only the answer's base changes.
+  const main = project.worktrees.find((w) => w.main);
+  const branch = main && main.path !== path ? main.branch : null;
+  const fallback = asked === "branch" && !branch;
   const files = MOCK_CHANGES[path] ?? [];
   const sum = (key: "added" | "removed") => files.reduce((n, f) => n + (f[key] ?? 0), 0);
   return {
     type: "changes",
     path,
+    base: fallback ? "head" : asked,
+    branch,
+    base_error: fallback ? NO_BRANCH : null,
     files,
     added: sum("added"),
     removed: sum("removed"),
@@ -575,12 +588,13 @@ export function createMockTransport(
   // Files by worktree path, and the one watched.
   const files = new Map<string, string[]>();
   let watched: string | null = null;
+  let watchedBase: DiffBase = "head";
   const worktreeAt = (path: string) =>
     projects.flatMap((p) => p.worktrees).find((w) => w.path === path);
   // As the service does after every refresh of the watched worktree: its files, then its changes.
   const sendFiles = (path: string) => {
     later({ type: "files", path, files: files.get(path) as string[], truncated: false });
-    later(changes([path], path));
+    later(changes(projects, path, watchedBase));
   };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
   const touch = (cwd: string, name: string) => {
@@ -807,13 +821,8 @@ export function createMockTransport(
       projects[projects.indexOf(project)] = updated;
       later({ type: "worktree_renamed", project: updated, from: path, path: renamed.path });
     },
-    async listChanges(path) {
-      later(
-        changes(
-          projects.flatMap((p) => p.worktrees.map((w) => w.path)),
-          path,
-        ),
-      );
+    async listChanges(path, base) {
+      later(changes(projects, path, base));
     },
     async listSessions() {
       // Only the current space's.
@@ -939,9 +948,10 @@ export function createMockTransport(
       }
       if (scenario === "load") print(id, ECHO_MARK);
     },
-    async watchWorktree(path) {
+    async watchWorktree(path, base) {
       const worktree = worktreeAt(path);
       watched = worktree ? path : null;
+      watchedBase = base;
       if (!worktree) {
         const message = `${path} is not a worktree of a followed project`;
         return void later({ type: "error", message });

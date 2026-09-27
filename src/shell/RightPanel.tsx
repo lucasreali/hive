@@ -22,6 +22,9 @@ import { useShallow } from "zustand/react/shallow";
 import {
   agentWorkingIn,
   type ChangedFile,
+  type Changes,
+  type DiffBase,
+  diffBase,
   dropFile,
   type FileStatus,
   type FileTarget,
@@ -31,6 +34,7 @@ import {
   type PanelView,
   panelWorktree,
   type SearchMatch,
+  setDiffBase,
   setEditing,
   setOpenFile,
   setPanelView,
@@ -216,14 +220,16 @@ function WorktreeInfo(props: { worktree: Worktree; children?: ReactNode }) {
 
 /**
  * The worktree the files views show (the selected worktree, or the selected agent's, or the
- * shown terminal's); its changes are asked for when it is shown and whenever it changes.
+ * shown terminal's); its changes are asked for when it is shown and whenever it or its base
+ * changes.
  */
 function useShownWorktree() {
   const target = useHive(useShallow(panelWorktree));
   const path = target?.worktree.path;
+  const base = useHive((s) => (path ? diffBase(s, path) : null));
   useEffect(() => {
-    if (path) void transport.listChanges(path);
-  }, [path]);
+    if (path && base) void transport.listChanges(path, base);
+  }, [path, base]);
   return target;
 }
 
@@ -527,7 +533,40 @@ function ContentResults({ worktree, query }: { worktree: string; query: string }
   );
 }
 
-/** "N files changed +a −d", or why the service could not list them. */
+/**
+ * What the changes are compared with (9.11): HEAD (what is not committed yet) or the main
+ * worktree's branch (the merge-base with it: all the work of this branch). Only where there is
+ * a branch to compare with, or a branch base fell back to HEAD: then the branch is disabled and
+ * its tooltip says why.
+ */
+function BaseToggle({ changes }: { changes: Changes }) {
+  if (!changes.branch && !changes.base_error) return null;
+  const branch = changes.branch ?? "Branch";
+  const option = (base: DiffBase, label: string, title: string, disabled = false) => (
+    <button
+      type="button"
+      aria-pressed={changes.base === base}
+      title={title}
+      disabled={disabled}
+      onClick={() => setDiffBase(changes.path, base)}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <fieldset className="segmented diff-base" aria-label="Compare with">
+      {option("head", "HEAD", "Compare with HEAD: what is not committed yet")}
+      {option(
+        "branch",
+        branch,
+        changes.base_error ?? `Compare with where this branch left ${branch}: all its work`,
+        !!changes.base_error,
+      )}
+    </fieldset>
+  );
+}
+
+/** "N files changed +a −d" and the base toggle, or why the service could not list them. */
 function Summary({ worktree }: { worktree: string }) {
   const changes = useHive((s) => s.changes[worktree]);
   if (!changes) return null;
@@ -537,6 +576,7 @@ function Summary({ worktree }: { worktree: string }) {
       <div className="files-summary">
         <span>{n === 0 ? "No changes" : `${n} ${n === 1 ? "file" : "files"} changed`}</span>
         {n > 0 && <Counts added={changes.added} removed={changes.removed} />}
+        <BaseToggle changes={changes} />
       </div>
       {changes.error && <div className="files-error">{changes.error}</div>}
     </>
@@ -863,7 +903,7 @@ export function FileView({ worktree }: { worktree: string }) {
             <button
               type="button"
               className="ghost text"
-              title={dirty ? "Save or reload the file first" : "Show the diff against HEAD"}
+              title={dirty ? "Save or reload the file first" : "Show the diff"}
               disabled={dirty}
               onClick={() => setEditing(false)}
             >

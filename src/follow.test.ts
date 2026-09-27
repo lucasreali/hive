@@ -5,6 +5,7 @@ import {
   apply,
   initialState,
   select,
+  setDiffBase,
   setFocused,
   setMentioning,
   setOpenFile,
@@ -19,9 +20,11 @@ beforeEach(() => useHive.setState(initialState, true));
 function recorder() {
   const calls: (string | null)[] = [];
   const transport = {
-    watchWorktree: async (path: string) => void calls.push(path),
+    // The main worktrees are watched against HEAD; any other base shows.
+    watchWorktree: async (path: string, base: string) =>
+      void calls.push(base === "head" ? path : `${base}:${path}`),
     unwatchWorktree: async () => void calls.push(null),
-  } as Transport;
+  } as unknown as Transport;
   return { calls, transport };
 }
 
@@ -52,6 +55,21 @@ test("the service watches the worktree the open files panel shows, and nothing e
   expect(calls).toHaveLength(5);
 });
 
+test("a Claude worktree is watched against its branch, and anew when its base is picked", () => {
+  const { calls, transport } = recorder();
+  const fix = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).worktrees[1] as { path: string };
+  apply({ type: "projects", projects: MOCK_REPOS });
+  apply({ type: "welcome", version: "0.1.0", distro: null });
+  setRightPanel("files");
+  select(fix.path);
+  const stop = followPanel(transport);
+  expect(calls).toEqual([`branch:${fix.path}`]);
+  setDiffBase(fix.path, "head");
+  setDiffBase("/elsewhere", "branch");
+  expect(calls).toEqual([`branch:${fix.path}`, fix.path]);
+  stop();
+});
+
 test("a chat's @ list has its worktree watched while it shows, before the panel's", () => {
   const { calls, transport } = recorder();
   const [shop, api] = MOCK_REPOS as [(typeof MOCK_REPOS)[number], (typeof MOCK_REPOS)[number]];
@@ -73,17 +91,18 @@ test("a chat's @ list has its worktree watched while it shows, before the panel'
 });
 
 const welcome = () => apply({ type: "welcome", version: "1", distro: null });
+const none = { base: "head", branch: null, base_error: null } as const;
 const changes = (path: string) =>
-  apply({ type: "changes", path, files: [], added: 0, removed: 0, error: null });
+  apply({ type: "changes", path, ...none, files: [], added: 0, removed: 0, error: null });
 
 test("asks for the open file when it opens, its worktree changes, or the service is new", () => {
-  const openFile = mock(async (_worktree: string, _path: string) => {});
+  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
   const stop = followOpenFile({ openFile } as unknown as Transport);
   setOpenFile({ worktree: "/w", path: "a.ts" });
   expect(openFile).not.toHaveBeenCalled(); // Not connected yet.
 
   welcome();
-  expect(openFile.mock.calls).toEqual([["/w", "a.ts"]]);
+  expect(openFile.mock.calls).toEqual([["/w", "a.ts", "head"]]);
   changes("/other");
   apply({ type: "agent_removed", channel: 1, id: "x" });
   expect(openFile).toHaveBeenCalledTimes(1);
@@ -91,22 +110,36 @@ test("asks for the open file when it opens, its worktree changes, or the service
   setOpenFile({ worktree: "/w", path: "b.ts" });
   welcome();
   expect(openFile.mock.calls.slice(1)).toEqual([
-    ["/w", "a.ts"],
-    ["/w", "b.ts"],
-    ["/w", "b.ts"],
+    ["/w", "a.ts", "head"],
+    ["/w", "b.ts", "head"],
+    ["/w", "b.ts", "head"],
   ]);
 
   // Closing b.ts's tab shows a.ts's, beside it (8.21).
   setOpenFile(null);
-  expect(openFile.mock.calls.at(-1)).toEqual(["/w", "a.ts"]);
+  expect(openFile.mock.calls.at(-1)).toEqual(["/w", "a.ts", "head"]);
   apply({ type: "disconnected", reason: "gone" });
   stop();
   setOpenFile({ worktree: "/w", path: "c.ts" });
   expect(openFile).toHaveBeenCalledTimes(5);
 });
 
+test("asks for the open file again at the base picked for its worktree", () => {
+  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
+  welcome();
+  setOpenFile({ worktree: "/w", path: "a.ts" });
+  const stop = followOpenFile({ openFile } as unknown as Transport);
+  setDiffBase("/other", "branch");
+  setDiffBase("/w", "branch");
+  expect(openFile.mock.calls).toEqual([
+    ["/w", "a.ts", "head"],
+    ["/w", "a.ts", "branch"],
+  ]);
+  stop();
+});
+
 test("asks again when a save found a newer version on disk", () => {
-  const openFile = mock(async (_worktree: string, _path: string) => {});
+  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
   welcome();
   setOpenFile({ worktree: "/w", path: "a.ts" }, true);
   const stop = followOpenFile({ openFile } as unknown as Transport);
