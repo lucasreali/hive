@@ -524,6 +524,14 @@ test("the tree works from the keyboard", () => {
   expect(fireEvent.keyDown(tree(), { key: "a" })).toBe(true);
   for (let i = 0; i < 20; i++) key("ArrowDown");
   expect(active()?.textContent).toBe("package.json+1−1M");
+  // Delete asks first, naming the entry.
+  expect(useHive.getState().question).toBeNull();
+  expect(key("Delete")).toBe(false);
+  expect(useHive.getState()).toMatchObject({
+    modal: "confirm",
+    question: { title: "Delete file?", action: "Delete" },
+  });
+  expect(useHive.getState().question?.text).toStartWith("Delete package.json? ");
 });
 
 test("an empty tree ignores keys", () => {

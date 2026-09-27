@@ -498,6 +498,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         folder: "e".into(),
     };
     assert_eq!(service.control().await, (0, moving));
+    hive.delete_file("/r".into(), "e/b".into()).unwrap();
+    let delete = Control::DeleteFile {
+        worktree: "/r".into(),
+        path: "e/b".into(),
+    };
+    assert_eq!(service.control().await, (0, delete));
     hive.create_folder("/r".into(), "d".into(), "e".into())
         .unwrap();
     let folder = Control::CreateFolder {
@@ -860,6 +866,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.move_file("/r".into(), "a".into(), "d".into()),
         not_connected
     );
+    assert_eq!(hive.delete_file("/r".into(), "a".into()), not_connected);
     assert_eq!(
         hive.create_folder("/r".into(), "".into(), "d".into()),
         not_connected
@@ -1070,6 +1077,7 @@ fn commands_reach_the_managed_hive() {
             create_file,
             rename_file,
             move_file,
+            delete_file,
             create_folder,
             open_in_editor,
             get_settings,
@@ -1183,6 +1191,7 @@ fn commands_reach_the_managed_hive() {
         ("create_file", &create_file),
         ("rename_file", &rename_file),
         ("move_file", &move_file),
+        ("delete_file", &file),
         ("create_folder", &create_folder),
         ("open_in_editor", &file),
         ("get_settings", &json!({})),
@@ -1239,6 +1248,7 @@ fn commands_reach_the_managed_hive() {
         ("create_file", create_file),
         ("rename_file", rename_file),
         ("move_file", move_file),
+        ("delete_file", file.clone()),
         ("create_folder", create_folder),
         ("open_in_editor", file),
         ("get_settings", json!({})),

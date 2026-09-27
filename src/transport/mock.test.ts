@@ -687,6 +687,38 @@ test("files are moved and folders created as the service does, never over anothe
   expect(messages[0]).toEqual({ type: "folder_created", worktree: w, path: "empty" });
 });
 
+test("files and folders are deleted as the service does, with what they hold", async () => {
+  const { transport, messages } = await connected();
+  const w = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).path;
+  await transport.watchWorktree(w);
+  await tick();
+  await transport.createFolder(w, "", "empty");
+  await transport.createFolder(w, "src/auth", "inner");
+  await tick();
+  messages.length = 0;
+  await transport.deleteFile(w, "src/auth");
+  await transport.deleteFile(w, "README.md");
+  await transport.deleteFile(w, "empty");
+  await transport.deleteFile(w, "empty");
+  await transport.deleteFile(w, "src/auth/login.ts");
+  await transport.deleteFile("/nowhere", "a");
+  await tick();
+  const deleted = (path: string) => ({ type: "file_deleted", worktree: w, path }) as const;
+  const failed = (worktree: string, message: string) =>
+    ({ type: "file_op_failed", worktree, message }) as const;
+  expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
+    deleted("src/auth"),
+    deleted("README.md"),
+    deleted("empty"),
+    failed(w, "empty does not exist"),
+    failed(w, "src/auth/login.ts does not exist"),
+    failed("/nowhere", "/nowhere is not a worktree of a followed project"),
+  ]);
+  const files = messages.filter((m) => m.type === "files").at(-1) as { files: string[] };
+  expect(files.files.filter((p) => p.startsWith("src/auth") || p === "README.md")).toEqual([]);
+  expect(files.files).toContain("src/App.tsx");
+});
+
 test("a file's Windows path for an external editor, or why not", async () => {
   const { transport, messages } = await connected();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];

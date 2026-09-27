@@ -244,16 +244,24 @@ pub fn create_folder(dir: &Path, folder: &str, name: &str) -> io::Result<String>
     Ok(relative_to(&root, &path))
 }
 
-/// The entry `path` of the worktree at `dir` (resolved: `root`) to rename or move, and whether it
-/// is a folder: a regular file or a folder, the entry itself (never what a symlink points to),
-/// in its folder resolved inside `dir`; neither `.git` nor inside it.
-fn source(dir: &Path, root: &Path, path: &str) -> io::Result<(PathBuf, bool)> {
+/// The entry `path` of the worktree at `dir` (resolved: `root`) itself (a symlink is not
+/// followed) and its type, in its folder resolved inside `dir`; neither `.git` nor inside it.
+/// Never the root: `path` is at least one name below it.
+fn entry(dir: &Path, root: &Path, path: &str) -> io::Result<(PathBuf, fs::FileType)> {
     let rel = relative(path)?;
     // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
     let joined = dir.join(rel);
     let parent = inside(dir, joined.parent().unwrap_or(dir))?;
-    let from = not_git(root, parent.join(joined.file_name().unwrap_or_default()))?;
-    let kind = from.symlink_metadata()?.file_type();
+    let at = not_git(root, parent.join(joined.file_name().unwrap_or_default()))?;
+    let kind = at.symlink_metadata()?.file_type();
+    Ok((at, kind))
+}
+
+/// The entry `path` of the worktree at `dir` (resolved: `root`) to rename or move, and whether it
+/// is a folder: a regular file or a folder, the entry itself (never what a symlink points to),
+/// in its folder resolved inside `dir`; neither `.git` nor inside it.
+fn source(dir: &Path, root: &Path, path: &str) -> io::Result<(PathBuf, bool)> {
+    let (from, kind) = entry(dir, root, path)?;
     if !kind.is_file() && !kind.is_dir() {
         return Err(io::Error::other(format!(
             "{path} is not a regular file or a folder"
@@ -323,6 +331,62 @@ pub fn move_with(
         return Ok(relative_to(&root, &from));
     }
     move_entry(&root, &from, is_folder, to, held, unlink)
+}
+
+/// Most entries a deleted folder may hold, at any depth…
+pub const DELETE_ENTRIES: usize = 10_000;
+/// …and most levels of folders under it: past either, deleting it is refused rather than
+/// keeping the service busy.
+pub const DELETE_DEPTH: usize = 64;
+
+/// Deletes the entry `path` of the worktree at `dir` for good (no trash): a file or a symlink
+/// itself, never what it points to; a folder with what it holds, never following a symlink in
+/// it (`remove_dir_all`), unless `held` refuses it or [`bounded`] does.
+pub fn delete(dir: &Path, path: &str, held: Held) -> io::Result<()> {
+    let root = dir.canonicalize()?;
+    let (at, kind) = entry(dir, &root, path)?;
+    if kind.is_dir() {
+        // `held` compares it resolved as stored (only the case may differ); the removal goes by
+        // `at`, whose last name is not followed even if it turned into a symlink meanwhile.
+        held(&at.canonicalize()?)?;
+        bounded(&root, &at, path)?;
+        // ponytail: what an agent adds between the count and the removal is removed too.
+        fs::remove_dir_all(&at)?;
+    } else {
+        fs::remove_file(&at)?;
+    }
+    let _ = File::open(at.parent().unwrap_or(&root)).and_then(|folder| folder.sync_all());
+    Ok(())
+}
+
+/// Refuses the folder `at` (the app's `path`, in `root`) when it holds a `.git` (another
+/// repository or worktree) or more than [`DELETE_ENTRIES`] entries or [`DELETE_DEPTH`] levels
+/// of folders. Symlinks are counted, never followed.
+fn bounded(root: &Path, at: &Path, path: &str) -> io::Result<()> {
+    let terminal = |why: String| io::Error::other(format!("{path} {why}: delete it in a terminal"));
+    let mut entries = 0;
+    let mut pending = vec![(at.to_path_buf(), 0)];
+    while let Some((folder, depth)) = pending.pop() {
+        for entry in fs::read_dir(&folder)? {
+            let entry = entry?;
+            entries += 1;
+            if entries > DELETE_ENTRIES {
+                return Err(terminal(format!(
+                    "holds more than {DELETE_ENTRIES} entries"
+                )));
+            }
+            not_git(root, entry.path())?;
+            if entry.file_type()?.is_dir() {
+                if depth == DELETE_DEPTH {
+                    return Err(terminal(format!(
+                        "is more than {DELETE_DEPTH} folders deep"
+                    )));
+                }
+                pending.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Moves `from` (see [`source`]) to `to`, never over an existing entry and never to `.git`: a
@@ -1549,6 +1613,155 @@ mod tests {
         assert_eq!(err(move_to(dir.path(), "src", ".gIt")), refused);
         assert!(dir.path().join("src").is_dir() && dir.path().join(".git/hooks").is_dir());
         assert!(outside.path().join("o").is_dir() && !outside.path().join("src").exists());
+    }
+
+    fn delete(dir: &Path, path: &str) -> io::Result<()> {
+        super::delete(dir, path, &free)
+    }
+
+    #[test]
+    fn a_file_or_a_folder_is_deleted_with_what_it_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |p: &str| dir.path().join(p);
+        std::fs::create_dir_all(at("src/lib/deep")).unwrap();
+        std::fs::write(at("a.ts"), "a").unwrap();
+        std::fs::write(at("src/b.ts"), "b").unwrap();
+        std::fs::write(at("src/lib/deep/c.ts"), "c").unwrap();
+        std::os::unix::fs::symlink("/nonexistent/x", at("src/lib/dangling")).unwrap();
+        std::fs::create_dir(at("empty")).unwrap();
+        delete(dir.path(), "a.ts").unwrap();
+        assert!(!at("a.ts").exists());
+        delete(dir.path(), "src/lib").unwrap();
+        assert_eq!(names(&at("src")), ["b.ts"]);
+        delete(dir.path(), "empty").unwrap();
+        delete(dir.path(), "src").unwrap();
+        assert_eq!(names(dir.path()), Vec::<String>::new());
+        assert_eq!(
+            delete(dir.path(), "nope").unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(delete(&dir.path().join("gone"), "a").is_err());
+    }
+
+    #[test]
+    fn a_symlink_is_deleted_itself_never_what_it_points_to() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "s").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let at = |p: &str| dir.path().join(p);
+        std::os::unix::fs::symlink(outside.path().join("secret"), at("file")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), at("folder")).unwrap();
+        std::fs::create_dir(at("d")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), at("d/out")).unwrap();
+        delete(dir.path(), "file").unwrap();
+        delete(dir.path(), "folder").unwrap();
+        // Inside a folder, a symlink is removed, not followed.
+        delete(dir.path(), "d").unwrap();
+        assert_eq!(names(dir.path()), Vec::<String>::new());
+        assert_eq!(names(outside.path()), ["secret"]);
+        // Nothing through a symlink outside the worktree.
+        std::os::unix::fs::symlink(outside.path(), at("out")).unwrap();
+        let err = delete(dir.path(), "out/secret").unwrap_err().to_string();
+        assert_eq!(err, "the file resolves outside the worktree");
+        assert_eq!(names(outside.path()), ["secret"]);
+    }
+
+    #[test]
+    fn neither_the_root_nor_git_nor_outside_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |p: &str| dir.path().join(p);
+        std::fs::create_dir_all(at(".git/hooks")).unwrap();
+        // A stand-in for `.git` on a case-insensitive file system.
+        std::fs::create_dir_all(at(".Git/hooks")).unwrap();
+        std::fs::create_dir_all(at("vendor/lib")).unwrap();
+        std::fs::write(at("vendor/lib/.GIT"), "gitdir: x").unwrap();
+        std::os::unix::fs::symlink(".git", at("git")).unwrap();
+        let err = |path: &str| delete(dir.path(), path).unwrap_err().to_string();
+        let not_inside = "not a relative path inside the worktree";
+        for path in ["", ".", "..", "/", "../x", "src/.."] {
+            assert_eq!(err(path), not_inside, "{path:?}");
+        }
+        let refused = "Hive does not change what is inside .git";
+        assert_eq!(err(".git"), refused);
+        assert_eq!(err(".Git/hooks"), refused);
+        assert_eq!(err("git/hooks"), refused);
+        // Nor a folder holding one (another repository or worktree).
+        assert_eq!(err("vendor"), refused);
+        assert!(at(".git/hooks").is_dir() && at("vendor/lib/.GIT").exists());
+        // The symlink named `git` is not `.git`: it goes, `.git` stays.
+        delete(dir.path(), "git").unwrap();
+        assert!(at(".git/hooks").is_dir());
+    }
+
+    #[test]
+    fn a_held_folder_is_not_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("a"), "a").unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let busy = |folder: &Path| {
+            asked.borrow_mut().push(folder.to_path_buf());
+            Err(io::Error::other(
+                "in use by bash (1): close its terminals first",
+            ))
+        };
+        let err = super::delete(dir.path(), "src", &busy).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "in use by bash (1): close its terminals first"
+        );
+        assert!(dir.path().join("src").is_dir());
+        // Asked with the folder resolved; a file is never asked about.
+        super::delete(dir.path(), "a", &busy).unwrap();
+        let src = dir.path().canonicalize().unwrap().join("src");
+        assert_eq!(*asked.borrow(), [src]);
+    }
+
+    #[test]
+    fn a_folder_turned_into_a_symlink_meanwhile_is_not_followed() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "s").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().join("d");
+        std::fs::create_dir(&d).unwrap();
+        // After the folder was checked, something swaps it for a symlink to outside.
+        let swap = |_: &Path| {
+            std::fs::remove_dir(&d)?;
+            std::os::unix::fs::symlink(outside.path(), &d)
+        };
+        super::delete(dir.path(), "d", &swap).unwrap();
+        assert_eq!(names(dir.path()), Vec::<String>::new());
+        assert_eq!(names(outside.path()), ["secret"]);
+    }
+
+    #[test]
+    fn a_folder_past_the_caps_is_not_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let big = root.join("big");
+        std::fs::create_dir(&big).unwrap();
+        for n in 0..DELETE_ENTRIES {
+            std::fs::write(big.join(n.to_string()), "").unwrap();
+        }
+        assert!(bounded(&root, &big, "big").is_ok());
+        std::fs::write(big.join("one more"), "").unwrap();
+        let err = delete(dir.path(), "big").unwrap_err().to_string();
+        let many = format!("big holds more than {DELETE_ENTRIES} entries: delete it in a terminal");
+        assert_eq!(err, many);
+        assert_eq!(names(&big).len(), DELETE_ENTRIES + 1);
+
+        let mut deepest = root.join("deep");
+        for _ in 0..DELETE_DEPTH {
+            deepest.push("d");
+        }
+        std::fs::create_dir_all(&deepest).unwrap();
+        assert!(bounded(&root, &root.join("deep"), "deep").is_ok());
+        std::fs::create_dir(deepest.join("d")).unwrap();
+        let err = delete(dir.path(), "deep").unwrap_err().to_string();
+        let deep =
+            format!("deep is more than {DELETE_DEPTH} folders deep: delete it in a terminal");
+        assert_eq!(err, deep);
+        assert!(deepest.join("d").is_dir());
     }
 
     #[test]

@@ -909,6 +909,27 @@ export function createMockTransport(
       if (to === path) return void later({ type: "file_renamed", worktree, path, to });
       fileOp(worktree, path, to, name, () => ({ type: "file_renamed", worktree, path, to }));
     },
+    // A stand-in for `hive::file::delete`: the file or folder, with what it holds, goes.
+    async deleteFile(worktree, path) {
+      const shown = worktreeAt(worktree);
+      const listed = shown ? (files.get(worktree) ?? mockFiles(shown)) : [];
+      const under = (p: string) => p === path || p.startsWith(`${path}/`);
+      const empty = [...folders].filter((f) => under(f.slice(worktree.length + 1)));
+      const message = !shown
+        ? `${worktree} is not a worktree of a followed project`
+        : !listed.some(under) && empty.length === 0
+          ? `${path} does not exist`
+          : null;
+      if (message) return void later({ type: "file_op_failed", worktree, message });
+      later({ type: "file_deleted", worktree, path });
+      for (const f of empty) folders.delete(f);
+      for (const p of listed.filter(under)) written.delete(`${worktree}/${p}`);
+      files.set(
+        worktree,
+        listed.filter((p) => !under(p)),
+      );
+      if (watched === worktree) sendFiles(worktree);
+    },
     async createFolder(worktree, folder, name) {
       const path = folder ? `${folder}/${name}` : name;
       fileOp(worktree, null, path, name, () => ({ type: "folder_created", worktree, path }), true);

@@ -359,3 +359,64 @@ async fn files_are_moved_and_folders_created_inside_a_followed_worktree() {
     drop(conn);
     stop(daemon);
 }
+
+#[tokio::test]
+async fn files_and_folders_are_deleted_inside_a_followed_worktree() {
+    let repo = Repo::new();
+    repo.commit("a.txt", "one\n");
+    std::fs::create_dir_all(repo.root.join("d/e")).unwrap();
+    std::fs::write(repo.root.join("d/e/b.txt"), "b").unwrap();
+    let root = repo.root.display().to_string();
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    let delete = |path: &str| Control::DeleteFile {
+        worktree: root.clone(),
+        path: path.to_owned(),
+    };
+    let deleted = |path: &str| Control::FileDeleted {
+        worktree: root.clone(),
+        path: path.to_owned(),
+    };
+    let failed = |message: &str| Control::FileOpFailed {
+        worktree: root.clone(),
+        message: message.to_owned(),
+    };
+    // Not a followed worktree yet.
+    conn.send(0, delete("a.txt")).await;
+    assert!(matches!(
+        conn.control().await.1,
+        Control::FileOpFailed { .. }
+    ));
+    assert!(repo.root.join("a.txt").exists());
+    follow(&mut conn, &root).await;
+
+    conn.send(0, delete("a.txt")).await;
+    assert_eq!(conn.control().await.1, deleted("a.txt"));
+    assert!(!repo.root.join("a.txt").exists());
+    conn.send(0, delete(".git")).await;
+    assert_eq!(
+        conn.control().await.1,
+        failed("Hive does not change what is inside .git")
+    );
+
+    // A folder goes with what it holds, unless a process works inside it.
+    let mut sleep = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(repo.root.join("d/e"))
+        .spawn()
+        .unwrap();
+    conn.send(0, delete("d")).await;
+    let busy = format!(
+        "in use by sleep ({}): close its terminals first",
+        sleep.id()
+    );
+    assert_eq!(conn.control().await.1, failed(&busy));
+    sleep.kill().unwrap();
+    sleep.wait().unwrap();
+    assert!(repo.root.join("d/e/b.txt").exists());
+    conn.send(0, delete("d")).await;
+    assert_eq!(conn.control().await.1, deleted("d"));
+    assert!(!repo.root.join("d").exists());
+    drop(conn);
+    stop(daemon);
+}
