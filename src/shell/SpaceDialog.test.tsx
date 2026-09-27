@@ -20,7 +20,13 @@ afterEach(() => {
 });
 
 const [shop, api] = MOCK_REPOS;
-const NO_ENV = { claude_config_dir: null, git_name: null, git_email: null, gh_config_dir: null };
+const NO_ENV = {
+  claude_config_dir: null,
+  git_name: null,
+  git_email: null,
+  gh_config_dir: null,
+  gh_account: null,
+};
 const home: Space = { id: "default", name: "Home", projects: [shop.id], env: NO_ENV };
 const work: Space = {
   id: "w",
@@ -156,4 +162,127 @@ test("inbox items name their agent's space when there are several", () => {
   const texts = screen.getAllByRole("menuitem").map((i) => i.textContent);
   expect(texts[0]).toContain("Work · waiting for permission");
   expect(texts[1]).toMatch(/Work · \d+s ago$/);
+});
+
+const GITHUB = "github.com";
+const ghLogin = (login: string, active: boolean, logged_in = true, host = GITHUB) => ({
+  host,
+  login,
+  active,
+  logged_in,
+});
+const ghAccounts = (gh_config_dir: string | null, problem: string | null = null) =>
+  apply({
+    type: "gh_accounts",
+    gh_config_dir,
+    accounts: problem ? [] : [ghLogin("octo-personal", false), ghLogin("octo-work", true)],
+    problem,
+  });
+const ghSelect = () => screen.getByRole("combobox", { name: "GitHub account" });
+const ghOptions = () => {
+  fireEvent.mouseDown(ghSelect());
+  const labels = screen.getAllByRole("option").map((o) => o.textContent);
+  fireEvent.keyDown(ghSelect(), { key: "Escape" });
+  return labels;
+};
+
+test("the GitHub account is one of gh's accounts, listed for the dialog's gh config folder", () => {
+  const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
+  const create = spyOn(transport, "createSpace").mockResolvedValue();
+  show([home], "default");
+  pick("New space…");
+  expect(list).toHaveBeenCalledWith(null);
+  // Before the answer, only gh's active account.
+  expect(ghSelect().textContent).toBe("gh's active account");
+  act(() => ghAccounts(null));
+  expect(ghSelect().textContent).toBe("gh's active account (octo-work)");
+  expect(ghOptions()).toEqual(["gh's active account (octo-work)", "octo-personal", "octo-work"]);
+  fireEvent.mouseDown(ghSelect());
+  fireEvent.click(screen.getByRole("option", { name: "octo-personal" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Home" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create space" }));
+  const personal = { host: GITHUB, login: "octo-personal" };
+  expect(create).toHaveBeenCalledWith("Home", { ...NO_ENV, gh_account: personal });
+
+  // Another config folder is listed once its field is left; the old answer no longer shows.
+  const folder = screen.getByLabelText("GitHub CLI config folder");
+  fireEvent.change(folder, { target: { value: "/cfg" } });
+  expect(ghSelect().textContent).toBe("octo-personal (not logged in)");
+  fireEvent.blur(folder);
+  expect(list).toHaveBeenLastCalledWith("/cfg");
+  act(() => ghAccounts("/cfg", "No account is logged in to gh (run gh auth login)"));
+  expect(screen.getByRole("status").textContent).toBe(
+    "No account is logged in to gh (run gh auth login)",
+  );
+  // Back to gh's active account.
+  fireEvent.mouseDown(ghSelect());
+  fireEvent.click(screen.getByRole("option", { name: "gh's active account" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create space" }));
+  expect(create).toHaveBeenLastCalledWith("Home", { ...NO_ENV, gh_config_dir: "/cfg" });
+  list.mockRestore();
+  create.mockRestore();
+});
+
+test("an account on another host or with a bad token says so", () => {
+  const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
+  const gone = { host: "ghe.example", login: "gone" };
+  show([home, { ...work, env: { ...NO_ENV, gh_account: gone } }], "w");
+  pick("Edit space…");
+  act(() =>
+    apply({
+      type: "gh_accounts",
+      gh_config_dir: null,
+      accounts: [ghLogin("old", false, false), ghLogin("corp", false, true, "ghe.example")],
+      problem: null,
+    }),
+  );
+  expect(ghOptions()).toEqual([
+    "gh's active account",
+    "old (token invalid)",
+    "corp on ghe.example",
+    "gone on ghe.example (not logged in)",
+  ]);
+  // Not listed: it cannot be made active.
+  expect(screen.queryByRole("button", { name: "Make active in gh…" })).toBeNull();
+  list.mockRestore();
+});
+
+test("making the space's account gh's active one asks first, over the kept dialog", () => {
+  const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
+  const switchGh = spyOn(transport, "switchGhAccount").mockResolvedValue();
+  const personal = { host: GITHUB, login: "octo-personal" };
+  const env = { ...NO_ENV, gh_config_dir: "/cfg", gh_account: personal };
+  show([home, { ...work, env }], "w");
+  pick("Edit space…");
+  act(() => ghAccounts("/cfg"));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Job" } });
+  const make = () => fireEvent.click(screen.getByRole("button", { name: "Make active in gh…" }));
+  make();
+  const confirm = dialog("Switch gh's active account?");
+  expect(confirm.textContent).toContain(
+    `octo-personal becomes gh's active account on ${GITHUB} for every shell and repository on this machine, outside Hive too.`,
+  );
+  // The space dialog stays open underneath, edits and all.
+  expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Job");
+  fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[1] as HTMLElement);
+  expect(switchGh).not.toHaveBeenCalled();
+  expect(useHive.getState().modal).toBe("edit-space");
+  expect(screen.queryByRole("dialog", { name: "Switch gh's active account?" })).toBeNull();
+  make();
+  fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+  expect(switchGh).toHaveBeenCalledWith("/cfg", personal);
+  expect(useHive.getState().modal).toBe("edit-space");
+  expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Job");
+  // The answer shows it active: nothing left to switch.
+  act(() =>
+    apply({
+      type: "gh_accounts",
+      gh_config_dir: "/cfg",
+      accounts: [ghLogin("octo-personal", true), ghLogin("octo-work", false)],
+      problem: null,
+    }),
+  );
+  expect(screen.queryByRole("button", { name: "Make active in gh…" })).toBeNull();
+  list.mockRestore();
+  switchGh.mockRestore();
 });

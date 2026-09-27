@@ -934,10 +934,42 @@ const NO_ENV: SpaceEnv = {
   git_name: null,
   git_email: null,
   gh_config_dir: null,
+  gh_account: null,
 };
 function space(id: string, name: string, projects: string[], env = NO_ENV): Space {
   return { id, name, projects, env };
 }
+
+test("gh's accounts are listed, and the active one switched", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  messages.length = 0;
+  await transport.listGhAccounts(null);
+  await transport.switchGhAccount("/g", { host: "github.com", login: "mock-personal" });
+  await tick();
+  const login = (login: string, active: boolean) => ({
+    host: "github.com",
+    login,
+    active,
+    logged_in: true,
+  });
+  expect(messages).toEqual([
+    {
+      type: "gh_accounts",
+      gh_config_dir: null,
+      accounts: [login("mock-personal", false), login("mock-work", true)],
+      problem: null,
+    },
+    {
+      type: "gh_accounts",
+      gh_config_dir: "/g",
+      accounts: [login("mock-personal", true), login("mock-work", false)],
+      problem: null,
+    },
+  ]);
+});
 
 test("spaces are kept as the service keeps them", async () => {
   const transport = createMockTransport();

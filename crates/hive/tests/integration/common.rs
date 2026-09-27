@@ -135,7 +135,8 @@ impl Env {
         self.daemon_with(self.hive().env("PATH", path))
     }
 
-    fn daemon_with(&self, hive: &mut Command) -> Daemon {
+    /// [`Env::daemon`] started from `hive` (e.g. [`Env::hive`] with more environment).
+    pub fn daemon_with(&self, hive: &mut Command) -> Daemon {
         let child = hive.arg("daemon").stdin(Stdio::null()).spawn().unwrap();
         let mut daemon = Daemon(child);
         // A daemon that already exited fails the test at once, not after the timeout (a

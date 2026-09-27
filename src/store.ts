@@ -49,6 +49,8 @@ export type ServiceMessage =
   | { type: "remove_project_failed"; id: string; message: string }
   | { type: "spaces"; spaces: Space[]; current: string }
   | { type: "space_failed"; message: string }
+  | ({ type: "gh_accounts" } & GhAccounts)
+  | { type: "notice"; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -189,6 +191,19 @@ export type SpaceEnv = {
   git_name: string | null;
   git_email: string | null;
   gh_config_dir: string | null;
+  /** The `gh` account whose token its terminals get (9.30); null: `gh`'s active account. */
+  gh_account: GhAccount | null;
+};
+
+/** Mirrors `hive_protocol::GhAccount`: a `gh` login on a host. */
+export type GhAccount = { host: string; login: string };
+/** Mirrors `hive_protocol::GhLogin`: an account as `gh auth status` lists it. */
+export type GhLogin = GhAccount & { active: boolean; logged_in: boolean };
+/** The accounts of `gh` in a config folder, logins only; `problem` says what went wrong. */
+export type GhAccounts = {
+  gh_config_dir: string | null;
+  accounts: GhLogin[];
+  problem: string | null;
 };
 
 /** Mirrors `hive_protocol::Space` (6.14): its projects' ids and its terminals' environment. */
@@ -647,7 +662,14 @@ export type Modal =
  * A yes/no question asked in a Hive dialog (8.20), never the WebView's `confirm`: `run` happens
  * only when the user picks `action` (e.g. "Discard", "Delete").
  */
-export type Question = { title: string; text: string; action: string; run: () => void };
+export type Question = {
+  title: string;
+  text: string;
+  action: string;
+  run: () => void;
+  /** The dialog asked from, shown again (still open underneath) once answered. */
+  back?: Modal;
+};
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
 /** A project row's context menu, at the pointer. */
@@ -750,6 +772,8 @@ export type HiveState = {
   currentSpace: string | null;
   /** Why the last space request was refused. */
   spaceError: string | null;
+  /** The last `gh_accounts` answer (9.30), for the space dialog; null until asked. */
+  ghAccounts: GhAccounts | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
   /** The worktree a dialog opened for (its row's menu). */
@@ -841,6 +865,7 @@ export const initialState: HiveState = {
   spaces: null,
   currentSpace: null,
   spaceError: null,
+  ghAccounts: null,
   modalProject: null,
   modalWorktree: null,
   worktreeDialog: {
@@ -1230,6 +1255,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "space_failed":
       return { spaceError: m.message };
+    case "notice":
+      return { notice: m.message };
+    case "gh_accounts": {
+      const { type: _, ...accounts } = m;
+      return { ghAccounts: accounts };
+    }
     case "branches": {
       const { type: _, ...branches } = m;
       return patchDialog(s, { branches });

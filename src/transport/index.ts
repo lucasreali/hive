@@ -3,6 +3,7 @@ import type {
   ChatAnswer,
   ChatImage,
   ChatMode,
+  GhAccount,
   ServiceMessage,
   SessionTarget,
   Settings,
@@ -48,6 +49,16 @@ export interface Transport {
   deleteSpace(id: string): Promise<void>;
   /** Makes `id` the current space: the sidebar and the Sessions panel show its projects. */
   selectSpace(id: string): Promise<void>;
+  /**
+   * The accounts logged in to `gh` (9.30), in `ghConfigDir` when set (else `gh`'s own config);
+   * answered by `gh_accounts`, logins only.
+   */
+  listGhAccounts(ghConfigDir: string | null): Promise<void>;
+  /**
+   * Makes `account` `gh`'s own active account, for every shell on the machine (ask first);
+   * answered by `gh_accounts`.
+   */
+  switchGhAccount(ghConfigDir: string | null, account: GhAccount): Promise<void>;
   /**
    * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
    * empty); answered by `dirs`.

@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    ChatAnswer, ChatImage, ChatMode, Control, Frame, FrameCodec, FrameError, FrameType, Role,
-    SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    ChatAnswer, ChatImage, ChatMode, Control, Frame, FrameCodec, FrameError, FrameType, GhAccount,
+    Role, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -553,6 +553,24 @@ impl Hive {
         self.link().send(0, &Control::SelectSpace { id })
     }
 
+    /// The answer to both arrives as `gh_accounts` (9.30).
+    pub fn list_gh_accounts(&self, gh_config_dir: Option<String>) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::ListGhAccounts { gh_config_dir })
+    }
+
+    pub fn switch_gh_account(
+        &self,
+        gh_config_dir: Option<String>,
+        account: GhAccount,
+    ) -> Result<(), String> {
+        let switch = Control::SwitchGhAccount {
+            gh_config_dir,
+            account,
+        };
+        self.link().send(0, &switch)
+    }
+
     /// The answer arrives as `editor_target` with an empty `worktree`.
     pub fn open_settings_file(&self) -> Result<(), String> {
         self.link().send(0, &Control::OpenSettingsFile)
@@ -1057,6 +1075,23 @@ pub mod commands {
     #[tauri::command]
     pub fn select_space(hive: State<'_, Hive>, id: String) -> Result<(), String> {
         hive.select_space(id)
+    }
+
+    #[tauri::command]
+    pub fn list_gh_accounts(
+        hive: State<'_, Hive>,
+        gh_config_dir: Option<String>,
+    ) -> Result<(), String> {
+        hive.list_gh_accounts(gh_config_dir)
+    }
+
+    #[tauri::command]
+    pub fn switch_gh_account(
+        hive: State<'_, Hive>,
+        gh_config_dir: Option<String>,
+        account: GhAccount,
+    ) -> Result<(), String> {
+        hive.switch_gh_account(gh_config_dir, account)
     }
 
     #[tauri::command]
