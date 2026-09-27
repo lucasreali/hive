@@ -1788,6 +1788,7 @@ dependencies = [
  "clap",
  "futures-util",
  "hive-protocol",
+ "libc",
  "libproc",
  "nix",
  "notify",

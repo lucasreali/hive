@@ -319,6 +319,34 @@ async fn files_are_moved_and_folders_created_inside_a_followed_worktree() {
         conn.control().await.1,
         failed("not a relative path inside the worktree")
     );
+
+    // A folder moves with what it holds, unless a process works inside it.
+    conn.send(0, mkdir("e")).await;
+    conn.control().await;
+    conn.send(0, moving("d", "e")).await;
+    let moved = Control::FileRenamed {
+        worktree: root.clone(),
+        path: "d".to_owned(),
+        to: "e/d".to_owned(),
+    };
+    assert_eq!(conn.control().await.1, moved);
+    assert_eq!(sides(&mut conn, &root, "e/d/a.txt").await.0, text("one\n"));
+    let mut sleep = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(repo.root.join("e/d"))
+        .spawn()
+        .unwrap();
+    conn.send(0, mkdir("g")).await;
+    conn.control().await;
+    conn.send(0, moving("e", "g")).await;
+    let busy = format!(
+        "in use by sleep ({}): close its terminals first",
+        sleep.id()
+    );
+    assert_eq!(conn.control().await.1, failed(&busy));
+    sleep.kill().unwrap();
+    sleep.wait().unwrap();
+    assert!(repo.root.join("e/d/a.txt").exists());
     drop(conn);
     stop(daemon);
 }

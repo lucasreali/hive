@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, expect, jest, mock, spyOn, test } from "bun:test";
 import { EditorView } from "@codemirror/view";
 import {
   DefaultFileIcon,
@@ -733,7 +733,7 @@ test("the files menu targets a folder, a file's folder, or the root; a deleted f
   const files = [file("README.md"), file("src/a.ts"), file("src/gone.ts", "deleted")];
   const targets = fileRows("/w", files, { "files:/w/src": false }).map((r) => fileTarget("/w", r));
   expect(targets).toEqual([
-    { worktree: "/w", folder: "src", path: null },
+    { worktree: "/w", folder: "src", path: "src" },
     { worktree: "/w", folder: "src", path: "src/a.ts" },
     { worktree: "/w", folder: "src", path: null },
     { worktree: "/w", folder: "", path: "README.md" },
@@ -760,7 +760,7 @@ test("a right click opens the files menu for its row, below the rows for the roo
   expect(menu()).toEqual({ ...at, folder: "", path: "README.md", x: 10, y: 30 });
   // On a row without the pointer: under the row itself.
   fireEvent.contextMenu(screen.getByRole("treeitem", { name: "src" }));
-  expect(menu()).toMatchObject({ folder: "src", path: null, x: 0, y: 0 });
+  expect(menu()).toMatchObject({ folder: "src", path: "src", x: 0, y: 0 });
 });
 
 test("folders created from the tree show even when git lists nothing in them", () => {
@@ -799,7 +799,6 @@ test("a file dragged onto a folder, a file or below the rows moves there", async
   for (const type of ["dragstart", "dragover"]) document.addEventListener(type, seen);
   const readme = row(/^README/);
   expect(readme.getAttribute("draggable")).toBe("true");
-  expect(row("src").getAttribute("draggable")).toBe("false");
   // A drag from outside the tree (e.g. a file of the system) is not a move.
   fireEvent.dragOver(row("src"), { dataTransfer });
   fireEvent.drop(row("src"), { dataTransfer });
@@ -864,4 +863,109 @@ test("a file dragged onto a folder, a file or below the rows moves there", async
   fireEvent.dragOver(row("src"), { dataTransfer });
   fireEvent.dragEnd(readme, { dataTransfer });
   for (const type of ["dragstart", "dragover"]) document.removeEventListener(type, seen);
+});
+
+const treeRow = (name: string | RegExp) => screen.getByRole("treeitem", { name });
+const isOpen = (name: string) => treeRow(name).getAttribute("aria-expanded") === "true";
+const openFolders = (...folders: string[]) =>
+  act(() =>
+    useHive.setState((s) => ({
+      collapsed: {
+        ...s.collapsed,
+        ...Object.fromEntries(folders.map((f) => [`files:${fixLogin.path}/${f}`, false])),
+      },
+    })),
+  );
+
+test("a folder the drag opened closes when the drag leaves it or ends without a drop", () => {
+  const moved = spyOn(transport, "moveFile").mockResolvedValue();
+  jest.useFakeTimers();
+  try {
+    filesView();
+    const dataTransfer = {};
+    const over = (name: string | RegExp) => fireEvent.dragOver(treeRow(name), { dataTransfer });
+    const hold = (name: string) => {
+      over(name);
+      act(() => jest.advanceTimersByTime(HOVER_OPEN_MS));
+    };
+    const readme = treeRow(/^README/);
+    // Opened before the drag: it stays open.
+    openFolders("docs");
+    fireEvent.dragStart(readme, { dataTransfer });
+    hold("src");
+    hold("auth");
+    expect([isOpen("src"), isOpen("auth")]).toEqual([true, true]);
+    // Inside them, both stay open; out of one, it closes.
+    over(/^session\.ts/);
+    expect([isOpen("src"), isOpen("auth")]).toEqual([true, true]);
+    over(/^main/);
+    expect([isOpen("src"), isOpen("auth")]).toEqual([true, false]);
+    over("docs");
+    expect([isOpen("src"), isOpen("docs")]).toEqual([false, true]);
+    // A drag that ends without a drop closes what it opened.
+    hold("src");
+    expect(isOpen("src")).toBe(true);
+    fireEvent.dragEnd(readme, { dataTransfer });
+    expect([isOpen("src"), isOpen("docs")]).toEqual([false, true]);
+    // So does leaving the tree.
+    fireEvent.dragStart(readme, { dataTransfer });
+    hold("src");
+    const scroller = document.querySelector(".files-tree") as HTMLElement;
+    const leave = createEvent.dragLeave(scroller);
+    Object.defineProperty(leave, "relatedTarget", { value: document.body });
+    fireEvent(scroller, leave);
+    expect(isOpen("src")).toBe(false);
+    fireEvent.dragEnd(readme, { dataTransfer });
+    // A drop keeps the folders around it open, and opens the one it goes to.
+    fireEvent.dragStart(readme, { dataTransfer });
+    hold("src");
+    over("auth");
+    fireEvent.drop(treeRow("auth"), { dataTransfer });
+    fireEvent.dragEnd(readme, { dataTransfer });
+    expect(moved).toHaveBeenCalledWith(fixLogin.path, "README.md", "src/auth");
+    expect([isOpen("src"), isOpen("auth")]).toEqual([true, true]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("a folder is dragged like a file, never into itself", () => {
+  const moved = spyOn(transport, "moveFile").mockResolvedValue();
+  filesView();
+  openFolders("src", "src/auth");
+  const dataTransfer = {};
+  expect(treeRow("auth").getAttribute("draggable")).toBe("true");
+  fireEvent.dragStart(treeRow("auth"), { dataTransfer });
+  // Onto itself or what it holds: no drop line, no drop.
+  for (const name of ["auth", /^session\.ts/]) {
+    const event = createEvent.dragOver(treeRow(name), { dataTransfer });
+    fireEvent(treeRow(name), event);
+    expect([event.defaultPrevented, treeRow("auth").dataset.fileDrop]).toEqual([false, "false"]);
+    fireEvent.drop(treeRow(name), { dataTransfer });
+  }
+  // Onto its own folder: nothing moves.
+  fireEvent.dragOver(treeRow(/^main/), { dataTransfer });
+  expect(treeRow("src").dataset.fileDrop).toBe("true");
+  fireEvent.drop(treeRow(/^main/), { dataTransfer });
+  expect(moved).not.toHaveBeenCalled();
+  fireEvent.dragStart(treeRow("auth"), { dataTransfer });
+  fireEvent.drop(treeRow("docs"), { dataTransfer });
+  expect(moved).toHaveBeenCalledWith(fixLogin.path, "src/auth", "docs");
+  expect(isOpen("docs")).toBe(true);
+  fireEvent.dragStart(treeRow("auth"), { dataTransfer });
+  fireEvent.drop(tree(), { dataTransfer });
+  expect(moved).toHaveBeenLastCalledWith(fixLogin.path, "src/auth", "");
+});
+
+test("the tree's active row follows a renamed or moved entry once it is listed", () => {
+  filesView();
+  act(() => apply({ type: "file_renamed", worktree: fixLogin.path, path: "docs", to: "zeta" }));
+  expect(useHive.getState().movedRow).toEqual({ worktree: fixLogin.path, path: "zeta" });
+  const listed = ["README.md", "src/main.ts", "zeta/session-notes.md"];
+  act(() => apply({ type: "files", path: fixLogin.path, files: listed, truncated: false }));
+  expect(tree().getAttribute("aria-activedescendant")).toBe(treeRow("zeta").id);
+  expect(useHive.getState().movedRow).toBeNull();
+  // A moved file too.
+  act(() => apply({ type: "file_renamed", worktree: fixLogin.path, path: "a", to: "README.md" }));
+  expect(tree().getAttribute("aria-activedescendant")).toBe(treeRow(/^README/).id);
 });

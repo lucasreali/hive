@@ -759,6 +759,11 @@ async fn pump(
         .await;
 }
 
+/// [`projects::held`] for a folder about to be renamed or moved, with this machine's processes.
+fn held(projects: &Projects) -> impl Fn(&Path) -> io::Result<()> {
+    move |folder| projects::held(&projects.list(), folder, procs::Source::System)
+}
+
 async fn connection(stream: UnixStream, state: Arc<State>, app_gone: mpsc::Sender<()>) {
     let (read, write) = stream.into_split();
     let mut reader = FramedRead::new(read, FrameCodec);
@@ -1193,7 +1198,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }) => state.projects(move |projects| {
             let renamed = projects
                 .worktree(&worktree)
-                .and_then(|dir| file::rename(&dir, &path, &name));
+                .and_then(|dir| file::rename(&dir, &path, &name, &held(projects)));
             match renamed {
                 Ok(to) => Control::FileRenamed { worktree, path, to },
                 Err(err) => Control::FileOpFailed {
@@ -1209,7 +1214,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }) => state.projects(move |projects| {
             let moved = projects
                 .worktree(&worktree)
-                .and_then(|dir| file::move_to(&dir, &path, &folder));
+                .and_then(|dir| file::move_to(&dir, &path, &folder, &held(projects)));
             match moved {
                 Ok(to) => Control::FileRenamed { worktree, path, to },
                 Err(err) => Control::FileOpFailed {
