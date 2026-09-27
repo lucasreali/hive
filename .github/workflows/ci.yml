@@ -44,7 +44,7 @@ jobs:
       # Exclusions: COVERAGE_EXCLUSIONS.md (same regex as scripts/gates.sh).
       - run: cargo llvm-cov --workspace --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'
       - if: failure()
-        run: cargo llvm-cov report --text --output-dir target/covtext --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'; f=$(find target/covtext -name daemon.rs.txt); echo "file $f"; sed -n '1,8p;195,235p' "$f" | cat -A | cut -c1-120; grep -nE '[^0-9.]0\||\^0' "$f" | head -30
+        run: cargo llvm-cov report --json --output-path cov.json --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'; jq -r '.data[0].functions[] | select(.filenames[0] | endswith("daemon.rs")) | . as $f | .regions[] | select(.[4] == 0 and .[7] == 0) | "\($f.name) \(.[0]):\(.[1])-\(.[2]):\(.[3])"' cov.json | head -40
 
   # The diff's mutants, sharded by their number (mutants.yml, TODO 7.1). `mutants-base` re-runs
   # them for another range (e.g. to measure a change to the mutants setup).
