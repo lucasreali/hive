@@ -162,6 +162,65 @@ fn the_webview_navigates_only_within_the_app() {
     }
 }
 
+#[tokio::test]
+async fn only_a_path_the_service_sent_opens_and_only_once() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    let refused = |path: &str| Err(format!("Hive opens only a path the service sent: {path}"));
+    // No opener given (`main.rs` gives one): an approved path still cannot open.
+    let file = "\\\\wsl.localhost\\Ubuntu\\r\\a.ts";
+    let target = |windows_path: Option<&str>| Control::EditorTarget {
+        worktree: "/r".into(),
+        path: "a.ts".into(),
+        windows_path: windows_path.map(Into::into),
+        error: None,
+    };
+    service.send(0, target(Some(file))).await;
+    next(&mut rx).await;
+    assert_eq!(
+        hive.open_path(file.into(), false),
+        Err("this app cannot open paths".into())
+    );
+
+    let (tx, opened) = std::sync::mpsc::channel();
+    let hive = hive.with_open(move |path, reveal| {
+        tx.send((path.to_owned(), reveal)).unwrap();
+        Ok(())
+    });
+    assert_eq!(hive.open_path(file.into(), false), refused(file)); // Taken by the try above.
+    let log = "\\\\wsl.localhost\\Ubuntu\\home\\you\\.claude\\projects\\p\\s.jsonl";
+    let located = Control::SessionLocated {
+        id: "s".into(),
+        target: SessionTarget::Log,
+        windows_path: Some(log.into()),
+        error: None,
+    };
+    for message in [target(Some(file)), target(None), located] {
+        service.send(0, message).await;
+        next(&mut rx).await;
+    }
+    assert_eq!(
+        hive.open_path("C:\\evil.bat".into(), false),
+        refused("C:\\evil.bat")
+    );
+    assert_eq!(hive.open_path(log.into(), true), Ok(()));
+    assert_eq!(hive.open_path(file.into(), false), Ok(()));
+    assert_eq!(hive.open_path(file.into(), false), refused(file));
+    let calls: Vec<_> = opened.try_iter().collect();
+    assert_eq!(calls, [(log.into(), true), (file.into(), false)]);
+
+    // Only the newest paths wait: the oldest goes past the limit.
+    let paths: Vec<String> = (0..=APPROVED_LIMIT).map(|i| format!("C:\\{i}")).collect();
+    for path in &paths {
+        service.send(0, target(Some(path))).await;
+        next(&mut rx).await;
+    }
+    assert_eq!(hive.open_path(paths[0].clone(), false), refused(&paths[0]));
+    for path in &paths[1..] {
+        assert_eq!(hive.open_path(path.clone(), false), Ok(()), "{path}");
+    }
+    assert_eq!(opened.try_iter().count(), APPROVED_LIMIT);
+}
+
 #[test]
 fn the_built_config_has_the_csp_and_builds_its_own_window() {
     let config: tauri::utils::config::Config =
@@ -182,6 +241,22 @@ fn the_built_config_has_the_csp_and_builds_its_own_window() {
     let macos: Value = serde_json::from_str(include_str!("../tauri.macos.conf.json")).unwrap();
     let windows = macos["app"]["windows"].as_array().unwrap();
     assert!(windows.iter().all(|window| window["create"] == false));
+    // The webview opens links only; paths go through `open_path`.
+    let capability: Value =
+        serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+    let opener: Vec<_> = capability["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|permission| permission.to_string().contains("opener:"))
+        .collect();
+    assert_eq!(
+        opener,
+        [
+            &json!("opener:allow-open-url"),
+            &json!("opener:allow-default-urls")
+        ]
+    );
 }
 
 #[test]
@@ -1027,6 +1102,7 @@ fn commands_reach_the_managed_hive() {
             delete_file,
             create_folder,
             open_in_editor,
+            open_path,
             get_settings,
             set_settings,
             create_space,
@@ -1132,6 +1208,10 @@ fn commands_reach_the_managed_hive() {
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
+
+    let path = json!({"path": "C:\\x.bat", "reveal": false});
+    let unasked = json!("Hive opens only a path the service sent: C:\\x.bat");
+    assert_eq!(invoke(&webview, "open_path", path), Err(unasked));
 
     let refused = invoke(&webview, "connect", json!({})).unwrap_err();
     assert!(refused.as_str().unwrap().contains("onMessage"), "{refused}");

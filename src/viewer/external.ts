@@ -1,10 +1,17 @@
-import { isTauri } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { type ServiceMessage, setEditorNotice, setNotice, useHive } from "../store";
 import { isMac } from "../window";
 import { isFor } from "./buffer";
 
 type EditorTarget = Extract<ServiceMessage, { type: "editor_target" }>;
+
+/**
+ * Opens `path` with the system's default app, or shows it in the Explorer or the Finder when
+ * `reveal`. The app side opens only a path the service just sent, once (9.10): the webview has
+ * no permission to open a path itself.
+ */
+export const openPath = (path: string, reveal = false) =>
+  invoke<void>("open_path", { path, reveal });
 
 /**
  * "Open in external editor": the service's answer opens the file's Windows path with its

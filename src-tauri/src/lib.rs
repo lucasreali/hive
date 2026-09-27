@@ -5,7 +5,7 @@
 //! plus a `channel` field. Terminal output goes, as raw bytes, to the `Channel` given for that
 //! terminal by `open_terminal`. No Tauri events are used.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;
@@ -60,6 +60,8 @@ const STDERR_LIMIT: u64 = 16_384;
 const EXIT_WAIT: Duration = Duration::from_secs(2);
 
 const NOT_CONNECTED: &str = "not connected to the hive service";
+/// How many paths the service sent (`editor_target`, `session_located`) wait for `open_path`.
+const APPROVED_LIMIT: usize = 16;
 
 /// Program and arguments that start `hive bridge`: from Windows through WSL (#14, 4.18), or
 /// natively when `macos` (5.2). `HIVE_WSL_DISTRO` picks the WSL distribution (Windows only)
@@ -113,10 +115,14 @@ pub struct Hive {
     restart: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs a downloaded update's installer; given by `main.rs` (`with_install`).
     install: Option<Box<Installer>>,
+    /// Opens a path, or shows it in the file manager; given by `main.rs` (`with_open`).
+    open: Option<Box<Opener>>,
 }
 
 /// Runs the installer of a downloaded update.
 type Installer = dyn Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync;
+/// Opens `path` with the system's default app, or shows it in the file manager when `reveal`.
+type Opener = dyn Fn(&str, bool) -> Result<(), String> + Send + Sync;
 
 #[derive(Default)]
 struct Link {
@@ -134,9 +140,19 @@ struct Link {
     /// The newer release `check_update` found and downloaded, for `install_update` or the
     /// app's exit (4.19).
     update: Option<(Update, Vec<u8>)>,
+    /// The paths the service sent for the app to open, oldest first, each for one `open_path`.
+    approved: VecDeque<String>,
 }
 
 impl Link {
+    /// Lets `open_path` open `path` once; the oldest waiting path goes past [`APPROVED_LIMIT`].
+    fn approve(&mut self, path: String) {
+        if self.approved.len() == APPROVED_LIMIT {
+            self.approved.pop_front();
+        }
+        self.approved.push_back(path);
+    }
+
     fn to_ui(&self, message: Value) {
         if let Some(ui) = &self.ui {
             let _ = ui.send(message);
@@ -192,7 +208,31 @@ impl Hive {
             link: Arc::default(),
             restart: None,
             install: None,
+            open: None,
         }
+    }
+
+    pub fn with_open(
+        mut self,
+        open: impl Fn(&str, bool) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.open = Some(Box::new(open));
+        self
+    }
+
+    /// Opens `path` with the system's default app, or shows it in the file manager when
+    /// `reveal` (open point #15): only a path the service just sent in `editor_target` or
+    /// `session_located` (checked there, 9.8), and each at most once. The webview itself has no
+    /// permission to open a path, so a script in it can open nothing else.
+    pub fn open_path(&self, path: String, reveal: bool) -> Result<(), String> {
+        let mut link = self.link();
+        let Some(at) = link.approved.iter().position(|approved| *approved == path) else {
+            return Err(format!("Hive opens only a path the service sent: {path}"));
+        };
+        link.approved.remove(at);
+        drop(link);
+        let open = self.open.as_ref().ok_or("this app cannot open paths")?;
+        open(&path, reveal)
     }
 
     pub fn with_restart(mut self, restart: impl Fn() + Send + Sync + 'static) -> Self {
@@ -693,6 +733,14 @@ async fn pump<R: AsyncRead + Unpin>(
                 return End::Refused;
             }
             Control::TerminalExited { .. } => drop(link.terminals.remove(&frame.channel)),
+            Control::EditorTarget {
+                windows_path: Some(path),
+                ..
+            }
+            | Control::SessionLocated {
+                windows_path: Some(path),
+                ..
+            } => link.approve(path),
             _ => {}
         }
         link.to_ui(value);
@@ -982,6 +1030,11 @@ pub mod commands {
         path: String,
     ) -> Result<(), String> {
         hive.open_in_editor(worktree, path)
+    }
+
+    #[tauri::command]
+    pub fn open_path(hive: State<'_, Hive>, path: String, reveal: bool) -> Result<(), String> {
+        hive.open_path(path, reveal)
     }
 
     #[tauri::command]

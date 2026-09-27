@@ -109,9 +109,9 @@ test("a located log or folder opens, or is revealed, with Windows' apps", async 
   locate(session, "folder", "open");
   await openLocated(located("folder", "C:\\dir"), true);
   expect(calls).toEqual([
-    ["plugin:opener|open_path", { path: "C:\\log" }],
-    ["plugin:opener|reveal_item_in_dir", { paths: ["C:\\log"] }],
-    ["plugin:opener|open_path", { path: "C:\\dir" }],
+    ["open_path", { path: "C:\\log", reveal: false }],
+    ["open_path", { path: "C:\\log", reveal: true }],
+    ["open_path", { path: "C:\\dir", reveal: false }],
   ]);
 
   locate(session, "log", "open");
