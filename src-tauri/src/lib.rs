@@ -90,6 +90,20 @@ pub fn bridge_command(
     (program.into(), args)
 }
 
+/// Whether the webview may load `url` (open point #15): only the app itself, from the one origin
+/// Tauri serves it from (`tauri://localhost` when `macos`, `http://tauri.localhost` on Windows)
+/// or, in a development build, from the dev server `dev`. Links open outside, through the
+/// opener plugin.
+pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool {
+    let (scheme, host) = if macos {
+        ("tauri", "localhost")
+    } else {
+        ("http", "tauri.localhost")
+    };
+    let bundled = url.scheme() == scheme && url.host_str() == Some(host) && url.port().is_none();
+    bundled || dev.is_some_and(|dev| dev.origin() == url.origin())
+}
+
 /// Tauri state: the bridge command and the live link to the service.
 pub struct Hive {
     program: OsString,

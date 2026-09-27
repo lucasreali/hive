@@ -113,6 +113,78 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
 }
 
 #[test]
+fn the_webview_navigates_only_within_the_app() {
+    let url = |text: &str| tauri::Url::parse(text).unwrap();
+    let outside = [
+        "https://example.com/",
+        "http://localhost:1420/",
+        "tauri://evil.com/",
+        "http://tauri.localhost.evil.com/",
+        "http://tauri.localhost:8080/",
+        "tauri://localhost:8080/",
+        "file:///etc/passwd",
+        "about:blank",
+        "javascript:alert(1)",
+    ];
+    // Each platform's own origin only: Tauri does not serve the app from the other ones there.
+    let platforms = [
+        (
+            true,
+            "tauri://localhost/index.html#x",
+            ["http://tauri.localhost/", "https://tauri.localhost/"],
+        ),
+        (
+            false,
+            "http://tauri.localhost/assets/a.js",
+            ["tauri://localhost/", "https://tauri.localhost/"],
+        ),
+    ];
+    for (macos, inside, others) in platforms {
+        assert!(app_url(&url(inside), macos, None), "{inside}");
+        for text in outside.iter().chain(&others) {
+            assert!(!app_url(&url(text), macos, None), "{text} (macos: {macos})");
+        }
+    }
+    // The dev server, when given, only on its own origin.
+    let dev = url("http://localhost:1420");
+    assert!(app_url(
+        &url("http://localhost:1420/src/main.tsx"),
+        false,
+        Some(&dev)
+    ));
+    assert!(app_url(&url("http://tauri.localhost/"), false, Some(&dev)));
+    for text in [
+        "http://localhost:1421/",
+        "https://localhost:1420/",
+        "http://127.0.0.1:1420/",
+    ] {
+        assert!(!app_url(&url(text), false, Some(&dev)), "{text}");
+    }
+}
+
+#[test]
+fn the_built_config_has_the_csp_and_builds_its_own_window() {
+    let config: tauri::utils::config::Config =
+        serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    let security = &config.app.security;
+    let csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+               img-src 'self' data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost";
+    assert_eq!(security.csp.as_ref().unwrap().to_string(), csp);
+    // The dev CSP adds the Vite hot-reload socket. Tauri applies a CSP only to the pages it
+    // serves itself, so on desktop not to the dev server's.
+    let dev = security.dev_csp.as_ref().unwrap().to_string();
+    assert!(
+        dev.ends_with("connect-src ipc: http://ipc.localhost ws://localhost:1420"),
+        "{dev}"
+    );
+    // `main.rs` builds the window, with the navigation guard; a window per platform config.
+    assert!(config.app.windows.iter().all(|window| !window.create));
+    let macos: Value = serde_json::from_str(include_str!("../tauri.macos.conf.json")).unwrap();
+    let windows = macos["app"]["windows"].as_array().unwrap();
+    assert!(windows.iter().all(|window| window["create"] == false));
+}
+
+#[test]
 fn bridge_runs_a_constant_script_without_a_shell_config() {
     let (program, args) = bridge_command(false, &|_| None, None);
     assert_eq!(program, "wsl.exe");

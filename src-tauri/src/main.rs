@@ -23,6 +23,17 @@ fn main() {
                 .with_restart(move || handle.request_restart())
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()));
             app.manage(hive);
+            // The window (`"create": false` in the config) with its guards (open point #15): the
+            // webview never leaves the app and never opens another window.
+            let window = app.config().app.windows.first().cloned();
+            let window = window.ok_or("hive-app: no window in tauri.conf.json")?;
+            let dev = tauri::is_dev()
+                .then(|| app.config().build.dev_url.clone())
+                .flatten();
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
+                .on_navigation(move |url| hive_lib::app_url(url, macos, dev.as_ref()))
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                .build()?;
             #[cfg(windows)]
             disable_browser_keys(app);
             Ok(())
