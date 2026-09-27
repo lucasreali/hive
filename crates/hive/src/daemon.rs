@@ -1545,8 +1545,19 @@ mod tests {
         // A subagent working in a worktree of its own.
         let mut owning = Agent::new(5, Instant::now(), 0);
         owning.worktree = Some("/r".into());
-        let payload = serde_json::json!({"session_id": "u", "agent_id": "a", "cwd": "/r/w"});
-        let start = ClaudeCode.translate("SubagentStart", Some("5".into()), payload);
+        let start = AgentEvent {
+            provider: "claude-code".into(),
+            terminal_id: Some("5".into()),
+            session_id: Some("u".into()),
+            subagent: Some(hive_protocol::Subagent {
+                id: "a".into(),
+                agent_type: None,
+            }),
+            cwd: Some("/r/w".into()),
+            kind: EventKind::SubagentStarted,
+            activity: None,
+            raw: serde_json::Value::Null,
+        };
         owning.apply("u", &start, Instant::now(), &|cwd| Some(cwd.to_owned()));
         let owning_state = owning.message("u");
         let state = test_state(dir.path());

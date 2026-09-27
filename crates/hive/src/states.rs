@@ -1260,11 +1260,8 @@ mod tests {
         agent.watched = true;
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
         let sent = agent.feed("s", &hook("Stop", None, json!({})), now);
-        // Seen, yet it still finished: a tone and an inbox item, no OS notification.
-        let finished = Some(Alert::Finished);
-        assert!(
-            matches!(sent, Some(Control::AgentState { pending: false, alert, .. }) if alert == finished)
-        );
+        // Seen (not pending, below), yet it still finished: a tone and an inbox item.
+        assert_eq!(alerts(sent), Some((Some(Alert::Finished), false)));
         assert_eq!((shown(&agent).0, pending(&agent)), (WaitingYou, false));
         // Looking away later keeps it seen, and so do events that change nothing shown.
         agent.watched = false;
