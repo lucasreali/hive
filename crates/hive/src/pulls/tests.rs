@@ -413,6 +413,17 @@ fn pulls(error: Option<&str>) -> Control {
 
 #[test]
 fn the_list_is_fetched_once_per_interval_unless_forced() {
+    // One list per project and account.
+    let none = SpaceEnv::default();
+    let account = SpaceEnv {
+        gh_account: Some(GhAccount {
+            host: "github.com".into(),
+            login: "me".into(),
+        }),
+        ..SpaceEnv::default()
+    };
+    assert_eq!(key("/a", &none), "/a\nNone\nNone");
+    assert_ne!(key("/a", &none), key("/a", &account));
     let mut cache = Cache::default();
     let start = Instant::now();
     let at = |ms: u64| start + Duration::from_millis(ms);
@@ -533,7 +544,11 @@ case "$1 $2" in
   "api graphql") [ -f '{dir}/fail' ] && {{ cat '{dir}/fail' >&2; exit 1; }}; cat '{SEARCH}' ;;
   "pr view") cat '{VIEW}' ;;
   "pr checkout") git checkout -q -b feature ;;
-  "pr create") [ "$7" = --title=nolink ] || echo 'https://github.com/o/r/pull/42' ;;
+  "pr create") case "$7" in
+      --title=nolink) ;;
+      --title=unpushed) echo 'pull request create failed: GraphQL: Head sha can'"'"'t be blank' >&2; exit 1 ;;
+      *) echo 'https://github.com/o/r/pull/42' ;;
+    esac ;;
 esac
 "#
     );
@@ -1077,6 +1092,17 @@ fn a_pull_request_opens_from_the_worktree_branch() {
         message: "Opened the pull request".into(),
     };
     assert_eq!(create("nolink", "", "main", false)[0], done);
+    // gh's refusal, and a repository with no GitHub remote.
+    let unpushed =
+        "gh pr create failed: pull request create failed: GraphQL: Head sha can't be blank";
+    assert_eq!(refused("unpushed", "", "main"), unpushed);
+    git(root, &["remote", "remove", "origin"]);
+    let calls = setup.calls().len();
+    assert_eq!(
+        refused("t", "", "main"),
+        "No remote of this repository is on github.com"
+    );
     git(&wt, &["checkout", "-q", "--detach"]);
     assert_eq!(refused("t", "", "main"), "This worktree is on no branch");
+    assert_eq!(setup.calls().len(), calls);
 }

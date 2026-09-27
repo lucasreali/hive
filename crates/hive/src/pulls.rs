@@ -285,7 +285,7 @@ fn checkout(
 ) -> Result<Control, String> {
     let name = format!("pr-{number}");
     let created = projects.create_worktree(&project.id, &name, None);
-    let (_, created) = created.map_err(|err| err.to_string())?;
+    let (made, created) = created.map_err(|err| err.to_string())?;
     let root = Path::new(&project.path);
     let args = ["pr", "checkout", &number.to_string(), "--repo", &repo.arg()];
     let checked = run(gh, env, &created.path, &args, ACTION_OUTPUT);
@@ -295,9 +295,8 @@ fn checkout(
     let _ = git::output(root, &["branch", "-D", &format!("worktree-{name}")], &[0]);
     checked?;
     Ok(Control::WorktreeCreated {
-        project: projects
-            .followed(&project.id)
-            .map_err(|err| err.to_string())?,
+        // On the pull request's branch now (the project as made, should it be unfollowed).
+        project: projects.followed(&project.id).unwrap_or(made),
         path: created.path.to_string_lossy().into_owned(),
         notes: created.notes,
     })
@@ -388,7 +387,8 @@ fn run(gh: &Gh, env: &SpaceEnv, cwd: &Path, args: &[&str], limit: u64) -> Result
 /// The GitHub repository of the project at `root`, from its remotes on `host`.
 fn remote(root: &Path, host: &str) -> Result<Repo, String> {
     let args = ["config", "--get-regexp", r"^remote\..*\.(url|gh-resolved)$"];
-    let out = git::output(root, &args, &[0, 1]).map_err(|err| err.to_string())?;
+    // A repository git cannot read has no remote either.
+    let out = git::output(root, &args, &[0, 1]).unwrap_or_default();
     pick_remote(&String::from_utf8_lossy(&out), host)
         .ok_or_else(|| format!("No remote of this repository is on {host}"))
 }
