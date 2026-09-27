@@ -1,0 +1,177 @@
+{
+ "additions": 84,
+ "author": {
+  "is_bot": false,
+  "login": "octo-1"
+ },
+ "baseRefName": "trunk",
+ "body": "<!-- a template comment -->\n### Description\n\nFixes [the bug](https://github.com/cli/cli/issues/1). ![shot](https://example.com/a.png)\n",
+ "comments": [
+  {
+   "author": {
+    "login": "octo-6"
+   },
+   "authorAssociation": "NONE",
+   "body": "Text 5 with `code`.",
+   "createdAt": "2026-09-10T14:31:25Z",
+   "includesCreatedEdit": false,
+   "isMinimized": true,
+   "minimizedReason": "SPAM",
+   "reactionGroups": [],
+   "url": "https://github.com/cli/cli/pull/14337#issuecomment-5620353412",
+   "viewerDidAuthor": false
+  },
+  {
+   "author": {
+    "login": "octo-7"
+   },
+   "authorAssociation": "NONE",
+   "body": "Text 6 with `code`.",
+   "createdAt": "2026-09-13T00:41:13Z",
+   "includesCreatedEdit": false,
+   "isMinimized": true,
+   "minimizedReason": "SPAM",
+   "reactionGroups": [],
+   "url": "https://github.com/cli/cli/pull/14337#issuecomment-5649734435",
+   "viewerDidAuthor": false
+  },
+  {
+   "author": {
+    "login": "octo-8"
+   },
+   "authorAssociation": "NONE",
+   "body": "Text 7 with `code`.",
+   "createdAt": "2026-09-25T08:13:53Z",
+   "includesCreatedEdit": false,
+   "isMinimized": true,
+   "minimizedReason": "SPAM",
+   "reactionGroups": [],
+   "url": "https://github.com/cli/cli/pull/14337#issuecomment-5829173663",
+   "viewerDidAuthor": false
+  }
+ ],
+ "deletions": 47,
+ "files": [
+  {
+   "path": "pkg/cmd/api/api.go",
+   "additions": 33,
+   "deletions": 31
+  },
+  {
+   "path": "pkg/cmd/api/api_test.go",
+   "additions": 43,
+   "deletions": 11
+  },
+  {
+   "path": "pkg/cmd/factory/default.go",
+   "additions": 1,
+   "deletions": 0
+  },
+  {
+   "path": "pkg/cmdutil/factory.go",
+   "additions": 7,
+   "deletions": 5
+  }
+ ],
+ "headRefName": "williammartin-ghes-api-telemetry",
+ "headRefOid": "4a75987727d9a40c58546914e9fd74e6485b9443",
+ "isCrossRepository": false,
+ "isDraft": false,
+ "mergeable": "UNKNOWN",
+ "number": 14337,
+ "reviewDecision": "APPROVED",
+ "reviews": [
+  {
+   "author": {
+    "login": "octo-9"
+   },
+   "authorAssociation": "CONTRIBUTOR",
+   "body": "Text 1 with `code`.",
+   "submittedAt": "2026-09-03T13:51:01Z",
+   "includesCreatedEdit": false,
+   "reactionGroups": [],
+   "state": "COMMENTED",
+   "commit": {
+    "oid": "6b30ab7ea3cb8bf4a30dfb2302125b97ec0fb863"
+   }
+  },
+  {
+   "author": {
+    "login": "octo-10"
+   },
+   "authorAssociation": "MEMBER",
+   "body": "Text 2 with `code`.",
+   "submittedAt": "2026-09-03T15:08:48Z",
+   "includesCreatedEdit": false,
+   "reactionGroups": [],
+   "state": "APPROVED",
+   "commit": {
+    "oid": "6b30ab7ea3cb8bf4a30dfb2302125b97ec0fb863"
+   }
+  },
+  {
+   "author": {
+    "login": "octo-2"
+   },
+   "authorAssociation": "MEMBER",
+   "body": "",
+   "submittedAt": "2026-09-03T15:19:49Z",
+   "includesCreatedEdit": false,
+   "reactionGroups": [],
+   "state": "APPROVED",
+   "commit": {
+    "oid": "4a75987727d9a40c58546914e9fd74e6485b9443"
+   }
+  },
+  {
+   "author": {
+    "login": "octo-8"
+   },
+   "authorAssociation": "NONE",
+   "body": "Text 4 with `code`.",
+   "submittedAt": "2026-09-25T08:13:42Z",
+   "includesCreatedEdit": false,
+   "reactionGroups": [],
+   "state": "COMMENTED",
+   "commit": {
+    "oid": "4a75987727d9a40c58546914e9fd74e6485b9443"
+   }
+  }
+ ],
+ "state": "MERGED",
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-09-03T15:17:24Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/cli/cli/actions/runs/33771463758/job/100702464945",
+   "name": "CodeQL-Build (go, manual, ./.github/codeql/codeql-config.yml)",
+   "startedAt": "2026-09-03T15:14:23Z",
+   "status": "COMPLETED",
+   "workflowName": "Code Scanning"
+  },
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-09-03T15:16:47Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/cli/cli/actions/runs/33771463812/job/100702465720",
+   "name": "lint",
+   "startedAt": "2026-09-03T15:14:22Z",
+   "status": "COMPLETED",
+   "workflowName": "Lint"
+  },
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-09-03T15:19:38Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/cli/cli/actions/runs/33771463724/job/100702465259",
+   "name": "build (ubuntu-latest)",
+   "startedAt": "2026-09-03T15:14:22Z",
+   "status": "COMPLETED",
+   "workflowName": "Unit and Integration Tests"
+  }
+ ],
+ "title": "Disable telemetry for unauthenticated GHES `gh api` requests using absolute hostnames",
+ "updatedAt": "2026-09-25T08:18:47Z",
+ "url": "https://github.com/cli/cli/pull/14337"
+}
