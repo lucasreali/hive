@@ -95,6 +95,7 @@ fn disable_browser_keys(app: &tauri::App) {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
     use windows_core::Interface;
 
+    let _break: u32 = "only Windows compiles this line";
     let Some(window) = app.get_webview_window("main") else {
         eprintln!("hive-app: no main window to turn browser keys off");
         return;
