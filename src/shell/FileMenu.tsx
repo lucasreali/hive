@@ -1,6 +1,20 @@
-import { FilePlusIcon, FolderPlusIcon, type Icon, PencilSimpleIcon } from "@phosphor-icons/react";
+import {
+  FilePlusIcon,
+  FolderPlusIcon,
+  type Icon,
+  PencilSimpleIcon,
+  TrashIcon,
+} from "@phosphor-icons/react";
 import { useState } from "react";
-import { type FileDialogKind, openFileDialog, openFileMenu, useHive } from "../store";
+import {
+  ask,
+  type FileDialogKind,
+  type FileTarget,
+  openFileDialog,
+  openFileMenu,
+  useHive,
+  within,
+} from "../store";
 import { transport } from "../transport";
 import { CloseIcon, ICON } from "./icons";
 import { ContextMenu, showModal } from "./WorktreeMenu";
@@ -31,8 +45,43 @@ export function FileMenu() {
       {item(FilePlusIcon, "New File…", "file")}
       {item(FolderPlusIcon, "New Folder…", "folder")}
       {target.path !== null && item(PencilSimpleIcon, "Rename…", "rename")}
+      {target.path !== null && (
+        <button
+          type="button"
+          role="menuitem"
+          className="danger"
+          onClick={() => {
+            closeMenu();
+            askDelete(target);
+          }}
+        >
+          <TrashIcon {...ICON} />
+          Delete…
+        </button>
+      )}
     </ContextMenu>
   );
+}
+
+/**
+ * Asks before deleting the file or folder `path` of `target` (nothing without one): the text
+ * names it and, for a folder, how many of the tree's files it holds.
+ */
+export function askDelete({ worktree, folder, path }: FileTarget) {
+  if (path === null) return;
+  const listing = useHive.getState().worktreeFiles;
+  const listed = listing?.path === worktree ? listing.files : [];
+  const count = listed.filter((p) => within(p, path)).length;
+  const what =
+    path !== folder
+      ? path
+      : `the folder ${path} and the ${count} file${count === 1 ? "" : "s"} in it`;
+  ask({
+    title: path === folder ? "Delete folder?" : "Delete file?",
+    text: `Delete ${what}? Nothing goes to a trash: git can bring back tracked files, but untracked and ignored ones are lost for good.`,
+    action: "Delete",
+    run: () => void transport.deleteFile(worktree, path),
+  });
 }
 
 const TITLES: Record<FileDialogKind, [title: string, submit: string]> = {

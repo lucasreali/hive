@@ -1599,6 +1599,18 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 },
             }
         }),
+        Ok(Control::DeleteFile { worktree, path }) => state.projects(move |projects| {
+            let deleted = projects
+                .worktree(&worktree)
+                .and_then(|dir| file::delete(&dir, &path, &held(projects)));
+            match deleted {
+                Ok(()) => Control::FileDeleted { worktree, path },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }),
         Ok(Control::CreateFolder {
             worktree,
             folder,

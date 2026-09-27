@@ -112,6 +112,11 @@ export interface Transport {
    */
   moveFile(worktree: string, path: string, folder: string): Promise<void>;
   /**
+   * Deletes the file or folder `path` for good, a folder with what it holds; answered by
+   * `file_deleted` or `file_op_failed`.
+   */
+  deleteFile(worktree: string, path: string): Promise<void>;
+  /**
    * Creates the folder `name` in `folder` ("" for the worktree's root), never over an entry;
    * answered by `folder_created` or `file_op_failed`.
    */
