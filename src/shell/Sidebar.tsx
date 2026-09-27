@@ -388,10 +388,8 @@ function AgentRow({
   const shown = (useHive((s) => s.activeTab === agent.terminal) || picked) && !covered;
   const status = useHive((s) => s.agentStates[agent.id]);
   const usage = useHive((s) => s.agentUsage[agent.id]);
-  // The session's name, as on its tab; until it has one, "New chat" for a chat, else "Claude".
-  const name = useHive(
-    (s) => s.agentTitles[agent.id] ?? (s.chats[agent.terminal] ? "New chat" : "Claude"),
-  );
+  // The session's name, as on its tab; until it has one, "Claude".
+  const name = useHive((s) => s.agentTitles[agent.id] ?? "Claude");
   const badge = useHive((s) => s.terminals[agent.terminal]?.badge);
   const show = () => tab && activateTab(tab);
   const row = useRef<HTMLDivElement>(null);

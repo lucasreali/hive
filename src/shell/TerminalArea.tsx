@@ -1,6 +1,5 @@
 import {
   FilePlusIcon,
-  RobotIcon,
   SquareSplitHorizontalIcon,
   TerminalWindowIcon,
   XIcon,
@@ -15,7 +14,6 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { closeChat, openChat } from "../chats";
 import { useReorder } from "../reorder";
 import {
   activateTab,
@@ -48,10 +46,8 @@ import {
 } from "../terminals";
 import { isDirty, isFor } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
-import { ChatView } from "./ChatView";
 import {
   AddFolderIcon,
-  ChatIcon,
   CloseIcon,
   FileIcon,
   ICON,
@@ -101,8 +97,8 @@ function find(s: HiveState, path: string) {
 type Drag = ReturnType<ReturnType<typeof useReorder>>;
 
 /**
- * A tab of the bar: its label shows it, its × closes it, dragging it moves it. Terminals, chats
- * and files share it. With unsaved edits the × shows a dot instead, as in other editors, and
+ * A tab of the bar: its label shows it, its × closes it, dragging it moves it. Terminals and
+ * files share it. With unsaved edits the × shows a dot instead, as in other editors, and
  * turns back into the × on hover or keyboard focus, where it is about to be used.
  */
 function TabItem(props: {
@@ -152,10 +148,8 @@ function TabItem(props: {
 }
 
 /**
- * A terminal's (or a chat's) tab: the worktree's name, or, while a Claude agent runs in it, the
- * agent's state and its session's name (as in Orca). A chat shows its session's name, kept once
- * it ended, and "New chat" until it has one (8.11). Tabs show only their worktree's, so no
- * project.
+ * A terminal's tab: the worktree's name, or, while a Claude agent runs in it, the agent's state
+ * and its session's name (as in Orca). Tabs show only their worktree's, so no project.
  */
 function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: Drag }) {
   const { tab, onMenu } = props;
@@ -168,32 +162,23 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
   const agentState = useHive((s) => (agent ? (s.agentStates[agent]?.state ?? "idle") : null));
-  const title = useHive(
-    (s) => (agent ? s.agentTitles[agent] : undefined) ?? s.chats[tab.id]?.title,
-  );
-  const chat = tab.kind === "chat";
-  const label = title ?? (chat ? "New chat" : name);
-  const ended = useHive((s) => !!s.chats[tab.id]?.closed);
+  const title = useHive((s) => (agent ? s.agentTitles[agent] : undefined));
+  const label = title ?? name;
   return (
     <TabItem
       drag={props.drag}
       active={active}
       split={split}
-      // A chat has no split, so no menu.
-      onMenu={
-        chat
-          ? undefined
-          : (event) => {
-              event.preventDefault();
-              onMenu({ tab: tab.id, x: event.clientX, y: event.clientY });
-            }
-      }
+      onMenu={(event) => {
+        event.preventDefault();
+        onMenu({ tab: tab.id, x: event.clientX, y: event.clientY });
+      }}
       title={title ? `${title}\n${tab.cwd}` : tab.cwd}
       onShow={() => activateTab(tab)}
-      close={`Close ${chat ? "chat" : "terminal"} ${label}`}
-      onClose={() => (chat ? closeChat(tab.id) : closeTerminal(tab.id))}
+      close={`Close terminal ${label}`}
+      onClose={() => closeTerminal(tab.id)}
     >
-      {agentState ? <StateIcon state={agentState} /> : chat ? <ChatIcon /> : <TerminalIcon />}
+      {agentState ? <StateIcon state={agentState} /> : <TerminalIcon />}
       <span className="tab-name" data-agent={title ? true : undefined}>
         {label}
       </span>
@@ -215,7 +200,6 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
           exited
         </span>
       )}
-      {ended && <span className="tab-badge">ended</span>}
     </TabItem>
   );
 }
@@ -308,11 +292,8 @@ function NoTerminals({ worktree }: { worktree: string }) {
   );
 }
 
-/** The "+" menu's Agent: the in-app chat (7.3). */
-const openAgent = (worktree: string) => void openChat(worktree);
-
 /**
- * The tab bar's "+": a menu to open a terminal, an agent or a new file (its name asked first)
+ * The tab bar's "+": a menu to open a terminal or a new file (its name asked first)
  * in `worktree`. Enter, Space or ↓ open it; Esc closes it and gives the focus back to "+".
  */
 function NewTabButton({ worktree }: { worktree: string | null }) {
@@ -336,8 +317,8 @@ function NewTabButton({ worktree }: { worktree: string | null }) {
         ref={setPlus}
         type="button"
         className="ghost"
-        title="New terminal, agent or file"
-        aria-label="New terminal, agent or file"
+        title="New terminal or file"
+        aria-label="New terminal or file"
         aria-haspopup="menu"
         aria-expanded={at !== null}
         disabled={worktree === null}
@@ -356,10 +337,6 @@ function NewTabButton({ worktree }: { worktree: string | null }) {
             <TerminalWindowIcon {...ICON} />
             Terminal
           </button>
-          <button type="button" role="menuitem" onClick={act(openAgent)}>
-            <RobotIcon {...ICON} />
-            Agent
-          </button>
           <button
             type="button"
             role="menuitem"
@@ -374,7 +351,7 @@ function NewTabButton({ worktree }: { worktree: string | null }) {
   );
 }
 
-// "+" opens a terminal, an agent or a new file in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
+// "+" opens a terminal or a new file in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
 // the selected worktree's tabs show (a project's are its main worktree's).
 export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
@@ -386,13 +363,6 @@ export function TerminalArea() {
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
   const transcript = useHive((s) => s.transcriptShown);
-  const chat = useHive((s) =>
-    !s.fileShown &&
-    !s.transcriptShown &&
-    visibleTabs(s).some((t) => t.id === s.activeTab && t.kind === "chat")
-      ? s.activeTab
-      : null,
-  );
   const percent = useHive((s) => s.splitPercent);
   const [menu, setMenu] = useState<TabMenu | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -433,8 +403,7 @@ export function TerminalArea() {
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript || chat !== null} />
-        {chat !== null && <ChatView key={chat} id={chat} />}
+        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript} />
         {file && <FileView worktree={file.worktree} />}
         {transcript && (
           <TranscriptView

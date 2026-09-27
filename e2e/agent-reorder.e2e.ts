@@ -4,7 +4,7 @@ import { expect, type Page, test } from "@playwright/test";
 async function agent(page: Page, row: string, badge: string, cd?: string) {
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: row, exact: true }).first().click();
-  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByTitle("New terminal or file").click();
   await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(page.locator(".xterm-helper-textarea").last()).toBeFocused();
   for (const line of [cd && `cd ${cd}`, `hive badge ${badge}`, "claude"]) {

@@ -675,7 +675,6 @@ async fn a_removed_project_takes_its_settings_and_ports_along_and_leaves_its_fil
                 setup: Some("make".into()),
                 ..Default::default()
             },
-            ..Default::default()
         };
         settings.projects.insert(root.clone(), project);
         app.send(0, Control::SetSettings { settings }).await;

@@ -6,7 +6,7 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist");
-  const plus = page.getByTitle("New terminal, agent or file");
+  const plus = page.getByTitle("New terminal or file");
   const agents = tree.locator(".tree-row.agent");
   const rows = () => tree.locator(".tree-row").allTextContents();
 

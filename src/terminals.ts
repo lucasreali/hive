@@ -277,14 +277,12 @@ export async function splitTerminal(id: number | null): Promise<void> {
   const s = useHive.getState();
   const split = shownSplit(s);
   if (split && (split.left === id || split.right === id)) return setSplit(null);
-  // Chats (7.3) are not terminals: they take no part in a split.
-  const terminals = s.tabs.filter((t) => t.kind !== "chat");
-  const tab = terminals.find((t) => t.id === id);
+  const tab = s.tabs.find((t) => t.id === id);
   if (!tab) return;
   const place = tabPlace(s, tab.cwd);
   const same = inBarOrder(
     s,
-    terminals.filter((t) => tabPlace(s, t.cwd) === place),
+    s.tabs.filter((t) => tabPlace(s, t.cwd) === place),
   );
   const next = same[(same.indexOf(tab) + 1) % same.length] as typeof tab;
   const right = next === tab ? await openTerminal(tab.cwd) : next.id;

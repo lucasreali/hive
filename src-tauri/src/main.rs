@@ -76,14 +76,6 @@ fn main() {
             commands::create_pull,
             commands::open_settings_file,
             commands::get_diagnostics,
-            commands::open_chat,
-            commands::chat_send,
-            commands::chat_answer,
-            commands::chat_interrupt,
-            commands::chat_set_mode,
-            commands::chat_set_model,
-            commands::close_chat,
-            commands::confirm_chat_folder,
         ])
         .build(tauri::generate_context!());
     match result {

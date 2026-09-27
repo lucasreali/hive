@@ -20,7 +20,7 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
-  const plus = page.getByTitle("New terminal, agent or file");
+  const plus = page.getByTitle("New terminal or file");
   await expect(tree.getByRole("button", { name: "fix-login" })).toBeVisible();
   // Nothing selected, so there is no worktree to open a terminal in.
   await expect(plus).toBeDisabled();

@@ -1,2 +1,0 @@
-{"type":"control_response","response":{"subtype":"error","request_id":"hive-2","error":"Cannot set permission mode to auto: auto mode unavailable for this model","error_code":"auto_mode_model"}}
-{"type":"system","subtype":"init","cwd":"/home/u/proj","session_id":"9f1c2b7e-5d3a-4c1e-8b2f-0a6d4e8c1f00","model":"claude-haiku-4-5-20251001","permissionMode":"default","apiKeySource":"none"}

@@ -169,7 +169,7 @@ function onContextMenu(event: MouseEvent): void {
 }
 
 /**
- * A file or a link dragged from outside that nothing on the way took (anywhere but the chat):
+ * A file or a link dragged from outside that nothing on the way took:
  * its drop would make the WebView open it in place of the app. Refused, and shown as not
  * droppable. The app's own drags (tree, sidebar) are left to their targets.
  */

@@ -76,7 +76,7 @@ test("editing: an agent writing the file under unsaved edits shows the conflict"
 }) => {
   await page.goto("/");
   const { view } = await openReadme(page);
-  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByTitle("New terminal or file").click();
   await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(page.getByRole("tab", { name: "fix-login" })).toHaveAttribute(
     "aria-selected",
