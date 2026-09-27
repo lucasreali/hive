@@ -82,6 +82,7 @@ jobs:
       - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/setup-rust
         with:
+          tools: cargo-nextest
           cache-key: mutants
       - run: cargo nextest run --workspace --cargo-profile mutants --no-run
       - id: test
@@ -105,6 +106,7 @@ jobs:
       # One cache for every shard (they build the same tree), written by the baseline job.
       - uses: ./.github/actions/setup-rust
         with:
+          tools: cargo-mutants,cargo-nextest
           cache-key: mutants
           cache-save: "false"
       - if: inputs.in-diff
