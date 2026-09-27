@@ -101,6 +101,16 @@ impl Store {
         self.set(settings)
     }
 
+    /// Drops the settings of the project `id` (9.28): the settings then in use, or `None` when
+    /// it had none (nothing is written).
+    pub fn forget(&self, id: &str) -> Result<Option<Settings>, String> {
+        let mut settings = self.get().0;
+        if settings.projects.remove(id).is_none() {
+            return Ok(None);
+        }
+        self.set(settings).map(Some)
+    }
+
     /// The scripts of the project `id` (none when it has no settings).
     pub fn scripts(&self, id: &str) -> ProjectScripts {
         let current = self.current();
@@ -241,6 +251,25 @@ mod tests {
         let file = tmp.path().join("hive/settings.json");
         let mode = std::fs::metadata(&file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(Store::load(file).get(), (settings, None));
+    }
+
+    #[test]
+    fn a_removed_project_takes_its_settings_along() {
+        let (tmp, store) = store();
+        let mut settings = with_scripts(ProjectScripts {
+            setup: Some("make".into()),
+            ..Default::default()
+        });
+        store.set(settings.clone()).unwrap();
+        let file = tmp.path().join("hive/settings.json");
+        // One without settings writes nothing.
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(store.forget("/other"), Ok(None));
+        assert!(!file.exists());
+        settings.projects.clear();
+        assert_eq!(store.forget("/r"), Ok(Some(settings.clone())));
+        assert_eq!(store.scripts("/r"), ProjectScripts::default());
         assert_eq!(Store::load(file).get(), (settings, None));
     }
 

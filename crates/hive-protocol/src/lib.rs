@@ -261,6 +261,20 @@ pub enum Control {
         /// Readable explanation, shown as is.
         message: String,
     },
+    /// App → service: stop following the project `id` (9.28); its files stay on disk.
+    /// Answered by `Spaces`, `Settings` (when it had settings), then `ProjectRemoved`, or by
+    /// `RemoveProjectFailed`.
+    RemoveProject {
+        id: String,
+    },
+    ProjectRemoved {
+        id: String,
+    },
+    /// Nothing changed. Shown as is.
+    RemoveProjectFailed {
+        id: String,
+        message: String,
+    },
     /// Every space (6.14) and the current one, whose projects the sidebar and the Sessions
     /// panel show. Sent before `projects` in answer to `ListProjects`, before `ProjectAdded`,
     /// and in answer to every space request.
@@ -1606,9 +1620,18 @@ mod tests {
             Control::SpaceFailed {
                 message: "m".into(),
             },
+            Control::RemoveProject { id: "/r".into() },
+            Control::ProjectRemoved { id: "/r".into() },
+            Control::RemoveProjectFailed {
+                id: "/r".into(),
+                message: "m".into(),
+            },
         ] {
             assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
         }
+        let remove = Control::RemoveProject { id: "/r".into() };
+        let json = serde_json::to_string(&remove).unwrap();
+        assert_eq!(json, r#"{"type":"remove_project","id":"/r"}"#);
         let other = serde_json::to_string(&ProjectError::InOtherSpace).unwrap();
         assert_eq!(other, r#""in_other_space""#);
     }
