@@ -90,7 +90,7 @@ pub fn spawn(
         // one right after spawning; without it there is no session to end, so no terminal.
         let pid = child
             .id()
-            .ok_or_else(|| std::io::Error::other("the shell has no pid"))?;
+            .ok_or(std::io::Error::other("the shell has no pid"))?;
         Ok((pty, child, pid))
     };
     let (pty, child, pid) =
