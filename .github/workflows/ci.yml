@@ -78,3 +78,45 @@ jobs:
           name: e2e-results
           path: target/e2e
           retention-days: 7
+
+  # Whether this push can change what compiles on Windows (TODO 9.4): the branch's diff since it
+  # left `main` (merge base with origin/main, as mutants.yml), or always on `main`. A job skipped
+  # by its `if` still leaves the run green, so `scripts/ci.sh watch` waits for nothing more.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.diff.outputs.windows }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      # hive-protocol is compiled into the app; ci.yml itself, so a change to the job runs it.
+      - id: diff
+        run: |
+          windows=true
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
+            files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
+            grep -qE '^(src-tauri/|crates/hive-protocol/|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|\.github/workflows/ci\.yml$)' <<< "$files" ||
+              windows=false
+          fi
+          echo "windows=$windows" | tee -a "$GITHUB_OUTPUT"
+
+  # The app's `#[cfg(windows)]` code (main.rs `disable_browser_keys`, parts of lib.rs), which the
+  # Linux jobs never compile: without this job a Windows break shows first in release.yml.
+  windows:
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # `tauri::generate_context!` needs the built frontend (`dist`).
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: cargo clippy -p hive-app --all-targets --locked -- -D warnings

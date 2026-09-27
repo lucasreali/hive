@@ -235,6 +235,8 @@ impl Drop for ScriptHome {
     }
 }
 
+// The inode check (`MetadataExt::ino`) exists only on Unix, where the bridge script runs.
+#[cfg(unix)]
 #[test]
 fn the_bridge_script_installs_the_bundled_hive_once_per_version() {
     use std::os::unix::fs::MetadataExt;
