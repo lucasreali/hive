@@ -15,6 +15,8 @@ use nix::unistd::Pid;
 const OUTPUT_LIMIT: u64 = 16_777_216; // 16 MiB
 /// Most bytes read from one git command's stderr.
 const STDERR_LIMIT: u64 = 67_108_864; // 64 MiB
+/// The longest a git command that only reads may take (e.g. on a hung network drive).
+pub const TIME_LIMIT: Duration = Duration::from_secs(10);
 
 /// `git -C <dir>`, ready for its arguments.
 pub fn command(dir: &Path) -> Command {

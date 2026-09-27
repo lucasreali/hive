@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use crate::spaces::Spaces;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
-use crate::{git, procs};
+use crate::{git, health, procs};
 
 /// Largest spaces or project list file read.
 const FILE_LIMIT: u64 = 1024 * 1024;
@@ -245,13 +245,7 @@ impl Projects {
 
     /// `path` when it is a worktree of a followed project: the path comes from the app.
     pub fn worktree(&self, path: &str) -> io::Result<PathBuf> {
-        let followed = self.list().into_iter().flat_map(|p| p.worktrees);
-        if followed.into_iter().any(|w| w.path == path) {
-            return Ok(PathBuf::from(path));
-        }
-        Err(io::Error::other(format!(
-            "{path} is not a worktree of a followed project"
-        )))
+        followed(&self.list(), path).map(|(dir, _)| dir)
     }
 
     /// Only followed projects are acted on: the id comes from the app.
@@ -265,6 +259,20 @@ impl Projects {
     fn spaces(&self) -> MutexGuard<'_, Spaces> {
         self.spaces.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The worktree `path` of `projects` and the branch it is compared with
+/// ([`health::branch`]); an error when no project has it.
+pub fn followed(projects: &[Project], path: &str) -> io::Result<(PathBuf, Option<String>)> {
+    for project in projects {
+        if let Some(w) = project.worktrees.iter().find(|w| w.path == path) {
+            let branch = health::branch(project, w).map(str::to_owned);
+            return Ok((PathBuf::from(path), branch));
+        }
+    }
+    Err(io::Error::other(format!(
+        "{path} is not a worktree of a followed project"
+    )))
 }
 
 /// The followed worktree containing `cwd`, as `(project id, worktree id)`. Claude worktrees
@@ -743,6 +751,45 @@ mod tests {
         assert!(projects.validate_worktree_name(&id, "free").is_ok());
         let err = projects.validate_worktree_name(&id, "Bad").unwrap_err();
         assert!(err.to_string().starts_with("invalid worktree name"));
+    }
+
+    #[test]
+    fn a_hung_git_is_an_error_of_its_project_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = load(tmp.path());
+        let [hung, fine] = ["hung", "fine"].map(|name| {
+            let root = tmp.path().canonicalize().unwrap().join(name);
+            let status = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .arg(&root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let id = root.display().to_string();
+            projects.change_spaces(|s| s.add(id.clone())).unwrap();
+            id
+        });
+        // Git reads the repository's config, which includes a pipe nobody writes to, as a
+        // repository on a hung network drive would hang.
+        let git_dir = Path::new(&hung).join(".git");
+        nix::unistd::mkfifo(&git_dir.join("hang"), nix::sys::stat::Mode::S_IRWXU).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(git_dir.join("config"))
+            .unwrap();
+        std::io::Write::write_all(&mut config, b"[include]\n\tpath = hang\n").unwrap();
+        let started = std::time::Instant::now();
+        let listed = projects.list();
+        assert!(started.elapsed() < git::TIME_LIMIT * 2, "not killed");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, hung);
+        assert!(listed[0].worktrees.is_empty());
+        let error = listed[0].error.as_deref().unwrap_or_default();
+        assert!(error.ends_with("took longer than 10 s"), "{error}");
+        assert_eq!(listed[1].id, fine);
+        assert_eq!(listed[1].error, None);
+        assert_eq!(listed[1].worktrees[0].path, fine);
     }
 
     #[test]

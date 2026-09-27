@@ -1,13 +1,14 @@
 use std::os::unix::ffi::OsStrExt;
 
-use hive_protocol::{ChangedFile, Control, FileStatus, Role};
+use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Role};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
 
 async fn changes(conn: &mut Conn, path: &str) -> Control {
     let path = path.to_owned();
-    conn.send(0, Control::ListChanges { path }).await;
+    let base = DiffBase::Branch;
+    conn.send(0, Control::ListChanges { path, base }).await;
     conn.control().await.1
 }
 
@@ -62,6 +63,9 @@ async fn a_worktree_lists_what_differs_from_head() {
     assert_eq!(
         refused,
         Control::Changes {
+            base: DiffBase::Head,
+            branch: None,
+            base_error: None,
             path: root.clone(),
             files: vec![],
             added: 0,
@@ -71,11 +75,17 @@ async fn a_worktree_lists_what_differs_from_head() {
     );
     follow(&mut conn, &root).await;
 
+    // The main worktree is compared with HEAD, whatever the base asked.
+    let no_branch =
+        Some("No branch to compare with: this is the main worktree, or it is detached".to_owned());
     let mut renamed = file("new name.txt", FileStatus::Renamed, Some(0), Some(0));
     renamed.old_path = Some("old name.txt".into());
     assert_eq!(
         changes(&mut conn, &root).await,
         Control::Changes {
+            base: DiffBase::Head,
+            branch: None,
+            base_error: no_branch.clone(),
             path: root.clone(),
             files: vec![
                 file("a.txt", FileStatus::Modified, Some(2), Some(1)),
@@ -108,6 +118,9 @@ async fn a_worktree_lists_what_differs_from_head() {
     assert_eq!(
         changes(&mut conn, &fresh).await,
         Control::Changes {
+            base: DiffBase::Head,
+            branch: None,
+            base_error: no_branch,
             path: fresh.clone(),
             files: vec![
                 file("loose.txt", FileStatus::Untracked, Some(1), Some(0)),

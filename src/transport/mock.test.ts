@@ -397,8 +397,8 @@ test("a watched worktree lists its files and again after a touch in its terminal
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
   const fix = (shop.worktrees[1] as { path: string }).path;
   const filesOf = () => messages.filter((m) => m.type === "files" || m.type === "error");
-  await transport.watchWorktree("/nowhere");
-  await transport.watchWorktree(shop.path);
+  await transport.watchWorktree("/nowhere", "head");
+  await transport.watchWorktree(shop.path, "head");
   await tick();
   const [refused, main] = filesOf();
   const message = "/nowhere is not a worktree of a followed project";
@@ -406,7 +406,7 @@ test("a watched worktree lists its files and again after a touch in its terminal
   expect(main).toMatchObject({ type: "files", path: shop.path, truncated: false });
   // The main worktree has enough files to scroll.
   expect(main?.type === "files" && main.files.length).toBe(MOCK_FILES.length + 400);
-  await transport.watchWorktree(fix);
+  await transport.watchWorktree(fix, "head");
   await tick();
   expect(filesOf()[2]).toEqual({ type: "files", path: fix, files: MOCK_FILES, truncated: false });
 
@@ -425,8 +425,8 @@ test("a watched worktree lists its files and again after a touch in its terminal
   await transport.writeTerminal(other, "touch d.txt\r");
   await tick();
   expect(filesOf()).toHaveLength(4);
-  await transport.watchWorktree(fix);
-  await transport.watchWorktree(shop.path);
+  await transport.watchWorktree(fix, "head");
+  await transport.watchWorktree(shop.path, "head");
   await tick();
   const [, , , , again, main2] = filesOf();
   expect(again?.type === "files" && again.files).toEqual(["b.txt", ...touched].sort());
@@ -438,28 +438,48 @@ test("changes of a followed worktree with their totals, or why not", async () =>
   const [shop, api, dotfiles] = MOCK_REPOS;
   const refactor = api.worktrees[1].path;
   messages.length = 0;
-  await transport.listChanges(refactor);
-  await transport.listChanges(shop.path);
-  await transport.listChanges(dotfiles.path);
+  await transport.listChanges(refactor, "branch");
+  await transport.listChanges(shop.path, "branch");
+  await transport.listChanges(dotfiles.path, "head");
+  await transport.listChanges(refactor, "head");
   await tick();
+  const refactored = {
+    type: "changes",
+    path: refactor,
+    base: "branch",
+    branch: "main",
+    base_error: null,
+    files: MOCK_CHANGES[refactor],
+    added: 24,
+    removed: 49,
+    error: null,
+  } as const;
   expect(messages).toEqual([
+    refactored,
+    // The main worktree has no branch to compare with.
     {
       type: "changes",
-      path: refactor,
-      files: MOCK_CHANGES[refactor],
-      added: 24,
-      removed: 49,
+      path: shop.path,
+      base: "head",
+      branch: null,
+      base_error: "No branch to compare with: this is the main worktree, or it is detached",
+      files: [],
+      added: 0,
+      removed: 0,
       error: null,
     },
-    { type: "changes", path: shop.path, files: [], added: 0, removed: 0, error: null },
     {
       type: "changes",
       path: dotfiles.path,
+      base: "head",
+      branch: null,
+      base_error: null,
       files: [],
       added: 0,
       removed: 0,
       error: `${dotfiles.path} is not a worktree of a followed project`,
     },
+    { ...refactored, base: "head" },
   ]);
 });
 
@@ -478,7 +498,7 @@ test("files of a followed worktree as their status says, or why not", async () =
     [refactor, "assets/logo.png"],
     [dotfiles.path, "a"],
   ];
-  for (const [worktree, path] of asked) await transport.openFile(worktree, path);
+  for (const [worktree, path] of asked) await transport.openFile(worktree, path, "head");
   await tick();
   const texts = messages.map((m) =>
     m.type === "file" ? [m.path, m.content, m.base, m.binary, m.error, m.version] : m,
@@ -526,7 +546,7 @@ test("a save checks the version as the service does; write stands in for an agen
   await transport.saveFile(shop.path, "README.md", "mine\n", mockVersion(readme));
   await transport.saveFile(shop.path, "README.md", "late\n", mockVersion(readme));
   await transport.saveFile("/nowhere", "a", "x", null);
-  await transport.openFile(shop.path, "README.md");
+  await transport.openFile(shop.path, "README.md", "head");
   await tick();
   const at = { worktree: shop.path, path: "README.md" };
   expect(messages.slice(0, 3)).toEqual([
@@ -543,12 +563,12 @@ test("a save checks the version as the service does; write stands in for an agen
   expect(messages[3]).toMatchObject({ type: "file", content: "mine\n" });
 
   // `write` in a watched worktree's terminal changes the text and sends the changes again.
-  await transport.watchWorktree(shop.path);
+  await transport.watchWorktree(shop.path, "head");
   const id = await transport.openTerminal(shop.path, 80, 24, () => {});
   await tick();
   messages.length = 0;
   await transport.writeTerminal(id, "write README.md agent was here\r");
-  await transport.openFile(shop.path, "README.md");
+  await transport.openFile(shop.path, "README.md", "head");
   await tick();
   expect(messages.map((m) => m.type)).toEqual(["files", "changes", "file"]);
   expect(messages[2]).toMatchObject({ content: "agent was here\n" });
@@ -564,7 +584,7 @@ test("files are created and renamed as the service does, never over another", as
   const { transport, messages } = await connected();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
   const w = shop.path;
-  await transport.watchWorktree(w);
+  await transport.watchWorktree(w, "head");
   await tick();
   messages.length = 0;
   await transport.createFile(w, "src", "new.ts");
@@ -576,7 +596,7 @@ test("files are created and renamed as the service does, never over another", as
   messages.length = 0;
   await transport.createFile(w, "", "top.ts");
   await transport.renameFile(w, "src/new.ts", "renamed.ts");
-  await transport.openFile(w, "src/renamed.ts");
+  await transport.openFile(w, "src/renamed.ts", "head");
   const failures: [string, string | null, string][] = [
     ["/nowhere", null, "x"],
     [w, null, ""],
@@ -609,7 +629,7 @@ test("files are created and renamed as the service does, never over another", as
 test("files are moved and folders created as the service does, never over another", async () => {
   const { transport, messages } = await connected();
   const w = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).path;
-  await transport.watchWorktree(w);
+  await transport.watchWorktree(w, "head");
   await tick();
   messages.length = 0;
   await transport.createFolder(w, "", "empty");
@@ -645,7 +665,7 @@ test("files are moved and folders created as the service does, never over anothe
   await transport.moveFile(w, "src/auth", "empty/inner");
   await transport.renameFile(w, "empty", "full");
   await transport.moveFile(w, "full", "full/inner");
-  await transport.openFile(w, "full/inner/auth/login.ts");
+  await transport.openFile(w, "full/inner/auth/login.ts", "head");
   await tick();
   const files = messages.filter((m) => m.type === "files").at(-1) as { files: string[] };
   expect(files.files.filter((p) => p.includes("auth/"))).toEqual([
@@ -670,7 +690,7 @@ test("files are moved and folders created as the service does, never over anothe
 test("files and folders are deleted as the service does, with what they hold", async () => {
   const { transport, messages } = await connected();
   const w = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).path;
-  await transport.watchWorktree(w);
+  await transport.watchWorktree(w, "head");
   await tick();
   await transport.createFolder(w, "", "empty");
   await transport.createFolder(w, "src/auth", "inner");
