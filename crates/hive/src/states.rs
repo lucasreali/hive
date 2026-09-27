@@ -884,10 +884,10 @@ mod tests {
 
     /// The alert and `writing` of a message `apply` sent.
     fn alerts(sent: Option<Control>) -> Option<(Option<Alert>, bool)> {
-        match sent? {
-            Control::AgentState { alert, writing, .. } => Some((alert, writing)),
-            _ => None,
-        }
+        let Some(Control::AgentState { alert, writing, .. }) = sent else {
+            return None;
+        };
+        Some((alert, writing))
     }
 
     #[test]
