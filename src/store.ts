@@ -232,9 +232,20 @@ export type ChangedFile = {
   removed: number | null;
 };
 
-/** A worktree's changes against HEAD, sorted by path, with the service's totals. */
+/**
+ * What a worktree's changes are compared with (9.11): its HEAD, or the merge-base with the main
+ * worktree's branch (the service finds it).
+ */
+export type DiffBase = "head" | "branch";
+
+/** A worktree's changes against its base, sorted by path, with the service's totals. */
 export type Changes = {
   path: string;
+  /** The base used: the one asked, or "head" when `base_error` says why not. */
+  base: DiffBase;
+  /** The main worktree's branch it can be compared with; null for the main worktree. */
+  branch: string | null;
+  base_error: string | null;
   files: ChangedFile[];
   added: number;
   removed: number;
@@ -654,6 +665,8 @@ export type HiveState = {
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
   changes: Record<string, Changes>;
+  /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
+  diffBases: Record<string, DiffBase>;
   /** The last `file` the service sent; shown only while it is the open file. */
   file: FileText | null;
   /** The open file shows as editable text (UI state), not as its read-only diff. */
@@ -738,6 +751,7 @@ export const initialState: HiveState = {
   agentUsage: {},
   worktreeFiles: null,
   changes: {},
+  diffBases: {},
   file: null,
   editing: false,
   edit: null,
@@ -1731,6 +1745,21 @@ export function panelWorktree(s: HiveState): { project: Project; worktree: Workt
   const find = (id: string | null | undefined) => all.find((e) => e.worktree.id === id);
   const tab = s.tabs.find((t) => t.id === s.activeTab);
   return find(selectedPlace(s)) ?? find(tab?.cwd) ?? null;
+}
+
+/**
+ * The base the worktree at `path` is compared with: the one picked, else the merge-base with the
+ * main branch in a Claude worktree and HEAD anywhere else (9.11).
+ */
+export function diffBase(s: HiveState, path: string): DiffBase {
+  const worktrees = Object.values(s.projects ?? {}).flatMap((p) => p.worktrees);
+  const claude = worktrees.find((w) => w.path === path)?.claude;
+  return s.diffBases[path] ?? (claude ? "branch" : "head");
+}
+
+/** Picks the base the worktree at `path` is compared with. */
+export function setDiffBase(path: string, base: DiffBase): void {
+  useHive.setState((s) => ({ diffBases: { ...s.diffBases, [path]: base } }));
 }
 
 /** The space holding the project `id`. */

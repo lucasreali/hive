@@ -1,16 +1,19 @@
 //! What changed in a worktree ("Árvore de arquivos com diff do git"): every file that
-//! differs from `HEAD`, staged or not, untracked included, as `git status` shows them, with
-//! line counts from `git diff --numstat`. Git runs as the executable with separate arguments.
+//! differs from its base, staged or not, untracked included, with line counts from
+//! `git diff --numstat`. The base is `HEAD` (what `git status` shows) or, for a worktree
+//! other than the main one, the merge-base with the main worktree's branch (9.11), so the
+//! agent's commits stay in view. Git runs as the executable with separate arguments.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use hive_protocol::{ChangedFile, Control, FileStatus};
+use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Project};
 
 use crate::git::{self, read_limited};
+use crate::projects;
 
 /// Untracked files larger than this are not counted (their lines show as unknown).
 const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
@@ -38,17 +41,70 @@ pub struct Changes {
     pub truncated: usize,
 }
 
-/// The changes of the worktree at `dir` against `HEAD` (the empty tree before the first
-/// commit).
-pub fn list(dir: &Path) -> io::Result<Changes> {
-    let status = git(dir, &STATUS)?;
-    let head = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
-    let base = if head.is_empty() {
-        git(dir, &["hash-object", "-t", "tree", "/dev/null"])?
-    } else {
-        head
+/// What a followed worktree's changes are compared with (9.11).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Against {
+    pub dir: PathBuf,
+    /// The merge-base with `branch`; `None`: `HEAD`.
+    pub commit: Option<String>,
+    /// The main worktree's branch the worktree can be compared with.
+    pub branch: Option<String>,
+    /// Why `branch` was asked but `HEAD` is used.
+    pub error: Option<String>,
+}
+
+/// The base `asked` for the worktree `path` of `projects`: for `branch`, the merge-base of its
+/// `HEAD` and the main worktree's branch (the one 6.6 counts against), else `HEAD` and why.
+pub fn against(projects: &[Project], path: &str, asked: DiffBase) -> io::Result<Against> {
+    let (dir, branch) = projects::followed(projects, path)?;
+    let (commit, error) = match (asked, &branch) {
+        (DiffBase::Head, _) => (None, None),
+        (DiffBase::Branch, None) => (None, Some(NO_BRANCH.to_owned())),
+        (DiffBase::Branch, Some(name)) => {
+            // A full ref name: a branch can never be read as an option.
+            let theirs = format!("refs/heads/{name}");
+            match git::output(&dir, &["merge-base", "HEAD", &theirs], &[0, 1]) {
+                Ok(out) if !out.is_empty() => (Some(lossy(out.trim_ascii())), None),
+                Ok(_) => (None, Some(format!("No commit in common with {name}"))),
+                Err(err) => (None, Some(err.to_string())),
+            }
+        }
     };
-    let base = String::from_utf8_lossy(&base).trim().to_owned();
+    Ok(Against {
+        dir,
+        commit,
+        branch,
+        error,
+    })
+}
+
+/// Why the main worktree, or a worktree of a detached main worktree, has no branch base.
+const NO_BRANCH: &str = "No branch to compare with: this is the main worktree, or it is detached";
+
+/// The `changes` answer for the worktree `path` of `projects` against `asked`.
+pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> Control {
+    match against(projects, &path, asked) {
+        Ok(against) => {
+            let listed = list(&against.dir, against.commit.as_deref());
+            message(path, Some(against), listed)
+        }
+        Err(err) => message(path, None, Err(err)),
+    }
+}
+
+/// The changes of the worktree at `dir` against `commit`, else `HEAD` (the empty tree before
+/// the first commit). Against `HEAD` they are what `git status` lists; against another commit,
+/// what `git diff` finds from it to the worktree, and the untracked files.
+pub fn list(dir: &Path, commit: Option<&str>) -> io::Result<Changes> {
+    let status = parse_status(&git(dir, &STATUS)?);
+    let (base, entries) = match commit {
+        Some(commit) => {
+            let mut entries = committed(dir, commit)?;
+            entries.extend(status.into_iter().filter(|e| e.1 == FileStatus::Untracked));
+            (commit.to_owned(), entries)
+        }
+        None => (head(dir)?, status),
+    };
     let diff = [
         "diff",
         "--numstat",
@@ -60,15 +116,56 @@ pub fn list(dir: &Path) -> io::Result<Changes> {
         "--",
     ];
     let numstat = git(dir, &diff)?;
-    Ok(collect(
-        dir,
-        parse_status(&status),
-        &parse_numstat(&numstat),
-    ))
+    Ok(collect(dir, entries, &parse_numstat(&numstat)))
 }
 
-/// The `changes` answer for `path`.
-pub fn message(path: String, listed: io::Result<Changes>) -> Control {
+/// `HEAD`'s commit, or the empty tree before the first commit.
+fn head(dir: &Path) -> io::Result<String> {
+    let head = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
+    let base = if head.is_empty() {
+        git(dir, &["hash-object", "-t", "tree", "/dev/null"])?
+    } else {
+        head
+    };
+    Ok(lossy(base.trim_ascii()))
+}
+
+/// The tracked files that differ between `commit` and the worktree (committed since, staged
+/// or not).
+pub fn committed(dir: &Path, commit: &str) -> io::Result<Vec<Entry>> {
+    let args = ["diff", "--raw", "-z", "--find-renames", commit, "--"];
+    Ok(parse_raw(&git(dir, &args)?))
+}
+
+/// Parses `git diff --raw -z --find-renames`: `:<modes> <ids> <status>`, then the path, or
+/// for a rename the old path and the new one. Any other status (a type change, an unmerged
+/// path) counts as modified.
+pub fn parse_raw(out: &[u8]) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    let mut records = out.split(|&b| b == 0);
+    while let Some(meta) = records.next() {
+        let Some(code) = meta
+            .strip_prefix(b":")
+            .and_then(|m| m.rsplit(|&b| b == b' ').next())
+        else {
+            continue;
+        };
+        let path = records.next().unwrap_or_default().to_vec();
+        entries.push(match code.first() {
+            Some(b'R') => {
+                let to = records.next().unwrap_or_default().to_vec();
+                (to, FileStatus::Renamed, Some(path))
+            }
+            Some(b'A') => (path, FileStatus::Added, None),
+            Some(b'D') => (path, FileStatus::Deleted, None),
+            _ => (path, FileStatus::Modified, None),
+        });
+    }
+    entries
+}
+
+/// The `changes` answer for `path`, listed against `against` when the worktree was found.
+pub fn message(path: String, against: Option<Against>, listed: io::Result<Changes>) -> Control {
     let (changes, error) = match listed {
         Ok(changes) => {
             let error = (changes.truncated > 0)
@@ -77,8 +174,15 @@ pub fn message(path: String, listed: io::Result<Changes>) -> Control {
         }
         Err(err) => (Changes::default(), Some(err.to_string())),
     };
+    let against = against.unwrap_or_default();
     Control::Changes {
         path,
+        base: match against.commit {
+            Some(_) => DiffBase::Branch,
+            None => DiffBase::Head,
+        },
+        branch: against.branch,
+        base_error: against.error,
         files: changes.files,
         added: changes.added,
         removed: changes.removed,
@@ -233,6 +337,7 @@ fn git(dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::health::tests::{commit, run, worktree};
 
     fn file(path: &str, status: FileStatus, counts: (Option<u64>, Option<u64>)) -> ChangedFile {
         ChangedFile {
@@ -398,8 +503,182 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
     #[test]
     fn a_folder_outside_git_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let err = list(dir.path()).unwrap_err().to_string();
+        let err = list(dir.path(), None).unwrap_err().to_string();
         assert!(err.starts_with("git status --porcelain=v2"), "{err}");
+    }
+
+    #[test]
+    fn raw_diff_entries_are_parsed() {
+        let out = b":100644 100644 aa bb M\0src/a b.rs\0\
+:000000 100644 00 bb A\0new.rs\0\
+:100644 000000 aa 00 D\0gone.rs\0\
+:100644 100644 aa bb R087\0from name\0to name\0\
+:100644 120000 aa bb T\0link\0\
+:000000 000000 00 00 U\0both.rs\0\
+garbage\0\
+:100644 100644 aa bb M\0odd\xffname\0";
+        let entries = parse_raw(out);
+        let got: Vec<_> = entries
+            .iter()
+            .map(|(p, s, f)| (lossy(p), *s, f.as_deref().map(lossy)))
+            .collect();
+        use FileStatus::*;
+        assert_eq!(
+            got,
+            vec![
+                ("src/a b.rs".into(), Modified, None),
+                ("new.rs".into(), Added, None),
+                ("gone.rs".into(), Deleted, None),
+                ("to name".into(), Renamed, Some("from name".into())),
+                ("link".into(), Modified, None),
+                ("both.rs".into(), Modified, None),
+                ("odd\u{fffd}name".into(), Modified, None),
+            ]
+        );
+        assert_eq!(entries[6].0, b"odd\xffname");
+    }
+
+    fn rev(dir: &Path) -> String {
+        lossy(git(dir, &["rev-parse", "HEAD"]).unwrap().trim_ascii())
+    }
+
+    fn project(worktrees: Vec<hive_protocol::Worktree>) -> Project {
+        Project {
+            id: String::new(),
+            name: String::new(),
+            path: String::new(),
+            worktrees,
+            error: None,
+        }
+    }
+
+    fn changes(
+        path: &str,
+        base: DiffBase,
+        base_error: Option<&str>,
+        files: Vec<ChangedFile>,
+    ) -> Control {
+        Control::Changes {
+            path: path.into(),
+            base,
+            branch: Some("main".into()),
+            base_error: base_error.map(Into::into),
+            added: files.iter().filter_map(|f| f.added).sum(),
+            removed: files.iter().filter_map(|f| f.removed).sum(),
+            files,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn a_branch_base_keeps_the_branch_commits_in_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = tmp.path().canonicalize().unwrap();
+        let (root, w, lone) = (top.join("r"), top.join("w"), top.join("lone"));
+        std::fs::create_dir(&root).unwrap();
+        run(&root, &["init", "-q", "-b", "main"]);
+        commit(&root, "a");
+        commit(&root, "r");
+        let fork = rev(&root);
+        run(
+            &root,
+            &["worktree", "add", "-q", "-b", "w", w.to_str().unwrap()],
+        );
+        commit(&w, "b");
+        run(&w, &["mv", "r", "s"]);
+        run(&w, &["commit", "-q", "-m", "s"]);
+        std::fs::write(w.join("a"), "a\nmore\n").unwrap();
+        std::fs::write(w.join("u"), "u\n").unwrap();
+        // The main branch moves on: that is not the branch's work.
+        commit(&root, "d");
+        // A worktree whose branch shares no commit with main.
+        run(
+            &root,
+            &["worktree", "add", "-q", "--detach", lone.to_str().unwrap()],
+        );
+        run(&lone, &["switch", "-q", "--orphan", "o"]);
+        commit(&lone, "x");
+        let mut projects = [project(vec![
+            worktree(&root, Some("main"), true),
+            worktree(&w, Some("w"), false),
+            worktree(&lone, Some("o"), false),
+        ])];
+        let path = w.display().to_string();
+
+        assert_eq!(
+            against(&projects, &path, DiffBase::Branch).unwrap(),
+            Against {
+                dir: w.clone(),
+                commit: Some(fork.clone()),
+                branch: Some("main".into()),
+                error: None,
+            }
+        );
+        let mut renamed = file("s", FileStatus::Renamed, (Some(0), Some(0)));
+        renamed.old_path = Some("r".into());
+        let modified = file("a", FileStatus::Modified, (Some(2), Some(1)));
+        let untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
+        assert_eq!(
+            answer(&projects, path.clone(), DiffBase::Branch),
+            changes(
+                &path,
+                DiffBase::Branch,
+                None,
+                vec![
+                    modified.clone(),
+                    file("b", FileStatus::Added, (Some(1), Some(0))),
+                    renamed,
+                    untracked.clone(),
+                ]
+            )
+        );
+        // Against HEAD, only what is not committed.
+        assert_eq!(
+            answer(&projects, path.clone(), DiffBase::Head),
+            changes(&path, DiffBase::Head, None, vec![modified, untracked])
+        );
+
+        // A detached HEAD still has a merge-base with main.
+        run(&w, &["switch", "-q", "--detach"]);
+        let detached = against(&projects, &path, DiffBase::Branch).unwrap();
+        assert_eq!(detached.commit, Some(fork));
+
+        // No commit in common: HEAD, and why.
+        let lone = lone.display().to_string();
+        let why = "No commit in common with main";
+        assert_eq!(
+            answer(&projects, lone.clone(), DiffBase::Branch),
+            changes(&lone, DiffBase::Head, Some(why), vec![])
+        );
+
+        // The main worktree has no branch to compare with.
+        let main = root.display().to_string();
+        let against_main = against(&projects, &main, DiffBase::Branch).unwrap();
+        let expected = (None, None, Some(NO_BRANCH.to_owned()));
+        let got = (against_main.commit, against_main.branch, against_main.error);
+        assert_eq!(got, expected);
+
+        // A branch git cannot read: HEAD, and git's error.
+        projects[0].worktrees[0].branch = Some("gone".into());
+        let gone = against(&projects, &path, DiffBase::Branch).unwrap();
+        assert_eq!(gone.commit, None);
+        let error = gone.error.unwrap_or_default();
+        assert!(error.starts_with("git merge-base"), "{error}");
+
+        // Only a followed worktree.
+        assert_eq!(
+            answer(&projects, "/nope".into(), DiffBase::Branch),
+            Control::Changes {
+                path: "/nope".into(),
+                base: DiffBase::Head,
+                branch: None,
+                base_error: None,
+                files: vec![],
+                added: 0,
+                removed: 0,
+                error: Some("/nope is not a worktree of a followed project".into()),
+            }
+        );
     }
 
     #[test]
@@ -410,10 +689,19 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             removed: 0,
             truncated: 0,
         };
+        let against = Against {
+            dir: PathBuf::from("/w"),
+            commit: Some("c".into()),
+            branch: Some("main".into()),
+            error: None,
+        };
         assert_eq!(
-            message("/w".into(), Ok(changes)),
+            message("/w".into(), Some(against), Ok(changes)),
             Control::Changes {
                 path: "/w".into(),
+                base: DiffBase::Branch,
+                branch: Some("main".into()),
+                base_error: None,
                 files: vec![file("a", FileStatus::Added, (Some(1), Some(0)))],
                 added: 1,
                 removed: 0,
@@ -425,10 +713,17 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             added: 5,
             ..Changes::default()
         };
+        let head = Against {
+            error: Some("why".into()),
+            ..Against::default()
+        };
         assert_eq!(
-            message("/w".into(), Ok(cut)),
+            message("/w".into(), Some(head), Ok(cut)),
             Control::Changes {
                 path: "/w".into(),
+                base: DiffBase::Head,
+                branch: None,
+                base_error: Some("why".into()),
                 files: vec![],
                 added: 5,
                 removed: 0,
@@ -436,9 +731,12 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             }
         );
         assert_eq!(
-            message("/w".into(), Err(io::Error::other("nope"))),
+            message("/w".into(), None, Err(io::Error::other("nope"))),
             Control::Changes {
                 path: "/w".into(),
+                base: DiffBase::Head,
+                branch: None,
+                base_error: None,
                 files: vec![],
                 added: 0,
                 removed: 0,
