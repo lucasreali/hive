@@ -1583,6 +1583,14 @@ mod tests {
         // Against HEAD, all of it is committed.
         assert_eq!(read(root, "a", None).unwrap(), (bytes("a2"), bytes("a2")));
         assert_eq!(read(root, "n", None).unwrap(), (bytes("n"), bytes("n")));
+        // Against HEAD, a staged rename reads its old path; before the first commit, nothing.
+        run(root, &["mv", "s", "t"]);
+        assert_eq!(read(root, "t", None).unwrap(), (bytes("r"), bytes("r")));
+        let fresh = tempfile::tempdir().unwrap();
+        run(fresh.path(), &["init", "-q"]);
+        std::fs::write(fresh.path().join("f"), "f").unwrap();
+        let first = read(fresh.path(), "f", None).unwrap();
+        assert_eq!(first, (bytes("f"), Side::Missing));
     }
 
     #[test]
