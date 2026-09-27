@@ -1088,7 +1088,12 @@ fn a_pull_request_opens_from_the_worktree_branch() {
         );
     }
     assert_eq!(setup.calls().len(), calls);
-    let most = create("t", &"b".repeat(BODY_LIMIT), &"b".repeat(256), false);
+    let most = create(
+        &"é".repeat(256),
+        &"b".repeat(BODY_LIMIT),
+        &"b".repeat(256),
+        false,
+    );
     assert!(matches!(most[0], Control::PullDone { .. }), "{most:?}");
     // gh answered without a link: opened all the same.
     let done = Control::PullDone {
