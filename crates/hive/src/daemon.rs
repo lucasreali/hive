@@ -203,8 +203,9 @@ impl State {
                 let var = std::env::var_os;
                 let (shell, timeout) = (wrapper::path_shell(), wrapper::SHELL_TIMEOUT);
                 let path = wrapper::user_path(shell, var("PATH"), var("HOME"), timeout).await;
-                state.user_path.send_replace(Some(path));
+                // Done before the answer wakes anyone waiting for it.
                 state.asking_path.store(false, Ordering::SeqCst);
+                state.user_path.send_replace(Some(path));
             });
         }
     }
