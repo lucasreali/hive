@@ -635,3 +635,130 @@ async fn worktrees_carry_their_health() {
     drop(conn);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn a_removed_project_takes_its_settings_and_ports_along_and_leaves_its_files() {
+    use hive_protocol::{ProjectScripts, ProjectSettings, Settings, SpaceEnv};
+    let repo = Repo::new();
+    assert!(repo.hive(&["create", "a"]).status.success());
+    let root = repo.root.display().to_string();
+    let wt = format!("{root}/.claude/worktrees/a");
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let remove = |id: &str| Control::RemoveProject { id: id.into() };
+    let failed = |id: &str, message: String| Control::RemoveProjectFailed {
+        id: id.into(),
+        message,
+    };
+    app.send(0, remove("/nope")).await;
+    let unknown = failed("/nope", "/nope is not a followed project".into());
+    assert_eq!(app.any_control().await.1, unknown);
+
+    // Followed in a space of its own, with settings and a block of ports.
+    let create = Control::CreateSpace {
+        name: "Work".into(),
+        env: SpaceEnv::default(),
+    };
+    app.send(0, create).await;
+    app.any_control().await;
+    let ports = repo.env.path("data/hive/ports.json");
+    // Where the settings and the ports are written before they replace their files.
+    let blockers = [
+        repo.env.path("config/hive/settings.tmp/x"),
+        repo.env.path("data/hive/ports.tmp/x"),
+    ];
+    for round in 0..2 {
+        added(&mut app, &root).await;
+        let mut settings = Settings::default();
+        let project = ProjectSettings {
+            scripts: ProjectScripts {
+                setup: Some("make".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        settings.projects.insert(root.clone(), project);
+        app.send(0, Control::SetSettings { settings }).await;
+        let saved = app.control().await.1;
+        assert!(matches!(saved, Control::Settings { .. }), "{saved:?}");
+
+        // Refused while a terminal of Hive works in one of its worktrees.
+        app.open_terminal(1, std::path::Path::new(&wt)).await;
+        app.send(0, remove(&root)).await;
+        let Control::RemoveProjectFailed { message, .. } = app.any_control().await.1 else {
+            panic!("expected a refusal")
+        };
+        assert!(
+            message.ends_with(": close its terminals first"),
+            "{message}"
+        );
+        assert_eq!(list(&mut app).await.len(), 1);
+        app.send(1, Control::CloseTerminal).await;
+        let exited = app.control().await;
+        assert!(matches!(exited, (1, Control::TerminalExited { .. })));
+        let blocks = std::fs::read_to_string(&ports).unwrap();
+        assert!(blocks.contains(&wt), "{blocks}");
+
+        // The first time neither its settings nor its ports can be saved: removed all the same.
+        for blocker in blockers.iter().filter(|_| round == 0) {
+            std::fs::create_dir_all(blocker).unwrap();
+        }
+        app.send(0, remove(&root)).await;
+        let Control::Spaces { spaces, .. } = app.any_control().await.1 else {
+            panic!("expected the spaces")
+        };
+        assert_eq!(spaces[1].projects, Vec::<String>::new());
+        let settings = app.any_control().await.1;
+        // The ports are freed once the settings are answered, before `project_removed`.
+        let removed = Control::ProjectRemoved { id: root.clone() };
+        assert_eq!(app.any_control().await.1, removed);
+        let blocks = std::fs::read_to_string(&ports).unwrap();
+        if round == 0 {
+            let failed = matches!(settings, Control::SettingsFailed { .. });
+            assert!(failed, "{settings:?}");
+            assert!(blocks.contains(&wt), "{blocks}");
+            for blocker in &blockers {
+                std::fs::remove_dir_all(blocker.parent().unwrap()).unwrap();
+            }
+        } else {
+            let settings_gone = Control::Settings {
+                settings: Settings::default(),
+            };
+            assert_eq!(settings, settings_gone);
+            assert!(!blocks.contains(&root), "{blocks}");
+        }
+        assert!(list(&mut app).await.is_empty());
+        app.send(0, remove(&root)).await;
+        let gone = failed(&root, format!("{root} is not a followed project"));
+        assert_eq!(app.any_control().await.1, gone);
+    }
+
+    // Without settings, none are sent.
+    added(&mut app, &root).await;
+    app.send(0, remove(&root)).await;
+    let spaces = app.any_control().await.1;
+    assert!(matches!(spaces, Control::Spaces { .. }), "{spaces:?}");
+    let removed = Control::ProjectRemoved { id: root.clone() };
+    assert_eq!(app.any_control().await.1, removed);
+
+    // Its files and worktrees stay; its space, empty now, can go.
+    assert!(std::path::Path::new(&wt).join(".git").exists());
+    assert_eq!(repo.git(&["worktree", "list"]).lines().count(), 2);
+    let delete = Control::DeleteSpace {
+        id: "space-1".into(),
+    };
+    app.send(0, delete).await;
+    let Control::Spaces { spaces, .. } = app.any_control().await.1 else {
+        panic!("expected the spaces")
+    };
+    assert_eq!(spaces.len(), 1);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+
+    // A restart does not bring it back.
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    assert!(list(&mut app).await.is_empty());
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
