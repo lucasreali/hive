@@ -5,8 +5,6 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::chat::is_session;
-
 /// Most bytes read of a process's command line or of a Claude session record.
 const READ_LIMIT: u64 = 64 * 1024;
 /// Most open files looked at per process.
@@ -166,6 +164,15 @@ fn logged(file: &Path) -> Option<String> {
     is_session(id).then(|| id.to_owned())
 }
 
+/// A Claude session id: a UUID.
+fn is_session(id: &str) -> bool {
+    id.len() == 36
+        && id.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
 /// The processes of a `/proc`-shaped directory.
 fn read_dir(root: &Path) -> Vec<Proc> {
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -200,6 +207,25 @@ fn parse_stat(stat: &str) -> Option<Proc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_uuids_are_sessions() {
+        assert!(is_session("9f1c2b7e-5d3a-4c1e-8b2f-0a6d4e8c1f00"));
+        assert!(is_session("9F1C2B7E-5D3A-4C1E-8B2F-0A6D4E8C1F00"));
+        for bad in [
+            "",
+            "9f1c2b7e-5d3a-4c1e-8b2f-0a6d4e8c1f0",
+            "9f1c2b7e-5d3a-4c1e-8b2f-0a6d4e8c1f000",
+            "9f1c2b7e05d3a-4c1e-8b2f-0a6d4e8c1f00",
+            "9f1c2b7e-5d3a04c1e-8b2f-0a6d4e8c1f00",
+            "9f1c2b7e-5d3a-4c1e08b2f-0a6d4e8c1f00",
+            "9f1c2b7e-5d3a-4c1e-8b2f00a6d4e8c1f00",
+            "9f1c2b7e-5d3a-4c1e-8b2f-0a6d4e8c1f0g",
+            "--resume-5d3a-4c1e-8b2f-0a6d4e8c1f00",
+        ] {
+            assert!(!is_session(bad), "{bad}");
+        }
+    }
 
     fn fake_proc(entries: &[(&str, &str)]) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();

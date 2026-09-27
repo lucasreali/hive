@@ -151,7 +151,7 @@ pub fn path_shell() -> (OsString, Vec<OsString>) {
 #[cfg(target_os = "macos")]
 pub use crate::macos::path_shell;
 
-/// The `PATH` the user's terminals get, for chats and for finding the real `claude`: the
+/// The `PATH` the user's terminals get, for finding the real `claude`: the
 /// one `shell` (see [`path_shell`]) prints, else the service's `path` (started through
 /// `wsl.exe`, it lacks what the user's config adds), then `~/.local/bin` and
 /// `~/.claude/local`, where Claude Code installs itself. Empty entries are dropped.

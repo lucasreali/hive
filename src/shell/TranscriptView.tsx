@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { type ChatEntry, hideTranscript, type SubagentRef, useHive } from "../store";
+import { hideTranscript, type SubagentRef, useHive } from "../store";
 import { transport } from "../transport";
-import { ConversationView, SUBAGENT_LABELS } from "./ConversationView";
+import { ConversationView } from "./ConversationView";
 import { STATE_LABEL, StateIcon, TerminalIcon } from "./icons";
 
 /**
@@ -16,18 +16,7 @@ export function TranscriptView({ agent, subagent }: SubagentRef) {
   // A subagent that left the agent's list has ended.
   const sub = useHive((s) => s.agentStates[agent]?.subagents.find((x) => x.id === subagent));
   const state = sub?.state ?? "ended";
-  const entries = (transcript?.entries ?? []).map(
-    (e, id): ChatEntry => ({
-      id,
-      kind: e.role,
-      text: e.text,
-      tool: e.tool,
-      parent: null,
-      status: null,
-      output: null,
-      images: [],
-    }),
-  );
+  const entries = transcript?.entries ?? [];
   useEffect(() => {
     void transport.watchTranscript(agent, subagent);
     return () => void transport.unwatchTranscript(agent, subagent);
@@ -46,7 +35,7 @@ export function TranscriptView({ agent, subagent }: SubagentRef) {
           <TerminalIcon /> Back to terminal
         </button>
       </div>
-      <ConversationView entries={entries} labels={SUBAGENT_LABELS}>
+      <ConversationView entries={entries}>
         {!transcript && <div className="hint">Loading the conversation…</div>}
         {transcript && entries.length === 0 && <div className="hint">Nothing written yet.</div>}
         {transcript?.truncated && <div className="hint">Earlier messages are left out.</div>}

@@ -599,137 +599,6 @@ async fn a_message_over_the_frame_limit_is_refused_and_the_link_keeps_working() 
 }
 
 #[tokio::test]
-async fn chat_messages_travel_on_the_chat_channel() {
-    let (hive, mut service, mut rx) = welcomed().await;
-    let mode = Some(ChatMode::Plan);
-    let model = Some("sonnet".to_owned());
-    assert_eq!(
-        hive.open_chat("/w".into(), None, mode, model.clone()),
-        Ok(1)
-    );
-    let open = Control::OpenChat {
-        cwd: "/w".into(),
-        resume: None,
-        mode,
-        model,
-    };
-    assert_eq!(service.control().await, (1, open));
-    let image = ChatImage {
-        media_type: "image/png".into(),
-        data: "iVBO".into(),
-    };
-    hive.chat_send(1, "hi".into(), vec![image.clone()]).unwrap();
-    let send = Control::ChatSend {
-        chat: 1,
-        text: "hi".into(),
-        images: vec![image],
-    };
-    assert_eq!(service.control().await, (1, send));
-    hive.chat_answer(1, "req_1".into(), ChatAnswer::Allow)
-        .unwrap();
-    let answer = Control::ChatAnswer {
-        chat: 1,
-        request: "req_1".into(),
-        answer: ChatAnswer::Allow,
-    };
-    assert_eq!(service.control().await, (1, answer));
-    hive.chat_interrupt(1).unwrap();
-    assert_eq!(
-        service.control().await,
-        (1, Control::ChatInterrupt { chat: 1 })
-    );
-    hive.chat_set_mode(1, ChatMode::AcceptEdits).unwrap();
-    let set = Control::ChatSetMode {
-        chat: 1,
-        mode: ChatMode::AcceptEdits,
-    };
-    assert_eq!(service.control().await, (1, set));
-    hive.chat_set_model(1, "opus".into()).unwrap();
-    let set = Control::ChatSetModel {
-        chat: 1,
-        model: "opus".into(),
-    };
-    assert_eq!(service.control().await, (1, set));
-    hive.confirm_chat_folder(1, "/w".into(), true).unwrap();
-    let confirm = Control::ConfirmChatFolder {
-        chat: 1,
-        cwd: "/w".into(),
-        accepted: Some(true),
-    };
-    assert_eq!(service.control().await, (1, confirm));
-    hive.close_chat(1).unwrap();
-    assert_eq!(service.control().await, (1, Control::CloseChat { chat: 1 }));
-
-    // The chat's messages reach the UI until it is closed; then its channel is released.
-    let gone = Control::ChatRequestGone {
-        chat: 1,
-        request: "req_1".into(),
-    };
-    service.send(1, gone).await;
-    assert_eq!(
-        next(&mut rx).await,
-        json!({"type": "chat_request_gone", "chat": 1, "request": "req_1", "channel": 1})
-    );
-    let closed = Control::ChatClosed {
-        chat: 1,
-        error: None,
-    };
-    service.send(1, closed).await;
-    assert_eq!(
-        next(&mut rx).await,
-        json!({"type": "chat_closed", "chat": 1, "error": null, "channel": 1})
-    );
-    service.send(1, Control::ChatInterrupt { chat: 1 }).await;
-    service.send(0, Control::UnhookedAgent).await;
-    assert_eq!(
-        next(&mut rx).await,
-        json!({"type": "unhooked_agent", "channel": 0})
-    );
-    assert_eq!(hive.open_chat("/w".into(), None, None, None), Ok(2));
-}
-
-#[tokio::test]
-async fn a_reloaded_ui_closes_its_old_chats_and_a_disconnect_closes_them_all() {
-    let (hive, mut service, _old) = welcomed().await;
-    hive.open_chat("/w".into(), None, None, None).unwrap();
-    service.control().await;
-    let (channel, mut rx) = ui();
-    hive.connect(channel);
-    next(&mut rx).await;
-    assert_eq!(service.control().await, (1, Control::CloseChat { chat: 1 }));
-    assert_eq!(service.control().await, (0, Control::GetSettings));
-
-    hive.open_chat("/w".into(), None, None, None).unwrap();
-    drop(service);
-    assert_eq!(
-        next(&mut rx).await,
-        json!({"type": "chat_closed", "channel": 2, "chat": 2, "error": null})
-    );
-    assert_eq!(
-        next(&mut rx).await,
-        json!({"type": "disconnected", "reason": "bridge gone"})
-    );
-    let not_connected = Err(NOT_CONNECTED.to_owned());
-    assert_eq!(
-        hive.open_chat("/w".into(), None, None, None),
-        Err(NOT_CONNECTED.into())
-    );
-    assert_eq!(hive.chat_send(2, "x".into(), vec![]), not_connected);
-    assert_eq!(
-        hive.chat_answer(2, "r".into(), ChatAnswer::Allow),
-        not_connected
-    );
-    assert_eq!(hive.chat_interrupt(2), not_connected);
-    assert_eq!(hive.chat_set_mode(2, ChatMode::Default), not_connected);
-    assert_eq!(hive.chat_set_model(2, "opus".into()), not_connected);
-    assert_eq!(hive.close_chat(2), not_connected);
-    assert_eq!(
-        hive.confirm_chat_folder(2, "/w".into(), false),
-        not_connected
-    );
-}
-
-#[tokio::test]
 async fn channel_numbers_run_out_instead_of_wrapping() {
     let (hive, _service, _rx) = welcomed().await;
     hive.link().last_channel = u32::MAX;
@@ -1096,15 +965,7 @@ fn commands_reach_the_managed_hive() {
             list_gh_accounts,
             switch_gh_account,
             open_settings_file,
-            get_diagnostics,
-            open_chat,
-            chat_send,
-            chat_answer,
-            chat_interrupt,
-            chat_set_mode,
-            chat_set_model,
-            close_chat,
-            confirm_chat_folder
+            get_diagnostics
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -1160,25 +1021,7 @@ fn commands_reach_the_managed_hive() {
     let update = json!({"id": "w", "name": "W", "env": {"git_name": "Me"}});
     let space = json!({"id": "w"});
     let switch_gh = json!({"account": {"host": "h", "login": "me"}});
-    let chat = json!({"chat": 3});
-    let chat_send = json!({"chat": 3, "text": "hi", "images": []});
-    let chat_answer = json!({"chat": 3, "request": "r", "answer": {"kind": "allow"}});
-    let chat_mode = json!({"chat": 3, "mode": "plan"});
-    let chat_model = json!({"chat": 3, "model": "opus"});
-    let confirm = json!({"chat": 3, "cwd": "/r", "accepted": true});
-    let open_chat = json!({"cwd": "/r", "resume": null, "mode": null, "model": null});
-    assert_eq!(
-        invoke(&webview, "open_chat", open_chat.clone()),
-        not_connected
-    );
     for (cmd, args) in [
-        ("chat_send", &chat_send),
-        ("chat_answer", &chat_answer),
-        ("chat_interrupt", &chat),
-        ("chat_set_mode", &chat_mode),
-        ("chat_set_model", &chat_model),
-        ("close_chat", &chat),
-        ("confirm_chat_folder", &confirm),
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
         ("create_worktree", &create),
@@ -1228,7 +1071,6 @@ fn commands_reach_the_managed_hive() {
         Ok(json!(1))
     );
     assert_eq!(invoke(&webview, "open_terminal", open), Ok(json!(2)));
-    assert_eq!(invoke(&webview, "open_chat", open_chat), Ok(json!(3)));
     assert_eq!(invoke(&webview, "write_terminal", write), Ok(Value::Null));
     assert_eq!(invoke(&webview, "resize_terminal", resize), Ok(Value::Null));
     assert_eq!(invoke(&webview, "close_terminal", close), Ok(Value::Null));
@@ -1269,13 +1111,6 @@ fn commands_reach_the_managed_hive() {
         ("delete_space", space.clone()),
         ("remove_project", space.clone()),
         ("select_space", space),
-        ("chat_send", chat_send),
-        ("chat_answer", chat_answer),
-        ("chat_interrupt", chat.clone()),
-        ("chat_set_mode", chat_mode),
-        ("chat_set_model", chat_model),
-        ("close_chat", chat),
-        ("confirm_chat_folder", confirm),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

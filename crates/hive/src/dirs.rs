@@ -148,7 +148,7 @@ fn run(program: &str, args: &[&str]) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
 
     use super::*;
 
@@ -185,10 +185,17 @@ mod tests {
         )
     }
 
+    /// Written by a `sh` of its own: a file this process writes can be held open by a child
+    /// another test thread forks meanwhile, and running it then fails with "Text file busy".
     fn script(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let written = std::process::Command::new("sh")
+            .args(["-c", r#"printf '%s\n' "$1" > "$2" && chmod 755 "$2""#, "sh"])
+            .arg(format!("#!/bin/sh\n{body}"))
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(written.success());
         path.display().to_string()
     }
 

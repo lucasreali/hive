@@ -104,22 +104,6 @@ export type ServiceMessage =
       subagent: string;
       entries: TranscriptEntry[];
     }
-  // The chat (7.3), on the chat's channel (`chat` is that channel).
-  | ({ type: "chat_opened"; channel: number } & ChatOpened)
-  | {
-      type: "chat_entries";
-      channel: number;
-      chat: number;
-      entries: ChatEntry[];
-      replace_last: boolean;
-    }
-  | { type: "chat_request"; channel: number; chat: number; request: ChatRequest }
-  | { type: "chat_request_gone"; channel: number; chat: number; request: string }
-  | ({ type: "chat_status"; channel: number } & ChatStatus)
-  // Also sent by the app side (Rust) for every open chat when the bridge exits.
-  | { type: "chat_closed"; channel: number; chat: number; error: string | null }
-  // The first chat in a project waits for the human's answer (`confirmChatFolder`).
-  | { type: "confirm_chat_folder"; channel: number; chat: number; cwd: string }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
   | { type: "disconnected"; reason: string };
 
@@ -265,8 +249,8 @@ export type OpenFile = { worktree: string; path: string };
  */
 export type FileTab = OpenFile & { editing: boolean; edit: EditBuffer | null; view: unknown };
 
-/** Mirrors `hive_protocol::OpenSession`: a session that ran in a Hive terminal or chat. */
-export type OpenSession = { id: string; cwd: string; kind: "terminal" | "chat" };
+/** Mirrors `hive_protocol::OpenSession`: a session that ran in a Hive terminal. */
+export type OpenSession = { id: string; cwd: string };
 
 /** A Claude Code session of a followed project, as the service read it from its log. */
 export type Session = {
@@ -287,7 +271,7 @@ export type Session = {
   log: string;
   /** By how its log ends; a session running in a Hive terminal shows its live state instead. */
   state: AgentState;
-  /** A `claude` is known to run it: in a Hive terminal or chat (see `agents`), or outside Hive. */
+  /** A `claude` is known to run it: in a Hive terminal (see `agents`), or outside Hive. */
   running: boolean;
 };
 export type SessionTarget = "log" | "folder";
@@ -343,124 +327,6 @@ export type SubagentRef = { agent: string; subagent: string };
 export type Transcript = SubagentRef & { entries: TranscriptEntry[]; truncated: boolean };
 /** Entries kept of a followed conversation; older ones are dropped. */
 export const TRANSCRIPT_LIMIT = 1000;
-
-/** Mirrors `hive_protocol::ChatMode`; `bypassPermissions` is never offered. */
-export type ChatMode = "default" | "accept_edits" | "plan" | "auto";
-/** Mirrors `hive_protocol::ChatImage`: `data` is base64. */
-export type ChatImage = { media_type: string; data: string };
-export type ChatEntryKind =
-  | "user"
-  | "assistant"
-  | "thinking"
-  | "tool"
-  | "error"
-  | "note"
-  | "divider"
-  | "usage";
-export type ToolStatus = "running" | "ok" | "error";
-/**
- * Mirrors `hive_protocol::ChatEntry`: one row of a chat. An entry with a known `id` replaces
- * that one (a tool's result); `parent` is the `Agent` call a subagent's entry belongs to.
- */
-export type ChatEntry = {
-  id: number;
-  kind: ChatEntryKind;
-  text: string;
-  tool: string | null;
-  parent: string | null;
-  status: ToolStatus | null;
-  output: string | null;
-  images: ChatImage[];
-};
-/** Mirrors `hive_protocol::ChatQuestion`: one question of an `AskUserQuestion`. */
-export type ChatQuestion = {
-  question: string;
-  header: string;
-  multi: boolean;
-  options: { label: string; description: string }[];
-};
-/** Mirrors `hive_protocol::ChatRequest`: a permission, question or plan waiting on the human. */
-export type ChatRequest = {
-  id: string;
-  kind: "permission" | "question" | "plan";
-  tool: string;
-  /** The full command, path or input JSON. */
-  detail: string;
-  reason: string | null;
-  questions: ChatQuestion[];
-  plan: string | null;
-};
-/** Mirrors `hive_protocol::ChatAnswer`; `answers` has, per question, labels or one free text. */
-export type ChatAnswer =
-  | { kind: "allow" }
-  | { kind: "deny"; message: string | null }
-  | { kind: "answers"; answers: string[][] }
-  | { kind: "approve_plan"; accept_edits: boolean }
-  | { kind: "keep_planning"; feedback: string };
-/** A model Claude offers (8.9): `value` goes to `chatSetModel`, `name` is shown, `auto`: it offers auto mode. */
-export type ChatModel = { value: string; name: string; auto: boolean };
-export type ChatOpened = {
-  chat: number;
-  cwd: string;
-  session: string | null;
-  model: string | null;
-  mode: ChatMode;
-  commands: string[];
-  /** The models Claude offers, for the model selector (8.9). */
-  models: ChatModel[];
-  /** Set when the chat runs on an API key rather than the subscription login. */
-  api_key_source: string | null;
-};
-export type ChatStatus = {
-  chat: number;
-  busy: boolean;
-  mode: ChatMode;
-  /** The model Claude runs, for the header. */
-  model: string | null;
-  /** The entry of `ChatOpened.models` that runs it (its `value`), for the selector. */
-  choice: string | null;
-  /** A transient API retry, e.g. "Retrying 2/10…". */
-  retry: string | null;
-  compacting: boolean;
-  session: string | null;
-  /** Set when the chat runs on an API key rather than the subscription login. */
-  api_key_source: string | null;
-};
-/** A chat tab's data, as the service sent it (keyed by the chat's channel). */
-export type Chat = {
-  cwd: string;
-  /** Null until `chat_opened`. */
-  opened: ChatOpened | null;
-  status: ChatStatus | null;
-  /** At most `CHAT_LIMIT`, oldest first. */
-  entries: ChatEntry[];
-  /** Permissions, questions and plans waiting on the human, oldest first. */
-  requests: ChatRequest[];
-  /** The service asks to confirm the first chat in this folder (`confirm_chat_folder`). */
-  confirm: boolean;
-  /** Set once `chat_closed` arrived; `error` holds claude's last words when it failed. */
-  closed: { error: string | null } | null;
-  /** Its session's name (`agent_title`, 8.11), kept once the chat ended. */
-  title?: string;
-};
-/** Entries kept of a chat; older ones are dropped. */
-export const CHAT_LIMIT = 2000;
-
-/**
- * What is being typed in a chat's composer (8.14, UI state): the text, the images to send
- * (`key` tells two equal ones apart) and the caret/selection (`start`..`end` in the text). Kept
- * while the chat's tab is open, so it survives the composer unmounting; cleared on send.
- */
-export type ChatDraft = {
-  text: string;
-  images: (ChatImage & { key: number })[];
-  start: number;
-  end: number;
-};
-export const EMPTY_DRAFT: ChatDraft = { text: "", images: [], start: 0, end: 0 };
-
-/** Where a chat's conversation was scrolled (8.14); `offset` matters only when not `atBottom`. */
-export type ChatScroll = { offset: number; atBottom: boolean };
 
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
@@ -589,8 +455,7 @@ export type Settings = {
   agents: { silence_secs: number; confirm_close: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */
-  /** `chat_confirmed`: chats (7.3) allowed in the project; set by the service only. */
-  projects: Record<string, { scripts: ProjectScripts; chat_confirmed?: boolean }>;
+  projects: Record<string, { scripts: ProjectScripts }>;
 };
 
 /** A project's scripts (6.8): the user's own, kept only in the settings. */
@@ -635,11 +500,8 @@ export type Diagnostics = {
   claude: string | null;
 };
 
-/**
- * A tab of the terminal area: a terminal, or a chat (7.3) when `kind` is "chat" (absent is a
- * terminal), and the worktree path it was opened in (its title's source).
- */
-export type Tab = { id: number; cwd: string; kind?: "terminal" | "chat" };
+/** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
+export type Tab = { id: number; cwd: string };
 /** Two terminals side by side (6.11), left and right, both of one worktree. */
 export type Split = { left: number; right: number };
 
@@ -812,14 +674,6 @@ export type HiveState = {
   gotoLine: (OpenFile & { line: number }) | null;
   /** The followed subagent's conversation; check `agent` and `subagent`. */
   transcript: Transcript | null;
-  /** Chats (7.3) by their channel, the id of their tab. */
-  chats: Record<number, Chat>;
-  /** Chat composers' drafts by chat (8.14); none means empty (`EMPTY_DRAFT`). */
-  drafts: Record<number, ChatDraft>;
-  /** Chats' scroll positions by chat (8.14); none means at the bottom. */
-  chatScrolls: Record<number, ChatScroll>;
-  /** The worktree whose files a chat composer's `@` list offers (8.12), watched while it shows. */
-  mentioning: string | null;
 };
 
 export const initialState: HiveState = {
@@ -894,10 +748,6 @@ export const initialState: HiveState = {
   sessionsError: null,
   gotoLine: null,
   transcript: null,
-  chats: {},
-  drafts: {},
-  chatScrolls: {},
-  mentioning: null,
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -1069,39 +919,6 @@ function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Part
   return { terminals: { ...s.terminals, [id]: { ...current, ...patch } } };
 }
 
-/** Changes chat `id`, made empty first when the service speaks of it before its tab exists. */
-function patchChat(s: HiveState, id: number, patch: (chat: Chat) => Partial<Chat>) {
-  const chat = s.chats[id] ?? {
-    cwd: "",
-    opened: null,
-    status: null,
-    entries: [],
-    requests: [],
-    confirm: false,
-    closed: null,
-  };
-  return { chats: { ...s.chats, [id]: { ...chat, ...patch(chat) } } };
-}
-
-/**
- * A chat's entries after `chat_entries`: an entry replaces the one with its `id` (a tool's
- * result), or the last one when `replaceLast` (live text); any other is added at the end.
- */
-export function mergeEntries(
-  entries: ChatEntry[],
-  more: ChatEntry[],
-  replaceLast: boolean,
-): ChatEntry[] {
-  const next = [...entries];
-  more.forEach((entry, i) => {
-    // ponytail: a linear search per entry over at most CHAT_LIMIT; index by id if it shows.
-    const at = i === 0 && replaceLast ? next.length - 1 : next.findIndex((e) => e.id === entry.id);
-    if (at >= 0) next[at] = entry;
-    else next.push(entry);
-  });
-  return next.slice(-CHAT_LIMIT);
-}
-
 function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<HiveState> {
   return { worktreeDialog: { ...s.worktreeDialog, ...patch } };
 }
@@ -1202,12 +1019,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const shown = s.transcriptShown?.agent === m.id ? null : s.transcriptShown;
       return { agents, agentStates, agentTitles, agentUsage, pendingSeen, transcriptShown: shown };
     }
-    case "agent_title": {
-      const agentTitles = { ...s.agentTitles, [m.id]: m.title };
-      // A chat's agent runs on the chat's channel.
-      if (!s.chats[m.channel]) return { agentTitles };
-      return { agentTitles, ...patchChat(s, m.channel, () => ({ title: m.title })) };
-    }
+    case "agent_title":
+      return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
     case "agent_usage": {
       const { type: _, id, ...usage } = m;
       return { agentUsage: { ...s.agentUsage, [id]: usage } };
@@ -1440,33 +1253,6 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         },
       };
     }
-    case "chat_opened": {
-      const { type: _, channel: __, ...opened } = m;
-      return patchChat(s, m.chat, () => ({ opened, cwd: m.cwd, confirm: false }));
-    }
-    case "chat_entries":
-      return patchChat(s, m.chat, (c) => ({
-        entries: mergeEntries(c.entries, m.entries, m.replace_last),
-      }));
-    case "chat_request":
-      return patchChat(s, m.chat, (c) => ({ requests: [...c.requests, m.request] }));
-    case "chat_request_gone":
-      return patchChat(s, m.chat, (c) => ({
-        requests: c.requests.filter((r) => r.id !== m.request),
-      }));
-    case "chat_status": {
-      const { type: _, channel: __, ...status } = m;
-      return patchChat(s, m.chat, () => ({ status }));
-    }
-    case "chat_closed":
-      return patchChat(s, m.chat, (c) => ({
-        closed: { error: m.error },
-        confirm: false,
-        requests: [],
-        status: c.status && { ...c.status, busy: false },
-      }));
-    case "confirm_chat_folder":
-      return patchChat(s, m.chat, () => ({ cwd: m.cwd, confirm: true }));
     case "disconnected":
       // The service is gone, and every agent and the watches with it.
       return {
@@ -1754,10 +1540,10 @@ export const setFocused = (focused: boolean) => useHive.setState({ focused });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
 
-/** A terminal (or a chat) just opened in `cwd`: its tab is shown and its worktree selected. */
-export const addTab = (id: number, cwd: string, kind?: "chat") =>
+/** A terminal just opened in `cwd`: its tab is shown and its worktree selected. */
+export const addTab = (id: number, cwd: string) =>
   useHive.setState((s) => ({
-    tabs: [...s.tabs, kind ? { id, cwd, kind } : { id, cwd }],
+    tabs: [...s.tabs, { id, cwd }],
     tabOrder: withKey(s.tabOrder, `tab:${id}`),
     activeTab: id,
     fileShown: false,
@@ -1822,39 +1608,6 @@ export const setSplit = (split: Split | null) =>
     transcriptShown: split ? null : s.transcriptShown,
   }));
 
-/** Keeps chat `id`'s data from its tab's start (`cwd`), or drops it (null) when the tab closes. */
-export const setChat = (id: number, cwd: string | null) =>
-  useHive.setState((s) => {
-    if (cwd !== null) return patchChat(s, id, () => ({ cwd }));
-    const { [id]: _, ...chats } = s.chats;
-    const { [id]: _draft, ...drafts } = s.drafts;
-    const { [id]: _scroll, ...chatScrolls } = s.chatScrolls;
-    return { chats, drafts, chatScrolls };
-  });
-
-/**
- * Changes chat `id`'s draft (8.14), or clears it (null, once sent). Read it with
- * `s.drafts[id] ?? EMPTY_DRAFT`. A chat whose tab closed keeps no draft.
- */
-export const setDraft = (id: number, patch: Partial<ChatDraft> | null) =>
-  useHive.setState((s) => {
-    if (!s.chats[id]) return {};
-    const { [id]: draft = EMPTY_DRAFT, ...drafts } = s.drafts;
-    return { drafts: patch ? { ...drafts, [id]: { ...draft, ...patch } } : drafts };
-  });
-
-/** A composer's `@` list shows `worktree`'s files (`on`), or no longer does (8.12). */
-export const setMentioning = (worktree: string, on: boolean) =>
-  useHive.setState((s) =>
-    on ? { mentioning: worktree } : s.mentioning === worktree ? { mentioning: null } : {},
-  );
-
-/** Keeps where chat `id`'s conversation is scrolled (8.14), to come back there. */
-export const setChatScroll = (id: number, offset: number, atBottom: boolean) =>
-  useHive.setState((s) =>
-    s.chats[id] ? { chatScrolls: { ...s.chatScrolls, [id]: { offset, atBottom } } } : {},
-  );
-
 /** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
 export const focusPane = (id: number) =>
   useHive.setState((s) => {
@@ -1894,11 +1647,11 @@ export function visibleTabs(s: HiveState): Tab[] {
   );
 }
 
-/** A tab of the bar: a terminal or chat, or an open file. */
+/** A tab of the bar: a terminal or an open file. */
 export type BarItem = Tab | FileTab;
 
 /**
- * A tab's key in `tabOrder` (8.21): a file's by its path; a terminal's or chat's by its Claude
+ * A tab's key in `tabOrder` (8.21): a file's by its path; a terminal's by its Claude
  * session while one runs in it (so it keeps its place when the session is resumed after a
  * reload), else by its channel.
  */
@@ -1918,7 +1671,7 @@ export function inBarOrder<T extends BarItem>(s: HiveState, items: T[]): T[] {
   return [...items].sort((a, b) => rank(a) - rank(b));
 }
 
-/** The tabs of the bar, terminals, chats and files mixed, in its order. */
+/** The tabs of the bar, terminals and files mixed, in its order. */
 export function barItems(s: HiveState): BarItem[] {
   const place = tabsPlace(s);
   const files = s.openFiles.filter((f) => place === null || tabPlace(s, f.worktree) === place);

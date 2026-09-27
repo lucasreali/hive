@@ -96,20 +96,6 @@ impl Store {
         Duration::from_secs(self.current().0.agents.silence_secs.into())
     }
 
-    /// Whether the human allowed chats (7.3) in the project `id`.
-    pub fn chat_confirmed(&self, id: &str) -> bool {
-        let current = self.current();
-        current.0.projects.get(id).is_some_and(|p| p.chat_confirmed)
-    }
-
-    /// Remembers that the human allowed chats in the project `id`; the settings then in use.
-    pub fn confirm_chat(&self, id: &str) -> Result<Settings, String> {
-        let mut settings = self.get().0;
-        let project = settings.projects.entry(id.to_owned()).or_default();
-        project.chat_confirmed = true;
-        self.set(settings)
-    }
-
     /// Drops the settings of the project `id` (9.28): the settings then in use, or `None` when
     /// it had none (nothing is written). Under one lock, so a save meanwhile is not undone.
     pub fn forget(&self, id: &str) -> Result<Option<Settings>, String> {
@@ -284,34 +270,21 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_chat_projects_are_saved_with_their_other_settings() {
-        let (tmp, store) = store();
-        let mut settings = with_scripts(ProjectScripts {
-            setup: Some("make".into()),
-            ..Default::default()
-        });
-        store.set(settings.clone()).unwrap();
-        assert!(!store.chat_confirmed("/r"));
-        let confirmed = store.confirm_chat("/r").unwrap();
-        settings.projects.get_mut("/r").unwrap().chat_confirmed = true;
-        assert_eq!(confirmed, settings);
-        assert!(store.chat_confirmed("/r"));
-        assert!(!store.chat_confirmed("/other"));
-        let file = tmp.path().join("hive/settings.json");
-        assert!(Store::load(file).chat_confirmed("/r"));
-        // A project without settings gets them.
-        store.confirm_chat("/s").unwrap();
-        assert!(store.chat_confirmed("/s"));
-    }
-
-    #[test]
     fn a_partial_file_keeps_the_defaults_for_the_rest() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("settings.json");
         std::fs::write(&file, r#"{"notifications":{"volume":0},"other":true}"#).unwrap();
         let mut expected = Settings::default();
         expected.notifications.volume = 0;
-        assert_eq!(Store::load(file).get(), (expected, None));
+        assert_eq!(Store::load(file.clone()).get(), (expected, None));
+        // A project allowed for the chats Hive once had (7.3) keeps its other settings.
+        let old = r#"{"projects":{"/r":{"scripts":{"setup":"make"},"chat_confirmed":true}}}"#;
+        std::fs::write(&file, old).unwrap();
+        let setup = ProjectScripts {
+            setup: Some("make".into()),
+            ..Default::default()
+        };
+        assert_eq!(Store::load(file).get(), (with_scripts(setup), None));
     }
 
     #[test]
@@ -491,10 +464,7 @@ mod tests {
 
     fn with_scripts(scripts: ProjectScripts) -> Settings {
         let mut settings = Settings::default();
-        let project = ProjectSettings {
-            scripts,
-            chat_confirmed: false,
-        };
+        let project = ProjectSettings { scripts };
         settings.projects.insert("/r".into(), project);
         settings
     }
