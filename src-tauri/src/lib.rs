@@ -726,6 +726,7 @@ pub mod commands {
     pub fn check_update<R: Runtime>(app: AppHandle<R>) {
         use tauri_plugin_updater::UpdaterExt;
         tauri::async_runtime::spawn(async move {
+            // Only a newer release, downloaded and signed, reaches the UI (`update_ready`).
             app.state::<Hive>().check_update(app.updater()).await;
         });
     }
