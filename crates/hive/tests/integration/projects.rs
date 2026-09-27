@@ -709,6 +709,9 @@ async fn a_removed_project_takes_its_settings_and_ports_along_and_leaves_its_fil
         };
         assert_eq!(spaces[1].projects, Vec::<String>::new());
         let settings = app.any_control().await.1;
+        // The ports are freed once the settings are answered, before `project_removed`.
+        let removed = Control::ProjectRemoved { id: root.clone() };
+        assert_eq!(app.any_control().await.1, removed);
         let blocks = std::fs::read_to_string(&ports).unwrap();
         if round == 0 {
             let failed = matches!(settings, Control::SettingsFailed { .. });
@@ -724,8 +727,6 @@ async fn a_removed_project_takes_its_settings_and_ports_along_and_leaves_its_fil
             assert_eq!(settings, settings_gone);
             assert!(!blocks.contains(&root), "{blocks}");
         }
-        let removed = Control::ProjectRemoved { id: root.clone() };
-        assert_eq!(app.any_control().await.1, removed);
         assert!(list(&mut app).await.is_empty());
         app.send(0, remove(&root)).await;
         let gone = failed(&root, format!("{root} is not a followed project"));
