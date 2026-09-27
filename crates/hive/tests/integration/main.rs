@@ -23,6 +23,8 @@ mod hook;
 #[cfg(test)]
 mod projects;
 #[cfg(test)]
+mod pulls;
+#[cfg(test)]
 mod scripts;
 #[cfg(test)]
 mod spaces;

@@ -179,6 +179,8 @@ struct State {
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
     /// Whether the user's `PATH` is being asked for.
     asking_path: std::sync::atomic::AtomicBool,
+    /// The pull requests lists fetched (9.31).
+    pulls: std::sync::Mutex<crate::pulls::Cache>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -219,6 +221,7 @@ impl State {
             windows: Default::default(),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
+            pulls: Default::default(),
         }
     }
 
@@ -615,6 +618,25 @@ impl State {
                 problem,
             };
             state.to_app(0, &reply).await;
+        });
+    }
+
+    /// Answers a request of the pull requests view (9.31) off the frame loop: `gh` asks
+    /// GitHub.
+    fn pulls(self: &Arc<Self>, request: Control) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let gh = state.gh().await;
+            let replies = tokio::task::block_in_place(|| {
+                let mut replies = crate::pulls::answer(&gh, &state.projects, &state.pulls, request);
+                replies
+                    .iter_mut()
+                    .for_each(|reply| state.with_health(reply));
+                replies
+            });
+            for reply in replies {
+                state.to_app(0, &reply).await;
+            }
         });
     }
 
@@ -1420,6 +1442,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             gh_config_dir,
             account,
         }) => state.gh_accounts(gh_config_dir, Some(account)),
+        Ok(
+            request @ (Control::ListPulls { .. }
+            | Control::OpenPull { .. }
+            | Control::ActOnPull { .. }
+            | Control::CreatePull { .. }),
+        ) => state.pulls(request),
         Ok(Control::ListBranches { project }) => state.projects(move |projects| {
             let (branches, error) = match projects.branches(&project) {
                 Ok(branches) => (branches, None),

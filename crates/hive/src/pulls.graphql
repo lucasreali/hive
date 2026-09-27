@@ -26,5 +26,5 @@ fragment pull on PullRequest {
   updatedAt
   author { login }
   reviewDecision
-  commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 }
