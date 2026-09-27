@@ -1078,6 +1078,11 @@ async fn chat_lines(stdout: tokio::process::ChildStdout, lines: mpsc::Sender<Opt
 
 /// Turns a chat's stdout into messages until it closes, sending its live text when due
 /// ([`chat::Stream::flush`]), then reports its exit.
+/// [`projects::held`] for a folder about to be renamed or moved, with this machine's processes.
+fn held(projects: &Projects) -> impl Fn(&Path) -> io::Result<()> {
+    move |folder| projects::held(&projects.list(), folder, procs::Source::System)
+}
+
 fn not_a_chat_folder(cwd: &str) -> String {
     format!("{cwd} is not a worktree of an added project: chats open only there")
 }
@@ -1579,7 +1584,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }) => state.projects(move |projects| {
             let renamed = projects
                 .worktree(&worktree)
-                .and_then(|dir| file::rename(&dir, &path, &name));
+                .and_then(|dir| file::rename(&dir, &path, &name, &held(projects)));
             match renamed {
                 Ok(to) => Control::FileRenamed { worktree, path, to },
                 Err(err) => Control::FileOpFailed {
@@ -1595,7 +1600,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }) => state.projects(move |projects| {
             let moved = projects
                 .worktree(&worktree)
-                .and_then(|dir| file::move_to(&dir, &path, &folder));
+                .and_then(|dir| file::move_to(&dir, &path, &folder, &held(projects)));
             match moved {
                 Ok(to) => Control::FileRenamed { worktree, path, to },
                 Err(err) => Control::FileOpFailed {

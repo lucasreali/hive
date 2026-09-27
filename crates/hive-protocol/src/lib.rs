@@ -582,22 +582,23 @@ pub enum Control {
         worktree: String,
         path: String,
     },
-    /// App → service: rename the file `path` to `name` in the same folder (7.4). Never
-    /// overwrites. Answered by `FileRenamed` or `FileOpFailed`.
+    /// App → service: rename the file or folder (9.1) `path` to `name` in the same folder
+    /// (7.4). Never overwrites. Answered by `FileRenamed` or `FileOpFailed`.
     RenameFile {
         worktree: String,
         path: String,
         name: String,
     },
-    /// The file `path` is now `to` (relative to the worktree).
+    /// The file or folder `path` is now `to` (relative to the worktree); for a folder, every
+    /// path under `path` is now under `to`.
     FileRenamed {
         worktree: String,
         path: String,
         to: String,
     },
-    /// App → service: move the file `path` into `folder` (relative to the worktree, empty for
-    /// its root), keeping its name (8.3). Never overwrites. Answered by `FileRenamed` or
-    /// `FileOpFailed`.
+    /// App → service: move the file or folder (9.1) `path` into `folder` (relative to the
+    /// worktree, empty for its root), keeping its name (8.3). Never overwrites. Answered by
+    /// `FileRenamed` or `FileOpFailed`.
     MoveFile {
         worktree: String,
         path: String,

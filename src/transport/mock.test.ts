@@ -638,6 +638,32 @@ test("files are moved and folders created as the service does, never over anothe
     failed("src already exists"),
     failed("gone.ts does not exist"),
   ]);
+
+  // A folder moves with its files and folders, never into itself.
+  messages.length = 0;
+  await transport.moveFile(w, "src/auth", "empty/inner");
+  await transport.renameFile(w, "empty", "full");
+  await transport.moveFile(w, "full", "full/inner");
+  await transport.openFile(w, "full/inner/auth/login.ts");
+  await tick();
+  const files = messages.filter((m) => m.type === "files").at(-1) as { files: string[] };
+  expect(files.files.filter((p) => p.includes("auth/"))).toEqual([
+    "full/inner/auth/login.ts",
+    "full/inner/auth/session.ts",
+  ]);
+  expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
+    renamed("src/auth", "empty/inner/auth"),
+    renamed("empty", "full"),
+    failed("a folder cannot go into itself"),
+    expect.objectContaining({
+      type: "file",
+      content: "// src/auth/login.ts\nexport const value = 1;\n",
+    }),
+  ]);
+  messages.length = 0;
+  await transport.createFolder(w, "", "empty");
+  await tick();
+  expect(messages[0]).toEqual({ type: "folder_created", worktree: w, path: "empty" });
 });
 
 test("a file's Windows path for an external editor, or why not", async () => {

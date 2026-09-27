@@ -292,12 +292,13 @@ export type SessionTarget = "log" | "folder";
 export type SessionMenu = { session: string; x: number; y: number };
 /**
  * A file tree's menu target: new files go in `folder` (relative to the worktree, "" for its
- * root); `path` is the file to rename, null for a folder or the tree's background.
+ * root); `path` is the file or folder to rename (a folder: `folder` itself), null for the tree's
+ * background.
  */
 export type FileTarget = { worktree: string; folder: string; path: string | null };
 /** What the file name dialog does: a new file or folder in `folder`, or rename `path`. */
 export type FileDialogKind = "file" | "folder" | "rename";
-/** The "New file" / "New folder" / "Rename file" dialog: its target and the service's refusal. */
+/** The "New file" / "New folder" / "Rename" dialog: its target and the service's refusal. */
 export type FileDialog = FileTarget & { kind: FileDialogKind; error: string | null };
 
 /** A line of a file holding the searched text (`line` is 1-based). */
@@ -689,6 +690,8 @@ export type HiveState = {
    */
   // ponytail: kept for the window's life, even if the folder goes away outside Hive.
   newFolders: Record<string, string[]>;
+  /** The entry just renamed or moved: the Files tree makes its row the active one once listed. */
+  movedRow: OpenFile | null;
   /** The question of the "confirm" modal (`ask`). */
   question: Question | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
@@ -824,6 +827,7 @@ export const initialState: HiveState = {
   fileMenu: null,
   fileDialog: null,
   newFolders: {},
+  movedRow: null,
   question: null,
   notice: null,
   update: null,
@@ -1292,17 +1296,35 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...fileDialogDone(s, m.worktree),
       };
     case "file_renamed": {
-      // Its tab, its place in the bar, its text and its edits follow the rename (or move).
-      const moved = <T extends OpenFile>(f: T | null) =>
-        f && isFor(f, m) ? { ...f, path: m.to } : f;
-      const from = fileKey(m);
-      const to = fileKey({ worktree: m.worktree, path: m.to });
+      // Its tab, its place in the bar, its text and its edits follow the rename (or move); a
+      // folder's `to` moves every path under it, with its folders' open state.
+      const to = (path: string) =>
+        path === m.path || path.startsWith(`${m.path}/`) ? m.to + path.slice(m.path.length) : null;
+      const moved = <T extends OpenFile>(f: T | null) => {
+        const path = f?.worktree === m.worktree ? to(f.path) : null;
+        return f && path !== null ? { ...f, path } : f;
+      };
+      // Keys that end in a path of the worktree: bar keys and the trees' folders.
+      const prefixes = [fileKey({ worktree: m.worktree, path: "" })].concat(
+        ["files", "changes"].map((tree) => `${tree}:${m.worktree}/`),
+      );
+      const rekey = (key: string) => {
+        const prefix = prefixes.find((p) => key.startsWith(p));
+        const path = prefix === undefined ? null : to(key.slice(prefix.length));
+        return path === null ? key : `${prefix}${path}`;
+      };
+      const shown = s.newFolders[m.worktree];
       return {
         openFile: moved(s.openFile),
         openFiles: s.openFiles.map((f) => ({ ...(moved(f) as FileTab), edit: moved(f.edit) })),
-        tabOrder: s.tabOrder.map((k) => (k === from ? to : k)),
+        tabOrder: s.tabOrder.map(rekey),
         file: moved(s.file),
         edit: moved(s.edit),
+        collapsed: Object.fromEntries(Object.entries(s.collapsed).map(([k, v]) => [rekey(k), v])),
+        newFolders: shown
+          ? { ...s.newFolders, [m.worktree]: shown.map((p) => to(p) ?? p) }
+          : s.newFolders,
+        movedRow: { worktree: m.worktree, path: m.to },
         ...fileDialogDone(s, m.worktree),
       };
     }
@@ -1320,9 +1342,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     }
     case "file_op_failed":
+      // Under the dialog's field, else (a drag) in the status bar.
       return s.fileDialog?.worktree === m.worktree
         ? { fileDialog: { ...s.fileDialog, error: m.message } }
-        : {};
+        : { notice: m.message };
     case "transcript": {
       const { type: _, ...transcript } = m;
       return { transcript };
