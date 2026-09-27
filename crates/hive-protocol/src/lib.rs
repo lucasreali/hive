@@ -783,6 +783,8 @@ pub enum ChatMode {
     Default,
     AcceptEdits,
     Plan,
+    /// Claude's classifier decides (8.4); refused by claude for a model or account without it.
+    Auto,
 }
 
 /// A model claude offers (8.9): `value` is what `chat_set_model` sends, `name` what is shown.
@@ -1855,6 +1857,13 @@ mod tests {
                     model: "opus".into(),
                 },
                 r#"{"type":"chat_set_model","chat":2,"model":"opus"}"#,
+            ),
+            (
+                Control::ChatSetMode {
+                    chat: 2,
+                    mode: ChatMode::Auto,
+                },
+                r#"{"type":"chat_set_mode","chat":2,"mode":"auto"}"#,
             ),
             (
                 Control::ChatStatus {
