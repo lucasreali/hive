@@ -233,7 +233,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 
 ### Projects
 1. After `welcome` (also a replayed one), the app's Rust side sends `list_projects`; the UI's "Refresh worktrees" button sends it again. The service also sends `projects` after each worktree hook (see [Worktree hooks](#worktree-hooks)); other worktree changes are not watched (only the files panel's worktree is, see [Files panel watch](#files-panel-watch-31-31)).
-2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare and prunable entries (the directory is gone) skipped.
+2. The service answers `projects`. Each project's worktrees come from `git worktree list --porcelain -z`, bare and prunable entries (the directory is gone) skipped. Git gets 10 s (killed with its children after it, as for [Worktree health](#worktree-health)); a timeout is that project's `error` only (9.13).
 3. `add_project {path}` (the add-project dialog): the path must be absolute, an existing directory and inside a git repository with a working tree. It is normalised to the main worktree (the first entry of `git worktree list`), so a subfolder or a linked worktree adds its repository. A new project is appended to the current space in `<data>/hive/spaces.json`; if that write fails the list is unchanged and the answer is `add_project_failed {error: storage}`. A project already in another space is refused (`in_other_space`, "<path> is already in the space <name>").
 4. Project requests run on a blocking thread, off the app's frame loop, because git can be slow.
 5. Worktree requests name a project by id and are refused ("<id> is not a followed project") for any other.
@@ -318,7 +318,7 @@ See [Handshake](#handshake). A refused client is not the app, so the daemon keep
 1. `open_terminal` on channel n.
 2. The service spawns `fish -C 'set -gx PATH <bin> $PATH'` on a new PTY. fish is the session leader, and the environment has `HIVE_TERMINAL_ID=n` and `TERM=xterm-256color`, plus, in a followed worktree, `HIVE_PORT`, `HIVE_WORKTREE_PATH` and `HIVE_ROOT_PATH` (see [Project scripts and ports](#project-scripts-and-ports-68)).
 3. The service replies `terminal_opened`.
-4. A pump task copies PTY output into terminal frames. There is no scrollback on the service side.
+4. A pump task copies PTY output into terminal frames. There is no scrollback on the service side. Typing and output never wait for another task (9.13): input goes through a per-terminal queue found under a short std lock, and the pump records the time of the last output in an atomic shared with the registry, so neither waits while agents are placed or their logs read.
 5. When the PTY closes, the pump reaps fish and sends `terminal_exited {code}`.
 6. `close_terminal` ends the terminal's session (see below). The exit is reported by the pump.
 

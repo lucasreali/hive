@@ -1,6 +1,8 @@
 //! PTY-backed terminals running fish. Pass-through only: no scrollback is kept here.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -24,11 +26,10 @@ pub struct Terminal {
     /// Unhooked-`claude` detector for this terminal.
     pub watch: Watch,
     /// When the PTY last printed something (the silence rule of agent states).
-    pub last_output: Instant,
+    pub last_output: LastOutput,
     /// The Claude config folder its space gave it (6.14), where its agents' sessions are;
     /// `None` for the service's own.
     pub claude_dir: Option<String>,
-    input: mpsc::UnboundedSender<Input>,
 }
 
 pub enum Input {
@@ -36,16 +37,38 @@ pub enum Input {
     Resize { cols: u16, rows: u16 },
 }
 
-impl Terminal {
-    /// Queues input or a resize; ignored once the terminal is gone.
-    pub fn send(&self, input: Input) {
-        let _ = self.input.send(input);
+/// When a terminal last printed something, shared by its output pump and the registry
+/// without a lock, so output never waits for one (9.13).
+#[derive(Clone)]
+pub struct LastOutput {
+    start: Instant,
+    /// Nanoseconds after `start`.
+    since: Arc<AtomicU64>,
+}
+
+impl LastOutput {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            since: Arc::default(),
+        }
+    }
+
+    /// Records output now.
+    pub fn touch(&self) {
+        let since = u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.since.store(since, Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> Instant {
+        self.start + Duration::from_nanos(self.since.load(Ordering::Relaxed))
     }
 }
 
 /// Starts the shell (see [`shell`]) on a new PTY in `cwd`, with `bin_dir` first on `PATH`
 /// and `HIVE_TERMINAL_ID` set, plus `env` (its space's, 6.14, and its worktree's `HIVE_*`,
-/// 6.8). Returns the registry entry, the output side and the child.
+/// 6.8). Returns the registry entry, its input queue (typing and resizes; it ends once
+/// every sender is dropped), the output side and the child.
 pub fn spawn(
     id: u32,
     cwd: &str,
@@ -53,7 +76,7 @@ pub fn spawn(
     rows: u16,
     bin_dir: &Path,
     env: &[(&'static str, String)],
-) -> Result<(Terminal, OwnedReadPty, Child), String> {
+) -> Result<(Terminal, mpsc::UnboundedSender<Input>, OwnedReadPty, Child), String> {
     let start = || -> pty_process::Result<_> {
         let (pty, pts) = pty_process::open()?;
         pty.resize(Size::new(rows, cols))?;
@@ -76,10 +99,10 @@ pub fn spawn(
         Terminal {
             session,
             watch: Watch::default(),
-            last_output: Instant::now(),
+            last_output: LastOutput::new(),
             claude_dir: None,
-            input,
         },
+        input,
         output,
         child,
     ))
@@ -330,33 +353,43 @@ async fn feed(mut pty: OwnedWritePty, mut input: mpsc::UnboundedReceiver<Input>)
 /// Ends every process group in the given sessions: SIGHUP, then SIGKILL for
 /// whatever is still alive after [`GRACE`].
 pub async fn end_sessions(sessions: &[i32]) {
-    signal_sessions(sessions, Signal::SIGHUP);
+    signal(&in_sessions(sessions).await, Signal::SIGHUP);
     let _ = tokio::time::timeout(GRACE, async {
-        while any_alive(sessions) {
+        while !in_sessions(sessions).await.is_empty() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await;
-    signal_sessions(sessions, Signal::SIGKILL);
+    signal(&in_sessions(sessions).await, Signal::SIGKILL);
 }
 
-fn any_alive(sessions: &[i32]) -> bool {
-    procs::list(procs::Source::System)
-        .iter()
-        .any(|p| sessions.contains(&p.session))
+/// The processes in `sessions`, read from `/proc` on a blocking thread (9.13).
+async fn in_sessions(sessions: &[i32]) -> Vec<procs::Proc> {
+    let all = tokio::task::spawn_blocking(|| procs::list(procs::Source::System)).await;
+    let all = all.unwrap_or_default().into_iter();
+    all.filter(|p| sessions.contains(&p.session)).collect()
 }
 
-fn signal_sessions(sessions: &[i32], signal: Signal) {
-    for proc in procs::list(procs::Source::System) {
-        if sessions.contains(&proc.session) {
-            let _ = killpg(Pid::from_raw(proc.pgrp), signal);
-        }
+fn signal(procs: &[procs::Proc], signal: Signal) {
+    for proc in procs {
+        let _ = killpg(Pid::from_raw(proc.pgrp), signal);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_output_is_shared_by_its_clones() {
+        let last = LastOutput::new();
+        let pump = last.clone();
+        let started = last.get();
+        std::thread::sleep(Duration::from_millis(5));
+        pump.touch();
+        assert!(last.get() >= started + Duration::from_millis(5));
+        assert!(last.get() <= Instant::now());
+    }
 
     #[test]
     fn path_command_quotes_the_directory_for_fish() {
