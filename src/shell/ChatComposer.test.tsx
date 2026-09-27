@@ -289,6 +289,33 @@ test("the model selector says Model while the chat's model is not known", () => 
   expect(select.disabled).toBe(true);
 });
 
+test("Auto is left out on a model without it, in the selector and for Shift+Tab", () => {
+  const setMode = spyOn(transport, "chatSetMode").mockResolvedValue();
+  const { input } = composer();
+  const models = [...MODELS, { value: "haiku", name: "Haiku 4.5", auto: false }];
+  open([], models, "claude-haiku-4-5");
+  const on = (choice: string, mode: ChatStatus["mode"]) =>
+    act(() => apply({ type: "chat_status", channel: 3, ...status(false), choice, mode }));
+  const mode = screen.getByRole("combobox", { name: "Permission mode" });
+  const modes = () => {
+    fireEvent.mouseDown(mode);
+    const shown = optionTexts();
+    fireEvent.keyDown(mode, { key: "Escape" });
+    return shown;
+  };
+  // Not known yet which listed model runs: offered.
+  expect(modes()).toContain("Auto");
+  on("haiku", "plan");
+  expect(modes()).toEqual(["Default", "Accept edits", "Plan"]);
+  fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+  expect(setMode.mock.calls.at(-1)).toEqual([3, "default"]);
+  // Still shown while it is the mode (e.g. set before the switch).
+  on("haiku", "auto");
+  expect(modes()).toContain("Auto");
+  on("sonnet", "plan");
+  expect(modes()).toContain("Auto");
+});
+
 test("Shift+Tab asks for the next mode, like the CLI, from Auto back to Default", () => {
   const setMode = spyOn(transport, "chatSetMode").mockResolvedValue();
   const { input } = composer();
