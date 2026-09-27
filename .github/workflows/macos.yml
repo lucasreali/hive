@@ -8,7 +8,36 @@ on:
     branches: [main, "task/**"]
   workflow_dispatch:
 
+# A newer push to the same branch supersedes the running checks (as ci.yml).
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Whether this push can change the bundle (TODO 9.5): the branch's diff since it left `main`
+  # (merge base with origin/main, as ci.yml's `changes`); always on `main` and on a manual run.
+  # A job skipped by its `if` still leaves the run green.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      bundle: ${{ steps.diff.outputs.bundle }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      # The root Cargo.toml holds the release profile; the Tauri CLI that bundles comes from
+      # package.json; macos.yml itself, so a change to the job runs it.
+      - id: diff
+        run: |
+          bundle=true
+          if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+            # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
+            files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
+            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|\.github/workflows/macos\.yml$)' <<< "$files" ||
+              bundle=false
+          fi
+          echo "bundle=$bundle" | tee -a "$GITHUB_OUTPUT"
+
   test:
     runs-on: macos-14
     env:
@@ -23,6 +52,7 @@ jobs:
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-llvm-cov,cargo-mutants
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # The integration tests' terminals run fish, as on WSL (`common::Env`).
       - run: brew install fish
@@ -37,12 +67,15 @@ jobs:
       - run: bun test
 
   bundle:
+    needs: changes
+    if: needs.changes.outputs.bundle == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - run: |
           cargo build --release --locked -p hive
