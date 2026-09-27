@@ -1,6 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 
-use hive_protocol::{Control, Project, ProjectError, Role};
+use hive_protocol::{Control, DiffBase, Project, ProjectError, Role};
 
 use crate::common::{Conn, Env};
 use crate::worktree::Repo;
@@ -594,7 +594,11 @@ async fn worktrees_carry_their_health() {
     assert_eq!(health(&list(&mut conn).await[0]), expected);
 
     // A change in the watched worktree sends its new status.
-    conn.send(0, Control::WatchWorktree { path: wt("b") }).await;
+    let watch = Control::WatchWorktree {
+        path: wt("b"),
+        base: DiffBase::Head,
+    };
+    conn.send(0, watch).await;
     std::fs::write(format!("{}/new.txt", wt("b")), "x").unwrap();
     let status = loop {
         let status = conn.worktree_status(&wt("b")).await.expect("a status");

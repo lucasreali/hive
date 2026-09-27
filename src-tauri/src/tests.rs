@@ -407,8 +407,11 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         name: "x".into(),
     };
     assert_eq!(service.control().await, (0, rename));
-    hive.watch_worktree("/r".into()).unwrap();
-    let watch = Control::WatchWorktree { path: "/r".into() };
+    hive.watch_worktree("/r".into(), DiffBase::Branch).unwrap();
+    let watch = Control::WatchWorktree {
+        path: "/r".into(),
+        base: DiffBase::Branch,
+    };
     assert_eq!(service.control().await, (0, watch));
     hive.unwatch_worktree().unwrap();
     assert_eq!(service.control().await, (0, Control::UnwatchWorktree));
@@ -430,8 +433,11 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         focused: true,
     };
     assert_eq!(service.control().await, (0, view));
-    hive.list_changes("/r".into()).unwrap();
-    let changes = Control::ListChanges { path: "/r".into() };
+    hive.list_changes("/r".into(), DiffBase::Branch).unwrap();
+    let changes = Control::ListChanges {
+        path: "/r".into(),
+        base: DiffBase::Branch,
+    };
     assert_eq!(service.control().await, (0, changes));
     hive.list_sessions().unwrap();
     assert_eq!(service.control().await, (0, Control::ListSessions));
@@ -456,10 +462,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         windows: true,
     };
     assert_eq!(service.control().await, (0, dirs));
-    hive.open_file("/r".into(), "a".into()).unwrap();
+    hive.open_file("/r".into(), "a".into(), DiffBase::Head)
+        .unwrap();
     let open = Control::OpenFile {
         worktree: "/r".into(),
         path: "a".into(),
+        base: DiffBase::Head,
     };
     assert_eq!(service.control().await, (0, open));
     hive.save_file("/r".into(), "a".into(), "x".into(), Some("v".into()))
@@ -712,7 +720,10 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.create_worktree("/r".into(), "x".into(), None),
         not_connected
     );
-    assert_eq!(hive.watch_worktree("/r".into()), not_connected);
+    assert_eq!(
+        hive.watch_worktree("/r".into(), DiffBase::Head),
+        not_connected
+    );
     assert_eq!(hive.unwatch_worktree(), not_connected);
     assert_eq!(hive.watch_transcript("s".into(), "a".into()), not_connected);
     assert_eq!(
@@ -720,8 +731,14 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.set_view(None, false), not_connected);
-    assert_eq!(hive.list_changes("/r".into()), not_connected);
-    assert_eq!(hive.open_file("/r".into(), "a".into()), not_connected);
+    assert_eq!(
+        hive.list_changes("/r".into(), DiffBase::Head),
+        not_connected
+    );
+    assert_eq!(
+        hive.open_file("/r".into(), "a".into(), DiffBase::Head),
+        not_connected
+    );
     assert_eq!(
         hive.save_file("/r".into(), "a".into(), "x".into(), None),
         not_connected
@@ -1005,11 +1022,11 @@ fn commands_reach_the_managed_hive() {
     let create = json!({"project": "/r", "name": "x", "base": null});
     let remove = json!({"path": "/r/w", "force": false});
     let rename = json!({"path": "/r/w", "name": "x"});
-    let watch = json!({"path": "/r"});
+    let watch = json!({"path": "/r", "base": "branch"});
     let transcript = json!({"agent": "s", "subagent": "a"});
     let view = json!({"terminal": 1, "focused": true});
-    let changes = json!({"path": "/r"});
-    let file = json!({"worktree": "/r", "path": "a"});
+    let changes = json!({"path": "/r", "base": "head"});
+    let file = json!({"worktree": "/r", "path": "a", "base": "head"});
     let search = json!({"worktree": "/r", "query": "q"});
     let dirs = json!({"path": "", "windows": false});
     let locate = json!({"id": "s", "target": "log"});

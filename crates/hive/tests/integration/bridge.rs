@@ -7,6 +7,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::common::{DISTRO, Env, TIMEOUT, wait_until};
+use crate::terminal::printed_pid;
 
 struct Bridge {
     child: Child,
@@ -144,11 +145,35 @@ async fn bridge_reports_a_service_that_does_not_start() {
             log.display()
         )
     );
-    assert!(
-        std::fs::read_to_string(log)
+    // The service waits for the lock as long as the bridge waits for it, so it may give up
+    // just after the bridge.
+    wait_until(|| {
+        std::fs::read_to_string(&log)
             .unwrap()
             .contains("is another hive daemon running?")
-    );
+    });
+}
+
+#[tokio::test]
+async fn a_bridge_started_while_the_service_ends_gets_a_new_service() {
+    let env = Env::new();
+    let mut old = env.daemon();
+    let mut app = env.connect(Role::App).await;
+    app.open_terminal(1, &env.path("home")).await;
+    // Ignores SIGHUP: the old service waits out its whole grace period to end it.
+    app.input(1, "sh -c 'trap \"\" HUP; echo pid=$$; exec sleep 30'\r")
+        .await;
+    printed_pid(&mut app, 1).await;
+    drop(app);
+    // The socket goes as soon as the app does, while the terminal is still being ended.
+    wait_until(|| !env.socket().exists());
+    assert!(old.0.try_wait().unwrap().is_none());
+    let mut bridge = bridge(&env);
+    bridge.send(Control::hello(Role::App, hive::VERSION)).await;
+    assert_eq!(bridge.next().await, Some(welcome()));
+    assert!(old.wait_exit().success());
+    assert!(bridge.close().await.success());
+    wait_until(|| !env.socket().exists());
 }
 
 #[tokio::test]
