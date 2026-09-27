@@ -1256,9 +1256,10 @@ mod tests {
         assert_eq!(err(move_to(dir.path(), ".git/hooks", "")), refused);
         assert_eq!(err(move_to(dir.path(), "src", ".git")), refused);
         assert_eq!(err(rename(dir.path(), "src", ".git")), refused);
-        // In any case: on a case-insensitive file system `.GIT` is `.git` (here, stand-ins).
+        // In any case: on a case-insensitive file system `.GIT` is `.git` (elsewhere,
+        // stand-ins).
         std::fs::create_dir_all(dir.path().join(".Git/hooks")).unwrap();
-        std::fs::create_dir(dir.path().join(".gIt")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".gIt")).unwrap();
         assert_eq!(err(rename(dir.path(), ".GIT", "x")), refused);
         assert_eq!(err(move_to(dir.path(), ".Git/hooks", "")), refused);
         assert_eq!(err(rename(dir.path(), "src", ".GIT")), refused);
