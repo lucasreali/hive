@@ -11,7 +11,16 @@ import {
   useHive,
 } from "../store";
 import { transport } from "../transport";
-import { base64, ChatComposer, MAX_IMAGE_DATA, MAX_IMAGES } from "./ChatComposer";
+import { MOCK_REPOS } from "../transport/mock";
+import {
+  base64,
+  ChatComposer,
+  MAX_IMAGE_DATA,
+  MAX_IMAGES,
+  mention,
+  mentionPaths,
+  rankPaths,
+} from "./ChatComposer";
 
 beforeEach(() => useHive.setState(initialState, true));
 afterEach(() => {
@@ -501,4 +510,101 @@ test("Ctrl+C copies a selection, stops a running turn, or clears the composer", 
   expect(screen.queryByRole("list", { name: "Images to send" })).toBeNull();
   expect(useHive.getState().drafts[3]).toBeUndefined();
   expect(input.disabled).toBe(false);
+});
+
+test("a listing's paths are its files and their folders, ending in /", () => {
+  expect(mentionPaths(["src/a/b.ts", "src/c.ts", "README.md"])).toEqual([
+    "README.md",
+    "src/",
+    "src/a/",
+    "src/a/b.ts",
+    "src/c.ts",
+  ]);
+  expect(rankPaths(["src/", "src/chat.ts", "docs/c.md", "x/s/ch"], "sch")).toEqual([
+    "x/s/ch",
+    "src/chat.ts",
+  ]);
+  expect(
+    rankPaths(
+      Array.from({ length: 60 }, (_, i) => `f${i}`),
+      "",
+    ),
+  ).toHaveLength(50);
+  expect([mention("a/b.ts"), mention("my dir/")]).toEqual(["@a/b.ts", '@"my dir/"']);
+});
+
+/** The chat runs at the root of worktree `/w`, whose listing is `files`. */
+function worktree(files: string[]) {
+  const [repo] = MOCK_REPOS as [(typeof MOCK_REPOS)[number]];
+  const [main] = repo.worktrees as [(typeof repo.worktrees)[number]];
+  act(() => {
+    apply({
+      type: "projects",
+      projects: [{ ...repo, worktrees: [{ ...main, id: "/w", path: "/w" }] }],
+    });
+    apply({ type: "files", path: "/w", files, truncated: false });
+  });
+}
+
+test("@ lists the worktree's files and folders, fuzzy-filtered, and picking puts in the path", () => {
+  const { send, input } = composer();
+  open(["compact"]);
+  worktree(["src/chat.ts", "src/deep/x.md", "notes.txt"]);
+  const list = () => screen.queryByRole("listbox", { name: "Files" });
+  const options = () => screen.getAllByRole("option").map((o) => o.textContent);
+  const selected = () => screen.getByRole("option", { selected: true }).textContent;
+  fireEvent.change(input, { target: { value: "see @" } });
+  expect(options()).toEqual([
+    "@notes.txt",
+    "@src/",
+    "@src/chat.ts",
+    "@src/deep/",
+    "@src/deep/x.md",
+  ]);
+  // The list's worktree is watched while it shows.
+  expect(useHive.getState().mentioning).toBe("/w");
+  fireEvent.change(input, { target: { value: "see @sd" } });
+  expect(options()).toEqual(["@src/deep/", "@src/deep/x.md"]);
+  // ↓ and Enter pick a folder: no space after it, and its files are listed.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(selected()).toBe("@src/deep/x.md");
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect([input.value, input.selectionStart, send.mock.calls]).toEqual(["see @src/deep/", 14, []]);
+  expect(options()).toEqual(["@src/deep/", "@src/deep/x.md"]);
+  // Tab picks a file, then a space; the list is gone and Enter sends the text as typed.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "Tab" });
+  expect([input.value, list()]).toEqual(["see @src/deep/x.md ", null]);
+  expect(useHive.getState().mentioning).toBeNull();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(send.mock.calls).toEqual([[3, "see @src/deep/x.md ", []]]);
+
+  // In the middle of the text, only the word the caret ends is replaced; a click picks too.
+  fireEvent.change(input, { target: { value: "a @no b" } });
+  input.focus();
+  input.setSelectionRange(5, 5);
+  // A click puts the caret there (React sees it on mouseup).
+  fireEvent.mouseUp(input);
+  fireEvent.click(screen.getByRole("option", { name: "@notes.txt" }));
+  expect(input.value).toBe("a @notes.txt  b");
+  // Esc hides the list; typing shows it again. No match, or no @ word, lists nothing.
+  fireEvent.change(input, { target: { value: "@c" } });
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(list()).toBeNull();
+  expect(useHive.getState().mentioning).toBeNull();
+  fireEvent.change(input, { target: { value: "@ch" } });
+  expect(options()).toEqual(["@src/chat.ts"]);
+  for (const value of ["@zzz", "me@src", "@src "]) {
+    fireEvent.change(input, { target: { value } });
+    expect(list()).toBeNull();
+  }
+});
+
+test("@ lists nothing in a chat that does not run at a worktree's root", () => {
+  const { input } = composer();
+  open();
+  fireEvent.change(input, { target: { value: "@" } });
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(useHive.getState().mentioning).toBeNull();
 });
