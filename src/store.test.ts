@@ -597,7 +597,7 @@ test("sessions are stored as listed; a deleted one leaves, a refused delete says
   const [a, b] = MOCK_SESSIONS;
   apply({ type: "session_deleted", id: a.id });
   expect(useHive.getState().sessions).toBeNull();
-  apply({ type: "sessions", sessions: [a, b], error: null });
+  apply({ type: "sessions", sessions: [a, b], error: null, truncated: false });
   apply({ type: "session_deleted", id: a.id });
   expect(useHive.getState().sessions).toEqual([b]);
   apply({ type: "delete_session_failed", id: b.id, message: "busy" });

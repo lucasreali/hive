@@ -859,7 +859,7 @@ export function createMockTransport(
     async listSessions() {
       // Only the current space's.
       const shown = sessions.filter((x) => space(current)?.projects.includes(x.project));
-      later({ type: "sessions", sessions: shown, error: null });
+      later({ type: "sessions", sessions: shown, error: null, truncated: false });
     },
     async locateSession(id, target) {
       const found = sessions.find((x) => x.id === id);

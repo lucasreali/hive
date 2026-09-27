@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 import { apply, initialState, select, setPanelView, setRightPanel, useHive } from "../store";
@@ -6,6 +6,18 @@ import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
 import { REFRESH_MS } from "./SessionsView";
+
+beforeAll(() => {
+  // happy-dom has no layout: give the list and its rows a height so the virtualizer shows rows.
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")?.get;
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains("sessions")) return 400;
+      return this.classList.contains("session") ? 72 : original?.call(this);
+    },
+  });
+});
 
 afterEach(() => {
   for (const tab of useHive.getState().tabs) closeTerminal(tab.id);
@@ -43,7 +55,7 @@ test("Sessions lists the shown worktree's sessions only, searched", () => {
   const listed = show(shop.id);
   expect(listed).toHaveBeenCalledTimes(1);
   expect(screen.getByText("Loading…")).toBeDefined();
-  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null }));
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
   // shop's main worktree: its own sessions, one of them started in a subfolder.
   expect(titles()).toEqual(["Checkout totals", "Untitled session"]);
   // Every session has its state: here, one left mid-turn and one that ended.
@@ -79,8 +91,35 @@ test("Sessions lists the shown worktree's sessions only, searched", () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Refresh sessions" }));
   expect(listed).toHaveBeenCalledTimes(2);
-  act(() => apply({ type: "sessions", sessions: [], error: "permission denied" }));
+  act(() =>
+    apply({ type: "sessions", sessions: [], error: "permission denied", truncated: false }),
+  );
   expect(screen.getByText("permission denied")).toBeDefined();
+});
+
+test("a list cut short says so at its end", () => {
+  show(shop.id);
+  const line = () => screen.queryByText("Older sessions are not listed.");
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
+  expect(line()).toBeNull();
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: true }));
+  // After the rows, below the list.
+  expect(line()?.previousElementSibling).toBe(list());
+});
+
+test("only the rows in view are rendered", () => {
+  show(shop.id);
+  const many = Array.from({ length: 300 }, (_, i) => ({
+    ...checkout,
+    id: `s${i}`,
+    title: `S${i}`,
+  }));
+  act(() => apply({ type: "sessions", sessions: many, error: null, truncated: false }));
+  const rows = list().querySelectorAll(".session");
+  expect(rows.length).toBeGreaterThan(0);
+  expect(rows.length).toBeLessThan(many.length);
+  expect(titles()[0]).toBe("S0");
+  expect(screen.getByText("300 shown")).toBeDefined();
 });
 
 test("the open tab asks for the sessions again every few seconds", () => {
@@ -95,7 +134,7 @@ test("the open tab asks for the sessions again every few seconds", () => {
 test("a click resumes a session; a running one shows its state and its terminal", () => {
   const open = spyOn(transport, "openTerminal").mockResolvedValue(8);
   show(shop.id);
-  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null }));
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
   fireEvent.click(screen.getAllByTitle("Resume in its worktree")[1] as HTMLElement);
   expect(open.mock.calls[0]?.[0]).toBe(untitled.cwd);
 
@@ -135,7 +174,7 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   const deleted = spyOn(transport, "deleteSession").mockResolvedValue();
   const writeText = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   show(shop.id);
-  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null }));
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
   const menu = () => screen.queryByRole("menu");
   const actions = (from: string) =>
     fireEvent.click(screen.getByRole("button", { name: `Actions for ${from}` }));

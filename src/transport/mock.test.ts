@@ -818,7 +818,7 @@ test("sessions: listed, located, and deleted unless running", async () => {
     return messages;
   };
   expect(await answers(() => transport.listSessions())).toEqual([
-    { type: "sessions", sessions: MOCK_SESSIONS, error: null },
+    { type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false },
   ]);
   expect(await answers(() => transport.locateSession(first.id, "folder"))).toEqual([
     {
@@ -1030,7 +1030,7 @@ test("spaces are kept as the service keeps them", async () => {
   expect(messages).toEqual([
     failed("Enter a name for the space"),
     { type: "spaces", spaces: [def, space("space-1", "Work", [], env)], current: "space-1" },
-    { type: "sessions", sessions: [], error: null },
+    { type: "sessions", sessions: [], error: null, truncated: false },
     {
       type: "add_project_failed",
       path: SHOP,

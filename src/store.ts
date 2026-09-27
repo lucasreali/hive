@@ -67,7 +67,7 @@ export type ServiceMessage =
   | ({ type: "file" } & FileText)
   | ({ type: "search_results" } & SearchResults)
   | ({ type: "dirs" } & Dirs)
-  | { type: "sessions"; sessions: Session[]; error: string | null }
+  | { type: "sessions"; sessions: Session[]; error: string | null; truncated: boolean }
   // Handled by `openSession` (src/sessions.ts), not stored.
   | {
       type: "session_located";
@@ -670,6 +670,8 @@ export type HiveState = {
   sessions: Session[] | null;
   /** Why the service could not list them. */
   sessionsError: string | null;
+  /** Older sessions were left out of the list. */
+  sessionsTruncated: boolean;
   /** A line to show once the open file's text is there (a search result), then cleared. */
   gotoLine: (OpenFile & { line: number }) | null;
   /** The followed subagent's conversation; check `agent` and `subagent`. */
@@ -746,6 +748,7 @@ export const initialState: HiveState = {
   dirs: null,
   sessions: null,
   sessionsError: null,
+  sessionsTruncated: false,
   gotoLine: null,
   transcript: null,
 };
@@ -1138,7 +1141,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { changes: { ...s.changes, [m.path]: changes } };
     }
     case "sessions":
-      return { sessions: m.sessions, sessionsError: m.error };
+      return { sessions: m.sessions, sessionsError: m.error, sessionsTruncated: m.truncated };
     case "session_deleted":
       return { sessions: s.sessions?.filter((x) => x.id !== m.id) ?? null };
     case "delete_session_failed":
