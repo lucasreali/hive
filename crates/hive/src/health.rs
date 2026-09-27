@@ -19,9 +19,14 @@ const TIME_LIMIT: Duration = Duration::from_secs(10);
 /// The status of `project`'s worktree `w`, `None` when git fails. The main worktree is
 /// counted against nothing; the others against its branch, when it has one.
 pub fn of(project: &Project, w: &Worktree) -> Option<WorktreeStatus> {
+    read(Path::new(&w.path), branch(project, w)).ok()
+}
+
+/// The branch `project`'s worktree `w` is counted against: the main worktree's, for any other
+/// worktree, when it has one. The Changes panel's `branch` base (9.11) compares with it too.
+pub fn branch<'a>(project: &'a Project, w: &Worktree) -> Option<&'a str> {
     let main = project.worktrees.iter().find(|w| w.main);
-    let base = main.and_then(|m| m.branch.as_deref()).filter(|_| !w.main);
-    read(Path::new(&w.path), base).ok()
+    main.and_then(|m| m.branch.as_deref()).filter(|_| !w.main)
 }
 
 /// Gives every worktree of `project` its status.
@@ -84,11 +89,11 @@ impl Sent {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn run(dir: &Path, args: &[&str]) {
+    pub(crate) fn run(dir: &Path, args: &[&str]) {
         let status = std::process::Command::new("git")
             .arg("-C")
             .arg(dir)
@@ -102,13 +107,13 @@ mod tests {
         assert!(status.success(), "git {args:?}");
     }
 
-    fn commit(dir: &Path, name: &str) {
+    pub(crate) fn commit(dir: &Path, name: &str) {
         std::fs::write(dir.join(name), name).unwrap();
         run(dir, &["add", name]);
         run(dir, &["commit", "-q", "-m", name]);
     }
 
-    fn worktree(path: &Path, branch: Option<&str>, main: bool) -> Worktree {
+    pub(crate) fn worktree(path: &Path, branch: Option<&str>, main: bool) -> Worktree {
         let path = path.display().to_string();
         Worktree {
             id: path.clone(),

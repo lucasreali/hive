@@ -1,12 +1,21 @@
 use hive::file::{TEXT_LIMIT, version};
-use hive_protocol::{Control, Role, SaveError};
+use hive_protocol::{Control, DiffBase, Role, SaveError};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
 
 async fn open(conn: &mut Conn, worktree: &str, path: &str) -> Control {
     let (worktree, path) = (worktree.to_owned(), path.to_owned());
-    conn.send(0, Control::OpenFile { worktree, path }).await;
+    let base = DiffBase::Head;
+    conn.send(
+        0,
+        Control::OpenFile {
+            worktree,
+            path,
+            base,
+        },
+    )
+    .await;
     conn.control().await.1
 }
 

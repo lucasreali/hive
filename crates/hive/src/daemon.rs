@@ -15,7 +15,7 @@ use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AgentEvent, ChatMode, Control, EventKind, Frame, FrameCodec, FrameError, FrameType,
+    AgentEvent, ChatMode, Control, DiffBase, EventKind, Frame, FrameCodec, FrameError, FrameType,
     OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionKind, SessionTarget,
 };
 use pty_process::OwnedReadPty;
@@ -279,23 +279,28 @@ impl State {
     /// Sends `worktree_status` for every followed worktree (only the one at `only`, when
     /// given) whose status is not the one the app has.
     async fn refresh_health(&self, only: Option<&str>) {
-        let changed = tokio::task::block_in_place(|| {
-            let mut changed = Vec::new();
-            for project in self.projects.list() {
-                let chosen = project.worktrees.iter();
-                for w in chosen.filter(|w| only.is_none_or(|path| path == w.path)) {
-                    let status = health::of(&project, w);
-                    if self.sent().changed(&w.path, &status) {
-                        let path = w.path.clone();
-                        changed.push(Control::WorktreeStatus { path, status });
-                    }
-                }
-            }
-            changed
-        });
+        let changed =
+            tokio::task::block_in_place(|| self.health_changed(&self.projects.list(), only));
         for message in changed {
             self.to_app(0, &message).await;
         }
+    }
+
+    /// The `worktree_status` of every worktree of `projects` (only the one at `only`, when
+    /// given) whose status is not the one the app has.
+    fn health_changed(&self, projects: &[Project], only: Option<&str>) -> Vec<Control> {
+        let mut changed = Vec::new();
+        for project in projects {
+            let chosen = project.worktrees.iter();
+            for w in chosen.filter(|w| only.is_none_or(|path| path == w.path)) {
+                let status = health::of(project, w);
+                if self.sent().changed(&w.path, &status) {
+                    let path = w.path.clone();
+                    changed.push(Control::WorktreeStatus { path, status });
+                }
+            }
+        }
+        changed
     }
 
     /// Sends a control message to the app, if one is connected.
@@ -577,19 +582,21 @@ impl State {
         self.to_app(0, &reply).await;
     }
 
-    /// Watches `path` for the files panel instead of the worktree watched until now, if any.
-    async fn watch_worktree(self: &Arc<Self>, path: Option<String>) {
+    /// Watches `path` for the files panel instead of the worktree watched until now, if any;
+    /// its changes against `base`.
+    async fn watch_worktree(self: &Arc<Self>, path: Option<(String, DiffBase)>) {
         let mut watching = self.watching.lock().await;
         if let Some(task) = watching.take() {
             task.abort();
         }
-        *watching = path.map(|path| tokio::spawn(watch_files(self.clone(), path)));
+        *watching = path.map(|(path, base)| tokio::spawn(watch_files(self.clone(), path, base)));
     }
 
     /// The one place a change in the watched worktree `path` is reported to the app, after
     /// the debounce: `files` when the listing changed (`None` when it did not), then its
-    /// `changes` every time, since an edit changes the diff but not the list.
-    async fn worktree_changed(&self, path: &str, listing: Option<&Listing>) {
+    /// `changes` against `base` every time, since an edit changes the diff but not the list,
+    /// then its status if it changed.
+    async fn worktree_changed(&self, path: &str, base: DiffBase, listing: Option<&Listing>) {
         if let Some(listing) = listing {
             let files = Control::Files {
                 path: path.to_owned(),
@@ -598,10 +605,16 @@ impl State {
             };
             self.to_app(0, &files).await;
         }
-        let listed = tokio::task::block_in_place(|| changes::list(Path::new(path)));
-        self.to_app(0, &changes::message(path.to_owned(), listed))
-            .await;
-        self.refresh_health(Some(path)).await;
+        // One listing of the projects gives both the changes' base and the status.
+        let (changes, statuses) = tokio::task::block_in_place(|| {
+            let projects = self.projects.list();
+            let changes = changes::answer(&projects, path.to_owned(), base);
+            (changes, self.health_changed(&projects, Some(path)))
+        });
+        self.to_app(0, &changes).await;
+        for message in statuses {
+            self.to_app(0, &message).await;
+        }
     }
 
     /// Follows the subagent's transcript instead of any other: sends what it holds now, then
@@ -958,7 +971,7 @@ async fn watch_health(state: Arc<State>, interval: std::time::Duration) {
 
 /// Lists the worktree `path` now and after every change, until aborted or the watch fails.
 /// Git and inotify run on a blocking thread, off the frame loop.
-async fn watch_files(state: Arc<State>, path: String) {
+async fn watch_files(state: Arc<State>, path: String, base: DiffBase) {
     let started = tokio::task::block_in_place(|| {
         let root = state.projects.worktree(&path)?;
         Watcher::new(&root)
@@ -974,7 +987,7 @@ async fn watch_files(state: Arc<State>, path: String) {
             Ok(listing) => {
                 let changed = last.as_ref() != Some(&listing);
                 state
-                    .worktree_changed(&path, changed.then_some(&listing))
+                    .worktree_changed(&path, base, changed.then_some(&listing))
                     .await;
                 last = Some(listing);
             }
@@ -1258,7 +1271,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.input(channel, Input::Resize { cols, rows }).await
         }
         Ok(Control::CloseTerminal) => state.close(channel).await,
-        Ok(Control::WatchWorktree { path }) => state.watch_worktree(Some(path)).await,
+        Ok(Control::WatchWorktree { path, base }) => state.watch_worktree(Some((path, base))).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
         Ok(Control::WatchTranscript { agent, subagent }) => {
             state.watch_transcript(agent, subagent).await
@@ -1408,10 +1421,9 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 }
             })
         }
-        Ok(Control::ListChanges { path }) => state.projects(move |projects| {
-            let listed = projects.worktree(&path).and_then(|dir| changes::list(&dir));
-            changes::message(path, listed)
-        }),
+        Ok(Control::ListChanges { path, base }) => {
+            state.projects(move |projects| changes::answer(&projects.list(), path, base))
+        }
         Ok(Control::ListSessions) => {
             // Hive's terminals and chats: their hooks name their sessions.
             let mut running: HashSet<String> = state.agents.lock().await.keys().cloned().collect();
@@ -1485,10 +1497,13 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 error,
             }
         }),
-        Ok(Control::OpenFile { worktree, path }) => state.projects(move |projects| {
-            let read = projects
-                .worktree(&worktree)
-                .and_then(|dir| file::read(&dir, &path));
+        Ok(Control::OpenFile {
+            worktree,
+            path,
+            base,
+        }) => state.projects(move |projects| {
+            let read = changes::against(&projects.list(), &worktree, base)
+                .and_then(|against| file::read(&against.dir, &path, against.commit.as_deref()));
             file::message(worktree, path, read)
         }),
         Ok(Control::SaveFile {
