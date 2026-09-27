@@ -195,6 +195,39 @@ test("copy on select copies a new selection, only when set", async () => {
   copy.mockRestore();
 });
 
+test("an OSC 8 link opens outside the app, only when safe; never a browser dialog or window", async () => {
+  const confirmSpy = spyOn(window, "confirm");
+  const openSpy = spyOn(window, "open");
+  const { id, term } = await open();
+  showTerminal(id);
+  term.write("\x1b]8;;https://example.com/x\x07web\x1b]8;;\x07");
+  await written(term);
+  // xterm's own OSC 8 provider, as a click on the link would reach it.
+  type Link = { text: string; activate: (event: MouseEvent, text: string) => void };
+  type Provider = { provideLinks: (y: number, found: (links?: Link[]) => void) => void };
+  const core = (
+    term as unknown as { _core: { _linkProviderService: { linkProviders: Provider[] } } }
+  )._core;
+  const links: Link[] = [];
+  for (const provider of core._linkProviderService.linkProviders) {
+    provider.provideLinks(1, (found) => links.push(...(found ?? [])));
+  }
+  expect(links.map((link) => link.text)).toEqual(["https://example.com/x"]);
+  const [link] = links as [Link];
+  // A link `safeUrl` refuses (xterm already drops non-http ones) opens nothing.
+  link.activate(new MouseEvent("click"), "javascript:alert(1)");
+  await settle();
+  expect(useHive.getState().notice).toBeNull();
+  // Outside Tauri `openLink` only says so.
+  link.activate(new MouseEvent("click"), link.text);
+  await settle();
+  expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://example.com/x");
+  expect(confirmSpy).not.toHaveBeenCalled();
+  expect(openSpy).not.toHaveBeenCalled();
+  confirmSpy.mockRestore();
+  openSpy.mockRestore();
+});
+
 test("a refused open leaves no terminal and no tab", async () => {
   const openSpy = spyOn(transport, "openTerminal").mockRejectedValue(new Error("disconnected"));
   await expect(openTerminal("/w")).rejects.toThrow("disconnected");
