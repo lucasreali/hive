@@ -790,7 +790,8 @@ impl State {
                 .chat_closed(channel, Some(not_a_chat_folder(cwd)))
                 .await;
         }
-        let (mut env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
+        let space = tokio::task::block_in_place(|| self.projects.space_env(cwd));
+        let (mut env, claude_dir) = (crate::spaces::vars(&space), space.claude_config_dir);
         env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
         let (claude, path) = self.user_claude().await;
         // Its tools need the user's programs; a space's own `PATH` still wins.

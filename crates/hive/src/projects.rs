@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use hive_protocol::{Control, Project, ProjectError, SpaceEnv, Worktree};
 use serde::de::DeserializeOwned;
 
-use crate::spaces::{self, Spaces};
+use crate::spaces::Spaces;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
 use crate::{git, procs};
@@ -69,13 +69,6 @@ impl Projects {
         let (paths, env) = self.spaces().current();
         let projects = paths.iter().map(|path| project(path)).collect();
         (projects, env.claude_config_dir)
-    }
-
-    /// What a terminal opened in `cwd` gets from the space of the project holding it: its
-    /// environment entries and Claude config folder. Nothing outside every project.
-    pub fn terminal_env(&self, cwd: &str) -> (Vec<(&'static str, String)>, Option<String>) {
-        let env = self.space_env(cwd);
-        (spaces::vars(&env), env.claude_config_dir)
     }
 
     /// The environment of the space of the project holding `cwd` (also what `gh` gets for a
@@ -787,6 +780,6 @@ mod tests {
     #[test]
     fn a_terminal_outside_every_project_gets_no_space_environment() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(load(tmp.path()).terminal_env("/anywhere"), (vec![], None));
+        assert_eq!(load(tmp.path()).space_env("/anywhere"), SpaceEnv::default());
     }
 }

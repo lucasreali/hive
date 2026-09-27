@@ -413,6 +413,13 @@ esac
         assert_eq!(none.gh.accounts(None), Err(NOT_LOGGED_IN.to_owned()));
         let lines = Fake::new("gh: not a status\n");
         assert_eq!(lines.gh.accounts(None), Err(NOT_LOGGED_IN.to_owned()));
+        // Up to 64 KiB is read; more is refused.
+        let padded = |len: usize| format!("{STATUS}{}", "\n".repeat(len - STATUS.len()));
+        let most = Fake::new(&padded(AUTH_OUTPUT as usize));
+        assert_eq!(most.gh.accounts(None).unwrap().len(), 2);
+        let over = Fake::new(&padded(AUTH_OUTPUT as usize + 1));
+        let refused = "gh auth status printed more than 65536 bytes";
+        assert_eq!(over.gh.accounts(None), Err(refused.to_owned()));
     }
 
     #[test]
