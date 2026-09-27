@@ -96,6 +96,8 @@ pub async fn badge(paths: &Paths, terminal: u32, text: String) -> io::Result<()>
 /// [`SEND_TIMEOUT`].
 async fn send(paths: &Paths, channel: u32, message: &Control) -> io::Result<()> {
     let sent = async {
+        // Never to a socket in a runtime directory that is not ours (`Paths::check_runtime`).
+        paths.check_runtime()?;
         let stream = UnixStream::connect(paths.socket()).await?;
         let mut writer = FramedWrite::new(stream, FrameCodec);
         let hello = Control::hello(Role::Hook, VERSION);

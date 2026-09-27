@@ -156,6 +156,9 @@ async fn bridge_refuses_an_insecure_runtime_directory() {
     let env = Env::new();
     std::fs::create_dir(env.path("run/hive")).unwrap();
     std::fs::set_permissions(env.path("run/hive"), std::fs::Permissions::from_mode(0o777)).unwrap();
+    // Another user's socket, planted before Hive starts: the bridge never connects to it.
+    let planted = std::os::unix::net::UnixListener::bind(env.socket()).unwrap();
+    planted.set_nonblocking(true).unwrap();
     let out = env
         .hive()
         .arg("bridge")
@@ -164,4 +167,6 @@ async fn bridge_refuses_an_insecure_runtime_directory() {
         .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("insecure runtime directory"));
+    let accepted = planted.accept().map(drop).map_err(|err| err.kind());
+    assert_eq!(accepted, Err(std::io::ErrorKind::WouldBlock));
 }

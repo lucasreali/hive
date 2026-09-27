@@ -16,7 +16,14 @@ use crate::paths::Paths;
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn run(paths: &Paths, hive: &Path) -> io::Result<()> {
-    let stream = match UnixStream::connect(paths.socket()).await {
+    // Only in a runtime directory of ours: in any other, the socket may be another user's.
+    // A missing or insecure one goes to `start_daemon`, whose `prepare_runtime` creates it or
+    // refuses it with a clear error.
+    let first = async {
+        paths.check_runtime()?;
+        UnixStream::connect(paths.socket()).await
+    };
+    let stream = match first.await {
         Ok(stream) => stream,
         Err(_) => {
             start_daemon(paths, hive)?;

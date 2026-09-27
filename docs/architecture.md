@@ -37,7 +37,7 @@ Windows                         WSL
 | `hive::watch` | Pure state machine for the unhooked-`claude` warning. |
 | `hive::states` | Pure agent state machine: hook events → state per agent and subagent, "the most urgent wins", PTY-silence reconciliation (the clock is passed in). |
 | `hive::adapter` | `Adapter` trait and `ClaudeCode` adapter: raw hook payload → `AgentEvent` (raw payload kept). |
-| `hive::hook` | `hive hook`: reads stdin (512 KiB limit), optionally records JSONL, sends with a 200 ms timeout. `hive badge` sends through the same hook-role connection. |
+| `hive::hook` | `hive hook`: reads stdin (512 KiB limit), optionally records JSONL, sends with a 200 ms timeout, never to a socket in a runtime dir that is not ours (9.7). `hive badge` sends through the same hook-role connection. |
 | `hive::bridge` | Relay plus detached daemon start (`setsid --fork`, stderr to `daemon.log`). |
 | `hive::wrapper` | Installs `<data>/hive/bin/claude` (sh wrapper) and `<data>/hive/hive-hooks.json` when the daemon starts. |
 | `hive::settings` | The user's settings (`<config>/hive/settings.json`): read at start (256 KiB limit; missing: the defaults; invalid: the defaults plus a warning, the file left alone), range checks, saved whole (temporary file + rename, 0600). |
@@ -143,7 +143,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `file_deleted {worktree, path}` | service → app | 0 | `path` (as the app sent it) is gone, with everything under it. The Files tree drops it and what it held at once (the watch's next `files` confirms it); the open files under it close their tabs, and those with unsaved edits ask first, in one question. |
 | `file_op_failed {worktree, message}` | service → app | 0 | Nothing was created, renamed, moved or deleted; `message` shows as is in the file name dialog, or in the status bar when no dialog is open for the worktree (a drag). |
 | `open_in_editor {worktree, path}` | app → service | 0 | Where Windows sees this file, to open it in an external editor. Answered by `editor_target`. |
-| `editor_target {worktree, path, windows_path, error}` | service → app | 0 | The file's Windows path (`wslpath -w`), or why not (`error`, e.g. a file that is not text or source, which the system might run). |
+| `editor_target {worktree, path, windows_path, error}` | service → app | 0 | The file's Windows path (`wslpath -w`), or why not (`error`, e.g. a file that is not text or source, which the system might run). The app acts on it once, only while its own request for that `worktree` and `path` is pending (9.7). |
 | `get_settings` | app → service | 0 | Answered by `settings`. |
 | `settings {settings}` | service → app | 0 | The service's settings (see [Settings](#settings)). Sent right after `welcome`, and in answer to `get_settings` and to a saved `set_settings`. |
 | `set_settings {settings}` | app → service | 0 | Check and save the whole settings. Answered by `settings`, or by `settings_failed` with nothing saved. |
@@ -175,7 +175,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
    - otherwise `~/.cargo/bin/hive` (`cargo install`, development).
 
    On Windows the process gets `CREATE_NO_WINDOW`, and it is killed when the app drops the connection.
-2. The bridge connects to `<runtime>/hive.sock`.
+2. The bridge connects to `<runtime>/hive.sock`, only when the runtime dir is ours (owned by the user, mode 0700, not a symlink): in any other, the socket may be another user's (9.7).
 3. If the connection fails, the bridge prepares the runtime dir, truncates `daemon.log` (0600) and runs `setsid --fork hive daemon`. The daemon's stdin and stdout are null and its stderr goes to the log.
 4. The bridge retries the connection for up to 5 s. If the daemon never listens, the bridge fails with "the hive service did not start; see <log>".
 5. Two bridges racing is harmless: the second daemon cannot take the lockfile and exits.
