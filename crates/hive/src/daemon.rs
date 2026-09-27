@@ -3,13 +3,13 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::fs::{File, Permissions};
+use std::fs::{File, Permissions, TryLockError};
 use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
@@ -37,10 +37,15 @@ use crate::settings;
 use crate::spaces::Spaces;
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper};
+use crate::{
+    bridge, changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper,
+};
 
 /// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
 const TERMINAL_QUEUE: usize = 256;
+
+/// How often a service waiting for the lock tries it again.
+const LOCK_RETRY: Duration = Duration::from_millis(20);
 
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
@@ -50,7 +55,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // app connection. Fails harmlessly for a group leader (e.g. started from a shell).
     let _ = nix::unistd::setsid();
     paths.prepare_runtime()?;
-    let _lock = lock(paths)?;
+    let _lock = lock(paths).await?;
     wrapper::install(paths, &std::env::current_exe()?)?;
     // Handle SIGTERM before anyone can connect, so an early one still cleans up.
     let terminate = signal(SignalKind::terminate())?;
@@ -77,20 +82,33 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     );
     let state = Arc::new(state);
     state.ask_user_path();
-    let result = serve(listener, terminate, state).await;
+    let result = serve(listener, &socket, terminate, state).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
 
-/// Single-instance guard: an exclusive lock held for the daemon's whole life.
-fn lock(paths: &Paths) -> io::Result<File> {
+/// Single-instance guard: an exclusive lock held for the daemon's whole life. A service that
+/// is still ending holds it for up to its grace period, so the lock is tried again for as long
+/// as the bridge waits for a new service.
+async fn lock(paths: &Paths) -> io::Result<File> {
     let file = File::options()
         .create(true)
         .truncate(false)
         .write(true)
         .mode(0o600)
         .open(paths.lock())?;
-    file.try_lock().map_err(|err| {
+    let retry = async {
+        loop {
+            match file.try_lock() {
+                Err(TryLockError::WouldBlock) => tokio::time::sleep(LOCK_RETRY).await,
+                locked => return locked,
+            }
+        }
+    };
+    let locked = tokio::time::timeout(bridge::START_TIMEOUT, retry)
+        .await
+        .unwrap_or_else(|_| file.try_lock());
+    locked.map_err(|err| {
         io::Error::other(format!(
             "cannot lock {}: {err}; is another hive daemon running?",
             paths.lock().display()
@@ -99,7 +117,12 @@ fn lock(paths: &Paths) -> io::Result<File> {
     Ok(file)
 }
 
-async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>) -> io::Result<()> {
+async fn serve(
+    listener: UnixListener,
+    socket: &Path,
+    mut terminate: Signal,
+    state: Arc<State>,
+) -> io::Result<()> {
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
@@ -113,6 +136,10 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
             _ = terminate.recv() => break,
         }
     }
+    // Released before the terminals end: an app started again meanwhile gets a new service
+    // (waiting for the lock) instead of a listen queue nobody accepts.
+    drop(listener);
+    let _ = std::fs::remove_file(socket);
     watcher.abort();
     health.abort();
     // Before the terminals end (and their sessions with them): what to resume next time.

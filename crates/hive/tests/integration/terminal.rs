@@ -15,7 +15,7 @@ fn pid_in(output: &str) -> Option<i32> {
     })
 }
 
-async fn printed_pid(app: &mut crate::common::Conn, channel: u32) -> i32 {
+pub async fn printed_pid(app: &mut crate::common::Conn, channel: u32) -> i32 {
     let mut seen = String::new();
     loop {
         seen.push_str(&app.output_until(channel, "\n").await);

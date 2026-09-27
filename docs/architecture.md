@@ -178,7 +178,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 2. The bridge connects to `<runtime>/hive.sock`.
 3. If the connection fails, the bridge prepares the runtime dir, truncates `daemon.log` (0600) and runs `setsid --fork hive daemon`. The daemon's stdin and stdout are null and its stderr goes to the log.
 4. The bridge retries the connection for up to 5 s. If the daemon never listens, the bridge fails with "the hive service did not start; see <log>".
-5. Two bridges racing is harmless: the second daemon cannot take the lockfile and exits.
+5. Two bridges racing is harmless: the second daemon cannot take the lockfile and exits. A daemon tries the lockfile again for up to 5 s (the bridge's wait), because a service that is ending keeps it until its terminals have ended (up to their 2 s grace); that service drops its listener and removes the socket as soon as it stops serving, so a bridge started meanwhile starts the new service.
 6. The bridge then copies bytes in both directions without looking at them. When either side closes, the bridge exits.
 
 ### App connect (app side)
