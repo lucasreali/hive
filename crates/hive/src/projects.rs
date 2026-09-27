@@ -3,6 +3,7 @@
 //! flat `projects.json` of earlier versions (a JSON array of top-level paths) becomes the
 //! "Default" space until the first change is saved.
 
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -134,6 +135,31 @@ impl Projects {
         };
         added.map_err(|message| (error, message))?;
         Ok(project(&id))
+    }
+
+    /// Stops following the project `id` (9.28); nothing on disk changes. Refused while a
+    /// process of one of Hive's terminals (their session ids, `terminals`, as `proc` lists
+    /// processes) works in it or one of its worktrees. Answers its worktrees' paths.
+    pub fn remove(
+        &self,
+        id: &str,
+        proc: procs::Source,
+        terminals: &HashSet<i32>,
+    ) -> io::Result<Vec<String>> {
+        self.root(id)?;
+        let worktrees: Vec<String> = project(id).worktrees.into_iter().map(|w| w.path).collect();
+        // The root too, in case its worktrees cannot be listed (e.g. its folder is gone).
+        let dirs = std::iter::once(id).chain(worktrees.iter().map(String::as_str));
+        let mut busy: Vec<procs::Proc> = dirs
+            .flat_map(|dir| procs::inside(proc, Path::new(dir)))
+            .filter(|p| terminals.contains(&p.session))
+            .collect();
+        busy.sort_by_key(|p| p.pid);
+        busy.dedup();
+        refuse(busy)?;
+        self.change_spaces(|spaces| spaces.remove(id))
+            .map_err(io::Error::other)?;
+        Ok(worktrees)
     }
 
     /// The branches of the followed project `id`.
@@ -283,7 +309,11 @@ pub fn held(projects: &[Project], folder: &Path, proc: procs::Source) -> io::Res
 
 /// Refuses a worktree that some process (e.g. a terminal or an agent) works in.
 fn unused(proc: procs::Source, path: &Path) -> io::Result<()> {
-    let mut busy = procs::inside(proc, path);
+    refuse(procs::inside(proc, path))
+}
+
+/// Refuses when some process (`busy`) works there, naming them.
+fn refuse(mut busy: Vec<procs::Proc>) -> io::Result<()> {
     if busy.is_empty() {
         return Ok(());
     }
@@ -449,6 +479,47 @@ mod tests {
             busy(5),
             "in use by p1 (1), p2 (2), p3 (3), p4 (4), p5 (5): close its terminals first"
         );
+    }
+
+    #[test]
+    fn a_project_is_removed_only_when_no_terminal_of_hive_works_in_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("r");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/f"), "kept").unwrap();
+        let id = root.display().to_string();
+        let projects = load(tmp.path());
+        projects.change_spaces(|s| s.add(id.clone())).unwrap();
+        // Two processes in the project: a terminal of Hive's (session 7) and one outside Hive.
+        let proc = tmp.path().join("proc");
+        for (pid, session) in [(10, 7), (11, 11)] {
+            let entry = proc.join(pid.to_string());
+            std::fs::create_dir_all(&entry).unwrap();
+            let stat = format!("{pid} (p{pid}) S 1 {session} {session} 0");
+            std::fs::write(entry.join("stat"), stat).unwrap();
+            std::os::unix::fs::symlink(root.join("src"), entry.join("cwd")).unwrap();
+        }
+        let proc = procs::Source::Dir(&proc);
+        let remove = |id: &str, sessions: &[i32]| {
+            projects.remove(id, proc, &sessions.iter().copied().collect())
+        };
+
+        let err = remove(&id, &[7, 8]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "in use by p10 (10): close its terminals first"
+        );
+        let err = remove("/elsewhere", &[]).unwrap_err();
+        assert_eq!(err.to_string(), "/elsewhere is not a followed project");
+        assert_eq!(load(tmp.path()).spaces().projects().count(), 1);
+
+        // A process outside Hive's terminals does not keep it.
+        assert_eq!(remove(&id, &[8]).unwrap(), Vec::<String>::new());
+        assert!(projects.list().is_empty());
+        assert_eq!(*load(tmp.path()).spaces(), Spaces::with(vec![]));
+        assert_eq!(std::fs::read_to_string(root.join("src/f")).unwrap(), "kept");
+        let err = remove(&id, &[]).unwrap_err();
+        assert_eq!(err.to_string(), format!("{id} is not a followed project"));
     }
 
     #[test]

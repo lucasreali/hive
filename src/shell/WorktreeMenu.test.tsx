@@ -9,11 +9,13 @@ import {
   NO_SCRIPTS,
   openModal,
   type Project,
+  type Session,
   select,
   useHive,
 } from "../store";
 import { transport } from "../transport";
-import { MOCK_REPOS } from "../transport/mock";
+import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
+import { type EditBuffer, toText } from "../viewer/buffer";
 
 afterEach(() => {
   cleanup();
@@ -342,6 +344,7 @@ test("the project menu removes merged worktrees without changes, each with its r
   expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
     "New worktree… Ctrl+Shift+N",
     "Remove merged worktrees…",
+    "Remove project…",
   ]);
   fireEvent.keyDown(screen.getByRole("menu", { name: "Project" }), { key: "Escape" });
   expect(menu()).toBeNull();
@@ -395,4 +398,92 @@ test("with no merged worktree the dialog says so", () => {
   expect(
     (within(dialog).getByRole("button", { name: /^Remove/ }) as HTMLButtonElement).disabled,
   ).toBe(true);
+});
+
+test("removing a project asks first, Cancel does nothing, and its state goes with it", () => {
+  const remove = spyOn(transport, "removeProject").mockResolvedValue();
+  const [, api] = MOCK_REPOS;
+  const [apiMain] = api.worktrees;
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [shop, api] }));
+  const ask = () => {
+    fireEvent.contextMenu(row("shop"), { clientX: 10, clientY: 20 });
+    fireEvent.click(item("Remove project…"));
+    expect(menu()).toBeNull();
+    return screen.getByRole("dialog", { name: "Remove project?" });
+  };
+  const kept =
+    "Remove shop from Hive? Its files stay on disk: the repository and its worktrees are not deleted.";
+  expect(ask().textContent).toBe(`Remove project?${kept}CancelRemove`);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(remove).not.toHaveBeenCalled();
+  expect(Object.keys(useHive.getState().projects ?? {})).toEqual([shop.id, api.id]);
+
+  // Unsaved edits in one of its files are named; the service is asked once Remove is picked.
+  const tab = (worktree: string, path: string, edit: EditBuffer | null = null) => {
+    return { worktree, path, editing: false, edit, view: null };
+  };
+  const dirty: EditBuffer = {
+    worktree: login.id,
+    path: "a.ts",
+    doc: toText("edited"),
+    saved: toText("saved"),
+    version: "v",
+    conflict: null,
+    saving: null,
+    error: null,
+    recheck: 0,
+  };
+  const session = (id: string, project: string) => ({ ...MOCK_SESSIONS[0], id, project });
+  const [inShop, inApi] = [`file:${login.id}\na.ts`, `file:${apiMain.id}\nb.ts`];
+  act(() =>
+    useHive.setState({
+      openFiles: [tab(login.id, "a.ts", dirty), tab(apiMain.id, "b.ts")],
+      tabOrder: [inShop, "session:s1", inApi, "session:s2"],
+      agentOrder: ["s1", "s2"],
+      sessions: [session("s1", shop.id), session("s2", api.id)] as Session[],
+      selection: login.id,
+      collapsed: {
+        [shop.id]: true,
+        [`worktree:${login.id}`]: true,
+        [`files:${main.id}/src`]: false,
+        [`changes:${login.id}/src`]: false,
+        [api.id]: true,
+      },
+      comments: { [login.id]: [], [apiMain.id]: [] },
+      newFolders: { [main.id]: ["x"] },
+      worktreeFiles: { path: login.id, files: [], truncated: false },
+      searchResults: { worktree: main.id, query: "q", matches: [], truncated: false, error: null },
+    }),
+  );
+  const unsaved = " Unsaved changes in its open files will be lost.";
+  expect(ask().textContent).toContain(`${kept}${unsaved}`);
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  expect(remove.mock.calls).toEqual([[shop.id]]);
+
+  // A refusal shows in the status bar and changes nothing.
+  act(() => apply({ type: "remove_project_failed", id: shop.id, message: "in use by fish (1)" }));
+  expect(useHive.getState().notice).toBe("in use by fish (1)");
+  expect(useHive.getState().projects?.[shop.id]).toBeDefined();
+
+  act(() => apply({ type: "project_removed", id: shop.id }));
+  const s = useHive.getState();
+  expect(Object.keys(s.projects ?? {})).toEqual([api.id]);
+  expect(s.openFiles.map((f) => f.path)).toEqual(["b.ts"]);
+  expect(s.tabOrder).toEqual([inApi, "session:s2"]);
+  expect(s.agentOrder).toEqual(["s2"]);
+  expect(s.sessions?.map((x) => x.id)).toEqual(["s2"]);
+  expect(s.selection).toBeNull();
+  expect(s.collapsed).toEqual({ [api.id]: true });
+  expect(s.comments).toEqual({ [apiMain.id]: [] });
+  expect(s.newFolders).toEqual({});
+  expect([s.worktreeFiles, s.searchResults]).toEqual([null, null]);
+  expect(localStorage.getItem("hive.agentOrder")).toBe('["s2"]');
+  expect(screen.queryByRole("button", { name: /^shop/ })).toBeNull();
+  // One it no longer has changes nothing.
+  act(() => apply({ type: "project_removed", id: shop.id }));
+  expect(useHive.getState()).toEqual(s);
+  remove.mockRestore();
 });

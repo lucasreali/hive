@@ -582,6 +582,35 @@ impl State {
         self.to_app(0, &reply).await;
     }
 
+    /// Stops following the project `id` (9.28), unless a process of Hive's terminals (their
+    /// `sessions`) works in it; its settings and its worktrees' port blocks go with it.
+    async fn remove_project(&self, id: String, sessions: &HashSet<i32>) {
+        let removed = tokio::task::block_in_place(|| {
+            self.projects.remove(&id, procs::Source::System, sessions)
+        });
+        let worktrees = match removed {
+            Ok(worktrees) => worktrees,
+            Err(err) => {
+                let message = err.to_string();
+                return self
+                    .to_app(0, &Control::RemoveProjectFailed { id, message })
+                    .await;
+            }
+        };
+        self.to_app(0, &self.projects.spaces_message()).await;
+        let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
+            Ok(settings) => settings.map(|settings| Control::Settings { settings }),
+            Err(message) => Some(Control::SettingsFailed { message }),
+        };
+        if let Some(reply) = reply {
+            self.to_app(0, &reply).await;
+        }
+        if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
+            eprintln!("hive: warning: cannot free the ports of {id}: {err}");
+        }
+        self.to_app(0, &Control::ProjectRemoved { id }).await;
+    }
+
     /// Watches `path` for the files panel instead of the worktree watched until now, if any;
     /// its changes against `base`.
     async fn watch_worktree(self: &Arc<Self>, path: Option<(String, DiffBase)>) {
@@ -1341,6 +1370,13 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 };
                 state.to_app(0, &reply).await;
             });
+        }
+        Ok(Control::RemoveProject { id }) => {
+            let terminals = state.terminals.lock().await;
+            let sessions: HashSet<i32> = terminals.values().map(|t| t.session).collect();
+            drop(terminals);
+            let state = state.clone();
+            tokio::spawn(async move { state.remove_project(id, &sessions).await });
         }
         Ok(Control::CreateSpace { name, env }) => {
             state.change_spaces(|s| s.create(&name, env)).await
