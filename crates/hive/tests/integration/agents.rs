@@ -987,3 +987,89 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn terminals_echo_while_agents_are_being_placed() {
+    // Placing an agent holds the agents lock while git lists the projects; another agent
+    // starting meanwhile waits for that lock holding the terminals lock (the lock order).
+    // Neither may hold up a terminal's input or output (9.13).
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    let home = repo.env.path("home");
+    app.open_terminal(1, &home).await;
+    app.open_terminal(2, &home).await;
+    // From now on git reads the repository's config up to a pipe, and waits there for as
+    // long as the test holds the pipe open without writing to it (a hung network drive).
+    let pipe = repo.root.join(".git/hang");
+    nix::unistd::mkfifo(&pipe, nix::sys::stat::Mode::S_IRWXU).unwrap();
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.root.join(".git/config"))
+        .unwrap();
+    config.write_all(b"[include]\n\tpath = hang\n").unwrap();
+    let start = |terminal: &str| {
+        let mut child = repo
+            .env
+            .hive()
+            .args(["hook", "SessionStart"])
+            .env("HIVE_TERMINAL_ID", terminal)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let payload = json!({"session_id": format!("s{terminal}"), "cwd": root});
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(payload.to_string().as_bytes()).unwrap();
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+    };
+    start("1");
+    // Opening the pipe for writing succeeds once git, placing the first agent, reads it.
+    let mut hold = None;
+    crate::common::wait_until(|| {
+        use std::os::unix::fs::OpenOptionsExt;
+        let nonblock = nix::fcntl::OFlag::O_NONBLOCK.bits();
+        let opened = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(nonblock)
+            .open(&pipe);
+        hold = opened.ok();
+        hold.is_some()
+    });
+    start("2");
+    // The second `SessionStart` is being handled: it holds the terminals lock by now.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    app.input(1, "echo hive-(math 6 \\* 7)\r").await;
+    let mut seen = String::new();
+    while !seen.contains("hive-42") {
+        let frame = app.next().await.expect("connection closed");
+        if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == 1 {
+            seen.push_str(&String::from_utf8_lossy(&frame.payload));
+        } else if let Ok(message) = frame.to_control() {
+            assert!(
+                !matches!(message, Control::AgentDetected { .. }),
+                "placed before the echo: {message:?}"
+            );
+        }
+    }
+    // Git goes on (and the next one finds no pipe): both agents are placed.
+    std::fs::remove_file(&pipe).unwrap();
+    drop(hold);
+    let mut detected = Vec::new();
+    while detected.len() < 2 {
+        if let (channel, Control::AgentDetected { id, .. }) = app.control().await {
+            detected.push((channel, id));
+        }
+    }
+    detected.sort();
+    assert_eq!(detected, [(1, "s1".to_owned()), (2, "s2".to_owned())]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

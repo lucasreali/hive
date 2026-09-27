@@ -1,6 +1,8 @@
 use crate::common;
 
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
+use std::process::Stdio;
 
 use common::{Env, stop};
 use hive_protocol::{AgentEvent, Control, EventKind, PROTOCOL_VERSION, Role, Settings};
@@ -23,15 +25,41 @@ async fn socket_and_lockfile_are_private() {
 #[tokio::test]
 async fn only_one_daemon_runs_at_a_time() {
     let env = Env::new();
-    let daemon = env.daemon();
-    let second = env.hive().arg("daemon").output().unwrap();
-    assert!(!second.status.success());
-    let stderr = String::from_utf8_lossy(&second.stderr);
+    let start = || {
+        let mut daemon = env.hive();
+        daemon
+            .arg("daemon")
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped());
+        common::Daemon(daemon.spawn().unwrap())
+    };
+    // Two racing: the loser waits for the lock as long as a bridge would, then gives up.
+    let [mut first, mut second] = [start(), start()];
+    let mut first_lost = false;
+    common::wait_until(|| {
+        first_lost = first.0.try_wait().unwrap().is_some();
+        first_lost || second.0.try_wait().unwrap().is_some()
+    });
+    let (mut lost, mut won) = if first_lost {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    assert!(!lost.wait_exit().success());
+    let mut stderr = String::new();
+    lost.0
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
     assert!(
         stderr.ends_with("; is another hive daemon running?\n"),
         "{stderr}"
     );
-    stop(daemon);
+    assert!(won.0.try_wait().unwrap().is_none());
+    assert!(std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+    stop(won);
 }
 
 #[tokio::test]

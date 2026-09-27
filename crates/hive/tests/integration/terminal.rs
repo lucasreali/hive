@@ -15,7 +15,7 @@ fn pid_in(output: &str) -> Option<i32> {
     })
 }
 
-async fn printed_pid(app: &mut crate::common::Conn, channel: u32) -> i32 {
+pub async fn printed_pid(app: &mut crate::common::Conn, channel: u32) -> i32 {
     let mut seen = String::new();
     loop {
         seen.push_str(&app.output_until(channel, "\n").await);
@@ -23,6 +23,16 @@ async fn printed_pid(app: &mut crate::common::Conn, channel: u32) -> i32 {
             return pid;
         }
     }
+}
+
+/// PTYs the process `pid` has open.
+#[cfg(target_os = "linux")]
+fn ptys_open(pid: u32) -> usize {
+    std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .unwrap()
+        .filter_map(|fd| std::fs::read_link(fd.ok()?.path()).ok())
+        .filter(|target| target.ends_with("ptmx"))
+        .count()
 }
 
 fn gone(pid: i32) -> bool {
@@ -76,11 +86,16 @@ async fn shell_exit_is_reported_with_its_code() {
     let mut daemon = env.daemon();
     let mut app = env.connect(Role::App).await;
     app.open_terminal(2, &env.path("home")).await;
+    #[cfg(target_os = "linux")]
+    assert_eq!(ptys_open(daemon.0.id()), 1);
     app.input(2, "exit 3\r").await;
     assert_eq!(
         app.control().await,
         (2, Control::TerminalExited { code: Some(3) })
     );
+    // Its PTY is closed: nothing is left to write to it.
+    #[cfg(target_os = "linux")]
+    wait_until(|| ptys_open(daemon.0.id()) == 0);
     // The channel is free again.
     app.open_terminal(2, &env.path("home")).await;
     drop(app);
