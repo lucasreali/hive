@@ -397,7 +397,7 @@ const SYSTEM: &str = "macOS";
 /// app runs, installs or follows one. Every other extension is refused (9.8), among them
 /// scripts an installed interpreter may run (`.js`, `.py`, `.sh`, `.rb`, `.pl`, `.ps1`, `.lua`,
 /// `.jsx`), web pages and XML (a browser or an Office app), projects an IDE builds when it
-/// opens them (`.sln`, `.csproj`) and `.csv` (a spreadsheet).
+/// opens them (`.sln`, `.csproj`, `.gradle`, `.kts`) and `.csv` (a spreadsheet).
 // ponytail: a fixed list, not the user's file associations; add a text type when one is missing.
 const EDITOR_EXTENSIONS: &[&str] = &[
     "adoc",
@@ -423,7 +423,6 @@ const EDITOR_EXTENSIONS: &[&str] = &[
     "exs",
     "fs",
     "go",
-    "gradle",
     "graphql",
     "h",
     "hcl",
@@ -436,7 +435,6 @@ const EDITOR_EXTENSIONS: &[&str] = &[
     "jsonc",
     "jsonl",
     "kt",
-    "kts",
     "less",
     "lock",
     "log",
@@ -516,15 +514,31 @@ const EDITOR_NAMES: &[&str] = &[
     "vagrantfile",
 ];
 /// Folder extensions that macOS runs or installs as one item (bundles).
-const BUNDLES: &[&str] = &["app", "mpkg", "pkg", "prefpane", "saver", "workflow"];
+const BUNDLES: &[&str] = &[
+    "action", "app", "mpkg", "pkg", "prefpane", "saver", "workflow",
+];
+/// Extensions Windows tries first for a name without one: `README` runs `README.exe` beside it.
+const PROGRAM_EXTENSIONS: &[&str] = &["bat", "cmd", "com", "exe", "lnk", "pif"];
 
-/// Refuses a name Win32 changes (`evil.exe.` opens `evil.exe`) or cannot hold.
-fn plain_name(name: &str) -> io::Result<()> {
+/// Refuses a name Win32 changes (`evil.exe.` opens `evil.exe`) or cannot hold, and a name
+/// with a program beside it that Windows could run in its place.
+fn plain_name(real: &Path) -> io::Result<()> {
+    let name = real.file_name().unwrap_or_default().to_string_lossy();
     let odd = |c: char| c.is_control() || r#"<>:"|?*\"#.contains(c);
     if name.ends_with(['.', ' ']) || name.contains(odd) {
         return Err(io::Error::other(format!(
             r#"{name:?} could open another file on Windows: it ends in a dot or a space, or holds one of <>:"|?*\"#
         )));
+    }
+    let prefix = format!("{}.", name.to_ascii_lowercase());
+    for entry in fs::read_dir(real.parent().unwrap_or(real))? {
+        let other = entry?.file_name().to_string_lossy().to_ascii_lowercase();
+        let program = other.strip_prefix(&prefix);
+        if program.is_some_and(|e| PROGRAM_EXTENSIONS.contains(&e)) {
+            return Err(io::Error::other(format!(
+                "Windows could run {other} beside {name} instead of opening it"
+            )));
+        }
     }
     Ok(())
 }
@@ -535,22 +549,25 @@ fn plain_name(name: &str) -> io::Result<()> {
 pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<String> {
     if path.is_empty() {
         // The worktree's own folder, for the Windows Explorer or the Finder.
-        let name = dir.file_name().unwrap_or_default().to_string_lossy();
-        plain_name(&name)?;
-        let extension = dir.extension().unwrap_or_default().to_string_lossy();
-        if BUNDLES.contains(&extension.to_ascii_lowercase().as_str()) {
+        let real = dir.canonicalize()?;
+        plain_name(&real)?;
+        let extension = real.extension().unwrap_or_default().to_string_lossy();
+        if BUNDLES.contains(&extension.to_ascii_lowercase().as_str())
+            || real.join("Contents/Info.plist").exists()
+        {
             return Err(io::Error::other(format!(
-                "{SYSTEM} might run or install the folder {name}"
+                "{SYSTEM} might run or install the folder {}",
+                real.display()
             )));
         }
-        return windows(dir, wslpath);
+        return windows(&real, wslpath);
     }
     let Some(real) = resolve(dir, relative(path)?)? else {
         return Err(io::Error::other(format!("{path} does not exist")));
     };
     // The name the system sees: a symlink's target.
+    plain_name(&real)?;
     let name = real.file_name().unwrap_or_default().to_string_lossy();
-    plain_name(&name)?;
     let lower = name.to_ascii_lowercase();
     let named = EDITOR_NAMES.contains(&lower.as_str());
     let extension = lower.rsplit_once('.').map(|(_, extension)| extension);
@@ -952,7 +969,10 @@ mod tests {
             windows_path(dir.path(), path, OsStr::new("wslpath")).map_err(|e| e.to_string())
         };
         assert_eq!(at("a.ts"), Ok(real.display().to_string()));
-        assert_eq!(at(""), Ok(dir.path().display().to_string()));
+        assert_eq!(
+            at(""),
+            Ok(dir.path().canonicalize().unwrap().display().to_string())
+        );
         assert_eq!(at("nope"), Err("nope does not exist".to_owned()));
     }
 
@@ -1021,6 +1041,13 @@ mod tests {
             "a.rs ",
             "a.exe:b.rs",
             "a\tb.rs",
+            "a<b.rs",
+            "a>b.rs",
+            "a\"b.rs",
+            "a|b.rs",
+            "a?b.rs",
+            "a*b.rs",
+            "a\\b.rs",
         ] {
             let refused = format!(
                 "{name:?} could open another file on Windows: it ends in a dot or a space, or \
@@ -1041,6 +1068,20 @@ mod tests {
         std::fs::set_permissions(dir.path().join("a.rs"), fs::Permissions::from_mode(0o755))
             .unwrap();
         assert!(at("a.rs").is_ok());
+        // Windows tries `README.exe` (any case) before `README`.
+        std::fs::write(dir.path().join("README.Cmd"), "").unwrap();
+        let beside = "Windows could run readme.cmd beside README instead of opening it";
+        assert_eq!(at("README"), Err(beside.to_owned()));
+        std::fs::write(dir.path().join("LICENSE.txt"), "").unwrap();
+        assert!(at("LICENSE").is_ok());
+        // The name checked is the one the system opens: a symlink's target.
+        std::os::unix::fs::symlink("a.exe", dir.path().join("notes.md")).unwrap();
+        let run = format!(
+            "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
+             Makefile), not a.exe: {SYSTEM} might run it"
+        );
+        let notes = windows_path(dir.path(), "notes.md", OsStr::new("echo"));
+        assert_eq!(notes.map_err(|e| e.to_string()), Err(run));
     }
 
     #[test]
@@ -1052,8 +1093,20 @@ mod tests {
             windows_path(&folder, "", OsStr::new("echo")).map_err(|e| e.to_string())
         };
         assert!(at("shop.9.8-task").is_ok());
-        let bundle = format!("{SYSTEM} might run or install the folder Evil.APP");
-        assert_eq!(at("Evil.APP"), Err(bundle));
+        let real = dir.path().canonicalize().unwrap();
+        let bundle = |name: &str| {
+            let folder = real.join(name).display().to_string();
+            Err(format!("{SYSTEM} might run or install the folder {folder}"))
+        };
+        assert_eq!(at("Evil.APP"), bundle("Evil.APP"));
+        // A bundle with any extension holds an `Info.plist`.
+        std::fs::create_dir_all(dir.path().join("x.y/Contents")).unwrap();
+        std::fs::write(dir.path().join("x.y/Contents/Info.plist"), "").unwrap();
+        let folder = windows_path(&dir.path().join("x.y"), "", OsStr::new("echo"));
+        assert_eq!(folder.map_err(|e| e.to_string()), bundle("x.y"));
+        std::fs::write(dir.path().join("shop.exe"), "").unwrap();
+        let beside = "Windows could run shop.exe beside shop instead of opening it";
+        assert_eq!(at("shop"), Err(beside.to_owned()));
         let odd = "\"shop.\" could open another file on Windows: it ends in a dot or a space, \
                    or holds one of <>:\"|?*\\";
         assert_eq!(at("shop."), Err(odd.to_owned()));
