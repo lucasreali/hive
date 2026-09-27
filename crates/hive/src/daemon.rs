@@ -104,7 +104,7 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
-    let registry = tokio::spawn(watch_registry(state.clone()));
+    let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -865,10 +865,13 @@ async fn watch_files(state: Arc<State>, path: String) {
 }
 
 /// Watches git's worktree registry of the current space's projects (9.36): however a
-/// worktree is added or removed, the app gets the projects again, once per burst. Ends only
-/// when no watcher can be made (e.g. no inotify instance left).
-async fn watch_registry(state: Arc<State>) -> io::Result<()> {
-    let mut registry = Registry::new()?;
+/// worktree is added or removed, the app gets the projects again, once per burst.
+async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
+    let mut registry = match registry {
+        Ok(registry) => registry,
+        // E.g. no inotify instance left: the worktrees still follow hooks and the app.
+        Err(err) => return eprintln!("hive: warning: cannot watch git's worktrees: {err}"),
+    };
     let mut changed = false;
     loop {
         let roots = state.projects.roots();
@@ -1520,6 +1523,19 @@ mod tests {
             Ports::new(dir.join("ports.json")),
             restore,
         ))
+    }
+
+    #[tokio::test]
+    async fn without_a_watcher_the_registry_is_not_watched() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let failed = Err(io::Error::other("no inotify"));
+        // It ends instead of waiting for changes forever.
+        let ended = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            watch_registry(state, failed),
+        );
+        assert!(ended.await.is_ok());
     }
 
     #[test]
