@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
-import { type AgentState, apply, initialState, useHive } from "../store";
+import { type AgentState, addTab, apply, initialState, setChat, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
@@ -146,6 +146,33 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   const badge = screen.getByText("db");
   expect(badge.className).toBe("tab-badge label-badge");
   expect(badge.parentElement?.getAttribute("aria-current")).toBe("false");
+});
+
+test("a chat's tab, sidebar row and header show its session's name, New chat until it has one", () => {
+  render(<App />);
+  const fixLogin = shop.worktrees[1];
+  const at = { project: shop.id, worktree: fixLogin.id, cwd: fixLogin.path };
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    setChat(5, fixLogin.path);
+    addTab(5, fixLogin.path, "chat");
+    apply({ type: "agent_detected", channel: 5, id: "c", ...at });
+  });
+  const names = () => [
+    document.querySelector(".tab-name")?.textContent,
+    tree().querySelector(".tree-row.agent")?.textContent,
+    document.querySelector(".chat-view .chat-title")?.textContent,
+  ];
+  expect(names()).toEqual(["New chat", "idleNew chatidle", "New chat"]);
+  expect(document.querySelector(".chat-view .path")?.getAttribute("title")).toBe(fixLogin.path);
+  act(() => apply({ type: "agent_title", channel: 5, id: "c", title: "Fix the login" }));
+  expect(names()).toEqual(["Fix the login", "idleFix the loginidle", "Fix the login"]);
+  // Ended, the chat keeps its name; its row goes.
+  act(() => {
+    apply({ type: "agent_removed", channel: 5, id: "c" });
+    apply({ type: "chat_closed", channel: 5, chat: 5, error: null });
+  });
+  expect(names()).toEqual(["Fix the login", undefined, "Fix the login"]);
 });
 
 test("agents and their subagents show the state the service sent, named for screen readers", () => {

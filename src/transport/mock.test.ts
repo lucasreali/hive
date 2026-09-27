@@ -986,8 +986,15 @@ test("chats share the terminals' ids and play the scripted chat", async () => {
   expect(messages.at(-1)).toMatchObject({ type: "chat_status", mode: "plan" });
   await transport.chatSend(chat, "permission", []);
   await tick();
-  expect(messages.at(-2)).toMatchObject({ type: "chat_status", busy: true });
-  expect(messages.at(-1)).toMatchObject({ type: "chat_entries", entries: [{ kind: "user" }] });
+  expect(messages.at(-3)).toMatchObject({ type: "chat_status", busy: true });
+  expect(messages.at(-2)).toMatchObject({ type: "chat_entries", entries: [{ kind: "user" }] });
+  // The first prompt names the chat's session (8.11).
+  expect(messages.at(-1)).toEqual({
+    type: "agent_title",
+    channel: 2,
+    id: "mock-chat-2",
+    title: "permission",
+  });
   await transport.chatInterrupt(chat);
   await tick();
   expect(messages.at(-1)).toMatchObject({ type: "chat_status", busy: false });

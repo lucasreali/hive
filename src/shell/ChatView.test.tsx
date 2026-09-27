@@ -57,7 +57,7 @@ const state = () => document.querySelector(".chat-view .state-label")?.textConte
 test("a chat tab shows the chat in place of the terminals, from start to end", () => {
   const view = chatTab();
   expect((document.querySelector(".terminal-host") as HTMLElement).hidden).toBe(true);
-  expect(view.querySelector(".path")?.textContent).toBe("chat: /wstarting");
+  expect(view.querySelector(".path")?.textContent).toBe("New chatstarting");
   expect(screen.getByText("Starting Claude…")).toBeDefined();
   act(() => apply(opened));
   expect(state()).toBe("ready");
@@ -93,10 +93,10 @@ test("a chat tab shows the chat in place of the terminals, from start to end", (
   // The tab says so; closing an ended chat does not ask the service again.
   const close = spyOn(transport, "closeChat").mockResolvedValue();
   const tab = screen.getByRole("tab");
-  expect(tab.textContent).toBe("/wended");
+  expect(tab.textContent).toBe("New chatended");
   fireEvent.contextMenu(tab);
   expect(screen.queryByRole("menu")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Close chat /w" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close chat New chat" }));
   expect(close).not.toHaveBeenCalled();
   expect(screen.queryByRole("region", { name: "Chat" })).toBeNull();
 });

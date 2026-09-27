@@ -899,6 +899,13 @@ label:has(> input[type="checkbox"]:disabled) {
   align-items: baseline;
 }
 
+/* A chat's session name (8.11): cut with an ellipsis, its state stays beside it. */
+.chat-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The scroller and what floats over it when scrolled up (8.13). */
 .conversation {
   position: relative;

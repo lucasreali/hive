@@ -138,6 +138,21 @@ test("a turn plays the scripted entries, then ends idle with its usage", async (
   expect(take()).toEqual([]);
 });
 
+test("the first prompt names the session, then only a rename does", async () => {
+  const { chat, take } = await opened();
+  const titles = () =>
+    take().flatMap((m) => (m.type === "agent_title" ? [[m.channel, m.id, m.title]] : []));
+  chat.send(1, "Fix the login", []);
+  await settle();
+  expect(titles()).toEqual([[1, "mock-chat-1", "Fix the login"]]);
+  chat.send(1, "And the logout", []);
+  await settle();
+  expect(titles()).toEqual([]);
+  chat.send(1, "/rename Auth fixes", []);
+  await settle();
+  expect(titles()).toEqual([[1, "mock-chat-1", "Auth fixes"]]);
+});
+
 test("words in the turn add a subagent, Markdown, a compaction and an error", async () => {
   const { chat, take } = await opened();
   chat.send(1, "subagent compact error markdown", []);

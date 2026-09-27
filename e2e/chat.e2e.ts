@@ -18,15 +18,20 @@ test("chat: confirm the folder, send, entries arrive, a tool opens, Stop while b
 
   const chat = page.getByRole("region", { name: "Chat" });
   await expect(chat.getByText("Send a message to start.")).toBeVisible();
-  await expect(tabs.getByRole("tab", { name: "fix-login" })).toHaveAttribute(
+  // Unnamed until its first prompt (8.11).
+  await expect(tabs.getByRole("tab", { name: "New chat" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
+  await expect(chat.locator(".chat-title")).toHaveText("New chat");
   const input = chat.getByRole("textbox", { name: "Message" });
   await input.fill("list the files");
   await input.press("Shift+Enter");
   await input.press("Enter");
   await expect(input).toHaveValue("");
+  // The first prompt names it: its tab and its header agree.
+  await expect(tabs.getByRole("tab", { name: "list the files" })).toBeVisible();
+  await expect(chat.locator(".chat-title")).toHaveText("list the files");
   // While the turn runs, Send turns into Stop.
   await expect(chat.getByRole("button", { name: "Stop" })).toBeVisible();
   // Live text (7.3h): the reply shows as it grows (checked every frame: it lasts one step).
@@ -58,7 +63,11 @@ test("chat: confirm the folder, send, entries arrive, a tool opens, Stop while b
   await expect(chat.locator('[data-role="note"]')).toHaveText("Interrupted");
   await expect(chat.getByRole("button", { name: "Send" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Close chat fix-login" }).click();
+  // Renamed with `/rename`.
+  await input.fill("/rename File listing");
+  await input.press("Enter");
+  await expect(chat.locator(".chat-title")).toHaveText("File listing");
+  await page.getByRole("button", { name: "Close chat File listing" }).click();
   await expect(chat).toBeHidden();
   await expect(tabs.getByRole("tab")).toHaveCount(0);
 });

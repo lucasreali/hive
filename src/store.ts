@@ -414,6 +414,8 @@ export type Chat = {
   confirm: boolean;
   /** Set once `chat_closed` arrived; `error` holds claude's last words when it failed. */
   closed: { error: string | null } | null;
+  /** Its session's name (`agent_title`, 8.11), kept once the chat ended. */
+  title?: string;
 };
 /** Entries kept of a chat; older ones are dropped. */
 export const CHAT_LIMIT = 2000;
@@ -1108,8 +1110,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const shown = s.transcriptShown?.agent === m.id ? null : s.transcriptShown;
       return { agents, agentStates, agentTitles, agentUsage, pendingSeen, transcriptShown: shown };
     }
-    case "agent_title":
-      return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
+    case "agent_title": {
+      const agentTitles = { ...s.agentTitles, [m.id]: m.title };
+      // A chat's agent runs on the chat's channel.
+      if (!s.chats[m.channel]) return { agentTitles };
+      return { agentTitles, ...patchChat(s, m.channel, () => ({ title: m.title })) };
+    }
     case "agent_usage": {
       const { type: _, id, ...usage } = m;
       return { agentUsage: { ...s.agentUsage, [id]: usage } };

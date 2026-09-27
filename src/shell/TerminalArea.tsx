@@ -153,7 +153,8 @@ function TabItem(props: {
 
 /**
  * A terminal's (or a chat's) tab: the worktree's name, or, while a Claude agent runs in it, the
- * agent's state and its session's name (as in Orca). Tabs show only their worktree's, so no
+ * agent's state and its session's name (as in Orca). A chat shows its session's name, kept once
+ * it ended, and "New chat" until it has one (8.11). Tabs show only their worktree's, so no
  * project.
  */
 function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: Drag }) {
@@ -167,8 +168,11 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
   const agentState = useHive((s) => (agent ? (s.agentStates[agent]?.state ?? "idle") : null));
-  const title = useHive((s) => (agent ? s.agentTitles[agent] : undefined));
+  const title = useHive(
+    (s) => (agent ? s.agentTitles[agent] : undefined) ?? s.chats[tab.id]?.title,
+  );
   const chat = tab.kind === "chat";
+  const label = title ?? (chat ? "New chat" : name);
   const ended = useHive((s) => !!s.chats[tab.id]?.closed);
   return (
     <TabItem
@@ -186,12 +190,12 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
       }
       title={title ? `${title}\n${tab.cwd}` : tab.cwd}
       onShow={() => activateTab(tab)}
-      close={`Close ${chat ? "chat" : "terminal"} ${title ?? name}`}
+      close={`Close ${chat ? "chat" : "terminal"} ${label}`}
       onClose={() => (chat ? closeChat(tab.id) : closeTerminal(tab.id))}
     >
       {agentState ? <StateIcon state={agentState} /> : chat ? <ChatIcon /> : <TerminalIcon />}
       <span className="tab-name" data-agent={title ? true : undefined}>
-        {title ?? name}
+        {label}
       </span>
       {state?.badge && (
         <span className="tab-badge label-badge" title="Set with hive badge">

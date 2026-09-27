@@ -116,8 +116,8 @@ export function ChatView({ id }: { id: number }) {
     <section className="file-view transcript-view chat-view" aria-label="Chat">
       <div className="file-view-bar">
         <ChatIcon />
-        <span className="path">
-          chat: {chat.cwd}
+        <span className="path" title={chat.cwd}>
+          <span className="chat-title">{chat.title ?? "New chat"}</span>
           <span className="state-label" data-state={state}>
             {state}
           </span>

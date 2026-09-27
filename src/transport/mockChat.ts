@@ -89,6 +89,8 @@ type MockChat = {
   pending: string | null;
   /** Opened with `resume`: the history is sent first. */
   resumed: boolean;
+  /** Its session has a name (`agent_title`). */
+  titled: boolean;
 };
 
 /** The `markdown` word's reply: a heading, a table wider than the chat, a code block. */
@@ -114,7 +116,8 @@ export const MOCK_MARKDOWN = [
  * `subagent` adds an `Agent` call with its subagent's entries, `markdown` a reply with a heading,
  * a wide table and a code block (8.6), `compact` a divider, `error`
  * a retry and an error entry, `crash` closes the chat with an error. The first chat in each
- * folder asks `confirm_chat_folder`.
+ * folder asks `confirm_chat_folder`. The first prompt names the session, then `/rename <name>`
+ * does (8.11).
  */
 export function createMockChat(send: (message: ServiceMessage) => void, step = CHAT_STEP_MS) {
   const chats = new Map<number, MockChat>();
@@ -203,6 +206,11 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
     chat.busy = true;
     status(id, chat, {});
     entries(id, [entry(chat, "user", text, { images })]);
+    const renamed = /^\/rename\s+(.+)/.exec(text)?.[1];
+    if (!chat.titled || renamed) {
+      chat.titled = true;
+      send({ type: "agent_title", channel: id, id: chat.session, title: renamed ?? text });
+    }
     show([entry(chat, "thinking", "Let me look at the worktree first.")]);
     show([entry(chat, "assistant", "I'll list the files.")]);
     tool("Bash", "ls -la", "README.md\nsrc\n");
@@ -270,6 +278,7 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
         timers: [],
         pending: null,
         resumed: resume !== null,
+        titled: false,
       };
       if (confirmed.has(cwd)) return void later(() => opened(id, chat));
       waiting.set(id, chat);
