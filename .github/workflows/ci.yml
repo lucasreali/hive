@@ -35,6 +35,7 @@ jobs:
       - run: cargo check --workspace --locked
       - run: cargo deny check
       - run: cargo machete
+      - run: python3 .claude/hooks/test_guard.py
 
   coverage:
     runs-on: ubuntu-latest
