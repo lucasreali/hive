@@ -1591,6 +1591,14 @@ mod tests {
         std::fs::write(fresh.path().join("f"), "f").unwrap();
         let first = read(fresh.path(), "f", None).unwrap();
         assert_eq!(first, (bytes("f"), Side::Missing));
+        // Over the limit at the base too.
+        let big = "x".repeat(TEXT_LIMIT as usize + 1);
+        std::fs::write(root.join("big"), &big).unwrap();
+        run(root, &["add", "big"]);
+        run(root, &["commit", "-q", "-m", "big"]);
+        let over = read(root, "big", base).unwrap();
+        assert_eq!(over, (Side::TooLarge, Side::Missing));
+        assert_eq!(read(root, "big", None).unwrap().1, Side::TooLarge);
     }
 
     #[test]
