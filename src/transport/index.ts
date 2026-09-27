@@ -1,8 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type {
-  ChatAnswer,
-  ChatImage,
-  ChatMode,
   DiffBase,
   GhAccount,
   ServiceMessage,
@@ -156,40 +153,12 @@ export interface Transport {
   checkUpdate(): Promise<void>;
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */
   installUpdate(): Promise<void>;
-  /**
-   * Starts a chat (7.3) in the worktree `cwd` (resuming session `resume`, on `model`) and resolves with its
-   * id, a channel shared with terminals. Answered by `chat_opened` (maybe after
-   * `confirm_chat_folder`) or `chat_closed`; then `chat_entries`, `chat_request`, `chat_status`.
-   */
-  openChat(
-    cwd: string,
-    resume: string | null,
-    mode: ChatMode | null,
-    model: string | null,
-  ): Promise<number>;
-  /** A user turn. */
-  chatSend(chat: number, text: string, images: ChatImage[]): Promise<void>;
-  /** Answers the pending request `request` (its id); answered by `chat_request_gone`. */
-  chatAnswer(chat: number, request: string, answer: ChatAnswer): Promise<void>;
-  /** Stops the running turn. */
-  chatInterrupt(chat: number): Promise<void>;
-  /** Switches the permission mode; answered by `chat_status`. */
-  chatSetMode(chat: number, mode: ChatMode): Promise<void>;
-  /**
-   * Switches to the model `model` (a `value` of `ChatOpened.models`, 8.9); answered by
-   * `chat_status` once Claude takes it, or an `error` entry with Claude's refusal.
-   */
-  chatSetModel(chat: number, model: string): Promise<void>;
-  /** Ends the chat; answered by `chat_closed`. */
-  closeChat(chat: number): Promise<void>;
-  /** The human's answer to `confirm_chat_folder`. */
-  confirmChatFolder(chat: number, cwd: string, accepted: boolean): Promise<void>;
 }
 
 /**
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
- * `?mock=empty` starts it with no projects; `?mock=update` offers an update that fails; `?mock=deny-auto` refuses auto mode in chats; `?mock=states` adds agents in every state;
+ * `?mock=empty` starts it with no projects; `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
  * every terminal (the load test, 1.11).
  */

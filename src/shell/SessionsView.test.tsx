@@ -1,15 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
-import {
-  addTab,
-  apply,
-  initialState,
-  select,
-  setPanelView,
-  setRightPanel,
-  useHive,
-} from "../store";
+import { apply, initialState, select, setPanelView, setRightPanel, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
@@ -136,33 +128,6 @@ test("a click resumes a session; a running one shows its state and its terminal"
   expect(within(running).getByTitle("Show its terminal")).toBeDefined();
 });
 
-test("a session running in a Hive chat shows its chat", () => {
-  show(shop.id);
-  const { cwd } = checkout;
-  act(() => {
-    apply({ type: "sessions", sessions: [{ ...checkout, running: true }], error: null });
-    addTab(7, cwd, "chat");
-    apply({
-      type: "agent_detected",
-      channel: 7,
-      id: checkout.id,
-      project: null,
-      worktree: null,
-      cwd,
-    });
-    select(shop.id);
-  });
-  const row = list().querySelector(".session") as HTMLElement;
-  expect(row.dataset.live).toBe("true");
-  fireEvent.click(within(row).getByTitle("Show its chat"));
-  expect(useHive.getState().activeTab).toBe(7);
-  fireEvent.click(screen.getByRole("button", { name: `Actions for ${checkout.title}` }));
-  const shown = screen.getByRole("menuitem", { name: "Show Its Chat" }) as HTMLButtonElement;
-  expect(shown.disabled).toBe(false);
-  const remove = screen.getByRole("menuitem", { name: "Delete" }) as HTMLButtonElement;
-  expect([remove.disabled, remove.title]).toEqual([true, "End the session before deleting it"]);
-});
-
 test("⋯ and a right click open a session's menu of actions", async () => {
   const open = spyOn(transport, "openTerminal").mockResolvedValue(8);
   const write = spyOn(transport, "writeTerminal").mockResolvedValue();
@@ -183,7 +148,6 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   actions(name);
   expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
     "Resume in Worktree",
-    "Open as Chat",
     "Continue in New Session",
     "Copy Resume Command",
     "Open Log",
@@ -223,9 +187,6 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   act(() => select(shop.id));
   pick("Resume in Worktree", untitled.id);
   expect(open.mock.calls.at(-1)?.[0]).toBe(untitled.cwd);
-  const chat = spyOn(transport, "openChat").mockResolvedValue(9);
-  pick("Open as Chat", untitled.id);
-  expect(chat.mock.calls).toEqual([[untitled.cwd, untitled.id, null, null]]);
 
   // Running outside Hive: neither resumed nor deleted here; a new session from it is fine.
   act(() => select(shop.worktrees[1].id));
@@ -234,8 +195,6 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   expect([resumeItem.hasAttribute("disabled"), resumeItem.title]).toEqual([true, ""]);
   const removeItem = screen.getByRole("menuitem", { name: "Delete" }) as HTMLButtonElement;
   expect([removeItem.disabled, removeItem.title]).toEqual([true, ""]);
-  const chatItem = screen.getByRole("menuitem", { name: "Open as Chat" }) as HTMLButtonElement;
-  expect([chatItem.disabled, chatItem.title]).toEqual([true, ""]);
   const fork = screen.getByRole("menuitem", { name: "Continue in New Session" });
   expect(fork.hasAttribute("disabled")).toBe(false);
   fireEvent.keyDown(menu() as HTMLElement, { key: "Escape" });
@@ -259,8 +218,6 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   expect(screen.getByRole("menuitem", { name: "Show Its Terminal" })).toBeDefined();
   const remove = screen.getByRole("menuitem", { name: "Delete" }) as HTMLButtonElement;
   expect([remove.disabled, remove.title]).toEqual([true, "End the session before deleting it"]);
-  const asChat = screen.getByRole("menuitem", { name: "Open as Chat" }) as HTMLButtonElement;
-  expect(asChat.disabled).toBe(true);
   // The menu key has no pointer: under the row.
   fireEvent.keyDown(menu() as HTMLElement, { key: "Escape" });
   fireEvent.contextMenu(row, { clientX: 0, clientY: 0 });

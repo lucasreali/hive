@@ -35,16 +35,19 @@ pub fn save_open(file: &Path, open: &[OpenSession]) -> io::Result<()> {
 }
 
 /// The sessions `save_open` kept, once: the file is removed. Anything unreadable is dropped,
-/// and so is an entry whose id is not a session id (it is typed into a shell) or whose
-/// folder is not absolute.
+/// and so is an entry whose id is not a session id (it is typed into a shell), whose folder
+/// is not absolute, or that ran in one of the in-app chats Hive had (`"kind":"chat"`, 7.3,
+/// removed in 9.2).
 pub fn take_open(file: &Path) -> Vec<OpenSession> {
     let read = File::open(file).and_then(|f| crate::git::read_limited(&mut &f, OPEN_LIMIT));
     let _ = std::fs::remove_file(file);
-    let open: Vec<OpenSession> = read
+    let open: Vec<Value> = read
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
     open.into_iter()
+        .filter(|s| s.get("kind").and_then(Value::as_str) != Some("chat"))
+        .filter_map(|s| serde_json::from_value::<OpenSession>(s).ok())
         .filter(|s| valid_id(&s.id) && Path::new(&s.cwd).is_absolute())
         .collect()
 }
@@ -432,7 +435,7 @@ impl Sessions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hive_protocol::{SessionKind, Worktree};
+    use hive_protocol::Worktree;
 
     fn var<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into())
@@ -612,8 +615,7 @@ not json
         let root = tmp.path().join("projects");
         let folder = root.join(normalized("/r/x"));
         std::fs::create_dir_all(&folder).unwrap();
-        // A name wins over the first prompt, which names a session that has none (a chat's:
-        // Claude writes no `ai-title` for a stream-json session, 8.11).
+        // A name wins over the first prompt, which names a session that has none (8.11).
         std::fs::write(
             folder.join("s.jsonl"),
             "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}\n{\"type\":\"ai-title\",\"aiTitle\":\"Named\"}",
@@ -656,11 +658,6 @@ not json
         let open = |id: &str, cwd: &str| OpenSession {
             id: id.into(),
             cwd: cwd.into(),
-            kind: SessionKind::Terminal,
-        };
-        let chat = OpenSession {
-            kind: SessionKind::Chat,
-            ..open("c", "/r")
         };
         // Nothing ran: nothing is kept.
         save_open(&file, &[]).unwrap();
@@ -673,20 +670,21 @@ not json
                 open("a", "/r"),
                 open("x; rm", "/r"),
                 open("b", "rel"),
-                chat.clone(),
+                open("c", "/r"),
             ],
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         // Ids that are not session ids, and relative folders, are dropped.
-        assert_eq!(take_open(&file), vec![open("a", "/r"), chat]);
+        assert_eq!(take_open(&file), vec![open("a", "/r"), open("c", "/r")]);
         assert!(!file.exists());
         assert_eq!(take_open(&file), vec![]);
 
-        // A list kept before chats existed holds terminals.
-        std::fs::write(&file, r#"[{"id":"a","cwd":"/r"}]"#).unwrap();
-        assert_eq!(take_open(&file), vec![open("a", "/r")]);
+        // A list kept while Hive had chats (7.3, removed in 9.2): their sessions are dropped.
+        let old = r#"[{"id":"a","cwd":"/r","kind":"terminal"},{"id":"c","cwd":"/r","kind":"chat"},{"id":"b","cwd":"/r"}]"#;
+        std::fs::write(&file, old).unwrap();
+        assert_eq!(take_open(&file), vec![open("a", "/r"), open("b", "/r")]);
 
         // A long list (over a few KiB) is read back whole.
         let many: Vec<OpenSession> = (0..200).map(|i| open(&format!("s{i}"), "/r")).collect();

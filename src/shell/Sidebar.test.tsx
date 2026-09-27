@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
-import { type AgentState, addTab, apply, initialState, setChat, useHive } from "../store";
+import { type AgentState, apply, initialState, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
@@ -148,33 +148,6 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   expect(badge.parentElement?.getAttribute("aria-current")).toBe("false");
 });
 
-test("a chat's tab, sidebar row and header show its session's name, New chat until it has one", () => {
-  render(<App />);
-  const fixLogin = shop.worktrees[1];
-  const at = { project: shop.id, worktree: fixLogin.id, cwd: fixLogin.path };
-  act(() => {
-    apply({ type: "projects", projects: [shop] });
-    setChat(5, fixLogin.path);
-    addTab(5, fixLogin.path, "chat");
-    apply({ type: "agent_detected", channel: 5, id: "c", ...at });
-  });
-  const names = () => [
-    document.querySelector(".tab-name")?.textContent,
-    tree().querySelector(".tree-row.agent")?.textContent,
-    document.querySelector(".chat-view .chat-title")?.textContent,
-  ];
-  expect(names()).toEqual(["New chat", "idleNew chatidle", "New chat"]);
-  expect(document.querySelector(".chat-view .path")?.getAttribute("title")).toBe(fixLogin.path);
-  act(() => apply({ type: "agent_title", channel: 5, id: "c", title: "Fix the login" }));
-  expect(names()).toEqual(["Fix the login", "idleFix the loginidle", "Fix the login"]);
-  // Ended, the chat keeps its name; its row goes.
-  act(() => {
-    apply({ type: "agent_removed", channel: 5, id: "c" });
-    apply({ type: "chat_closed", channel: 5, chat: 5, error: null });
-  });
-  expect(names()).toEqual(["Fix the login", undefined, "Fix the login"]);
-});
-
 test("agents and their subagents show the state the service sent, named for screen readers", () => {
   render(<App />);
   const none = { activity: null, since_ms: 0 };
@@ -290,7 +263,7 @@ test("rows show the time in the state and the activity, all ticking on one timer
     const usage = { context_tokens: 84_400, context_limit: 200_000, output_tokens: 9 };
     act(() => apply({ type: "agent_usage", id: "s1", ...usage }));
     expect(ctx()).toEqual(["ctx 42%"]);
-    // The window the service sent (1M for Opus 5.5), rounded down as the chat's footer.
+    // The window the service sent (1M for Opus 5.5), rounded down.
     const long = { context_tokens: 52_900, context_limit: 1_000_000, output_tokens: 9 };
     act(() => apply({ type: "agent_usage", id: "s1", ...long }));
     expect(ctx()).toEqual(["ctx 5%"]);

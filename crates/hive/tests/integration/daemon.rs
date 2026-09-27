@@ -287,6 +287,52 @@ async fn settings_are_read_checked_and_saved_by_the_service() {
 }
 
 #[tokio::test]
+async fn diagnostics_find_a_claude_installed_after_none_was_found() {
+    let env = Env::new();
+    // Only this folder on the service's `PATH`, with no `claude` yet, and a slow shell of the
+    // test's own that prints it (`fish` on WSL, `$SHELL` on macOS).
+    let tools = env.path("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let shell = tools.join("fish");
+    std::fs::write(
+        &shell,
+        "#!/bin/sh\n/bin/sleep 1\nprintf '%s\\n' \"$PATH\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let child = env
+        .hive()
+        .env("PATH", &tools)
+        .env("SHELL", &shell)
+        .arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut daemon = common::Daemon(child);
+    common::wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+    let mut app = env.connect(Role::App).await;
+    let diagnostics = |claude: Option<String>| Control::Diagnostics {
+        settings_file: env.path("config/hive/settings.json").display().to_string(),
+        wrapper: env.path("data/hive/bin/claude").display().to_string(),
+        claude,
+    };
+    app.send(0, Control::GetDiagnostics).await;
+    assert_eq!(app.control().await, (0, diagnostics(None)));
+    // Asked again while the shell still runs: that one ask goes on.
+    app.send(0, Control::GetDiagnostics).await;
+    assert_eq!(app.control().await, (0, diagnostics(None)));
+    // Installed meanwhile: found on the `PATH` asked for again.
+    let claude = tools.join("claude");
+    std::fs::write(&claude, "").unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    app.send(0, Control::GetDiagnostics).await;
+    let found = diagnostics(Some(claude.display().to_string()));
+    assert_eq!(app.control().await, (0, found));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn the_settings_file_is_written_to_be_opened_and_diagnostics_name_it() {
     let env = Env::new();
     // A `wslpath` and a `claude` of the test's own, first on the service's `PATH`.

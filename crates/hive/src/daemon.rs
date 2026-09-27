@@ -15,8 +15,8 @@ use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AgentEvent, ChatMode, Control, DiffBase, EventKind, Frame, FrameCodec, FrameError, FrameType,
-    GhAccount, OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionKind, SessionTarget,
+    AgentEvent, Control, DiffBase, EventKind, Frame, FrameCodec, FrameError, FrameType, GhAccount,
+    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -28,7 +28,6 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
-use crate::chat::{self, Chat};
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
@@ -70,7 +69,6 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     };
     let state = State::new(
         paths.bin_dir(),
-        paths.hooks_settings(),
         projects,
         sessions,
         settings,
@@ -126,17 +124,7 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
         .values()
         .map(|t| t.session)
         .collect();
-    let chats: Vec<i32> = state
-        .chats
-        .lock()
-        .await
-        .values_mut()
-        .map(|chat| {
-            chat.close();
-            chat.group
-        })
-        .collect();
-    tokio::join!(terminal::end_sessions(&sessions), chat::end(chats));
+    terminal::end_sessions(&sessions).await;
     Ok(())
 }
 
@@ -145,11 +133,6 @@ struct State {
     app: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
-    /// Open chats (7.3) by channel; they share the terminals' channels. Locked after
-    /// `terminals` and before `confirming` and `agents` when several are needed.
-    chats: Mutex<HashMap<u32, Chat>>,
-    /// Chats waiting for the human to allow chats in their project (`confirm_chat_folder`).
-    confirming: Mutex<HashMap<u32, chat::Open>>,
     /// Detected agents by session id, with their terminal and state. Locked after `terminals`
     /// when both are needed.
     agents: Mutex<HashMap<String, Agent>>,
@@ -161,8 +144,6 @@ struct State {
     /// terminal channels start at 1.
     watched: AtomicU32,
     bin_dir: PathBuf,
-    /// The hooks settings the wrapper passes to `claude` (#21); chats pass them too.
-    hooks_settings: PathBuf,
     projects: Projects,
     /// Claude Code's session logs of the followed projects.
     sessions: Sessions,
@@ -171,9 +152,6 @@ struct State {
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
-    /// The context windows of the models the chats used, for the agents' `context_limit`.
-    /// Locked before `agents` when both are needed.
-    windows: Mutex<transcript::Windows>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for at start and again, in the
     /// background, while no `claude` is on it: the user's shell never holds up the frames.
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
@@ -192,7 +170,6 @@ struct Restore {
 impl State {
     fn new(
         bin_dir: PathBuf,
-        hooks_settings: PathBuf,
         projects: Projects,
         sessions: Sessions,
         settings: settings::Store,
@@ -202,21 +179,17 @@ impl State {
         Self {
             app: Mutex::new(None),
             terminals: Mutex::new(HashMap::new()),
-            chats: Mutex::new(HashMap::new()),
-            confirming: Mutex::new(HashMap::new()),
             agents: Mutex::new(HashMap::new()),
             watching: Mutex::new(None),
             transcript: Mutex::new(None),
             watched: AtomicU32::new(0),
             bin_dir,
-            hooks_settings,
             projects,
             sessions,
             settings,
             ports,
             restore,
             sent: Default::default(),
-            windows: Default::default(),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
         }
@@ -224,22 +197,23 @@ impl State {
 
     /// Asks for the user's `PATH` in the background, unless it is already being asked for.
     fn ask_user_path(self: &Arc<Self>) {
-        if !self.asking_path.swap(true, Ordering::SeqCst) {
-            let state = self.clone();
-            tokio::spawn(async move {
-                let var = std::env::var_os;
-                let (shell, timeout) = (wrapper::path_shell(), wrapper::SHELL_TIMEOUT);
-                let path = wrapper::user_path(shell, var("PATH"), var("HOME"), timeout).await;
-                state.user_path.send_replace(Some(path));
-                state.asking_path.store(false, Ordering::SeqCst);
-            });
+        if self.asking_path.swap(true, Ordering::SeqCst) {
+            return;
         }
+        let state = self.clone();
+        tokio::spawn(async move {
+            let var = std::env::var_os;
+            let (shell, timeout) = (wrapper::path_shell(), wrapper::SHELL_TIMEOUT);
+            let path = wrapper::user_path(shell, var("PATH"), var("HOME"), timeout).await;
+            // Done before the answer wakes anyone waiting for it.
+            state.asking_path.store(false, Ordering::SeqCst);
+            state.user_path.send_replace(Some(path));
+        });
     }
 
-    /// The real `claude` the user's terminals would run, and the user's `PATH` it was
-    /// looked for on (waits only for the first answer, at start). None found: the `PATH` is
-    /// asked for again, for the next time.
-    async fn user_claude(self: &Arc<Self>) -> (Option<PathBuf>, OsString) {
+    /// The real `claude` the user's terminals would run (waits only for the user's first
+    /// `PATH`, at start). None found: the `PATH` is asked for again, for the next time.
+    async fn user_claude(self: &Arc<Self>) -> Option<PathBuf> {
         let mut known = self.user_path.subscribe();
         let path = known.wait_for(Option::is_some).await.ok();
         let path = path.and_then(|path| path.clone()).unwrap_or_default();
@@ -247,7 +221,7 @@ impl State {
         if claude.is_none() {
             self.ask_user_path();
         }
-        (claude, path)
+        claude
     }
 
     fn sent(&self) -> std::sync::MutexGuard<'_, health::Sent> {
@@ -370,17 +344,11 @@ impl State {
     /// terminal's exit arriving while git runs waits and removes it afterwards.
     async fn detect(&self, channel: u32, event: &AgentEvent) {
         let mut terminals = self.terminals.lock().await;
-        let claude_dir = match terminals.get_mut(&channel) {
-            Some(terminal) => {
-                terminal.watch.hooked();
-                terminal.claude_dir.clone()
-            }
-            // A chat's `claude` (7.3), on a channel of its own.
-            None => match self.chats.lock().await.get(&channel) {
-                Some(chat) => chat.claude_dir.clone(),
-                None => return,
-            },
+        let Some(terminal) = terminals.get_mut(&channel) else {
+            return;
         };
+        terminal.watch.hooked();
+        let claude_dir = terminal.claude_dir.clone();
         let Some(id) = agent_id(event) else { return };
         let mut agents = self.agents.lock().await;
         // Other terminals keep working meanwhile.
@@ -428,27 +396,16 @@ impl State {
         self.to_app(agent.channel, &message).await;
     }
 
-    /// Keeps the sessions running in Hive's terminals and chats, in channel order, to resume
-    /// them when the app opens again.
+    /// Keeps the sessions running in Hive's terminals, in channel order, to resume them when
+    /// the app opens again.
     async fn save_open(&self) {
-        let chats: Vec<u32> = self.chats.lock().await.keys().copied().collect();
         let agents = self.agents.lock().await;
         let mut open: Vec<(u32, OpenSession)> = agents
             .iter()
             .filter_map(|(id, agent)| {
                 let cwd = agent.cwd.clone()?;
-                let kind = match chats.contains(&agent.channel) {
-                    true => SessionKind::Chat,
-                    false => SessionKind::Terminal,
-                };
-                Some((
-                    agent.channel,
-                    OpenSession {
-                        id: id.clone(),
-                        cwd,
-                        kind,
-                    },
-                ))
+                let id = id.clone();
+                Some((agent.channel, OpenSession { id, cwd }))
             })
             .collect();
         open.sort_by_key(|(channel, _)| *channel);
@@ -518,7 +475,6 @@ impl State {
             match terminals.entry(channel) {
                 _ if channel == 0 => Err("terminal channels start at 1".to_owned()),
                 Entry::Occupied(_) => Err(format!("terminal {channel} is already open")),
-                _ if self.chat_on(channel).await => Err(format!("chat {channel} is open")),
                 Entry::Vacant(slot) => {
                     terminal::spawn(channel, cwd, cols, rows, &self.bin_dir, &env).map(
                         |(mut terminal, pty, child)| {
@@ -722,219 +678,6 @@ impl State {
         }
     }
 
-    /// Whether a chat, open or waiting for its confirmation, has `channel`.
-    async fn chat_on(&self, channel: u32) -> bool {
-        self.chats.lock().await.contains_key(&channel)
-            || self.confirming.lock().await.contains_key(&channel)
-    }
-
-    /// `open_chat` (7.3): only in a worktree of an added project, and once the human allowed
-    /// chats in that project (asked with `confirm_chat_folder` the first time).
-    async fn open_chat(
-        self: &Arc<Self>,
-        channel: u32,
-        cwd: String,
-        resume: Option<String>,
-        mode: Option<ChatMode>,
-        model: Option<String>,
-    ) {
-        let taken = match channel {
-            0 => Some("chat channels start at 1".to_owned()),
-            _ if self.terminals.lock().await.contains_key(&channel) => {
-                Some(format!("terminal {channel} is open"))
-            }
-            _ if self.chat_on(channel).await => Some(format!("chat {channel} is already open")),
-            _ => None,
-        };
-        if let Some(message) = taken {
-            return self.to_app(channel, &Control::Error { message }).await;
-        }
-        let project = tokio::task::block_in_place(|| self.chat_project(&cwd, resume.is_some()));
-        let open = match project {
-            Some(project) => Ok(chat::Open {
-                cwd,
-                project,
-                resume,
-                mode: mode.unwrap_or(ChatMode::Default),
-                // Never passed unless it is a model name; claude then runs its own choice
-                // (e.g. an ended chat going on that ran a model id `--model` cannot take).
-                model: model.filter(|model| chat::is_model(model)),
-            }),
-            None => Err(not_a_chat_folder(&cwd)),
-        };
-        let open = open.and_then(|open| match open.resume.as_deref() {
-            Some(id) if !chat::is_session(id) => Err("not a session id to resume".to_owned()),
-            _ => Ok(open),
-        });
-        match open {
-            Err(error) => self.chat_closed(channel, Some(error)).await,
-            Ok(open) if self.settings.chat_confirmed(&open.project) => {
-                self.start_chat(channel, open).await
-            }
-            Ok(open) => {
-                let cwd = open.cwd.clone();
-                self.confirming.lock().await.insert(channel, open);
-                let ask = Control::ConfirmChatFolder {
-                    chat: channel,
-                    cwd,
-                    accepted: None,
-                };
-                self.to_app(channel, &ask).await;
-            }
-        }
-    }
-
-    /// The project a chat in `cwd` opens in: `cwd` must be one of its worktrees. A resumed
-    /// session may have run in a folder inside the worktree: `claude --resume` finds it only
-    /// from there. That folder must be real (no `..`, no link), so it stays in the worktree.
-    fn chat_project(&self, cwd: &str, resume: bool) -> Option<String> {
-        let real = std::fs::canonicalize(cwd).is_ok_and(|real| real == Path::new(cwd));
-        match projects::place(&self.projects.list(), cwd) {
-            Some((project, worktree)) if worktree == cwd || resume && real => Some(project),
-            _ => None,
-        }
-    }
-
-    /// The human's answer to `confirm_chat_folder`: allowed chats in the project are
-    /// remembered in the settings, which the app gets again.
-    async fn confirm_chat(self: &Arc<Self>, channel: u32, cwd: String, accepted: Option<bool>) {
-        let open = match self.confirming.lock().await.entry(channel) {
-            Entry::Occupied(waiting) if waiting.get().cwd == cwd => Some(waiting.remove()),
-            _ => None,
-        };
-        let Some(open) = open else {
-            let message = "no chat waits for this folder".to_owned();
-            return self.to_app(channel, &Control::Error { message }).await;
-        };
-        if accepted != Some(true) {
-            return self.chat_closed(channel, None).await;
-        }
-        let saved = tokio::task::block_in_place(|| self.settings.confirm_chat(&open.project));
-        match saved {
-            Ok(settings) => {
-                self.to_app(0, &Control::Settings { settings }).await;
-                self.start_chat(channel, open).await;
-            }
-            Err(error) => self.chat_closed(channel, Some(error)).await,
-        }
-    }
-
-    /// Starts the chat's `claude` with a terminal's environment in its worktree (its space's
-    /// and its worktree's `HIVE_*`), found as the wrapper finds it.
-    async fn start_chat(self: &Arc<Self>, channel: u32, open: chat::Open) {
-        let cwd = &open.cwd;
-        // Checked again: the folder may have changed (e.g. into a link) while the human
-        // confirmed it.
-        let resume = open.resume.is_some();
-        let project = tokio::task::block_in_place(|| self.chat_project(cwd, resume));
-        if project.as_ref() != Some(&open.project) {
-            return self
-                .chat_closed(channel, Some(not_a_chat_folder(cwd)))
-                .await;
-        }
-        let space = tokio::task::block_in_place(|| self.projects.space_env(cwd));
-        let (mut env, claude_dir) = (crate::spaces::vars(&space), space.claude_config_dir);
-        env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
-        let (claude, path) = self.user_claude().await;
-        // Its tools need the user's programs; a space's own `PATH` still wins.
-        env.insert(0, ("PATH", path.to_string_lossy().into_owned()));
-        let started = claude.ok_or_else(|| "no claude found on PATH".to_owned());
-        let started = started.and_then(|claude| {
-            let (model, resume) = (open.model.as_deref(), open.resume.as_deref());
-            let args = chat::args(&self.hooks_settings, open.mode, model, resume);
-            let (model, resume) = (open.model.clone(), open.resume.clone());
-            let stream = chat::Stream::new(channel, cwd.clone(), open.mode, model, resume);
-            let started = Chat::start(stream, &claude, &args, cwd, &env);
-            started.map_err(|err| format!("cannot start claude in {cwd}: {err}"))
-        });
-        match started {
-            Ok((mut chat, pipes)) => {
-                if let Some(session) = &open.resume {
-                    let sessions = self.sessions.at(claude_dir.as_deref());
-                    let out = tokio::task::block_in_place(|| history(&sessions, session, cwd));
-                    self.chat_out(channel, chat.stream.history(&out.0, out.1))
-                        .await;
-                }
-                chat.claude_dir = claude_dir;
-                self.chats.lock().await.insert(channel, chat);
-                tokio::spawn(chat_pump(self.clone(), channel, pipes));
-            }
-            Err(error) => self.chat_closed(channel, Some(error)).await,
-        }
-    }
-
-    async fn chat_closed(&self, channel: u32, error: Option<String>) {
-        let closed = Control::ChatClosed {
-            chat: channel,
-            error,
-        };
-        self.to_app(channel, &closed).await;
-    }
-
-    /// Acts on the chat on `channel`.
-    async fn chat(&self, channel: u32, act: impl FnOnce(&mut Chat) -> chat::Out) {
-        // Sent under the lock, so its messages come before the chat's `chat_closed`.
-        let mut chats = self.chats.lock().await;
-        let out = chats.get_mut(&channel).map(|chat| {
-            let out = act(chat);
-            chat.run(out)
-        });
-        match out {
-            Some(out) => self.chat_out(channel, out).await,
-            None => {
-                let message = format!("no chat is open on channel {channel}");
-                self.to_app(channel, &Control::Error { message }).await;
-            }
-        }
-    }
-
-    /// Sends what a chat has for the app; the end of a turn updates its agent's state and
-    /// context window (read again on the next tick).
-    async fn chat_out(&self, channel: u32, out: chat::Out) {
-        for message in &out.app {
-            self.to_app(channel, message).await;
-        }
-        let mut windows = self.windows.lock().await;
-        for (model, window) in &out.windows {
-            windows.learn(model, *window);
-        }
-        drop(windows);
-        if let Some(window) = out.window {
-            let mut agents = self.agents.lock().await;
-            for agent in agents.values_mut().filter(|a| a.channel == channel) {
-                agent.usage.window = Some(window);
-                agent.usage.due = true;
-            }
-        }
-        if let Some(event) = &out.turn {
-            self.saw(event).await;
-        }
-        // A chat's session gets no name from Claude (8.11): its first prompt names it as soon
-        // as Claude took it, before the turn ends.
-        if out.prompted {
-            let mut agents = self.agents.lock().await;
-            if let Some((id, agent)) = agents.iter_mut().find(|(_, a)| a.channel == channel) {
-                let id = id.clone();
-                self.retitle(&id, agent).await;
-            }
-        }
-    }
-
-    /// `close_chat`: closes claude's stdin, then signals it until it ends ([`chat::stop`]);
-    /// its exit is reported by [`chat_pump`]. A chat still waiting for its confirmation just
-    /// closes.
-    async fn close_chat(&self, channel: u32) {
-        if self.confirming.lock().await.remove(&channel).is_some() {
-            return self.chat_closed(channel, None).await;
-        }
-        let mut chats = self.chats.lock().await;
-        if let Some(chat) = chats.get_mut(&channel)
-            && chat.close()
-        {
-            tokio::spawn(chat::stop(chat.group, chat::GRACE));
-        }
-    }
-
     /// Ends the terminal's processes; its exit is reported by [`pump`].
     async fn close(&self, channel: u32) {
         if let Some(terminal) = self.terminals.lock().await.get(&channel) {
@@ -945,15 +688,6 @@ impl State {
 }
 
 /// The agent an event belongs to: its session id; `None` for subagent events.
-/// A resumed chat's history: the tail of session `id`'s log in the folder Claude keeps for
-/// `cwd`, inside Claude's projects folder, and whether its start was left out. Nothing when
-/// the log is not found or cannot be read.
-fn history(sessions: &Sessions, id: &str, cwd: &str) -> (Vec<u8>, bool) {
-    let log = sessions.root().zip(sessions.log(id, cwd));
-    log.and_then(|(root, log)| transcript::tail(root, &log).ok())
-        .unwrap_or_default()
-}
-
 fn agent_id(event: &AgentEvent) -> Option<String> {
     match event.subagent {
         None => event.session_id.clone(),
@@ -988,7 +722,6 @@ async fn watch_terminals(state: Arc<State>) {
         }
         // Not under the terminals lock: placing a new agent holds the agents lock while git runs.
         let silence = state.settings.silence();
-        let windows = state.windows.lock().await;
         for (id, agent) in state.agents.lock().await.iter_mut() {
             let output = last_output.get(&agent.channel);
             agent.watched = state.watches(agent.channel);
@@ -1010,7 +743,7 @@ async fn watch_terminals(state: Arc<State>) {
             };
             // A bounded read (see `transcript::Usage`), off the other tasks' threads.
             let usage = &mut agent.usage;
-            let read = || usage.read(id, root, path, &windows);
+            let read = || usage.read(id, root, path);
             if let Some(message) = tokio::task::block_in_place(read) {
                 state.to_app(agent.channel, &message).await;
             }
@@ -1109,83 +842,9 @@ async fn pump(
         .await;
 }
 
-/// Reads a chat's stdout lines (`None`: one too long, skipped) until it closes.
-async fn chat_lines(stdout: tokio::process::ChildStdout, lines: mpsc::Sender<Option<Vec<u8>>>) {
-    let mut stdout = tokio::io::BufReader::new(stdout);
-    let mut buf = Vec::new();
-    while let Ok(Some(whole)) = chat::next_line(&mut stdout, &mut buf, chat::MAX_LINE).await {
-        // The pump reads until this ends: it never goes first.
-        let _ = lines.send(whole.then(|| buf.clone())).await;
-    }
-}
-
-/// Turns a chat's stdout into messages until it closes, sending its live text when due
-/// ([`chat::Stream::flush`]), then reports its exit.
 /// [`projects::held`] for a folder about to be renamed or moved, with this machine's processes.
 fn held(projects: &Projects) -> impl Fn(&Path) -> io::Result<()> {
     move |folder| projects::held(&projects.list(), folder, procs::Source::System)
-}
-
-fn not_a_chat_folder(cwd: &str) -> String {
-    format!("{cwd} is not a worktree of an added project: chats open only there")
-}
-
-async fn chat_pump(state: Arc<State>, channel: u32, pipes: chat::Pipes) {
-    let chat::Pipes {
-        mut child,
-        stdout,
-        stderr,
-    } = pipes;
-    let stderr = tokio::spawn(chat::tail(stderr));
-    let (sender, mut lines) = mpsc::channel(1);
-    tokio::spawn(chat_lines(stdout, sender));
-    loop {
-        let due = {
-            let chats = state.chats.lock().await;
-            let chat = chats.get(&channel);
-            chat.and_then(|chat| chat.stream.due(std::time::Instant::now()))
-        };
-        let timer = async {
-            match due {
-                Some(due) => tokio::time::sleep_until(due.into()).await,
-                None => std::future::pending().await,
-            }
-        };
-        // Live text is flushed after every line too; the timer sends what is left when claude pauses.
-        let line = tokio::select! {
-            biased;
-            () = timer => None,
-            line = lines.recv() => match line {
-                Some(line) => Some(line),
-                None => break,
-            },
-        };
-        let mut chats = state.chats.lock().await;
-        let out = chats.get_mut(&channel).map(|chat| {
-            let mut out = match &line {
-                Some(line) => chat.stream.line(line.as_deref()),
-                None => chat::Out::default(),
-            };
-            out.app
-                .extend(chat.stream.flush(std::time::Instant::now()).app);
-            chat.run(out)
-        });
-        state.chat_out(channel, out.unwrap_or_default()).await;
-        drop(chats);
-    }
-    let status = child.wait().await.ok();
-    let stderr = stderr.await.unwrap_or_default();
-    let closing = {
-        let mut chats = state.chats.lock().await;
-        let closed = chats.remove(&channel);
-        let mut agents = state.agents.lock().await;
-        for (id, _) in agents.extract_if(|_, a| a.channel == channel) {
-            state.to_app(channel, &Control::AgentRemoved { id }).await;
-        }
-        closed.is_some_and(|chat| chat.closing)
-    };
-    let error = chat::ended(status, closing, &stderr);
-    state.chat_closed(channel, error).await;
 }
 
 async fn connection(stream: UnixStream, state: Arc<State>, app_gone: mpsc::Sender<()>) {
@@ -1375,7 +1034,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.to_app(0, &target).await;
         }
         Ok(Control::GetDiagnostics) => {
-            let (claude, _) = state.user_claude().await;
+            let claude = state.user_claude().await;
             let diagnostics = Control::Diagnostics {
                 settings_file: state.settings.file().display().to_string(),
                 wrapper: state.bin_dir.join("claude").display().to_string(),
@@ -1508,7 +1167,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.projects(move |projects| changes::answer(&projects.list(), path, base))
         }
         Ok(Control::ListSessions) => {
-            // Hive's terminals and chats: their hooks name their sessions.
+            // Hive's terminals: their hooks name their sessions.
             let mut running: HashSet<String> = state.agents.lock().await.keys().cloned().collect();
             state.sessions(move |projects, sessions| {
                 // Claude keeps a record of each running `claude` beside its projects folder.
@@ -1700,42 +1359,6 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 windows_path: located.ok(),
             }
         }),
-        // The chat (7.3): its channel is its id.
-        Ok(Control::OpenChat {
-            cwd,
-            resume,
-            mode,
-            model,
-        }) => state.open_chat(channel, cwd, resume, mode, model).await,
-        Ok(Control::ConfirmChatFolder { cwd, accepted, .. }) => {
-            state.confirm_chat(channel, cwd, accepted).await
-        }
-        Ok(Control::ChatSend { text, images, .. }) => {
-            state
-                .chat(channel, |chat| chat.stream.send(&text, &images))
-                .await
-        }
-        Ok(Control::ChatInterrupt { .. }) => {
-            state.chat(channel, |chat| chat.stream.interrupt()).await
-        }
-        Ok(Control::ChatSetMode { mode, .. }) => {
-            state.chat(channel, |chat| chat.stream.set_mode(mode)).await
-        }
-        Ok(Control::ChatSetModel { model, .. }) => {
-            // A copy: the chat's output locks the windows again.
-            let windows = state.windows.lock().await.clone();
-            let set = |chat: &mut Chat| chat.stream.set_model(&model, &windows);
-            state.chat(channel, set).await
-        }
-        Ok(Control::CloseChat { .. }) => state.close_chat(channel).await,
-        // Only a request pending on this channel's chat can be answered.
-        Ok(Control::ChatAnswer {
-            request, answer, ..
-        }) => {
-            state
-                .chat(channel, |chat| chat.stream.answer(&request, &answer))
-                .await
-        }
         _ => {
             let message = "unexpected message from the app".to_owned();
             state.to_app(channel, &Control::Error { message }).await;
@@ -1811,7 +1434,6 @@ mod tests {
         let projects = Projects::load(dir.join("spaces.json"), &dir.join("projects.json"));
         Arc::new(State::new(
             dir.into(),
-            dir.join("hive-hooks.json"),
             projects,
             Sessions::new(None),
             settings::Store::load(dir.join("settings.json")),
@@ -1820,33 +1442,15 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn a_chats_result_sets_its_agents_window_and_teaches_the_others() {
+    #[test]
+    fn a_path_ask_already_running_is_not_started_again() {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path());
-        *state.agents.lock().await = HashMap::from([
-            ("chat".to_owned(), Agent::new(4, Instant::now(), 0)),
-            ("terminal".to_owned(), Agent::new(5, Instant::now(), 0)),
-        ]);
-        let out = chat::Out {
-            windows: vec![("claude-sonnet-4-6".into(), 700_000)],
-            window: Some(300_000),
-            ..chat::Out::default()
-        };
-        state.chat_out(4, out).await;
-        let windows = state.windows.lock().await;
-        assert_eq!(windows.of("claude-sonnet-4-6"), Some(700_000));
-        let agents = state.agents.lock().await;
-        let (chat, terminal) = (&agents["chat"].usage, &agents["terminal"].usage);
-        assert_eq!((chat.window, chat.due), (Some(300_000), true));
-        assert_eq!((terminal.window, terminal.due), (None, false));
-        drop((windows, agents));
-        // A result without a window leaves the agent's as it was.
-        state.chat_out(4, chat::Out::default()).await;
-        assert_eq!(
-            state.agents.lock().await["chat"].usage.window,
-            Some(300_000)
-        );
+        state.asking_path.store(true, Ordering::SeqCst);
+        // Without a runtime, starting another ask would panic.
+        state.ask_user_path();
+        assert!(state.asking_path.load(Ordering::SeqCst));
+        assert_eq!(*state.user_path.borrow(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1921,8 +1525,7 @@ mod tests {
             context_limit: 200_000,
             output_tokens: 2,
         };
-        let windows = Default::default();
-        let read = named.usage.read("s", dir.path(), &log, &windows);
+        let read = named.usage.read("s", dir.path(), &log);
         assert_eq!(read, Some(usage.clone()));
         let state = test_state(dir.path());
         *state.agents.lock().await = HashMap::from([

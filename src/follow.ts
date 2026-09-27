@@ -4,17 +4,15 @@ import { diffBase, type HiveState, panelWorktree, useHive } from "./store";
 import type { Transport } from "./transport";
 
 /**
- * Keeps the service watching the worktree the right panel shows (`panelWorktree`), or the one
- * whose files a chat's `@` list offers while it shows (8.12): one at a time, none while neither
- * shows. A new connection starts with no watch, so it is sent again. Returns the unsubscribe.
+ * Keeps the service watching the worktree the right panel shows (`panelWorktree`), none while it
+ * is closed. A new connection starts with no watch, so it is sent again. Returns the unsubscribe.
  */
 export function followPanel(transport: Transport): () => void {
   let watched: string | null = null;
   const sync = (s: HiveState) => {
     const connected = s.connection.status === "connected";
     const open = connected && s.rightPanel === "files";
-    const panel = open ? (panelWorktree(s)?.worktree.path ?? null) : null;
-    const shown = connected ? (s.mentioning ?? panel) : null;
+    const shown = open ? (panelWorktree(s)?.worktree.path ?? null) : null;
     // A new base is watched anew: the service lists its changes against it.
     const base = shown && diffBase(s, shown);
     const key = shown && `${base}:${shown}`;

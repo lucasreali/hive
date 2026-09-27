@@ -65,7 +65,7 @@ const COMPONENTS: Components = {
 /**
  * Claude's text as Markdown (8.6, spike Q5): GFM (tables, strikethrough, task lists), no raw
  * HTML (react-markdown shows it as text without `rehype-raw`), links filtered by `safeUrl`.
- * Memoized on the text: while a live entry grows (7.3h) only it is parsed again.
+ * Memoized on the text: as a conversation grows, only its new entries are parsed.
  */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
