@@ -420,6 +420,8 @@ test("chat: the draft and its caret come back after another tab was shown", asyn
   const plus = page.getByTitle("New terminal, agent or file");
   await plus.click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
+  // Enter before the folder dialog shows would leave it open over the composer.
+  await expect(page.getByRole("dialog", { name: "Chat in this folder?" })).toBeVisible();
   await page.keyboard.press("Enter");
   const input = page
     .getByRole("region", { name: "Chat" })
