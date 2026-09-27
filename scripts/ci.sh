@@ -63,7 +63,8 @@ case "${1:-}" in
     # Minutes: the run's wall-clock, then each job's start (from the run's) and duration.
     gh run view "${2:?run id}" --json createdAt,updatedAt,jobs -q '(.createdAt | fromdate) as $t0
       | "run \(((.updatedAt | fromdate) - $t0) / 60 | floor)min",
-        (.jobs[] | "\(.databaseId) \(.conclusion) +\(((.startedAt | fromdate) - $t0) / 60 | floor) \(((.completedAt | fromdate) - (.startedAt | fromdate)) / 60 | floor)min \(.name)")'
+        (.jobs[] | if .status != "completed" then "\(.databaseId) \(.status) \(.name)" else
+          "\(.databaseId) \(.conclusion) +\(((.startedAt | fromdate) - $t0) / 60 | floor) \(((.completedAt | fromdate) - (.startedAt | fromdate)) / 60 | floor)min \(.name)" end)'
     ;;
   log) gh api "repos/{owner}/{repo}/actions/jobs/${2:?job id}/logs" ;;
   survivors)
