@@ -16,6 +16,7 @@ import { openModal, type ProjectScripts, type Settings, scriptsOf, useHive } fro
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
+import { openSettingsFile } from "../viewer/external";
 import { keyText } from "../window";
 import { CloseIcon, ICON } from "./icons";
 
@@ -672,11 +673,7 @@ export function SettingsDialog() {
         </div>
       </div>
       <footer>
-        <button
-          type="button"
-          className="secondary settings-file"
-          onClick={() => void transport.openSettingsFile()}
-        >
+        <button type="button" className="secondary settings-file" onClick={openSettingsFile}>
           Open settings file
         </button>
         <button type="button" className="secondary" onClick={close}>

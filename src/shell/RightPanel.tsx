@@ -43,6 +43,7 @@ import { transport } from "../transport";
 import { isDirty } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
+import { openInEditor } from "../viewer/external";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
 import { isMac, keyText } from "../window";
@@ -888,7 +889,7 @@ export function FileView({ worktree }: { worktree: string }) {
           className="ghost"
           aria-label="Open in external editor"
           title={`Open in external editor (the ${isMac() ? "" : "Windows "}default app for the file)`}
-          onClick={() => void transport.openInEditor(worktree, openFile.path)}
+          onClick={() => openInEditor(worktree, openFile.path)}
         >
           <ExternalIcon />
         </button>

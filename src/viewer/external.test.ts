@@ -1,8 +1,50 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { asMac } from "../../test/mac";
 import { initialState, setOpenFile, useHive } from "../store";
-import { openExternal, openFolder } from "./external";
+import { transport } from "../transport";
+import { openExternal, openFolder, openInEditor, openSettingsFile, openTarget } from "./external";
+
+afterEach(() => mock.restore());
+
+test("an editor_target the app did not ask for opens nothing", async () => {
+  const calls: string[] = [];
+  mockIPC((cmd) => {
+    calls.push(cmd);
+  });
+  // A worktree no test asks for: what the app asked for is remembered across test files.
+  const worktree = "/never-asked";
+  setOpenFile({ worktree, path: "a.ts" });
+  await openTarget({ ...target("/tmp/evil.command", null, ""), worktree }, true);
+  await openTarget({ ...target(unc), worktree }, true);
+  expect([calls, useHive.getState().notice, notice()]).toEqual([[], null, null]);
+});
+
+test("a requested editor_target opens once", async () => {
+  const ask = spyOn(transport, "openInEditor").mockResolvedValue();
+  const askSettings = spyOn(transport, "openSettingsFile").mockResolvedValue();
+  const opened: unknown[] = [];
+  mockIPC((_, args) => {
+    opened.push(args);
+  });
+  setOpenFile({ worktree: "/w", path: "a.ts" });
+  openInEditor("/w", "a.ts");
+  openInEditor("/w", "");
+  openSettingsFile();
+  expect(ask.mock.calls).toEqual([
+    ["/w", "a.ts"],
+    ["/w", ""],
+  ]);
+  expect(askSettings).toHaveBeenCalledTimes(1);
+  const folder = "\\\\wsl.localhost\\Ubuntu\\w\\";
+  const settings = "\\\\wsl.localhost\\Ubuntu\\home\\you\\.config\\hive\\settings.json";
+  for (let i = 0; i < 2; i++) {
+    await openTarget(target(unc), true);
+    await openTarget(target(folder, null, ""), true);
+    await openTarget({ ...target(settings, null, ""), worktree: "" }, true);
+  }
+  expect(opened).toEqual([{ path: unc }, { path: folder }, { path: settings }]);
+});
 
 afterEach(() => {
   clearMocks();

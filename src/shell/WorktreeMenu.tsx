@@ -29,6 +29,7 @@ import {
 } from "../store";
 import { openTerminal, openWith } from "../terminals";
 import { transport } from "../transport";
+import { openInEditor } from "../viewer/external";
 import { isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { CloseIcon, ICON } from "./icons";
@@ -147,11 +148,7 @@ export function WorktreeMenu() {
         <CopyIcon {...ICON} />
         Copy path
       </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={act(() => void transport.openInEditor(w.path, ""))}
-      >
+      <button type="button" role="menuitem" onClick={act(() => openInEditor(w.path, ""))}>
         <FolderOpenIcon {...ICON} />
         {isMac() ? "Reveal in Finder" : "Open in Explorer"}
       </button>
