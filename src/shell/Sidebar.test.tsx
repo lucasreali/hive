@@ -263,6 +263,12 @@ test("rows show the time in the state and the activity, all ticking on one timer
     const usage = { context_tokens: 84_400, context_limit: 200_000, output_tokens: 9 };
     act(() => apply({ type: "agent_usage", id: "s1", ...usage }));
     expect(ctx()).toEqual(["ctx 42%"]);
+    // The window the service sent (1M for Opus 5.5), rounded down as the chat's footer.
+    const long = { context_tokens: 52_900, context_limit: 1_000_000, output_tokens: 9 };
+    act(() => apply({ type: "agent_usage", id: "s1", ...long }));
+    expect(ctx()).toEqual(["ctx 5%"]);
+    act(() => apply({ type: "agent_usage", id: "s1", ...long, context_tokens: 105_900 }));
+    expect(ctx()).toEqual(["ctx 10%"]);
     // The last row gone, the timer stops.
     expect(stops).not.toHaveBeenCalled();
     cleanup();

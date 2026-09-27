@@ -171,6 +171,9 @@ struct State {
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
+    /// The context windows of the models the chats used, for the agents' `context_limit`.
+    /// Locked before `agents` when both are needed.
+    windows: Mutex<transcript::Windows>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for at start and again, in the
     /// background, while no `claude` is on it: the user's shell never holds up the frames.
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
@@ -213,6 +216,7 @@ impl State {
             ports,
             restore,
             sent: Default::default(),
+            windows: Default::default(),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
         }
@@ -794,10 +798,23 @@ impl State {
         }
     }
 
-    /// Sends what a chat has for the app; the end of a turn updates its agent's state.
+    /// Sends what a chat has for the app; the end of a turn updates its agent's state and
+    /// context window (read again on the next tick).
     async fn chat_out(&self, channel: u32, out: chat::Out) {
         for message in &out.app {
             self.to_app(channel, message).await;
+        }
+        let mut windows = self.windows.lock().await;
+        for (model, window) in &out.windows {
+            windows.learn(model, *window);
+        }
+        drop(windows);
+        if let Some(window) = out.window {
+            let mut agents = self.agents.lock().await;
+            for agent in agents.values_mut().filter(|a| a.channel == channel) {
+                agent.usage.window = Some(window);
+                agent.usage.due = true;
+            }
         }
         if let Some(event) = &out.turn {
             self.saw(event).await;
@@ -872,6 +889,7 @@ async fn watch_terminals(state: Arc<State>) {
         }
         // Not under the terminals lock: placing a new agent holds the agents lock while git runs.
         let silence = state.settings.silence();
+        let windows = state.windows.lock().await;
         for (id, agent) in state.agents.lock().await.iter_mut() {
             let output = last_output.get(&agent.channel);
             agent.watched = state.watches(agent.channel);
@@ -893,7 +911,8 @@ async fn watch_terminals(state: Arc<State>) {
             };
             // A bounded read (see `transcript::Usage`), off the other tasks' threads.
             let usage = &mut agent.usage;
-            if let Some(message) = tokio::task::block_in_place(|| usage.read(id, root, path)) {
+            let read = || usage.read(id, root, path, &windows);
+            if let Some(message) = tokio::task::block_in_place(read) {
                 state.to_app(agent.channel, &message).await;
             }
             if agent.usage.interrupted()
@@ -1662,6 +1681,35 @@ mod tests {
         ))
     }
 
+    #[tokio::test]
+    async fn a_chats_result_sets_its_agents_window_and_teaches_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        *state.agents.lock().await = HashMap::from([
+            ("chat".to_owned(), Agent::new(4, Instant::now(), 0)),
+            ("terminal".to_owned(), Agent::new(5, Instant::now(), 0)),
+        ]);
+        let out = chat::Out {
+            windows: vec![("claude-sonnet-4-6".into(), 700_000)],
+            window: Some(300_000),
+            ..chat::Out::default()
+        };
+        state.chat_out(4, out).await;
+        let windows = state.windows.lock().await;
+        assert_eq!(windows.of("claude-sonnet-4-6"), Some(700_000));
+        let agents = state.agents.lock().await;
+        let (chat, terminal) = (&agents["chat"].usage, &agents["terminal"].usage);
+        assert_eq!((chat.window, chat.due), (Some(300_000), true));
+        assert_eq!((terminal.window, terminal.due), (None, false));
+        drop((windows, agents));
+        // A result without a window leaves the agent's as it was.
+        state.chat_out(4, chat::Out::default()).await;
+        assert_eq!(
+            state.agents.lock().await["chat"].usage.window,
+            Some(300_000)
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn changed_worktree_statuses_are_sent_on_every_tick() {
         // Through a real daemon this would take the 30 s interval.
@@ -1734,7 +1782,9 @@ mod tests {
             context_limit: 200_000,
             output_tokens: 2,
         };
-        assert_eq!(named.usage.read("s", dir.path(), &log), Some(usage.clone()));
+        let windows = Default::default();
+        let read = named.usage.read("s", dir.path(), &log, &windows);
+        assert_eq!(read, Some(usage.clone()));
         let state = test_state(dir.path());
         *state.agents.lock().await = HashMap::from([
             ("s".to_owned(), named),

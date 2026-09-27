@@ -386,18 +386,34 @@ fn a_turns_images_are_bounded_and_checked() {
 fn the_usage_footer_has_time_tokens_and_context() {
     let result = json!({"duration_ms": 2345, "usage": {"output_tokens": 40},
         "modelUsage": {"a": {"contextWindow": 1000}, "b": {"contextWindow": 2000}, "c": {}}});
+    let found = windows(&result);
+    assert_eq!(found, [("a".into(), 1000), ("b".into(), 2000)]);
+    // The current model's window, else the largest.
+    assert_eq!(window_of(&found, Some("a")), Some(1000));
+    assert_eq!(window_of(&found, Some("x")), Some(2000));
+    assert_eq!(window_of(&found, None), Some(2000));
+    assert_eq!(window_of(&[], None), None);
     assert_eq!(
-        usage(&result, 500),
+        usage(&result, 500, Some(2000)),
         "2.3 s · 40 output tokens · 25% context"
     );
-    let no_window = json!({"duration_ms": 50, "modelUsage": {"a": {"contextWindow": 0}}});
-    assert_eq!(usage(&no_window, 5), "0.1 s · 0 output tokens");
-    assert_eq!(usage(&json!({}), 5), "0.0 s · 0 output tokens");
-    let huge = json!({"modelUsage": {"a": {"contextWindow": 1}}});
+    // Rounded down, as the sidebar does.
     assert_eq!(
-        usage(&huge, u64::MAX),
+        usage(&json!({}), 1999, Some(2000)),
+        "0.0 s · 0 output tokens · 99% context"
+    );
+    let no_window = json!({"duration_ms": 50});
+    assert_eq!(usage(&no_window, 5, Some(0)), "0.1 s · 0 output tokens");
+    assert_eq!(usage(&json!({}), 5, None), "0.0 s · 0 output tokens");
+    assert_eq!(
+        usage(&json!({}), u64::MAX, Some(1)),
         format!("0.0 s · 0 output tokens · {}% context", u64::MAX)
     );
+    // At most `MAX_MODELS` models are read.
+    let many: serde_json::Map<String, Value> = (0..MAX_MODELS + 1)
+        .map(|n| (format!("m{n:02}"), json!({"contextWindow": n})))
+        .collect();
+    assert_eq!(windows(&json!({"modelUsage": many})).len(), MAX_MODELS);
     let tokens = json!({"input_tokens": 1, "cache_read_input_tokens": 20,
         "cache_creation_input_tokens": 300, "output_tokens": 4000});
     assert_eq!(context(&tokens), 321);
@@ -454,6 +470,7 @@ fn a_text_turn_opens_the_chat_then_shows_the_reply_and_its_usage() {
             ],
             write: vec![user],
             turn: None,
+            ..Out::default()
         }
     );
     let out = replay(&mut stream, "text");
@@ -822,6 +839,7 @@ fn permission_requests_wait_for_the_humans_answer_given_once() {
             app: noted(5, "Allowed Write: /home/u/proj/hello.txt", "req_1"),
             write: vec![allowed("req_1", input)],
             turn: waiting("Bash"),
+            ..Out::default()
         }
     );
     // Once only; never an id of no pending request.
@@ -860,6 +878,7 @@ fn permission_requests_wait_for_the_humans_answer_given_once() {
             app: noted(6, "Denied Bash: touch made-by-bash.txt", "req_2"),
             write: vec![denied("req_2", "The user denied this.")],
             turn: working(),
+            ..Out::default()
         }
     );
 }
@@ -951,6 +970,7 @@ fn questions_are_answered_with_their_labels_or_a_free_text() {
             app: noted(4, "Answered: Portuguese", "req_3"),
             write: vec![chosen(json!("Portuguese"))],
             turn: working(),
+            ..Out::default()
         }
     );
     // A free text, up to 4 KiB.
@@ -1634,6 +1654,37 @@ fn the_context_comes_from_the_main_threads_calls() {
     );
     // No session known: no event for the agent states.
     assert_eq!(out.turn, None);
+    assert_eq!(
+        (out.windows, out.window),
+        (vec![("m".into(), 1000)], Some(1000))
+    );
+}
+
+#[test]
+fn the_chats_window_is_its_current_models() {
+    // As recorded (claude 2.1.283, `model-switch`): after a switch from Haiku to Sonnet 5,
+    // `modelUsage` holds both models and the next `system/init` names the new one.
+    let mut stream = stream();
+    let mut line = |value: Value| stream.line(Some(value.to_string().as_bytes()));
+    let init = |model: &str| json!({"type": "system", "subtype": "init", "model": model});
+    let result =
+        |usage: Value| json!({"type": "result", "subtype": "success", "modelUsage": usage});
+    let haiku = json!({"contextWindow": 200_000});
+    let sonnet = json!({"contextWindow": 1_000_000});
+    line(init("claude-haiku-4-5-20251001"));
+    let out = line(result(json!({"claude-haiku-4-5-20251001": haiku})));
+    assert_eq!(out.window, Some(200_000));
+    line(init("claude-sonnet-5"));
+    let both = json!({"claude-haiku-4-5-20251001": haiku, "claude-sonnet-5": sonnet});
+    let out = line(result(both));
+    assert_eq!(out.window, Some(1_000_000));
+    assert_eq!(out.windows.len(), 2);
+    line(init("claude-haiku-4-5-20251001"));
+    let both = json!({"claude-haiku-4-5-20251001": haiku, "claude-sonnet-5": sonnet});
+    assert_eq!(line(result(both)).window, Some(200_000));
+    // A zero window is no window.
+    let zero = json!({"claude-haiku-4-5-20251001": {"contextWindow": 0}});
+    assert_eq!(line(result(zero)).window, None);
 }
 
 #[test]
