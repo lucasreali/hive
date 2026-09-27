@@ -248,7 +248,16 @@ test("files: the selected worktree's lines holding the text, once typing pauses"
     ...Array.from({ length: FILE_LIMIT }, (_, i) => ({ path: `f${i}`, line: 1, text: "token" })),
   ];
   act(() => {
-    apply({ type: "changes", path: fixLogin.path, files: [], added: 0, removed: 0, error: null });
+    const none = { base: "head", branch: null, base_error: null } as const;
+    apply({
+      type: "changes",
+      path: fixLogin.path,
+      ...none,
+      files: [],
+      added: 0,
+      removed: 0,
+      error: null,
+    });
     apply({
       type: "search_results",
       worktree: fixLogin.path,
