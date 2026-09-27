@@ -79,7 +79,8 @@ test("the list asks when shown and every two minutes while it shows, never faste
   expect(list.mock.calls).toEqual([[shop.id, false]]);
   expect(within(view()).getByText("Loading…")).toBeTruthy();
   const timer = every.mock.calls.find(([, ms]) => ms === PULLS_INTERVAL_MS);
-  (timer?.[0] as () => void)();
+  const tick = timer?.[0] as () => void;
+  tick();
   expect(list).toHaveBeenCalledTimes(2);
   expect(list).toHaveBeenLastCalledWith(shop.id, false);
   // On demand: GitHub is asked now.
