@@ -67,7 +67,7 @@ test("tab drag: one accent line shows where the tab lands, and goes away after",
   await tree.getByRole("button", { name: "fix-login" }).click();
   await openFile(page, "README.md");
   await openFile(page, "package.json");
-  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByTitle("New terminal or file").click();
   await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect.poll(() => names(page)).toEqual(["README.md", "package.json", "fix-login"]);
   const tab = (name: string) => page.locator(".tab", { hasText: name });
