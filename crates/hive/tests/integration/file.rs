@@ -204,8 +204,8 @@ async fn a_save_writes_only_over_the_version_the_app_read() {
             path: program.to_owned(),
             windows_path: None,
             error: Some(format!(
-                "{system} would run a .{} file instead of opening it in an editor",
-                program.rsplit('.').next().unwrap()
+                "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
+                 Makefile), not {program}: {system} might run it"
             )),
         }
     );
