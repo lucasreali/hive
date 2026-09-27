@@ -326,7 +326,7 @@ export type Transcript = SubagentRef & { entries: TranscriptEntry[]; truncated: 
 export const TRANSCRIPT_LIMIT = 1000;
 
 /** Mirrors `hive_protocol::ChatMode`; `bypassPermissions` is never offered. */
-export type ChatMode = "default" | "accept_edits" | "plan";
+export type ChatMode = "default" | "accept_edits" | "plan" | "auto";
 /** Mirrors `hive_protocol::ChatImage`: `data` is base64. */
 export type ChatImage = { media_type: string; data: string };
 export type ChatEntryKind =

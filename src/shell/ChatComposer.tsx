@@ -13,11 +13,12 @@ import { Select } from "../ui/Select";
 import { imageUrl } from "./ConversationView";
 import { ICON } from "./icons";
 
-/** The permission modes offered (7.3): never `bypassPermissions`. */
+/** The permission modes offered (7.3, 8.4), in Shift+Tab's order: never `bypassPermissions`. */
 export const MODES: { value: ChatMode; label: string }[] = [
   { value: "default", label: "Default" },
   { value: "accept_edits", label: "Accept edits" },
   { value: "plan", label: "Plan" },
+  { value: "auto", label: "Auto" },
 ];
 
 const NO_COMMANDS: string[] = [];
@@ -57,7 +58,9 @@ export async function base64(file: Blob): Promise<string> {
  * lists the chat's slash commands that start with what follows it: ↑/↓ move, Enter or Tab
  * picks, Esc hides the list. Like Claude's terminal (8.8), ↑ on the first line brings back the
  * messages sent in this chat (↓ walks back to what was being typed), and Ctrl+C with nothing
- * selected stops a running turn or, idle, clears the composer. The mode selector shows the service's mode and asks it for another.
+ * selected stops a running turn or, idle, clears the composer. The mode selector shows the service's mode and asks it for another;
+ * Shift+Tab asks for the next one, like the CLI (8.4). A mode Claude refuses is not taken: the
+ * service shows Claude's message in the chat.
  */
 export function ChatComposer({ chat }: { chat: number }) {
   const draft = useHive((s) => s.drafts[chat] ?? EMPTY_DRAFT);
@@ -129,6 +132,10 @@ export function ChatComposer({ chat }: { chat: number }) {
     if (listed && move) {
       event.preventDefault();
       setActive((at + move + matches.length) % matches.length);
+    } else if (event.key === "Tab" && event.shiftKey) {
+      event.preventDefault();
+      const current = MODES.findIndex((m) => m.value === mode);
+      void transport.chatSetMode(chat, MODES[(current + 1) % MODES.length]?.value ?? "default");
     } else if (listed && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
       event.preventDefault();
       pick(matches[at]);

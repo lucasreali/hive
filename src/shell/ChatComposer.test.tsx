@@ -224,6 +224,7 @@ test("the mode selector shows the service's mode and asks it for another", () =>
     "Default",
     "Accept edits",
     "Plan",
+    "Auto",
   ]);
   fireEvent.click(screen.getByRole("option", { name: "Plan" }));
   expect(setMode.mock.calls).toEqual([[3, "plan"]]);
@@ -231,6 +232,30 @@ test("the mode selector shows the service's mode and asks it for another", () =>
   expect(select.textContent).toBe("Default");
   act(() => apply({ type: "chat_status", channel: 3, ...status(false), mode: "plan" }));
   expect(select.textContent).toBe("Plan");
+});
+
+test("Shift+Tab asks for the next mode, like the CLI, from Auto back to Default", () => {
+  const setMode = spyOn(transport, "chatSetMode").mockResolvedValue();
+  const { input } = composer();
+  open(["compact"]);
+  const shiftTab = () => fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+  const asked = () => setMode.mock.calls.at(-1)?.[1];
+  // Shift+Tab stays in the composer: the focus does not move.
+  expect(shiftTab()).toBe(false);
+  expect(asked()).toBe("accept_edits");
+  for (const [mode, next] of [
+    ["accept_edits", "plan"],
+    ["plan", "auto"],
+    ["auto", "default"],
+  ] as const) {
+    act(() => apply({ type: "chat_status", channel: 3, ...status(false), mode }));
+    shiftTab();
+    expect(asked()).toBe(next);
+  }
+  // Even with the command list shown, it switches the mode; plain Tab still picks.
+  fireEvent.change(input, { target: { value: "/c" } });
+  shiftTab();
+  expect([input.value, asked(), setMode.mock.calls.length]).toEqual(["/c", "default", 5]);
 });
 
 test("Esc in the message stops a running turn, and only then", () => {
