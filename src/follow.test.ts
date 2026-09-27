@@ -6,6 +6,7 @@ import {
   initialState,
   select,
   setFocused,
+  setMentioning,
   setOpenFile,
   setRightPanel,
   useHive,
@@ -49,6 +50,26 @@ test("the service watches the worktree the open files panel shows, and nothing e
   stop();
   select(shop.id);
   expect(calls).toHaveLength(5);
+});
+
+test("a chat's @ list has its worktree watched while it shows, before the panel's", () => {
+  const { calls, transport } = recorder();
+  const [shop, api] = MOCK_REPOS as [(typeof MOCK_REPOS)[number], (typeof MOCK_REPOS)[number]];
+  apply({ type: "projects", projects: MOCK_REPOS });
+  apply({ type: "welcome", version: "0.1.0", distro: null });
+  const stop = followPanel(transport);
+  setMentioning(shop.id, true);
+  // Another list's end does not stop it.
+  setMentioning(api.id, false);
+  expect(useHive.getState().mentioning).toBe(shop.id);
+  setMentioning(shop.id, false);
+  expect(calls).toEqual([shop.id, null]);
+  setRightPanel("files");
+  select(api.id);
+  setMentioning(shop.id, true);
+  setMentioning(shop.id, false);
+  expect(calls).toEqual([shop.id, null, api.id, shop.id, api.id]);
+  stop();
 });
 
 const welcome = () => apply({ type: "welcome", version: "1", distro: null });

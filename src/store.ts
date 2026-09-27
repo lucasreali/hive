@@ -786,6 +786,8 @@ export type HiveState = {
   drafts: Record<number, ChatDraft>;
   /** Chats' scroll positions by chat (8.14); none means at the bottom. */
   chatScrolls: Record<number, ChatScroll>;
+  /** The worktree whose files a chat composer's `@` list offers (8.12), watched while it shows. */
+  mentioning: string | null;
 };
 
 export const initialState: HiveState = {
@@ -861,6 +863,7 @@ export const initialState: HiveState = {
   chats: {},
   drafts: {},
   chatScrolls: {},
+  mentioning: null,
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -1677,6 +1680,12 @@ export const setDraft = (id: number, patch: Partial<ChatDraft> | null) =>
     const { [id]: draft = EMPTY_DRAFT, ...drafts } = s.drafts;
     return { drafts: patch ? { ...drafts, [id]: { ...draft, ...patch } } : drafts };
   });
+
+/** A composer's `@` list shows `worktree`'s files (`on`), or no longer does (8.12). */
+export const setMentioning = (worktree: string, on: boolean) =>
+  useHive.setState((s) =>
+    on ? { mentioning: worktree } : s.mentioning === worktree ? { mentioning: null } : {},
+  );
 
 /** Keeps where chat `id`'s conversation is scrolled (8.14), to come back there. */
 export const setChatScroll = (id: number, offset: number, atBottom: boolean) =>
