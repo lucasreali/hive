@@ -1531,6 +1531,27 @@ mod tests {
     }
 
     #[test]
+    fn an_unchanged_sessions_list_is_not_sent_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let list = |error: Option<&str>| Control::Sessions {
+            sessions: vec![],
+            error: error.map(Into::into),
+            truncated: false,
+        };
+        assert!(state.new_to_app(&list(None)));
+        assert!(!state.new_to_app(&list(None)));
+        assert!(state.new_to_app(&list(Some("x"))));
+        // Anything else always goes.
+        assert!(state.new_to_app(&Control::ListSessions));
+        assert!(state.new_to_app(&Control::ListSessions));
+        assert!(!state.new_to_app(&list(Some("x"))));
+        // A new app, or a reloaded UI, has none.
+        *state.listed() = None;
+        assert!(state.new_to_app(&list(Some("x"))));
+    }
+
+    #[test]
     fn a_path_ask_already_running_is_not_started_again() {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path());
