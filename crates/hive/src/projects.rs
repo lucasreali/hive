@@ -754,6 +754,45 @@ mod tests {
     }
 
     #[test]
+    fn a_hung_git_is_an_error_of_its_project_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = load(tmp.path());
+        let [hung, fine] = ["hung", "fine"].map(|name| {
+            let root = tmp.path().canonicalize().unwrap().join(name);
+            let status = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .arg(&root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let id = root.display().to_string();
+            projects.change_spaces(|s| s.add(id.clone())).unwrap();
+            id
+        });
+        // Git reads the repository's config, which includes a pipe nobody writes to, as a
+        // repository on a hung network drive would hang.
+        let git_dir = Path::new(&hung).join(".git");
+        nix::unistd::mkfifo(&git_dir.join("hang"), nix::sys::stat::Mode::S_IRWXU).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(git_dir.join("config"))
+            .unwrap();
+        std::io::Write::write_all(&mut config, b"[include]\n\tpath = hang\n").unwrap();
+        let started = std::time::Instant::now();
+        let listed = projects.list();
+        assert!(started.elapsed() < git::TIME_LIMIT * 2, "not killed");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, hung);
+        assert!(listed[0].worktrees.is_empty());
+        let error = listed[0].error.as_deref().unwrap_or_default();
+        assert!(error.ends_with("took longer than 10 s"), "{error}");
+        assert_eq!(listed[1].id, fine);
+        assert_eq!(listed[1].error, None);
+        assert_eq!(listed[1].worktrees[0].path, fine);
+    }
+
+    #[test]
     fn missing_files_are_an_empty_default_space() {
         let tmp = tempfile::tempdir().unwrap();
         let projects = load(tmp.path());

@@ -128,13 +128,19 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
     Ok(())
 }
 
+/// The service's state. Lock order, when one task holds several: `terminals` → `agents` →
+/// `app`. `agents` is held across slow work (placing an agent runs git, reading a session
+/// log or a transcript), so a terminal's input and output never take an async lock (9.13):
+/// they go through `inputs` and [`terminal::LastOutput`]. The std locks (`inputs`, `sent`)
+/// are never held across an await.
 struct State {
     /// Control frames to the app connection's writer, while an app is connected.
     app: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
-    /// Detected agents by session id, with their terminal and state. Locked after `terminals`
-    /// when both are needed.
+    /// Each open terminal's input queue, by channel.
+    inputs: std::sync::Mutex<HashMap<u32, mpsc::UnboundedSender<Input>>>,
+    /// Detected agents by session id, with their terminal and state.
     agents: Mutex<HashMap<String, Agent>>,
     /// The task watching the worktree of the app's files panel.
     watching: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -179,6 +185,7 @@ impl State {
         Self {
             app: Mutex::new(None),
             terminals: Mutex::new(HashMap::new()),
+            inputs: Default::default(),
             agents: Mutex::new(HashMap::new()),
             watching: Mutex::new(None),
             transcript: Mutex::new(None),
@@ -226,6 +233,12 @@ impl State {
 
     fn sent(&self) -> std::sync::MutexGuard<'_, health::Sent> {
         self.sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn inputs(&self) -> std::sync::MutexGuard<'_, HashMap<u32, mpsc::UnboundedSender<Input>>> {
+        self.inputs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -439,9 +452,10 @@ impl State {
         }
     }
 
-    async fn input(&self, channel: u32, input: Input) {
-        if let Some(terminal) = self.terminals.lock().await.get(&channel) {
-            terminal.send(input);
+    /// Queues input or a resize; ignored once the terminal is gone.
+    fn input(&self, channel: u32, input: Input) {
+        if let Some(terminal) = self.inputs().get(&channel) {
+            let _ = terminal.send(input);
         }
     }
 
@@ -477,10 +491,12 @@ impl State {
                 Entry::Occupied(_) => Err(format!("terminal {channel} is already open")),
                 Entry::Vacant(slot) => {
                     terminal::spawn(channel, cwd, cols, rows, &self.bin_dir, &env).map(
-                        |(mut terminal, pty, child)| {
+                        |(mut terminal, input, pty, child)| {
                             terminal.claude_dir = claude_dir;
+                            let last = terminal.last_output.clone();
                             slot.insert(terminal);
-                            tokio::spawn(pump(self.clone(), channel, pty, child, output));
+                            self.inputs().insert(channel, input);
+                            tokio::spawn(pump(self.clone(), channel, pty, child, output, last));
                         },
                     )
                 }
@@ -530,14 +546,20 @@ impl State {
 
     /// Answers a request on the current space's projects and their Claude sessions (in the
     /// space's Claude folder) off the frame loop, since reading logs can take a while too.
+    /// The request also gets the sessions of the detected agents, read off the frame loop
+    /// too: typing never waits for the agents lock (9.13).
     fn sessions(
         self: &Arc<Self>,
-        request: impl FnOnce(&[Project], &Sessions) -> Control + Send + 'static,
+        request: impl FnOnce(&[Project], &Sessions, HashSet<String>) -> Control + Send + 'static,
     ) {
         let state = self.clone();
-        self.projects(move |projects| {
-            let (current, claude_dir) = projects.current();
-            request(&current, &state.sessions.at(claude_dir.as_deref()))
+        tokio::spawn(async move {
+            let agents = state.agents.lock().await.keys().cloned().collect();
+            let asked = state.clone();
+            state.projects(move |projects| {
+                let (current, claude_dir) = projects.current();
+                request(&current, &asked.sessions.at(claude_dir.as_deref()), agents)
+            });
         });
     }
 
@@ -678,12 +700,20 @@ impl State {
         }
     }
 
-    /// Ends the terminal's processes; its exit is reported by [`pump`].
-    async fn close(&self, channel: u32) {
-        if let Some(terminal) = self.terminals.lock().await.get(&channel) {
-            let sessions = [terminal.session];
-            tokio::spawn(async move { terminal::end_sessions(&sessions).await });
-        }
+    /// Ends the terminal's processes, off the frame loop; its exit is reported by [`pump`].
+    fn close(self: &Arc<Self>, channel: u32) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let terminal = state
+                .terminals
+                .lock()
+                .await
+                .get(&channel)
+                .map(|t| t.session);
+            if let Some(session) = terminal {
+                terminal::end_sessions(&[session]).await;
+            }
+        });
     }
 }
 
@@ -701,7 +731,13 @@ async fn watch_terminals(state: Arc<State>) {
     let mut ticks = tokio::time::interval(watch::INTERVAL);
     loop {
         ticks.tick().await;
-        let running = watch::claude_sessions(&procs::list(procs::Source::System));
+        // `/proc` is read on a blocking thread, and not at all while no terminal is open.
+        let running = if state.terminals.lock().await.is_empty() {
+            HashSet::new()
+        } else {
+            let list = || watch::claude_sessions(&procs::list(procs::Source::System));
+            tokio::task::block_in_place(list)
+        };
         let now = Instant::now();
         let mut last_output = HashMap::new();
         let unhooked: Vec<u32> = state
@@ -710,7 +746,7 @@ async fn watch_terminals(state: Arc<State>) {
             .await
             .iter_mut()
             .filter_map(|(channel, t)| {
-                last_output.insert(*channel, t.last_output);
+                last_output.insert(*channel, t.last_output.get());
                 let session = t.session;
                 t.watch
                     .tick(running.contains(&session), now)
@@ -808,21 +844,19 @@ fn error(err: io::Error) -> Control {
     }
 }
 
-/// Copies PTY output to the app until the PTY closes, then reports the exit.
+/// Copies PTY output to the app until the PTY closes, then reports the exit. The copy takes
+/// no lock (9.13); only the exit does.
 async fn pump(
     state: Arc<State>,
     channel: u32,
     mut pty: OwnedReadPty,
     mut child: Child,
     output: mpsc::Sender<Frame>,
+    last_output: terminal::LastOutput,
 ) {
     let mut buf = vec![0; 64 * 1024];
     while let Ok(n @ 1..) = pty.read(&mut buf).await {
-        let mut terminals = state.terminals.lock().await;
-        terminals
-            .entry(channel)
-            .and_modify(|t| t.last_output = Instant::now());
-        drop(terminals);
+        last_output.touch();
         let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
         if output.send(frame).await.is_err() {
             break;
@@ -832,6 +866,7 @@ async fn pump(
     {
         let mut terminals = state.terminals.lock().await;
         terminals.remove(&channel);
+        state.inputs().remove(&channel);
         let mut agents = state.agents.lock().await;
         for (id, _) in agents.extract_if(|_, a| a.channel == channel) {
             state.to_app(channel, &Control::AgentRemoved { id }).await;
@@ -990,17 +1025,15 @@ where
 async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame>) {
     let channel = frame.channel;
     let message = match frame.kind {
-        FrameType::Terminal => return state.input(channel, Input::Data(frame.payload)).await,
+        FrameType::Terminal => return state.input(channel, Input::Data(frame.payload)),
         FrameType::Control => frame.to_control(),
     };
     match message {
         Ok(Control::OpenTerminal { cwd, cols, rows }) => {
             state.open(channel, &cwd, cols, rows, output.clone()).await;
         }
-        Ok(Control::Resize { cols, rows }) => {
-            state.input(channel, Input::Resize { cols, rows }).await
-        }
-        Ok(Control::CloseTerminal) => state.close(channel).await,
+        Ok(Control::Resize { cols, rows }) => state.input(channel, Input::Resize { cols, rows }),
+        Ok(Control::CloseTerminal) => state.close(channel),
         Ok(Control::WatchWorktree { path, base }) => state.watch_worktree(Some((path, base))).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
         Ok(Control::WatchTranscript { agent, subagent }) => {
@@ -1073,11 +1106,13 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             });
         }
         Ok(Control::RemoveProject { id }) => {
-            let terminals = state.terminals.lock().await;
-            let sessions: HashSet<i32> = terminals.values().map(|t| t.session).collect();
-            drop(terminals);
             let state = state.clone();
-            tokio::spawn(async move { state.remove_project(id, &sessions).await });
+            tokio::spawn(async move {
+                let terminals = state.terminals.lock().await;
+                let sessions: HashSet<i32> = terminals.values().map(|t| t.session).collect();
+                drop(terminals);
+                state.remove_project(id, &sessions).await
+            });
         }
         Ok(Control::CreateSpace { name, env }) => {
             state.change_spaces(|s| s.create(&name, env)).await
@@ -1168,8 +1203,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }
         Ok(Control::ListSessions) => {
             // Hive's terminals: their hooks name their sessions.
-            let mut running: HashSet<String> = state.agents.lock().await.keys().cloned().collect();
-            state.sessions(move |projects, sessions| {
+            state.sessions(move |projects, sessions, mut running| {
                 // Claude keeps a record of each running `claude` beside its projects folder.
                 let records = sessions
                     .root()
@@ -1186,26 +1220,27 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 Control::Sessions { sessions, error }
             })
         }
-        Ok(Control::LocateSession { id, target }) => state.sessions(move |projects, sessions| {
-            let located = sessions.find(projects, &id).and_then(|session| {
-                let path = match target {
-                    SessionTarget::Log => session.log,
-                    SessionTarget::Folder => session.cwd,
-                };
-                file::windows(Path::new(&path), OsStr::new("wslpath"))
-            });
-            Control::SessionLocated {
-                id,
-                target,
-                error: located.as_ref().err().map(ToString::to_string),
-                windows_path: located.ok(),
-            }
-        }),
+        Ok(Control::LocateSession { id, target }) => {
+            state.sessions(move |projects, sessions, _| {
+                let located = sessions.find(projects, &id).and_then(|session| {
+                    let path = match target {
+                        SessionTarget::Log => session.log,
+                        SessionTarget::Folder => session.cwd,
+                    };
+                    file::windows(Path::new(&path), OsStr::new("wslpath"))
+                });
+                Control::SessionLocated {
+                    id,
+                    target,
+                    error: located.as_ref().err().map(ToString::to_string),
+                    windows_path: located.ok(),
+                }
+            })
+        }
         Ok(Control::DeleteSession { id }) => {
-            // A running session keeps writing its log.
-            let live = state.agents.lock().await.contains_key(&id);
-            state.sessions(move |projects, sessions| {
-                let deleted = if live {
+            state.sessions(move |projects, sessions, running| {
+                // A running session keeps writing its log.
+                let deleted = if running.contains(&id) {
                     Err(io::Error::other("the session is running: end it first"))
                 } else {
                     sessions.delete(projects, &id)
