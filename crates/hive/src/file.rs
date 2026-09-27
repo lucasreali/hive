@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hasher};
 use std::io::{self, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -197,10 +198,12 @@ fn folder_in(dir: &Path, root: &Path, folder: &str) -> io::Result<PathBuf> {
 }
 
 /// `folder` (resolved, inside `root`), unless it is in the repository's `.git`: a file moved
-/// there could become a hook, one moved out breaks the repository.
+/// there could become a hook, one moved out breaks the repository. In any case, as git: on a
+/// case-insensitive file system (macOS, `/mnt/c`) `.GIT` is `.git`.
 fn not_git(root: &Path, folder: PathBuf) -> io::Result<PathBuf> {
     let rel = folder.strip_prefix(root).unwrap_or(&folder);
-    if rel.components().any(|c| c.as_os_str() == ".git") {
+    let git = |c: Component| c.as_os_str().as_bytes().eq_ignore_ascii_case(b".git");
+    if rel.components().any(git) {
         return Err(io::Error::other("Hive does not change what is inside .git"));
     }
     Ok(folder)
@@ -254,6 +257,13 @@ fn source(dir: &Path, root: &Path, path: &str) -> io::Result<(PathBuf, bool)> {
             "{path} is not a regular file or a folder"
         )));
     }
+    // A folder (not a symlink) resolved as stored, so `held` compares it with resolved paths
+    // even when the app spelled it in another case.
+    let from = if kind.is_dir() {
+        from.canonicalize()?
+    } else {
+        from
+    };
     Ok((from, kind.is_dir()))
 }
 
@@ -346,7 +356,8 @@ fn move_entry(
 // ponytail: both names exist for a moment, and a file system without hard links refuses;
 // the folders are checked, then used by path, so a process of the same user that swaps one
 // for a symlink in between can make it act outside the worktree. `openat(O_NOFOLLOW)` +
-// `linkat`/`unlinkat` (or [`rename_new`]) if either matters.
+// `linkat`/`unlinkat` (and `renameat2` for [`rename_new`], on folder handles too) if either
+// matters.
 fn relink(from: &Path, to: &Path, unlink: &dyn Fn(&Path) -> io::Result<()>) -> io::Result<()> {
     fs::hard_link(from, to)?;
     match unlink(from) {
@@ -1245,6 +1256,13 @@ mod tests {
         assert_eq!(err(move_to(dir.path(), ".git/hooks", "")), refused);
         assert_eq!(err(move_to(dir.path(), "src", ".git")), refused);
         assert_eq!(err(rename(dir.path(), "src", ".git")), refused);
+        // In any case: on a case-insensitive file system `.GIT` is `.git` (here, stand-ins).
+        std::fs::create_dir_all(dir.path().join(".Git/hooks")).unwrap();
+        std::fs::create_dir(dir.path().join(".gIt")).unwrap();
+        assert_eq!(err(rename(dir.path(), ".GIT", "x")), refused);
+        assert_eq!(err(move_to(dir.path(), ".Git/hooks", "")), refused);
+        assert_eq!(err(rename(dir.path(), "src", ".GIT")), refused);
+        assert_eq!(err(move_to(dir.path(), "src", ".gIt")), refused);
         assert!(dir.path().join("src").is_dir() && dir.path().join(".git/hooks").is_dir());
         assert!(outside.path().join("o").is_dir() && !outside.path().join("src").exists());
     }
