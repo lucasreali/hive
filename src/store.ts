@@ -532,6 +532,8 @@ export type Question = {
   run: () => void;
   /** The dialog asked from, shown again (still open underneath) once answered. */
   back?: Modal;
+  /** The deleted files with unsaved edits it asks about: a later deletion adds to them. */
+  deleted?: OpenFile[];
 };
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
@@ -1321,16 +1323,22 @@ function closeDeleted(s: HiveState, gone: OpenFile[]): HiveState {
     gone.filter((f) => !dirty.includes(f)),
   );
   if (dirty.length === 0) return next;
-  const [one] = dirty;
+  // Files deleted earlier may still wait for their answer: one question names them all (9.24),
+  // over the same dialog underneath.
+  const open = s.modal === "confirm" ? s.question : null;
+  const all = [...(open?.deleted ?? []), ...dirty];
+  const [one] = all;
   const text =
-    dirty.length === 1
+    all.length === 1
       ? `${one?.path} was deleted. Your unsaved changes to it will be lost.`
-      : `${dirty.map((f) => f.path).join(", ")} were deleted. Your unsaved changes to them will be lost.`;
-  const question = {
+      : `${all.map((f) => f.path).join(", ")} were deleted. Your unsaved changes to them will be lost.`;
+  const question: Question = {
     title: "Discard changes?",
     text,
     action: "Discard",
-    run: () => useHive.setState((s) => dropAll(s, dirty)),
+    run: () => useHive.setState((s) => dropAll(s, all)),
+    back: open ? open.back : s.modal,
+    deleted: all,
   };
   return { ...next, modal: "confirm", question };
 }
