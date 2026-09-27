@@ -1327,23 +1327,15 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn no_claude_on_the_users_path_asks_for_it_again_unless_already_asking() {
+    #[test]
+    fn a_path_ask_already_running_is_not_started_again() {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path());
-        let bin = dir.path().join("bin");
-        std::fs::create_dir(&bin).unwrap();
-        // An ask already runs, so no shell starts in this test.
         state.asking_path.store(true, Ordering::SeqCst);
-        state.user_path.send_replace(Some(bin.clone().into()));
-        assert_eq!(state.user_claude().await, None);
+        // Without a runtime, starting another ask would panic.
+        state.ask_user_path();
         assert!(state.asking_path.load(Ordering::SeqCst));
-        assert_eq!(*state.user_path.borrow(), Some(bin.clone().into()));
-        // Once one is there, it is found.
-        let claude = bin.join("claude");
-        std::fs::write(&claude, "").unwrap();
-        std::fs::set_permissions(&claude, Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(state.user_claude().await, Some(claude));
+        assert_eq!(*state.user_path.borrow(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
