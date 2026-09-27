@@ -175,7 +175,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
    - otherwise `~/.cargo/bin/hive` (`cargo install`, development).
 
    On Windows the process gets `CREATE_NO_WINDOW`, and it is killed when the app drops the connection.
-2. The bridge connects to `<runtime>/hive.sock`, only when the runtime dir is ours (owned by the user, mode 0700, not a symlink): in any other, the socket may be another user's (9.7).
+2. The bridge connects to `<runtime>/hive.sock`, only when the runtime dir is ours (owned by the user, mode 0700, not a symlink) and the socket's peer runs as the user (`peer_cred`): anything else may be another user's (9.7, `Paths::connect`, also used by `hive hook`).
 3. If the connection fails, the bridge prepares the runtime dir, truncates `daemon.log` (0600) and runs `setsid --fork hive daemon`. The daemon's stdin and stdout are null and its stderr goes to the log.
 4. The bridge retries the connection for up to 5 s. If the daemon never listens, the bridge fails with "the hive service did not start; see <log>".
 5. Two bridges racing is harmless: the second daemon cannot take the lockfile and exits.
