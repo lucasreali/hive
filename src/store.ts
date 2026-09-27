@@ -1125,13 +1125,15 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         removeFailures: { ...s.worktreeDialog.removeFailures, [m.path]: m.message },
       });
     case "worktree_status": {
-      if (!s.projects) return {};
-      const patch = (w: Worktree) => (w.path === m.path ? { ...w, status: m.status } : w);
-      const projects = Object.values(s.projects).map((p) => ({
-        ...p,
-        worktrees: p.worktrees.map(patch),
-      }));
-      return { projects: Object.fromEntries(projects.map((p) => [p.id, p])) };
+      // Only the project that owns the path changes: every other row keeps its objects (9.23).
+      const p = Object.values(s.projects ?? {}).find((p) =>
+        p.worktrees.some((w) => w.path === m.path),
+      );
+      if (!p) return {};
+      const worktrees = p.worktrees.map((w) =>
+        w.path === m.path ? { ...w, status: m.status } : w,
+      );
+      return { projects: { ...s.projects, [p.id]: { ...p, worktrees } } };
     }
     case "rename_worktree_failed": {
       const { type: _, ...failure } = m;
