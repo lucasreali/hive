@@ -16,7 +16,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     AgentEvent, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, GhAccount,
-    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget,
+    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget, Worktree,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -31,6 +31,7 @@ use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
+use crate::registry::Registry;
 use crate::scripts::{self, Ports};
 use crate::sessions::{self, Sessions};
 use crate::settings;
@@ -103,6 +104,7 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
+    let registry = tokio::spawn(watch_registry(state.clone()));
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -115,6 +117,7 @@ async fn serve(listener: UnixListener, mut terminate: Signal, state: Arc<State>)
     }
     watcher.abort();
     health.abort();
+    registry.abort();
     // Before the terminals end (and their sessions with them): what to resume next time.
     state.save_open().await;
     let sessions: Vec<i32> = state
@@ -152,6 +155,13 @@ struct State {
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
+    /// Each project's worktrees as last sent to the app (without status), so a change of
+    /// git's registry the app already has (its own request, a hook) is not sent again.
+    listed: std::sync::Mutex<HashMap<String, Vec<Worktree>>>,
+    /// Woken when the current space's projects change, so their registries are watched.
+    refollow: tokio::sync::Notify,
+    /// Held while [`State::worktrees_changed`] lists and sends.
+    changing: Mutex<()>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for at start and again, in the
     /// background, while no `claude` is on it: the user's shell never holds up the frames.
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
@@ -190,6 +200,9 @@ impl State {
             ports,
             restore,
             sent: Default::default(),
+            listed: Default::default(),
+            refollow: Default::default(),
+            changing: Mutex::new(()),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
         }
@@ -230,6 +243,40 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn listed(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<Worktree>>> {
+        self.listed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether the app has every one of `projects` with these worktrees.
+    fn known(&self, projects: &[Project]) -> bool {
+        let listed = self.listed();
+        projects
+            .iter()
+            .all(|p| listed.get(&p.id) == Some(&p.worktrees))
+    }
+
+    /// The one place the followed projects' worktrees are known to have changed outside
+    /// Hive's own requests: a worktree hook, or git's registry (9.36). The app gets the
+    /// projects again, with health, unless they are what it has (both saw the same change).
+    async fn worktrees_changed(&self) {
+        // One change at a time, so the second of two at once sees what the first sent.
+        let _turn = self.changing.lock().await;
+        let reply = tokio::task::block_in_place(|| {
+            let projects = self.projects.list();
+            if self.known(&projects) {
+                return None;
+            }
+            let mut reply = Control::Projects { projects };
+            self.with_health(&mut reply);
+            Some(reply)
+        });
+        if let Some(reply) = reply {
+            self.to_app(0, &reply).await;
+        }
+    }
+
     /// Gives the worktrees of the projects in a reply their status (git, so on a blocking
     /// thread), remembered as sent.
     fn with_health(&self, reply: &mut Control) {
@@ -242,6 +289,8 @@ impl State {
             _ => return,
         };
         for project in projects {
+            self.listed()
+                .insert(project.id.clone(), project.worktrees.clone());
             health::fill(project);
             let mut sent = self.sent();
             for w in &project.worktrees {
@@ -511,8 +560,29 @@ impl State {
 
     /// Answers a project request off the frame loop, since git can take a while.
     fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
+        self.answer(false, request);
+    }
+
+    /// [`State::projects`] for a request that changes worktrees: in turn with
+    /// [`State::worktrees_changed`], which then finds the change already sent.
+    fn change_worktrees(
+        self: &Arc<Self>,
+        request: impl FnOnce(&Projects) -> Control + Send + 'static,
+    ) {
+        self.answer(true, request);
+    }
+
+    fn answer(
+        self: &Arc<Self>,
+        in_turn: bool,
+        request: impl FnOnce(&Projects) -> Control + Send + 'static,
+    ) {
         let state = self.clone();
         tokio::spawn(async move {
+            let _turn = match in_turn {
+                true => Some(state.changing.lock().await),
+                false => None,
+            };
             // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
             let reply = tokio::task::block_in_place(|| {
                 let mut reply = request(&state.projects);
@@ -540,7 +610,11 @@ impl State {
     async fn change_spaces(&self, change: impl FnOnce(&mut Spaces) -> Result<(), String>) {
         let changed = tokio::task::block_in_place(|| self.projects.change_spaces(change));
         let reply = match changed {
-            Ok(()) => self.projects.spaces_message(),
+            Ok(()) => {
+                // A space switch changes the projects followed.
+                self.refollow.notify_one();
+                self.projects.spaces_message()
+            }
             Err(message) => Control::SpaceFailed { message },
         };
         self.to_app(0, &reply).await;
@@ -589,6 +663,7 @@ impl State {
                     .await;
             }
         };
+        self.refollow.notify_one();
         self.to_app(0, &self.projects.spaces_message()).await;
         let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
             Ok(settings) => settings.map(|settings| Control::Settings { settings }),
@@ -789,6 +864,26 @@ async fn watch_files(state: Arc<State>, path: String) {
     }
 }
 
+/// Watches git's worktree registry of the current space's projects (9.36): however a
+/// worktree is added or removed, the app gets the projects again, once per burst. Ends only
+/// when no watcher can be made (e.g. no inotify instance left).
+async fn watch_registry(state: Arc<State>) -> io::Result<()> {
+    let mut registry = Registry::new()?;
+    let mut changed = false;
+    loop {
+        let roots = state.projects.roots();
+        // Before listing, so a change made meanwhile is seen next time.
+        tokio::task::block_in_place(|| registry.follow(&roots));
+        if changed {
+            state.worktrees_changed().await;
+        }
+        changed = tokio::select! {
+            () = state.refollow.notified() => false,
+            () = registry.changed() => true,
+        };
+    }
+}
+
 fn error(err: io::Error) -> Control {
     Control::Error {
         message: err.to_string(),
@@ -921,9 +1016,8 @@ async fn hook_connection<R: AsyncRead + Unpin>(
                 event.kind
             {
                 // The app's worktrees follow a `claude -w` or a subagent's worktree.
-                state.projects(|projects| Control::Projects {
-                    projects: projects.list(),
-                });
+                let state = state.clone();
+                tokio::spawn(async move { state.worktrees_changed().await });
             }
             state.saw(&event).await;
             state.to_app(0, &Control::Agent(event)).await;
@@ -1047,6 +1141,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                 let reply = match added {
                     Ok(reply) => {
                         // It joined the current space.
+                        state.refollow.notify_one();
                         state.to_app(0, &state.projects.spaces_message()).await;
                         reply
                     }
@@ -1107,7 +1202,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             project,
             name,
             base,
-        }) => state.projects(move |projects| {
+        }) => state.change_worktrees(move |projects| {
             match projects.create_worktree(&project, &name, base.as_deref()) {
                 Ok((project, created)) => Control::WorktreeCreated {
                     project,
@@ -1123,7 +1218,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }),
         Ok(Control::RemoveWorktree { path, force }) => {
             let archiving = state.clone();
-            state.projects(move |projects| {
+            state.change_worktrees(move |projects| {
                 let archive = |root: &str| archiving.archive(root, &path);
                 match projects.remove_worktree(&path, force, procs::Source::System, archive) {
                     Ok(project) => Control::WorktreeRemoved { project, path },

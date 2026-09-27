@@ -341,6 +341,11 @@ async fn the_menu_removes_and_renames_worktrees() {
     ]);
     // Canonical, as the service lists it (on macOS the temp dir is under a symlink).
     let outside = outside.canonicalize().unwrap().display().to_string();
+    // Seen in git's worktree registry: the app gets the projects again (9.36).
+    let (0, Control::Projects { projects }) = conn.control().await else {
+        panic!("expected projects");
+    };
+    assert!(projects[0].worktrees.iter().any(|w| w.path == outside));
 
     let remove = |path: &str, force: bool| Control::RemoveWorktree {
         path: path.into(),

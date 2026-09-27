@@ -72,6 +72,11 @@ impl Projects {
         (projects, env.claude_config_dir)
     }
 
+    /// The current space's project folders, without asking git.
+    pub fn roots(&self) -> Vec<String> {
+        self.spaces().current().0
+    }
+
     /// The environment of the space of the project holding `cwd` (also what `gh` gets for a
     /// project, 9.30); the default one outside every project.
     pub fn space_env(&self, cwd: &str) -> SpaceEnv {
