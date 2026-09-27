@@ -11,7 +11,7 @@ import {
   MOCK_REFUSED_MODEL,
 } from "./mockChat";
 
-const MOCK_MODELS = MOCK_CHAT_MODELS.map(({ value, name }) => ({ value, name }));
+const MOCK_MODELS = MOCK_CHAT_MODELS.map(({ value, name, auto }) => ({ value, name, auto }));
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Long enough for a whole scripted turn at 1 ms a step. */

@@ -494,6 +494,7 @@ fn a_text_turn_opens_the_chat_then_shows_the_reply_and_its_usage() {
         models: vec![ChatModel {
             value: "haiku".into(),
             name: "Haiku".into(),
+            auto: false,
         }],
         api_key_source: None,
     };
@@ -1799,7 +1800,8 @@ fn model_names_are_short_and_never_options() {
 #[test]
 fn the_model_list_is_bounded_and_named() {
     let mut list = vec![
-        json!({"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus"}),
+        json!({"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus",
+               "supportsAutoMode": true}),
         json!({"value": "--bad", "displayName": "Bad"}),
         json!({"value": "sonnet", "resolvedModel": "--bad", "displayName": " \u{200b} "}),
         json!({"value": "haiku", "displayName": "h".repeat(MAX_ID + 1)}),
@@ -1811,6 +1813,7 @@ fn the_model_list_is_bounded_and_named() {
         let listed = ChatModel {
             value: value.into(),
             name: name.into(),
+            auto: value == "opus",
         };
         (listed, model.to_owned())
     };
@@ -1870,17 +1873,18 @@ fn a_model_switch_follows_claudes_answer() {
     let Some(Control::ChatOpened { models, .. }) = out.app.first() else {
         panic!("not opened: {out:?}")
     };
-    let names: Vec<(&str, &str)> = models
+    let names: Vec<(&str, &str, bool)> = models
         .iter()
-        .map(|m| (m.value.as_str(), m.name.as_str()))
+        .map(|m| (m.value.as_str(), m.name.as_str(), m.auto))
         .collect();
+    // Haiku has no auto mode.
     assert_eq!(
         names,
         [
-            ("default", "Default (recommended)"),
-            ("opus", "Opus 5.5"),
-            ("sonnet", "Sonnet 5"),
-            ("haiku", "Haiku 4.5"),
+            ("default", "Default (recommended)", true),
+            ("opus", "Opus 5.5", true),
+            ("sonnet", "Sonnet 5", true),
+            ("haiku", "Haiku 4.5", false),
         ]
     );
     let out = stream.line(Some(lines[1].as_bytes()));

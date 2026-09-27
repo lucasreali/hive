@@ -16,9 +16,9 @@ export const MOCK_CHAT_COMMANDS = ["compact", "clear", "review"];
  * `MOCK_REFUSED_MODEL`, as Claude refuses one it cannot run: an error entry, the model stays.
  */
 export const MOCK_CHAT_MODELS = [
-  { value: "default", name: "Default (recommended)", model: MOCK_CHAT_MODEL },
-  { value: "sonnet", name: "Sonnet", model: "claude-mock-sonnet" },
-  { value: "opus[1m]", name: "Opus (1M context)", model: "claude-mock-opus[1m]" },
+  { value: "default", name: "Default (recommended)", auto: true, model: MOCK_CHAT_MODEL },
+  { value: "sonnet", name: "Sonnet", auto: false, model: "claude-mock-sonnet" },
+  { value: "opus[1m]", name: "Opus (1M context)", auto: true, model: "claude-mock-opus[1m]" },
 ];
 export const MOCK_REFUSED_MODEL = "opus[1m]";
 
@@ -192,7 +192,7 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
       model,
       mode,
       commands: MOCK_CHAT_COMMANDS,
-      models: MOCK_CHAT_MODELS.map(({ value, name }) => ({ value, name })),
+      models: MOCK_CHAT_MODELS.map(({ value, name, auto }) => ({ value, name, auto })),
       api_key_source: null,
     });
     status(id, chat, {});

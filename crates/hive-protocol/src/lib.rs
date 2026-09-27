@@ -790,6 +790,8 @@ pub enum ChatMode {
 pub struct ChatModel {
     pub value: String,
     pub name: String,
+    /// claude offers auto mode on it (`supportsAutoMode`).
+    pub auto: bool,
 }
 
 /// An image of a user turn or a tool result.
@@ -1745,10 +1747,11 @@ mod tests {
                     models: vec![ChatModel {
                         value: "sonnet".into(),
                         name: "Sonnet 5".into(),
+                        auto: true,
                     }],
                     api_key_source: None,
                 },
-                r#"{"type":"chat_opened","chat":2,"cwd":"/r","session":"s","model":"m","mode":"plan","commands":["compact"],"models":[{"value":"sonnet","name":"Sonnet 5"}],"api_key_source":null}"#,
+                r#"{"type":"chat_opened","chat":2,"cwd":"/r","session":"s","model":"m","mode":"plan","commands":["compact"],"models":[{"value":"sonnet","name":"Sonnet 5","auto":true}],"api_key_source":null}"#,
             ),
             (
                 Control::ChatSend {

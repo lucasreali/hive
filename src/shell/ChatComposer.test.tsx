@@ -246,8 +246,8 @@ test("the mode selector shows the service's mode and asks it for another", () =>
 });
 
 const MODELS = [
-  { value: "default", name: "Default (recommended)" },
-  { value: "sonnet", name: "Sonnet 5" },
+  { value: "default", name: "Default (recommended)", auto: true },
+  { value: "sonnet", name: "Sonnet 5", auto: true },
 ];
 const optionTexts = () => screen.getAllByRole("option").map((o) => o.textContent);
 

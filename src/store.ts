@@ -378,8 +378,8 @@ export type ChatAnswer =
   | { kind: "answers"; answers: string[][] }
   | { kind: "approve_plan"; accept_edits: boolean }
   | { kind: "keep_planning"; feedback: string };
-/** A model Claude offers (8.9): `value` goes to `chatSetModel`, `name` is shown. */
-export type ChatModel = { value: string; name: string };
+/** A model Claude offers (8.9): `value` goes to `chatSetModel`, `name` is shown, `auto`: it offers auto mode. */
+export type ChatModel = { value: string; name: string; auto: boolean };
 export type ChatOpened = {
   chat: number;
   cwd: string;

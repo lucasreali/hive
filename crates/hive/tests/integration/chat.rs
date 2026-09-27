@@ -113,6 +113,7 @@ fn opened(chat: u32, cwd: &str, session: Option<&str>, mode: ChatMode) -> (u32, 
         models: vec![ChatModel {
             value: "haiku".into(),
             name: "Haiku".into(),
+            auto: false,
         }],
         api_key_source: None,
     };
