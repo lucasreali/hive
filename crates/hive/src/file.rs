@@ -344,10 +344,9 @@ pub fn delete(dir: &Path, path: &str, held: Held) -> io::Result<()> {
     let root = dir.canonicalize()?;
     let (at, kind) = entry(dir, &root, path)?;
     if kind.is_dir() {
-        // Resolved as stored (only the case may differ), so `held` compares it with resolved
-        // paths.
-        let at = at.canonicalize()?;
-        held(&at)?;
+        // `held` compares it resolved as stored (only the case may differ); the removal goes by
+        // `at`, whose last name is not followed even if it turned into a symlink meanwhile.
+        held(&at.canonicalize()?)?;
         bounded(&root, &at, path)?;
         // ponytail: what an agent adds between the count and the removal is removed too.
         fs::remove_dir_all(&at)?;
@@ -1433,6 +1432,23 @@ mod tests {
         super::delete(dir.path(), "a", &busy).unwrap();
         let src = dir.path().canonicalize().unwrap().join("src");
         assert_eq!(*asked.borrow(), [src]);
+    }
+
+    #[test]
+    fn a_folder_turned_into_a_symlink_meanwhile_is_not_followed() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "s").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().join("d");
+        std::fs::create_dir(&d).unwrap();
+        // After the folder was checked, something swaps it for a symlink to outside.
+        let swap = |_: &Path| {
+            std::fs::remove_dir(&d)?;
+            std::os::unix::fs::symlink(outside.path(), &d)
+        };
+        super::delete(dir.path(), "d", &swap).unwrap();
+        assert_eq!(names(dir.path()), Vec::<String>::new());
+        assert_eq!(names(outside.path()), ["secret"]);
     }
 
     #[test]
