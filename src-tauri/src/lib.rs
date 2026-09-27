@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    Control, Frame, FrameCodec, FrameError, FrameType, GhAccount, Role, SessionTarget, Settings,
-    SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, Role, SessionTarget,
+    Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -443,8 +443,8 @@ impl Hive {
     }
 
     /// Answered by `files` now and after every change in the worktree.
-    pub fn watch_worktree(&self, path: String) -> Result<(), String> {
-        self.link().send(0, &Control::WatchWorktree { path })
+    pub fn watch_worktree(&self, path: String, base: DiffBase) -> Result<(), String> {
+        self.link().send(0, &Control::WatchWorktree { path, base })
     }
 
     pub fn unwatch_worktree(&self) -> Result<(), String> {
@@ -468,8 +468,8 @@ impl Hive {
     }
 
     /// The answer arrives as `changes`.
-    pub fn list_changes(&self, path: String) -> Result<(), String> {
-        self.link().send(0, &Control::ListChanges { path })
+    pub fn list_changes(&self, path: String, base: DiffBase) -> Result<(), String> {
+        self.link().send(0, &Control::ListChanges { path, base })
     }
 
     /// The answer arrives as `sessions`.
@@ -499,8 +499,13 @@ impl Hive {
     }
 
     /// The answer arrives as `file`.
-    pub fn open_file(&self, worktree: String, path: String) -> Result<(), String> {
-        self.link().send(0, &Control::OpenFile { worktree, path })
+    pub fn open_file(&self, worktree: String, path: String, base: DiffBase) -> Result<(), String> {
+        let open = Control::OpenFile {
+            worktree,
+            path,
+            base,
+        };
+        self.link().send(0, &open)
     }
 
     /// The answer arrives as `file_saved` or `save_failed`.
@@ -918,8 +923,12 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn watch_worktree(hive: State<'_, Hive>, path: String) -> Result<(), String> {
-        hive.watch_worktree(path)
+    pub fn watch_worktree(
+        hive: State<'_, Hive>,
+        path: String,
+        base: DiffBase,
+    ) -> Result<(), String> {
+        hive.watch_worktree(path, base)
     }
 
     #[tauri::command]
@@ -955,13 +964,18 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn list_changes(hive: State<'_, Hive>, path: String) -> Result<(), String> {
-        hive.list_changes(path)
+    pub fn list_changes(hive: State<'_, Hive>, path: String, base: DiffBase) -> Result<(), String> {
+        hive.list_changes(path, base)
     }
 
     #[tauri::command]
-    pub fn open_file(hive: State<'_, Hive>, worktree: String, path: String) -> Result<(), String> {
-        hive.open_file(worktree, path)
+    pub fn open_file(
+        hive: State<'_, Hive>,
+        worktree: String,
+        path: String,
+        base: DiffBase,
+    ) -> Result<(), String> {
+        hive.open_file(worktree, path, base)
     }
 
     #[tauri::command]

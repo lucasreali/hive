@@ -1,4 +1,5 @@
-//! One file of a worktree for the viewer and diff (#31): its text on disk and at `HEAD`.
+//! One file of a worktree for the viewer and diff (#31): its text on disk and at its base
+//! (`HEAD`, or the merge-base the Changes panel compares with).
 //! Git runs as the executable with separate arguments.
 
 use std::ffi::OsStr;
@@ -12,10 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, SaveError};
 
-use crate::changes::{BINARY_PROBE, parse_status};
+use crate::changes::{self, BINARY_PROBE};
 use crate::git;
 
-/// Most bytes of each side (on disk, at `HEAD`) sent to the app.
+/// Most bytes of each side (on disk, at the base) sent to the app.
 pub const TEXT_LIMIT: u64 = 1_048_576; // 1 MiB
 /// Longest `path` accepted, Linux's `PATH_MAX`.
 const PATH_LIMIT: usize = 4096;
@@ -28,10 +29,11 @@ pub enum Side {
     Bytes(Vec<u8>),
 }
 
-/// The file `path` of the worktree at `dir`: on disk and at `HEAD`. `path` comes from the app:
-/// it must be relative, without `..`, and must not resolve (through symlinks) outside `dir`.
-pub fn read(dir: &Path, path: &str) -> io::Result<(Side, Side)> {
-    Ok((on_disk(dir, relative(path)?)?, at_head(dir, path)?))
+/// The file `path` of the worktree at `dir`: on disk and at `commit` (the Changes panel's
+/// base, see `changes::against`), else `HEAD`. `path` comes from the app: it must be
+/// relative, without `..`, and must not resolve (through symlinks) outside `dir`.
+pub fn read(dir: &Path, path: &str, commit: Option<&str>) -> io::Result<(Side, Side)> {
+    Ok((on_disk(dir, relative(path)?)?, at_base(dir, path, commit)?))
 }
 
 /// `path` from the app: relative, without `.` or `..`, at most [`PATH_LIMIT`] bytes.
@@ -74,16 +76,20 @@ fn on_disk(dir: &Path, rel: &Path) -> io::Result<Side> {
 }
 
 /// Where a save writes `rel`: the file itself (through symlinks), or a new file in a folder
-/// that resolves inside `dir`; with the file's permission bits when it exists.
+/// that resolves inside `dir`; with the file's permission bits when it exists. Never `.git` or
+/// inside it (#56): a committed symlink into `.git` would let a save rewrite its `config`.
 fn target(dir: &Path, rel: &Path) -> io::Result<(PathBuf, Option<u32>)> {
+    let root = dir.canonicalize()?;
     if let Some(real) = resolve(dir, rel)? {
+        let real = not_git(&root, real)?;
         let mode = real.metadata()?.permissions().mode();
         return Ok((real, Some(mode)));
     }
     // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
     let joined = dir.join(rel);
     let folder = inside(dir, joined.parent().unwrap_or(dir))?;
-    Ok((folder.join(joined.file_name().unwrap_or_default()), None))
+    let file = folder.join(joined.file_name().unwrap_or_default());
+    Ok((not_git(&root, file)?, None))
 }
 
 /// Temporary files of saves in progress, so two never share a name.
@@ -686,15 +692,23 @@ pub fn limited(input: &mut dyn Read) -> io::Result<Side> {
     Ok(Side::Bytes(bytes))
 }
 
-/// The blob at `HEAD`, looked up under the old path for a staged rename.
-fn at_head(dir: &Path, path: &str) -> io::Result<Side> {
-    if git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?.is_empty() {
-        return Ok(Side::Missing);
-    }
-    let blob = match blob(dir, path)? {
+/// The blob at `commit` (else `HEAD`), looked up under the old path for a rename since then
+/// (a staged one, against `HEAD`).
+fn at_base(dir: &Path, path: &str, commit: Option<&str>) -> io::Result<Side> {
+    let rev = match commit {
+        Some(commit) => commit,
+        None => {
+            let head = ["rev-parse", "--verify", "--quiet", "HEAD"];
+            if git::output(dir, &head, &[0, 1])?.is_empty() {
+                return Ok(Side::Missing);
+            }
+            "HEAD"
+        }
+    };
+    let blob = match blob(dir, rev, path)? {
         Some(blob) => Some(blob),
-        None => match renamed_from(dir, path)? {
-            Some(old) => blob(dir, &old)?,
+        None => match renamed_from(dir, path, commit)? {
+            Some(old) => blob(dir, rev, &old)?,
             None => None,
         },
     };
@@ -707,14 +721,14 @@ fn at_head(dir: &Path, path: &str) -> io::Result<Side> {
     git::output(dir, &["cat-file", "blob", &oid], &[0]).map(Side::Bytes)
 }
 
-/// The id and size of the blob at `path` in `HEAD`.
-fn blob(dir: &Path, path: &str) -> io::Result<Option<(String, u64)>> {
+/// The id and size of the blob at `path` in `rev`.
+fn blob(dir: &Path, rev: &str, path: &str) -> io::Result<Option<(String, u64)>> {
     let args = [
         "--literal-pathspecs",
         "ls-tree",
         "-l",
         "-z",
-        "HEAD",
+        rev,
         "--",
         path,
     ];
@@ -733,17 +747,23 @@ pub fn parse_ls_tree(out: &[u8]) -> Option<(String, u64)> {
     }
 }
 
-/// Where a staged rename to `path` came from.
-fn renamed_from(dir: &Path, path: &str) -> io::Result<Option<String>> {
-    let args = [
-        "status",
-        "--porcelain=v2",
-        "-z",
-        "--untracked-files=no",
-        "--find-renames",
-    ];
-    let status = git::output(dir, &args, &[0])?;
-    Ok(parse_status(&status)
+/// Where a rename to `path` since `commit` came from, as the Changes panel lists it; against
+/// `HEAD`, a staged rename.
+fn renamed_from(dir: &Path, path: &str, commit: Option<&str>) -> io::Result<Option<String>> {
+    let entries = match commit {
+        Some(commit) => changes::committed(dir, commit)?,
+        None => {
+            let args = [
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--untracked-files=no",
+                "--find-renames",
+            ];
+            changes::parse_status(&git::output(dir, &args, &[0])?)
+        }
+    };
+    Ok(entries
         .into_iter()
         .find(|(to, status, _)| to == path.as_bytes() && *status == FileStatus::Renamed)
         .and_then(|(_, _, from)| String::from_utf8(from?).ok()))
@@ -809,6 +829,7 @@ pub fn message(worktree: String, path: String, read: io::Result<(Side, Side)>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::health::tests::{commit, run};
     use serde_json::json;
 
     fn file(content: Option<&str>, base: Option<&str>) -> Control {
@@ -858,7 +879,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path().join("secret"), dir.path().join("out")).unwrap();
         std::os::unix::fs::symlink("gone", dir.path().join("dangling")).unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
-        let refused = |path: &str| read(dir.path(), path).unwrap_err().to_string();
+        let refused = |path: &str| read(dir.path(), path, None).unwrap_err().to_string();
         let not_inside = "not a relative path inside the worktree";
         for path in ["", "/etc/passwd", "../x", "sub/../../x", "./a", "sub/.."] {
             assert_eq!(refused(path), not_inside, "{path:?}");
@@ -883,7 +904,7 @@ mod tests {
         );
         assert!(on_disk(dir.path(), Path::new("sub/f/x")).is_err());
         assert_eq!(
-            read(dir.path(), &"a".repeat(PATH_LIMIT))
+            read(dir.path(), &"a".repeat(PATH_LIMIT), None)
                 .unwrap_err()
                 .kind(),
             {
@@ -1461,8 +1482,24 @@ mod tests {
         assert_eq!(err(rename(dir.path(), ".git/config", "x")), refused);
         assert_eq!(err(create(dir.path(), ".git", "x")), refused);
         assert_eq!(err(create_folder(dir.path(), "hooks", "x")), refused);
+        // Nor saved: through a committed symlink into `.git`, into a symlinked folder, or by name.
+        std::os::unix::fs::symlink("../.git/config", dir.path().join("src/notes")).unwrap();
+        let config = Some(version(b"c"));
+        let saving = |path: &str, version: Option<&str>| save(dir.path(), path, "x", version);
+        for (path, version) in [
+            ("src/notes", config.as_deref()),
+            (".git/config", config.as_deref()),
+            ("hooks/pre-commit", None),
+            (".git/new", None),
+        ] {
+            let failed = (SaveError::InvalidPath, refused.to_string());
+            assert_eq!(saving(path, version), Err(failed), "{path}");
+        }
         assert!(!dir.path().join(".git/hooks/pre-commit").exists());
-        assert!(dir.path().join(".git/config").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/config")).unwrap(),
+            "c"
+        );
         // A name that only starts like it is not `.git`.
         std::fs::create_dir(dir.path().join(".github")).unwrap();
         assert_eq!(
@@ -1766,6 +1803,45 @@ mod tests {
         );
         let over = vec![b'a'; TEXT_LIMIT as usize + 1];
         assert_eq!(limited(&mut &over[..]).unwrap(), Side::TooLarge);
+    }
+
+    #[test]
+    fn a_file_is_read_at_the_merge_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        run(root, &["init", "-q", "-b", "main"]);
+        commit(root, "a");
+        commit(root, "r");
+        let head = ["rev-parse", "HEAD"];
+        let base = String::from_utf8(git::output(root, &head, &[0]).unwrap()).unwrap();
+        let base = Some(base.trim());
+        std::fs::write(root.join("a"), "a2").unwrap();
+        run(root, &["mv", "r", "s"]);
+        run(root, &["commit", "-q", "-am", "b"]);
+        commit(root, "n");
+
+        assert_eq!(read(root, "a", base).unwrap(), (bytes("a2"), bytes("a")));
+        assert_eq!(read(root, "s", base).unwrap(), (bytes("r"), bytes("r")));
+        assert_eq!(read(root, "n", base).unwrap(), (bytes("n"), Side::Missing));
+        // Against HEAD, all of it is committed.
+        assert_eq!(read(root, "a", None).unwrap(), (bytes("a2"), bytes("a2")));
+        assert_eq!(read(root, "n", None).unwrap(), (bytes("n"), bytes("n")));
+        // Against HEAD, a staged rename reads its old path; before the first commit, nothing.
+        run(root, &["mv", "s", "t"]);
+        assert_eq!(read(root, "t", None).unwrap(), (bytes("r"), bytes("r")));
+        let fresh = tempfile::tempdir().unwrap();
+        run(fresh.path(), &["init", "-q"]);
+        std::fs::write(fresh.path().join("f"), "f").unwrap();
+        let first = read(fresh.path(), "f", None).unwrap();
+        assert_eq!(first, (bytes("f"), Side::Missing));
+        // Over the limit at the base too.
+        let big = "x".repeat(TEXT_LIMIT as usize + 1);
+        std::fs::write(root.join("big"), &big).unwrap();
+        run(root, &["add", "big"]);
+        run(root, &["commit", "-q", "-m", "big"]);
+        let over = read(root, "big", base).unwrap();
+        assert_eq!(over, (Side::TooLarge, Side::Missing));
+        assert_eq!(read(root, "big", None).unwrap().1, Side::TooLarge);
     }
 
     #[test]

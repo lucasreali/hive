@@ -165,9 +165,11 @@ pub fn parse_porcelain(out: &[u8]) -> Vec<Worktree> {
     list
 }
 
-/// Every worktree of the repository containing `dir`, the main one first.
+/// Every worktree of the repository containing `dir`, the main one first. Git gets
+/// [`git::TIME_LIMIT`]: projects are listed while the agents lock is held (9.13).
 pub fn list(dir: &Path) -> io::Result<Vec<Worktree>> {
-    git(dir, &["worktree", "list", "--porcelain", "-z"]).map(|out| parse_porcelain(&out))
+    let args = ["worktree", "list", "--porcelain", "-z"];
+    git::output_within(dir, &args, &[0], git::TIME_LIMIT).map(|out| parse_porcelain(&out))
 }
 
 /// Creates the worktree `name` for the repository containing `dir` (even from inside a

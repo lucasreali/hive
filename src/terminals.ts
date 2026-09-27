@@ -2,6 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
+import { openLink, safeUrl } from "./shell/Markdown";
 import {
   addTab,
   focusPane,
@@ -153,6 +154,17 @@ export const terminal = (id: number): Terminal | undefined => entries.get(id)?.t
 export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste(text);
 
 /**
+ * OSC 8 links in terminal output open as a Markdown link does (8.6), outside the app: never
+ * xterm's default, a browser `confirm()` and then `window.open` inside a Hive window (8.20).
+ */
+const LINKS = {
+  activate: (_event: MouseEvent, url: string) => {
+    const safe = safeUrl(url);
+    if (safe) void openLink(safe);
+  },
+};
+
+/**
  * Opens a terminal in `cwd` (a worktree path) and adds its tab, shown. The Terminal exists
  * before the service is asked, so no output is lost before the tab appears.
  */
@@ -160,6 +172,7 @@ export async function openTerminal(cwd: string): Promise<number> {
   const term = new Terminal({
     lineHeight: 1.2,
     allowProposedApi: true, // registerCharacterJoiner
+    linkHandler: LINKS,
     ...termOptions(useHive.getState().settings),
   });
   let id: number;
