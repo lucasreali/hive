@@ -142,7 +142,7 @@ fn list(
         Err(err) => return Some(failed(err.to_string(), 0)),
     };
     let env = projects.space_env(&id);
-    let key = format!("{id}\n{:?}\n{:?}", env.gh_config_dir, env.gh_account);
+    let key = key(&id, &env);
     let cache = || cache.lock().unwrap_or_else(PoisonError::into_inner);
     match cache().plan(&key, force, Instant::now()) {
         Plan::Send(reply) => return Some(*reply),
@@ -161,6 +161,11 @@ fn list(
         Err(error) => failed(error, now_ms()),
     };
     Some(cache().done(&key, reply, Instant::now()))
+}
+
+/// The list's key in the [`Cache`]: the project and the space's account.
+fn key(id: &str, env: &SpaceEnv) -> String {
+    format!("{id}\n{:?}\n{:?}", env.gh_config_dir, env.gh_account)
 }
 
 /// The repository, the account's pull requests and those asking for its review, in one

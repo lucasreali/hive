@@ -633,6 +633,16 @@ fn the_list_is_one_graphql_request_as_the_space_account() {
     // Asked again within the interval: the same answer, GitHub not asked.
     assert_eq!(setup.list(false), replies);
     assert_eq!(setup.calls().len(), 1);
+    // While a fetch runs, another request waits for its answer.
+    let key = key(&setup.id, &SpaceEnv::default());
+    let running = setup.cache.lock().unwrap().plan(&key, true, Instant::now());
+    assert_eq!(running, Plan::Fetch);
+    assert_eq!(setup.list(true), []);
+    setup
+        .cache
+        .lock()
+        .unwrap()
+        .done(&key, replies[0].clone(), Instant::now());
     // On demand: asked again; gh's error is shown without the query.
     std::fs::write(setup.tmp.path().join("fail"), "gh: Something went wrong\n").unwrap();
     let [
