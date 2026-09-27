@@ -251,7 +251,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_peer_of_another_user_is_refused() {
-        let (ours, _) = UnixStream::pair().unwrap();
+        // The other end stays open: macOS has no peer credentials for a closed peer.
+        let (ours, _theirs) = UnixStream::pair().unwrap();
         let me = nix::unistd::getuid().as_raw();
         check_peer(&ours, me).unwrap();
         let err = check_peer(&ours, me + 1).unwrap_err();
