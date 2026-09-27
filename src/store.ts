@@ -626,6 +626,8 @@ export type HiveState = {
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
   settingsError: string | null;
+  /** A `set_settings` sent and not answered yet: the next save waits for its answer (9.24). */
+  settingsPending: boolean;
   /** The last `diagnostics`, or null until asked. */
   diagnostics: Diagnostics | null;
   /** In the service's order; `null` until the service sent the list. */
@@ -716,6 +718,7 @@ export const initialState: HiveState = {
   connection: { status: "connecting" },
   settings: DEFAULT_SETTINGS,
   settingsError: null,
+  settingsPending: false,
   diagnostics: null,
   projects: null,
   addProjectError: null,
@@ -982,9 +985,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "welcome":
       return { connection: { status: "connected", version: m.version, distro: m.distro } };
     case "settings":
-      return { settings: m.settings, settingsError: null };
+      return { settings: m.settings, settingsError: null, settingsPending: false };
     case "settings_failed":
-      return { settingsError: m.message, notice: m.message };
+      return { settingsError: m.message, notice: m.message, settingsPending: false };
     case "diagnostics": {
       const { type: _, ...diagnostics } = m;
       return { diagnostics };
