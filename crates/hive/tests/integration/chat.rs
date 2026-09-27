@@ -724,3 +724,107 @@ async fn claude_is_found_and_run_on_the_path_of_the_users_shell() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+#[tokio::test]
+async fn a_chat_is_named_by_its_first_prompt_then_by_a_rename() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = sandbox(&repo);
+    // Answers `initialize`, then each turn replays the `title` fixture up to its `result`.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chat/title.jsonl");
+    let script = format!(
+        r#"#!/bin/sh
+exec 3< '{}'
+IFS= read -r line <&3
+IFS= read -r request
+printf '%s\n' "$line"
+while IFS= read -r request; do
+    while IFS= read -r line <&3; do
+        printf '%s\n' "$line"
+        case $line in *'"type":"result"'*) break ;; esac
+    done
+done
+"#,
+        fixture.display()
+    );
+    write_claude(&fake, &script);
+    let folder: String = root
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let logs = repo.env.path("home/.claude/projects").join(folder);
+    std::fs::create_dir_all(&logs).unwrap();
+    let log = logs.join(format!("{SESSION}.jsonl"));
+    let mut daemon = repo.env.daemon_on_path(&fake);
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    app.send(2, open(&root, None, None)).await;
+    assert_eq!(app.control().await, asked(2, &root));
+    app.send(2, confirm(2, &root, true)).await;
+    assert!(matches!(app.control().await, (0, Control::Settings { .. })));
+    assert!(matches!(
+        app.control().await,
+        (2, Control::ChatOpened { chat: 2, .. })
+    ));
+    // No name before the first prompt.
+    let start = json!({"session_id": SESSION, "cwd": root});
+    let seen = hook(&repo, &mut app, "2", "SessionStart", start).await;
+    assert!(
+        matches!(seen[0], (2, Control::AgentDetected { .. })),
+        "{seen:?}"
+    );
+    let titled = |m: &(u32, Control)| matches!(m, (_, Control::AgentTitle { .. }));
+    assert!(!seen.iter().any(titled), "{seen:?}");
+
+    // Claude writes the prompt to the session's log before it replays it: the prompt names the
+    // chat then, before the turn ends.
+    let prompt = "Explain in one sentence what a git worktree is. Do not use any tools.";
+    let record = json!({"type": "user", "message": {"role": "user", "content": prompt}});
+    std::fs::write(&log, format!("{record}\n")).unwrap();
+    send(&mut app, 2, prompt).await;
+    let mut before = Vec::new();
+    let title = until(&mut app, |message| match message {
+        (2, Control::AgentTitle { id, title }) if id == SESSION => Some(title.clone()),
+        other => {
+            before.push(other.clone());
+            None
+        }
+    })
+    .await;
+    assert_eq!(title, prompt);
+    let usage = |m: &(u32, Control)| match m {
+        (2, Control::ChatEntries { entries, .. }) => {
+            entries.iter().any(|e| e.kind == ChatEntryKind::Usage)
+        }
+        _ => false,
+    };
+    assert!(!before.iter().any(usage), "after the turn: {before:?}");
+
+    // `/rename` writes a `custom-title` before its turn ends; the first turn's end did not send
+    // the same name again.
+    let renamed = json!({"type": "custom-title", "customTitle": "hive spike title",
+        "sessionId": SESSION});
+    std::fs::write(&log, format!("{record}\n{renamed}\n")).unwrap();
+    send(&mut app, 2, "/rename hive spike title").await;
+    let mut between = Vec::new();
+    let title = until(&mut app, |message| match message {
+        (2, Control::AgentTitle { title, .. }) => Some(title.clone()),
+        other => {
+            between.push(other.clone());
+            None
+        }
+    })
+    .await;
+    assert_eq!(title, "hive spike title");
+    assert!(
+        between.iter().any(usage),
+        "the first turn ended: {between:?}"
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

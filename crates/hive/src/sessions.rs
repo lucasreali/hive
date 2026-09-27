@@ -327,12 +327,14 @@ impl Sessions {
         Ok(sessions.into_iter().map(|(session, _)| session).collect())
     }
 
-    /// The name of the session `id` that runs in `cwd` (the user's, else Claude's), from its
-    /// log in the folder Claude keeps for `cwd`.
+    /// The name of the session `id` that runs in `cwd` (the user's, else Claude's, else its
+    /// first prompt, as the sessions list shows it), from its log in the folder Claude keeps
+    /// for `cwd`.
     pub fn title(&self, id: &str, cwd: &str) -> Option<String> {
         let log = self.log(id, cwd)?;
         let meta = log.metadata().ok()?;
-        self.summary(&log, meta.modified().ok()?, meta.len())?.title
+        let summary = self.summary(&log, meta.modified().ok()?, meta.len())?;
+        summary.title.or(summary.first_prompt)
     }
 
     /// The log of the session `id` that ran in `cwd`, in the folder Claude keeps for `cwd`,
@@ -610,9 +612,11 @@ not json
         let root = tmp.path().join("projects");
         let folder = root.join(normalized("/r/x"));
         std::fs::create_dir_all(&folder).unwrap();
+        // A name wins over the first prompt, which names a session that has none (a chat's:
+        // Claude writes no `ai-title` for a stream-json session, 8.11).
         std::fs::write(
             folder.join("s.jsonl"),
-            r#"{"type":"ai-title","aiTitle":"Named"}"#,
+            "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}\n{\"type\":\"ai-title\",\"aiTitle\":\"Named\"}",
         )
         .unwrap();
         std::fs::write(
@@ -633,7 +637,7 @@ not json
         assert_eq!(sessions.title("s", "/r/x"), Some("Named".into()));
         assert_eq!(sessions.log("s", "/r/x"), Some(folder.join("s.jsonl")));
         assert_eq!(sessions.log("l", "/r/x"), None);
-        assert_eq!(sessions.title("u", "/r/x"), None);
+        assert_eq!(sessions.title("u", "/r/x"), Some("x".into()));
         assert_eq!(sessions.title("l", "/r/x"), None);
         assert_eq!(sessions.title("o", "/r/x"), None);
         assert_eq!(sessions.title("s", "/r/elsewhere"), None);

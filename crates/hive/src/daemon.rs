@@ -802,6 +802,15 @@ impl State {
         if let Some(event) = &out.turn {
             self.saw(event).await;
         }
+        // A chat's session gets no name from Claude (8.11): its first prompt names it as soon
+        // as Claude took it, before the turn ends.
+        if out.prompted {
+            let mut agents = self.agents.lock().await;
+            if let Some((id, agent)) = agents.iter_mut().find(|(_, a)| a.channel == channel) {
+                let id = id.clone();
+                self.retitle(&id, agent).await;
+            }
+        }
     }
 
     /// `close_chat`: closes claude's stdin, then signals it until it ends ([`chat::stop`]);

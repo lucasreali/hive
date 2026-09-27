@@ -688,7 +688,7 @@ one of them on Opus). Every scenario also copies its session transcript to
 | `auto-start`, `auto-switch`, `auto-switch-haiku` | 8.4 | `--permission-mode auto`, and `set_permission_mode {mode: "auto"}` (on `--thinking-model` and on haiku): the `control_response`, `system/init.permissionMode`, whether `ls` still asks |
 | `thinking-sonnet`, `thinking-summaries` | 8.7 | Thinking blocks and `thinking_delta`s on `--thinking-model` (default `sonnet`), `--effort high`; the second with `showThinkingSummaries: true` in `--settings` (the documented setting that stops the Anthropic API redacting thinking) |
 | `model-switch` | 8.9 | The `initialize` reply's `models`, then `set_model` to `--switch-model` (default `sonnet`) and to an unknown name, with each reply and the next `system/init` |
-| `title` | 8.11 | Two turns and `/rename hive spike title`; whether the transcript gets `ai-title` / `custom-title` |
+| `title` | 8.11 | Two turns and `/rename hive spike title`; whether the transcript gets `ai-title` / `custom-title`. Recorded (claude 2.1.283): no `ai-title`; `/rename` works (its turn replays the command and ends with the `result` "Session renamed to: …") and writes `custom-title` first. Fixture `tests/fixtures/chat/title.jsonl` |
 | `mention` | 8.12 | A prompt with `@notes.txt` and `@subdir/`; whether the file content or listing reaches the transcript without a tool call |
 
 ---

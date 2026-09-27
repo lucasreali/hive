@@ -25,6 +25,7 @@ fn replay(stream: &mut Stream, name: &str) -> Out {
         all.app.extend(out.app);
         all.write.extend(out.write);
         all.turn = out.turn.or(all.turn);
+        all.prompted |= out.prompted;
     }
     all
 }
@@ -454,6 +455,7 @@ fn a_text_turn_opens_the_chat_then_shows_the_reply_and_its_usage() {
             ],
             write: vec![user],
             turn: None,
+            prompted: false,
         }
     );
     let out = replay(&mut stream, "text");
@@ -489,6 +491,27 @@ fn a_text_turn_opens_the_chat_then_shows_the_reply_and_its_usage() {
     );
     assert!(out.write.is_empty());
     assert_eq!(out.turn, turn(EventKind::TurnFinished));
+    assert!(out.prompted);
+}
+
+#[test]
+fn only_a_replayed_prompt_of_the_main_thread_says_claude_took_it() {
+    let mut stream = stream();
+    let content = json!({"role": "user", "content": "hi"});
+    let line = |replay: bool, parent: Option<&str>| {
+        let line = json!({"type": "user", "isReplay": replay, "parent_tool_use_id": parent,
+            "message": content});
+        line.to_string().into_bytes()
+    };
+    // Its entry showed when it was sent; the replay only says claude took it.
+    let taken = Out {
+        prompted: true,
+        ..Out::default()
+    };
+    assert_eq!(stream.line(Some(&line(true, None))), taken);
+    // A subagent's prompt, a tool's result.
+    assert!(!stream.line(Some(&line(true, Some("toolu_1")))).prompted);
+    assert!(!stream.line(Some(&line(false, None))).prompted);
 }
 
 #[test]
@@ -822,6 +845,7 @@ fn permission_requests_wait_for_the_humans_answer_given_once() {
             app: noted(5, "Allowed Write: /home/u/proj/hello.txt", "req_1"),
             write: vec![allowed("req_1", input)],
             turn: waiting("Bash"),
+            prompted: false,
         }
     );
     // Once only; never an id of no pending request.
@@ -860,6 +884,7 @@ fn permission_requests_wait_for_the_humans_answer_given_once() {
             app: noted(6, "Denied Bash: touch made-by-bash.txt", "req_2"),
             write: vec![denied("req_2", "The user denied this.")],
             turn: working(),
+            prompted: false,
         }
     );
 }
@@ -951,6 +976,7 @@ fn questions_are_answered_with_their_labels_or_a_free_text() {
             app: noted(4, "Answered: Portuguese", "req_3"),
             write: vec![chosen(json!("Portuguese"))],
             turn: working(),
+            prompted: false,
         }
     );
     // A free text, up to 4 KiB.
@@ -1441,7 +1467,6 @@ fn garbage_unknown_and_oversized_lines_are_harmless() {
         b"[1, 2]",
         br#"{"type": "future_thing", "subtype": "x"}"#,
         br#"{"type": "system", "subtype": "hook_started"}"#,
-        br#"{"type": "user", "isReplay": true, "message": {"content": "mine"}}"#,
         br#"{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "nope"}]}}"#,
         br#"{"type": "user", "message": {"content": [{"type": "other"}]}}"#,
         br#"{"type": "control_response", "response": {"request_id": "hive-9"}}"#,

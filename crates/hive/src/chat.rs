@@ -450,6 +450,8 @@ pub struct Out {
     pub write: Vec<Value>,
     /// Fed to the agent's state like a hook event.
     pub turn: Option<AgentEvent>,
+    /// claude took a prompt (its replay): the session's log now holds it, which may name it.
+    pub prompted: bool,
 }
 
 /// The entry growing from a content block's deltas (spike 4.14), until its `assistant` message.
@@ -724,7 +726,10 @@ impl Stream {
                 entries.push(self.entry(ChatEntryKind::Note, note, None));
             }
             ("assistant", _) => self.assistant(message, parent, entries),
-            ("user", _) => self.user(message, parent, entries),
+            ("user", _) => {
+                out.prompted |= parent.is_none() && message["isReplay"] == true;
+                self.user(message, parent, entries);
+            }
             ("result", _) => self.result(message, entries, out),
             ("rate_limit_event", _) => self.rate_limit(&message["rate_limit_info"], entries),
             // Main thread only; a subagent's would be ignored.
