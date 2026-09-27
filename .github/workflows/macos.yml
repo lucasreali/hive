@@ -25,15 +25,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      # The Tauri CLI that bundles comes from package.json; macos.yml itself, so a change to
-      # the job runs it.
+      # The root Cargo.toml holds the release profile; the Tauri CLI that bundles comes from
+      # package.json; macos.yml itself, so a change to the job runs it.
       - id: diff
         run: |
           bundle=true
           if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
             # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
             files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
-            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.lock$|package\.json$|bun\.lock$|\.github/workflows/macos\.yml$)' <<< "$files" ||
+            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|\.github/workflows/macos\.yml$)' <<< "$files" ||
               bundle=false
           fi
           echo "bundle=$bundle" | tee -a "$GITHUB_OUTPUT"
