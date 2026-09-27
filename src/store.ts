@@ -793,9 +793,17 @@ export function safeStorage(): Storage | null {
   }
 }
 
-/** Sets a side's width (kept within its limits) and remembers both. */
-export function setWidth(side: Side, width: number): void {
+/**
+ * Sets a side's width (kept within its limits) and, unless `persist` is false (a drag in
+ * progress, saved once on release by `saveWidths`), remembers them all.
+ */
+export function setWidth(side: Side, width: number, persist = true): void {
   useHive.setState({ [widthKey(side)]: clampWidth(side, width) });
+  if (persist) saveWidths();
+}
+
+/** Remembers the current widths between runs. */
+export function saveWidths(): void {
   const { sidebarWidth, panelWidth, splitPercent } = useHive.getState();
   try {
     safeStorage()?.setItem(STORAGE, JSON.stringify({ sidebarWidth, panelWidth, splitPercent }));
