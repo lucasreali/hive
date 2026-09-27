@@ -311,6 +311,11 @@ pub enum Control {
         accounts: Vec<GhLogin>,
         problem: Option<String>,
     },
+    /// Something the human should know that has no place of its own, shown in the status bar
+    /// as is: e.g. a terminal that could not get its space's GitHub account (9.30).
+    Notice {
+        message: String,
+    },
     /// App → service: the local and remote branches of a followed project, answered by
     /// `Branches`.
     ListBranches {
@@ -1666,6 +1671,9 @@ mod tests {
             Control::DeleteSpace { id: "x".into() },
             Control::SelectSpace { id: "x".into() },
             Control::SpaceFailed {
+                message: "m".into(),
+            },
+            Control::Notice {
                 message: "m".into(),
             },
             Control::SwitchGhAccount {

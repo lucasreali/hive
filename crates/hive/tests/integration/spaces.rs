@@ -255,7 +255,7 @@ case "$1 $2" in
     '  - Active account: true' \
     '  ✓ Logged in to github.com account octo-work (/x/hosts.yml)' \
     '  - Active account: false' ;;
-  "auth token") echo "tok-$6" ;;
+  "auth token") [ "$6" != octo-gone ] || {{ echo 'no oauth token found for octo-gone' >&2; exit 1; }}; echo "tok-$6" ;;
 esac
 "#,
         log.display()
@@ -351,6 +351,21 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
         let expected = format!("token={token}|github.com.");
         app.output_until(channel, &expected).await;
     }
+    // An account gh has no token for: the terminal opens anyway, and the human is told.
+    let gone = Control::UpdateSpace {
+        id: "space-1".into(),
+        name: "Work".into(),
+        env: space("octo-gone"),
+    };
+    replies.push(ask(&mut app, gone).await);
+    let cwd = repo.root.display().to_string();
+    let (cols, rows) = (80, 24);
+    app.send(3, Control::OpenTerminal { cwd, cols, rows }).await;
+    let notice = Control::Notice {
+        message: "No GitHub token for octo-gone on github.com: this terminal uses gh's active account (gh auth token --hostname github.com --user octo-gone failed: no oauth token found for octo-gone)".into(),
+    };
+    assert_eq!(app.control().await, (0, notice));
+    assert_eq!(app.control().await, (3, Control::TerminalOpened));
 
     // gh's own active account changes only when asked for.
     let switch = Control::SwitchGhAccount {
@@ -383,6 +398,7 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
             "auth status|",
             "auth token --hostname github.com --user octo-work|",
             "auth token --hostname github.com --user octo-personal|",
+            "auth token --hostname github.com --user octo-gone|",
             "auth switch --hostname github.com --user octo-work|",
             "auth status|",
         ]

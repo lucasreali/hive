@@ -6,6 +6,8 @@
 # only records what is missing. Needs python3 (to pick ids out of the JSON).
 # Run from a checkout of this repository: scripts/spike/record-gh.sh
 set -eu
+# The recordings may hold a private repository's data: readable by this user only.
+umask 077
 out=/var/tmp/hive-gh-rec
 repo=lucasreali/hive
 mkdir -p "$out"
@@ -77,5 +79,5 @@ if [ -f "$out/run-view.out" ] && [ ! -f "$out/job-log.out" ]; then
 fi
 
 # gh prints a token only with --show-token, never used here; check anyway before sharing.
-grep -rlE 'gh[opsu]_[A-Za-z0-9]{30,}' "$out" && echo "WARNING: a token-like string is in the files above" || true
+grep -rlE 'gh[opsu]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}' "$out" && echo "WARNING: a token-like string is in the files above" || true
 echo "recorded into $out"

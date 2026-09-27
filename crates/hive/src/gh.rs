@@ -16,6 +16,9 @@ use crate::git;
 
 /// How long one `gh` command may take (most of them call GitHub).
 pub const TIME: Duration = Duration::from_secs(30);
+/// How long `gh auth token` and `gh auth switch` may take: they only read and write `gh`'s
+/// config, and a terminal waits for the token.
+const LOCAL_TIME: Duration = Duration::from_secs(5);
 /// Most bytes read from `gh auth status`, `gh auth token` or `gh auth switch`.
 const AUTH_OUTPUT: u64 = 64 * 1024;
 /// Most accounts listed.
@@ -60,15 +63,14 @@ impl Gh {
     }
 
     /// `gh <args>` in `cwd` (the service's when `None`) with `config_dir` as `GH_CONFIG_DIR`
-    /// and, given an account's token, `GH_TOKEN` and `GH_HOST`; any exit code outside `ok` is
-    /// an error carrying `gh`'s stderr.
+    /// and `vars` (an account's token, [`token_vars`]); any exit code outside `ok` is an error
+    /// carrying `gh`'s stderr, and so is more than `limit` bytes or `time` passing.
     fn output(
         &self,
-        config_dir: Option<&str>,
-        token: Option<(&GhAccount, &str)>,
+        (config_dir, vars): (Option<&str>, &[(&'static str, String)]),
         cwd: Option<&Path>,
         args: &[&str],
-        (ok, limit): (&[i32], u64),
+        (ok, limit, time): (&[i32], u64, Duration),
     ) -> Result<Vec<u8>, String> {
         let mut command = Command::new(&self.program);
         for key in CLEARED {
@@ -83,14 +85,12 @@ impl Gh {
             .env("GH_PAGER", "cat")
             .args(args);
         command.envs(config_dir.map(|dir| ("GH_CONFIG_DIR", dir)));
-        if let Some((account, token)) = token {
-            command.env("GH_TOKEN", token).env("GH_HOST", &account.host);
-        }
+        command.envs(vars.iter().cloned());
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
         let os: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
-        let out = git::limited(command, "gh", &os, &[], ok, limit, Some(TIME));
+        let out = git::limited(command, "gh", &os, &[], ok, limit, Some(time));
         out.map_err(|err| match err.kind() {
             io::ErrorKind::NotFound => NOT_INSTALLED.to_owned(),
             _ => err.to_string(),
@@ -102,13 +102,8 @@ impl Gh {
     /// per account: only on request, never polled.
     pub fn accounts(&self, config_dir: Option<&str>) -> Result<Vec<GhLogin>, String> {
         // 1: no account at all, or the active one failed (the others are still listed).
-        let out = self.output(
-            config_dir,
-            None,
-            None,
-            &["auth", "status"],
-            (&[0, 1], AUTH_OUTPUT),
-        )?;
+        let args = ["auth", "status"];
+        let out = self.output((config_dir, &[]), None, &args, (&[0, 1], AUTH_OUTPUT, TIME))?;
         let accounts = parse_status(&String::from_utf8_lossy(&out));
         match accounts.is_empty() {
             true => Err(NOT_LOGGED_IN.to_owned()),
@@ -121,7 +116,8 @@ impl Gh {
         check_account(account)?;
         let GhAccount { host, login } = account;
         let args = ["auth", "token", "--hostname", host, "--user", login];
-        let out = self.output(config_dir, None, None, &args, (&[0], AUTH_OUTPUT))?;
+        let limits = (&[0][..], AUTH_OUTPUT, LOCAL_TIME);
+        let out = self.output((config_dir, &[]), None, &args, limits)?;
         let out = String::from_utf8(out).unwrap_or_default();
         let token = out.trim();
         let usable = token.len() <= TOKEN_LIMIT && token.bytes().all(|b| b.is_ascii_graphic());
@@ -136,7 +132,8 @@ impl Gh {
         check_account(account)?;
         let GhAccount { host, login } = account;
         let args = ["auth", "switch", "--hostname", host, "--user", login];
-        self.output(config_dir, None, None, &args, (&[0], AUTH_OUTPUT))
+        let limits = (&[0][..], AUTH_OUTPUT, LOCAL_TIME);
+        self.output((config_dir, &[]), None, &args, limits)
             .map(drop)
     }
 
@@ -155,23 +152,19 @@ impl Gh {
         (accounts, switched.and(listed).err())
     }
 
-    /// What a terminal of a space with `env` gets besides `spaces::vars`: its account's
-    /// `GH_TOKEN` and `GH_HOST`. None without an account, or when `gh` gives no token (a
-    /// warning then goes to the log, never the token).
-    pub fn vars(&self, env: &SpaceEnv) -> Vec<(&'static str, String)> {
+    /// What a terminal of a space with `env` gets besides `spaces::vars`: its account's token
+    /// ([`token_vars`]); none without an account. When `gh` gives no token, why, to show
+    /// (never holding the token): the terminal then uses `gh`'s active account.
+    pub fn vars(&self, env: &SpaceEnv) -> Result<Vec<(&'static str, String)>, String> {
         let Some(account) = &env.gh_account else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        match self.token(env.gh_config_dir.as_deref(), account) {
-            Ok(token) => vec![("GH_TOKEN", token), ("GH_HOST", account.host.clone())],
-            Err(err) => {
-                eprintln!(
-                    "hive: warning: no GitHub token for {}: {err}",
-                    account.login
-                );
-                Vec::new()
-            }
-        }
+        let token = self.token(env.gh_config_dir.as_deref(), account);
+        let GhAccount { host, login } = account;
+        let token = token.map_err(|err| {
+            format!("No GitHub token for {login} on {host}: this terminal uses gh's active account ({err})")
+        })?;
+        Ok(token_vars(account, token))
     }
 
     /// `gh <args>` in `cwd` as a terminal of the space with `env` would run it: with its
@@ -187,15 +180,24 @@ impl Gh {
         limit: u64,
     ) -> Result<Vec<u8>, String> {
         let config_dir = env.gh_config_dir.as_deref();
-        let token = match &env.gh_account {
-            Some(account) => Some((account, self.token(config_dir, account)?)),
-            None => None,
+        let vars = match &env.gh_account {
+            Some(account) => token_vars(account, self.token(config_dir, account)?),
+            None => Vec::new(),
         };
-        let token = token
-            .as_ref()
-            .map(|(account, token)| (*account, token.as_str()));
-        self.output(config_dir, token, Some(cwd), args, (&[0], limit))
+        self.output((config_dir, &vars), Some(cwd), args, (&[0], limit, TIME))
     }
+}
+
+/// The environment giving `gh` `account`'s `token`: `GH_TOKEN` on github.com and `*.ghe.com`,
+/// `GH_ENTERPRISE_TOKEN` on any other host (GitHub Enterprise Server, where `gh` ignores
+/// `GH_TOKEN`), and `GH_HOST`.
+fn token_vars(account: &GhAccount, token: String) -> Vec<(&'static str, String)> {
+    let host = account.host.as_str();
+    let key = match host == "github.com" || host.ends_with(".ghe.com") {
+        true => "GH_TOKEN",
+        false => "GH_ENTERPRISE_TOKEN",
+    };
+    vec![(key, token), ("GH_HOST", account.host.clone())]
 }
 
 /// The accounts in `gh auth status`'s output (gh 2.40 and later: "✓ Logged in to <host>
@@ -497,16 +499,22 @@ esac
     fn a_space_account_gives_its_token_and_host_only() {
         let fake = Fake::new(STATUS);
         let mut env = SpaceEnv::default();
-        assert_eq!(fake.gh.vars(&env), []);
+        assert_eq!(fake.gh.vars(&env), Ok(vec![]));
         assert_eq!(fake.log(), "");
         env.gh_account = Some(account("github.com", "me"));
-        let expected = [
+        let expected = vec![
             ("GH_TOKEN", "tok-me".into()),
             ("GH_HOST", "github.com".into()),
         ];
-        assert_eq!(fake.gh.vars(&env), expected);
+        assert_eq!(fake.gh.vars(&env), Ok(expected));
         env.gh_account = Some(account("github.com", "fail"));
-        assert_eq!(fake.gh.vars(&env), []);
+        let failed = "No GitHub token for fail on github.com: this terminal uses gh's active account (gh auth token --hostname github.com --user fail failed: no oauth token found for me)";
+        assert_eq!(fake.gh.vars(&env), Err(failed.to_owned()));
+        // Other hosts: gh reads GH_TOKEN on github.com and GHE.com only.
+        let ghe = |host: &str| token_vars(&account(host, "me"), "t".into())[0].0;
+        assert_eq!(ghe("tenant.ghe.com"), "GH_TOKEN");
+        assert_eq!(ghe("ghe.example:8443"), "GH_ENTERPRISE_TOKEN");
+        assert_eq!(ghe("ghe.com"), "GH_ENTERPRISE_TOKEN");
     }
 
     #[test]

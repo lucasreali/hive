@@ -48,6 +48,7 @@ export type ServiceMessage =
   | { type: "spaces"; spaces: Space[]; current: string }
   | { type: "space_failed"; message: string }
   | ({ type: "gh_accounts" } & GhAccounts)
+  | { type: "notice"; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -1194,6 +1195,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "space_failed":
       return { spaceError: m.message };
+    case "notice":
+      return { notice: m.message };
     case "gh_accounts": {
       const { type: _, ...accounts } = m;
       return { ghAccounts: accounts };

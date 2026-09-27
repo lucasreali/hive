@@ -497,7 +497,14 @@ impl State {
         let mut env = crate::spaces::vars(&space);
         if space.gh_account.is_some() {
             let gh = self.gh().await;
-            env.extend(tokio::task::block_in_place(|| gh.vars(&space)));
+            match tokio::task::block_in_place(|| gh.vars(&space)) {
+                Ok(vars) => env.extend(vars),
+                // It still opens, and the human sees it would not act as the space's account.
+                Err(message) => {
+                    eprintln!("hive: warning: {message}");
+                    self.to_app(0, &Control::Notice { message }).await;
+                }
+            }
         }
         env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
         let claude_dir = space.claude_config_dir;
