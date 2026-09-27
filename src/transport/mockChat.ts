@@ -11,6 +11,9 @@ import type {
 export const CHAT_STEP_MS = 150;
 export const MOCK_CHAT_MODEL = "claude-mock";
 export const MOCK_CHAT_COMMANDS = ["compact", "clear", "review"];
+/** claude's refusal of auto mode (recorded, 2.1.283 on haiku). */
+export const MOCK_AUTO_REFUSED =
+  "Cannot set permission mode to auto: auto mode unavailable for this model";
 
 /** `request` of a turn whose text holds the key (the first key found wins). */
 export const MOCK_CHAT_REQUESTS: Record<
@@ -116,10 +119,15 @@ export const MOCK_MARKDOWN = [
  * `subagent` adds an `Agent` call with its subagent's entries, `markdown` a reply with a heading,
  * a wide table and a code block (8.6), `compact` a divider, `error`
  * a retry and an error entry, `crash` closes the chat with an error. The first chat in each
- * folder asks `confirm_chat_folder`. The first prompt names the session, then `/rename <name>`
- * does (8.11).
+ * folder asks `confirm_chat_folder`. With `denyAuto`, switching to auto is refused as claude
+ * refuses it (8.4). The first prompt
+ * names the session, then `/rename <name>` does (8.11).
  */
-export function createMockChat(send: (message: ServiceMessage) => void, step = CHAT_STEP_MS) {
+export function createMockChat(
+  send: (message: ServiceMessage) => void,
+  step = CHAT_STEP_MS,
+  denyAuto = false,
+) {
   const chats = new Map<number, MockChat>();
   const confirmed = new Set<string>();
   /** Chats waiting for `confirm_chat_folder`'s answer. */
@@ -327,8 +335,13 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
     setMode(id: number, mode: ChatMode) {
       const chat = chats.get(id);
       if (!chat) return;
-      chat.mode = mode;
-      later(() => status(id, chat, {}));
+      // As claude on a model without auto mode (8.4): its message, and the mode stays.
+      const refused = denyAuto && mode === "auto";
+      if (!refused) chat.mode = mode;
+      later(() => {
+        if (refused) entries(id, [entry(chat, "error", MOCK_AUTO_REFUSED)]);
+        status(id, chat, {});
+      });
     },
     close(id: number) {
       const chat = chats.get(id);

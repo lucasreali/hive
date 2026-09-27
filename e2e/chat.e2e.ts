@@ -420,7 +420,7 @@ test("chat: the draft and its caret come back after another tab was shown", asyn
   const plus = page.getByTitle("New terminal, agent or file");
   await plus.click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
-  // Enter before the folder dialog shows would leave it open over the composer.
+  // The folder dialog comes asynchronously: Enter before it shows would be lost.
   await expect(page.getByRole("dialog", { name: "Chat in this folder?" })).toBeVisible();
   await page.keyboard.press("Enter");
   const input = page
@@ -439,6 +439,35 @@ test("chat: the draft and its caret come back after another tab was shown", asyn
   ).toEqual([5, 6]);
 });
 
+test("chat: Shift+Tab cycles the modes up to Auto; a refused Auto shows Claude's message", async ({
+  page,
+}) => {
+  for (const [url, last] of [
+    ["/", "Auto"],
+    ["/?mock=deny-auto", "Plan"],
+  ] as const) {
+    await page.goto(url);
+    const tree = page.getByRole("navigation", { name: "Projects" });
+    await tree.getByRole("button", { name: "fix-login" }).click();
+    await page.getByTitle("New terminal, agent or file").click();
+    await page.getByRole("menuitem", { name: "Agent" }).click();
+    await page.getByRole("button", { name: "Start chat" }).click();
+    const chat = page.getByRole("region", { name: "Chat" });
+    const input = chat.getByRole("textbox", { name: "Message" });
+    const mode = chat.getByRole("combobox", { name: "Permission mode" });
+    await expect(input).toBeEnabled();
+    for (const next of ["Accept edits", "Plan", last]) {
+      await input.press("Shift+Tab");
+      await expect(mode).toHaveText(next);
+    }
+    // The focus stays in the message; the header follows.
+    await expect(input).toBeFocused();
+    await expect(chat.locator(".chat-meta")).toHaveText(`claude-mock · ${last}`);
+    const refused = chat.getByText("auto mode unavailable for this model", { exact: false });
+    await expect(refused).toHaveCount(last === "Auto" ? 0 : 1);
+  }
+});
+
 test("chat: @ lists the worktree's files and folders, even with the panel closed", async ({
   page,
 }) => {
@@ -448,6 +477,7 @@ test("chat: @ lists the worktree's files and folders, even with the panel closed
   await page.getByTitle(/^Files, diff and sessions/).click();
   await page.getByTitle("New terminal, agent or file").click();
   await page.getByRole("menuitem", { name: "Agent" }).click();
+  await expect(page.getByRole("dialog", { name: "Chat in this folder?" })).toBeVisible();
   await page.keyboard.press("Enter");
   const chat = page.getByRole("region", { name: "Chat" });
   const input = chat.getByRole("textbox", { name: "Message" });

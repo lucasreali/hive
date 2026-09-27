@@ -770,6 +770,8 @@ pub enum ChatMode {
     Default,
     AcceptEdits,
     Plan,
+    /// Claude's classifier decides (8.4); refused by claude for a model or account without it.
+    Auto,
 }
 
 /// An image of a user turn or a tool result.
@@ -1820,6 +1822,13 @@ mod tests {
                     mode: ChatMode::Default,
                 },
                 r#"{"type":"chat_set_mode","chat":2,"mode":"default"}"#,
+            ),
+            (
+                Control::ChatSetMode {
+                    chat: 2,
+                    mode: ChatMode::Auto,
+                },
+                r#"{"type":"chat_set_mode","chat":2,"mode":"auto"}"#,
             ),
             (
                 Control::ChatStatus {

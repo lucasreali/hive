@@ -972,6 +972,20 @@ test("deleting the current space makes the first one current, never the last one
   ]);
 });
 
+test("?mock=deny-auto refuses auto mode as claude does", async () => {
+  const transport = createMockTransport("deny-auto");
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  const chat = await transport.openChat("/w", null, null);
+  await tick();
+  await transport.confirmChatFolder(chat, "/w", true);
+  await tick();
+  await transport.chatSetMode(chat, "auto");
+  await tick();
+  expect(messages.at(-2)).toMatchObject({ type: "chat_entries", entries: [{ kind: "error" }] });
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", mode: "default" });
+});
+
 test("chats share the terminals' ids and play the scripted chat", async () => {
   const { transport, messages } = await opened();
   const chat = await transport.openChat("/w", null, null);

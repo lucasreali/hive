@@ -3,6 +3,7 @@ import type { ChatAnswer, ChatEntry, ServiceMessage } from "../store";
 import {
   createMockChat,
   describeAnswer,
+  MOCK_AUTO_REFUSED,
   MOCK_CHAT_COMMANDS,
   MOCK_CHAT_MODEL,
   MOCK_CHAT_REQUESTS,
@@ -295,6 +296,27 @@ test("an interrupt in the middle of a turn drops the rest of its script", async 
   const messages = take();
   expect(messages.at(-1)).toEqual(status(false));
   expect(entriesOf(messages).some((e) => e.kind === "usage")).toBe(false);
+});
+
+test("with deny-auto, auto is refused with claude's message and the mode stays", async () => {
+  const messages: ServiceMessage[] = [];
+  const chat = createMockChat((m) => messages.push(m), 1, true);
+  chat.open(1, "/w", null, null);
+  await settle();
+  chat.confirm(1, "/w", true);
+  await settle();
+  chat.setMode(1, "plan");
+  await settle();
+  messages.splice(0);
+  chat.setMode(1, "auto");
+  await settle();
+  expect(entriesOf(messages).map((e) => [e.kind, e.text])).toEqual([["error", MOCK_AUTO_REFUSED]]);
+  expect(messages.at(-1)).toEqual(status(false, { mode: "plan" }));
+  // Without it, auto is taken.
+  const other = await opened();
+  other.chat.setMode(1, "auto");
+  await settle();
+  expect(other.take()).toEqual([status(false, { mode: "auto" })]);
 });
 
 test("the mode can change, and closing ends the chat and its script", async () => {

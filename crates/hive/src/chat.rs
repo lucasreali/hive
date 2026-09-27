@@ -73,14 +73,20 @@ pub fn mode_arg(mode: ChatMode) -> &'static str {
         ChatMode::Default => "default",
         ChatMode::AcceptEdits => "acceptEdits",
         ChatMode::Plan => "plan",
+        ChatMode::Auto => "auto",
     }
 }
 
 /// The mode `claude` reports (`system/init`); `None` for any other (never offered).
 fn mode_of(arg: &str) -> Option<ChatMode> {
-    [ChatMode::Default, ChatMode::AcceptEdits, ChatMode::Plan]
-        .into_iter()
-        .find(|&mode| mode_arg(mode) == arg)
+    [
+        ChatMode::Default,
+        ChatMode::AcceptEdits,
+        ChatMode::Plan,
+        ChatMode::Auto,
+    ]
+    .into_iter()
+    .find(|&mode| mode_arg(mode) == arg)
 }
 
 /// `claude`'s arguments (spike 3.1): headless, stream-json both ways, permission prompts on
@@ -503,6 +509,11 @@ pub struct Stream {
     session: Option<String>,
     model: Option<String>,
     mode: ChatMode,
+    /// The mode claude last took (reported or a switch it accepted): a refused switch goes back.
+    confirmed: ChatMode,
+    /// Our `set_permission_mode` requests (id, mode) waiting for their answer, oldest first
+    /// (at most [`MAX_PENDING`]).
+    switches: Vec<(String, ChatMode)>,
     busy: bool,
     compacting: bool,
     retry: Option<String>,
@@ -538,6 +549,8 @@ impl Stream {
             session,
             model: None,
             mode,
+            confirmed: mode,
+            switches: Vec::new(),
             busy: false,
             compacting: false,
             retry: None,
@@ -674,6 +687,11 @@ impl Stream {
     pub fn set_mode(&mut self, mode: ChatMode) -> Out {
         let request = json!({"subtype": "set_permission_mode", "mode": mode_arg(mode)});
         let line = self.request(request);
+        if self.switches.len() == MAX_PENDING {
+            self.switches.remove(0);
+        }
+        let id = text(&line["request_id"]).to_owned();
+        self.switches.push((id, mode));
         let mut out = self.changed(|chat, _, _| chat.mode = mode);
         out.write.push(line);
         out
@@ -711,9 +729,7 @@ impl Stream {
             ("system", "status") => {
                 self.compacting = message["status"] == "compacting";
                 // e.g. leaving plan mode after an approved plan.
-                if let Some(mode) = message["permissionMode"].as_str().and_then(mode_of) {
-                    self.mode = mode;
-                }
+                self.reported(&message["permissionMode"]);
             }
             ("system", "compact_boundary") => {
                 let tokens = message["compact_metadata"]["pre_tokens"].as_u64();
@@ -758,11 +774,37 @@ impl Stream {
         }
     }
 
-    /// The answer to one of our requests: `initialize`'s opens the chat.
+    /// The mode claude reports (`system/init`, `system/status`), if it is one of ours.
+    fn reported(&mut self, mode: &Value) {
+        if let Some(mode) = mode.as_str().and_then(mode_of) {
+            (self.mode, self.confirmed) = (mode, mode);
+        }
+    }
+
+    /// The answer to one of our requests: `initialize`'s opens the chat; a refused mode switch
+    /// (e.g. auto on a model without it, 8.4) shows claude's message and keeps the mode claude
+    /// has.
     fn answered(&mut self, response: &Value, entries: &mut Vec<ChatEntry>, out: &mut Out) {
+        let switch = self
+            .switches
+            .iter()
+            .position(|(id, _)| response["request_id"] == **id);
+        if let Some(at) = switch {
+            // Answered in order: older switches were answered before.
+            let mode = self.switches[at].1;
+            self.switches.drain(..=at);
+            if response["subtype"] != "error" {
+                self.confirmed = mode;
+            } else if self.switches.is_empty() {
+                // Refused, and no later switch decides the mode: it stays claude's.
+                self.mode = self.confirmed;
+                entries.push(self.entry(ChatEntryKind::Error, text(&response["error"]), None));
+            }
+            return;
+        }
         let ours = self.initialize.as_deref();
         if ours.is_none_or(|id| response["request_id"] != id) {
-            // Interrupt receipts and mode changes need nothing.
+            // Interrupt receipts need nothing.
             return;
         }
         self.initialize = None;
@@ -921,9 +963,7 @@ impl Stream {
         if let Some(model) = id_of(&message["model"]) {
             self.model = Some(model.to_owned());
         }
-        if let Some(mode) = message["permissionMode"].as_str().and_then(mode_of) {
-            self.mode = mode;
-        }
+        self.reported(&message["permissionMode"]);
         // "none" is the subscription login (#45); anything else is an API key.
         let source = message["apiKeySource"].as_str().map(|s| clip(s, MAX_ID));
         self.api_key_source = source.filter(|s| !s.is_empty() && s != "none");
