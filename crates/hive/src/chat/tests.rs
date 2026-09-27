@@ -510,8 +510,9 @@ fn a_resumed_chat_keeps_its_session_and_writes_as_default() {
 }
 
 #[test]
-fn thinking_is_an_entry_and_redacted_thinking_is_not() {
+fn thinking_is_an_entry_and_empty_or_redacted_thinking_is_not() {
     let mut stream = stream();
+    // The fixture starts with claude 2.1.283's empty thinking (only a `signature`).
     let out = replay(&mut stream, "thinking");
     let kinds = kinds(&out);
     assert_eq!(
@@ -644,6 +645,30 @@ fn live_text_is_bounded_per_block_and_main_thread_only() {
     assert_eq!(thinking, [live(2, Thinking, "t", false)]);
     let text = flush(&mut stream, delta(1, true, "u", None), 4);
     assert_eq!(text, [live(3, Thinking, "u", false)]);
+}
+
+#[test]
+fn empty_thinking_deltas_show_nothing_until_text_comes() {
+    let mut stream = stream();
+    let now = Instant::now();
+    stream.line(Some(&delta(0, true, "", None)));
+    stream.line(Some(&delta(0, true, " \n", None)));
+    assert_eq!(stream.due(now), None);
+    assert_eq!(stream.flush(now), Out::default());
+    // Its empty block makes no entry either.
+    let block = json!({"type": "assistant", "message": {"content": [
+        {"type": "thinking", "thinking": " \n", "signature": "EsoH"}]}});
+    assert_eq!(
+        entries(&stream.line(Some(block.to_string().as_bytes()))),
+        []
+    );
+    // Text after whitespace shows, with it.
+    stream.line(Some(&delta(1, true, " ", None)));
+    stream.line(Some(&delta(1, true, "hm", None)));
+    assert_eq!(stream.flush(now).app, [live(2, Thinking, " hm", false)]);
+    // Once shown, any delta sends it again.
+    stream.line(Some(&delta(1, true, "", None)));
+    assert_eq!(stream.due(now), Some(now + LIVE_EVERY));
 }
 
 #[test]

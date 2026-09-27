@@ -197,8 +197,18 @@ and `aborted: true` (cut by an interrupt) are optional fields.
 `redacted_thinking` blocks carry no readable text. Whether thinking text is summarized or empty
 depends on the model and version: *to be recorded* (scenario `thinking`).
 
-- **Service:** entry `{kind: thinking, text}` (cut at the cap); `signature` dropped.
-  `thinking_tokens` becomes a progress counter, not an entry.
+**Recorded (8.7, claude 2.1.283):** haiku's thinking comes **empty**: `content_block_start`
+`{"type":"thinking","thinking":"","signature":""}`, `thinking_delta`s with `"thinking":""` and an
+`estimated_tokens` count (every `stream_event` carries `"thinking_display":"updates"`),
+`system/thinking_tokens` progress lines, then the `assistant` block with `"thinking":""` and only a
+`signature`. `sonnet-5` with `--effort high` sent no thinking blocks at all (0 thinking tokens), and
+`showThinkingSummaries: true` in `--settings` changed nothing: in this version no option or setting
+gives the thinking text.
+
+- **Service:** entry `{kind: thinking, text}` (cut at the cap); `signature` dropped. An empty
+  (whitespace-only) block makes no entry, and live text is sent only once it is not whitespace, so
+  an empty thinking block shows nothing, final or live (8.7). `thinking_tokens` is ignored: the
+  chat's "working" status already says the turn is busy.
 - **UI:** a collapsed "Thinking…" row (muted, expandable), with the running token estimate while
   it streams. 6.10 left thinking out of subagent transcripts; the chat shows it collapsed.
 
@@ -855,6 +865,7 @@ the default the implementation takes until the human answers):
    different behaviour from the terminal)?
 5. **Markdown:** *default: plain text, fenced code in monospace.* Add a sanitizing Markdown
    renderer (a new dependency, named before adding)?
-6. **Thinking:** *default: shown collapsed.* Or hidden like 6.10?
+6. **Thinking:** *default: shown collapsed.* Or hidden like 6.10? *(8.7: recent models send it
+   empty, so it only shows when it has text; section 4.3.)*
 7. **Recording:** please run `python3 scripts/spike/record-chat.py` and share the `rec/` folder;
    the fixtures of 14.2 are then replaced by real lines.
