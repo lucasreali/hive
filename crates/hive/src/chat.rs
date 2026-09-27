@@ -98,19 +98,16 @@ pub fn is_model(name: &str) -> bool {
 }
 
 /// The models `initialize` lists (`models[]`, 8.9): of its first [`MAX_CHOICES`], those whose
-/// `value` is a model name, each shown by its `displayName` (cut at [`MAX_ID`]) and with the model it runs
-/// (`resolvedModel`, else its value).
+/// `value` is a model name, each shown by its `displayName` (clipped to [`MAX_ID`] characters;
+/// its value when that is empty) and with the model it runs (`resolvedModel`, else its value).
 fn models(list: &Value) -> Vec<(ChatModel, String)> {
     let model = |entry: &Value| {
         let value = Some(text(&entry["value"])).filter(|v| is_model(v))?;
         let resolved = Some(text(&entry["resolvedModel"])).filter(|r| is_model(r));
-        let name = match text(&entry["displayName"]) {
-            "" => value.to_owned(),
-            name => clip(name, MAX_ID),
-        };
+        let name = Some(clip(text(&entry["displayName"]), MAX_ID)).filter(|n| !n.is_empty());
         let listed = ChatModel {
             value: value.to_owned(),
-            name,
+            name: name.unwrap_or_else(|| value.to_owned()),
         };
         Some((listed, resolved.unwrap_or(value).to_owned()))
     };

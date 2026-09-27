@@ -11,6 +11,16 @@ import type {
 export const CHAT_STEP_MS = 150;
 export const MOCK_CHAT_MODEL = "claude-mock";
 export const MOCK_CHAT_COMMANDS = ["compact", "clear", "review"];
+/**
+ * The models the mock offers (8.9), each with the model it runs. It refuses
+ * `MOCK_REFUSED_MODEL`, as Claude refuses one it cannot run: an error entry, the model stays.
+ */
+export const MOCK_CHAT_MODELS = [
+  { value: "default", name: "Default (recommended)", model: MOCK_CHAT_MODEL },
+  { value: "sonnet", name: "Sonnet", model: "claude-mock-sonnet" },
+  { value: "opus[1m]", name: "Opus (1M context)", model: "claude-mock-opus[1m]" },
+];
+export const MOCK_REFUSED_MODEL = "opus[1m]";
 
 /** `request` of a turn whose text holds the key (the first key found wins). */
 export const MOCK_CHAT_REQUESTS: Record<
@@ -81,6 +91,9 @@ export function describeAnswer(answer: ChatAnswer): string {
 type MockChat = {
   cwd: string;
   mode: ChatMode;
+  model: string;
+  /** The listed model that runs it. */
+  choice: string | null;
   session: string;
   /** The last entry id given. */
   last: number;
@@ -130,7 +143,8 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
       chat: id,
       busy: chat.busy,
       mode: chat.mode,
-      model: MOCK_CHAT_MODEL,
+      model: chat.model,
+      choice: chat.choice,
       retry: extra.retry ?? null,
       compacting: extra.compacting ?? false,
       api_key_source: null,
@@ -168,16 +182,17 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
   };
   const opened = (id: number, chat: MockChat) => {
     chats.set(id, chat);
-    const { cwd, session, mode } = chat;
+    const { cwd, session, mode, model } = chat;
     send({
       type: "chat_opened",
       channel: id,
       chat: id,
       cwd,
       session,
-      model: MOCK_CHAT_MODEL,
+      model,
       mode,
       commands: MOCK_CHAT_COMMANDS,
+      models: MOCK_CHAT_MODELS.map(({ value, name }) => ({ value, name })),
       api_key_source: null,
     });
     status(id, chat, {});
@@ -260,10 +275,19 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
 
   const later = (run: () => void) => setTimeout(run, 0);
   return {
-    open(id: number, cwd: string, resume: string | null, mode: ChatMode | null) {
+    open(
+      id: number,
+      cwd: string,
+      resume: string | null,
+      mode: ChatMode | null,
+      model: string | null = null,
+    ) {
+      const runs = model ?? MOCK_CHAT_MODEL;
       const chat: MockChat = {
         cwd,
         mode: mode ?? "default",
+        model: runs,
+        choice: MOCK_CHAT_MODELS.find((m) => m.model === runs || m.value === runs)?.value ?? null,
         session: resume ?? `mock-chat-${id}`,
         last: 0,
         busy: false,
@@ -319,6 +343,22 @@ export function createMockChat(send: (message: ServiceMessage) => void, step = C
       const chat = chats.get(id);
       if (!chat) return;
       chat.mode = mode;
+      later(() => status(id, chat, {}));
+    },
+    /** Like the service: only a listed model; Claude's refusal is an error entry. */
+    setModel(id: number, value: string) {
+      const chat = chats.get(id);
+      if (!chat) return;
+      const listed = MOCK_CHAT_MODELS.find((m) => m.value === value);
+      if (!listed) {
+        const message = `${value} is not a model this chat offers.`;
+        return void later(() => send({ type: "error", message }));
+      }
+      if (value === MOCK_REFUSED_MODEL) {
+        return void later(() => entries(id, [entry(chat, "error", `Model '${value}' not found`)]));
+      }
+      chat.model = listed.model;
+      chat.choice = value;
       later(() => status(id, chat, {}));
     },
     close(id: number) {

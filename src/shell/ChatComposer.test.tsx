@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
   apply,
+  type ChatModel,
   type ChatStatus,
   EMPTY_DRAFT,
   initialState,
@@ -25,6 +26,7 @@ const status = (busy: boolean): ChatStatus => ({
   busy,
   mode: "default",
   model: null,
+  choice: null,
   retry: null,
   compacting: false,
   api_key_source: null,
@@ -40,7 +42,7 @@ function composer() {
   return { send, stop, input };
 }
 
-const open = (commands: string[] = []) =>
+const open = (commands: string[] = [], models: ChatModel[] = [], model: string | null = null) =>
   act(() =>
     apply({
       type: "chat_opened",
@@ -48,9 +50,10 @@ const open = (commands: string[] = []) =>
       chat: 3,
       cwd: "/w",
       session: null,
-      model: null,
+      model,
       mode: "default",
       commands,
+      models,
       api_key_source: null,
     }),
   );
@@ -231,6 +234,49 @@ test("the mode selector shows the service's mode and asks it for another", () =>
   expect(select.textContent).toBe("Default");
   act(() => apply({ type: "chat_status", channel: 3, ...status(false), mode: "plan" }));
   expect(select.textContent).toBe("Plan");
+});
+
+const MODELS = [
+  { value: "default", name: "Default (recommended)" },
+  { value: "sonnet", name: "Sonnet 5" },
+];
+const optionTexts = () => screen.getAllByRole("option").map((o) => o.textContent);
+
+test("the model selector lists Claude's models and follows the service's choice", () => {
+  const setModel = spyOn(transport, "chatSetModel").mockResolvedValue();
+  composer();
+  // Nothing listed (not started, or Claude listed none): no selector.
+  open();
+  expect(screen.queryByRole("combobox", { name: "Model" })).toBeNull();
+  open([], MODELS, "claude-sonnet-5");
+  const select = screen.getByRole("combobox", { name: "Model" }) as HTMLButtonElement;
+  // Before the service named the listed model that runs the chat: the model's own name.
+  expect(select.textContent).toBe("claude-sonnet-5");
+  fireEvent.mouseDown(select);
+  expect(optionTexts()).toEqual(["claude-sonnet-5", "Default (recommended)", "Sonnet 5"]);
+  fireEvent.click(screen.getByRole("option", { name: "Sonnet 5" }));
+  expect(setModel.mock.calls).toEqual([[3, "sonnet"]]);
+  // The selector follows the service, not the click: a refusal keeps the model.
+  expect(select.textContent).toBe("claude-sonnet-5");
+  const on = (model: string, choice: string) =>
+    act(() => apply({ type: "chat_status", channel: 3, ...status(false), model, choice }));
+  on("claude-sonnet-5", "sonnet");
+  expect(select.textContent).toBe("Sonnet 5");
+  fireEvent.mouseDown(select);
+  expect(optionTexts()).toEqual(["Default (recommended)", "Sonnet 5"]);
+  fireEvent.click(screen.getByRole("option", { name: "Default (recommended)" }));
+  expect(setModel.mock.calls[1]).toEqual([3, "default"]);
+  on("claude-opus-5-5", "default");
+  expect(select.textContent).toBe("Default (recommended)");
+});
+
+test("the model selector says Model while the chat's model is not known", () => {
+  composer();
+  open([], MODELS);
+  const select = screen.getByRole("combobox", { name: "Model" }) as HTMLButtonElement;
+  expect(select.textContent).toBe("Model");
+  act(() => apply({ type: "chat_closed", channel: 3, chat: 3, error: null }));
+  expect(select.disabled).toBe(true);
 });
 
 test("Esc in the message stops a running turn, and only then", () => {

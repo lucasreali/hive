@@ -5,9 +5,13 @@ import {
   describeAnswer,
   MOCK_CHAT_COMMANDS,
   MOCK_CHAT_MODEL,
+  MOCK_CHAT_MODELS,
   MOCK_CHAT_REQUESTS,
   MOCK_MARKDOWN,
+  MOCK_REFUSED_MODEL,
 } from "./mockChat";
+
+const MOCK_MODELS = MOCK_CHAT_MODELS.map(({ value, name }) => ({ value, name }));
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Long enough for a whole scripted turn at 1 ms a step. */
@@ -48,6 +52,7 @@ const status = (
   busy,
   mode: "default",
   model: MOCK_CHAT_MODEL,
+  choice: "default",
   retry: null,
   compacting: false,
   api_key_source: null,
@@ -83,6 +88,7 @@ test("the first chat in a folder asks for a confirmation, once it is accepted", 
       model: MOCK_CHAT_MODEL,
       mode: "default",
       commands: MOCK_CHAT_COMMANDS,
+      models: MOCK_MODELS,
       api_key_source: null,
     },
     { ...status(false), channel: 2, chat: 2, session: "mock-chat-2" },
@@ -131,6 +137,7 @@ test("a turn plays the scripted entries, then ends idle with its usage", async (
   // Unknown chats are ignored.
   chat.send(9, "x", []);
   chat.setMode(9, "plan");
+  chat.setModel(9, "sonnet");
   chat.interrupt(9);
   chat.answer(9, "r", { kind: "allow" });
   chat.close(9);
@@ -280,6 +287,36 @@ test("an interrupt in the middle of a turn drops the rest of its script", async 
   const messages = take();
   expect(messages.at(-1)).toEqual(status(false));
   expect(entriesOf(messages).some((e) => e.kind === "usage")).toBe(false);
+});
+
+test("the model switches like the service's: a refusal keeps it, an unlisted one is not sent", async () => {
+  const { chat, take } = await opened();
+  chat.setModel(1, "sonnet");
+  await settle();
+  expect(take()).toEqual([status(false, { model: "claude-mock-sonnet", choice: "sonnet" })]);
+  chat.setModel(1, MOCK_REFUSED_MODEL);
+  await settle();
+  const refused = take();
+  expect(entriesOf(refused).map((e) => [e.kind, e.text])).toEqual([
+    ["error", `Model '${MOCK_REFUSED_MODEL}' not found`],
+  ]);
+  expect(refused.some((m) => m.type === "chat_status")).toBe(false);
+  chat.setModel(1, "gpt");
+  await settle();
+  expect(take()).toEqual([{ type: "error", message: "gpt is not a model this chat offers." }]);
+});
+
+test("a chat opened on a model runs it, chosen when listed", async () => {
+  const { chat, take } = mock();
+  chat.open(1, "/w", null, null, "claude-mock-sonnet");
+  chat.confirm(1, "/w", true);
+  chat.open(2, "/w", null, null, "claude-other");
+  await settle();
+  const statuses = take().filter((m) => m.type === "chat_status");
+  expect(statuses.map((m) => [m.model, m.choice])).toEqual([
+    ["claude-mock-sonnet", "sonnet"],
+    ["claude-other", null],
+  ]);
 });
 
 test("the mode can change, and closing ends the chat and its script", async () => {

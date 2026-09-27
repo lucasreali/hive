@@ -225,7 +225,7 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   expect(open.mock.calls.at(-1)?.[0]).toBe(untitled.cwd);
   const chat = spyOn(transport, "openChat").mockResolvedValue(9);
   pick("Open as Chat", untitled.id);
-  expect(chat.mock.calls).toEqual([[untitled.cwd, untitled.id, null]]);
+  expect(chat.mock.calls).toEqual([[untitled.cwd, untitled.id, null, null]]);
 
   // Running outside Hive: neither resumed nor deleted here; a new session from it is fine.
   act(() => select(shop.worktrees[1].id));

@@ -962,9 +962,9 @@ export function createMockTransport(
       exit(id, null);
     },
     // Chats share the terminals' channels, as in the app.
-    async openChat(cwd, resume, mode) {
+    async openChat(cwd, resume, mode, model) {
       const id = ++last;
-      chat.open(id, cwd, resume, mode);
+      chat.open(id, cwd, resume, mode, model);
       return id;
     },
     async chatSend(id, text, images) {
@@ -978,6 +978,9 @@ export function createMockTransport(
     },
     async chatSetMode(id, mode) {
       chat.setMode(id, mode);
+    },
+    async chatSetModel(id, model) {
+      chat.setModel(id, model);
     },
     async closeChat(id) {
       chat.close(id);

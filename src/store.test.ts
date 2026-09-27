@@ -720,6 +720,7 @@ test("a chat's messages fill its data; a chat tab is a tab of kind chat", () => 
     model: "m",
     mode: "default" as const,
     commands: ["compact"],
+    models: [],
     api_key_source: null,
   };
   apply({ type: "chat_opened", channel: 7, ...opened });
@@ -729,6 +730,7 @@ test("a chat's messages fill its data; a chat tab is a tab of kind chat", () => 
     busy: true,
     mode: "plan" as const,
     model: "m",
+    choice: null,
     retry: null,
     compacting: false,
     api_key_source: null,

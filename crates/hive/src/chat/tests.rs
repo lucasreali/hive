@@ -1801,7 +1801,7 @@ fn the_model_list_is_bounded_and_named() {
     let mut list = vec![
         json!({"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus"}),
         json!({"value": "--bad", "displayName": "Bad"}),
-        json!({"value": "sonnet", "resolvedModel": "--bad"}),
+        json!({"value": "sonnet", "resolvedModel": "--bad", "displayName": " \u{200b} "}),
         json!({"value": "haiku", "displayName": "h".repeat(MAX_ID + 1)}),
         json!("fable"),
     ];

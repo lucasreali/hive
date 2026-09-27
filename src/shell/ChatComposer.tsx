@@ -7,7 +7,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { type ChatDraft, type ChatMode, EMPTY_DRAFT, setDraft, useHive } from "../store";
+import {
+  type ChatDraft,
+  type ChatMode,
+  type ChatModel,
+  EMPTY_DRAFT,
+  setDraft,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { imageUrl } from "./ConversationView";
@@ -21,6 +28,7 @@ export const MODES: { value: ChatMode; label: string }[] = [
 ];
 
 const NO_COMMANDS: string[] = [];
+const NO_MODELS: ChatModel[] = [];
 
 /**
  * The service's limits (`hive::chat::MAX_IMAGES`, `MAX_IMAGE_DATA`): at most 10 images per
@@ -58,6 +66,9 @@ export async function base64(file: Blob): Promise<string> {
  * picks, Esc hides the list. Like Claude's terminal (8.8), ↑ on the first line brings back the
  * messages sent in this chat (↓ walks back to what was being typed), and Ctrl+C with nothing
  * selected stops a running turn or, idle, clears the composer. The mode selector shows the service's mode and asks it for another.
+ * The model selector (8.9) lists the models Claude offers and shows the one the chat runs; a
+ * pick asks the service, which follows once Claude takes it (a refusal is an error entry).
+ * Until the service names the listed model that runs the chat, it shows the model, else "Model".
  */
 export function ChatComposer({ chat }: { chat: number }) {
   const draft = useHive((s) => s.drafts[chat] ?? EMPTY_DRAFT);
@@ -77,6 +88,11 @@ export function ChatComposer({ chat }: { chat: number }) {
   const ready = useHive((s) => !!s.chats[chat]?.opened && !s.chats[chat]?.closed);
   const mode = useHive((s) => s.chats[chat]?.status?.mode ?? s.chats[chat]?.opened?.mode);
   const commands = useHive((s) => s.chats[chat]?.opened?.commands ?? NO_COMMANDS);
+  const models = useHive((s) => s.chats[chat]?.opened?.models ?? NO_MODELS);
+  const choice = useHive((s) => s.chats[chat]?.status?.choice ?? null);
+  const model = useHive((s) => s.chats[chat]?.status?.model ?? s.chats[chat]?.opened?.model);
+  const listed = models.map(({ value, name }) => ({ value, label: name }));
+  const unknown = { value: "", label: model ?? "Model" };
   const typed = /^\/\S*$/.test(text) && text !== hidden ? text.slice(1) : null;
   const matches = typed === null ? [] : commands.filter((c) => c.startsWith(typed));
   const at = Math.min(active, matches.length - 1);
@@ -314,6 +330,17 @@ export function ChatComposer({ chat }: { chat: number }) {
           disabled={!ready}
           onChange={(value) => void transport.chatSetMode(chat, value as ChatMode)}
         />
+        {models.length > 0 && (
+          <Select
+            className="chat-mode chat-model"
+            aria-label="Model"
+            value={choice ?? ""}
+            options={choice === null ? [unknown, ...listed] : listed}
+            disabled={!ready}
+            // "" (the model before one is listed) is never picked: it shows only while current.
+            onChange={(value) => void transport.chatSetModel(chat, value)}
+          />
+        )}
         {busy ? (
           <button
             type="button"

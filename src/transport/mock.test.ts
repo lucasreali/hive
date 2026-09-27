@@ -974,7 +974,7 @@ test("deleting the current space makes the first one current, never the last one
 
 test("chats share the terminals' ids and play the scripted chat", async () => {
   const { transport, messages } = await opened();
-  const chat = await transport.openChat("/w", null, null);
+  const chat = await transport.openChat("/w", null, null, null);
   expect(chat).toBe(2);
   await tick();
   expect(messages.at(-1)).toEqual({ type: "confirm_chat_folder", channel: 2, chat: 2, cwd: "/w" });
@@ -984,6 +984,9 @@ test("chats share the terminals' ids and play the scripted chat", async () => {
   await transport.chatSetMode(chat, "plan");
   await tick();
   expect(messages.at(-1)).toMatchObject({ type: "chat_status", mode: "plan" });
+  await transport.chatSetModel(chat, "sonnet");
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", choice: "sonnet" });
   await transport.chatSend(chat, "permission", []);
   await tick();
   expect(messages.at(-2)).toMatchObject({ type: "chat_status", busy: true });
