@@ -46,11 +46,19 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
   await tauriTransport.removeProject("/r");
-  const env = { claude_config_dir: null, git_name: "Me", git_email: null, gh_config_dir: null };
+  const env = {
+    claude_config_dir: null,
+    git_name: "Me",
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+  };
   await tauriTransport.createSpace("Work", env);
   await tauriTransport.updateSpace("w", "Job", env);
   await tauriTransport.deleteSpace("w");
   await tauriTransport.selectSpace("w");
+  await tauriTransport.listGhAccounts("/g");
+  await tauriTransport.switchGhAccount(null, { host: "h", login: "me" });
   await tauriTransport.listDirs("", true);
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
@@ -90,6 +98,8 @@ test("terminal and project actions call their commands", async () => {
     ["update_space", { id: "w", name: "Job", env }],
     ["delete_space", { id: "w" }],
     ["select_space", { id: "w" }],
+    ["list_gh_accounts", { ghConfigDir: "/g" }],
+    ["switch_gh_account", { ghConfigDir: null, account: { host: "h", login: "me" } }],
     ["list_dirs", { path: "", windows: true }],
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],

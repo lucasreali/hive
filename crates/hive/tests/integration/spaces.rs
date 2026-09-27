@@ -1,4 +1,4 @@
-use hive_protocol::{Control, ProjectError, Role, Space, SpaceEnv};
+use hive_protocol::{Control, GhAccount, GhLogin, ProjectError, Role, Space, SpaceEnv};
 use serde_json::json;
 
 use crate::agents::hook;
@@ -73,6 +73,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         git_name: Some("Work Me".into()),
         git_email: Some("me@work".into()),
         gh_config_dir: Some(claude.clone()),
+        gh_account: None,
     };
     let mut work = Space {
         id: "space-1".into(),
@@ -235,6 +236,201 @@ async fn a_terminal_gets_the_space_of_the_project_its_folder_resolves_into() {
         app.output_until(channel, &format!("config={claude}."))
             .await;
     }
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+/// A fake `gh` in `<env>/fake-gh`, never the real one: it logs each call's arguments and
+/// `GH_TOKEN` to `<env>/gh.log`, lists two accounts and prints `tok-<login>` as a token.
+fn fake_gh(repo: &Repo) -> std::path::PathBuf {
+    let dir = repo.env.path("fake-gh");
+    std::fs::create_dir(&dir).unwrap();
+    let log = repo.env.path("gh.log");
+    let script = format!(
+        r#"#!/bin/sh
+printf '%s|%s\n' "$*" "${{GH_TOKEN-}}" >> '{}'
+case "$1 $2" in
+  "auth status") printf '%s\n' github.com \
+    '  ✓ Logged in to github.com account octo-personal (/x/hosts.yml)' \
+    '  - Active account: true' \
+    '  ✓ Logged in to github.com account octo-work (/x/hosts.yml)' \
+    '  - Active account: false' ;;
+  "auth token") [ "$6" != octo-gone ] || {{ echo 'no oauth token found for octo-gone' >&2; exit 1; }}; echo "tok-$6" ;;
+esac
+"#,
+        log.display()
+    );
+    let gh = dir.join("gh");
+    std::fs::write(&gh, script).unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&gh, mode).unwrap();
+    dir
+}
+
+fn gh_account(login: &str) -> GhAccount {
+    GhAccount {
+        host: "github.com".into(),
+        login: login.into(),
+    }
+}
+
+#[tokio::test]
+async fn each_space_gives_its_terminals_its_own_github_account() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let other = repo.root.with_file_name("other");
+    std::fs::create_dir(&other).unwrap();
+    repo.git_in(&other, &["init", "-q", "-b", "main"]);
+    // First on the user's `PATH` through their (temporary) shell config, as a real install
+    // would be: on macOS the login shell puts the system folders, where CI has a real gh,
+    // before the service's own `PATH`.
+    let fake = fake_gh(&repo);
+    let fish = repo.env.path("config/fish");
+    std::fs::create_dir_all(&fish).unwrap();
+    let config = format!("set -gx PATH '{}' $PATH\n", fake.display());
+    std::fs::write(fish.join("config.fish"), config).unwrap();
+    // A token in the service's own environment never reaches gh.
+    let mut hive = repo.env.hive();
+    hive.env("GH_TOKEN", "tok-leaked");
+    let mut daemon = repo.env.daemon_with(&mut hive);
+    let mut app = repo.env.connect(Role::App).await;
+
+    // The accounts logged in to gh, logins only.
+    let listed = ask(
+        &mut app,
+        Control::ListGhAccounts {
+            gh_config_dir: None,
+        },
+    )
+    .await;
+    let login = |login: &str, active: bool| GhLogin {
+        host: "github.com".into(),
+        login: login.into(),
+        active,
+        logged_in: true,
+    };
+    let accounts = Control::GhAccounts {
+        gh_config_dir: None,
+        accounts: vec![login("octo-personal", true), login("octo-work", false)],
+        problem: None,
+    };
+    assert_eq!(listed, accounts);
+
+    // The default space uses the personal account, a Work space the work one.
+    let mut replies = vec![listed];
+    let space = |login: &str| SpaceEnv {
+        gh_account: Some(gh_account(login)),
+        ..SpaceEnv::default()
+    };
+    let rename = Control::UpdateSpace {
+        id: "default".into(),
+        name: "Personal".into(),
+        env: space("octo-personal"),
+    };
+    replies.push(ask(&mut app, rename).await);
+    let add = |path: &std::path::Path| Control::AddProject {
+        path: path.display().to_string(),
+    };
+    replies.push(ask(&mut app, add(&other)).await);
+    replies.push(app.control().await.1);
+    let create = Control::CreateSpace {
+        name: "Work".into(),
+        env: space("octo-work"),
+    };
+    replies.push(ask(&mut app, create).await);
+    replies.push(ask(&mut app, add(&repo.root)).await);
+    replies.push(app.control().await.1);
+    let Control::Spaces { spaces, .. } = &replies[5] else {
+        panic!("expected spaces: {:?}", replies[5])
+    };
+    assert_eq!(spaces[1].env, space("octo-work"));
+    assert_eq!(spaces[1].projects, [root]);
+    let echo = "echo \"token=$GH_TOKEN|$GH_HOST.\"\r";
+    for (channel, cwd, token) in [
+        (1, repo.root.clone(), "tok-octo-work"),
+        (2, other.clone(), "tok-octo-personal"),
+    ] {
+        app.open_terminal(channel, &cwd).await;
+        app.input(channel, echo).await;
+        let expected = format!("token={token}|github.com.");
+        app.output_until(channel, &expected).await;
+    }
+    // An account gh has no token for: the terminal opens anyway, and the human is told.
+    let gone = Control::UpdateSpace {
+        id: "space-1".into(),
+        name: "Work".into(),
+        env: space("octo-gone"),
+    };
+    replies.push(ask(&mut app, gone).await);
+    let cwd = repo.root.display().to_string();
+    let (cols, rows) = (80, 24);
+    app.send(3, Control::OpenTerminal { cwd, cols, rows }).await;
+    let notice = Control::Notice {
+        message: "No GitHub token for octo-gone on github.com: this terminal uses gh's active account (gh auth token --hostname github.com --user octo-gone failed: no oauth token found for octo-gone)".into(),
+    };
+    assert_eq!(app.control().await, (0, notice));
+    assert_eq!(app.control().await, (3, Control::TerminalOpened));
+
+    // gh's own active account changes only when asked for.
+    let switch = Control::SwitchGhAccount {
+        gh_config_dir: None,
+        account: gh_account("octo-work"),
+    };
+    replies.push(ask(&mut app, switch).await);
+    assert_eq!(replies.last(), Some(&accounts));
+    let bad = Control::SwitchGhAccount {
+        gh_config_dir: Some("relative".into()),
+        account: gh_account("octo-work"),
+    };
+    let refused = Control::GhAccounts {
+        gh_config_dir: Some("relative".into()),
+        accounts: vec![],
+        problem: Some("The GitHub CLI config folder must be an absolute path".into()),
+    };
+    assert_eq!(ask(&mut app, bad).await, refused);
+
+    // The app got logins, never a token; gh never got the service's token.
+    for reply in &replies {
+        let json = serde_json::to_string(reply).unwrap();
+        assert!(!json.contains("tok-"), "{json}");
+    }
+    let log = std::fs::read_to_string(repo.env.path("gh.log")).unwrap();
+    let calls: Vec<&str> = log.lines().collect();
+    assert_eq!(
+        calls,
+        [
+            "auth status|",
+            "auth token --hostname github.com --user octo-work|",
+            "auth token --hostname github.com --user octo-personal|",
+            "auth token --hostname github.com --user octo-gone|",
+            "auth switch --hostname github.com --user octo-work|",
+            "auth status|",
+        ]
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn without_gh_the_accounts_say_so() {
+    let repo = Repo::new();
+    let empty = repo.env.path("no-programs");
+    std::fs::create_dir(&empty).unwrap();
+    let mut daemon = repo.env.daemon_on_path(&empty);
+    let mut app = repo.env.connect(Role::App).await;
+    let listed = ask(
+        &mut app,
+        Control::ListGhAccounts {
+            gh_config_dir: None,
+        },
+    )
+    .await;
+    let missing = Control::GhAccounts {
+        gh_config_dir: None,
+        accounts: vec![],
+        problem: Some("gh (the GitHub CLI) is not installed".into()),
+    };
+    assert_eq!(listed, missing);
     drop(app);
     assert!(daemon.wait_exit().success());
 }

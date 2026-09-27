@@ -5,6 +5,7 @@ import type {
   Dirs,
   FileStatus,
   FileText,
+  GhLogin,
   Project,
   SaveError,
   ServiceMessage,
@@ -501,7 +502,27 @@ export function createMockTransport(
   }
   const find = (id: string) => projects.find((p) => p.id === id);
   // Spaces as `hive::spaces` keeps them: every project starts in "Default".
-  const noEnv = { claude_config_dir: null, git_name: null, git_email: null, gh_config_dir: null };
+  const noEnv = {
+    claude_config_dir: null,
+    git_name: null,
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+  };
+  // Two accounts logged in to `gh`, as the human has (9.30); "mock-work" is active.
+  const ghLogins: GhLogin[] = ["mock-personal", "mock-work"].map((login) => ({
+    host: "github.com",
+    login,
+    active: login === "mock-work",
+    logged_in: true,
+  }));
+  const sendGhAccounts = (gh_config_dir: string | null) =>
+    later({
+      type: "gh_accounts",
+      gh_config_dir,
+      accounts: structuredClone(ghLogins),
+      problem: null,
+    });
   let spaces: Space[] = [
     { id: "default", name: "Default", projects: projects.map((p) => p.id), env: noEnv },
   ];
@@ -709,6 +730,13 @@ export function createMockTransport(
         if (current === id) current = (spaces[0] as Space).id;
         return null;
       });
+    },
+    async listGhAccounts(ghConfigDir) {
+      sendGhAccounts(ghConfigDir);
+    },
+    async switchGhAccount(ghConfigDir, account) {
+      for (const l of ghLogins) l.active = l.login === account.login && l.host === account.host;
+      sendGhAccounts(ghConfigDir);
     },
     async selectSpace(id) {
       changeSpaces(() => {
