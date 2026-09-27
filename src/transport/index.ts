@@ -3,6 +3,7 @@ import type {
   ChatAnswer,
   ChatImage,
   ChatMode,
+  GhAccount,
   ServiceMessage,
   SessionTarget,
   Settings,
@@ -33,6 +34,11 @@ export interface Transport {
   /** Asks the service to follow `path`; answered by `project_added` or `add_project_failed`. */
   addProject(path: string): Promise<void>;
   /**
+   * Stops following the project `id` (9.28); its files stay on disk. Answered by `spaces`,
+   * `settings` (when it had settings) and `project_removed`, or by `remove_project_failed`.
+   */
+  removeProject(id: string): Promise<void>;
+  /**
    * A new, empty space (6.14), made the current one. Answered by `spaces` or `space_failed`,
    * as are the three below.
    */
@@ -43,6 +49,16 @@ export interface Transport {
   deleteSpace(id: string): Promise<void>;
   /** Makes `id` the current space: the sidebar and the Sessions panel show its projects. */
   selectSpace(id: string): Promise<void>;
+  /**
+   * The accounts logged in to `gh` (9.30), in `ghConfigDir` when set (else `gh`'s own config);
+   * answered by `gh_accounts`, logins only.
+   */
+  listGhAccounts(ghConfigDir: string | null): Promise<void>;
+  /**
+   * Makes `account` `gh`'s own active account, for every shell on the machine (ask first);
+   * answered by `gh_accounts`.
+   */
+  switchGhAccount(ghConfigDir: string | null, account: GhAccount): Promise<void>;
   /**
    * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
    * empty); answered by `dirs`.
@@ -106,6 +122,11 @@ export interface Transport {
    * over another; answered by `file_renamed` or `file_op_failed`.
    */
   moveFile(worktree: string, path: string, folder: string): Promise<void>;
+  /**
+   * Deletes the file or folder `path` for good, a folder with what it holds; answered by
+   * `file_deleted` or `file_op_failed`.
+   */
+  deleteFile(worktree: string, path: string): Promise<void>;
   /**
    * Creates the folder `name` in `folder` ("" for the worktree's root), never over an entry;
    * answered by `folder_created` or `file_op_failed`.

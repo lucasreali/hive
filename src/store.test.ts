@@ -469,11 +469,62 @@ test("a rename carries the open file, its text and its edits to the new path", (
   setOpenFile(null);
   apply({ type: "file_renamed", worktree: "/w", path: "d.ts", to: "e.ts" });
   expect(s().openFile).toBeNull();
-  // A refusal without a dialog for its worktree changes nothing.
+  // A refusal without a dialog for its worktree (a drag) shows in the status bar.
   apply({ type: "file_op_failed", worktree: "/w", message: "no" });
-  expect(s().fileDialog).toBeNull();
+  expect([s().fileDialog, s().notice]).toEqual([null, "no"]);
   openFileMenu({ worktree: "/w", folder: "", path: null, x: 1, y: 2 });
   expect(s().fileMenu).toMatchObject({ x: 1 });
+});
+
+test("a folder's rename or move carries the open files under it and its folders' state", () => {
+  const s = () => useHive.getState();
+  setOpenFile({ worktree: "/w", path: "src/a.ts" }, true);
+  apply(fileAnswer("one\n", "src/a.ts"));
+  setEdit({ ...(s().edit as EditBuffer), doc: toText("mine\n") });
+  setOpenFile({ worktree: "/w", path: "src/lib/b.ts" });
+  setOpenFile({ worktree: "/w", path: "srcx/c.ts" });
+  setOpenFile({ worktree: "/x", path: "src/a.ts" });
+  useHive.setState({
+    collapsed: {
+      "files:/w/src": false,
+      "files:/w/src/lib": false,
+      "changes:/w/src/lib": false,
+      "files:/w/srcx": false,
+      "files:/x/src": false,
+      "/w": true,
+    },
+    newFolders: { "/w": ["src/empty", "other"] },
+  });
+  apply({ type: "file_renamed", worktree: "/w", path: "src", to: "lib/core" });
+  const paths = s().openFiles.map((f) => `${f.worktree}:${f.path}`);
+  expect(paths).toEqual([
+    "/w:lib/core/a.ts",
+    "/w:lib/core/lib/b.ts",
+    "/w:srcx/c.ts",
+    "/x:src/a.ts",
+  ]);
+  // Unsaved edits are kept.
+  expect(s().openFiles[0]?.edit).toMatchObject({ path: "lib/core/a.ts" });
+  expect(s().openFiles[0]?.edit?.doc.toString()).toBe("mine\n");
+  expect(s().tabOrder.filter((k) => k.startsWith("file:"))).toEqual([
+    "file:/w\nlib/core/a.ts",
+    "file:/w\nlib/core/lib/b.ts",
+    "file:/w\nsrcx/c.ts",
+    "file:/x\nsrc/a.ts",
+  ]);
+  expect(s().collapsed).toEqual({
+    "files:/w/lib/core": false,
+    "files:/w/lib/core/lib": false,
+    "changes:/w/lib/core/lib": false,
+    "files:/w/srcx": false,
+    "files:/x/src": false,
+    "/w": true,
+  });
+  expect(s().newFolders).toEqual({ "/w": ["lib/core/empty", "other"] });
+  expect(s().movedRow).toEqual({ worktree: "/w", path: "lib/core" });
+  // No folder was created in another worktree: none is kept for it.
+  apply({ type: "file_renamed", worktree: "/y", path: "a", to: "b" });
+  expect(s().newFolders).toEqual({ "/w": ["lib/core/empty", "other"] });
 });
 
 test("a created folder is kept for the tree, with the folders around it open", () => {
@@ -556,6 +607,11 @@ test("sessions are stored as listed; a deleted one leaves, a refused delete says
   expect(useHive.getState().sessions).toEqual([b]);
   apply({ type: "delete_session_failed", id: b.id, message: "busy" });
   expect(useHive.getState().notice).toBe("Cannot delete the session: busy");
+});
+
+test("a notice from the service shows in the status bar", () => {
+  apply({ type: "notice", message: "No GitHub token for me" });
+  expect(useHive.getState().notice).toBe("No GitHub token for me");
 });
 
 test("a tab belongs to the deepest worktree holding its folder", () => {

@@ -3,14 +3,15 @@
 //! flat `projects.json` of earlier versions (a JSON array of top-level paths) becomes the
 //! "Default" space until the first change is saved.
 
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use hive_protocol::{Control, Project, ProjectError, Worktree};
+use hive_protocol::{Control, Project, ProjectError, SpaceEnv, Worktree};
 use serde::de::DeserializeOwned;
 
-use crate::spaces::{self, Spaces};
+use crate::spaces::Spaces;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
 use crate::{git, procs};
@@ -71,9 +72,9 @@ impl Projects {
         (projects, env.claude_config_dir)
     }
 
-    /// What a terminal opened in `cwd` gets from the space of the project holding it: its
-    /// environment entries and Claude config folder. Nothing outside every project.
-    pub fn terminal_env(&self, cwd: &str) -> (Vec<(&'static str, String)>, Option<String>) {
+    /// The environment of the space of the project holding `cwd` (also what `gh` gets for a
+    /// project, 9.30); the default one outside every project.
+    pub fn space_env(&self, cwd: &str) -> SpaceEnv {
         // Only the projects holding `cwd` when some do, so git runs for them alone; else
         // every project (a linked worktree may be anywhere).
         // ponytail: a worktree of one project inside another's folder takes the outer one's space.
@@ -92,8 +93,7 @@ impl Projects {
         let place = place(&listed, cwd);
         let spaces = self.spaces();
         let space = place.and_then(|(project, _)| spaces.of(&project).cloned());
-        let env = space.map(|s| s.env).unwrap_or_default();
-        (spaces::vars(&env), env.claude_config_dir)
+        space.map(|s| s.env).unwrap_or_default()
     }
 
     /// Applies a space request and saves the result (when it changed anything); nothing
@@ -136,6 +136,31 @@ impl Projects {
         Ok(project(&id))
     }
 
+    /// Stops following the project `id` (9.28); nothing on disk changes. Refused while a
+    /// process of one of Hive's terminals (their session ids, `terminals`, as `proc` lists
+    /// processes) works in it or one of its worktrees. Answers its worktrees' paths.
+    pub fn remove(
+        &self,
+        id: &str,
+        proc: procs::Source,
+        terminals: &HashSet<i32>,
+    ) -> io::Result<Vec<String>> {
+        self.root(id)?;
+        let worktrees: Vec<String> = project(id).worktrees.into_iter().map(|w| w.path).collect();
+        // The root too, in case its worktrees cannot be listed (e.g. its folder is gone).
+        let dirs = std::iter::once(id).chain(worktrees.iter().map(String::as_str));
+        let mut busy: Vec<procs::Proc> = dirs
+            .flat_map(|dir| procs::inside(proc, Path::new(dir)))
+            .filter(|p| terminals.contains(&p.session))
+            .collect();
+        busy.sort_by_key(|p| p.pid);
+        busy.dedup();
+        refuse(busy)?;
+        self.change_spaces(|spaces| spaces.remove(id))
+            .map_err(io::Error::other)?;
+        Ok(worktrees)
+    }
+
     /// The branches of the followed project `id`.
     pub fn branches(&self, id: &str) -> io::Result<worktree::Branches> {
         worktree::branches(&self.root(id)?)
@@ -172,7 +197,7 @@ impl Projects {
     ) -> io::Result<Project> {
         let (owner, _) = self.linked(path)?;
         if !force {
-            unused(proc, path)?;
+            unused(proc, Path::new(path))?;
         }
         let ran = before(&owner.id);
         if !force {
@@ -196,7 +221,7 @@ impl Projects {
                 "only worktrees under {WORKTREES_DIR} can be renamed"
             )));
         }
-        unused(proc, path)?;
+        unused(proc, Path::new(path))?;
         let to = worktree::rename(Path::new(&owner.id), Path::new(path), name)?;
         Ok((project(&owner.id), to.to_string_lossy().into_owned()))
     }
@@ -256,9 +281,30 @@ pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
         .map(|(p, w, _)| (p.id.clone(), w.id.clone()))
 }
 
+/// Refuses a folder (resolved) of a worktree before it is renamed, moved or removed: one that is
+/// or holds a worktree of `projects`, or that some process (e.g. a terminal or an agent) works
+/// in. Its path would change under them.
+pub fn held(projects: &[Project], folder: &Path, proc: procs::Source) -> io::Result<()> {
+    let holds = |w: &&Worktree| {
+        let real = Path::new(&w.path).canonicalize();
+        real.is_ok_and(|real| real.starts_with(folder))
+    };
+    if let Some(w) = projects.iter().flat_map(|p| &p.worktrees).find(holds) {
+        return Err(io::Error::other(format!(
+            "it holds the worktree {}",
+            w.path
+        )));
+    }
+    unused(proc, folder)
+}
+
 /// Refuses a worktree that some process (e.g. a terminal or an agent) works in.
-fn unused(proc: procs::Source, path: &str) -> io::Result<()> {
-    let mut busy = procs::inside(proc, Path::new(path));
+fn unused(proc: procs::Source, path: &Path) -> io::Result<()> {
+    refuse(procs::inside(proc, path))
+}
+
+/// Refuses when some process (`busy`) works there, naming them.
+fn refuse(mut busy: Vec<procs::Proc>) -> io::Result<()> {
     if busy.is_empty() {
         return Ok(());
     }
@@ -411,8 +457,9 @@ mod tests {
                 std::fs::write(entry.join("stat"), stat).unwrap();
                 std::os::unix::fs::symlink(&dir, entry.join("cwd")).unwrap();
             }
-            let err = unused(procs::Source::Dir(proc.path()), dir.to_str().unwrap()).unwrap_err();
-            assert!(unused(procs::Source::Dir(proc.path()), "/elsewhere").is_ok());
+            let err = unused(procs::Source::Dir(proc.path()), &dir).unwrap_err();
+            let elsewhere = Path::new("/elsewhere");
+            assert!(unused(procs::Source::Dir(proc.path()), elsewhere).is_ok());
             err.to_string()
         };
         assert_eq!(
@@ -423,6 +470,89 @@ mod tests {
             busy(5),
             "in use by p1 (1), p2 (2), p3 (3), p4 (4), p5 (5): close its terminals first"
         );
+    }
+
+    #[test]
+    fn a_project_is_removed_only_when_no_terminal_of_hive_works_in_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("r");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/f"), "kept").unwrap();
+        let id = root.display().to_string();
+        let projects = load(tmp.path());
+        projects.change_spaces(|s| s.add(id.clone())).unwrap();
+        // Two processes in the project: a terminal of Hive's (session 7) and one outside Hive.
+        let proc = tmp.path().join("proc");
+        for (pid, session) in [(10, 7), (11, 11)] {
+            let entry = proc.join(pid.to_string());
+            std::fs::create_dir_all(&entry).unwrap();
+            let stat = format!("{pid} (p{pid}) S 1 {session} {session} 0");
+            std::fs::write(entry.join("stat"), stat).unwrap();
+            std::os::unix::fs::symlink(root.join("src"), entry.join("cwd")).unwrap();
+        }
+        let proc = procs::Source::Dir(&proc);
+        let remove = |id: &str, sessions: &[i32]| {
+            projects.remove(id, proc, &sessions.iter().copied().collect())
+        };
+
+        let err = remove(&id, &[7, 8]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "in use by p10 (10): close its terminals first"
+        );
+        let err = remove("/elsewhere", &[]).unwrap_err();
+        assert_eq!(err.to_string(), "/elsewhere is not a followed project");
+        assert_eq!(load(tmp.path()).spaces().projects().count(), 1);
+
+        // A process outside Hive's terminals does not keep it.
+        assert_eq!(remove(&id, &[8]).unwrap(), Vec::<String>::new());
+        assert!(projects.list().is_empty());
+        assert_eq!(*load(tmp.path()).spaces(), Spaces::with(vec![]));
+        assert_eq!(std::fs::read_to_string(root.join("src/f")).unwrap(), "kept");
+        let err = remove(&id, &[]).unwrap_err();
+        assert_eq!(err.to_string(), format!("{id} is not a followed project"));
+    }
+
+    #[test]
+    fn a_folder_holding_a_worktree_or_a_process_is_held() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("r");
+        let at = |p: &str| root.join(p);
+        std::fs::create_dir_all(at("src/x")).unwrap();
+        std::fs::create_dir_all(at(".claude/worktrees/a")).unwrap();
+        std::fs::create_dir_all(at(".claude/other")).unwrap();
+        let (r, a) = (root.to_string_lossy(), at(".claude/worktrees/a"));
+        let list = vec![
+            wt(&r, Some("main"), false),
+            wt(&a.to_string_lossy(), None, false),
+        ];
+        let projects = [Project {
+            id: r.to_string(),
+            name: String::new(),
+            path: r.to_string(),
+            worktrees: worktrees(&root, list),
+            error: None,
+        }];
+        let proc = tempfile::tempdir().unwrap();
+        let held = |folder: &str| {
+            held(&projects, &at(folder), procs::Source::Dir(proc.path()))
+                .map_err(|err| err.to_string())
+        };
+        assert_eq!(held("src"), Ok(()));
+        assert_eq!(held(".claude/other"), Ok(()));
+        let holds = format!("it holds the worktree {}", a.display());
+        for folder in [".claude", ".claude/worktrees", ".claude/worktrees/a"] {
+            assert_eq!(held(folder), Err(holds.clone()), "{folder}");
+        }
+        // A process working in it, or in a folder inside it.
+        let entry = proc.path().join("7");
+        std::fs::create_dir(&entry).unwrap();
+        std::fs::write(entry.join("stat"), "7 (bash) S 1 7 7 0").unwrap();
+        std::os::unix::fs::symlink(at("src/x"), entry.join("cwd")).unwrap();
+        let busy = Err("in use by bash (7): close its terminals first".to_owned());
+        assert_eq!(held("src"), busy);
+        assert_eq!(held("src/x"), busy);
+        assert_eq!(held(".claude/other"), Ok(()));
     }
 
     #[test]
@@ -721,6 +851,6 @@ mod tests {
     #[test]
     fn a_terminal_outside_every_project_gets_no_space_environment() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(load(tmp.path()).terminal_env("/anywhere"), (vec![], None));
+        assert_eq!(load(tmp.path()).space_env("/anywhere"), SpaceEnv::default());
     }
 }

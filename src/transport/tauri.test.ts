@@ -45,11 +45,20 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.closeTerminal(7);
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
-  const env = { claude_config_dir: null, git_name: "Me", git_email: null, gh_config_dir: null };
+  await tauriTransport.removeProject("/r");
+  const env = {
+    claude_config_dir: null,
+    git_name: "Me",
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+  };
   await tauriTransport.createSpace("Work", env);
   await tauriTransport.updateSpace("w", "Job", env);
   await tauriTransport.deleteSpace("w");
   await tauriTransport.selectSpace("w");
+  await tauriTransport.listGhAccounts("/g");
+  await tauriTransport.switchGhAccount(null, { host: "h", login: "me" });
   await tauriTransport.listDirs("", true);
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
@@ -69,6 +78,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.createFile("/r", "src", "b.ts");
   await tauriTransport.renameFile("/r", "a.ts", "c.ts");
   await tauriTransport.moveFile("/r", "a.ts", "src");
+  await tauriTransport.deleteFile("/r", "src");
   await tauriTransport.createFolder("/r", "src", "lib");
   await tauriTransport.openInEditor("/r", "a.ts");
   await tauriTransport.getSettings();
@@ -83,10 +93,13 @@ test("terminal and project actions call their commands", async () => {
     ["close_terminal", { id: 7 }],
     ["list_projects", {}],
     ["add_project", { path: "/r" }],
+    ["remove_project", { id: "/r" }],
     ["create_space", { name: "Work", env }],
     ["update_space", { id: "w", name: "Job", env }],
     ["delete_space", { id: "w" }],
     ["select_space", { id: "w" }],
+    ["list_gh_accounts", { ghConfigDir: "/g" }],
+    ["switch_gh_account", { ghConfigDir: null, account: { host: "h", login: "me" } }],
     ["list_dirs", { path: "", windows: true }],
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],
@@ -106,6 +119,7 @@ test("terminal and project actions call their commands", async () => {
     ["create_file", { worktree: "/r", folder: "src", name: "b.ts" }],
     ["rename_file", { worktree: "/r", path: "a.ts", name: "c.ts" }],
     ["move_file", { worktree: "/r", path: "a.ts", folder: "src" }],
+    ["delete_file", { worktree: "/r", path: "src" }],
     ["create_folder", { worktree: "/r", folder: "src", name: "lib" }],
     ["open_in_editor", { worktree: "/r", path: "a.ts" }],
     ["get_settings", {}],

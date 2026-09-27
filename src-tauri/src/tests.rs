@@ -492,6 +492,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         folder: "e".into(),
     };
     assert_eq!(service.control().await, (0, moving));
+    hive.delete_file("/r".into(), "e/b".into()).unwrap();
+    let delete = Control::DeleteFile {
+        worktree: "/r".into(),
+        path: "e/b".into(),
+    };
+    assert_eq!(service.control().await, (0, delete));
     hive.create_folder("/r".into(), "d".into(), "e".into())
         .unwrap();
     let folder = Control::CreateFolder {
@@ -534,9 +540,27 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.delete_space("w".into()).unwrap();
     let delete = Control::DeleteSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, delete));
+    hive.remove_project("/r".into()).unwrap();
+    let remove = Control::RemoveProject { id: "/r".into() };
+    assert_eq!(service.control().await, (0, remove));
     hive.select_space("w".into()).unwrap();
     let select = Control::SelectSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, select));
+    hive.list_gh_accounts(Some("/g".into())).unwrap();
+    let list = Control::ListGhAccounts {
+        gh_config_dir: Some("/g".into()),
+    };
+    assert_eq!(service.control().await, (0, list));
+    let account = GhAccount {
+        host: "github.com".into(),
+        login: "me".into(),
+    };
+    hive.switch_gh_account(None, account.clone()).unwrap();
+    let switch = Control::SwitchGhAccount {
+        gh_config_dir: None,
+        account,
+    };
+    assert_eq!(service.control().await, (0, switch));
     hive.open_settings_file().unwrap();
     assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
     hive.get_diagnostics().unwrap();
@@ -842,6 +866,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.move_file("/r".into(), "a".into(), "d".into()),
         not_connected
     );
+    assert_eq!(hive.delete_file("/r".into(), "a".into()), not_connected);
     assert_eq!(
         hive.create_folder("/r".into(), "".into(), "d".into()),
         not_connected
@@ -856,7 +881,14 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.delete_space("w".into()), not_connected);
+    assert_eq!(hive.remove_project("/r".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
+    assert_eq!(hive.list_gh_accounts(None), not_connected);
+    let account = GhAccount {
+        host: "h".into(),
+        login: "l".into(),
+    };
+    assert_eq!(hive.switch_gh_account(None, account), not_connected);
     assert_eq!(hive.open_settings_file(), not_connected);
     assert_eq!(hive.get_diagnostics(), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
@@ -1051,6 +1083,7 @@ fn commands_reach_the_managed_hive() {
             create_file,
             rename_file,
             move_file,
+            delete_file,
             create_folder,
             open_in_editor,
             get_settings,
@@ -1058,7 +1091,10 @@ fn commands_reach_the_managed_hive() {
             create_space,
             update_space,
             delete_space,
+            remove_project,
             select_space,
+            list_gh_accounts,
+            switch_gh_account,
             open_settings_file,
             get_diagnostics,
             open_chat,
@@ -1123,6 +1159,7 @@ fn commands_reach_the_managed_hive() {
     let new_space = json!({"name": "W", "env": {}});
     let update = json!({"id": "w", "name": "W", "env": {"git_name": "Me"}});
     let space = json!({"id": "w"});
+    let switch_gh = json!({"account": {"host": "h", "login": "me"}});
     let chat = json!({"chat": 3});
     let chat_send = json!({"chat": 3, "text": "hi", "images": []});
     let chat_answer = json!({"chat": 3, "request": "r", "answer": {"kind": "allow"}});
@@ -1163,6 +1200,7 @@ fn commands_reach_the_managed_hive() {
         ("create_file", &create_file),
         ("rename_file", &rename_file),
         ("move_file", &move_file),
+        ("delete_file", &file),
         ("create_folder", &create_folder),
         ("open_in_editor", &file),
         ("get_settings", &json!({})),
@@ -1170,7 +1208,10 @@ fn commands_reach_the_managed_hive() {
         ("create_space", &new_space),
         ("update_space", &update),
         ("delete_space", &space),
+        ("remove_project", &space),
         ("select_space", &space),
+        ("list_gh_accounts", &json!({"ghConfigDir": null})),
+        ("switch_gh_account", &switch_gh),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
     ] {
@@ -1218,6 +1259,7 @@ fn commands_reach_the_managed_hive() {
         ("create_file", create_file),
         ("rename_file", rename_file),
         ("move_file", move_file),
+        ("delete_file", file.clone()),
         ("create_folder", create_folder),
         ("open_in_editor", file),
         ("get_settings", json!({})),
@@ -1225,6 +1267,7 @@ fn commands_reach_the_managed_hive() {
         ("create_space", new_space),
         ("update_space", update),
         ("delete_space", space.clone()),
+        ("remove_project", space.clone()),
         ("select_space", space),
         ("chat_send", chat_send),
         ("chat_answer", chat_answer),

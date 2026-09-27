@@ -1,0 +1,48 @@
+# Known vulnerabilities in the Rust and frontend dependencies, weekly on `main` (TODO 9.6): a new
+# advisory can land on an unchanged lockfile. Does not block anything: findings open a GitHub
+# issue, or comment on the one still open (as mutants-full.yml does), and fail the run.
+name: audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-deny
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          deny=0; cargo deny --color never check advisories > deny.txt 2>&1 || deny=$?
+          bun=0; bun audit > bun.txt 2>&1 || bun=$?
+          cat deny.txt bun.txt
+          if [ "$deny" = 0 ] && [ "$bun" = 0 ]; then exit 0; fi
+          title="Weekly audit: vulnerable dependencies"
+          {
+            echo "Run: $RUN"
+            echo
+            echo "cargo deny check advisories (exit $deny):"; echo '```'; tail -c 30000 deny.txt; echo '```'
+            echo "bun audit (exit $bun):"; echo '```'; tail -c 30000 bun.txt; echo '```'
+          } > body.md
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
+          exit 1

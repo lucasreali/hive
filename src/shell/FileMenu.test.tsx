@@ -2,7 +2,8 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { apply, initialState, openFileMenu, useHive } from "../store";
 import { transport } from "../transport";
-import { FileMenu, FileNameDialog } from "./FileMenu";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { askDelete, FileMenu, FileNameDialog } from "./FileMenu";
 
 afterEach(() => {
   mock.restore();
@@ -16,6 +17,7 @@ function Shown() {
     <>
       <FileMenu />
       {modal === "file-name" && <FileNameDialog />}
+      {modal === "confirm" && <ConfirmDialog />}
     </>
   );
 }
@@ -30,7 +32,7 @@ test("a file's menu renames it in its folder; the service's refusal shows until 
   render(<Shown />);
   expect(items()).toEqual([]);
   act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src/a.ts", x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…", "New Folder…", "Rename…"]);
+  expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
   expect(useHive.getState().fileMenu).toBeNull();
   expect(screen.getByRole("heading").textContent).toBe("Rename file");
@@ -56,11 +58,30 @@ test("a file's menu renames it in its folder; the service's refusal shows until 
   expect(useHive.getState().fileDialog).toBeNull();
 });
 
-test("a folder's menu only creates, in that folder; the root is named as such", () => {
+test("a folder's menu renames it where it is", () => {
+  const rename = spyOn(transport, "renameFile").mockResolvedValue();
+  render(<Shown />);
+  act(() => openFileMenu({ worktree: "/w", folder: "src/lib", path: "src/lib", x: 1, y: 2 }));
+  expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+  expect(screen.getByRole("heading").textContent).toBe("Rename folder");
+  expect(field().value).toBe("lib");
+  // Where the folder is, not the folder itself.
+  expect(screen.getByText("src")).toBeTruthy();
+  type("core");
+  fireEvent.submit(field());
+  expect(rename).toHaveBeenCalledWith("/w", "src/lib", "core");
+  // A top folder is in the root.
+  act(() => useHive.setState({ modal: null, fileDialog: null }));
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+  expect(screen.getByText("(worktree root)")).toBeTruthy();
+});
+
+test("a folder's menu creates in that folder; the root is named as such and has no rename", () => {
   const create = spyOn(transport, "createFile").mockResolvedValue();
   render(<Shown />);
-  act(() => openFileMenu({ worktree: "/w", folder: "src", path: null, x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…", "New Folder…"]);
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
   fireEvent.click(screen.getByRole("menuitem", { name: "New File…" }));
   expect(screen.getByRole("heading").textContent).toBe("New file");
   expect(screen.getByText("src")).toBeTruthy();
@@ -72,10 +93,54 @@ test("a folder's menu only creates, in that folder; the root is named as such", 
   expect(useHive.getState()).toMatchObject({ modal: null, fileDialog: null });
 
   act(() => openFileMenu({ worktree: "/w", folder: "", path: null, x: 1, y: 2 }));
+  expect(items()).toEqual(["New File…", "New Folder…"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "New File…" }));
   expect(screen.getByText("(worktree root)")).toBeTruthy();
   fireEvent.click(screen.getByTitle("Close (Esc)"));
   expect(useHive.getState().modal).toBeNull();
+});
+
+test("Delete… asks first, naming the entry and a folder's files; Cancel deletes nothing", () => {
+  const remove = spyOn(transport, "deleteFile").mockResolvedValue();
+  const files = ["src/a.ts", "src/lib/b.ts", "srcx/c.ts", "top.ts"];
+  apply({ type: "files", path: "/w", files, truncated: false });
+  render(<Shown />);
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
+  expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+  expect(useHive.getState().fileMenu).toBeNull();
+  expect(screen.getByRole("heading").textContent).toBe("Delete folder?");
+  const lost =
+    "Nothing goes to a trash: git can bring back tracked files, but untracked and ignored ones are lost for good.";
+  expect(screen.getByText(/^Delete the folder/).textContent).toBe(
+    `Delete the folder src and the 2 files in it? ${lost}`,
+  );
+  // Cancel has the focus: Enter or a click on it deletes nothing.
+  expect(document.activeElement?.textContent).toBe("Cancel");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(useHive.getState().modal).toBeNull();
+  expect(remove).not.toHaveBeenCalled();
+
+  act(() => openFileMenu({ worktree: "/w", folder: "", path: "top.ts", x: 1, y: 2 }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+  expect(screen.getByRole("heading").textContent).toBe("Delete file?");
+  expect(screen.getByText(/^Delete top/).textContent).toBe(`Delete top.ts? ${lost}`);
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(remove).toHaveBeenCalledWith("/w", "top.ts");
+
+  // One file; another worktree's folder is not counted from this listing.
+  act(() => askDelete({ worktree: "/w", folder: "srcx", path: "srcx" }));
+  expect(useHive.getState().question?.text).toStartWith(
+    "Delete the folder srcx and the 1 file in it?",
+  );
+  act(() => askDelete({ worktree: "/x", folder: "d", path: "d" }));
+  expect(useHive.getState().question?.text).toStartWith(
+    "Delete the folder d and the 0 files in it?",
+  );
+  // Nothing to delete without a path (the root, a deleted file).
+  act(() => useHive.setState({ modal: null, question: null }));
+  askDelete({ worktree: "/w", folder: "", path: null });
+  expect(useHive.getState().question).toBeNull();
 });
 
 test("New Folder… asks for a name and creates it in the menu's folder", () => {

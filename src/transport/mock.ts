@@ -4,6 +4,7 @@ import type {
   Dirs,
   FileStatus,
   FileText,
+  GhLogin,
   Project,
   SaveError,
   ServiceMessage,
@@ -488,7 +489,27 @@ export function createMockTransport(
   }
   const find = (id: string) => projects.find((p) => p.id === id);
   // Spaces as `hive::spaces` keeps them: every project starts in "Default".
-  const noEnv = { claude_config_dir: null, git_name: null, git_email: null, gh_config_dir: null };
+  const noEnv = {
+    claude_config_dir: null,
+    git_name: null,
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+  };
+  // Two accounts logged in to `gh`, as the human has (9.30); "mock-work" is active.
+  const ghLogins: GhLogin[] = ["mock-personal", "mock-work"].map((login) => ({
+    host: "github.com",
+    login,
+    active: login === "mock-work",
+    logged_in: true,
+  }));
+  const sendGhAccounts = (gh_config_dir: string | null) =>
+    later({
+      type: "gh_accounts",
+      gh_config_dir,
+      accounts: structuredClone(ghLogins),
+      problem: null,
+    });
   let spaces: Space[] = [
     { id: "default", name: "Default", projects: projects.map((p) => p.id), env: noEnv },
   ];
@@ -601,8 +622,8 @@ export function createMockTransport(
     );
   // Folders created by `createFolder`, by `<worktree>/<path>` (git lists no empty folder).
   const folders = new Set<string>();
-  // Moves the listed file `from` (null: none) to `to` (a new folder when `folder`), answering
-  // `done()`, or why not.
+  // Moves the listed file or folder `from` (null: none) to `to` (a new folder when `folder`),
+  // with what it holds and their texts, answering `done()`, or why not.
   const fileOp = (
     worktree: string,
     from: string | null,
@@ -613,21 +634,35 @@ export function createMockTransport(
   ) => {
     const shown = worktreeAt(worktree);
     const listed = shown ? (files.get(worktree) ?? mockFiles(shown)) : [];
-    const taken =
-      listed.some((p) => p === to || p.startsWith(`${to}/`)) || folders.has(`${worktree}/${to}`);
+    const under = (at: string) => (p: string) => p === at || p.startsWith(`${at}/`);
+    const taken = listed.some(under(to)) || folders.has(`${worktree}/${to}`);
+    const known = from !== null && (listed.some(under(from)) || folders.has(`${worktree}/${from}`));
     const message = !shown
       ? `${worktree} is not a worktree of a followed project`
       : ["", ".", ".."].includes(name) || name.includes("/")
         ? "not a valid file name"
         : taken
           ? `${name} already exists`
-          : from !== null && !listed.includes(from)
+          : from !== null && !known
             ? `${from} does not exist`
-            : null;
+            : from !== null && under(from)(to)
+              ? "a folder cannot go into itself"
+              : null;
     if (message) return void later({ type: "file_op_failed", worktree, message });
     later(done());
     if (folder) return void folders.add(`${worktree}/${to}`);
-    files.set(worktree, [...listed.filter((p) => p !== from), to].sort());
+    const moved = (p: string) => (from !== null && under(from)(p) ? to + p.slice(from.length) : p);
+    for (const p of listed.filter((p) => moved(p) !== p)) {
+      written.set(`${worktree}/${moved(p)}`, fileAt(worktree, p).content ?? "");
+    }
+    for (const f of [...folders].filter((f) => f.startsWith(`${worktree}/`))) {
+      const path = f.slice(worktree.length + 1);
+      if (moved(path) === path) continue;
+      folders.delete(f);
+      folders.add(`${worktree}/${moved(path)}`);
+    }
+    const created = from === null ? [to] : [];
+    files.set(worktree, [...listed.map(moved), ...created].sort());
     if (watched === worktree) sendFiles(worktree);
   };
   // A stand-in for an agent editing a file: `write <path> <text>` in a worktree's terminal.
@@ -682,6 +717,13 @@ export function createMockTransport(
         return null;
       });
     },
+    async listGhAccounts(ghConfigDir) {
+      sendGhAccounts(ghConfigDir);
+    },
+    async switchGhAccount(ghConfigDir, account) {
+      for (const l of ghLogins) l.active = l.login === account.login && l.host === account.host;
+      sendGhAccounts(ghConfigDir);
+    },
     async selectSpace(id) {
       changeSpaces(() => {
         if (!space(id)) return `no space "${id}"`;
@@ -726,6 +768,21 @@ export function createMockTransport(
       }
       sendSpaces();
       later({ type: "project_added", project: find(path) as Project });
+    },
+    async removeProject(id) {
+      const project = find(id);
+      const busy = project?.worktrees.map((w) => inUse(w.path)).find((m) => m !== null);
+      const refused = project ? busy : `${id} is not a followed project`;
+      if (refused) return void later({ type: "remove_project_failed", id, message: refused });
+      projects.splice(projects.indexOf(project as Project), 1);
+      for (const x of spaces) x.projects = x.projects.filter((p) => p !== id);
+      sendSpaces();
+      if (settings.projects[id]) {
+        const { [id]: _, ...rest } = settings.projects;
+        settings = { ...settings, projects: rest };
+        later({ type: "settings", settings });
+      }
+      later({ type: "project_removed", id });
     },
     async listDirs(path, windows) {
       later({ type: "dirs", ...mockDirs(path, windows) });
@@ -862,21 +919,35 @@ export function createMockTransport(
     },
     async renameFile(worktree, path, name) {
       const to = path.replace(/[^/]*$/, name);
-      fileOp(worktree, path, to, name, () => {
-        const text = fileAt(worktree, path).content ?? "";
-        written.set(`${worktree}/${to}`, text);
-        return { type: "file_renamed", worktree, path, to };
-      });
+      fileOp(worktree, path, to, name, () => ({ type: "file_renamed", worktree, path, to }));
     },
     async moveFile(worktree, path, folder) {
       const name = path.slice(path.lastIndexOf("/") + 1);
       const to = folder ? `${folder}/${name}` : name;
       // Its own folder: nothing moves.
       if (to === path) return void later({ type: "file_renamed", worktree, path, to });
-      fileOp(worktree, path, to, name, () => {
-        written.set(`${worktree}/${to}`, fileAt(worktree, path).content ?? "");
-        return { type: "file_renamed", worktree, path, to };
-      });
+      fileOp(worktree, path, to, name, () => ({ type: "file_renamed", worktree, path, to }));
+    },
+    // A stand-in for `hive::file::delete`: the file or folder, with what it holds, goes.
+    async deleteFile(worktree, path) {
+      const shown = worktreeAt(worktree);
+      const listed = shown ? (files.get(worktree) ?? mockFiles(shown)) : [];
+      const under = (p: string) => p === path || p.startsWith(`${path}/`);
+      const empty = [...folders].filter((f) => under(f.slice(worktree.length + 1)));
+      const message = !shown
+        ? `${worktree} is not a worktree of a followed project`
+        : !listed.some(under) && empty.length === 0
+          ? `${path} does not exist`
+          : null;
+      if (message) return void later({ type: "file_op_failed", worktree, message });
+      later({ type: "file_deleted", worktree, path });
+      for (const f of empty) folders.delete(f);
+      for (const p of listed.filter(under)) written.delete(`${worktree}/${p}`);
+      files.set(
+        worktree,
+        listed.filter((p) => !under(p)),
+      );
+      if (watched === worktree) sendFiles(worktree);
     },
     async createFolder(worktree, folder, name) {
       const path = folder ? `${folder}/${name}` : name;

@@ -37,6 +37,7 @@ import {
   setRightPanel,
   useHive,
   type Worktree,
+  within,
 } from "../store";
 import { transport } from "../transport";
 import { isDirty } from "../viewer/buffer";
@@ -46,6 +47,7 @@ import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
 import { isMac, keyText } from "../window";
 import { askDiscard } from "./ConfirmDialog";
+import { askDelete } from "./FileMenu";
 import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
 import { ResizeHandle } from "./resize";
 import { SessionsView } from "./SessionsView";
@@ -150,11 +152,12 @@ export function fileRows(
 
 /**
  * What the tree's menu acts on for `row`: new files go in the folder, or the file's folder, or
- * the root (no row: the tree's background); only a file still on disk can be renamed.
+ * the root (no row: the tree's background); a folder or a file still on disk can be renamed
+ * (a folder is its own `folder`).
  */
 export function fileTarget(worktree: string, row: FileRow | undefined): FileTarget {
   if (!row) return { worktree, folder: "", path: null };
-  if (row.kind === "folder") return { worktree, folder: row.path, path: null };
+  if (row.kind === "folder") return { worktree, folder: row.path, path: row.path };
   const folder = row.key.slice(0, Math.max(row.key.lastIndexOf("/"), 0));
   return { worktree, folder, path: row.file.status === "deleted" ? null : row.key };
 }
@@ -576,6 +579,17 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
       ? useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: row.open } }))
       : leaveFile({ worktree, path: row.key }, !changedOnly);
   const drag = useFileDrag(worktree, rows);
+  // The entry just renamed or moved becomes the active row once the listing shows it.
+  const moved = useHive((s) =>
+    !changedOnly && s.movedRow?.worktree === worktree ? s.movedRow.path : null,
+  );
+  const movedAt = rows.findIndex((r) => (r.kind === "folder" ? r.path : r.key) === moved);
+  useEffect(() => {
+    if (movedAt < 0) return;
+    setActive(movedAt);
+    virtual.scrollToIndex(movedAt);
+    useHive.setState({ movedRow: null });
+  }, [movedAt, virtual]);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[at];
     if (!row) return;
@@ -588,6 +602,8 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
       pick(row);
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if (row.kind === "folder" && row.open === (event.key === "ArrowLeft")) pick(row);
+    } else if (event.key === "Delete") {
+      askDelete(fileTarget(worktree, row));
     } else {
       return;
     }
@@ -634,7 +650,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
               data-deleted={status === "deleted"}
               data-index={item.index}
               data-file-drop={row.kind === "folder" && row.path === drag.over}
-              draggable={!changedOnly && row.kind === "file" && status !== "deleted"}
+              draggable={!changedOnly && (row.kind === "folder" || status !== "deleted")}
               onDragStart={(e) => drag.start(e, row)}
               title={row.kind === "file" ? row.key : undefined}
               style={{ transform: `translateY(${item.start}px)`, paddingLeft: 8 + row.depth * 14 }}
@@ -675,24 +691,48 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   );
 }
 
-/** How long a closed folder must be hovered while dragging a file before it opens. */
+/** How long a closed folder must be hovered while dragging before it opens. */
 export const HOVER_OPEN_MS = 600;
 
+/** The folder holding `path` ("" for the root). */
+const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
+
 /**
- * Dragging a file of the Files tree onto a folder, a file (its folder) or the tree below the
- * rows (the root) asks the service to move it there; its own folder does nothing. A closed
- * folder hovered for [`HOVER_OPEN_MS`] opens. `over` is the folder a drop would go to.
+ * Dragging a file or a folder of the Files tree onto a folder, a file (its folder) or the tree
+ * below the rows (the root) asks the service to move it there; its own folder does nothing, and
+ * a folder never goes into itself (no drop line). A closed folder hovered for
+ * [`HOVER_OPEN_MS`] opens; it closes again when the drag leaves it (its row and the rows inside
+ * it) or ends without a drop. Folders open before the drag stay open, and the folder a drop
+ * goes to opens with its parents, so the moved entry shows. `over` is the folder a drop would
+ * go to.
  */
 function useFileDrag(worktree: string, rows: FileRow[]) {
-  const [dragged, setDragged] = useState<FileTarget | null>(null);
+  const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const hover = useRef<{ key: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  // The folders this drag opened.
+  const opened = useRef<string[]>([]);
+  const setOpen = (folders: string[], open: boolean) => {
+    if (folders.length === 0) return;
+    const keys = folders.map((f) => [`files:${worktree}/${f}`, !open]);
+    useHive.setState((s) => ({ collapsed: { ...s.collapsed, ...Object.fromEntries(keys) } }));
+  };
+  // Closes the folders the drag opened, except those holding `folder`.
+  const closeOutside = (folder: string | null) => {
+    const holds = (f: string) => folder !== null && within(folder, f);
+    setOpen(
+      opened.current.filter((f) => !holds(f)),
+      false,
+    );
+    opened.current = opened.current.filter(holds);
+  };
   const unhover = () => {
     if (hover.current) clearTimeout(hover.current.timer);
     hover.current = null;
   };
   const end = () => {
     unhover();
+    closeOutside(null);
     setDragged(null);
     setOver(null);
   };
@@ -703,38 +743,49 @@ function useFileDrag(worktree: string, rows: FileRow[]) {
     return at == null ? undefined : rows[Number(at)];
   };
   const start = (e: DragEvent, row: FileRow) => {
-    const target = fileTarget(worktree, row);
-    if (target.path === null) return;
-    e.dataTransfer.setData("text/plain", target.path);
+    const { path } = fileTarget(worktree, row);
+    if (path === null) return;
+    e.dataTransfer.setData("text/plain", path);
     e.dataTransfer.effectAllowed = "move";
-    setDragged(target);
+    setDragged(path);
   };
   const handlers = {
     onDragOver: (e: DragEvent) => {
-      if (!dragged) return;
+      if (dragged === null) return;
+      const row = rowAt(e);
+      const folder = fileTarget(worktree, row).folder;
+      closeOutside(folder);
+      if (hover.current?.key !== row?.key) unhover();
+      // A folder never goes into itself: no drop there.
+      if (within(folder, dragged)) return setOver(null);
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      const row = rowAt(e);
-      setOver(fileTarget(worktree, row).folder);
-      if (hover.current?.key === row?.key) return;
-      unhover();
-      if (row?.kind !== "folder" || row.open) return;
-      const timer = setTimeout(
-        () => useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: false } })),
-        HOVER_OPEN_MS,
-      );
+      setOver(folder);
+      if (hover.current || row?.kind !== "folder" || row.open) return;
+      const timer = setTimeout(() => {
+        opened.current.push(row.path);
+        setOpen([row.path], true);
+      }, HOVER_OPEN_MS);
       hover.current = { key: row.key, timer };
     },
     onDragLeave: (e: DragEvent) => {
       if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
       unhover();
+      closeOutside(null);
       setOver(null);
     },
     onDrop: (e: DragEvent) => {
-      if (!dragged?.path) return;
-      e.preventDefault();
+      if (dragged === null) return;
       const folder = fileTarget(worktree, rowAt(e)).folder;
-      if (folder !== dragged.folder) void transport.moveFile(worktree, dragged.path, folder);
+      if (within(folder, dragged)) return;
+      e.preventDefault();
+      if (folder !== parentOf(dragged)) {
+        void transport.moveFile(worktree, dragged, folder);
+        const parts = folder.split("/");
+        setOpen(folder ? parts.map((_, i) => parts.slice(0, i + 1).join("/")) : [], true);
+      }
+      // The folders the drag opened stay open.
+      opened.current = [];
       end();
     },
     onDragEnd: end,

@@ -30,6 +30,8 @@ export function App() {
   const rightPanel = useHive((s) => s.rightPanel);
   const status = useHive((s) => s.connection.status);
   const modal = useHive((s) => s.modal);
+  // A question asked from a dialog keeps that dialog open underneath, edits and all.
+  const under = useHive((s) => (s.modal === "confirm" ? s.question?.back : s.modal));
   const hasProjects = useHive((s) => Object.keys(s.projects ?? {}).length > 0);
   const theme = useHive((s) => s.settings.appearance.theme);
   // Nothing works without the service: the workspace is inert under the block (#29).
@@ -55,8 +57,8 @@ export function App() {
         {modal === "worktree-picker" && !blocked && <WorktreePicker />}
         {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
-        {modal === "new-space" && !blocked && <SpaceDialog editing={false} />}
-        {modal === "edit-space" && !blocked && <SpaceDialog editing />}
+        {under === "new-space" && !blocked && <SpaceDialog editing={false} />}
+        {under === "edit-space" && !blocked && <SpaceDialog editing />}
         {modal === "settings" && !blocked && <SettingsDialog />}
         {modal === "remove-merged" && !blocked && <RemoveMergedDialog />}
         {modal === "palette" && !blocked && <Palette />}

@@ -184,3 +184,49 @@ test("files: New Folder shows an empty folder; a dragged file moves into it, its
     "notes/README.md",
   );
 });
+
+test("files: a folder opened under a drag closes when it leaves; a dragged folder moves with its tabs", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const { panel } = await openReadme(page);
+  const row = (name: string) => panel.getByRole("treeitem", { name, exact: true });
+  await row("docs").click();
+  await row("api.md").click();
+  const view = page.getByRole("region", { name: "docs/api.md" });
+  await view.locator(".cm-line").first().click();
+  await page.keyboard.type("// mine\n");
+  const at = async (name: string) => {
+    const box = await row(name).boundingBox();
+    if (!box) throw new Error(`${name} is not shown`);
+    return { x: box.x + 40, y: box.y + box.height / 2 };
+  };
+  const hover = async (name: string) => {
+    const { x, y } = await at(name);
+    await page.mouse.move(x, y);
+    await page.mouse.move(x + 1, y);
+  };
+
+  const from = await at("docs");
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // Held over a closed folder, it opens; out of it, it closes again.
+  await hover("src");
+  await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+  await expect(row("auth")).toBeVisible();
+  await hover("config");
+  await expect(row("src")).toHaveAttribute("aria-expanded", "false");
+  // Never into itself: no drop line there.
+  await hover("docs");
+  await expect(row("docs")).toHaveAttribute("data-file-drop", "false");
+  // Dropped on a folder, the folder moves in with its open file, unsaved edits kept.
+  await hover("src");
+  await expect(row("src")).toHaveAttribute("data-file-drop", "true");
+  await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+  await page.mouse.up();
+  const moved = page.getByRole("region", { name: "src/docs/api.md" });
+  await expect(moved.locator(".cm-content")).toContainText("// mine");
+  await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+  await expect(row("docs")).toHaveAttribute("aria-expanded", "true");
+  await expect(row("api.md")).toHaveAttribute("title", "src/docs/api.md");
+});

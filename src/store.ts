@@ -45,8 +45,12 @@ export type ServiceMessage =
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
+  | { type: "project_removed"; id: string }
+  | { type: "remove_project_failed"; id: string; message: string }
   | { type: "spaces"; spaces: Space[]; current: string }
   | { type: "space_failed"; message: string }
+  | ({ type: "gh_accounts" } & GhAccounts)
+  | { type: "notice"; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -81,6 +85,7 @@ export type ServiceMessage =
   | { type: "file_created"; worktree: string; path: string }
   | { type: "file_renamed"; worktree: string; path: string; to: string }
   | { type: "folder_created"; worktree: string; path: string }
+  | { type: "file_deleted"; worktree: string; path: string }
   | { type: "file_op_failed"; worktree: string; message: string }
   // Handled by `openExternal` (src/viewer/external.ts), not stored.
   // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
@@ -187,6 +192,19 @@ export type SpaceEnv = {
   git_name: string | null;
   git_email: string | null;
   gh_config_dir: string | null;
+  /** The `gh` account whose token its terminals get (9.30); null: `gh`'s active account. */
+  gh_account: GhAccount | null;
+};
+
+/** Mirrors `hive_protocol::GhAccount`: a `gh` login on a host. */
+export type GhAccount = { host: string; login: string };
+/** Mirrors `hive_protocol::GhLogin`: an account as `gh auth status` lists it. */
+export type GhLogin = GhAccount & { active: boolean; logged_in: boolean };
+/** The accounts of `gh` in a config folder, logins only; `problem` says what went wrong. */
+export type GhAccounts = {
+  gh_config_dir: string | null;
+  accounts: GhLogin[];
+  problem: string | null;
 };
 
 /** Mirrors `hive_protocol::Space` (6.14): its projects' ids and its terminals' environment. */
@@ -277,12 +295,13 @@ export type SessionTarget = "log" | "folder";
 export type SessionMenu = { session: string; x: number; y: number };
 /**
  * A file tree's menu target: new files go in `folder` (relative to the worktree, "" for its
- * root); `path` is the file to rename, null for a folder or the tree's background.
+ * root); `path` is the file or folder to rename (a folder: `folder` itself), null for the tree's
+ * background.
  */
 export type FileTarget = { worktree: string; folder: string; path: string | null };
 /** What the file name dialog does: a new file or folder in `folder`, or rename `path`. */
 export type FileDialogKind = "file" | "folder" | "rename";
-/** The "New file" / "New folder" / "Rename file" dialog: its target and the service's refusal. */
+/** The "New file" / "New folder" / "Rename" dialog: its target and the service's refusal. */
 export type FileDialog = FileTarget & { kind: FileDialogKind; error: string | null };
 
 /** A line of a file holding the searched text (`line` is 1-based). */
@@ -644,7 +663,14 @@ export type Modal =
  * A yes/no question asked in a Hive dialog (8.20), never the WebView's `confirm`: `run` happens
  * only when the user picks `action` (e.g. "Discard", "Delete").
  */
-export type Question = { title: string; text: string; action: string; run: () => void };
+export type Question = {
+  title: string;
+  text: string;
+  action: string;
+  run: () => void;
+  /** The dialog asked from, shown again (still open underneath) once answered. */
+  back?: Modal;
+};
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
 /** A project row's context menu, at the pointer. */
@@ -667,6 +693,8 @@ export type HiveState = {
    */
   // ponytail: kept for the window's life, even if the folder goes away outside Hive.
   newFolders: Record<string, string[]>;
+  /** The entry just renamed or moved: the Files tree makes its row the active one once listed. */
+  movedRow: OpenFile | null;
   /** The question of the "confirm" modal (`ask`). */
   question: Question | null;
   /** A short message in the status bar, e.g. why the Explorer did not open. */
@@ -745,6 +773,8 @@ export type HiveState = {
   currentSpace: string | null;
   /** Why the last space request was refused. */
   spaceError: string | null;
+  /** The last `gh_accounts` answer (9.30), for the space dialog; null until asked. */
+  ghAccounts: GhAccounts | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
   /** The worktree a dialog opened for (its row's menu). */
@@ -800,6 +830,7 @@ export const initialState: HiveState = {
   fileMenu: null,
   fileDialog: null,
   newFolders: {},
+  movedRow: null,
   question: null,
   notice: null,
   update: null,
@@ -835,6 +866,7 @@ export const initialState: HiveState = {
   spaces: null,
   currentSpace: null,
   spaceError: null,
+  ghAccounts: null,
   modalProject: null,
   modalWorktree: null,
   worktreeDialog: {
@@ -968,8 +1000,13 @@ export function moveAgent(id: string, target: string, after: boolean): void {
     ORDER_LIMIT,
   );
   useHive.setState({ agentOrder });
+}
+
+/** Remembers the agents' order whenever it changes. */
+export function saveAgentOrder(s: HiveState, prev: HiveState): void {
+  if (s.agentOrder === prev.agentOrder) return;
   try {
-    safeStorage()?.setItem(ORDER_STORAGE, JSON.stringify(agentOrder));
+    safeStorage()?.setItem(ORDER_STORAGE, JSON.stringify(s.agentOrder));
   } catch {
     // A full or blocked storage only loses the preference.
   }
@@ -1025,6 +1062,7 @@ export const useHive = create<HiveState>()(() => ({
   tabOrder: savedTabOrder(),
 }));
 useHive.subscribe(saveTabOrder);
+useHive.subscribe(saveAgentOrder);
 
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
   const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };
@@ -1075,6 +1113,50 @@ export const owner = (projects: HiveState["projects"], id: string | null): Proje
 /** The worktree `id` of any project. */
 export const findWorktree = (projects: HiveState["projects"], id: string | null) =>
   owner(projects, id)?.worktrees.find((w) => w.id === id);
+
+/**
+ * What goes with a project the service stopped following (9.28): its rows and sessions, its
+ * file tabs (their unsaved edits too: the question said so), the panel state of its worktrees,
+ * and the places its worktrees and sessions held in the agents' and the tab bar's orders.
+ */
+function removedProject(s: HiveState, id: string): Partial<HiveState> {
+  const project = s.projects?.[id];
+  if (!project) return {};
+  const places = [id, ...project.worktrees.map((w) => w.id)];
+  const inside = (path: string | null) => places.includes(path as string);
+  const files: Partial<HiveState> = {};
+  for (const f of s.openFiles.filter((f) => inside(f.worktree))) {
+    Object.assign(files, dropFile({ ...s, ...files }, f));
+  }
+  const gone = (s.sessions ?? []).filter((x) => x.project === id).map((x) => x.id);
+  gone.push(...Object.values(s.agents).flatMap((a) => (inside(a.worktree) ? [a.id] : [])));
+  const own = (key: string) =>
+    key === id ||
+    gone.some((g) => key === `session:${g}`) ||
+    places.some(
+      (p) =>
+        key === `worktree:${p}` ||
+        [`files:${p}/`, `changes:${p}/`, `file:${p}\n`].some((start) => key.startsWith(start)),
+    );
+  const keep = <T>(record: Record<string, T>) =>
+    Object.fromEntries(Object.entries(record).filter(([key]) => !inside(key)));
+  const { [id]: _, ...projects } = s.projects ?? {};
+  return {
+    ...files,
+    projects,
+    selection: inside(s.selection) || gone.includes(s.selection ?? "") ? null : s.selection,
+    collapsed: Object.fromEntries(Object.entries(s.collapsed).filter(([key]) => !own(key))),
+    tabOrder: (files.tabOrder ?? s.tabOrder).filter((key) => !own(key)),
+    agentOrder: s.agentOrder.filter((a) => !gone.includes(a)),
+    sessions: s.sessions?.filter((x) => x.project !== id) ?? null,
+    worktreeFiles: inside(s.worktreeFiles?.path ?? null) ? null : s.worktreeFiles,
+    changes: keep(s.changes),
+    comments: keep(s.comments),
+    commenting: inside(s.commenting?.worktree ?? null) ? null : s.commenting,
+    newFolders: keep(s.newFolders),
+    searchResults: inside(s.searchResults?.worktree ?? null) ? null : s.searchResults,
+  };
+}
 
 function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
@@ -1160,6 +1242,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "add_project_failed":
       return { addProjectError: m.message };
+    case "project_removed":
+      return removedProject(s, m.id);
+    case "remove_project_failed":
+      return { notice: m.message };
     case "spaces":
       // The answer to the space dialog's request: it has done its job.
       return {
@@ -1170,6 +1256,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "space_failed":
       return { spaceError: m.message };
+    case "notice":
+      return { notice: m.message };
+    case "gh_accounts": {
+      const { type: _, ...accounts } = m;
+      return { ghAccounts: accounts };
+    }
     case "branches": {
       const { type: _, ...branches } = m;
       return patchDialog(s, { branches });
@@ -1261,17 +1353,34 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...fileDialogDone(s, m.worktree),
       };
     case "file_renamed": {
-      // Its tab, its place in the bar, its text and its edits follow the rename (or move).
-      const moved = <T extends OpenFile>(f: T | null) =>
-        f && isFor(f, m) ? { ...f, path: m.to } : f;
-      const from = fileKey(m);
-      const to = fileKey({ worktree: m.worktree, path: m.to });
+      // Its tab, its place in the bar, its text and its edits follow the rename (or move); a
+      // folder's `to` moves every path under it, with its folders' open state.
+      const to = (path: string) => (within(path, m.path) ? m.to + path.slice(m.path.length) : null);
+      const moved = <T extends OpenFile>(f: T | null) => {
+        const path = f?.worktree === m.worktree ? to(f.path) : null;
+        return f && path !== null ? { ...f, path } : f;
+      };
+      // Keys that end in a path of the worktree: bar keys and the trees' folders.
+      const prefixes = [fileKey({ worktree: m.worktree, path: "" })].concat(
+        ["files", "changes"].map((tree) => `${tree}:${m.worktree}/`),
+      );
+      const rekey = (key: string) => {
+        const prefix = prefixes.find((p) => key.startsWith(p));
+        const path = prefix === undefined ? null : to(key.slice(prefix.length));
+        return path === null ? key : `${prefix}${path}`;
+      };
+      const shown = s.newFolders[m.worktree];
       return {
         openFile: moved(s.openFile),
         openFiles: s.openFiles.map((f) => ({ ...(moved(f) as FileTab), edit: moved(f.edit) })),
-        tabOrder: s.tabOrder.map((k) => (k === from ? to : k)),
+        tabOrder: s.tabOrder.map(rekey),
         file: moved(s.file),
         edit: moved(s.edit),
+        collapsed: Object.fromEntries(Object.entries(s.collapsed).map(([k, v]) => [rekey(k), v])),
+        newFolders: shown
+          ? { ...s.newFolders, [m.worktree]: shown.map((p) => to(p) ?? p) }
+          : s.newFolders,
+        movedRow: { worktree: m.worktree, path: m.to },
         ...fileDialogDone(s, m.worktree),
       };
     }
@@ -1288,10 +1397,32 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...fileDialogDone(s, m.worktree),
       };
     }
+    case "file_deleted": {
+      // The entry leaves the tree at once (the next listing confirms it), and the tabs of the
+      // files it held close.
+      const gone = (path: string) => within(path, m.path);
+      const listing = s.worktreeFiles;
+      const shown = s.newFolders[m.worktree];
+      const tree = {
+        ...s,
+        worktreeFiles:
+          listing?.path === m.worktree
+            ? { ...listing, files: listing.files.filter((p) => !gone(p)) }
+            : listing,
+        newFolders: shown
+          ? { ...s.newFolders, [m.worktree]: shown.filter((p) => !gone(p)) }
+          : s.newFolders,
+      };
+      return closeDeleted(
+        tree,
+        s.openFiles.filter((f) => f.worktree === m.worktree && gone(f.path)),
+      );
+    }
     case "file_op_failed":
+      // Under the dialog's field, else (a drag) in the status bar.
       return s.fileDialog?.worktree === m.worktree
         ? { fileDialog: { ...s.fileDialog, error: m.message } }
-        : {};
+        : { notice: m.message };
     case "transcript": {
       const { type: _, ...transcript } = m;
       return { transcript };
@@ -1387,22 +1518,47 @@ function deletedFiles(s: HiveState, before: WorktreeFiles | null): HiveState {
   const gone = s.openFiles.filter(
     (f) => f.worktree === now.path && was.has(f.path) && !is.has(f.path),
   );
+  return closeDeleted(s, gone);
+}
+
+/**
+ * The tabs of the deleted files `gone` close; those with unsaved edits once the user agrees,
+ * in one question.
+ */
+function closeDeleted(s: HiveState, gone: OpenFile[]): HiveState {
+  const dirty = gone.filter((f) => {
+    const { edit } = fileTabState(s, f);
+    return edit && isDirty(edit);
+  });
+  const next = dropAll(
+    s,
+    gone.filter((f) => !dirty.includes(f)),
+  );
+  if (dirty.length === 0) return next;
+  const [one] = dirty;
+  const text =
+    dirty.length === 1
+      ? `${one?.path} was deleted. Your unsaved changes to it will be lost.`
+      : `${dirty.map((f) => f.path).join(", ")} were deleted. Your unsaved changes to them will be lost.`;
+  const question = {
+    title: "Discard changes?",
+    text,
+    action: "Discard",
+    run: () => useHive.setState((s) => dropAll(s, dirty)),
+  };
+  return { ...next, modal: "confirm", question };
+}
+
+/** `s` with the tabs of `files` closed, one after the other. */
+function dropAll(s: HiveState, files: OpenFile[]): HiveState {
   let next = s;
-  for (const f of gone) {
-    const edit = fileTabState(next, f).edit;
-    const question = {
-      title: "Discard changes?",
-      text: `${f.path} was deleted. Your unsaved changes to it will be lost.`,
-      action: "Discard",
-      run: () => useHive.setState((s) => dropFile(s, f)),
-    };
-    next = {
-      ...next,
-      ...(edit && isDirty(edit) ? { modal: "confirm", question } : dropFile(next, f)),
-    };
-  }
+  for (const f of files) next = { ...next, ...dropFile(next, f) };
   return next;
 }
+
+/** Whether `path` is `folder` or inside it. */
+export const within = (path: string, folder: string) =>
+  path === folder || path.startsWith(`${folder}/`);
 
 /** Closes the file dialog when the answer is for its worktree. */
 function fileDialogDone(s: HiveState, worktree: string): Partial<HiveState> {

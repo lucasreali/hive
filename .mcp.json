@@ -2,7 +2,7 @@
   "mcpServers": {
     "context7": {
       "command": "bunx",
-      "args": ["@upstash/context7-mcp"]
+      "args": ["@upstash/context7-mcp@4.1.1"]
     }
   }
 }

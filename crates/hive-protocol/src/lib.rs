@@ -261,6 +261,20 @@ pub enum Control {
         /// Readable explanation, shown as is.
         message: String,
     },
+    /// App → service: stop following the project `id` (9.28); its files stay on disk.
+    /// Answered by `Spaces`, `Settings` (when it had settings), then `ProjectRemoved`, or by
+    /// `RemoveProjectFailed`.
+    RemoveProject {
+        id: String,
+    },
+    ProjectRemoved {
+        id: String,
+    },
+    /// Nothing changed. Shown as is.
+    RemoveProjectFailed {
+        id: String,
+        message: String,
+    },
     /// Every space (6.14) and the current one, whose projects the sidebar and the Sessions
     /// panel show. Sent before `projects` in answer to `ListProjects`, before `ProjectAdded`,
     /// and in answer to every space request.
@@ -290,6 +304,30 @@ pub enum Control {
     },
     /// A space request refused, with nothing changed. Shown as is.
     SpaceFailed {
+        message: String,
+    },
+    /// App → service: the accounts logged in to `gh` (9.30), in `gh_config_dir` when set
+    /// (the space dialog's GitHub CLI config folder). Answered by `GhAccounts`.
+    ListGhAccounts {
+        gh_config_dir: Option<String>,
+    },
+    /// App → service: makes `account` the active one of `gh` itself (`gh auth switch`), for
+    /// every shell on the machine; the app asks the human first. Answered by `GhAccounts`.
+    SwitchGhAccount {
+        gh_config_dir: Option<String>,
+        account: GhAccount,
+    },
+    /// The accounts of `gh` in `gh_config_dir` (as asked), logins only: never a token.
+    /// `problem` says why the list is empty or incomplete (no `gh`, not logged in, a failed
+    /// switch), shown as is.
+    GhAccounts {
+        gh_config_dir: Option<String>,
+        accounts: Vec<GhLogin>,
+        problem: Option<String>,
+    },
+    /// Something the human should know that has no place of its own, shown in the status bar
+    /// as is: e.g. a terminal that could not get its space's GitHub account (9.30).
+    Notice {
         message: String,
     },
     /// App → service: the local and remote branches of a followed project, answered by
@@ -558,22 +596,23 @@ pub enum Control {
         worktree: String,
         path: String,
     },
-    /// App → service: rename the file `path` to `name` in the same folder (7.4). Never
-    /// overwrites. Answered by `FileRenamed` or `FileOpFailed`.
+    /// App → service: rename the file or folder (9.1) `path` to `name` in the same folder
+    /// (7.4). Never overwrites. Answered by `FileRenamed` or `FileOpFailed`.
     RenameFile {
         worktree: String,
         path: String,
         name: String,
     },
-    /// The file `path` is now `to` (relative to the worktree).
+    /// The file or folder `path` is now `to` (relative to the worktree); for a folder, every
+    /// path under `path` is now under `to`.
     FileRenamed {
         worktree: String,
         path: String,
         to: String,
     },
-    /// App → service: move the file `path` into `folder` (relative to the worktree, empty for
-    /// its root), keeping its name (8.3). Never overwrites. Answered by `FileRenamed` or
-    /// `FileOpFailed`.
+    /// App → service: move the file or folder (9.1) `path` into `folder` (relative to the
+    /// worktree, empty for its root), keeping its name (8.3). Never overwrites. Answered by
+    /// `FileRenamed` or `FileOpFailed`.
     MoveFile {
         worktree: String,
         path: String,
@@ -592,7 +631,18 @@ pub enum Control {
         worktree: String,
         path: String,
     },
-    /// Nothing was created, renamed or moved. Shown as is.
+    /// App → service: delete the file or folder `path` (relative to the worktree) for good
+    /// (9.29). Answered by `FileDeleted` or `FileOpFailed`.
+    DeleteFile {
+        worktree: String,
+        path: String,
+    },
+    /// The file or folder `path` (as the app sent it) is gone, with everything under it.
+    FileDeleted {
+        worktree: String,
+        path: String,
+    },
+    /// Nothing was created, renamed, moved or deleted. Shown as is.
     FileOpFailed {
         worktree: String,
         message: String,
@@ -1086,6 +1136,27 @@ pub struct SpaceEnv {
     pub git_email: Option<String>,
     /// `GH_CONFIG_DIR`.
     pub gh_config_dir: Option<String>,
+    /// The `gh` account whose token its terminals and Hive's own `gh` calls get as `GH_TOKEN`
+    /// (with `GH_HOST`), looked up in `gh_config_dir` when set; `None`: `gh`'s active account.
+    pub gh_account: Option<GhAccount>,
+}
+
+/// A `gh` login on a host, e.g. `lucasreali` on `github.com`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GhAccount {
+    pub host: String,
+    pub login: String,
+}
+
+/// An account as `gh auth status` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GhLogin {
+    pub host: String,
+    pub login: String,
+    /// `gh`'s active account on its host.
+    pub active: bool,
+    /// Its token works (`gh` checked it); false when `gh` failed to log in with it.
+    pub logged_in: bool,
 }
 
 /// A git repository inside WSL that the app follows (#4). Paths are the service's, never
@@ -1591,7 +1662,29 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&spaces).unwrap(),
-            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"claude_config_dir":null,"git_name":null,"git_email":"a@b","gh_config_dir":null}}],"current":"default"}"#
+            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"claude_config_dir":null,"git_name":null,"git_email":"a@b","gh_config_dir":null,"gh_account":null}}],"current":"default"}"#
+        );
+        let accounts = Control::GhAccounts {
+            gh_config_dir: Some("/g".into()),
+            accounts: vec![GhLogin {
+                host: "github.com".into(),
+                login: "me".into(),
+                active: true,
+                logged_in: false,
+            }],
+            problem: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&accounts).unwrap(),
+            r#"{"type":"gh_accounts","gh_config_dir":"/g","accounts":[{"host":"github.com","login":"me","active":true,"logged_in":false}],"problem":null}"#
+        );
+        let list: Control =
+            serde_json::from_str(r#"{"type":"list_gh_accounts","gh_config_dir":null}"#).unwrap();
+        assert_eq!(
+            list,
+            Control::ListGhAccounts {
+                gh_config_dir: None
+            }
         );
         let bare: Space = serde_json::from_str(r#"{"id":"x","name":"X"}"#).unwrap();
         assert!(bare.projects.is_empty() && bare.env == SpaceEnv::default());
@@ -1606,9 +1699,28 @@ mod tests {
             Control::SpaceFailed {
                 message: "m".into(),
             },
+            Control::Notice {
+                message: "m".into(),
+            },
+            Control::SwitchGhAccount {
+                gh_config_dir: None,
+                account: GhAccount {
+                    host: "github.com".into(),
+                    login: "me".into(),
+                },
+            },
+            Control::RemoveProject { id: "/r".into() },
+            Control::ProjectRemoved { id: "/r".into() },
+            Control::RemoveProjectFailed {
+                id: "/r".into(),
+                message: "m".into(),
+            },
         ] {
             assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
         }
+        let remove = Control::RemoveProject { id: "/r".into() };
+        let json = serde_json::to_string(&remove).unwrap();
+        assert_eq!(json, r#"{"type":"remove_project","id":"/r"}"#);
         let other = serde_json::to_string(&ProjectError::InOtherSpace).unwrap();
         assert_eq!(other, r#""in_other_space""#);
     }
@@ -2303,6 +2415,22 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &created).payload[..],
             br#"{"type":"folder_created","worktree":"/r","path":"d/e"}"#
+        );
+        let delete = Control::DeleteFile {
+            worktree: "/r".into(),
+            path: "d/e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &delete).payload[..],
+            br#"{"type":"delete_file","worktree":"/r","path":"d/e"}"#
+        );
+        let deleted = Control::FileDeleted {
+            worktree: "/r".into(),
+            path: "d/e".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &deleted).payload[..],
+            br#"{"type":"file_deleted","worktree":"/r","path":"d/e"}"#
         );
     }
 

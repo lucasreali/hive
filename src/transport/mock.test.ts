@@ -3,6 +3,7 @@ import {
   type AgentState,
   DEFAULT_SETTINGS,
   type ServiceMessage,
+  type Settings,
   type Space,
   type SpaceEnv,
 } from "../store";
@@ -638,6 +639,64 @@ test("files are moved and folders created as the service does, never over anothe
     failed("src already exists"),
     failed("gone.ts does not exist"),
   ]);
+
+  // A folder moves with its files and folders, never into itself.
+  messages.length = 0;
+  await transport.moveFile(w, "src/auth", "empty/inner");
+  await transport.renameFile(w, "empty", "full");
+  await transport.moveFile(w, "full", "full/inner");
+  await transport.openFile(w, "full/inner/auth/login.ts");
+  await tick();
+  const files = messages.filter((m) => m.type === "files").at(-1) as { files: string[] };
+  expect(files.files.filter((p) => p.includes("auth/"))).toEqual([
+    "full/inner/auth/login.ts",
+    "full/inner/auth/session.ts",
+  ]);
+  expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
+    renamed("src/auth", "empty/inner/auth"),
+    renamed("empty", "full"),
+    failed("a folder cannot go into itself"),
+    expect.objectContaining({
+      type: "file",
+      content: "// src/auth/login.ts\nexport const value = 1;\n",
+    }),
+  ]);
+  messages.length = 0;
+  await transport.createFolder(w, "", "empty");
+  await tick();
+  expect(messages[0]).toEqual({ type: "folder_created", worktree: w, path: "empty" });
+});
+
+test("files and folders are deleted as the service does, with what they hold", async () => {
+  const { transport, messages } = await connected();
+  const w = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).path;
+  await transport.watchWorktree(w);
+  await tick();
+  await transport.createFolder(w, "", "empty");
+  await transport.createFolder(w, "src/auth", "inner");
+  await tick();
+  messages.length = 0;
+  await transport.deleteFile(w, "src/auth");
+  await transport.deleteFile(w, "README.md");
+  await transport.deleteFile(w, "empty");
+  await transport.deleteFile(w, "empty");
+  await transport.deleteFile(w, "src/auth/login.ts");
+  await transport.deleteFile("/nowhere", "a");
+  await tick();
+  const deleted = (path: string) => ({ type: "file_deleted", worktree: w, path }) as const;
+  const failed = (worktree: string, message: string) =>
+    ({ type: "file_op_failed", worktree, message }) as const;
+  expect(messages.filter((m) => m.type !== "files" && m.type !== "changes")).toEqual([
+    deleted("src/auth"),
+    deleted("README.md"),
+    deleted("empty"),
+    failed(w, "empty does not exist"),
+    failed(w, "src/auth/login.ts does not exist"),
+    failed("/nowhere", "/nowhere is not a worktree of a followed project"),
+  ]);
+  const files = messages.filter((m) => m.type === "files").at(-1) as { files: string[] };
+  expect(files.files.filter((p) => p.startsWith("src/auth") || p === "README.md")).toEqual([]);
+  expect(files.files).toContain("src/App.tsx");
 });
 
 test("a file's Windows path for an external editor, or why not", async () => {
@@ -907,10 +966,42 @@ const NO_ENV: SpaceEnv = {
   git_name: null,
   git_email: null,
   gh_config_dir: null,
+  gh_account: null,
 };
 function space(id: string, name: string, projects: string[], env = NO_ENV): Space {
   return { id, name, projects, env };
 }
+
+test("gh's accounts are listed, and the active one switched", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  messages.length = 0;
+  await transport.listGhAccounts(null);
+  await transport.switchGhAccount("/g", { host: "github.com", login: "mock-personal" });
+  await tick();
+  const login = (login: string, active: boolean) => ({
+    host: "github.com",
+    login,
+    active,
+    logged_in: true,
+  });
+  expect(messages).toEqual([
+    {
+      type: "gh_accounts",
+      gh_config_dir: null,
+      accounts: [login("mock-personal", false), login("mock-work", true)],
+      problem: null,
+    },
+    {
+      type: "gh_accounts",
+      gh_config_dir: "/g",
+      accounts: [login("mock-personal", true), login("mock-work", false)],
+      problem: null,
+    },
+  ]);
+});
 
 test("spaces are kept as the service keeps them", async () => {
   const transport = createMockTransport();
@@ -969,6 +1060,45 @@ test("deleting the current space makes the first one current, never the last one
   expect(messages.slice(-2)).toEqual([
     { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
     { type: "space_failed", message: "the last space cannot be deleted" },
+  ]);
+});
+
+test("a project is removed with its settings, never while a terminal works in it", async () => {
+  const { transport, messages } = await connected();
+  const scripts = { setup: "make", run: [], archive: null };
+  const projects = { [SHOP]: { scripts } } as Settings["projects"];
+  await transport.setSettings({ ...DEFAULT_SETTINGS, projects });
+  const id = await transport.openTerminal(SHOP, 80, 24, () => {});
+  await tick();
+  messages.length = 0;
+  await transport.removeProject("/nope");
+  await transport.removeProject(SHOP);
+  await tick();
+  await transport.closeTerminal(id);
+  await tick();
+  expect(messages.pop()).toMatchObject({ type: "terminal_exited" });
+  await transport.removeProject(SHOP);
+  await transport.removeProject(API);
+  await transport.listProjects();
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "remove_project_failed",
+      id: "/nope",
+      message: "/nope is not a followed project",
+    },
+    {
+      type: "remove_project_failed",
+      id: SHOP,
+      message: `in use by fish (${id}): close its terminals first`,
+    },
+    { type: "spaces", spaces: [space("default", "Default", [API])], current: "default" },
+    { type: "settings", settings: DEFAULT_SETTINGS },
+    { type: "project_removed", id: SHOP },
+    { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
+    { type: "project_removed", id: API },
+    { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
+    { type: "projects", projects: [] },
   ]);
 });
 
