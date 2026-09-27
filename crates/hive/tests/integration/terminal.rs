@@ -102,6 +102,67 @@ async fn shell_exit_is_reported_with_its_code() {
     assert!(daemon.wait_exit().success());
 }
 
+/// Collects `channel`'s output until its `terminal_exited`; also returns how long after the
+/// first `pid=<digits>` in the output the exit came.
+async fn output_until_exit(app: &mut crate::common::Conn, channel: u32) -> (String, Duration) {
+    let mut seen = String::new();
+    let mut pid_at = None;
+    loop {
+        let frame = app.next().await.expect("connection closed");
+        if frame.channel != channel {
+            continue;
+        }
+        if frame.kind == hive_protocol::FrameType::Terminal {
+            seen.push_str(&String::from_utf8_lossy(&frame.payload));
+            if pid_at.is_none() && pid_in(&seen).is_some() {
+                pid_at = Some(Instant::now());
+            }
+        } else if let Ok(Control::TerminalExited { .. }) = frame.to_control() {
+            let pid_at = pid_at.expect("no pid in the output");
+            return (seen, pid_at.elapsed());
+        }
+    }
+}
+
+#[tokio::test]
+async fn shell_exit_is_reported_while_a_disowned_job_holds_the_pty() {
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let mut app = env.connect(Role::App).await;
+    app.open_terminal(1, &env.path("home")).await;
+    app.input(1, "sleep 30 &; disown; echo \"pid=$last_pid\"; exit\r")
+        .await;
+    let (output, after) = output_until_exit(&mut app, 1).await;
+    assert!(after < Duration::from_secs(1), "{after:?}");
+    // The output printed right before `exit` was delivered, and the job ended with the tab.
+    let pid = pid_in(&output).unwrap();
+    wait_until(|| gone(pid));
+    // Nothing of it is left: the channel is free again.
+    app.open_terminal(1, &env.path("home")).await;
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+/// A process in its own session is not ended with the tab, yet the exit is still reported.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn shell_exit_is_reported_while_another_session_holds_the_pty() {
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let mut app = env.connect(Role::App).await;
+    app.open_terminal(1, &env.path("home")).await;
+    app.input(
+        1,
+        "setsid sh -c 'echo pid=$$; exec sleep 30' &; sleep 0.2; exit\r",
+    )
+    .await;
+    let (_, after) = output_until_exit(&mut app, 1).await;
+    // `sleep 0.2` runs after the pid is printed, then the drain.
+    assert!(after < Duration::from_secs(1), "{after:?}");
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
 #[tokio::test]
 async fn closing_a_terminal_ends_its_shell() {
     let env = Env::new();
