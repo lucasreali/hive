@@ -1,5 +1,6 @@
 import type {
   AgentState,
+  Alert,
   ChangedFile,
   Dirs,
   FileStatus,
@@ -51,7 +52,15 @@ const sub = (
   state: AgentState,
   worktree: string | null = null,
   activity: string | null = null,
-): Subagent => ({ id, agent_type, state, worktree, activity, since_ms: Date.now() - 42_000 });
+): Subagent => ({
+  id,
+  agent_type,
+  state,
+  worktree,
+  activity,
+  since_ms: Date.now() - 42_000,
+  writing: WRITES.includes(state),
+});
 /** A stand-in for `AgentState::urgency`/`pending`, least urgent first; the real rule lives in Rust. */
 const URGENCY: AgentState[] = [
   "ended",
@@ -64,11 +73,38 @@ const URGENCY: AgentState[] = [
   "waiting_plan",
   "waiting_permission",
 ];
-export const agentStatus = (state: AgentState, activity: string | null = null, since_ms = 0) => {
+/** A stand-in for `AgentState::writes`. */
+const WRITES: AgentState[] = [
+  "working",
+  "with_subagents",
+  "waiting_permission",
+  "waiting_plan",
+  "waiting_answer",
+];
+export const agentStatus = (
+  state: AgentState,
+  activity: string | null = null,
+  since_ms = 0,
+  alert: Alert | null = null,
+) => {
   const urgency = URGENCY.indexOf(state);
   const pending = urgency >= URGENCY.indexOf("waiting_you");
-  return { state, urgency, pending, interrupted: false, activity, since_ms };
+  const writing = WRITES.includes(state);
+  return { state, urgency, pending, interrupted: false, alert, writing, activity, since_ms };
 };
+
+/**
+ * A stand-in for the alert `states::Agent` decides when the state goes from `before` to
+ * `after`: finished (working or with subagents → waiting for you), else waiting when the user
+ * is needed; none for the first state or no change.
+ */
+export function mockAlert(before: AgentState | undefined, after: AgentState): Alert | null {
+  if (before === undefined || before === after) return null;
+  if (after === "waiting_you" && (before === "working" || before === "with_subagents")) {
+    return "finished";
+  }
+  return agentStatus(after).pending ? "waiting" : null;
+}
 
 /** `?mock=states`: shop's worktree that subagent a3 works in, shown as its parent row (#22). */
 export const MOCK_OWN_WORKTREE = "/home/user/projects/shop/.claude/worktrees/tests-login";
@@ -589,8 +625,19 @@ export function createMockTransport(
   // Kept in memory; the real service checks the ranges and saves them.
   let settings: Settings = DEFAULT_SETTINGS;
   // The typed line stands in for the tool call it is doing.
-  const setState = (id: string, state: AgentState, activity: string | null = null) =>
-    later({ type: "agent_state", id, ...agentStatus(state, activity, Date.now()), subagents: [] });
+  const states = new Map<string, AgentState>();
+  const setState = (id: string, state: AgentState, activity: string | null = null) => {
+    const alert = mockAlert(states.get(id), state);
+    states.set(id, state);
+    const status = agentStatus(state, activity, Date.now(), alert);
+    later({ type: "agent_state", id, ...status, subagents: [] });
+  };
+  // A stand-in for `projects::place` (without resolving links): the deepest worktree holding it.
+  const place = (cwd: string) =>
+    projects
+      .flatMap((p) => p.worktrees)
+      .filter((w) => cwd === w.path || cwd.startsWith(`${w.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0]?.id ?? null;
   // Files by worktree path, and the one watched.
   const files = new Map<string, string[]>();
   let watched: string | null = null;
@@ -679,7 +726,10 @@ export function createMockTransport(
       later({ type: "settings", settings });
       sendSpaces();
       later({ type: "projects", projects });
-      if (scenario === "states") for (const m of mockStates()) later(m);
+      if (scenario === "states") {
+        for (const m of mockStates()) later(m);
+        later({ type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] });
+      }
     },
     async listProjects() {
       sendSpaces();
@@ -961,7 +1011,7 @@ export function createMockTransport(
     async openTerminal(cwd, _cols, _rows, onData) {
       const id = ++last;
       terminals.set(id, { onData, line: "", cwd, agent: null });
-      later({ type: "terminal_opened", channel: id });
+      later({ type: "terminal_opened", channel: id, worktree: place(cwd) });
       setTimeout(() => print(id, PROMPT), 0);
       if (scenario === "load") void replay(id);
       return id;

@@ -3,6 +3,33 @@ use std::time::{Duration, Instant};
 use hive_protocol::{Control, Role};
 
 use crate::common::{Env, wait_until};
+use crate::worktree::Repo;
+
+#[tokio::test]
+async fn a_terminal_is_placed_in_the_worktree_holding_its_resolved_cwd() {
+    let repo = Repo::new();
+    assert!(repo.hive(&["create", "a"]).status.success());
+    let root = repo.root.display().to_string();
+    let a = repo.root.join(".claude/worktrees/a");
+    std::fs::create_dir(a.join("src")).unwrap();
+    let link = repo.env.path("home/link");
+    std::os::unix::fs::symlink(&a, &link).unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    let added = app.control().await.1;
+    assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
+    let a_id = Some(a.display().to_string());
+    assert_eq!(app.open_terminal(1, &repo.root).await, Some(root));
+    assert_eq!(app.open_terminal(2, &a).await, a_id);
+    // A subfolder, or a link to the worktree: the worktree holding it.
+    assert_eq!(app.open_terminal(3, &a.join("src")).await, a_id);
+    assert_eq!(app.open_terminal(4, &link).await, a_id);
+    assert_eq!(app.open_terminal(5, &repo.env.path("home")).await, None);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
 
 /// First `pid=<digits>` in the output (the echoed command line shows `pid=$...`, not digits).
 fn pid_in(output: &str) -> Option<i32> {

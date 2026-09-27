@@ -32,7 +32,8 @@ export type ServiceMessage =
       app_protocol: number;
       app_version: string;
     }
-  | { type: "terminal_opened"; channel: number }
+  // `worktree`: the followed worktree the service placed the terminal's cwd in, null outside.
+  | { type: "terminal_opened"; channel: number; worktree: string | null }
   | { type: "terminal_exited"; channel: number; code: number | null }
   | { type: "unhooked_agent"; channel: number }
   // `hive badge` in that terminal; empty clears it.
@@ -42,6 +43,7 @@ export type ServiceMessage =
   | { type: "agent_title"; channel: number; id: string; title: string }
   | ({ type: "agent_state"; id: string } & AgentStatus)
   | ({ type: "agent_usage"; id: string } & AgentUsage)
+  | { type: "subagent_worktrees"; worktrees: string[] }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
@@ -126,6 +128,11 @@ export type Terminal = {
   unhooked: boolean;
   /** Set with `hive badge`; cleared when the terminal exits. */
   badge?: string;
+  /**
+   * The followed worktree the service placed its cwd in (`terminal_opened`), null outside
+   * every project or until the service answered: its tab's place (`tabWorktree`).
+   */
+  worktree: string | null;
 };
 
 /** Mirrors `hive_protocol::Worktree`: every field comes from the service. */
@@ -396,14 +403,20 @@ export type Subagent = {
   agent_type: string | null;
   state: AgentState;
   worktree: string | null;
+  /** Its state may be writing files, in its own worktree. */
+  writing: boolean;
 } & Doing;
 
 /** What an agent or subagent is doing (its current tool call) and since when (ms since the epoch) its state lasts. */
 export type Doing = { activity: string | null; since_ms: number };
 
+/** Mirrors `hive_protocol::Alert`: why a new state alerts (`notify`). */
+export type Alert = "finished" | "waiting";
+
 /**
- * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins)
- * and `pending` (needs the user) are the service's, so the app keeps no table of its own.
+ * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins),
+ * `pending` (needs the user), `alert` and `writing` are the service's, so the app keeps no
+ * table of its own.
  */
 export type AgentStatus = {
   state: AgentState;
@@ -411,6 +424,10 @@ export type AgentStatus = {
   pending: boolean;
   /** It waits for you because the user interrupted it: nothing alerts. */
   interrupted: boolean;
+  /** Set only on the message whose state changed; never on the snapshot after `welcome`. */
+  alert: Alert | null;
+  /** Its state may be writing files, in its worktree: "Agent working here". */
+  writing: boolean;
   subagents: Subagent[];
 } & Doing;
 
@@ -650,6 +667,11 @@ export type HiveState = {
   agentTitles: Record<string, string>;
   /** A running agent's tokens from its transcript, by session id. */
   agentUsage: Record<string, AgentUsage>;
+  /**
+   * The worktrees a live subagent works in as its own and no agent runs in (the service's):
+   * they show under their subagent only, not in their project's list.
+   */
+  subagentWorktrees: string[];
   /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
@@ -736,6 +758,7 @@ export const initialState: HiveState = {
   agentStates: {},
   agentTitles: {},
   agentUsage: {},
+  subagentWorktrees: [],
   worktreeFiles: null,
   changes: {},
   file: null,
@@ -915,7 +938,13 @@ useHive.subscribe(saveTabOrder);
 useHive.subscribe(saveAgentOrder);
 
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
-  const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };
+  const current = s.terminals[id] ?? {
+    id,
+    exited: false,
+    code: null,
+    unhooked: false,
+    worktree: null,
+  };
   return { terminals: { ...s.terminals, [id]: { ...current, ...patch } } };
 }
 
@@ -998,8 +1027,13 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...versions } = m;
       return { connection: { status: "version_mismatch", ...versions } };
     }
-    case "terminal_opened":
-      return patchTerminal(s, m.channel, { exited: false, code: null, unhooked: false });
+    case "terminal_opened": {
+      const opened = { exited: false, code: null, unhooked: false, worktree: m.worktree };
+      // Its tab selected its cwd; the place is the worktree holding it (a subfolder, a link).
+      const tab = s.tabs.find((t) => t.id === m.channel);
+      const moved = tab && s.selection === tab.cwd ? { selection: m.worktree ?? tab.cwd } : {};
+      return { ...patchTerminal(s, m.channel, opened), ...moved };
+    }
     case "terminal_exited":
       return patchTerminal(s, m.channel, { exited: true, code: m.code, badge: "" });
     case "unhooked_agent":
@@ -1025,6 +1059,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, id, ...usage } = m;
       return { agentUsage: { ...s.agentUsage, [id]: usage } };
     }
+    case "subagent_worktrees":
+      return { subagentWorktrees: m.worktrees };
     case "agent_state": {
       const { type: _, id, ...status } = m;
       const agentStates = { ...s.agentStates, [id]: status };
@@ -1039,12 +1075,20 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const was = owner(s.projects, s.selection);
       const gone = was && !ids.has(s.selection as string);
       const selection = gone ? (projects[was.id] ? was.id : null) : s.selection;
+      // So does a terminal's: its tab shows under the project (its main worktree's id).
+      const terminals = Object.fromEntries(
+        Object.values(s.terminals).map((t) => {
+          const left = t.worktree !== null && !ids.has(t.worktree);
+          const project = left ? owner(s.projects, t.worktree)?.id : undefined;
+          return [t.id, project && projects[project] ? { ...t, worktree: project } : t];
+        }),
+      );
       const collapsed = Object.fromEntries(
         Object.entries(s.collapsed).filter(
           ([key]) => !key.startsWith("worktree:") || ids.has(key.slice("worktree:".length)),
         ),
       );
-      return { projects, selection, collapsed };
+      return { projects, selection, terminals, collapsed };
     }
     case "project_added":
       // Only the add-project dialog asks for this, so it has done its job.
@@ -1259,6 +1303,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         connection: { status: "disconnected", reason: m.reason },
         agents: {},
         agentStates: {},
+        subagentWorktrees: [],
         worktreeFiles: null,
         transcriptShown: null,
         transcript: null,
@@ -1542,20 +1587,23 @@ export const toggleCollapsed = (id: string) =>
 
 /** A terminal just opened in `cwd`: its tab is shown and its worktree selected. */
 export const addTab = (id: number, cwd: string) =>
-  useHive.setState((s) => ({
-    tabs: [...s.tabs, { id, cwd }],
-    tabOrder: withKey(s.tabOrder, `tab:${id}`),
-    activeTab: id,
-    fileShown: false,
-    transcriptShown: null,
-    selection: cwd,
-  }));
+  useHive.setState((s) => {
+    const tab = { id, cwd };
+    return {
+      tabs: [...s.tabs, tab],
+      tabOrder: withKey(s.tabOrder, `tab:${id}`),
+      activeTab: id,
+      fileShown: false,
+      transcriptShown: null,
+      selection: tabWorktree(s, tab),
+    };
+  });
 export const activateTab = (tab: Tab) =>
   useHive.setState((s) => ({
     activeTab: tab.id,
     fileShown: false,
     transcriptShown: null,
-    selection: tabPlace(s, tab.cwd),
+    selection: tabWorktree(s, tab),
   }));
 /**
  * Removes the tab; when it was shown, the other pane of its split is, else its right neighbour
@@ -1616,16 +1664,12 @@ export const focusPane = (id: number) =>
   });
 
 /**
- * The worktree a tab (or the open file) at `path` belongs to: the deepest followed worktree
- * holding it (a Claude worktree lies inside its main one). A gone worktree's path falls to its
- * project's main worktree, whose id is the project's; a path outside every project is itself.
+ * The worktree a terminal tab belongs to, as the service placed its cwd (`terminal_opened`;
+ * once that worktree is gone, its project's); outside every project, or until the service
+ * answers, its cwd.
  */
-export function tabPlace(s: HiveState, path: string): string {
-  const inside = Object.values(s.projects ?? {})
-    .flatMap((p) => p.worktrees)
-    .filter((w) => path === w.path || path.startsWith(`${w.path}/`));
-  return inside.sort((a, b) => b.path.length - a.path.length)[0]?.id ?? path;
-}
+export const tabWorktree = (s: HiveState, tab: Tab): string =>
+  s.terminals[tab.id]?.worktree ?? tab.cwd;
 
 /**
  * Whose tabs the tab bar shows: the selected worktree (a selected project stands for its main
@@ -1635,16 +1679,13 @@ export function tabsPlace(s: HiveState): string | null {
   const agent = s.agents[s.selection ?? ""];
   if (!agent) return s.selection;
   const tab = s.tabs.find((t) => t.id === agent.terminal);
-  return tab ? tabPlace(s, tab.cwd) : agent.worktree;
+  return tab ? tabWorktree(s, tab) : agent.worktree;
 }
 
 /** The terminal tabs of the place the tab bar shows, in the bar's order. */
 export function visibleTabs(s: HiveState): Tab[] {
   const place = tabsPlace(s);
-  return inBarOrder(
-    s,
-    place === null ? s.tabs : s.tabs.filter((t) => tabPlace(s, t.cwd) === place),
-  );
+  return inBarOrder(s, place === null ? s.tabs : s.tabs.filter((t) => tabWorktree(s, t) === place));
 }
 
 /** A tab of the bar: a terminal or an open file. */
@@ -1674,7 +1715,7 @@ export function inBarOrder<T extends BarItem>(s: HiveState, items: T[]): T[] {
 /** The tabs of the bar, terminals and files mixed, in its order. */
 export function barItems(s: HiveState): BarItem[] {
   const place = tabsPlace(s);
-  const files = s.openFiles.filter((f) => place === null || tabPlace(s, f.worktree) === place);
+  const files = s.openFiles.filter((f) => place === null || f.worktree === place);
   return inBarOrder(s, [...visibleTabs(s), ...files]);
 }
 
@@ -1700,7 +1741,7 @@ export function moveTab(id: string, target: string, after: boolean): void {
 /** Whether the open file's tab belongs to the place the tab bar shows. */
 export function fileVisible(s: HiveState): boolean {
   const place = tabsPlace(s);
-  return !!s.openFile && (place === null || tabPlace(s, s.openFile.worktree) === place);
+  return !!s.openFile && (place === null || s.openFile.worktree === place);
 }
 
 /**
@@ -1722,7 +1763,7 @@ export function panelWorktree(s: HiveState): { project: Project; worktree: Workt
   );
   const find = (id: string | null | undefined) => all.find((e) => e.worktree.id === id);
   const tab = s.tabs.find((t) => t.id === s.activeTab);
-  return find(selectedPlace(s)) ?? find(tab?.cwd) ?? null;
+  return find(selectedPlace(s)) ?? find(tab && tabWorktree(s, tab)) ?? null;
 }
 
 /** The space holding the project `id`. */
@@ -1772,22 +1813,16 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
 
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
 
-/** States in which an agent may be writing files: the file view's "Agent working here". */
-const WRITING: AgentState[] = [
-  "working",
-  "with_subagents",
-  "waiting_permission",
-  "waiting_plan",
-  "waiting_answer",
-];
-
-/** An agent placed in `worktree`, or a subagent in its own worktree there, may be writing. */
+/**
+ * An agent placed in `worktree`, or a subagent in its own worktree there, may be writing (the
+ * service's `writing`): the file view's "Agent working here".
+ */
 export const agentWorkingIn = (s: HiveState, worktree: string): boolean =>
   Object.values(s.agents).some((a) => {
     const status = s.agentStates[a.id];
     const subagents = status?.subagents ?? [];
     return (
-      (a.worktree === worktree && !!status && WRITING.includes(status.state)) ||
-      subagents.some((sub) => sub.worktree === worktree && WRITING.includes(sub.state))
+      (a.worktree === worktree && !!status?.writing) ||
+      subagents.some((sub) => sub.worktree === worktree && sub.writing)
     );
   });

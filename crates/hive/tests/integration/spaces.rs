@@ -369,7 +369,11 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
         message: "No GitHub token for octo-gone on github.com: this terminal uses gh's active account (gh auth token --hostname github.com --user octo-gone failed: no oauth token found for octo-gone)".into(),
     };
     assert_eq!(app.control().await, (0, notice));
-    assert_eq!(app.control().await, (3, Control::TerminalOpened));
+    let worktree = Some(repo.root.display().to_string());
+    assert_eq!(
+        app.control().await,
+        (3, Control::TerminalOpened { worktree })
+    );
 
     // gh's own active account changes only when asked for.
     let switch = Control::SwitchGhAccount {

@@ -53,6 +53,7 @@ function shown() {
           agent_type: "Explore",
           state: "working",
           worktree: null,
+          writing: true,
           activity: null,
           since_ms: 0,
         },

@@ -161,7 +161,12 @@ pub enum Control {
         cols: u16,
         rows: u16,
     },
-    TerminalOpened,
+    /// The terminal is running. `worktree` is the id of the followed worktree holding its
+    /// `cwd` (`projects::place`: resolved, the deepest wins), `None` outside every followed
+    /// project: the app shows the tab under that worktree.
+    TerminalOpened {
+        worktree: Option<String>,
+    },
     Resize {
         cols: u16,
         rows: u16,
@@ -211,11 +216,23 @@ pub enum Control {
         /// It waits for you because the user interrupted it (Esc/Ctrl+C, or declined a
         /// dialog): not pending, and nothing alerts (no tone, inbox or OS notification).
         interrupted: bool,
+        /// Set only on the message whose displayed `state` changed (hive.md item 5, 2.4): see
+        /// [`Alert`]. `None` for an agent's first state and the snapshot after `Welcome`.
+        alert: Option<Alert>,
+        /// `state` may be writing files ([`AgentState::writes`]): the file view's "Agent
+        /// working here" in the agent's worktree.
+        writing: bool,
         subagents: Vec<SubagentState>,
         /// What the agent itself is doing (its current tool call), cleared when its turn ends.
         activity: Option<String>,
         /// Wall clock (ms since the Unix epoch) when the displayed `state` began.
         since_ms: u64,
+    },
+    /// The worktrees a live subagent works in as its own (#22) and no agent runs in: the
+    /// sidebar shows each only under its subagent, not in its project's list. Sent when the
+    /// set changes, and after the app's `Welcome` when it is not empty.
+    SubagentWorktrees {
+        worktrees: Vec<String>,
     },
     /// The agent's session name from its log (the user's, else Claude's), sent when it is
     /// first known and whenever it changes.
@@ -1223,6 +1240,29 @@ impl AgentState {
     pub fn pending(self) -> bool {
         self >= AgentState::WaitingYou
     }
+
+    /// May be writing files: working, with subagents, or on a dialog about to go on.
+    pub fn writes(self) -> bool {
+        matches!(
+            self,
+            AgentState::Working
+                | AgentState::WithSubagents
+                | AgentState::WaitingPermission
+                | AgentState::WaitingPlan
+                | AgentState::WaitingAnswer
+        )
+    }
+}
+
+/// Why an agent's new state alerts (a tone and an inbox item): it `Finished` (working or
+/// with subagents, then waiting for you: also an OS notification while pending), or entered
+/// another state that is `Waiting` for the user (`AgentState::pending`). An interrupt never
+/// alerts: the user caused it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Alert {
+    Finished,
+    Waiting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1237,6 +1277,8 @@ pub struct SubagentState {
     pub activity: Option<String>,
     /// Wall clock (ms since the Unix epoch) when its `state` began.
     pub since_ms: u64,
+    /// Its `state` may be writing files ([`AgentState::writes`]), in its own `worktree`.
+    pub writing: bool,
 }
 
 #[cfg(test)]
@@ -1345,6 +1387,8 @@ mod tests {
             urgency: 8,
             pending: true,
             interrupted: false,
+            alert: Some(Alert::Waiting),
+            writing: true,
             subagents: vec![SubagentState {
                 id: "a".into(),
                 agent_type: None,
@@ -1352,15 +1396,39 @@ mod tests {
                 worktree: Some("/r/.claude/worktrees/w".into()),
                 activity: Some("Reading a.rs".into()),
                 since_ms: 7,
+                writing: true,
             }],
             activity: None,
             since_ms: 5,
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"waiting","writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
+        let finished = serde_json::to_string(&[Some(Alert::Finished), None]).unwrap();
+        assert_eq!(finished, r#"["finished",null]"#);
+    }
+
+    #[test]
+    fn terminal_and_subagent_worktree_messages_are_tagged_json() {
+        let opened = Control::TerminalOpened {
+            worktree: Some("/r".into()),
+        };
+        assert_eq!(
+            &Frame::control(1, &opened).payload[..],
+            br#"{"type":"terminal_opened","worktree":"/r"}"#
+        );
+        let owned = Control::SubagentWorktrees {
+            worktrees: vec!["/r/.claude/worktrees/a".into()],
+        };
+        assert_eq!(
+            &Frame::control(0, &owned).payload[..],
+            br#"{"type":"subagent_worktrees","worktrees":["/r/.claude/worktrees/a"]}"#
+        );
+        for msg in [opened, owned] {
+            assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
+        }
     }
 
     #[test]
@@ -1384,6 +1452,11 @@ mod tests {
         assert_eq!(
             pending,
             [true, true, true, true, true, false, false, false, false]
+        );
+        let writes: Vec<bool> = most_urgent_first.iter().map(|s| s.writes()).collect();
+        assert_eq!(
+            writes,
+            [true, true, true, false, false, true, true, false, false]
         );
         let json = serde_json::to_string(&most_urgent_first).unwrap();
         assert_eq!(
