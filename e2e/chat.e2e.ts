@@ -436,3 +436,41 @@ test("chat: the draft and its caret come back after another tab was shown", asyn
     await input.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd]),
   ).toEqual([5, 6]);
 });
+
+test("chat: @ lists the worktree's files and folders, even with the panel closed", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await page.getByTitle(/^Files, diff and sessions/).click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await page.keyboard.press("Enter");
+  const chat = page.getByRole("region", { name: "Chat" });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  await expect(input).toBeEnabled();
+
+  const files = chat.getByRole("listbox", { name: "Files" });
+  await input.fill("read @chsum");
+  await expect(files.getByRole("option")).toHaveText(["@src/checkout/CheckoutSummary.tsx"]);
+  // A folder ends in `/` and keeps the list open on its files.
+  await input.fill("read @src/au");
+  await expect(files.getByRole("option").first()).toHaveText("@src/auth/");
+  await input.press("Enter");
+  await expect(input).toHaveValue("read @src/auth/");
+  await expect(files.getByRole("option")).toHaveText([
+    "@src/auth/",
+    "@src/auth/login.ts",
+    "@src/auth/session.ts",
+  ]);
+  await input.press("ArrowDown");
+  await input.press("Tab");
+  await expect(input).toHaveValue("read @src/auth/login.ts ");
+  await expect(files).toBeHidden();
+  // Esc hides the list.
+  await input.pressSequentially("@");
+  await expect(files).toBeVisible();
+  await input.press("Escape");
+  await expect(files).toBeHidden();
+});
