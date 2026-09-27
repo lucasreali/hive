@@ -55,17 +55,33 @@ fn run_within(
     time: Option<Duration>,
 ) -> io::Result<Vec<u8>> {
     let mut command = command(dir);
+    command.args(args);
+    limited(command, "git", args, input, ok, limit, time)
+}
+
+/// Runs `command`, already given its `args` (`program` names it in errors), as
+/// [`run_within`] runs git: `input` on stdin, at most `limit` bytes of stdout, errors carrying
+/// its stderr only (never its stdout), and everything it started killed after `time`. A
+/// program that cannot start is an error of that kind (`NotFound` when it is not installed).
+pub fn limited(
+    mut command: Command,
+    program: &str,
+    args: &[&OsStr],
+    input: &[u8],
+    ok: &[i32],
+    limit: u64,
+    time: Option<Duration>,
+) -> io::Result<Vec<u8>> {
     if time.is_some() {
-        // Its own process group, so the limit ends git's children too.
+        // Its own process group, so the limit ends its children too.
         command.process_group(0);
     }
     let mut child = command
-        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| io::Error::new(err.kind(), format!("cannot run git: {err}")))?;
+        .map_err(|err| io::Error::new(err.kind(), format!("cannot run {program}: {err}")))?;
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
     let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
     let (finished, done) = mpsc::channel::<()>();
@@ -97,16 +113,22 @@ fn run_within(
     let command: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
     let command = command.join(" ");
     if let (true, Some(time)) = (expired, time) {
-        let message = format!("git {command} took longer than {} s", time.as_secs_f32());
+        let message = format!(
+            "{program} {command} took longer than {} s",
+            time.as_secs_f32()
+        );
         return Err(io::Error::new(io::ErrorKind::TimedOut, message));
     }
-    let out = out
-        .map_err(|_| io::Error::other(format!("git {command} printed more than {limit} bytes")))?;
+    let out = out.map_err(|_| {
+        io::Error::other(format!(
+            "{program} {command} printed more than {limit} bytes"
+        ))
+    })?;
     if status.code().is_some_and(|code| ok.contains(&code)) {
         return Ok(out);
     }
     Err(io::Error::other(format!(
-        "git {command} failed: {}",
+        "{program} {command} failed: {}",
         String::from_utf8_lossy(&err).trim()
     )))
 }

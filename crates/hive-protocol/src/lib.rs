@@ -304,6 +304,30 @@ pub enum Control {
     SpaceFailed {
         message: String,
     },
+    /// App → service: the accounts logged in to `gh` (9.30), in `gh_config_dir` when set
+    /// (the space dialog's GitHub CLI config folder). Answered by `GhAccounts`.
+    ListGhAccounts {
+        gh_config_dir: Option<String>,
+    },
+    /// App → service: makes `account` the active one of `gh` itself (`gh auth switch`), for
+    /// every shell on the machine; the app asks the human first. Answered by `GhAccounts`.
+    SwitchGhAccount {
+        gh_config_dir: Option<String>,
+        account: GhAccount,
+    },
+    /// The accounts of `gh` in `gh_config_dir` (as asked), logins only: never a token.
+    /// `problem` says why the list is empty or incomplete (no `gh`, not logged in, a failed
+    /// switch), shown as is.
+    GhAccounts {
+        gh_config_dir: Option<String>,
+        accounts: Vec<GhLogin>,
+        problem: Option<String>,
+    },
+    /// Something the human should know that has no place of its own, shown in the status bar
+    /// as is: e.g. a terminal that could not get its space's GitHub account (9.30).
+    Notice {
+        message: String,
+    },
     /// App → service: the local and remote branches of a followed project, answered by
     /// `Branches`.
     ListBranches {
@@ -878,6 +902,27 @@ pub struct SpaceEnv {
     pub git_email: Option<String>,
     /// `GH_CONFIG_DIR`.
     pub gh_config_dir: Option<String>,
+    /// The `gh` account whose token its terminals and Hive's own `gh` calls get as `GH_TOKEN`
+    /// (with `GH_HOST`), looked up in `gh_config_dir` when set; `None`: `gh`'s active account.
+    pub gh_account: Option<GhAccount>,
+}
+
+/// A `gh` login on a host, e.g. `lucasreali` on `github.com`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GhAccount {
+    pub host: String,
+    pub login: String,
+}
+
+/// An account as `gh auth status` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GhLogin {
+    pub host: String,
+    pub login: String,
+    /// `gh`'s active account on its host.
+    pub active: bool,
+    /// Its token works (`gh` checked it); false when `gh` failed to log in with it.
+    pub logged_in: bool,
 }
 
 /// A git repository inside WSL that the app follows (#4). Paths are the service's, never
@@ -1371,7 +1416,29 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&spaces).unwrap(),
-            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"claude_config_dir":null,"git_name":null,"git_email":"a@b","gh_config_dir":null}}],"current":"default"}"#
+            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"claude_config_dir":null,"git_name":null,"git_email":"a@b","gh_config_dir":null,"gh_account":null}}],"current":"default"}"#
+        );
+        let accounts = Control::GhAccounts {
+            gh_config_dir: Some("/g".into()),
+            accounts: vec![GhLogin {
+                host: "github.com".into(),
+                login: "me".into(),
+                active: true,
+                logged_in: false,
+            }],
+            problem: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&accounts).unwrap(),
+            r#"{"type":"gh_accounts","gh_config_dir":"/g","accounts":[{"host":"github.com","login":"me","active":true,"logged_in":false}],"problem":null}"#
+        );
+        let list: Control =
+            serde_json::from_str(r#"{"type":"list_gh_accounts","gh_config_dir":null}"#).unwrap();
+        assert_eq!(
+            list,
+            Control::ListGhAccounts {
+                gh_config_dir: None
+            }
         );
         let bare: Space = serde_json::from_str(r#"{"id":"x","name":"X"}"#).unwrap();
         assert!(bare.projects.is_empty() && bare.env == SpaceEnv::default());
@@ -1385,6 +1452,16 @@ mod tests {
             Control::SelectSpace { id: "x".into() },
             Control::SpaceFailed {
                 message: "m".into(),
+            },
+            Control::Notice {
+                message: "m".into(),
+            },
+            Control::SwitchGhAccount {
+                gh_config_dir: None,
+                account: GhAccount {
+                    host: "github.com".into(),
+                    login: "me".into(),
+                },
             },
             Control::RemoveProject { id: "/r".into() },
             Control::ProjectRemoved { id: "/r".into() },

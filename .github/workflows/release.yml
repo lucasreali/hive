@@ -15,7 +15,44 @@ permissions:
   contents: read
 
 jobs:
+  # Releases only from a green CI (TODO 9.4): a successful `ci` run of the tagged commit, or of its
+  # parent when the tagged commit is scripts/release.sh's version bump, which no branch tests.
+  ci-green:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          green() {
+            gh run list --workflow ci.yml --commit "$(git rev-parse "$1")" --status success \
+              --json url -q '.[0].url // empty'
+          }
+          url=$(green HEAD)
+          if [ -n "$url" ]; then echo "ci is green on the tagged commit: $url"; exit 0; fi
+          # The bump: only these files, and every changed line a manifest's `version`.
+          files=$(git diff --name-only HEAD^ HEAD)
+          lines=$(git diff -U0 HEAD^ HEAD | grep -E '^[-+]' | grep -vE '^(---|\+\+\+) ' || true)
+          if grep -qvxE 'package\.json|src-tauri/tauri\.conf\.json|src-tauri/Cargo\.toml|crates/hive/Cargo\.toml|Cargo\.lock' <<< "$files" ||
+            grep -qvxE '[-+](  "version": "[0-9]+\.[0-9]+\.[0-9]+",|version = "[0-9]+\.[0-9]+\.[0-9]+")' <<< "$lines"
+          then
+            echo "no green ci run for $(git rev-parse HEAD); re-run this workflow once ci is green" >&2
+            exit 1
+          fi
+          url=$(green HEAD^)
+          if [ -z "$url" ]; then
+            echo "the tagged commit only bumps versions, but its parent $(git rev-parse HEAD^) has no green ci run" >&2
+            exit 1
+          fi
+          echo "the tagged commit only bumps versions: accepting its parent's green ci run: $url"
+
   linux:
+    needs: ci-green
     # The oldest supported runner: a glibc this old runs on any recent WSL distribution.
     runs-on: ubuntu-22.04
     steps:
@@ -62,6 +99,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    needs: ci-green
     # Apple Silicon only (#39).
     runs-on: macos-14
     environment: release

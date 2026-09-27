@@ -8,6 +8,7 @@ pub mod daemon;
 pub mod dirs;
 pub mod file;
 pub mod files;
+pub mod gh;
 pub mod git;
 pub mod health;
 pub mod hook;

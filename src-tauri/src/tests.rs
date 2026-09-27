@@ -235,6 +235,8 @@ impl Drop for ScriptHome {
     }
 }
 
+// The inode check (`MetadataExt::ino`) exists only on Unix, where the bridge script runs.
+#[cfg(unix)]
 #[test]
 fn the_bridge_script_installs_the_bundled_hive_once_per_version() {
     use std::os::unix::fs::MetadataExt;
@@ -544,6 +546,21 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.select_space("w".into()).unwrap();
     let select = Control::SelectSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, select));
+    hive.list_gh_accounts(Some("/g".into())).unwrap();
+    let list = Control::ListGhAccounts {
+        gh_config_dir: Some("/g".into()),
+    };
+    assert_eq!(service.control().await, (0, list));
+    let account = GhAccount {
+        host: "github.com".into(),
+        login: "me".into(),
+    };
+    hive.switch_gh_account(None, account.clone()).unwrap();
+    let switch = Control::SwitchGhAccount {
+        gh_config_dir: None,
+        account,
+    };
+    assert_eq!(service.control().await, (0, switch));
     hive.open_settings_file().unwrap();
     assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
     hive.get_diagnostics().unwrap();
@@ -735,6 +752,12 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.delete_space("w".into()), not_connected);
     assert_eq!(hive.remove_project("/r".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
+    assert_eq!(hive.list_gh_accounts(None), not_connected);
+    let account = GhAccount {
+        host: "h".into(),
+        login: "l".into(),
+    };
+    assert_eq!(hive.switch_gh_account(None, account), not_connected);
     assert_eq!(hive.open_settings_file(), not_connected);
     assert_eq!(hive.get_diagnostics(), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
@@ -939,6 +962,8 @@ fn commands_reach_the_managed_hive() {
             delete_space,
             remove_project,
             select_space,
+            list_gh_accounts,
+            switch_gh_account,
             open_settings_file,
             get_diagnostics
         ])
@@ -995,6 +1020,7 @@ fn commands_reach_the_managed_hive() {
     let new_space = json!({"name": "W", "env": {}});
     let update = json!({"id": "w", "name": "W", "env": {"git_name": "Me"}});
     let space = json!({"id": "w"});
+    let switch_gh = json!({"account": {"host": "h", "login": "me"}});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
@@ -1027,6 +1053,8 @@ fn commands_reach_the_managed_hive() {
         ("delete_space", &space),
         ("remove_project", &space),
         ("select_space", &space),
+        ("list_gh_accounts", &json!({"ghConfigDir": null})),
+        ("switch_gh_account", &switch_gh),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
     ] {

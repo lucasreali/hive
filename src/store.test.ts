@@ -604,6 +604,11 @@ test("sessions are stored as listed; a deleted one leaves, a refused delete says
   expect(useHive.getState().notice).toBe("Cannot delete the session: busy");
 });
 
+test("a notice from the service shows in the status bar", () => {
+  apply({ type: "notice", message: "No GitHub token for me" });
+  expect(useHive.getState().notice).toBe("No GitHub token for me");
+});
+
 test("a tab belongs to the deepest worktree holding its folder", () => {
   const [shop] = MOCK_REPOS;
   const [main, login] = shop.worktrees;

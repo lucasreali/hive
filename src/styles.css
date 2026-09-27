@@ -3079,3 +3079,14 @@ body[data-resizing] {
   color: var(--text-3);
   font-style: italic;
 }
+
+/* The space dialog's GitHub account (9.30): the select, then "Make active in gh…" */
+.gh-account {
+  display: flex;
+  gap: 8px;
+}
+
+.gh-account .select {
+  flex: 1;
+  min-width: 0;
+}
