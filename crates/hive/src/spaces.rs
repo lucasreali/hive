@@ -7,6 +7,8 @@ use std::path::Path;
 use hive_protocol::{Space, SpaceEnv};
 use serde::{Deserialize, Serialize};
 
+use crate::gh;
+
 /// The space the flat project list of earlier versions moves into.
 pub const DEFAULT_ID: &str = "default";
 /// Longest space name, in characters.
@@ -208,8 +210,17 @@ fn check_env(env: SpaceEnv, on_disk: bool) -> Result<SpaceEnv, String> {
         claude_config_dir: dir("The Claude config folder", env.claude_config_dir, on_disk)?,
         git_name: text("The git name", env.git_name, TEXT_LIMIT)?,
         git_email: text("The git email", env.git_email, TEXT_LIMIT)?,
-        gh_config_dir: dir("The GitHub CLI config folder", env.gh_config_dir, on_disk)?,
+        gh_config_dir: gh_config_dir(env.gh_config_dir, on_disk)?,
+        gh_account: match env.gh_account {
+            Some(account) => gh::check_account(&account).map(|()| Some(account))?,
+            None => None,
+        },
     })
+}
+
+/// The GitHub CLI config folder, as [`dir`] checks it; also the one `gh_accounts` lists in.
+pub fn gh_config_dir(value: Option<String>, on_disk: bool) -> Result<Option<String>, String> {
+    dir("The GitHub CLI config folder", value, on_disk)
 }
 
 /// The environment entries a terminal of a space gets, as separate values (never a shell
@@ -239,6 +250,7 @@ mod tests {
             git_name: name.map(Into::into),
             git_email: None,
             gh_config_dir: None,
+            gh_account: None,
         }
     }
 
@@ -381,6 +393,20 @@ mod tests {
         // Blank values are unset.
         spaces.create("blank", env(Some(" "), Some(""))).unwrap();
         assert_eq!(spaces.current().1, SpaceEnv::default());
+        // A GitHub account is kept when its login and host could be GitHub's.
+        let account = |login: &str| SpaceEnv {
+            gh_account: Some(hive_protocol::GhAccount {
+                host: "github.com".into(),
+                login: login.into(),
+            }),
+            ..SpaceEnv::default()
+        };
+        assert_eq!(
+            create(&mut spaces, "n", account("--help")),
+            r#""--help" is not a GitHub login"#
+        );
+        spaces.create("gh", account("me")).unwrap();
+        assert_eq!(spaces.current().1, account("me"));
     }
 
     #[test]
@@ -436,6 +462,11 @@ mod tests {
             git_name: Some("Me".into()),
             git_email: Some("me@x".into()),
             gh_config_dir: Some("/g".into()),
+            // Its token comes from `gh` when a terminal opens (`gh::Gh::vars`).
+            gh_account: Some(hive_protocol::GhAccount {
+                host: "github.com".into(),
+                login: "me".into(),
+            }),
         };
         let expected = [
             ("CLAUDE_CONFIG_DIR", "/c"),

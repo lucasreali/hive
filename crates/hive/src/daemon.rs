@@ -15,7 +15,7 @@ use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AgentEvent, ChatMode, Control, EventKind, Frame, FrameCodec, FrameError, FrameType,
+    AgentEvent, ChatMode, Control, EventKind, Frame, FrameCodec, FrameError, FrameType, GhAccount,
     OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionKind, SessionTarget,
 };
 use pty_process::OwnedReadPty;
@@ -491,10 +491,16 @@ impl State {
         rows: u16,
         output: mpsc::Sender<Frame>,
     ) {
-        // Its space's environment (6.14) and its worktree's `HIVE_*` (6.8), placed before the
-        // lock since placing lists worktrees.
-        let (mut env, claude_dir) = tokio::task::block_in_place(|| self.projects.terminal_env(cwd));
+        // Its space's environment (6.14) with its GitHub account's token (9.30), and its
+        // worktree's `HIVE_*` (6.8), placed before the lock since placing lists worktrees.
+        let space = tokio::task::block_in_place(|| self.projects.space_env(cwd));
+        let mut env = crate::spaces::vars(&space);
+        if space.gh_account.is_some() {
+            let gh = self.gh().await;
+            env.extend(tokio::task::block_in_place(|| gh.vars(&space)));
+        }
         env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
+        let claude_dir = space.claude_config_dir;
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {
@@ -575,6 +581,34 @@ impl State {
             Err(message) => Control::SpaceFailed { message },
         };
         self.to_app(0, &reply).await;
+    }
+
+    /// `gh` on the user's `PATH` (waits only for the first answer, at start).
+    async fn gh(&self) -> crate::gh::Gh {
+        let mut known = self.user_path.subscribe();
+        let path = known.wait_for(Option::is_some).await.ok();
+        crate::gh::Gh::on(path.and_then(|path| path.clone()).unwrap_or_default())
+    }
+
+    /// Answers `gh_accounts` for `gh_config_dir` off the frame loop (`gh` asks GitHub), after
+    /// making `switch` `gh`'s active account when given (9.30).
+    fn gh_accounts(self: &Arc<Self>, gh_config_dir: Option<String>, switch: Option<GhAccount>) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let gh = state.gh().await;
+            let (accounts, problem) = tokio::task::block_in_place(|| {
+                match crate::spaces::gh_config_dir(gh_config_dir.clone(), true) {
+                    Ok(dir) => gh.answer(dir.as_deref(), switch.as_ref()),
+                    Err(problem) => (Vec::new(), Some(problem)),
+                }
+            });
+            let reply = Control::GhAccounts {
+                gh_config_dir,
+                accounts,
+                problem,
+            };
+            state.to_app(0, &reply).await;
+        });
     }
 
     /// Watches `path` for the files panel instead of the worktree watched until now, if any.
@@ -1332,6 +1366,11 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
         }
         Ok(Control::DeleteSpace { id }) => state.change_spaces(|s| s.delete(&id)).await,
         Ok(Control::SelectSpace { id }) => state.change_spaces(|s| s.select(&id)).await,
+        Ok(Control::ListGhAccounts { gh_config_dir }) => state.gh_accounts(gh_config_dir, None),
+        Ok(Control::SwitchGhAccount {
+            gh_config_dir,
+            account,
+        }) => state.gh_accounts(gh_config_dir, Some(account)),
         Ok(Control::ListBranches { project }) => state.projects(move |projects| {
             let (branches, error) = match projects.branches(&project) {
                 Ok(branches) => (branches, None),

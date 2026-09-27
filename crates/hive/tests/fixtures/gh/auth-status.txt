@@ -1,0 +1,12 @@
+github.com
+  ✓ Logged in to github.com account octo-personal (GH_TOKEN)
+  - Active account: true
+  - Git operations protocol: https
+  - Token: gho_************************************
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+
+  X Failed to log in to github.com account octo-old (/home/user/.config/gh/hosts.yml)
+  - Active account: false
+  - The token in /home/user/.config/gh/hosts.yml is invalid.
+  - To re-authenticate, run: gh auth login -h github.com
+  - To forget about this account, run: gh auth logout -h github.com -u octo-old

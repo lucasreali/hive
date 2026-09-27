@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use hive_protocol::{Control, Project, ProjectError, Worktree};
+use hive_protocol::{Control, Project, ProjectError, SpaceEnv, Worktree};
 use serde::de::DeserializeOwned;
 
 use crate::spaces::{self, Spaces};
@@ -74,6 +74,13 @@ impl Projects {
     /// What a terminal opened in `cwd` gets from the space of the project holding it: its
     /// environment entries and Claude config folder. Nothing outside every project.
     pub fn terminal_env(&self, cwd: &str) -> (Vec<(&'static str, String)>, Option<String>) {
+        let env = self.space_env(cwd);
+        (spaces::vars(&env), env.claude_config_dir)
+    }
+
+    /// The environment of the space of the project holding `cwd` (also what `gh` gets for a
+    /// project, 9.30); the default one outside every project.
+    pub fn space_env(&self, cwd: &str) -> SpaceEnv {
         // Only the projects holding `cwd` when some do, so git runs for them alone; else
         // every project (a linked worktree may be anywhere).
         // ponytail: a worktree of one project inside another's folder takes the outer one's space.
@@ -92,8 +99,7 @@ impl Projects {
         let place = place(&listed, cwd);
         let spaces = self.spaces();
         let space = place.and_then(|(project, _)| spaces.of(&project).cloned());
-        let env = space.map(|s| s.env).unwrap_or_default();
-        (spaces::vars(&env), env.claude_config_dir)
+        space.map(|s| s.env).unwrap_or_default()
     }
 
     /// Applies a space request and saves the result (when it changed anything); nothing
