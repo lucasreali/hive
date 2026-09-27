@@ -25,6 +25,11 @@ export interface Transport {
   /** Asks the service to follow `path`; answered by `project_added` or `add_project_failed`. */
   addProject(path: string): Promise<void>;
   /**
+   * Stops following the project `id` (9.28); its files stay on disk. Answered by `spaces`,
+   * `settings` (when it had settings) and `project_removed`, or by `remove_project_failed`.
+   */
+  removeProject(id: string): Promise<void>;
+  /**
    * A new, empty space (6.14), made the current one. Answered by `spaces` or `space_failed`,
    * as are the three below.
    */
