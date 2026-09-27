@@ -13,7 +13,7 @@ use tokio::net::UnixStream;
 use crate::paths::Paths;
 
 /// How long to wait for a freshly started service to accept connections.
-const START_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn run(paths: &Paths, hive: &Path) -> io::Result<()> {
     // Only to our own service (`Paths::connect`). A missing or insecure runtime directory goes
