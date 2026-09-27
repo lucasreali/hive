@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use hive_protocol::{Control, Role};
+use hive_protocol::{Control, DiffBase, Role};
 
 use crate::common::Conn;
 use crate::worktree::Repo;
@@ -8,9 +8,9 @@ use crate::worktree::Repo;
 /// Longer than the debounce and a re-list: whatever a change triggers has been sent by then.
 const SETTLE: Duration = Duration::from_millis(800);
 
-async fn watch(conn: &mut Conn, path: &str) {
+async fn watch(conn: &mut Conn, path: &str, base: DiffBase) {
     let path = path.to_owned();
-    conn.send(0, Control::WatchWorktree { path }).await;
+    conn.send(0, Control::WatchWorktree { path, base }).await;
 }
 
 /// The next control messages, which must be `files` for `path` and then its `changes`.
@@ -60,7 +60,7 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
     let mut daemon = repo.env.daemon();
     let mut conn = repo.env.connect(Role::App).await;
     // Only worktrees of followed projects.
-    watch(&mut conn, &root).await;
+    watch(&mut conn, &root, DiffBase::Head).await;
     let refused = format!("{root} is not a worktree of a followed project");
     assert_eq!(
         conn.control().await,
@@ -74,14 +74,14 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
     ));
     // Nor any other folder of it.
     let src = format!("{root}/src");
-    watch(&mut conn, &src).await;
+    watch(&mut conn, &src, DiffBase::Head).await;
     let refused = format!("{src} is not a worktree of a followed project");
     assert_eq!(
         conn.control().await,
         (0, Control::Error { message: refused })
     );
 
-    watch(&mut conn, &root).await;
+    watch(&mut conn, &root, DiffBase::Head).await;
     let listed = [".gitignore", "README", "src/a.rs"];
     assert_eq!(files(&mut conn, &root).await, listed);
     // Ignored trees are not watched: a change in one sends nothing.
@@ -121,7 +121,7 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
     assert_eq!(files(&mut conn, &root).await, listed);
 
     // Watching another worktree replaces the first.
-    watch(&mut conn, &fix_path).await;
+    watch(&mut conn, &fix_path, DiffBase::Head).await;
     assert_eq!(files(&mut conn, &fix_path).await, ["README"]);
     repo.write("e.txt", "");
     tokio::time::sleep(SETTLE).await;
@@ -136,12 +136,17 @@ async fn a_watched_worktree_sends_its_files_after_every_change() {
     conn.send(0, Control::ListProjects).await;
     assert!(matches!(conn.control().await.1, Control::Projects { .. }));
 
+    // Its changes are against the base asked: the merge-base with main keeps a commit of its
+    // branch in view.
+    repo.git_in(&fix, &["add", "g.txt"]);
+    repo.git_in(&fix, &["commit", "-q", "-m", "g"]);
+    watch(&mut conn, &fix_path, DiffBase::Branch).await;
+    match conn.control().await {
+        (0, Control::Files { files, .. }) => assert_eq!(files, ["README", "f.txt", "g.txt"]),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(changed(&mut conn, &fix_path).await, ["f.txt", "g.txt"]);
     // A worktree that disappears is an error.
-    watch(&mut conn, &fix_path).await;
-    assert_eq!(
-        files(&mut conn, &fix_path).await,
-        ["README", "f.txt", "g.txt"]
-    );
     std::fs::remove_dir_all(&fix).unwrap();
     match conn.control().await {
         (0, Control::Error { message }) => {
