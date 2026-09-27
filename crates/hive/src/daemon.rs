@@ -1326,6 +1326,25 @@ mod tests {
         ))
     }
 
+    #[tokio::test]
+    async fn no_claude_on_the_users_path_asks_for_it_again_unless_already_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        // An ask already runs, so no shell starts in this test.
+        state.asking_path.store(true, Ordering::SeqCst);
+        state.user_path.send_replace(Some(bin.clone().into()));
+        assert_eq!(state.user_claude().await, None);
+        assert!(state.asking_path.load(Ordering::SeqCst));
+        assert_eq!(*state.user_path.borrow(), Some(bin.clone().into()));
+        // Once one is there, it is found.
+        let claude = bin.join("claude");
+        std::fs::write(&claude, "").unwrap();
+        std::fs::set_permissions(&claude, Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(state.user_claude().await, Some(claude));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn changed_worktree_statuses_are_sent_on_every_tick() {
         // Through a real daemon this would take the 30 s interval.
