@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { App } from "./App";
-import { moveNextTo } from "./reorder";
+import { moveNextTo, useReorder } from "./reorder";
 import {
   apply,
   initialState,
@@ -177,4 +177,69 @@ test("dragging an agent shows a drop line and drops it there; another worktree r
   // With no drag going on, nothing takes a drop.
   fire(row("s2"), "drop", { clientY: 115 });
   expect(rowTitles()).toEqual(["s4", "s2", "s3", "s1"]);
+});
+
+test("a dragged item is dimmed; the list's empty end drops it last; another item keeps the line", async () => {
+  const moves: unknown[] = [];
+  function List({ items }: { items: string[] }) {
+    const drag = useReorder("test", (...move) => moves.push(move), true);
+    return (
+      <div data-testid="list" {...drag.end(items.at(-1))}>
+        {items.map((id) => (
+          <span key={id} data-testid={id} {...drag(id)}>
+            <b>{id}</b>
+          </span>
+        ))}
+        <i data-testid="plus" />
+      </div>
+    );
+  }
+  const view = render(<List items={["a", "b", "c"]} />);
+  const el = (id: string) => screen.getByTestId(id);
+  const data = { setData: () => {} };
+  const fire = (target: HTMLElement, type: "dragOver" | "drop" | "dragLeave", fields = {}) => {
+    const event = createEvent[type](target, { dataTransfer: data });
+    for (const [key, value] of Object.entries(fields)) Object.defineProperty(event, key, { value });
+    return fireEvent(target, event);
+  };
+
+  fireEvent.dragStart(el("a"), { dataTransfer: data });
+  expect(el("a").dataset.dragging).toBeUndefined();
+  await act(() => new Promise((done) => setTimeout(done)));
+  expect(el("a").dataset.dragging).toBe("true");
+  // Past the last item: the line after it; over an item's own child the item handles it.
+  expect(fire(el("plus"), "dragOver")).toBe(false);
+  expect(el("c").dataset.drop).toBe("after");
+  expect(fire(el("b").firstChild as HTMLElement, "dragOver", { clientX: 0 })).toBe(false);
+  expect(el("b").dataset.drop).toBe("before");
+  // Onto another item the line stays until that item's dragover; over the dragged one it goes.
+  fire(el("b"), "dragLeave", { relatedTarget: el("a").firstChild });
+  expect(el("b").dataset.drop).toBe("before");
+  expect(fire(el("a"), "dragOver")).toBe(true);
+  expect(document.querySelector("[data-drop]")).toBeNull();
+  // Leaving the list clears the line; moving within it does not.
+  fire(el("plus"), "dragOver");
+  fire(el("plus"), "dragLeave", { relatedTarget: el("list") });
+  expect(el("c").dataset.drop).toBe("after");
+  fire(el("list"), "dragLeave", { relatedTarget: document.body });
+  expect(el("c").dataset.drop).toBeUndefined();
+  // A drop on the empty end moves it after the last; a drop on an item is the item's.
+  fire(el("plus"), "drop");
+  fire(el("b"), "drop", { clientX: 0 });
+  expect(moves).toEqual([
+    ["a", "c", true],
+    ["a", "b", false],
+  ]);
+  fireEvent.dragEnd(el("a"), { dataTransfer: data });
+  expect(el("a").dataset.dragging).toBeUndefined();
+
+  // An empty list takes nothing; a timer left from a drag already over dims nothing.
+  fireEvent.dragStart(el("a"), { dataTransfer: data });
+  fireEvent.dragEnd(el("a"), { dataTransfer: data });
+  await act(() => new Promise((done) => setTimeout(done)));
+  expect(el("a").dataset.dragging).toBeUndefined();
+  view.rerender(<List items={[]} />);
+  fireEvent.dragStart(el("plus"), { dataTransfer: data });
+  expect(fire(el("list"), "dragOver")).toBe(true);
+  expect(moves).toHaveLength(2);
 });

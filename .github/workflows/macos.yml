@@ -16,13 +16,14 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           components: llvm-tools-preview, clippy
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-llvm-cov,cargo-mutants
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # The integration tests' terminals run fish, as on WSL (`common::Env`).
       - run: brew install fish
       - run: bun install --frozen-lockfile
@@ -39,23 +40,21 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - run: |
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
           cp target/release/hive src-tauri/resources/hive
       - run: bun install --frozen-lockfile
-      - run: bun tauri build --config src-tauri/tauri.release.macos.conf.json
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # No updater artifacts, so no signing key: that stays in release.yml's `release`
+      # environment (#29), out of reach of any branch.
+      - run: bun tauri build --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - uses: actions/upload-artifact@v6
         with:
           name: hive-macos
-          path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app.tar.gz
-            target/release/bundle/macos/*.app.tar.gz.sig
+          path: target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 7
