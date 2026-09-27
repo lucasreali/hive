@@ -64,10 +64,27 @@ impl Ports {
             .find(|port| !blocks.values().any(|p| p == port))
             .ok_or_else(|| io::Error::other("every block of ports is taken"))?;
         blocks.insert(worktree.to_owned(), port);
-        let json = serde_json::to_vec_pretty(&blocks)?;
-        self.file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
-        write_atomic(&self.file, &json, 0o600)?;
+        self.write(&blocks)?;
         Ok(port)
+    }
+
+    /// Takes back the blocks of `worktrees` (a removed project's, 9.28); nothing is written
+    /// when none of them has one.
+    pub fn forget(&self, worktrees: &[String]) -> io::Result<()> {
+        let _lock = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut blocks = self.read();
+        let before = blocks.len();
+        blocks.retain(|path, _| !worktrees.contains(path));
+        if blocks.len() == before {
+            return Ok(());
+        }
+        self.write(&blocks)
+    }
+
+    fn write(&self, blocks: &BTreeMap<String, u16>) -> io::Result<()> {
+        let json = serde_json::to_vec_pretty(blocks)?;
+        self.file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
+        write_atomic(&self.file, &json, 0o600)
     }
 
     /// The blocks in the file; an unreadable file or a block outside the range counts as none.
@@ -188,6 +205,30 @@ mod tests {
         // A removed worktree's block goes to the next one that needs a block.
         std::fs::remove_dir(a).unwrap();
         assert_eq!(ports.port(b).unwrap(), 20_010);
+        assert_eq!(ports.port("/new").unwrap(), 20_000);
+    }
+
+    #[test]
+    fn a_removed_project_gives_its_blocks_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("hive/ports.json");
+        let ports = Ports::new(file.clone());
+        ports.forget(&["/x".into()]).unwrap();
+        assert!(!file.exists());
+        let [a, b, c] = ["a", "b", "c"].map(|w| {
+            let dir = tmp.path().join(w);
+            std::fs::create_dir(&dir).unwrap();
+            let dir = dir.display().to_string();
+            ports.port(&dir).unwrap();
+            dir
+        });
+        let saved = std::fs::read(&file).unwrap();
+        ports.forget(&["/x".into()]).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), saved);
+        ports.forget(&[a, c, "/x".into()]).unwrap();
+        let kept = BTreeMap::from([(b, 20_010)]);
+        assert_eq!(Ports::new(file).read(), kept);
+        // Their folders may still exist: the blocks are free again all the same.
         assert_eq!(ports.port("/new").unwrap(), 20_000);
     }
 

@@ -60,7 +60,11 @@ test("lists every command with its keys but itself, then agents and worktrees", 
   const [commands, places] = groups();
   expect(commands).toEqual([
     "Commands",
-    [...COMMANDS.filter((c) => c.id !== "palette").map((c) => c.label), "Remove merged worktrees…"],
+    [
+      ...COMMANDS.filter((c) => c.id !== "palette").map((c) => c.label),
+      "Remove merged worktrees…",
+      "Remove project…",
+    ],
   ]);
   expect(places).toEqual([
     "Agents and worktrees",
@@ -110,6 +114,14 @@ test("the mouse picks and runs a row; a click outside closes", () => {
   fireEvent.click(screen.getByRole("dialog", { name: "Command palette" }));
   expect(useHive.getState().modal).toBeNull();
   expect(dialog.isConnected).toBe(false);
+});
+
+test("removing the current project from the palette asks first", () => {
+  open();
+  type("remove project");
+  key("Enter");
+  const asked = screen.getByRole("dialog", { name: "Remove project?" });
+  expect(asked.textContent).toContain(`Remove ${shop.name} from Hive?`);
 });
 
 test("Enter on a worktree selects it and expands its project", () => {

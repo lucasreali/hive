@@ -3,6 +3,7 @@ import {
   type AgentState,
   DEFAULT_SETTINGS,
   type ServiceMessage,
+  type Settings,
   type Space,
   type SpaceEnv,
 } from "../store";
@@ -995,6 +996,45 @@ test("deleting the current space makes the first one current, never the last one
   expect(messages.slice(-2)).toEqual([
     { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
     { type: "space_failed", message: "the last space cannot be deleted" },
+  ]);
+});
+
+test("a project is removed with its settings, never while a terminal works in it", async () => {
+  const { transport, messages } = await connected();
+  const scripts = { setup: "make", run: [], archive: null };
+  const projects = { [SHOP]: { scripts } } as Settings["projects"];
+  await transport.setSettings({ ...DEFAULT_SETTINGS, projects });
+  const id = await transport.openTerminal(SHOP, 80, 24, () => {});
+  await tick();
+  messages.length = 0;
+  await transport.removeProject("/nope");
+  await transport.removeProject(SHOP);
+  await tick();
+  await transport.closeTerminal(id);
+  await tick();
+  expect(messages.pop()).toMatchObject({ type: "terminal_exited" });
+  await transport.removeProject(SHOP);
+  await transport.removeProject(API);
+  await transport.listProjects();
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "remove_project_failed",
+      id: "/nope",
+      message: "/nope is not a followed project",
+    },
+    {
+      type: "remove_project_failed",
+      id: SHOP,
+      message: `in use by fish (${id}): close its terminals first`,
+    },
+    { type: "spaces", spaces: [space("default", "Default", [API])], current: "default" },
+    { type: "settings", settings: DEFAULT_SETTINGS },
+    { type: "project_removed", id: SHOP },
+    { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
+    { type: "project_removed", id: API },
+    { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
+    { type: "projects", projects: [] },
   ]);
 });
 

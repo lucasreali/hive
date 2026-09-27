@@ -16,6 +16,7 @@ export const tauriTransport: Transport = {
   closeTerminal: (id) => invoke("close_terminal", { id }),
   listProjects: () => invoke("list_projects"),
   addProject: (path) => invoke("add_project", { path }),
+  removeProject: (id) => invoke("remove_project", { id }),
   createSpace: (name, env) => invoke("create_space", { name, env }),
   updateSpace: (id, name, env) => invoke("update_space", { id, name, env }),
   deleteSpace: (id) => invoke("delete_space", { id }),

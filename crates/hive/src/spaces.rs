@@ -94,6 +94,17 @@ impl Spaces {
         Ok(())
     }
 
+    /// Takes the project `id` out of the space holding it (9.28); an unfollowed one is refused.
+    pub fn remove(&mut self, project: &str) -> Result<(), String> {
+        let space = self
+            .spaces
+            .iter_mut()
+            .find(|s| s.projects.iter().any(|p| p == project));
+        let space = space.ok_or_else(|| format!("{project} is not a followed project"))?;
+        space.projects.retain(|p| p != project);
+        Ok(())
+    }
+
     /// A new, empty space, made the current one.
     pub fn create(&mut self, name: &str, env: SpaceEnv) -> Result<(), String> {
         let (name, env) = (check_name(name)?, check_env(env, true)?);
@@ -299,6 +310,26 @@ mod tests {
             spaces.delete("space-2"),
             Err("the last space cannot be deleted".to_owned())
         );
+    }
+
+    #[test]
+    fn a_removed_project_leaves_its_space_which_can_then_be_deleted() {
+        let mut spaces = Spaces::with(vec!["/a".into(), "/b".into()]);
+        spaces.create("Work", SpaceEnv::default()).unwrap();
+        spaces.add("/c".into()).unwrap();
+        spaces.remove("/a").unwrap();
+        assert_eq!(spaces.spaces[0].projects, ["/b"]);
+        // From a space that is not the current one too.
+        assert_eq!(spaces.current, "space-1");
+        spaces.remove("/c").unwrap();
+        assert!(spaces.spaces[1].projects.is_empty());
+        spaces.delete("space-1").unwrap();
+        let before = spaces.clone();
+        assert_eq!(
+            spaces.remove("/a"),
+            Err("/a is not a followed project".to_owned())
+        );
+        assert_eq!(spaces, before);
     }
 
     #[test]
