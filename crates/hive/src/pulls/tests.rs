@@ -543,7 +543,9 @@ printf '%s\036' "$PWD" >> '{dir}/gh.log'
 case "$1 $2" in
   "api graphql") [ -f '{dir}/fail' ] && {{ cat '{dir}/fail' >&2; exit 1; }}; cat '{SEARCH}' ;;
   "pr view") cat '{VIEW}' ;;
-  "pr checkout") git checkout -q -b feature ;;
+  "pr checkout") git checkout -q -b feature
+    git config --get core.fsmonitor > '{dir}/git-config'
+    git config --get log.showSignature >> '{dir}/git-config' ;;
   "pr create") case "$7" in
       --title=nolink) ;;
       --title=unpushed) echo 'pull request create failed: GraphQL: Head sha can'"'"'t be blank' >&2; exit 1 ;;
@@ -971,6 +973,9 @@ fn checkout_makes_a_worktree_on_the_pull_request_branch() {
         &["branch", "--format=%(refname:short)"],
     );
     assert_eq!(branches, "feature\nmain\n");
+    // The git gh runs gets no fsmonitor program and no signature check, as Hive's own.
+    let config = std::fs::read_to_string(setup.tmp.path().join("git-config")).unwrap();
+    assert_eq!(config, "false\nfalse\n");
 
     // gh refuses: neither the worktree nor its branch is left.
     let [
