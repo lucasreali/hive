@@ -16,7 +16,6 @@ import type {
 } from "../store";
 import { DEFAULT_SETTINGS } from "../store";
 import type { Transport } from ".";
-import { CHAT_STEP_MS, createMockChat } from "./mockChat";
 import { loadReplay, type ReplayEvent } from "./replay";
 
 const PROMPT = "mock$ ";
@@ -471,7 +470,7 @@ function nameError(project: Project, name: string): string | null {
  * a save checks the version as the service does and keeps the text.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
- * "empty" starts with no projects; "update" offers version 9.9.9, whose install fails; "deny-auto" refuses auto mode in chats (8.4); "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
+ * "empty" starts with no projects; "update" offers version 9.9.9, whose install fails; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
  * after its prompt, at recorded timing, each terminal starting `LOAD_STAGGER_MS` later than
  * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
  * generated one.
@@ -512,7 +511,6 @@ export function createMockTransport(
   const terminals = new Map<number, MockTerminal>();
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
-  const chat = createMockChat((message) => send(message), CHAT_STEP_MS, scenario === "deny-auto");
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
   let recording: Promise<ReplayEvent[]> | undefined;
   const replay = async (id: number) => {
@@ -960,33 +958,6 @@ export function createMockTransport(
     async resizeTerminal() {},
     async closeTerminal(id) {
       exit(id, null);
-    },
-    // Chats share the terminals' channels, as in the app.
-    async openChat(cwd, resume, mode, model) {
-      const id = ++last;
-      chat.open(id, cwd, resume, mode, model);
-      return id;
-    },
-    async chatSend(id, text, images) {
-      chat.send(id, text, images);
-    },
-    async chatAnswer(id, request, answer) {
-      chat.answer(id, request, answer);
-    },
-    async chatInterrupt(id) {
-      chat.interrupt(id);
-    },
-    async chatSetMode(id, mode) {
-      chat.setMode(id, mode);
-    },
-    async chatSetModel(id, model) {
-      chat.setModel(id, model);
-    },
-    async closeChat(id) {
-      chat.close(id);
-    },
-    async confirmChatFolder(id, cwd, accepted) {
-      chat.confirm(id, cwd, accepted);
     },
   };
 }

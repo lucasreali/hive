@@ -22,8 +22,7 @@ export function reference(path: string, { from, to }: Lines): string {
  * one it opened in), since the paths are relative to that worktree.
  */
 export function terminalIn(s: HiveState, worktree: string): { terminal: number } | { why: string } {
-  // A chat (7.3) takes no terminal input.
-  const tab = s.tabs.find((t) => t.id === s.activeTab && t.kind !== "chat");
+  const tab = s.tabs.find((t) => t.id === s.activeTab);
   if (!tab) return { why: "No terminal open" };
   if (s.terminals[tab.id]?.exited) return { why: "The terminal has exited" };
   const agent = Object.values(s.agents).find((a) => a.terminal === tab.id);

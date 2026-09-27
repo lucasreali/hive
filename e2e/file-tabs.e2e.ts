@@ -40,7 +40,7 @@ test("file tabs: each file keeps its edits; tabs reorder by drag, remembered aft
   await expect(page.getByRole("button", { name: /\(unsaved changes\)$/ })).toHaveCount(2);
 
   // A new terminal goes last; dragged onto the left edge of README.md it lands first.
-  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByTitle("New terminal or file").click();
   await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect.poll(() => names(page)).toEqual(["README.md", "package.json", "fix-login"]);
   const tab = (name: string) => page.locator(".tab", { hasText: name });

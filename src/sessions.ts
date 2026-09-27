@@ -1,6 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { openChat } from "./chats";
 import {
   activateTab,
   ask,
@@ -35,7 +34,7 @@ export const resumeCommand = (session: Session) =>
   `cd ${quoted(session.cwd)} && claude ${resumeArgs(session)}`;
 
 /**
- * Goes on with the session: shows its terminal or chat when it runs in one, else runs
+ * Goes on with the session: shows its terminal when it runs in one, else runs
  * `claude --resume` in a new terminal in its folder. `fork` always starts a new session.
  */
 export async function resume(session: Session, fork = false): Promise<void> {
@@ -53,26 +52,13 @@ export async function resume(session: Session, fork = false): Promise<void> {
 }
 
 /**
- * Goes on with the session in a chat (7.3) in its folder, its conversation so far shown first.
- * Like `resume`, never while it runs.
- */
-export async function openAsChat(session: Session): Promise<void> {
-  try {
-    await openChat(session.cwd, session.id);
-  } catch (error) {
-    setNotice(`Cannot open a chat in ${session.cwd}: ${error}`);
-  }
-}
-
-/**
- * The sessions that ran in Hive's terminals and chats when the app last closed: each is resumed
- * in a new terminal (or chat) in its folder, one after the other.
+ * The sessions that ran in Hive's terminals when the app last closed: each is resumed in a new
+ * terminal in its folder, one after the other.
  */
 export async function restore(sessions: OpenSession[]): Promise<void> {
-  for (const { id, cwd, kind } of sessions) {
+  for (const { id, cwd } of sessions) {
     try {
-      if (kind === "chat") await openChat(cwd, id);
-      else await openClaude(cwd, `--resume ${id}`);
+      await openClaude(cwd, `--resume ${id}`);
     } catch (error) {
       setNotice(`Cannot resume the session in ${cwd}: ${error}`);
     }

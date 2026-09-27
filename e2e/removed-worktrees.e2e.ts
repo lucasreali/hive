@@ -8,7 +8,7 @@ test("removed worktrees: the row disappears, its project is selected, its tab st
   const fixLogin = tree.getByRole("button", { name: "fix-login" });
 
   await fixLogin.click();
-  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByTitle("New terminal or file").click();
   await page.getByRole("menuitem", { name: "Terminal" }).click();
   const tab = page.getByRole("tablist").getByRole("tab", { name: "fix-login" });
   await expect(tab).toHaveAttribute("aria-selected", "true");

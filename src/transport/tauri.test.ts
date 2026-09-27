@@ -116,26 +116,3 @@ test("terminal and project actions call their commands", async () => {
     ["install_update", {}],
   ]);
 });
-
-test("chat actions call their commands on the chat's id", async () => {
-  const calls = record(4);
-  expect(await tauriTransport.openChat("/r", null, "plan", "sonnet")).toBe(4);
-  const image = { media_type: "image/png", data: "iVBO" };
-  await tauriTransport.chatSend(4, "hi", [image]);
-  await tauriTransport.chatAnswer(4, "req_1", { kind: "deny", message: null });
-  await tauriTransport.chatInterrupt(4);
-  await tauriTransport.chatSetMode(4, "accept_edits");
-  await tauriTransport.chatSetModel(4, "opus");
-  await tauriTransport.closeChat(4);
-  await tauriTransport.confirmChatFolder(4, "/r", true);
-  expect(calls).toEqual([
-    ["open_chat", { cwd: "/r", resume: null, mode: "plan", model: "sonnet" }],
-    ["chat_send", { chat: 4, text: "hi", images: [image] }],
-    ["chat_answer", { chat: 4, request: "req_1", answer: { kind: "deny", message: null } }],
-    ["chat_interrupt", { chat: 4 }],
-    ["chat_set_mode", { chat: 4, mode: "accept_edits" }],
-    ["chat_set_model", { chat: 4, model: "opus" }],
-    ["close_chat", { chat: 4 }],
-    ["confirm_chat_folder", { chat: 4, cwd: "/r", accepted: true }],
-  ]);
-});

@@ -53,7 +53,7 @@ export function Select(props: {
     const el = list.current as HTMLDivElement;
     el.style.left = `${box.left}px`;
     el.style.minWidth = `${box.width}px`;
-    // It opens upwards when there is more room above (e.g. the chat composer, at the bottom).
+    // It opens upwards when there is more room above (e.g. near the window's bottom).
     const below = window.innerHeight - box.bottom - 8;
     const above = box.top - 8;
     if (below < LIST_MAX && above > below) {

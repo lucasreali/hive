@@ -94,9 +94,7 @@ test("the project button opens the add-project dialog", () => {
 
 test("new terminal waits for the worktree picker", () => {
   render(<App />);
-  expect((screen.getByTitle("New terminal, agent or file") as HTMLButtonElement).disabled).toBe(
-    true,
-  );
+  expect((screen.getByTitle("New terminal or file") as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("the empty state shows only once the service says there are no projects", () => {
