@@ -393,61 +393,177 @@ const SYSTEM: &str = "Windows";
 #[cfg(target_os = "macos")]
 const SYSTEM: &str = "macOS";
 
-/// Extensions that the system runs, installs or follows instead of opening them in an editor.
-// ponytail: a fixed list, not the user's file associations; extend it when one is missing.
-#[cfg(target_os = "linux")]
-const RUNS_AS_PROGRAM: &[&str] = &[
-    "appref-ms",
-    "application",
-    "bat",
-    "cmd",
-    "com",
-    "cpl",
-    "exe",
-    "hta",
-    "inf",
-    "jar",
-    "js",
-    "jse",
-    "lnk",
-    "msc",
-    "msi",
-    "msp",
-    "pif",
-    "ps1",
-    "reg",
-    "scf",
-    "scr",
-    "url",
-    "vbe",
-    "vbs",
-    "ws",
-    "wsf",
-    "wsh",
+/// Extensions of text and source files that open in an editor on Windows and macOS: no usual
+/// app runs, installs or follows one. Every other extension is refused (9.8), among them
+/// scripts an installed interpreter may run (`.js`, `.py`, `.sh`, `.rb`, `.pl`, `.ps1`, `.lua`,
+/// `.jsx`), web pages and XML (a browser or an Office app), projects an IDE builds when it
+/// opens them (`.sln`, `.csproj`) and `.csv` (a spreadsheet).
+// ponytail: a fixed list, not the user's file associations; add a text type when one is missing.
+const EDITOR_EXTENSIONS: &[&str] = &[
+    "adoc",
+    "c",
+    "cc",
+    "cfg",
+    "cjs",
+    "clj",
+    "cljs",
+    "cmake",
+    "conf",
+    "cpp",
+    "cs",
+    "css",
+    "cts",
+    "cxx",
+    "dart",
+    "diff",
+    "dockerfile",
+    "env",
+    "erl",
+    "ex",
+    "exs",
+    "fs",
+    "go",
+    "gradle",
+    "graphql",
+    "h",
+    "hcl",
+    "hpp",
+    "hs",
+    "ini",
+    "java",
+    "json",
+    "json5",
+    "jsonc",
+    "jsonl",
+    "kt",
+    "kts",
+    "less",
+    "lock",
+    "log",
+    "md",
+    "mdx",
+    "mjs",
+    "ml",
+    "mli",
+    "mts",
+    "nix",
+    "patch",
+    "properties",
+    "proto",
+    "rs",
+    "rst",
+    "sass",
+    "scala",
+    "scss",
+    "sql",
+    "svelte",
+    "swift",
+    "tex",
+    "tf",
+    "tfvars",
+    "toml",
+    "ts",
+    "tsx",
+    "txt",
+    "vue",
+    "yaml",
+    "yml",
+    "zig",
 ];
-#[cfg(target_os = "macos")]
-const RUNS_AS_PROGRAM: &[&str] = &[
-    "app", "command", "jar", "pkg", "scpt", "terminal", "tool", "workflow",
+/// Names without an extension (dotfiles included) that open in an editor.
+const EDITOR_NAMES: &[&str] = &[
+    ".dockerignore",
+    ".editorconfig",
+    ".env",
+    ".env.development",
+    ".env.example",
+    ".env.local",
+    ".env.production",
+    ".env.sample",
+    ".env.test",
+    ".eslintignore",
+    ".eslintrc",
+    ".gitattributes",
+    ".gitignore",
+    ".gitkeep",
+    ".gitmodules",
+    ".mailmap",
+    ".node-version",
+    ".npmrc",
+    ".nvmrc",
+    ".prettierignore",
+    ".prettierrc",
+    ".python-version",
+    ".ruby-version",
+    ".tool-versions",
+    "authors",
+    "changelog",
+    "codeowners",
+    "containerfile",
+    "contributing",
+    "copying",
+    "dockerfile",
+    "gemfile",
+    "jenkinsfile",
+    "justfile",
+    "license",
+    "licence",
+    "makefile",
+    "notice",
+    "procfile",
+    "rakefile",
+    "readme",
+    "vagrantfile",
 ];
+/// Folder extensions that macOS runs or installs as one item (bundles).
+const BUNDLES: &[&str] = &["app", "mpkg", "pkg", "prefpane", "saver", "workflow"];
+
+/// Refuses a name Win32 changes (`evil.exe.` opens `evil.exe`) or cannot hold.
+fn plain_name(name: &str) -> io::Result<()> {
+    let odd = |c: char| c.is_control() || r#"<>:"|?*\"#.contains(c);
+    if name.ends_with(['.', ' ']) || name.contains(odd) {
+        return Err(io::Error::other(format!(
+            r#"{name:?} could open another file on Windows: it ends in a dot or a space, or holds one of <>:"|?*\"#
+        )));
+    }
+    Ok(())
+}
 
 /// The path the app opens (see [`windows`]) of the file `path` of the worktree at `dir` (the
-/// folder itself when `path` is empty), with the system's default app. Refused for a file
-/// the system would run.
+/// folder itself when `path` is empty), with the system's default app. Only a text or source
+/// file ([`EDITOR_EXTENSIONS`], [`EDITOR_NAMES`], compared without case) is handed over.
 pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<String> {
-    let real = if path.is_empty() {
-        // The worktree's own folder, for the Windows Explorer.
-        dir.to_path_buf()
-    } else {
-        let Some(real) = resolve(dir, relative(path)?)? else {
-            return Err(io::Error::other(format!("{path} does not exist")));
-        };
-        real
+    if path.is_empty() {
+        // The worktree's own folder, for the Windows Explorer or the Finder.
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        plain_name(&name)?;
+        let extension = dir.extension().unwrap_or_default().to_string_lossy();
+        if BUNDLES.contains(&extension.to_ascii_lowercase().as_str()) {
+            return Err(io::Error::other(format!(
+                "{SYSTEM} might run or install the folder {name}"
+            )));
+        }
+        return windows(dir, wslpath);
+    }
+    let Some(real) = resolve(dir, relative(path)?)? else {
+        return Err(io::Error::other(format!("{path} does not exist")));
     };
-    let extension = real.extension().unwrap_or_default().to_string_lossy();
-    let extension = extension.to_ascii_lowercase();
-    if RUNS_AS_PROGRAM.contains(&extension.as_str()) {
+    // The name the system sees: a symlink's target.
+    let name = real.file_name().unwrap_or_default().to_string_lossy();
+    plain_name(&name)?;
+    let lower = name.to_ascii_lowercase();
+    let named = EDITOR_NAMES.contains(&lower.as_str());
+    let extension = lower.rsplit_once('.').map(|(_, extension)| extension);
+    if !named && !extension.is_some_and(|e| EDITOR_EXTENSIONS.contains(&e)) {
         return Err(io::Error::other(format!(
-            "{SYSTEM} would run a .{extension} file instead of opening it in an editor"
+            "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
+             Makefile), not {name}: {SYSTEM} might run it"
+        )));
+    }
+    // macOS runs an executable file without an extension in the Terminal.
+    if named && real.metadata()?.permissions().mode() & 0o111 != 0 {
+        return Err(io::Error::other(format!(
+            "{name} is executable: {SYSTEM} might run it instead of opening it in an editor"
         )));
     }
     windows(&real, wslpath)
@@ -811,7 +927,6 @@ mod tests {
     fn a_file_is_located_for_windows_unless_windows_would_run_it() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.ts"), "").unwrap();
-        std::fs::write(dir.path().join("run.BAT"), "").unwrap();
         let real = dir.path().canonicalize().unwrap().join("a.ts");
         let at = |path: &str, program: &str| {
             windows_path(dir.path(), path, OsStr::new(program)).map_err(|e| e.to_string())
@@ -820,8 +935,6 @@ mod tests {
         assert_eq!(at("a.ts", "echo"), Ok(format!("-w {}", real.display())));
         // An empty path is the worktree's folder.
         assert_eq!(at("", "echo"), Ok(format!("-w {}", dir.path().display())));
-        let run = "Windows would run a .bat file instead of opening it in an editor";
-        assert_eq!(at("run.BAT", "echo"), Err(run.to_owned()));
         assert_eq!(at("nope", "echo"), Err("nope does not exist".to_owned()));
         let not_inside = "not a relative path inside the worktree";
         assert_eq!(at("../a.ts", "echo"), Err(not_inside.to_owned()));
@@ -834,16 +947,116 @@ mod tests {
     fn a_file_is_located_on_macos_unless_macos_would_run_it() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.ts"), "").unwrap();
-        std::fs::write(dir.path().join("Some.APP"), "").unwrap();
         let real = dir.path().canonicalize().unwrap().join("a.ts");
         let at = |path: &str| {
             windows_path(dir.path(), path, OsStr::new("wslpath")).map_err(|e| e.to_string())
         };
         assert_eq!(at("a.ts"), Ok(real.display().to_string()));
         assert_eq!(at(""), Ok(dir.path().display().to_string()));
-        let run = "macOS would run a .app file instead of opening it in an editor";
-        assert_eq!(at("Some.APP"), Err(run.to_owned()));
         assert_eq!(at("nope"), Err("nope does not exist".to_owned()));
+    }
+
+    #[test]
+    fn only_text_and_source_files_open_in_an_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |name: &str| {
+            let file = dir.path().join(name);
+            std::fs::write(&file, "").unwrap();
+            windows_path(dir.path(), name, OsStr::new("echo")).map_err(|e| e.to_string())
+        };
+        for name in [
+            "a.rs",
+            "b.MD",
+            "c.json",
+            "Makefile",
+            "LICENSE",
+            ".gitignore",
+            ".env.local",
+            "d.e.ts",
+        ] {
+            assert!(at(name).is_ok(), "{name}");
+        }
+        let windows = [
+            "chm",
+            "py",
+            "pyw",
+            "appinstaller",
+            "msix",
+            "appx",
+            "settingcontent-ms",
+            "library-ms",
+            "search-ms",
+            "searchconnector-ms",
+            "xll",
+            "sct",
+            "wsc",
+            "diagcab",
+            "theme",
+            "themepack",
+            "exe",
+            "bat",
+            "JS",
+            "lnk",
+            "url",
+            "ps1",
+        ];
+        let macos = [
+            "fileloc", "inetloc", "webloc", "mpkg", "dmg", "command", "app", "terminal",
+        ];
+        for extension in windows.iter().chain(&macos) {
+            let name = format!("a.{extension}");
+            let refused = format!(
+                "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
+                 Makefile), not {name}: {SYSTEM} might run it"
+            );
+            assert_eq!(at(&name), Err(refused), "{name}");
+        }
+        assert!(at("tool").is_err());
+        assert!(at(".bat").is_err());
+        // Win32 drops a final dot or space, and cannot name `:` (a stream) or a control.
+        for name in [
+            "a.exe.",
+            "a.exe ",
+            "a.rs.",
+            "a.rs ",
+            "a.exe:b.rs",
+            "a\tb.rs",
+        ] {
+            let refused = format!(
+                "{name:?} could open another file on Windows: it ends in a dot or a space, or \
+                 holds one of <>:\"|?*\\"
+            );
+            assert_eq!(at(name), Err(refused), "{name:?}");
+        }
+        // macOS runs an executable file without an extension; one with a text extension opens.
+        std::fs::set_permissions(
+            dir.path().join("Makefile"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let executable = format!(
+            "Makefile is executable: {SYSTEM} might run it instead of opening it in an editor"
+        );
+        assert_eq!(at("Makefile"), Err(executable));
+        std::fs::set_permissions(dir.path().join("a.rs"), fs::Permissions::from_mode(0o755))
+            .unwrap();
+        assert!(at("a.rs").is_ok());
+    }
+
+    #[test]
+    fn a_worktree_folder_opens_unless_it_is_a_bundle_or_an_odd_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |name: &str| {
+            let folder = dir.path().join(name);
+            std::fs::create_dir(&folder).unwrap();
+            windows_path(&folder, "", OsStr::new("echo")).map_err(|e| e.to_string())
+        };
+        assert!(at("shop.9.8-task").is_ok());
+        let bundle = format!("{SYSTEM} might run or install the folder Evil.APP");
+        assert_eq!(at("Evil.APP"), Err(bundle));
+        let odd = "\"shop.\" could open another file on Windows: it ends in a dot or a space, \
+                   or holds one of <>:\"|?*\\";
+        assert_eq!(at("shop."), Err(odd.to_owned()));
     }
 
     #[test]
