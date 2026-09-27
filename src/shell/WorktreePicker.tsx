@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { openModal, useHive, type Worktree } from "../store";
-import { openTerminal } from "../terminals";
+import { openTerminal, showOpenFailure } from "../terminals";
 import { BranchIcon, SearchIcon } from "./icons";
 
 const close = () => openModal(null);
@@ -22,7 +22,7 @@ export function WorktreePicker() {
   const pick = (worktree: Worktree | undefined) => {
     if (!worktree) return;
     close();
-    void openTerminal(worktree.path);
+    showOpenFailure(openTerminal(worktree.path));
   };
   return (
     // A native modal dialog: the page behind is inert and Esc closes it.

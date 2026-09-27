@@ -1397,6 +1397,14 @@ export const markInboxRead = () =>
     ),
   }));
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
+/**
+ * Shows why `action` failed as the notice (9.21), after `what` ("Cannot open a terminal"),
+ * so a failed request is never swallowed. Returns `action` with the failure handled.
+ */
+export const showFailure = <T>(action: Promise<T>, what = ""): Promise<T> => {
+  action.catch((error: unknown) => setNotice(what ? `${what}: ${error}` : String(error)));
+  return action;
+};
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });

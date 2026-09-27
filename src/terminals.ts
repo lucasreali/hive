@@ -9,6 +9,7 @@ import {
   removeTab,
   type Settings,
   setSplit,
+  showFailure,
   shownSplit,
   tabPlace,
   useHive,
@@ -195,6 +196,13 @@ export async function openTerminal(cwd: string): Promise<number> {
  */
 export const openClaude = (cwd: string, args = ""): Promise<number> =>
   openWith(cwd, `claude${args && ` ${args}`}`);
+
+/**
+ * For a click or key that opens a terminal (`openTerminal`, `openClaude`, `openWith`,
+ * `splitTerminal`), 9.21: a failure is shown as the notice, never swallowed.
+ */
+export const showOpenFailure = (open: Promise<unknown>) =>
+  void showFailure(open, "Cannot open a terminal");
 
 /** A terminal in `cwd` with `command` typed into it and Enter pressed, as the user would. */
 export async function openWith(cwd: string, command: string): Promise<number> {

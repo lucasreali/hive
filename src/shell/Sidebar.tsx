@@ -32,7 +32,7 @@ import {
   type Worktree,
   type WorktreeStatus,
 } from "../store";
-import { openClaude } from "../terminals";
+import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { keyText } from "../window";
@@ -279,7 +279,7 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
           className="new-chat"
           title="New chat: a terminal running claude"
           aria-label={`New chat in ${w.name}`}
-          onClick={() => void openClaude(w.path)}
+          onClick={() => showOpenFailure(openClaude(w.path))}
         >
           <NewChatIcon size={12} weight="bold" aria-hidden="true" />
         </button>

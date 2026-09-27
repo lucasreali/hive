@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply, initialState, openModal, useHive } from "../store";
 import { closeTerminal } from "../terminals";
@@ -85,6 +86,24 @@ test("Enter opens a terminal in the picked worktree and closes the picker", asyn
   await waitFor(() => expect(useHive.getState().tabs.map((t) => t.cwd)).toEqual([path]));
   expect(openTerminal.mock.calls[0][0]).toBe(path);
   openTerminal.mockRestore();
+});
+
+test("a terminal that cannot be opened is shown as the notice, with no tab (9.21)", async () => {
+  const restore = unsent("openTerminal");
+  open();
+  key("Enter");
+  await waitFor(() =>
+    expect(useHive.getState().notice).toBe(`Cannot open a terminal: ${LINK_DOWN}`),
+  );
+  restore();
+  expect(
+    screen.getByRole("button", { name: `Cannot open a terminal: ${LINK_DOWN}` }),
+  ).toBeDefined();
+  expect(useHive.getState().tabs).toEqual([]);
+  // Retrying from the picker opens it once the link is back.
+  act(() => openModal("worktree-picker"));
+  key("Enter");
+  await waitFor(() => expect(useHive.getState().tabs.map((t) => t.cwd)).toEqual([shop.path]));
 });
 
 test("hovering picks a row and a click opens it", async () => {

@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
+import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import {
   apply,
@@ -388,6 +389,24 @@ test("the project menu removes merged worktrees without changes, each with its r
   expect(submit().disabled).toBe(true);
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(useHive.getState().modal).toBeNull();
+});
+
+test("a removal that cannot be sent is shown as the notice; its row is no longer removing (9.21)", async () => {
+  const status = { changes: 0, ahead: 0, behind: 0, merged: true, last_commit_ms: 0 };
+  const merged = { ...shop, worktrees: [main, { ...login, status }] };
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [merged] }));
+  act(() => openModal("remove-merged", shop.id));
+  const dialog = screen.getByRole("dialog", { name: "Remove merged worktrees" });
+  const box = () => within(dialog).getByRole("checkbox") as HTMLInputElement;
+  const restore = unsent("removeWorktree");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove (1)" }));
+  expect(box().disabled).toBe(true);
+  await waitFor(() => expect(box().disabled).toBe(false));
+  restore();
+  expect(useHive.getState().notice).toBe(LINK_DOWN);
+  expect(within(dialog).queryByRole("status")).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "Remove (1)" })).toBeDefined();
 });
 
 test("with no merged worktree the dialog says so", () => {
