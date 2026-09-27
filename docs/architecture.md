@@ -318,7 +318,7 @@ See [Handshake](#handshake). A refused client is not the app, so the daemon keep
 2. The service spawns `fish -C 'set -gx PATH <bin> $PATH'` on a new PTY. fish is the session leader, and the environment has `HIVE_TERMINAL_ID=n` and `TERM=xterm-256color`, plus, in a followed worktree, `HIVE_PORT`, `HIVE_WORKTREE_PATH` and `HIVE_ROOT_PATH` (see [Project scripts and ports](#project-scripts-and-ports-68)).
 3. The service replies `terminal_opened`.
 4. A pump task copies PTY output into terminal frames. There is no scrollback on the service side. Typing and output never wait for another task (9.13): input goes through a per-terminal queue found under a short std lock, and the pump records the time of the last output in an atomic shared with the registry, so neither waits while agents are placed or their logs read.
-5. When fish exits, the pump sends `terminal_exited {code}`. If another process keeps the PTY open (a disowned job, a `setsid` child), the output still gets 200 ms, then the terminal's other process groups end as on `close_terminal` (9.15).
+5. When fish exits, the pump ends the terminal's other process groups as on `close_terminal` and sends `terminal_exited {code}`. If another process keeps the PTY open (a disowned job, a `setsid` child), the output still gets 200 ms first (9.15).
 6. `close_terminal` ends the terminal's session (see below). The exit is reported by the pump.
 
 ### Hook event

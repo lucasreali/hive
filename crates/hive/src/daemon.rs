@@ -839,7 +839,7 @@ const DRAIN: Duration = Duration::from_millis(200);
 
 /// Copies PTY output to the app until the shell exits, then reports the exit. The copy takes
 /// no lock (9.13); only the exit does. A disowned job or a `setsid` child can keep the PTY
-/// open after the shell exits (risk 9): the output gets [`DRAIN`], then the PTY's other
+/// open after the shell exits (risk 9): the output gets [`DRAIN`], then the terminal's other
 /// process groups end as when its tab closes (#18).
 async fn pump(
     state: Arc<State>,
@@ -855,12 +855,12 @@ async fn pump(
     let status = tokio::select! {
         () = &mut copy => child.wait().await,
         status = child.wait() => {
-            if tokio::time::timeout(DRAIN, &mut copy).await.is_err() {
-                terminal::end_sessions(&[session]).await;
-            }
+            let _ = tokio::time::timeout(DRAIN, &mut copy).await;
             status
         }
     };
+    // Whether or not they still hold the PTY (macOS revokes it when the shell exits).
+    terminal::end_sessions(&[session]).await;
     let code = status.ok().and_then(|status| status.code());
     {
         let mut terminals = state.terminals.lock().await;
