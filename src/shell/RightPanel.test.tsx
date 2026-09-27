@@ -33,11 +33,13 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
+import * as RightPanelModule from "./RightPanel";
 import {
   allFiles,
   FilesView,
   fileRows,
   fileTarget,
+  fileTree,
   HOVER_OPEN_MS,
   leaveFile,
   NAME_LIMIT,
@@ -124,7 +126,7 @@ test("rows group paths into folders, folders first, with the strongest status in
     file("test/u.ts"),
   ];
   const shape = (collapsed: Record<string, boolean>) =>
-    fileRows("/w", files, collapsed).map((r) =>
+    fileRows("/w", fileTree(files), collapsed).map((r) =>
       r.kind === "folder" ? [r.depth, `${r.name}/`, r.status, r.open] : [r.depth, r.name],
     );
   // Every folder starts collapsed.
@@ -156,10 +158,10 @@ test("rows group paths into folders, folders first, with the strongest status in
     [1, "u.ts"],
     [0, "README.md"],
   ]);
-  const key = fileRows("/w", files, open)[1].key;
+  const key = fileRows("/w", fileTree(files), open)[1].key;
   expect(key).toBe("files:/w/src/b");
   // The Diff tree keeps its own folders: the Files tree's open ones stay closed there.
-  const diff = fileRows("/w", files, open, "changes");
+  const diff = fileRows("/w", fileTree(files), open, "changes");
   expect(diff.map((r) => r.kind === "folder" && [r.key, r.open])).toEqual([
     ["changes:/w/src", false],
     ["changes:/w/test", false],
@@ -498,6 +500,24 @@ test("the tree works from the keyboard", () => {
   expect(useHive.getState().question?.text).toStartWith("Delete package.json? ");
 });
 
+test("moving in the tree neither rebuilds nor walks it; opening a folder only walks it", () => {
+  panel();
+  act(() => select(refactor.id));
+  act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
+  const build = spyOn(RightPanelModule, "fileTree");
+  const walk = spyOn(RightPanelModule, "fileRows");
+  const key = (k: string) => fireEvent.keyDown(tree(), { key: k });
+  key("ArrowDown");
+  key("ArrowDown");
+  key("ArrowUp");
+  expect([build.mock.calls.length, walk.mock.calls.length]).toEqual([0, 0]);
+  key("ArrowRight");
+  expect([build.mock.calls.length, walk.mock.calls.length]).toEqual([0, 1]);
+  // A new listing is built once.
+  act(() => apply({ type: "changes", ...changes(refactor.path, [file("x/y.ts")]) }));
+  expect([build.mock.calls.length, walk.mock.calls.length]).toEqual([1, 2]);
+});
+
 test("an empty tree ignores keys", () => {
   panel();
   act(() => select(fixLogin.id));
@@ -524,7 +544,7 @@ test("All lists every file with the changes' statuses, deleted files included", 
     ["src/c.ts", null],
   ]);
   // A folder with nothing changed inside has no status.
-  const folders = fileRows("/w", all, {}).filter((r) => r.kind === "folder");
+  const folders = fileRows("/w", fileTree(all), {}).filter((r) => r.kind === "folder");
   expect(folders.map((r) => r.kind === "folder" && [r.name, r.status])).toEqual([
     ["gone", "deleted"],
     ["src", null],
@@ -739,7 +759,9 @@ test("the line asked for is shown once the file's text is there, in the diff or 
 
 test("the files menu targets a folder, a file's folder, or the root; a deleted file has no rename", () => {
   const files = [file("README.md"), file("src/a.ts"), file("src/gone.ts", "deleted")];
-  const targets = fileRows("/w", files, { "files:/w/src": false }).map((r) => fileTarget("/w", r));
+  const targets = fileRows("/w", fileTree(files), { "files:/w/src": false }).map((r) =>
+    fileTarget("/w", r),
+  );
   expect(targets).toEqual([
     { worktree: "/w", folder: "src", path: "src" },
     { worktree: "/w", folder: "src", path: "src/a.ts" },
@@ -772,10 +794,8 @@ test("a right click opens the files menu for its row, below the rows for the roo
 });
 
 test("folders created from the tree show even when git lists nothing in them", () => {
-  const rows = fileRows("/w", [file("a/x.ts")], { "files:/w/new": false }, "files", [
-    "new/inner",
-    "a",
-  ]);
+  const root = fileTree([file("a/x.ts")], ["new/inner", "a"]);
+  const rows = fileRows("/w", root, { "files:/w/new": false }, "files");
   expect(rows.map((r) => [r.kind, r.name, r.depth])).toEqual([
     ["folder", "a", 0],
     ["folder", "new", 0],
