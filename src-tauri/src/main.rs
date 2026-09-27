@@ -66,6 +66,8 @@ fn main() {
             commands::update_space,
             commands::delete_space,
             commands::select_space,
+            commands::list_gh_accounts,
+            commands::switch_gh_account,
             commands::open_settings_file,
             commands::get_diagnostics,
             commands::open_chat,
