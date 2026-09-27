@@ -56,11 +56,30 @@ test("a file's menu renames it in its folder; the service's refusal shows until 
   expect(useHive.getState().fileDialog).toBeNull();
 });
 
-test("a folder's menu only creates, in that folder; the root is named as such", () => {
+test("a folder's menu renames it where it is", () => {
+  const rename = spyOn(transport, "renameFile").mockResolvedValue();
+  render(<Shown />);
+  act(() => openFileMenu({ worktree: "/w", folder: "src/lib", path: "src/lib", x: 1, y: 2 }));
+  expect(items()).toEqual(["New File…", "New Folder…", "Rename…"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+  expect(screen.getByRole("heading").textContent).toBe("Rename folder");
+  expect(field().value).toBe("lib");
+  // Where the folder is, not the folder itself.
+  expect(screen.getByText("src")).toBeTruthy();
+  type("core");
+  fireEvent.submit(field());
+  expect(rename).toHaveBeenCalledWith("/w", "src/lib", "core");
+  // A top folder is in the root.
+  act(() => useHive.setState({ modal: null, fileDialog: null }));
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+  expect(screen.getByText("(worktree root)")).toBeTruthy();
+});
+
+test("a folder's menu creates in that folder; the root is named as such and has no rename", () => {
   const create = spyOn(transport, "createFile").mockResolvedValue();
   render(<Shown />);
-  act(() => openFileMenu({ worktree: "/w", folder: "src", path: null, x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…", "New Folder…"]);
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
   fireEvent.click(screen.getByRole("menuitem", { name: "New File…" }));
   expect(screen.getByRole("heading").textContent).toBe("New file");
   expect(screen.getByText("src")).toBeTruthy();
@@ -72,6 +91,7 @@ test("a folder's menu only creates, in that folder; the root is named as such", 
   expect(useHive.getState()).toMatchObject({ modal: null, fileDialog: null });
 
   act(() => openFileMenu({ worktree: "/w", folder: "", path: null, x: 1, y: 2 }));
+  expect(items()).toEqual(["New File…", "New Folder…"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "New File…" }));
   expect(screen.getByText("(worktree root)")).toBeTruthy();
   fireEvent.click(screen.getByTitle("Close (Esc)"));

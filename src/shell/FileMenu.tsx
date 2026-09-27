@@ -42,8 +42,9 @@ const TITLES: Record<FileDialogKind, [title: string, submit: string]> = {
 };
 
 /**
- * "New file" or "New folder" (in the menu's folder) or "Rename file": the service checks the
- * name, creates or renames without ever overwriting, and its refusal shows under the field.
+ * "New file" or "New folder" (in the menu's folder) or "Rename file" / "Rename folder": the
+ * service checks the name, creates or renames without ever overwriting, and its refusal shows
+ * under the field.
  */
 export function FileNameDialog() {
   const dialog = useHive((s) => s.fileDialog);
@@ -51,9 +52,13 @@ export function FileNameDialog() {
   const current = path.slice(path.lastIndexOf("/") + 1);
   const [name, setName] = useState(current);
   if (!dialog) return null;
-  const { worktree, folder, kind, error } = dialog;
+  const { worktree, kind, error } = dialog;
   const canSubmit = name !== "" && name !== current;
-  const [title, action] = TITLES[kind];
+  const [file, action] = TITLES[kind];
+  // A folder being renamed is its own `folder`; the dialog shows where it is.
+  const title = kind === "rename" && path === dialog.folder ? "Rename folder" : file;
+  const folder =
+    kind === "rename" ? path.slice(0, Math.max(path.lastIndexOf("/"), 0)) : dialog.folder;
   return (
     <dialog
       className="dialog"

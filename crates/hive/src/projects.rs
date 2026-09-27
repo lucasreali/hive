@@ -198,7 +198,7 @@ impl Projects {
     ) -> io::Result<Project> {
         let (owner, _) = self.linked(path)?;
         if !force {
-            unused(proc, path)?;
+            unused(proc, Path::new(path))?;
         }
         let ran = before(&owner.id);
         if !force {
@@ -222,7 +222,7 @@ impl Projects {
                 "only worktrees under {WORKTREES_DIR} can be renamed"
             )));
         }
-        unused(proc, path)?;
+        unused(proc, Path::new(path))?;
         let to = worktree::rename(Path::new(&owner.id), Path::new(path), name)?;
         Ok((project(&owner.id), to.to_string_lossy().into_owned()))
     }
@@ -282,9 +282,26 @@ pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
         .map(|(p, w, _)| (p.id.clone(), w.id.clone()))
 }
 
+/// Refuses a folder (resolved) of a worktree before it is renamed, moved or removed: one that is
+/// or holds a worktree of `projects`, or that some process (e.g. a terminal or an agent) works
+/// in. Its path would change under them.
+pub fn held(projects: &[Project], folder: &Path, proc: procs::Source) -> io::Result<()> {
+    let holds = |w: &&Worktree| {
+        let real = Path::new(&w.path).canonicalize();
+        real.is_ok_and(|real| real.starts_with(folder))
+    };
+    if let Some(w) = projects.iter().flat_map(|p| &p.worktrees).find(holds) {
+        return Err(io::Error::other(format!(
+            "it holds the worktree {}",
+            w.path
+        )));
+    }
+    unused(proc, folder)
+}
+
 /// Refuses a worktree that some process (e.g. a terminal or an agent) works in.
-fn unused(proc: procs::Source, path: &str) -> io::Result<()> {
-    refuse(procs::inside(proc, Path::new(path)))
+fn unused(proc: procs::Source, path: &Path) -> io::Result<()> {
+    refuse(procs::inside(proc, path))
 }
 
 /// Refuses when some process (`busy`) works there, naming them.
@@ -441,8 +458,9 @@ mod tests {
                 std::fs::write(entry.join("stat"), stat).unwrap();
                 std::os::unix::fs::symlink(&dir, entry.join("cwd")).unwrap();
             }
-            let err = unused(procs::Source::Dir(proc.path()), dir.to_str().unwrap()).unwrap_err();
-            assert!(unused(procs::Source::Dir(proc.path()), "/elsewhere").is_ok());
+            let err = unused(procs::Source::Dir(proc.path()), &dir).unwrap_err();
+            let elsewhere = Path::new("/elsewhere");
+            assert!(unused(procs::Source::Dir(proc.path()), elsewhere).is_ok());
             err.to_string()
         };
         assert_eq!(
@@ -494,6 +512,48 @@ mod tests {
         assert_eq!(std::fs::read_to_string(root.join("src/f")).unwrap(), "kept");
         let err = remove(&id, &[]).unwrap_err();
         assert_eq!(err.to_string(), format!("{id} is not a followed project"));
+    }
+
+    #[test]
+    fn a_folder_holding_a_worktree_or_a_process_is_held() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("r");
+        let at = |p: &str| root.join(p);
+        std::fs::create_dir_all(at("src/x")).unwrap();
+        std::fs::create_dir_all(at(".claude/worktrees/a")).unwrap();
+        std::fs::create_dir_all(at(".claude/other")).unwrap();
+        let (r, a) = (root.to_string_lossy(), at(".claude/worktrees/a"));
+        let list = vec![
+            wt(&r, Some("main"), false),
+            wt(&a.to_string_lossy(), None, false),
+        ];
+        let projects = [Project {
+            id: r.to_string(),
+            name: String::new(),
+            path: r.to_string(),
+            worktrees: worktrees(&root, list),
+            error: None,
+        }];
+        let proc = tempfile::tempdir().unwrap();
+        let held = |folder: &str| {
+            held(&projects, &at(folder), procs::Source::Dir(proc.path()))
+                .map_err(|err| err.to_string())
+        };
+        assert_eq!(held("src"), Ok(()));
+        assert_eq!(held(".claude/other"), Ok(()));
+        let holds = format!("it holds the worktree {}", a.display());
+        for folder in [".claude", ".claude/worktrees", ".claude/worktrees/a"] {
+            assert_eq!(held(folder), Err(holds.clone()), "{folder}");
+        }
+        // A process working in it, or in a folder inside it.
+        let entry = proc.path().join("7");
+        std::fs::create_dir(&entry).unwrap();
+        std::fs::write(entry.join("stat"), "7 (bash) S 1 7 7 0").unwrap();
+        std::os::unix::fs::symlink(at("src/x"), entry.join("cwd")).unwrap();
+        let busy = Err("in use by bash (7): close its terminals first".to_owned());
+        assert_eq!(held("src"), busy);
+        assert_eq!(held("src/x"), busy);
+        assert_eq!(held(".claude/other"), Ok(()));
     }
 
     #[test]

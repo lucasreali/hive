@@ -1,8 +1,9 @@
 //! What only macOS needs, kept apart from the portable code: the kernel's process table
 //! (through `libproc`), the terminal's login shell and native file paths. Tested on macOS.
 
-use std::ffi::{CStr, OsStr, c_char};
+use std::ffi::{CStr, CString, OsStr, c_char};
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use libproc::bsd_info::BSDInfo;
@@ -88,6 +89,18 @@ pub fn native_path(path: &Path, _wslpath: &OsStr) -> io::Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Renames `from` to `to` in one step, failing (`EEXIST`) when `to` exists:
+/// `renamex_np(RENAME_EXCL)`.
+pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    let c = |path: &Path| CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other);
+    let (from, to) = (c(from)?, c(to)?);
+    // SAFETY: both are NUL-terminated strings that live until the call returns.
+    match unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +139,24 @@ mod tests {
         // Still there, as a zombie, until it is waited for.
         assert_eq!(nix::sys::signal::kill(Pid::from_raw(pid), None), Ok(()));
         assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn a_rename_never_replaces_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |name: &str| dir.path().join(name);
+        std::fs::create_dir(at("a")).unwrap();
+        std::fs::create_dir(at("empty")).unwrap();
+        std::fs::write(at("f"), "f").unwrap();
+        for taken in ["empty", "f"] {
+            let err = rename_new(&at("a"), &at(taken)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{taken}");
+        }
+        rename_new(&at("a"), &at("b")).unwrap();
+        assert!(at("b").is_dir() && !at("a").exists());
+        assert!(rename_new(&at("b\0"), &at("c")).is_err());
+        assert!(rename_new(&at("b"), &at("c\0")).is_err());
+        assert!(at("b").is_dir());
     }
 
     #[test]

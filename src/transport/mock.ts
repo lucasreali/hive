@@ -601,8 +601,8 @@ export function createMockTransport(
     );
   // Folders created by `createFolder`, by `<worktree>/<path>` (git lists no empty folder).
   const folders = new Set<string>();
-  // Moves the listed file `from` (null: none) to `to` (a new folder when `folder`), answering
-  // `done()`, or why not.
+  // Moves the listed file or folder `from` (null: none) to `to` (a new folder when `folder`),
+  // with what it holds and their texts, answering `done()`, or why not.
   const fileOp = (
     worktree: string,
     from: string | null,
@@ -613,21 +613,35 @@ export function createMockTransport(
   ) => {
     const shown = worktreeAt(worktree);
     const listed = shown ? (files.get(worktree) ?? mockFiles(shown)) : [];
-    const taken =
-      listed.some((p) => p === to || p.startsWith(`${to}/`)) || folders.has(`${worktree}/${to}`);
+    const under = (at: string) => (p: string) => p === at || p.startsWith(`${at}/`);
+    const taken = listed.some(under(to)) || folders.has(`${worktree}/${to}`);
+    const known = from !== null && (listed.some(under(from)) || folders.has(`${worktree}/${from}`));
     const message = !shown
       ? `${worktree} is not a worktree of a followed project`
       : ["", ".", ".."].includes(name) || name.includes("/")
         ? "not a valid file name"
         : taken
           ? `${name} already exists`
-          : from !== null && !listed.includes(from)
+          : from !== null && !known
             ? `${from} does not exist`
-            : null;
+            : from !== null && under(from)(to)
+              ? "a folder cannot go into itself"
+              : null;
     if (message) return void later({ type: "file_op_failed", worktree, message });
     later(done());
     if (folder) return void folders.add(`${worktree}/${to}`);
-    files.set(worktree, [...listed.filter((p) => p !== from), to].sort());
+    const moved = (p: string) => (from !== null && under(from)(p) ? to + p.slice(from.length) : p);
+    for (const p of listed.filter((p) => moved(p) !== p)) {
+      written.set(`${worktree}/${moved(p)}`, fileAt(worktree, p).content ?? "");
+    }
+    for (const f of [...folders].filter((f) => f.startsWith(`${worktree}/`))) {
+      const path = f.slice(worktree.length + 1);
+      if (moved(path) === path) continue;
+      folders.delete(f);
+      folders.add(`${worktree}/${moved(path)}`);
+    }
+    const created = from === null ? [to] : [];
+    files.set(worktree, [...listed.map(moved), ...created].sort());
     if (watched === worktree) sendFiles(worktree);
   };
   // A stand-in for an agent editing a file: `write <path> <text>` in a worktree's terminal.
@@ -877,21 +891,14 @@ export function createMockTransport(
     },
     async renameFile(worktree, path, name) {
       const to = path.replace(/[^/]*$/, name);
-      fileOp(worktree, path, to, name, () => {
-        const text = fileAt(worktree, path).content ?? "";
-        written.set(`${worktree}/${to}`, text);
-        return { type: "file_renamed", worktree, path, to };
-      });
+      fileOp(worktree, path, to, name, () => ({ type: "file_renamed", worktree, path, to }));
     },
     async moveFile(worktree, path, folder) {
       const name = path.slice(path.lastIndexOf("/") + 1);
       const to = folder ? `${folder}/${name}` : name;
       // Its own folder: nothing moves.
       if (to === path) return void later({ type: "file_renamed", worktree, path, to });
-      fileOp(worktree, path, to, name, () => {
-        written.set(`${worktree}/${to}`, fileAt(worktree, path).content ?? "");
-        return { type: "file_renamed", worktree, path, to };
-      });
+      fileOp(worktree, path, to, name, () => ({ type: "file_renamed", worktree, path, to }));
     },
     async createFolder(worktree, folder, name) {
       const path = folder ? `${folder}/${name}` : name;
