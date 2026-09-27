@@ -30,6 +30,7 @@ import {
 import { openTerminal, openWith } from "../terminals";
 import { transport } from "../transport";
 import { isMac, keyText } from "../window";
+import { askRemoveProject } from "./ConfirmDialog";
 import { CloseIcon, ICON } from "./icons";
 
 const closeMenu = () => openMenu(null);
@@ -199,6 +200,19 @@ export function ProjectMenu() {
       <button type="button" role="menuitem" onClick={dialog("remove-merged")}>
         <BroomIcon {...ICON} />
         Remove merged worktrees…
+      </button>
+      <hr />
+      <button
+        type="button"
+        role="menuitem"
+        className="danger"
+        onClick={() => {
+          closeProjectMenu();
+          askRemoveProject(menu.project);
+        }}
+      >
+        <TrashIcon {...ICON} />
+        Remove project…
       </button>
     </ContextMenu>
   );

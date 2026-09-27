@@ -15,6 +15,7 @@ import { openWith } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
 import { keyText } from "../window";
+import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
 import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
 
@@ -73,6 +74,11 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
       label: "Remove merged worktrees…",
       detail: s.projects?.[project]?.name,
       run: () => openModal("remove-merged", project),
+    });
+    extra.push({
+      label: "Remove project…",
+      detail: s.projects?.[project]?.name,
+      run: () => askRemoveProject(project),
     });
   }
   const place = panelWorktree(s);
