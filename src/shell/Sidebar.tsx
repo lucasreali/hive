@@ -357,7 +357,7 @@ function StateLines({
           {doing && <Meta doing={doing} />}
           {usage && (
             <span className="state-ctx" title={`${usage.context_tokens} context tokens`}>
-              ctx {Math.round((usage.context_tokens / usage.context_limit) * 100)}%
+              ctx {Math.floor((usage.context_tokens * 100) / usage.context_limit)}%
             </span>
           )}
         </span>

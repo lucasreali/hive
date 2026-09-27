@@ -44,6 +44,8 @@ const MAX_IMAGES: usize = 10;
 /// Most base64 bytes of images in one message: a user turn's together (with its text it must
 /// fit in one `chat_send` frame, `MAX_PAYLOAD` = 4 MiB), or one image of a tool result.
 pub const MAX_IMAGE_DATA: usize = 3 << 20;
+/// Most models read from a `result`'s `modelUsage`.
+const MAX_MODELS: usize = 16;
 /// Most slash commands kept.
 const MAX_COMMANDS: usize = 500;
 /// Most tool calls of a turn waiting for their result.
@@ -256,17 +258,30 @@ fn context(usage: &Value) -> u64 {
     .fold(0, u64::saturating_add)
 }
 
-/// The footer of a turn: its time, output tokens and how full the context is.
-fn usage(result: &Value, context: u64) -> String {
+/// The context windows a `result` gives, by model (`modelUsage.*.contextWindow`, every model
+/// the session used so far, subagents' included), the first [`MAX_MODELS`] only.
+fn windows(result: &Value) -> Vec<(String, u64)> {
+    let models = result["modelUsage"].as_object().into_iter().flatten();
+    let windows =
+        models.filter_map(|(model, u)| Some((model.clone(), u["contextWindow"].as_u64()?)));
+    windows.take(MAX_MODELS).collect()
+}
+
+/// The chat's window among `windows`: its current `model`'s, else the largest.
+fn window_of(windows: &[(String, u64)], model: Option<&str>) -> Option<u64> {
+    let current = windows.iter().find(|(m, _)| Some(m.as_str()) == model);
+    let window = current.map(|(_, w)| *w);
+    window.or_else(|| windows.iter().map(|(_, w)| *w).max())
+}
+
+/// The footer of a turn: its time, output tokens and how full the `window` is (in whole
+/// percent, rounded down as the sidebar does).
+fn usage(result: &Value, context: u64, window: Option<u64>) -> String {
     let secs = result["duration_ms"].as_u64().unwrap_or_default() as f64 / 1000.0;
     let output = result["usage"]["output_tokens"]
         .as_u64()
         .unwrap_or_default();
     let mut text = format!("{secs:.1} s · {output} output tokens");
-    let models = result["modelUsage"].as_object().into_iter().flatten();
-    let window = models
-        .filter_map(|(_, u)| u["contextWindow"].as_u64())
-        .max();
     if let Some(window) = window.filter(|&w| w > 0) {
         let percent = context.saturating_mul(100) / window;
         text.push_str(&format!(" · {percent}% context"));
@@ -450,6 +465,10 @@ pub struct Out {
     pub write: Vec<Value>,
     /// Fed to the agent's state like a hook event.
     pub turn: Option<AgentEvent>,
+    /// The context windows a `result` gave, by model, and the chat's own (its current model's):
+    /// the agent's `context_limit` follows it, and the others are learned for terminal agents.
+    pub windows: Vec<(String, u64)>,
+    pub window: Option<u64>,
 }
 
 /// The entry growing from a content block's deltas (spike 4.14), until its `assistant` message.
@@ -1119,7 +1138,9 @@ impl Stream {
             };
             entries.push(self.entry(ChatEntryKind::Error, &error, None));
         }
-        let footer = usage(message, self.context);
+        out.windows = windows(message);
+        out.window = window_of(&out.windows, self.model.as_deref()).filter(|&w| w > 0);
+        let footer = usage(message, self.context, out.window);
         entries.push(self.entry(ChatEntryKind::Usage, &footer, None));
         let kind = match failed {
             true => EventKind::TurnFailed { error: None },
