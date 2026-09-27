@@ -197,17 +197,18 @@ impl State {
 
     /// Asks for the user's `PATH` in the background, unless it is already being asked for.
     fn ask_user_path(self: &Arc<Self>) {
-        if !self.asking_path.swap(true, Ordering::SeqCst) {
-            let state = self.clone();
-            tokio::spawn(async move {
-                let var = std::env::var_os;
-                let (shell, timeout) = (wrapper::path_shell(), wrapper::SHELL_TIMEOUT);
-                let path = wrapper::user_path(shell, var("PATH"), var("HOME"), timeout).await;
-                // Done before the answer wakes anyone waiting for it.
-                state.asking_path.store(false, Ordering::SeqCst);
-                state.user_path.send_replace(Some(path));
-            });
+        if self.asking_path.swap(true, Ordering::SeqCst) {
+            return;
         }
+        let state = self.clone();
+        tokio::spawn(async move {
+            let var = std::env::var_os;
+            let (shell, timeout) = (wrapper::path_shell(), wrapper::SHELL_TIMEOUT);
+            let path = wrapper::user_path(shell, var("PATH"), var("HOME"), timeout).await;
+            // Done before the answer wakes anyone waiting for it.
+            state.asking_path.store(false, Ordering::SeqCst);
+            state.user_path.send_replace(Some(path));
+        });
     }
 
     /// The real `claude` the user's terminals would run (waits only for the user's first
