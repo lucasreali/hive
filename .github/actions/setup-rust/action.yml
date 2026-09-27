@@ -2,6 +2,9 @@
 name: setup-rust
 description: Rust toolchain and cargo tools, Tauri's Linux libraries, fish 4 and the built frontend.
 inputs:
+  tools:
+    description: The cargo tools this job runs, comma-separated for taiki-e/install-action (none by default).
+    default: ""
   cache-key:
     description: Extra key for Swatinem/rust-cache (jobs that build another profile).
     default: ""
@@ -22,9 +25,10 @@ runs:
       with:
         toolchain: stable
         components: rustfmt, clippy, llvm-tools-preview
-    - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+    - if: inputs.tools != ''
+      uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
       with:
-        tool: cargo-deny,cargo-machete,cargo-llvm-cov,cargo-mutants,cargo-nextest
+        tool: ${{ inputs.tools }}
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         key: ${{ inputs.cache-key }}
