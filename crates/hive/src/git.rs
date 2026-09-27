@@ -22,6 +22,15 @@ pub fn command(dir: &Path) -> Command {
     command
         .arg("-C")
         .arg(dir)
+        // A repository's own `.git/config` (from an archive or a shared folder) must not make
+        // Hive's `git status` run its fsmonitor, nor `git log` its `gpg.program`. (Its filter
+        // drivers still run: their names are arbitrary, so no `-c` turns them off.)
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "log.showSignature=false",
+        ])
         // Hive always names the repository with `-C`.
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -187,6 +196,53 @@ mod tests {
         );
         let failed = output_within(tmp.path(), &["nope"], &[0], Duration::from_secs(30));
         assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn a_repository_fsmonitor_never_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        output(tmp.path(), &["init", "-q"], &[0]).unwrap();
+        let hook = "touch ran; false";
+        output(tmp.path(), &["config", "core.fsmonitor", hook], &[0]).unwrap();
+        output(tmp.path(), &["status"], &[0]).unwrap();
+        assert!(!tmp.path().join("ran").exists());
+        // Every git command carries the flags, `git::command` used directly too.
+        let args: Vec<_> = command(tmp.path())
+            .get_args()
+            .map(OsStr::to_owned)
+            .collect();
+        let flags = [
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "log.showSignature=false",
+        ];
+        assert_eq!(args[2..], flags.map(std::ffi::OsString::from));
+    }
+
+    #[test]
+    fn a_repository_gpg_program_never_runs_for_a_signed_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let git = |args: &[&str]| output(dir, args, &[0]).unwrap();
+        git(&["init", "-q"]);
+        let who = ["-c", "user.name=a", "-c", "user.email=a@b"];
+        git(&[&who[..], &["commit", "-q", "--allow-empty", "-m", "m"]].concat());
+        // HEAD, signed: git checks a signature without running anything but `gpg.program`.
+        let commit = String::from_utf8(git(&["cat-file", "commit", "HEAD"])).unwrap();
+        let signature = "gpgsig -----BEGIN PGP SIGNATURE-----\n x\n -----END PGP SIGNATURE-----\n";
+        let signed = commit.replacen("\n\n", &format!("\n{signature}\n"), 1);
+        let args = ["hash-object", "-t", "commit", "-w", "--stdin"].map(OsStr::new);
+        let sha = run(dir, &args, signed.as_bytes(), &[0], OUTPUT_LIMIT).unwrap();
+        git(&["update-ref", "HEAD", String::from_utf8(sha).unwrap().trim()]);
+        let gpg = dir.join("gpg");
+        std::fs::write(&gpg, "#!/bin/sh\ntouch \"$0.ran\"\n").unwrap();
+        std::fs::set_permissions(&gpg, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        git(&["config", "gpg.program", gpg.to_str().unwrap()]);
+        git(&["config", "log.showSignature", "true"]);
+        git(&["log", "-1", "--format=%ct", "HEAD", "--"]);
+        assert!(!dir.join("gpg.ran").exists());
     }
 
     #[test]
