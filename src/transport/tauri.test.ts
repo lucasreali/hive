@@ -45,6 +45,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.closeTerminal(7);
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
+  await tauriTransport.removeProject("/r");
   const env = {
     claude_config_dir: null,
     git_name: "Me",
@@ -91,6 +92,7 @@ test("terminal and project actions call their commands", async () => {
     ["close_terminal", { id: 7 }],
     ["list_projects", {}],
     ["add_project", { path: "/r" }],
+    ["remove_project", { id: "/r" }],
     ["create_space", { name: "Work", env }],
     ["update_space", { id: "w", name: "Job", env }],
     ["delete_space", { id: "w" }],

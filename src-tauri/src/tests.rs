@@ -532,6 +532,9 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.delete_space("w".into()).unwrap();
     let delete = Control::DeleteSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, delete));
+    hive.remove_project("/r".into()).unwrap();
+    let remove = Control::RemoveProject { id: "/r".into() };
+    assert_eq!(service.control().await, (0, remove));
     hive.select_space("w".into()).unwrap();
     let select = Control::SelectSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, select));
@@ -869,6 +872,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.delete_space("w".into()), not_connected);
+    assert_eq!(hive.remove_project("/r".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
     assert_eq!(hive.list_gh_accounts(None), not_connected);
     let account = GhAccount {
@@ -1077,6 +1081,7 @@ fn commands_reach_the_managed_hive() {
             create_space,
             update_space,
             delete_space,
+            remove_project,
             select_space,
             list_gh_accounts,
             switch_gh_account,
@@ -1192,6 +1197,7 @@ fn commands_reach_the_managed_hive() {
         ("create_space", &new_space),
         ("update_space", &update),
         ("delete_space", &space),
+        ("remove_project", &space),
         ("select_space", &space),
         ("list_gh_accounts", &json!({"ghConfigDir": null})),
         ("switch_gh_account", &switch_gh),
@@ -1249,6 +1255,7 @@ fn commands_reach_the_managed_hive() {
         ("create_space", new_space),
         ("update_space", update),
         ("delete_space", space.clone()),
+        ("remove_project", space.clone()),
         ("select_space", space),
         ("chat_send", chat_send),
         ("chat_answer", chat_answer),

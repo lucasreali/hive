@@ -350,6 +350,11 @@ impl Hive {
         self.link().send(0, &Control::AddProject { path })
     }
 
+    /// The answer arrives as `project_removed` or `remove_project_failed`.
+    pub fn remove_project(&self, id: String) -> Result<(), String> {
+        self.link().send(0, &Control::RemoveProject { id })
+    }
+
     /// The answer arrives as `branches`.
     pub fn list_branches(&self, project: String) -> Result<(), String> {
         self.link().send(0, &Control::ListBranches { project })
@@ -852,6 +857,11 @@ pub mod commands {
     #[tauri::command]
     pub fn add_project(hive: State<'_, Hive>, path: String) -> Result<(), String> {
         hive.add_project(path)
+    }
+
+    #[tauri::command]
+    pub fn remove_project(hive: State<'_, Hive>, id: String) -> Result<(), String> {
+        hive.remove_project(id)
     }
 
     #[tauri::command]
