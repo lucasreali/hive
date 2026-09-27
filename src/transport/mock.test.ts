@@ -690,7 +690,7 @@ test("files are moved and folders created as the service does, never over anothe
 test("files and folders are deleted as the service does, with what they hold", async () => {
   const { transport, messages } = await connected();
   const w = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).path;
-  await transport.watchWorktree(w);
+  await transport.watchWorktree(w, "head");
   await tick();
   await transport.createFolder(w, "", "empty");
   await transport.createFolder(w, "src/auth", "inner");
