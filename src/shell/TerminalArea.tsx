@@ -369,7 +369,12 @@ export function TerminalArea() {
   return (
     <section className="terminals" aria-label="Terminals">
       <div className="bar">
-        <div className="tabs" role="tablist" aria-label="Open terminals and files">
+        <div
+          className="tabs"
+          role="tablist"
+          aria-label="Open terminals and files"
+          {...drag.end(keys.at(-1))}
+        >
           {items.map((item, i) => {
             const key = keys[i] as string;
             return "path" in item ? (
