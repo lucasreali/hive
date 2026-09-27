@@ -732,6 +732,14 @@ async fn a_removed_project_takes_its_settings_and_ports_along_and_leaves_its_fil
         assert_eq!(app.any_control().await.1, gone);
     }
 
+    // Without settings, none are sent.
+    added(&mut app, &root).await;
+    app.send(0, remove(&root)).await;
+    let spaces = app.any_control().await.1;
+    assert!(matches!(spaces, Control::Spaces { .. }), "{spaces:?}");
+    let removed = Control::ProjectRemoved { id: root.clone() };
+    assert_eq!(app.any_control().await.1, removed);
+
     // Its files and worktrees stay; its space, empty now, can go.
     assert!(std::path::Path::new(&wt).join(".git").exists());
     assert_eq!(repo.git(&["worktree", "list"]).lines().count(), 2);
