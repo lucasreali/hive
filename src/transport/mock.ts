@@ -727,6 +727,21 @@ export function createMockTransport(
       sendSpaces();
       later({ type: "project_added", project: find(path) as Project });
     },
+    async removeProject(id) {
+      const project = find(id);
+      const busy = project?.worktrees.map((w) => inUse(w.path)).find((m) => m !== null);
+      const refused = project ? busy : `${id} is not a followed project`;
+      if (refused) return void later({ type: "remove_project_failed", id, message: refused });
+      projects.splice(projects.indexOf(project as Project), 1);
+      for (const x of spaces) x.projects = x.projects.filter((p) => p !== id);
+      sendSpaces();
+      if (settings.projects[id]) {
+        const { [id]: _, ...rest } = settings.projects;
+        settings = { ...settings, projects: rest };
+        later({ type: "settings", settings });
+      }
+      later({ type: "project_removed", id });
+    },
     async listDirs(path, windows) {
       later({ type: "dirs", ...mockDirs(path, windows) });
     },

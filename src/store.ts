@@ -45,6 +45,8 @@ export type ServiceMessage =
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
+  | { type: "project_removed"; id: string }
+  | { type: "remove_project_failed"; id: string; message: string }
   | { type: "spaces"; spaces: Space[]; current: string }
   | { type: "space_failed"; message: string }
   | ({ type: "branches" } & Branches)
@@ -968,8 +970,13 @@ export function moveAgent(id: string, target: string, after: boolean): void {
     ORDER_LIMIT,
   );
   useHive.setState({ agentOrder });
+}
+
+/** Remembers the agents' order whenever it changes. */
+export function saveAgentOrder(s: HiveState, prev: HiveState): void {
+  if (s.agentOrder === prev.agentOrder) return;
   try {
-    safeStorage()?.setItem(ORDER_STORAGE, JSON.stringify(agentOrder));
+    safeStorage()?.setItem(ORDER_STORAGE, JSON.stringify(s.agentOrder));
   } catch {
     // A full or blocked storage only loses the preference.
   }
@@ -1025,6 +1032,7 @@ export const useHive = create<HiveState>()(() => ({
   tabOrder: savedTabOrder(),
 }));
 useHive.subscribe(saveTabOrder);
+useHive.subscribe(saveAgentOrder);
 
 function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Partial<HiveState> {
   const current = s.terminals[id] ?? { id, exited: false, code: null, unhooked: false };
@@ -1075,6 +1083,50 @@ export const owner = (projects: HiveState["projects"], id: string | null): Proje
 /** The worktree `id` of any project. */
 export const findWorktree = (projects: HiveState["projects"], id: string | null) =>
   owner(projects, id)?.worktrees.find((w) => w.id === id);
+
+/**
+ * What goes with a project the service stopped following (9.28): its rows and sessions, its
+ * file tabs (their unsaved edits too: the question said so), the panel state of its worktrees,
+ * and the places its worktrees and sessions held in the agents' and the tab bar's orders.
+ */
+function removedProject(s: HiveState, id: string): Partial<HiveState> {
+  const project = s.projects?.[id];
+  if (!project) return {};
+  const places = [id, ...project.worktrees.map((w) => w.id)];
+  const inside = (path: string | null) => places.includes(path as string);
+  const files: Partial<HiveState> = {};
+  for (const f of s.openFiles.filter((f) => inside(f.worktree))) {
+    Object.assign(files, dropFile({ ...s, ...files }, f));
+  }
+  const gone = (s.sessions ?? []).filter((x) => x.project === id).map((x) => x.id);
+  gone.push(...Object.values(s.agents).flatMap((a) => (inside(a.worktree) ? [a.id] : [])));
+  const own = (key: string) =>
+    key === id ||
+    gone.some((g) => key === `session:${g}`) ||
+    places.some(
+      (p) =>
+        key === `worktree:${p}` ||
+        [`files:${p}/`, `changes:${p}/`, `file:${p}\n`].some((start) => key.startsWith(start)),
+    );
+  const keep = <T>(record: Record<string, T>) =>
+    Object.fromEntries(Object.entries(record).filter(([key]) => !inside(key)));
+  const { [id]: _, ...projects } = s.projects ?? {};
+  return {
+    ...files,
+    projects,
+    selection: inside(s.selection) || gone.includes(s.selection ?? "") ? null : s.selection,
+    collapsed: Object.fromEntries(Object.entries(s.collapsed).filter(([key]) => !own(key))),
+    tabOrder: (files.tabOrder ?? s.tabOrder).filter((key) => !own(key)),
+    agentOrder: s.agentOrder.filter((a) => !gone.includes(a)),
+    sessions: s.sessions?.filter((x) => x.project !== id) ?? null,
+    worktreeFiles: inside(s.worktreeFiles?.path ?? null) ? null : s.worktreeFiles,
+    changes: keep(s.changes),
+    comments: keep(s.comments),
+    commenting: inside(s.commenting?.worktree ?? null) ? null : s.commenting,
+    newFolders: keep(s.newFolders),
+    searchResults: inside(s.searchResults?.worktree ?? null) ? null : s.searchResults,
+  };
+}
 
 function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
@@ -1160,6 +1212,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "add_project_failed":
       return { addProjectError: m.message };
+    case "project_removed":
+      return removedProject(s, m.id);
+    case "remove_project_failed":
+      return { notice: m.message };
     case "spaces":
       // The answer to the space dialog's request: it has done its job.
       return {
