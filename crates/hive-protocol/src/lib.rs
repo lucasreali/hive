@@ -478,9 +478,10 @@ pub enum Control {
     },
     /// App → service: watch this worktree of a followed project for the files panel,
     /// answered by `Files` now and after every change. Only one worktree is watched: this
-    /// replaces the previous one.
+    /// replaces the previous one. Its `Changes` are listed against `base`.
     WatchWorktree {
         path: String,
+        base: DiffBase,
     },
     /// App → service: stop watching (the files panel closed).
     UnwatchWorktree,
@@ -509,12 +510,21 @@ pub enum Control {
     /// `Changes`.
     ListChanges {
         path: String,
+        base: DiffBase,
     },
-    /// Every file that differs from `HEAD` (staged, unstaged and untracked, as `git status`
-    /// shows them), sorted by path, with the line totals of all of them.
+    /// Every file that differs from the base (committed since it, staged, unstaged and
+    /// untracked), sorted by path, with the line totals of all of them.
     Changes {
         /// The worktree, as asked.
         path: String,
+        /// What the files are compared with: the base asked, or `head` when `base_error`
+        /// says why not.
+        base: DiffBase,
+        /// The main worktree's branch this worktree can be compared with; `None` for the
+        /// main worktree itself, or when that one is detached.
+        branch: Option<String>,
+        /// Why `branch` was asked but `HEAD` is shown.
+        base_error: Option<String>,
         files: Vec<ChangedFile>,
         added: u64,
         removed: u64,
@@ -595,17 +605,19 @@ pub enum Control {
     },
     /// App → service: one file of a worktree of a followed project for the viewer and diff
     /// (#31), answered by `File`. `path` is relative to the worktree and must stay inside it.
+    /// Its base is the one `ListChanges` compares with for `base`.
     OpenFile {
         worktree: String,
         path: String,
+        base: DiffBase,
     },
-    /// A file's text on disk and at `HEAD`; both `None` when binary or too large.
+    /// A file's text on disk and at its base; both `None` when binary or too large.
     File {
         worktree: String,
         path: String,
         /// The text on disk; `None` when the file is gone.
         content: Option<String>,
-        /// The text at `HEAD` (a renamed file's old path); `None` when the file is new or
+        /// The text at the base (a renamed file's old path); `None` when the file is new or
         /// before the first commit.
         base: Option<String>,
         /// An opaque token for the bytes on disk, only compared for equality; `None` when
@@ -1243,7 +1255,18 @@ pub struct SearchMatch {
     pub text: String,
 }
 
-/// A file that differs from `HEAD` in a worktree.
+/// What a worktree's changes are compared with (9.11); the app keeps the choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffBase {
+    /// Its `HEAD`: what is not committed yet.
+    Head,
+    /// The merge-base of its `HEAD` and the main worktree's branch (the branch 6.6 counts
+    /// ahead/behind against): all the work of its branch, committed or not.
+    Branch,
+}
+
+/// A file that differs from the base in a worktree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedFile {
     /// Relative to the worktree, `/`-separated.
@@ -1741,7 +1764,14 @@ mod tests {
             &Frame::control(0, &files).payload[..],
             br#"{"type":"files","path":"/r","files":["a/b.rs"],"truncated":false}"#
         );
-        let watch = Control::WatchWorktree { path: "/r".into() };
+        let watch = Control::WatchWorktree {
+            path: "/r".into(),
+            base: DiffBase::Branch,
+        };
+        assert_eq!(
+            &Frame::control(0, &watch).payload[..],
+            br#"{"type":"watch_worktree","path":"/r","base":"branch"}"#
+        );
         assert_eq!(Frame::control(0, &watch).to_control().unwrap(), watch);
         assert_eq!(
             &Frame::control(0, &Control::UnwatchWorktree).payload[..],
@@ -1804,6 +1834,9 @@ mod tests {
     fn changes_are_tagged_json() {
         let changes = Control::Changes {
             path: "/r".into(),
+            base: DiffBase::Head,
+            branch: Some("main".into()),
+            base_error: Some("e".into()),
             files: vec![ChangedFile {
                 path: "b".into(),
                 status: FileStatus::Renamed,
@@ -1817,9 +1850,12 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &changes).payload[..],
-            br#"{"type":"changes","path":"/r","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null}"#
+            br#"{"type":"changes","path":"/r","base":"head","branch":"main","base_error":"e","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null}"#
         );
-        let list = Control::ListChanges { path: "/r".into() };
+        let list = Control::ListChanges {
+            path: "/r".into(),
+            base: DiffBase::Branch,
+        };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
     }
 
@@ -2025,7 +2061,12 @@ mod tests {
         let open = Control::OpenFile {
             worktree: "/r".into(),
             path: "a".into(),
+            base: DiffBase::Head,
         };
+        assert_eq!(
+            &Frame::control(0, &open).payload[..],
+            br#"{"type":"open_file","worktree":"/r","path":"a","base":"head"}"#
+        );
         assert_eq!(Frame::control(0, &open).to_control().unwrap(), open);
     }
 

@@ -65,15 +65,15 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.createWorktree("/r", "x", null);
   await tauriTransport.removeWorktree("/r/w", true);
   await tauriTransport.renameWorktree("/r/w", "y");
-  await tauriTransport.watchWorktree("/r");
+  await tauriTransport.watchWorktree("/r", "branch");
   await tauriTransport.unwatchWorktree();
   await tauriTransport.setView(3, true);
-  await tauriTransport.listChanges("/r");
+  await tauriTransport.listChanges("/r", "head");
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
   await tauriTransport.deleteSession("s");
   await tauriTransport.searchFiles("/r", "q");
-  await tauriTransport.openFile("/r", "a.ts");
+  await tauriTransport.openFile("/r", "a.ts", "head");
   await tauriTransport.saveFile("/r", "a.ts", "x", "v");
   await tauriTransport.createFile("/r", "src", "b.ts");
   await tauriTransport.renameFile("/r", "a.ts", "c.ts");
@@ -106,15 +106,15 @@ test("terminal and project actions call their commands", async () => {
     ["create_worktree", { project: "/r", name: "x", base: null }],
     ["remove_worktree", { path: "/r/w", force: true }],
     ["rename_worktree", { path: "/r/w", name: "y" }],
-    ["watch_worktree", { path: "/r" }],
+    ["watch_worktree", { path: "/r", base: "branch" }],
     ["unwatch_worktree", {}],
     ["set_view", { terminal: 3, focused: true }],
-    ["list_changes", { path: "/r" }],
+    ["list_changes", { path: "/r", base: "head" }],
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],
     ["delete_session", { id: "s" }],
     ["search_files", { worktree: "/r", query: "q" }],
-    ["open_file", { worktree: "/r", path: "a.ts" }],
+    ["open_file", { worktree: "/r", path: "a.ts", base: "head" }],
     ["save_file", { worktree: "/r", path: "a.ts", content: "x", version: "v" }],
     ["create_file", { worktree: "/r", folder: "src", name: "b.ts" }],
     ["rename_file", { worktree: "/r", path: "a.ts", name: "c.ts" }],
