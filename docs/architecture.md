@@ -139,7 +139,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | `file_deleted {worktree, path}` | service → app | 0 | `path` (as the app sent it) is gone, with everything under it. The Files tree drops it and what it held at once (the watch's next `files` confirms it); the open files under it close their tabs, and those with unsaved edits ask first, in one question. |
 | `file_op_failed {worktree, message}` | service → app | 0 | Nothing was created, renamed, moved or deleted; `message` shows as is in the file name dialog, or in the status bar when no dialog is open for the worktree (a drag). |
 | `open_in_editor {worktree, path}` | app → service | 0 | Where Windows sees this file, to open it in an external editor. Answered by `editor_target`. |
-| `editor_target {worktree, path, windows_path, error}` | service → app | 0 | The file's Windows path (`wslpath -w`), or why not (`error`, e.g. a file Windows would run). |
+| `editor_target {worktree, path, windows_path, error}` | service → app | 0 | The file's Windows path (`wslpath -w`), or why not (`error`, e.g. a file that is not text or source, which the system might run). |
 | `get_settings` | app → service | 0 | Answered by `settings`. |
 | `settings {settings}` | service → app | 0 | The service's settings (see [Settings](#settings)). Sent right after `welcome`, and in answer to `get_settings` and to a saved `set_settings`. |
 | `set_settings {settings}` | app → service | 0 | Check and save the whole settings. Answered by `settings`, or by `settings_failed` with nothing saved. |
