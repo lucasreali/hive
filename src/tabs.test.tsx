@@ -261,6 +261,44 @@ test("a renamed or moved file keeps its tab and its place; a deleted one's tab c
   expect(bar()).toEqual([1, "d.ts"]);
 });
 
+test("a deleted file or folder leaves the tree at once and its tabs close, asking once when dirty", () => {
+  apply({
+    type: "files",
+    path: W,
+    files: ["a.ts", "src/b.ts", "src/lib/c.ts", "srcx/d.ts"],
+    truncated: false,
+  });
+  useHive.setState({ newFolders: { [W]: ["src/empty", "other"] } });
+  for (const path of ["src/b.ts", "src/lib/c.ts", "srcx/d.ts", "a.ts"]) {
+    setOpenFile(file(path), true);
+    answer(path, "x\n");
+    if (path !== "srcx/d.ts") type(`${path} mine\n`);
+  }
+  setOpenFile(file("src/b.ts", checkout.path));
+  // Every open file, another worktree's marked.
+  const open = () => s().openFiles.map((f) => (f.worktree === W ? f.path : `other:${f.path}`));
+  // Clean tabs under the folder close at once; the dirty ones ask, in one question.
+  apply({ type: "file_deleted", worktree: W, path: "src" });
+  expect(s().worktreeFiles?.files).toEqual(["a.ts", "srcx/d.ts"]);
+  expect(s().newFolders).toEqual({ [W]: ["other"] });
+  expect(open()).toEqual(["src/b.ts", "src/lib/c.ts", "srcx/d.ts", "a.ts", "other:src/b.ts"]);
+  expect(s().question?.text).toBe(
+    "src/b.ts, src/lib/c.ts were deleted. Your unsaved changes to them will be lost.",
+  );
+  act(() => s().question?.run());
+  expect(open()).toEqual(["srcx/d.ts", "a.ts", "other:src/b.ts"]);
+  // A clean file closes without asking; a dirty one asks, and Cancel keeps it.
+  useHive.setState({ modal: null, question: null });
+  apply({ type: "file_deleted", worktree: W, path: "srcx/d.ts" });
+  expect([open(), s().question]).toEqual([["a.ts", "other:src/b.ts"], null]);
+  // Another worktree's deletion touches neither this listing nor these tabs.
+  apply({ type: "file_deleted", worktree: checkout.path, path: "a.ts" });
+  expect([s().worktreeFiles?.files, open()]).toEqual([["a.ts"], ["a.ts", "other:src/b.ts"]]);
+  apply({ type: "file_deleted", worktree: W, path: "a.ts" });
+  expect(s().question?.text).toBe("a.ts was deleted. Your unsaved changes to it will be lost.");
+  expect(open()).toEqual(["a.ts", "other:src/b.ts"]);
+});
+
 test("the bar shows every tab in its order; a drag shows a drop line; the × asks when dirty", () => {
   render(<App />);
   act(() => {

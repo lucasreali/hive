@@ -69,6 +69,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.createFile("/r", "src", "b.ts");
   await tauriTransport.renameFile("/r", "a.ts", "c.ts");
   await tauriTransport.moveFile("/r", "a.ts", "src");
+  await tauriTransport.deleteFile("/r", "src");
   await tauriTransport.createFolder("/r", "src", "lib");
   await tauriTransport.openInEditor("/r", "a.ts");
   await tauriTransport.getSettings();
@@ -106,6 +107,7 @@ test("terminal and project actions call their commands", async () => {
     ["create_file", { worktree: "/r", folder: "src", name: "b.ts" }],
     ["rename_file", { worktree: "/r", path: "a.ts", name: "c.ts" }],
     ["move_file", { worktree: "/r", path: "a.ts", folder: "src" }],
+    ["delete_file", { worktree: "/r", path: "src" }],
     ["create_folder", { worktree: "/r", folder: "src", name: "lib" }],
     ["open_in_editor", { worktree: "/r", path: "a.ts" }],
     ["get_settings", {}],
