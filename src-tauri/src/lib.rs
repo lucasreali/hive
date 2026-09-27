@@ -505,6 +505,11 @@ impl Hive {
         self.link().send(0, &moving)
     }
 
+    /// The answer arrives as `file_deleted` or `file_op_failed`.
+    pub fn delete_file(&self, worktree: String, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::DeleteFile { worktree, path })
+    }
+
     /// The answer arrives as `folder_created` or `file_op_failed`.
     pub fn create_folder(
         &self,
@@ -1021,6 +1026,15 @@ pub mod commands {
         folder: String,
     ) -> Result<(), String> {
         hive.move_file(worktree, path, folder)
+    }
+
+    #[tauri::command]
+    pub fn delete_file(
+        hive: State<'_, Hive>,
+        worktree: String,
+        path: String,
+    ) -> Result<(), String> {
+        hive.delete_file(worktree, path)
     }
 
     #[tauri::command]

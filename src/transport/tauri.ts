@@ -45,6 +45,7 @@ export const tauriTransport: Transport = {
   createFile: (worktree, folder, name) => invoke("create_file", { worktree, folder, name }),
   renameFile: (worktree, path, name) => invoke("rename_file", { worktree, path, name }),
   moveFile: (worktree, path, folder) => invoke("move_file", { worktree, path, folder }),
+  deleteFile: (worktree, path) => invoke("delete_file", { worktree, path }),
   createFolder: (worktree, folder, name) => invoke("create_folder", { worktree, folder, name }),
   openInEditor: (worktree, path) => invoke("open_in_editor", { worktree, path }),
   getSettings: () => invoke("get_settings"),
