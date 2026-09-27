@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
-/// The recorder's scenarios, and `streaming`: live text (7.3h), written from the documented
-/// shapes (spike 4.14).
-const SCENARIOS: [&str; 14] = [
+/// The recorder's scenarios, `streaming`: live text (7.3h), written from the documented
+/// shapes (spike 4.14), and `auto-refused`: auto mode refused on haiku (8.4, recorded by hand).
+const SCENARIOS: [&str; 15] = [
     "text",
     "thinking",
     "tools",
@@ -20,6 +20,7 @@ const SCENARIOS: [&str; 14] = [
     "interrupt",
     "resume",
     "streaming",
+    "auto-refused",
 ];
 
 #[test]

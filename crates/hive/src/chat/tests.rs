@@ -86,9 +86,14 @@ fn turn(kind: EventKind) -> Option<AgentEvent> {
 
 #[test]
 fn modes_are_the_clis_permission_modes() {
-    let modes = [ChatMode::Default, ChatMode::AcceptEdits, ChatMode::Plan];
+    let modes = [
+        ChatMode::Default,
+        ChatMode::AcceptEdits,
+        ChatMode::Plan,
+        ChatMode::Auto,
+    ];
     let args: Vec<&str> = modes.iter().map(|&m| mode_arg(m)).collect();
-    assert_eq!(args, ["default", "acceptEdits", "plan"]);
+    assert_eq!(args, ["default", "acceptEdits", "plan", "auto"]);
     for mode in modes {
         assert_eq!(mode_of(mode_arg(mode)), Some(mode));
     }
@@ -1670,6 +1675,80 @@ fn turns_modes_and_interrupts_are_written_to_claude() {
     );
     // The same mode again changes no status.
     assert!(stream.set_mode(ChatMode::AcceptEdits).app.is_empty());
+}
+
+fn modes(out: &Out) -> Vec<ChatMode> {
+    let modes = statuses(out).into_iter().filter_map(|status| match status {
+        Control::ChatStatus { mode, .. } => Some(mode),
+        _ => None,
+    });
+    modes.collect()
+}
+
+fn feed(stream: &mut Stream, line: &str) -> Out {
+    stream.line(Some(line.as_bytes()))
+}
+
+#[test]
+fn a_refused_mode_shows_claudes_message_and_keeps_claudes_mode() {
+    let mut stream = stream();
+    assert_eq!(modes(&stream.set_mode(ChatMode::Auto)), [ChatMode::Auto]);
+    // Recorded (claude 2.1.283, haiku): the switch is refused, init still says default.
+    let out = replay(&mut stream, "auto-refused");
+    let refused = "Cannot set permission mode to auto: auto mode unavailable for this model";
+    assert_eq!(kinds(&out), [(Error, refused.into())]);
+    assert_eq!(modes(&out)[0], ChatMode::Default);
+    assert_eq!(stream.mode, ChatMode::Default);
+    // Two quick switches: the first is confirmed, the second refused, so the first stays.
+    stream.set_mode(ChatMode::AcceptEdits);
+    stream.set_mode(ChatMode::Auto);
+    let response = |id: u32, body: &str| {
+        format!(r#"{{"type":"control_response","response":{{"request_id":"hive-{id}",{body}}}}}"#)
+    };
+    let ok = response(
+        3,
+        r#""subtype":"success","response":{"mode":"acceptEdits"}"#,
+    );
+    assert_eq!(feed(&mut stream, &ok), Out::default());
+    // An answer that is not the last switch's (an interrupt's) changes nothing.
+    let other = response(9, r#""subtype":"error","error":"x""#);
+    assert_eq!(feed(&mut stream, &other), Out::default());
+    let no = response(4, r#""subtype":"error","error":"no""#);
+    let out = feed(&mut stream, &no);
+    assert_eq!(kinds(&out), [(Error, "no".into())]);
+    assert_eq!(modes(&out), [ChatMode::AcceptEdits]);
+    // Answered once: the same answer again changes nothing.
+    assert_eq!(feed(&mut stream, &no), Out::default());
+    // A confirmed switch keeps the mode.
+    stream.set_mode(ChatMode::Auto);
+    let ok = response(5, r#""subtype":"success","response":{"mode":"auto"}"#);
+    assert_eq!(feed(&mut stream, &ok), Out::default());
+    assert_eq!(
+        (stream.mode, stream.confirmed),
+        (ChatMode::Auto, ChatMode::Auto)
+    );
+}
+
+#[test]
+fn claude_started_in_auto_reports_it() {
+    let mut stream = Stream::new(7, CWD.into(), ChatMode::Auto, None);
+    assert_eq!(args(Path::new("/s"), ChatMode::Auto, None)[11], "auto");
+    feed(
+        &mut stream,
+        r#"{"type":"system","subtype":"init","permissionMode":"auto"}"#,
+    );
+    assert_eq!(
+        (stream.mode, stream.confirmed),
+        (ChatMode::Auto, ChatMode::Auto)
+    );
+    feed(
+        &mut stream,
+        r#"{"type":"system","subtype":"status","permissionMode":"plan"}"#,
+    );
+    assert_eq!(
+        (stream.mode, stream.confirmed),
+        (ChatMode::Plan, ChatMode::Plan)
+    );
 }
 
 /// Every line of `input`; bounded by its length, so a mutant cannot loop forever.
