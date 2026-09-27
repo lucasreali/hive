@@ -1175,13 +1175,16 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             })
         }
         Ok(Control::LocateSession { id, target }) => state.sessions(move |projects, sessions| {
-            let located = sessions.find(projects, &id).and_then(|session| {
-                let path = match target {
-                    SessionTarget::Log => session.log,
-                    SessionTarget::Folder => session.cwd,
-                };
-                file::windows(Path::new(&path), OsStr::new("wslpath"))
-            });
+            let wslpath = OsStr::new("wslpath");
+            let located = sessions
+                .find(projects, &id)
+                .and_then(|session| match target {
+                    SessionTarget::Log => file::windows(Path::new(&session.log), wslpath),
+                    // The log's `cwd` is untrusted: checked as a worktree's folder is (9.10).
+                    SessionTarget::Folder => {
+                        file::windows_path(Path::new(&session.cwd), "", wslpath)
+                    }
+                });
             Control::SessionLocated {
                 id,
                 target,

@@ -614,6 +614,12 @@ pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<Strin
     if path.is_empty() {
         // The worktree's own folder, for the Windows Explorer or the Finder.
         let real = dir.canonicalize()?;
+        if !real.is_dir() {
+            return Err(io::Error::other(format!(
+                "{} is not a folder",
+                real.display()
+            )));
+        }
         plain_name(&real)?;
         let extension = real.extension().unwrap_or_default().to_string_lossy();
         if BUNDLES.contains(&extension.to_ascii_lowercase().as_str())
@@ -1174,6 +1180,10 @@ mod tests {
         let odd = "\"shop.\" could open another file on Windows: it ends in a dot or a space, \
                    or holds one of <>:\"|?*\\";
         assert_eq!(at("shop."), Err(odd.to_owned()));
+        // A file where a folder is expected (a session log's `cwd`) would be run or opened.
+        let file = windows_path(&dir.path().join("shop.exe"), "", OsStr::new("echo"));
+        let not_folder = format!("{} is not a folder", real.join("shop.exe").display());
+        assert_eq!(file.map_err(|e| e.to_string()), Err(not_folder));
     }
 
     #[test]

@@ -222,8 +222,9 @@ impl Hive {
 
     /// Opens `path` with the system's default app, or shows it in the file manager when
     /// `reveal` (open point #15): only a path the service just sent in `editor_target` or
-    /// `session_located` (checked there, 9.8), and each at most once. The webview itself has no
-    /// permission to open a path, so a script in it can open nothing else.
+    /// `session_located` (checked there: `hive::file::windows_path`, 9.8; a session's log), and
+    /// each at most once, even when opening it fails. The webview itself has no permission to
+    /// open a path, so a script in it can open nothing else.
     pub fn open_path(&self, path: String, reveal: bool) -> Result<(), String> {
         let mut link = self.link();
         let Some(at) = link.approved.iter().position(|approved| *approved == path) else {
@@ -1032,8 +1033,13 @@ pub mod commands {
         hive.open_in_editor(worktree, path)
     }
 
+    /// Async, so off the main thread: opening a `\\wsl.localhost` path may wait for WSL.
     #[tauri::command]
-    pub fn open_path(hive: State<'_, Hive>, path: String, reveal: bool) -> Result<(), String> {
+    pub async fn open_path(
+        hive: State<'_, Hive>,
+        path: String,
+        reveal: bool,
+    ) -> Result<(), String> {
         hive.open_path(path, reveal)
     }
 

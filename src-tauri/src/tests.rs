@@ -184,7 +184,10 @@ async fn only_a_path_the_service_sent_opens_and_only_once() {
     let (tx, opened) = std::sync::mpsc::channel();
     let hive = hive.with_open(move |path, reveal| {
         tx.send((path.to_owned(), reveal)).unwrap();
-        Ok(())
+        match path {
+            "C:\\gone" => Err("no app for it".to_owned()),
+            _ => Ok(()),
+        }
     });
     assert_eq!(hive.open_path(file.into(), false), refused(file)); // Taken by the try above.
     let log = "\\\\wsl.localhost\\Ubuntu\\home\\you\\.claude\\projects\\p\\s.jsonl";
@@ -219,6 +222,13 @@ async fn only_a_path_the_service_sent_opens_and_only_once() {
         assert_eq!(hive.open_path(path.clone(), false), Ok(()), "{path}");
     }
     assert_eq!(opened.try_iter().count(), APPROVED_LIMIT);
+
+    // The opener's error reaches the UI, and the path is used up all the same.
+    service.send(0, target(Some("C:\\gone"))).await;
+    next(&mut rx).await;
+    let gone = || hive.open_path("C:\\gone".into(), false);
+    assert_eq!(gone(), Err("no app for it".into()));
+    assert_eq!(gone(), refused("C:\\gone"));
 }
 
 #[test]
