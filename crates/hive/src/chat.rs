@@ -944,6 +944,8 @@ impl Stream {
                     self.block(assistant, error, text(&block["text"]), parent)
                 }
                 Some("text") => self.block(assistant, assistant, text(&block["text"]), parent),
+                // Recent models send only a `signature` (8.7): nothing to show.
+                Some("thinking") if text(&block["thinking"]).trim().is_empty() => continue,
                 Some("thinking") => {
                     self.block(thinking, thinking, text(&block["thinking"]), parent)
                 }
@@ -1001,7 +1003,8 @@ impl Stream {
         if live.text.len() <= MAX_TEXT {
             live.text.push_str(text(piece));
         }
-        live.changed = true;
+        // Whitespace is not shown (8.7: recent models stream empty `thinking_delta`s).
+        live.changed = !live.text.trim().is_empty();
         self.live = Some(live);
     }
 
