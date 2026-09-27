@@ -58,6 +58,7 @@ fn main() {
             commands::create_file,
             commands::rename_file,
             commands::move_file,
+            commands::delete_file,
             commands::create_folder,
             commands::open_in_editor,
             commands::get_settings,
