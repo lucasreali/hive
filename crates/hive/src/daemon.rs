@@ -673,16 +673,14 @@ impl State {
                 project,
                 resume,
                 mode: mode.unwrap_or(ChatMode::Default),
-                model,
+                // Never passed unless it is a model name; claude then runs its own choice
+                // (e.g. an ended chat going on that ran a model id `--model` cannot take).
+                model: model.filter(|model| chat::is_model(model)),
             }),
             None => Err(not_a_chat_folder(&cwd)),
         };
         let open = open.and_then(|open| match open.resume.as_deref() {
             Some(id) if !chat::is_session(id) => Err("not a session id to resume".to_owned()),
-            _ => Ok(open),
-        });
-        let open = open.and_then(|open| match open.model.as_deref() {
-            Some(model) if !chat::is_model(model) => Err("not a model name".to_owned()),
             _ => Ok(open),
         });
         match open {

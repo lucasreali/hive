@@ -199,8 +199,6 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
         mode: None,
         model: Some(model.into()),
     };
-    app.send(2, with_model("--help")).await;
-    assert_eq!(app.control().await, closed(2, Some("not a model name")));
 
     // The first chat in the project asks; a refusal or a close ends it.
     app.send(2, open(&root, None, None)).await;
@@ -410,8 +408,14 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
 
     // A chat still open when the app leaves ends with the service.
     write_claude(&fake, &fake_claude(&fake));
-    app.send(8, open(&root, None, None)).await;
+    // A model that is not a model name is left out.
+    app.send(8, with_model("--help")).await;
     assert_eq!(app.control().await, opened(8, &root, None, default));
+    let args = std::fs::read_to_string(fake.join("args")).unwrap();
+    assert!(
+        !args.contains("--model") && !args.contains("--help"),
+        "{args}"
+    );
     // Live text left waiting when claude pauses is sent when its 50 ms are over.
     send(&mut app, 8, "pause").await;
     let user = entry(1, ChatEntryKind::User, "pause");
