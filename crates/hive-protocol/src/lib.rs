@@ -464,10 +464,13 @@ pub enum Control {
     },
     /// App → service: Claude Code's sessions of the followed projects, answered by `Sessions`.
     ListSessions,
-    /// The most recent first; `error` says why none could be read.
+    /// The most recent first, at most the service's cap (`truncated` when older ones were
+    /// left out); `error` says why none could be read. Sent only when it differs from the
+    /// last one the app got.
     Sessions {
         sessions: Vec<Session>,
         error: Option<String>,
+        truncated: bool,
     },
     /// Sent once after `Welcome` when the app closed with sessions running in Hive's terminals:
     /// the app resumes each in a new terminal.
@@ -1648,10 +1651,11 @@ mod tests {
         let sessions = Control::Sessions {
             sessions: vec![session],
             error: None,
+            truncated: true,
         };
         assert_eq!(
             &Frame::control(0, &sessions).payload[..],
-            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false}],"error":null}"#
+            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false}],"error":null,"truncated":true}"#
         );
         let usage = Control::AgentUsage {
             id: "s".into(),

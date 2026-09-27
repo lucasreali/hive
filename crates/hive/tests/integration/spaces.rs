@@ -113,7 +113,10 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         title: "Work task".into(),
     };
     assert!(seen.contains(&(1, title)), "{seen:?}");
-    let Control::Sessions { sessions, error } = ask(&mut app, Control::ListSessions).await else {
+    let Control::Sessions {
+        sessions, error, ..
+    } = ask(&mut app, Control::ListSessions).await
+    else {
         panic!("expected sessions")
     };
     let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
@@ -129,6 +132,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     let empty = Control::Sessions {
         sessions: vec![],
         error: None,
+        truncated: false,
     };
     assert_eq!(listed, empty);
     let refused = ask(&mut app, add(&root)).await;

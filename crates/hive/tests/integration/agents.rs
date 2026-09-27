@@ -419,12 +419,16 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         ask(Control::ListSessions).await,
         Control::Sessions {
             sessions: vec![],
-            error: None
+            error: None,
+            truncated: false,
         }
     );
     let added = ask(Control::AddProject { path: root.clone() }).await;
     assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
-    let Control::Sessions { sessions, error } = ask(Control::ListSessions).await else {
+    let Control::Sessions {
+        sessions, error, ..
+    } = ask(Control::ListSessions).await
+    else {
         panic!("expected sessions")
     };
     let mut ids: Vec<_> = sessions
@@ -515,6 +519,20 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         .collect();
     running.sort();
     assert_eq!(running, [(outside, false), ("old", false), ("s", true)]);
+    // Unchanged, the list is not sent again.
+    app.send(0, Control::ListSessions).await;
+    let locate = Control::LocateSession {
+        id: "s".into(),
+        target: SessionTarget::Log,
+    };
+    app.send(0, locate).await;
+    loop {
+        match app.control().await {
+            (0, Control::SessionLocated { .. }) => break,
+            (0, Control::Sessions { .. }) => panic!("an unchanged list was sent again"),
+            _ => {}
+        }
+    }
     let mut ask = async |message: Control| {
         app.send(0, message).await;
         loop {
@@ -539,6 +557,23 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         Control::SessionDeleted { id: "old".into() }
     );
     assert!(!logs.join("old.jsonl").exists());
+    // Changed, it is: the unchanged one never comes.
+    app.send(0, Control::ListSessions).await;
+    let sessions = loop {
+        if let (0, Control::Sessions { sessions, .. }) = app.control().await {
+            break sessions;
+        }
+    };
+    assert!(sessions.iter().all(|s| s.id != "old"), "{sessions:?}");
+    // A reloaded UI asks for the projects again, and gets the list again.
+    app.send(0, Control::ListProjects).await;
+    app.send(0, Control::ListSessions).await;
+    let again = loop {
+        if let (0, Control::Sessions { sessions, .. }) = app.control().await {
+            break sessions;
+        }
+    };
+    assert_eq!(again, sessions);
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -552,7 +587,10 @@ async fn unreadable_session_logs_are_reported() {
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     app.send(0, Control::ListSessions).await;
-    let Control::Sessions { sessions, error } = app.control().await.1 else {
+    let Control::Sessions {
+        sessions, error, ..
+    } = app.control().await.1
+    else {
         panic!("expected sessions")
     };
     assert!(sessions.is_empty());

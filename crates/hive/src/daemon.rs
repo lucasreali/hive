@@ -152,6 +152,8 @@ struct State {
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
+    /// The sessions list the app has (`Sessions`), so an unchanged one is not sent again.
+    listed: std::sync::Mutex<Option<Control>>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for at start and again, in the
     /// background, while no `claude` is on it: the user's shell never holds up the frames.
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
@@ -190,6 +192,7 @@ impl State {
             ports,
             restore,
             sent: Default::default(),
+            listed: Default::default(),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
         }
@@ -519,8 +522,25 @@ impl State {
                 state.with_health(&mut reply);
                 reply
             });
-            state.to_app(0, &reply).await;
+            if state.new_to_app(&reply) {
+                state.to_app(0, &reply).await;
+            }
         });
+    }
+
+    /// Whether the app lacks `reply`: always, except a sessions list equal to the last one
+    /// sent, which is remembered.
+    fn new_to_app(&self, reply: &Control) -> bool {
+        !matches!(reply, Control::Sessions { .. })
+            || self.listed().replace(reply.clone()).as_ref() != Some(reply)
+    }
+
+    /// The sessions list the app has; `None` for a new app, or a reloaded UI (which asks for
+    /// the projects again).
+    fn listed(&self) -> std::sync::MutexGuard<'_, Option<Control>> {
+        self.listed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Answers a request on the current space's projects and their Claude sessions (in the
@@ -955,6 +975,7 @@ where
         }
         *app = Some(control_tx);
     }
+    *state.listed() = None;
     state.send_settings().await;
     state.snapshot().await;
     // Only the first app after a restart resumes the sessions the last one left.
@@ -1030,6 +1051,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.to_app(0, &diagnostics).await;
         }
         Ok(Control::ListProjects) => {
+            *state.listed() = None;
             state.to_app(0, &state.projects.spaces_message()).await;
             state.projects(|projects| Control::Projects {
                 projects: projects.list(),
@@ -1167,11 +1189,15 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                     procs::Source::System,
                     records.as_deref(),
                 ));
-                let (sessions, error) = match sessions.list(projects, &running) {
-                    Ok(sessions) => (sessions, None),
-                    Err(err) => (Vec::new(), Some(err.to_string())),
+                let ((sessions, truncated), error) = match sessions.list(projects, &running) {
+                    Ok(listed) => (listed, None),
+                    Err(err) => ((Vec::new(), false), Some(err.to_string())),
                 };
-                Control::Sessions { sessions, error }
+                Control::Sessions {
+                    sessions,
+                    error,
+                    truncated,
+                }
             })
         }
         Ok(Control::LocateSession { id, target }) => state.sessions(move |projects, sessions| {
