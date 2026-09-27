@@ -86,18 +86,21 @@ pub fn spawn(
             .envs(env.iter().cloned())
             .current_dir(cwd)
             .spawn(pts)?;
-        Ok((pty, child))
+        // The shell leads its own session, so its pid is the session id. A child always has
+        // one right after spawning; without it there is no session to end, so no terminal.
+        let pid = child
+            .id()
+            .ok_or_else(|| std::io::Error::other("the shell has no pid"))?;
+        Ok((pty, child, pid))
     };
-    let (pty, child) = start().map_err(|err| format!("cannot start a terminal in {cwd}: {err}"))?;
-    // The shell leads its own session, so its pid is the session id. The pid is always
-    // known right after spawning; -1 (no process has it) keeps a missing one harmless.
-    let session = child.id().map_or(-1, |pid| pid as i32);
+    let (pty, child, pid) =
+        start().map_err(|err| format!("cannot start a terminal in {cwd}: {err}"))?;
     let (output, writer) = pty.into_split();
     let (input, input_rx) = mpsc::unbounded_channel();
     tokio::spawn(feed(writer, input_rx));
     Ok((
         Terminal {
-            session,
+            session: pid as i32,
             watch: Watch::default(),
             last_output: LastOutput::new(),
             claude_dir: None,
