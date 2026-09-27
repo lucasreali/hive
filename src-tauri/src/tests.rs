@@ -576,11 +576,16 @@ async fn a_message_over_the_frame_limit_is_refused_and_the_link_keeps_working() 
 async fn chat_messages_travel_on_the_chat_channel() {
     let (hive, mut service, mut rx) = welcomed().await;
     let mode = Some(ChatMode::Plan);
-    assert_eq!(hive.open_chat("/w".into(), None, mode), Ok(1));
+    let model = Some("sonnet".to_owned());
+    assert_eq!(
+        hive.open_chat("/w".into(), None, mode, model.clone()),
+        Ok(1)
+    );
     let open = Control::OpenChat {
         cwd: "/w".into(),
         resume: None,
         mode,
+        model,
     };
     assert_eq!(service.control().await, (1, open));
     let image = ChatImage {
@@ -611,6 +616,12 @@ async fn chat_messages_travel_on_the_chat_channel() {
     let set = Control::ChatSetMode {
         chat: 1,
         mode: ChatMode::AcceptEdits,
+    };
+    assert_eq!(service.control().await, (1, set));
+    hive.chat_set_model(1, "opus".into()).unwrap();
+    let set = Control::ChatSetModel {
+        chat: 1,
+        model: "opus".into(),
     };
     assert_eq!(service.control().await, (1, set));
     hive.confirm_chat_folder(1, "/w".into(), true).unwrap();
@@ -648,13 +659,13 @@ async fn chat_messages_travel_on_the_chat_channel() {
         next(&mut rx).await,
         json!({"type": "unhooked_agent", "channel": 0})
     );
-    assert_eq!(hive.open_chat("/w".into(), None, None), Ok(2));
+    assert_eq!(hive.open_chat("/w".into(), None, None, None), Ok(2));
 }
 
 #[tokio::test]
 async fn a_reloaded_ui_closes_its_old_chats_and_a_disconnect_closes_them_all() {
     let (hive, mut service, _old) = welcomed().await;
-    hive.open_chat("/w".into(), None, None).unwrap();
+    hive.open_chat("/w".into(), None, None, None).unwrap();
     service.control().await;
     let (channel, mut rx) = ui();
     hive.connect(channel);
@@ -662,7 +673,7 @@ async fn a_reloaded_ui_closes_its_old_chats_and_a_disconnect_closes_them_all() {
     assert_eq!(service.control().await, (1, Control::CloseChat { chat: 1 }));
     assert_eq!(service.control().await, (0, Control::GetSettings));
 
-    hive.open_chat("/w".into(), None, None).unwrap();
+    hive.open_chat("/w".into(), None, None, None).unwrap();
     drop(service);
     assert_eq!(
         next(&mut rx).await,
@@ -674,7 +685,7 @@ async fn a_reloaded_ui_closes_its_old_chats_and_a_disconnect_closes_them_all() {
     );
     let not_connected = Err(NOT_CONNECTED.to_owned());
     assert_eq!(
-        hive.open_chat("/w".into(), None, None),
+        hive.open_chat("/w".into(), None, None, None),
         Err(NOT_CONNECTED.into())
     );
     assert_eq!(hive.chat_send(2, "x".into(), vec![]), not_connected);
@@ -684,6 +695,7 @@ async fn a_reloaded_ui_closes_its_old_chats_and_a_disconnect_closes_them_all() {
     );
     assert_eq!(hive.chat_interrupt(2), not_connected);
     assert_eq!(hive.chat_set_mode(2, ChatMode::Default), not_connected);
+    assert_eq!(hive.chat_set_model(2, "opus".into()), not_connected);
     assert_eq!(hive.close_chat(2), not_connected);
     assert_eq!(
         hive.confirm_chat_folder(2, "/w".into(), false),
@@ -1052,6 +1064,7 @@ fn commands_reach_the_managed_hive() {
             chat_answer,
             chat_interrupt,
             chat_set_mode,
+            chat_set_model,
             close_chat,
             confirm_chat_folder
         ])
@@ -1112,8 +1125,9 @@ fn commands_reach_the_managed_hive() {
     let chat_send = json!({"chat": 3, "text": "hi", "images": []});
     let chat_answer = json!({"chat": 3, "request": "r", "answer": {"kind": "allow"}});
     let chat_mode = json!({"chat": 3, "mode": "plan"});
+    let chat_model = json!({"chat": 3, "model": "opus"});
     let confirm = json!({"chat": 3, "cwd": "/r", "accepted": true});
-    let open_chat = json!({"cwd": "/r", "resume": null, "mode": null});
+    let open_chat = json!({"cwd": "/r", "resume": null, "mode": null, "model": null});
     assert_eq!(
         invoke(&webview, "open_chat", open_chat.clone()),
         not_connected
@@ -1123,6 +1137,7 @@ fn commands_reach_the_managed_hive() {
         ("chat_answer", &chat_answer),
         ("chat_interrupt", &chat),
         ("chat_set_mode", &chat_mode),
+        ("chat_set_model", &chat_model),
         ("close_chat", &chat),
         ("confirm_chat_folder", &confirm),
         ("list_branches", &branches),
@@ -1213,6 +1228,7 @@ fn commands_reach_the_managed_hive() {
         ("chat_answer", chat_answer),
         ("chat_interrupt", chat.clone()),
         ("chat_set_mode", chat_mode),
+        ("chat_set_model", chat_model),
         ("close_chat", chat),
         ("confirm_chat_folder", confirm),
     ] {

@@ -5,8 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use hive_protocol::{
-    AgentState, ChatAnswer, ChatEntry, ChatEntryKind, ChatMode, Control, OpenSession, Role,
-    SessionKind,
+    AgentState, ChatAnswer, ChatEntry, ChatEntryKind, ChatMode, ChatModel, Control, OpenSession,
+    Role, SessionKind,
 };
 use serde_json::json;
 
@@ -71,6 +71,7 @@ fn open(cwd: &str, resume: Option<&str>, mode: Option<ChatMode>) -> Control {
         cwd: cwd.into(),
         resume: resume.map(str::to_owned),
         mode,
+        model: None,
     }
 }
 
@@ -109,6 +110,11 @@ fn opened(chat: u32, cwd: &str, session: Option<&str>, mode: ChatMode) -> (u32, 
         model: None,
         mode,
         commands: vec!["compact".into()],
+        models: vec![ChatModel {
+            value: "haiku".into(),
+            name: "Haiku".into(),
+            auto: false,
+        }],
         api_key_source: None,
     };
     (chat, opened)
@@ -142,6 +148,7 @@ fn status(chat: u32, busy: bool, mode: ChatMode, model: bool) -> (u32, Control) 
         busy,
         mode,
         model: model.then(|| "claude-haiku-4-5".into()),
+        choice: None,
         retry: None,
         compacting: false,
         session: Some(SESSION.into()),
@@ -187,6 +194,12 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     app.send(2, open(&root, Some("../x"), None)).await;
     let not_session = Some("not a session id to resume");
     assert_eq!(app.control().await, closed(2, not_session));
+    let with_model = |model: &str| Control::OpenChat {
+        cwd: root.clone(),
+        resume: None,
+        mode: None,
+        model: Some(model.into()),
+    };
 
     // The first chat in the project asks; a refusal or a close ends it.
     app.send(2, open(&root, None, None)).await;
@@ -321,6 +334,14 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     };
     app.send(4, plan).await;
     assert_eq!(app.control().await, status(4, false, ChatMode::Plan, true));
+    // Only a model claude offered is sent.
+    let model = Control::ChatSetModel {
+        chat: 4,
+        model: "opus".into(),
+    };
+    app.send(4, model).await;
+    let not_offered = "opus is not a model this chat offers.";
+    assert_eq!(app.control().await, error(4, not_offered));
     let answer = Control::ChatAnswer {
         chat: 4,
         request: "req_1".into(),
@@ -344,9 +365,16 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
     assert_eq!(app.control().await, (4, removed));
     assert_eq!(app.control().await, closed(4, None));
 
-    // Allowed once per project; a claude that fails says why.
-    app.send(6, open(&root, None, None)).await;
-    assert_eq!(app.control().await, opened(6, &root, None, default));
+    // Allowed once per project; a claude that fails says why. On the model it is given, the
+    // listed one that runs it chosen.
+    app.send(6, with_model("claude-haiku-4-5")).await;
+    let (_, mut on_haiku) = opened(6, &root, None, default);
+    if let Control::ChatOpened { model, .. } = &mut on_haiku {
+        *model = Some("claude-haiku-4-5".into());
+    }
+    assert_eq!(app.control().await, (6, on_haiku));
+    let args = std::fs::read_to_string(fake.join("args")).unwrap();
+    assert!(args.ends_with("--model\nclaude-haiku-4-5\n"), "{args}");
     send(&mut app, 6, "crash").await;
     let user = entry(1, ChatEntryKind::User, "crash");
     assert_eq!(app.control().await, entries(6, vec![user]));
@@ -381,8 +409,14 @@ async fn a_chat_is_allowed_per_project_then_follows_claudes_stream() {
 
     // A chat still open when the app leaves ends with the service.
     write_claude(&fake, &fake_claude(&fake));
-    app.send(8, open(&root, None, None)).await;
+    // A model that is not a model name is left out.
+    app.send(8, with_model("--help")).await;
     assert_eq!(app.control().await, opened(8, &root, None, default));
+    let args = std::fs::read_to_string(fake.join("args")).unwrap();
+    assert!(
+        !args.contains("--model") && !args.contains("--help"),
+        "{args}"
+    );
     // Live text left waiting when claude pauses is sent when its 50 ms are over.
     send(&mut app, 8, "pause").await;
     let user = entry(1, ChatEntryKind::User, "pause");

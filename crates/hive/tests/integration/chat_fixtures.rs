@@ -4,8 +4,9 @@
 use std::path::Path;
 
 /// The recorder's scenarios, `streaming`: live text (7.3h), written from the documented
-/// shapes (spike 4.14), and `auto-refused`: auto mode refused on haiku (8.4, recorded by hand).
-const SCENARIOS: [&str; 16] = [
+/// shapes (spike 4.14), `auto-refused`: auto mode refused on haiku (8.4, recorded by hand), and
+/// `model-switch`: `set_model` taken, then refused (8.9, recorded by hand; claude 2.1.283).
+const SCENARIOS: [&str; 17] = [
     "text",
     "thinking",
     "tools",
@@ -20,6 +21,7 @@ const SCENARIOS: [&str; 16] = [
     "interrupt",
     "resume",
     "streaming",
+    "model-switch",
     "auto-refused",
     "title",
 ];

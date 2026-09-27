@@ -132,11 +132,16 @@ export interface Transport {
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */
   installUpdate(): Promise<void>;
   /**
-   * Starts a chat (7.3) in the worktree `cwd` (resuming session `resume`) and resolves with its
+   * Starts a chat (7.3) in the worktree `cwd` (resuming session `resume`, on `model`) and resolves with its
    * id, a channel shared with terminals. Answered by `chat_opened` (maybe after
    * `confirm_chat_folder`) or `chat_closed`; then `chat_entries`, `chat_request`, `chat_status`.
    */
-  openChat(cwd: string, resume: string | null, mode: ChatMode | null): Promise<number>;
+  openChat(
+    cwd: string,
+    resume: string | null,
+    mode: ChatMode | null,
+    model: string | null,
+  ): Promise<number>;
   /** A user turn. */
   chatSend(chat: number, text: string, images: ChatImage[]): Promise<void>;
   /** Answers the pending request `request` (its id); answered by `chat_request_gone`. */
@@ -145,6 +150,11 @@ export interface Transport {
   chatInterrupt(chat: number): Promise<void>;
   /** Switches the permission mode; answered by `chat_status`. */
   chatSetMode(chat: number, mode: ChatMode): Promise<void>;
+  /**
+   * Switches to the model `model` (a `value` of `ChatOpened.models`, 8.9); answered by
+   * `chat_status` once Claude takes it, or an `error` entry with Claude's refusal.
+   */
+  chatSetModel(chat: number, model: string): Promise<void>;
   /** Ends the chat; answered by `chat_closed`. */
   closeChat(chat: number): Promise<void>;
   /** The human's answer to `confirm_chat_folder`. */

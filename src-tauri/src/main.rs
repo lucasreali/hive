@@ -73,6 +73,7 @@ fn main() {
             commands::chat_answer,
             commands::chat_interrupt,
             commands::chat_set_mode,
+            commands::chat_set_model,
             commands::close_chat,
             commands::confirm_chat_folder,
         ])

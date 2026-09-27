@@ -84,7 +84,7 @@ test("the sessions open when the app last closed are resumed, one after the othe
   expect(write).toHaveBeenCalledWith(4, "claude --resume a\r");
   expect(notice()).toBe("Cannot resume the session in /r/x: gone");
   // A chat comes back as a chat.
-  expect(chat.mock.calls).toEqual([["/r/y", "c", null]]);
+  expect(chat.mock.calls).toEqual([["/r/y", "c", null, null]]);
   expect(useHive.getState().tabs.at(-1)).toEqual({ id: 6, cwd: "/r/y", kind: "chat" });
   open.mockRestore();
   write.mockRestore();
@@ -200,7 +200,7 @@ test("how long ago, in the largest unit", () => {
 test("a session opens as a chat in its folder, or says why not", async () => {
   const chat = spyOn(transport, "openChat").mockResolvedValueOnce(7).mockRejectedValueOnce("no");
   await openAsChat(stopped);
-  expect(chat.mock.calls).toEqual([[stopped.cwd, stopped.id, null]]);
+  expect(chat.mock.calls).toEqual([[stopped.cwd, stopped.id, null, null]]);
   expect(useHive.getState().activeTab).toBe(7);
   await openAsChat(stopped);
   expect(notice()).toBe(`Cannot open a chat in ${stopped.cwd}: no`);

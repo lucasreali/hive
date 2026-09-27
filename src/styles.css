@@ -1151,6 +1151,11 @@ label:has(> input[type="checkbox"]:disabled) {
   margin-left: auto;
 }
 
+/* Right after the mode selector (8.9). */
+.chat-toolbar .chat-model {
+  margin-left: 0;
+}
+
 .chat-toolbar .chat-icon {
   width: 24px;
   height: 24px;

@@ -13,8 +13,9 @@ export async function openChat(
   cwd: string,
   resume: string | null = null,
   mode: ChatMode | null = null,
+  model: string | null = null,
 ): Promise<number> {
-  const id = await transport.openChat(cwd, resume, mode);
+  const id = await transport.openChat(cwd, resume, mode, model);
   setChat(id, cwd);
   addTab(id, cwd, "chat");
   return id;
@@ -31,13 +32,18 @@ export function closeChat(id: number): void {
 export const chatSession = (chat: Chat | undefined) =>
   chat?.status?.session ?? chat?.opened?.session ?? null;
 
-/** Goes on with an ended chat's session in a new chat, in the same mode, which replaces its tab. */
+/**
+ * Goes on with an ended chat's session in a new chat, in the same mode and on the same model,
+ * which replaces its tab.
+ */
 export async function resumeChat(id: number): Promise<void> {
   const chat = useHive.getState().chats[id];
   const session = chatSession(chat);
   if (!chat || !session) return;
   try {
-    await openChat(chat.cwd, session, chat.status?.mode ?? chat.opened?.mode ?? null);
+    const { status, opened } = chat;
+    const model = status?.model ?? opened?.model ?? null;
+    await openChat(chat.cwd, session, status?.mode ?? opened?.mode ?? null, model);
     closeChat(id);
   } catch (error) {
     setNotice(`Cannot resume the chat in ${chat.cwd}: ${error}`);

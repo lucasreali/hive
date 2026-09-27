@@ -12,6 +12,7 @@ import {
 import {
   type ChatDraft,
   type ChatMode,
+  type ChatModel,
   EMPTY_DRAFT,
   setDraft,
   setMentioning,
@@ -32,6 +33,7 @@ export const MODES: { value: ChatMode; label: string }[] = [
 ];
 
 const NO_COMMANDS: string[] = [];
+const NO_MODELS: ChatModel[] = [];
 const NO_FILES: string[] = [];
 
 /** A worktree listing's files and the folders holding them (ending in `/`), sorted. */
@@ -99,6 +101,10 @@ export async function base64(file: Blob): Promise<string> {
  * selected stops a running turn or, idle, clears the composer. The mode selector shows the service's mode and asks it for another;
  * Shift+Tab asks for the next one, like the CLI (8.4). A mode Claude refuses is not taken: the
  * service shows Claude's message in the chat.
+ * The model selector (8.9) lists the models Claude offers and shows the one the chat runs; a
+ * pick asks the service, which follows once Claude takes it (a refusal is an error entry).
+ * Until the service names the listed model that runs the chat, it shows the model, else "Model".
+ * Auto is offered only when that model offers it (unknown: offered), or while it is the mode.
  */
 export function ChatComposer({ chat }: { chat: number }) {
   const draft = useHive((s) => s.drafts[chat] ?? EMPTY_DRAFT);
@@ -120,6 +126,14 @@ export function ChatComposer({ chat }: { chat: number }) {
   const ready = useHive((s) => !!s.chats[chat]?.opened && !s.chats[chat]?.closed);
   const mode = useHive((s) => s.chats[chat]?.status?.mode ?? s.chats[chat]?.opened?.mode);
   const commands = useHive((s) => s.chats[chat]?.opened?.commands ?? NO_COMMANDS);
+  const models = useHive((s) => s.chats[chat]?.opened?.models ?? NO_MODELS);
+  const choice = useHive((s) => s.chats[chat]?.status?.choice ?? null);
+  const model = useHive((s) => s.chats[chat]?.status?.model ?? s.chats[chat]?.opened?.model);
+  const offered = models.map(({ value, name }) => ({ value, label: name }));
+  const unknown = { value: "", label: model ?? "Model" };
+  // Auto only where the chat's model offers it (8.4, 8.9), kept while it is the mode.
+  const auto = models.find((m) => m.value === choice)?.auto ?? true;
+  const modes = MODES.filter((m) => m.value !== "auto" || auto || mode === "auto");
   const cwd = useHive((s) => s.chats[chat]?.cwd);
   // Only a worktree's files are offered, relative to it: the chat must run at its root.
   const worktree = useHive((s) =>
@@ -215,8 +229,8 @@ export function ChatComposer({ chat }: { chat: number }) {
       setActive((at + move + matches.length) % matches.length);
     } else if (event.key === "Tab" && event.shiftKey) {
       event.preventDefault();
-      const current = MODES.findIndex((m) => m.value === mode);
-      void transport.chatSetMode(chat, MODES[(current + 1) % MODES.length]?.value ?? "default");
+      const current = modes.findIndex((m) => m.value === mode);
+      void transport.chatSetMode(chat, modes[(current + 1) % modes.length]?.value ?? "default");
     } else if (listed && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
       event.preventDefault();
       pick(matches[at]);
@@ -399,10 +413,21 @@ export function ChatComposer({ chat }: { chat: number }) {
           className="chat-mode"
           aria-label="Permission mode"
           value={mode ?? "default"}
-          options={MODES}
+          options={modes}
           disabled={!ready}
           onChange={(value) => void transport.chatSetMode(chat, value as ChatMode)}
         />
+        {models.length > 0 && (
+          <Select
+            className="chat-mode chat-model"
+            aria-label="Model"
+            value={choice ?? ""}
+            options={choice === null ? [unknown, ...offered] : offered}
+            disabled={!ready}
+            // "" (the model before one is listed) is never picked: it shows only while current.
+            onChange={(value) => void transport.chatSetModel(chat, value)}
+          />
+        )}
         {busy ? (
           <button
             type="button"

@@ -52,7 +52,7 @@ test("the + menu opens an agent or a new file in the selected worktree", async (
   // Agent: the in-app chat (7.3).
   newTab("Agent");
   expect(screen.queryByRole("menu")).toBeNull();
-  expect(open.mock.calls).toEqual([[fixLogin.path, null, null]]);
+  expect(open.mock.calls).toEqual([[fixLogin.path, null, null, null]]);
   await waitFor(() => expect(screen.getByRole("region", { name: "Chat" })).toBeDefined());
 
   newTab("New file…");

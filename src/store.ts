@@ -378,6 +378,8 @@ export type ChatAnswer =
   | { kind: "answers"; answers: string[][] }
   | { kind: "approve_plan"; accept_edits: boolean }
   | { kind: "keep_planning"; feedback: string };
+/** A model Claude offers (8.9): `value` goes to `chatSetModel`, `name` is shown, `auto`: it offers auto mode. */
+export type ChatModel = { value: string; name: string; auto: boolean };
 export type ChatOpened = {
   chat: number;
   cwd: string;
@@ -385,6 +387,8 @@ export type ChatOpened = {
   model: string | null;
   mode: ChatMode;
   commands: string[];
+  /** The models Claude offers, for the model selector (8.9). */
+  models: ChatModel[];
   /** Set when the chat runs on an API key rather than the subscription login. */
   api_key_source: string | null;
 };
@@ -392,7 +396,10 @@ export type ChatStatus = {
   chat: number;
   busy: boolean;
   mode: ChatMode;
+  /** The model Claude runs, for the header. */
   model: string | null;
+  /** The entry of `ChatOpened.models` that runs it (its `value`), for the selector. */
+  choice: string | null;
   /** A transient API retry, e.g. "Retrying 2/10…". */
   retry: string | null;
   compacting: boolean;

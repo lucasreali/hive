@@ -40,6 +40,7 @@ const opened: ServiceMessage = {
   model: null,
   mode: "default",
   commands: [],
+  models: [],
   api_key_source: null,
 };
 
@@ -70,6 +71,7 @@ test("a chat tab shows the chat in place of the terminals, from start to end", (
       busy: true,
       mode: "default",
       model: null,
+      choice: null,
       retry: null,
       compacting: false,
       api_key_source: null,
@@ -139,7 +141,7 @@ test("an ended chat with a session offers to resume it in its place", async () =
   act(() => apply({ type: "chat_closed", channel: 5, chat: 5, error: null }));
   expect(screen.getByText("The chat ended.")).toBeDefined();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Resume" })));
-  expect(open.mock.calls).toEqual([["/w", "s-1", "default"]]);
+  expect(open.mock.calls).toEqual([["/w", "s-1", "default", null]]);
   expect(useHive.getState().tabs).toEqual([{ id: 6, cwd: "/w", kind: "chat" }]);
 });
 
@@ -203,6 +205,7 @@ test("the header shows the model and mode, what else runs, and warns of an API k
     busy: true,
     mode: "plan",
     model: "claude-haiku-4-5",
+    choice: null,
     retry: null,
     compacting: false,
     session: null,

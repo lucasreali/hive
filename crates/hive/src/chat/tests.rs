@@ -1,11 +1,12 @@
 use super::*;
+use crate::transcript::LONG_CONTEXT_LIMIT;
 use ChatEntryKind::*;
 
 const SESSION: &str = "9f1c2b7e-5d3a-4c1e-8b2f-0a6d4e8c1f00";
 const CWD: &str = "/home/u/proj";
 
 fn stream() -> Stream {
-    let mut stream = Stream::new(7, CWD.into(), ChatMode::Default, None);
+    let mut stream = Stream::new(7, CWD.into(), ChatMode::Default, None, None);
     let initialize = stream.initialize();
     assert_eq!(
         initialize,
@@ -74,6 +75,7 @@ fn status(busy: bool, session: bool) -> Control {
         busy,
         mode: ChatMode::Default,
         model: session.then(|| "claude-haiku-4-5".into()),
+        choice: None,
         retry: None,
         compacting: false,
         session: session.then(|| SESSION.into()),
@@ -114,10 +116,18 @@ fn claude_runs_headless_with_hives_hooks() {
         args.extend(rest.iter().map(OsString::from));
         args
     };
-    assert_eq!(args(settings, ChatMode::Plan, None), expected("plan", &[]));
     assert_eq!(
-        args(settings, ChatMode::AcceptEdits, Some(SESSION)),
-        expected("acceptEdits", &["--resume", SESSION])
+        args(settings, ChatMode::Plan, None, None),
+        expected("plan", &[])
+    );
+    assert_eq!(
+        args(
+            settings,
+            ChatMode::AcceptEdits,
+            Some("opus[1m]"),
+            Some(SESSION)
+        ),
+        expected("acceptEdits", &["--model", "opus[1m]", "--resume", SESSION])
     );
 }
 
@@ -487,6 +497,11 @@ fn a_text_turn_opens_the_chat_then_shows_the_reply_and_its_usage() {
         model: None,
         mode: ChatMode::Default,
         commands: vec!["compact".into()],
+        models: vec![ChatModel {
+            value: "haiku".into(),
+            name: "Haiku".into(),
+            auto: false,
+        }],
         api_key_source: None,
     };
     let reply = "Git worktrees let one repository have several checkouts at once. \
@@ -537,7 +552,7 @@ fn only_a_replayed_prompt_of_the_main_thread_says_claude_took_it() {
 
 #[test]
 fn a_resumed_chat_keeps_its_session_and_writes_as_default() {
-    let mut stream = Stream::new(7, CWD.into(), ChatMode::Plan, Some(SESSION.into()));
+    let mut stream = Stream::new(7, CWD.into(), ChatMode::Plan, None, Some(SESSION.into()));
     stream.initialize();
     let out = replay(&mut stream, "resume");
     let Some(Control::ChatOpened { session, mode, .. }) = out.app.first() else {
@@ -1441,6 +1456,7 @@ fn the_end_of_a_turn_clears_its_transient_status() {
         busy: false,
         mode: ChatMode::Default,
         model: None,
+        choice: None,
         retry: Some("Retrying 2/9…".into()),
         compacting: true,
         session: None,
@@ -1453,6 +1469,7 @@ fn the_end_of_a_turn_clears_its_transient_status() {
         busy: false,
         mode: ChatMode::Default,
         model: None,
+        choice: None,
         retry: None,
         compacting: false,
         session: None,
@@ -1559,7 +1576,7 @@ fn the_initialize_answer_opens_once_even_when_it_failed() {
         Out::default()
     );
     // Before `initialize` is sent, nothing is ours.
-    let mut fresh = Stream::new(7, CWD.into(), ChatMode::Default, None);
+    let mut fresh = Stream::new(7, CWD.into(), ChatMode::Default, None, None);
     let answer = json!({"type": "control_response", "response": {}});
     assert_eq!(
         fresh.line(Some(answer.to_string().as_bytes())),
@@ -1661,6 +1678,7 @@ fn changed_commands_open_the_chat_again_with_the_new_list() {
             model: Some("claude-haiku-4-5".into()),
             mode: ChatMode::Default,
             commands: vec!["review".into(), "deploy".into()],
+            models: vec![],
             api_key_source: Some("apiKeyHelper".into()),
         }]
     );
@@ -1774,6 +1792,229 @@ fn turns_modes_and_interrupts_are_written_to_claude() {
     assert!(stream.set_mode(ChatMode::AcceptEdits).app.is_empty());
 }
 
+#[test]
+fn model_names_are_short_and_never_options() {
+    let long = "m".repeat(MAX_ID);
+    for good in [
+        "opus",
+        "claude-opus-5-5[1m]",
+        "claude-haiku-4-5-20251001",
+        "us.anthropic.claude-opus-4-8-v1:0",
+        "claude-opus-4@20250514",
+        "9",
+        long.as_str(),
+    ] {
+        assert!(is_model(good), "{good}");
+    }
+    let longer = "m".repeat(MAX_ID + 1);
+    for bad in [
+        "",
+        "--help",
+        "-m",
+        "[1m]",
+        ".opus",
+        "opus sonnet",
+        "opus;rm",
+        "opus/x",
+        "ópus",
+        longer.as_str(),
+    ] {
+        assert!(!is_model(bad), "{bad}");
+    }
+}
+
+#[test]
+fn the_model_list_is_bounded_and_named() {
+    let mut list = vec![
+        json!({"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus",
+               "supportsAutoMode": true}),
+        json!({"value": "--bad", "displayName": "Bad"}),
+        json!({"value": "sonnet", "resolvedModel": "--bad", "displayName": " \u{200b} "}),
+        json!({"value": "haiku", "displayName": "h".repeat(MAX_ID + 1)}),
+        json!("fable"),
+    ];
+    list.extend((0..MAX_CHOICES).map(|i| json!({"value": format!("m{i}")})));
+    let models = models(&Value::Array(list));
+    let listed = |value: &str, name: &str, model: &str| {
+        let listed = ChatModel {
+            value: value.into(),
+            name: name.into(),
+            auto: value == "opus",
+        };
+        (listed, model.to_owned())
+    };
+    assert_eq!(models.len(), MAX_CHOICES - 2);
+    assert_eq!(
+        models[..3],
+        [
+            listed("opus", "Opus", "claude-opus-5-5"),
+            listed("sonnet", "sonnet", "sonnet"),
+            listed("haiku", &clip(&"h".repeat(MAX_ID + 1), MAX_ID), "haiku"),
+        ]
+    );
+    assert_eq!(
+        models.last().unwrap().0.value,
+        format!("m{}", MAX_CHOICES - 6)
+    );
+    assert!(super::models(&json!({"value": "opus"})).is_empty());
+}
+
+fn fixture_lines(name: &str) -> Vec<String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chat");
+    let text = std::fs::read_to_string(dir.join(format!("{name}.jsonl"))).unwrap();
+    text.lines().map(str::to_owned).collect()
+}
+
+fn model_status(model: &str, choice: Option<&str>, session: bool) -> Control {
+    Control::ChatStatus {
+        chat: 7,
+        busy: false,
+        mode: ChatMode::Default,
+        model: Some(model.into()),
+        choice: choice.map(str::to_owned),
+        retry: None,
+        compacting: false,
+        session: session.then(|| SESSION.into()),
+        api_key_source: None,
+    }
+}
+
+fn set_model_line(id: u32, model: &str) -> Value {
+    json!({"type": "control_request", "request_id": format!("hive-{id}"),
+           "request": {"subtype": "set_model", "model": model}})
+}
+
+#[test]
+fn a_model_switch_follows_claudes_answer() {
+    // Recorded (claude 2.1.283, started with `--model haiku`).
+    let lines = fixture_lines("model-switch");
+    let mut stream = stream();
+    let windows = Windows::default();
+    // Nothing is sent before claude lists its models.
+    assert!(matches!(
+        &stream.set_model("haiku", &windows).app[..],
+        [Control::Error { .. }]
+    ));
+    let out = stream.line(Some(lines[0].as_bytes()));
+    let Some(Control::ChatOpened { models, .. }) = out.app.first() else {
+        panic!("not opened: {out:?}")
+    };
+    let names: Vec<(&str, &str, bool)> = models
+        .iter()
+        .map(|m| (m.value.as_str(), m.name.as_str(), m.auto))
+        .collect();
+    // Haiku has no auto mode.
+    assert_eq!(
+        names,
+        [
+            ("default", "Default (recommended)", true),
+            ("opus", "Opus 5.5", true),
+            ("sonnet", "Sonnet 5", true),
+            ("haiku", "Haiku 4.5", false),
+        ]
+    );
+    let out = stream.line(Some(lines[1].as_bytes()));
+    let haiku = "claude-haiku-4-5-20251001";
+    assert_eq!(out.app, [model_status(haiku, Some("haiku"), true)]);
+
+    // Taken: the model, the selector and the context window follow claude's answer.
+    let out = stream.set_model("sonnet", &windows);
+    assert_eq!(
+        out,
+        Out {
+            write: vec![set_model_line(2, "sonnet")],
+            ..Out::default()
+        }
+    );
+    // claude's own "Set model to …" line is a replay: not shown, only taken (as `/rename`'s,
+    // which may name the session, 8.11).
+    let taken = Out {
+        prompted: true,
+        ..Out::default()
+    };
+    assert_eq!(stream.line(Some(lines[2].as_bytes())), taken);
+    let out = stream.line(Some(lines[3].as_bytes()));
+    let sonnet = model_status("claude-sonnet-5", Some("sonnet"), true);
+    assert_eq!(out.app, std::slice::from_ref(&sonnet));
+    assert_eq!(out.window, Some(LONG_CONTEXT_LIMIT));
+    assert_eq!(stream.line(Some(lines[4].as_bytes())), Out::default());
+
+    // Refused: claude's message, and the model stays.
+    stream.set_model("haiku", &windows);
+    let out = stream.line(Some(lines[5].as_bytes()));
+    let refused = "Model 'no-such-model-hive-spike' not found";
+    assert_eq!(kinds(&out), [(Error, refused.into())]);
+    assert_eq!((statuses(&out), out.window), (vec![], None));
+    assert_eq!(stream.status(), sonnet);
+    // Answered once.
+    assert_eq!(stream.line(Some(lines[3].as_bytes())), Out::default());
+}
+
+#[test]
+fn a_switch_takes_the_new_models_window_and_only_its_own_answer() {
+    let lines = fixture_lines("model-switch");
+    let mut stream = stream();
+    stream.line(Some(lines[0].as_bytes()));
+    let mut windows = Windows::default();
+    let answer = |id: u32| {
+        let answer = json!({"type": "control_response",
+                            "response": {"subtype": "success", "request_id": format!("hive-{id}")}});
+        answer.to_string()
+    };
+    // Not learned yet: the usual window.
+    stream.set_model("haiku", &windows);
+    let out = stream.line(Some(answer(2).as_bytes()));
+    assert_eq!(out.window, Some(CONTEXT_LIMIT));
+    windows.learn("claude-haiku-4-5-20251001", 150_000);
+    stream.set_model("haiku", &windows);
+    // Only the last switch's answer counts.
+    stream.set_model("opus", &windows);
+    assert_eq!(stream.line(Some(answer(3).as_bytes())), Out::default());
+    let out = stream.line(Some(answer(4).as_bytes()));
+    assert_eq!(
+        out.app,
+        [model_status("claude-opus-5-5", Some("opus"), false)]
+    );
+    stream.set_model("haiku", &windows);
+    let out = stream.line(Some(answer(5).as_bytes()));
+    assert_eq!(out.window, Some(150_000));
+}
+
+#[test]
+fn the_chosen_model_is_kept_while_it_runs_the_chat() {
+    let lines = fixture_lines("model-switch");
+    let init = |model: &str| {
+        let init = json!({"type": "system", "subtype": "init", "model": model});
+        init.to_string()
+    };
+    // Given by alias (`--model sonnet`): chosen as soon as claude lists its models.
+    let mut stream = Stream::new(
+        7,
+        CWD.into(),
+        ChatMode::Default,
+        Some("sonnet".into()),
+        None,
+    );
+    stream.initialize();
+    stream.line(Some(lines[0].as_bytes()));
+    assert_eq!(stream.choice.as_deref(), Some("sonnet"));
+    // Opus and Default run the same model: the one chosen stays.
+    stream.set_model("opus", &Windows::default());
+    let taken =
+        r#"{"type":"control_response","response":{"subtype":"success","request_id":"hive-2"}}"#;
+    stream.line(Some(taken.as_bytes()));
+    stream.line(Some(init("claude-opus-5-5").as_bytes()));
+    assert_eq!(stream.choice.as_deref(), Some("opus"));
+    // A model claude runs by itself (e.g. `/model` in a turn): the first listed that runs it.
+    stream.line(Some(init("claude-haiku-4-5-20251001").as_bytes()));
+    assert_eq!(stream.choice.as_deref(), Some("haiku"));
+    stream.line(Some(init("claude-opus-5-5").as_bytes()));
+    assert_eq!(stream.choice.as_deref(), Some("default"));
+    // One not listed: none.
+    stream.line(Some(init("claude-opus-4-1").as_bytes()));
+    assert_eq!(stream.choice, None);
+}
+
 fn modes(out: &Out) -> Vec<ChatMode> {
     let modes = statuses(out).into_iter().filter_map(|status| match status {
         Control::ChatStatus { mode, .. } => Some(mode),
@@ -1848,8 +2089,11 @@ fn unanswered_mode_switches_are_bounded() {
 
 #[test]
 fn claude_started_in_auto_reports_it() {
-    let mut stream = Stream::new(7, CWD.into(), ChatMode::Auto, None);
-    assert_eq!(args(Path::new("/s"), ChatMode::Auto, None)[11], "auto");
+    let mut stream = Stream::new(7, CWD.into(), ChatMode::Auto, None, None);
+    assert_eq!(
+        args(Path::new("/s"), ChatMode::Auto, None, None)[11],
+        "auto"
+    );
     feed(
         &mut stream,
         r#"{"type":"system","subtype":"init","permissionMode":"auto"}"#,
@@ -1922,7 +2166,7 @@ fn a_chat_that_failed_says_why() {
 
 /// Starts `sh -c script` as a chat's `claude`.
 fn start(script: &str, dir: &Path, env: &[(&'static str, String)]) -> (Chat, Pipes) {
-    let stream = Stream::new(7, dir.display().to_string(), ChatMode::Default, None);
+    let stream = Stream::new(7, dir.display().to_string(), ChatMode::Default, None, None);
     let args = ["-c", script].map(OsString::from);
     let cwd = dir.to_str().unwrap();
     Chat::start(stream, Path::new("/bin/sh"), &args, cwd, env).unwrap()
@@ -1989,7 +2233,7 @@ while read -r line; do printf 'got %s\n' "$line"; done"#;
 #[tokio::test]
 async fn a_missing_program_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
-    let stream = Stream::new(7, "/".into(), ChatMode::Default, None);
+    let stream = Stream::new(7, "/".into(), ChatMode::Default, None, None);
     let missing = dir.path().join("claude");
     let started = Chat::start(stream, &missing, &[], "/", &[]);
     assert_eq!(started.err().unwrap().kind(), io::ErrorKind::NotFound);

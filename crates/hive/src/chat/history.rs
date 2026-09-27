@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn a_transcript_becomes_the_chats_first_entries() {
-        let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None);
+        let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None, None);
         let bash = json!({"type": "tool_use", "id": "t1", "name": "Bash",
                           "input": {"command": "ls"}});
         let records = lines(&[
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn the_images_sent_come_back_with_their_message() {
-        let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None);
+        let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None, None);
         let png = "iVBORw0KGgo=";
         let gif = "R0lGODlh";
         // Exactly the limit: a PNG signature padded to 3 MiB of base64.
@@ -171,7 +171,8 @@ mod tests {
         let records = lines(&[json!({"type": "user", "message": {"content": [
             {"type": "text", "text": wide}, block(&big),
         ]}})]);
-        let out = Stream::new(3, "/r".into(), ChatMode::Default, None).history(&records, false);
+        let out =
+            Stream::new(3, "/r".into(), ChatMode::Default, None, None).history(&records, false);
         assert_eq!(entries(&out)[0].images.len(), 1);
         let json = serde_json::to_vec(&out.app[0]).unwrap();
         assert!(json.len() <= hive_protocol::MAX_PAYLOAD, "{}", json.len());
@@ -179,7 +180,7 @@ mod tests {
 
     #[test]
     fn what_the_history_left_open_does_not_reach_the_live_turn() {
-        let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None);
+        let mut stream = Stream::new(3, "/r".into(), ChatMode::Default, None, None);
         let records = lines(&[
             json!({"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},

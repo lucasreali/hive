@@ -976,7 +976,7 @@ test("?mock=deny-auto refuses auto mode as claude does", async () => {
   const transport = createMockTransport("deny-auto");
   const messages: ServiceMessage[] = [];
   await transport.connect((m) => messages.push(m));
-  const chat = await transport.openChat("/w", null, null);
+  const chat = await transport.openChat("/w", null, null, null);
   await tick();
   await transport.confirmChatFolder(chat, "/w", true);
   await tick();
@@ -988,7 +988,7 @@ test("?mock=deny-auto refuses auto mode as claude does", async () => {
 
 test("chats share the terminals' ids and play the scripted chat", async () => {
   const { transport, messages } = await opened();
-  const chat = await transport.openChat("/w", null, null);
+  const chat = await transport.openChat("/w", null, null, null);
   expect(chat).toBe(2);
   await tick();
   expect(messages.at(-1)).toEqual({ type: "confirm_chat_folder", channel: 2, chat: 2, cwd: "/w" });
@@ -998,6 +998,9 @@ test("chats share the terminals' ids and play the scripted chat", async () => {
   await transport.chatSetMode(chat, "plan");
   await tick();
   expect(messages.at(-1)).toMatchObject({ type: "chat_status", mode: "plan" });
+  await transport.chatSetModel(chat, "sonnet");
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "chat_status", choice: "sonnet" });
   await transport.chatSend(chat, "permission", []);
   await tick();
   expect(messages.at(-3)).toMatchObject({ type: "chat_status", busy: true });

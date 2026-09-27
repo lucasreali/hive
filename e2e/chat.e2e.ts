@@ -110,6 +110,7 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
       input,
       chat.getByRole("button", { name: "Attach image" }),
       chat.getByRole("combobox", { name: "Permission mode" }),
+      chat.getByRole("combobox", { name: "Model" }),
       chat.getByRole("button", { name: "Send" }),
     ].map((part) => part.boundingBox()),
   );
@@ -123,12 +124,16 @@ test("chat: a pasted image shows as a thumbnail, is sent, and opens larger", asy
       (box?.y as number) + (box?.height as number),
     );
   }
-  const [, message, attach, mode, send] = inner;
+  const [, message, attach, mode, model, send] = inner;
   const middle = (b: typeof box) => (b?.y as number) + (b?.height as number) / 2;
   expect(Math.abs(middle(mode) - middle(send))).toBeLessThan(2);
   expect(Math.abs(middle(attach) - middle(send))).toBeLessThan(2);
   expect(mode?.y).toBeGreaterThan((message?.y as number) + (message?.height as number) - 1);
   expect(send?.x).toBeGreaterThan(mode?.x as number);
+  // The model selector sits next to the mode's (8.9).
+  expect(Math.abs(middle(model) - middle(send))).toBeLessThan(2);
+  expect(model?.x).toBeGreaterThan(mode?.x as number);
+  expect(send?.x).toBeGreaterThan(model?.x as number);
 
   // A second image: the message with both is one "You" row, its thumbnails side by side (8.18).
   await paste();
@@ -268,6 +273,34 @@ test("chat: the header shows model and mode, Esc stops a turn, / lists the comma
   await input.press("Escape");
   await expect(commands).toBeHidden();
   await expect(input).toHaveValue("/r");
+});
+
+test("chat: the model selector switches the model; a refused one keeps it", async ({ page }) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await page.getByTitle("New terminal, agent or file").click();
+  await page.getByRole("menuitem", { name: "Agent" }).click();
+  await page.getByRole("button", { name: "Start chat" }).click();
+  const chat = page.getByRole("region", { name: "Chat" });
+  const model = chat.getByRole("combobox", { name: "Model" });
+  await expect(model).toHaveText("Default (recommended)");
+  await model.click();
+  await expect(page.getByRole("option")).toHaveText([
+    "Default (recommended)",
+    "Sonnet",
+    "Opus (1M context)",
+  ]);
+  await page.getByRole("option", { name: "Sonnet" }).click();
+  // The selector and the header follow the service.
+  await expect(model).toHaveText("Sonnet");
+  await expect(chat.locator(".chat-meta")).toHaveText("claude-mock-sonnet · Default");
+  // The mock refuses this one, as Claude refuses a model: its message shows, the model stays.
+  await model.click();
+  await page.getByRole("option", { name: "Opus (1M context)" }).click();
+  await expect(chat.locator('[data-role="error"]')).toContainText("Model 'opus[1m]' not found");
+  await expect(model).toHaveText("Sonnet");
+  await expect(chat.locator(".chat-meta")).toHaveText("claude-mock-sonnet · Default");
 });
 
 test("chat: a session opens as a chat with its history, and an ended chat resumes", async ({
