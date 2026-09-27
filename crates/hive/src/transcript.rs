@@ -2,6 +2,7 @@
 //! Code writes beside its agent's: `<session id>/subagents/agent-<agent_id>.jsonl` next to
 //! `<session id>.jsonl`. Transcripts are only read, never written.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -223,10 +224,23 @@ fn read_lines(root: &Path, path: &Path, offset: &mut u64) -> io::Result<(Vec<u8>
 
 /// Largest token count taken from one usage field; a larger one counts as 0.
 const TOKEN_LIMIT: u64 = 100_000_000;
-/// The usual context window.
+/// The usual context window, assumed for a model whose window is not known.
 pub const CONTEXT_LIMIT: u64 = 200_000;
 /// The long context window.
 pub const LONG_CONTEXT_LIMIT: u64 = 1_000_000;
+/// Models whose window is 1M without the `[1m]` suffix, by model id prefix: Claude Code
+/// 2.1.283's `result.modelUsage` gave 1M for a plain `claude-opus-5-5` and `claude-sonnet-5`
+/// (200k for `claude-haiku-4-5-20251001`), and the models overview gives 1M as the default
+/// window of the Opus 5 and Fable/Mythos 5 families. Opus/Sonnet 4.x are left to [`Windows`]
+/// and the growth rule: Claude Code has run them at 200k unless asked for `[1m]`.
+const LONG_MODELS: [&str; 4] = [
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+];
+/// Most models whose window is remembered.
+const MAX_MODELS: usize = 64;
 /// Longest message id remembered.
 const MESSAGE_ID_LIMIT: usize = 128;
 
@@ -239,6 +253,8 @@ pub struct Tokens {
     pub output: u64,
     /// The context went past [`CONTEXT_LIMIT`] once.
     long: bool,
+    /// The model of the last counted message (`message.model`, never with a `[1m]` suffix).
+    model: Option<String>,
     /// The last counted message's id and output: Claude writes a message's content blocks as
     /// separate records repeating its usage, so a message is counted once.
     last: Option<(String, u64)>,
@@ -268,6 +284,10 @@ impl Tokens {
         }
         self.context = context;
         self.long |= context > CONTEXT_LIMIT;
+        let model = record.pointer("/message/model").and_then(Value::as_str);
+        if let Some(model) = model.filter(|m| m.len() <= MESSAGE_ID_LIMIT) {
+            self.model = Some(model.to_owned());
+        }
         let output = count("output_tokens");
         let id = record.pointer("/message/id").and_then(Value::as_str);
         match (&mut self.last, id.filter(|id| id.len() <= MESSAGE_ID_LIMIT)) {
@@ -282,15 +302,40 @@ impl Tokens {
         }
     }
 
-    /// The context window assumed.
-    // ponytail: guessed from the context seen, 1M once it went past 200k; the real window
-    // only reaches the statusline, not hooks or transcripts.
-    pub fn limit(&self) -> u64 {
-        if self.long {
-            LONG_CONTEXT_LIMIT
-        } else {
-            CONTEXT_LIMIT
+    /// The context window: `known`, else the window of the session's model in `windows`,
+    /// else [`CONTEXT_LIMIT`]; at least 1M once the context went past 200k.
+    pub fn limit(&self, known: Option<u64>, windows: &Windows) -> u64 {
+        let model = self.model.as_deref();
+        let window = known.or_else(|| model.and_then(|model| windows.of(model)));
+        let window = window.unwrap_or(CONTEXT_LIMIT);
+        match self.long {
+            true => window.max(LONG_CONTEXT_LIMIT),
+            false => window,
         }
+    }
+}
+
+/// Context windows by model id, learned from the `result.modelUsage` of Hive's chats: the
+/// transcripts and hook payloads do not carry them.
+#[derive(Debug, Default)]
+pub struct Windows(HashMap<String, u64>);
+
+impl Windows {
+    /// Remembers `model`'s window: ids up to [`MESSAGE_ID_LIMIT`] bytes, windows up to
+    /// [`TOKEN_LIMIT`], at most [`MAX_MODELS`] models.
+    pub fn learn(&mut self, model: &str, window: u64) {
+        let room = self.0.contains_key(model) || self.0.len() < MAX_MODELS;
+        if room && model.len() <= MESSAGE_ID_LIMIT && (1..=TOKEN_LIMIT).contains(&window) {
+            self.0.insert(model.to_owned(), window);
+        }
+    }
+
+    /// The window of `model`: learned, else 1M for a `[1m]` variant or a model of
+    /// [`LONG_MODELS`]; unknown otherwise.
+    pub fn of(&self, model: &str) -> Option<u64> {
+        let long = model.ends_with("[1m]") || LONG_MODELS.iter().any(|m| model.starts_with(m));
+        let learned = self.0.get(model).copied();
+        learned.or(long.then_some(LONG_CONTEXT_LIMIT))
     }
 }
 
@@ -304,6 +349,9 @@ pub struct Usage {
     tokens: Tokens,
     /// The context, its limit and the output last sent to the app.
     sent: Option<(u64, u64, u64)>,
+    /// The session's window when its chat told it (the current model's `contextWindow` in a
+    /// `result`); it wins over the window of the transcript's model.
+    pub window: Option<u64>,
     /// Read once: what was there before the agent was detected is not news.
     primed: bool,
     /// The last read ended the main conversation on an interrupt (see [`Usage::interrupted`]).
@@ -313,8 +361,15 @@ pub struct Usage {
 impl Usage {
     /// Reads what the transcript at `path` (inside `root`) gained and returns the agent's new
     /// `agent_usage` when it changed. At first only the last [`READ_LIMIT`] bytes are read,
-    /// so the output of a longer transcript's start is not counted.
-    pub fn read(&mut self, id: &str, root: &Path, path: &Path) -> Option<Control> {
+    /// so the output of a longer transcript's start is not counted. A window change alone is
+    /// news too.
+    pub fn read(
+        &mut self,
+        id: &str,
+        root: &Path,
+        path: &Path,
+        windows: &Windows,
+    ) -> Option<Control> {
         self.due = false;
         let (bytes, _, restarted) = read_lines(root, path, &mut self.offset).ok()?;
         if restarted {
@@ -329,7 +384,8 @@ impl Usage {
         }
         self.interrupted = self.primed && end == Some(crate::sessions::Ending::Interrupted);
         self.primed = true;
-        let now = (self.tokens.context, self.tokens.limit(), self.tokens.output);
+        let limit = self.tokens.limit(self.window, windows);
+        let now = (self.tokens.context, limit, self.tokens.output);
         if self.tokens.context == 0 || self.sent == Some(now) {
             return None;
         }
@@ -680,11 +736,92 @@ mod tests {
 
     #[test]
     fn the_context_limit_grows_once_the_context_passed_it() {
+        let none = Windows::default();
         let context = |n: u64| turn(None, json!({"input_tokens": n}));
         let at = counted(&[context(CONTEXT_LIMIT)]);
-        assert_eq!(at.limit(), CONTEXT_LIMIT);
+        assert_eq!(at.limit(None, &none), CONTEXT_LIMIT);
         let past = counted(&[context(CONTEXT_LIMIT + 1), context(10)]);
-        assert_eq!((past.context, past.limit()), (10, LONG_CONTEXT_LIMIT));
+        assert_eq!(
+            (past.context, past.limit(None, &none)),
+            (10, LONG_CONTEXT_LIMIT)
+        );
+        // A known window grows to 1M too, and a larger one stays.
+        assert_eq!(past.limit(Some(CONTEXT_LIMIT), &none), LONG_CONTEXT_LIMIT);
+        assert_eq!(past.limit(Some(2_000_000), &none), 2_000_000);
+    }
+
+    fn by(model: &str, input: u64) -> Value {
+        json!({"type": "assistant", "message": {"model": model, "usage": {"input_tokens": input}}})
+    }
+
+    #[test]
+    fn the_context_limit_is_the_window_of_the_sessions_model() {
+        let none = Windows::default();
+        // Claude Code 2.1.283: an Opus 5.5 session at 52.9k is 5% of 1M, a Haiku one 200k.
+        let opus = counted(&[by("claude-opus-5-5", 52_900)]);
+        assert_eq!(opus.limit(None, &none), LONG_CONTEXT_LIMIT);
+        assert_eq!(opus.context * 100 / opus.limit(None, &none), 5);
+        let haiku = counted(&[by("claude-haiku-4-5-20251001", 52_900)]);
+        assert_eq!(haiku.limit(None, &none), CONTEXT_LIMIT);
+        // The last counted message's model; a synthetic one without context is not counted.
+        let switched = counted(&[
+            by("claude-haiku-4-5-20251001", 10),
+            by("claude-sonnet-5", 10),
+            by("<synthetic>", 0),
+        ]);
+        assert_eq!(switched.limit(None, &none), LONG_CONTEXT_LIMIT);
+        // An id too long is not kept.
+        let long = format!("claude-opus-5-{}", "x".repeat(MESSAGE_ID_LIMIT));
+        let unknown = counted(&[by("claude-opus-5", 10), by(&long, 10)]);
+        assert_eq!(unknown.limit(None, &none), LONG_CONTEXT_LIMIT);
+        let longest = format!("claude-haiku-{}", "x".repeat(MESSAGE_ID_LIMIT - 13));
+        let kept = counted(&[by("claude-opus-5", 10), by(&longest, 10)]);
+        assert_eq!(kept.limit(None, &none), CONTEXT_LIMIT);
+        // The window a chat told wins; a learned one wins over the table.
+        assert_eq!(opus.limit(Some(300_000), &none), 300_000);
+        let mut learned = Windows::default();
+        learned.learn("claude-opus-5-5", 500_000);
+        assert_eq!(opus.limit(None, &learned), 500_000);
+    }
+
+    #[test]
+    fn windows_are_learned_within_bounds_and_known_by_name() {
+        let mut windows = Windows::default();
+        // Not learned: 1M for a `[1m]` variant and the long models, unknown otherwise.
+        assert_eq!(windows.of("claude-opus-5-5[1m]"), Some(LONG_CONTEXT_LIMIT));
+        assert_eq!(
+            windows.of("claude-sonnet-4-6[1m]"),
+            Some(LONG_CONTEXT_LIMIT)
+        );
+        for model in [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-fable-5-1",
+            "claude-mythos-5",
+        ] {
+            assert_eq!(windows.of(model), Some(LONG_CONTEXT_LIMIT), "{model}");
+        }
+        assert_eq!(windows.of("claude-sonnet-4-6"), None);
+        assert_eq!(windows.of("claude-haiku-4-5-20251001"), None);
+        windows.learn("claude-sonnet-4-6", 200_000);
+        assert_eq!(windows.of("claude-sonnet-4-6"), Some(200_000));
+        // Refused: an empty or too large window, an id too long.
+        windows.learn("zero", 0);
+        windows.learn("huge", TOKEN_LIMIT + 1);
+        windows.learn("top", TOKEN_LIMIT);
+        windows.learn(&"m".repeat(MESSAGE_ID_LIMIT + 1), 5);
+        windows.learn(&"m".repeat(MESSAGE_ID_LIMIT), 5);
+        assert_eq!((windows.of("zero"), windows.of("huge")), (None, None));
+        assert_eq!(windows.of("top"), Some(TOKEN_LIMIT));
+        assert_eq!(windows.of(&"m".repeat(MESSAGE_ID_LIMIT + 1)), None);
+        assert_eq!(windows.of(&"m".repeat(MESSAGE_ID_LIMIT)), Some(5));
+        // At most `MAX_MODELS` models; a known one still changes.
+        for n in 0..MAX_MODELS {
+            windows.learn(&format!("model-{n}"), 7);
+        }
+        assert_eq!(windows.0.len(), MAX_MODELS);
+        windows.learn("claude-sonnet-4-6", 1_000_000);
+        assert_eq!(windows.of("claude-sonnet-4-6"), Some(1_000_000));
     }
 
     #[test]
@@ -708,7 +845,8 @@ mod tests {
             due: true,
             ..Usage::default()
         };
-        let read = |agent: &mut Usage| agent.read("s", &f.root, &f.log);
+        let none = Windows::default();
+        let read = |agent: &mut Usage| agent.read("s", &f.root, &f.log, &none);
         // Not written yet, then no usage yet: nothing to send.
         assert_eq!(read(&mut agent), None);
         assert!(!agent.due);
@@ -730,9 +868,29 @@ mod tests {
         // A rewritten, shorter transcript is counted again from its start.
         std::fs::write(&f.log, spent("m4", 50, 1)).unwrap();
         assert_eq!(read(&mut agent), usage(50, CONTEXT_LIMIT, 1));
+        // The window its chat told is news without a new line.
+        agent.window = Some(LONG_CONTEXT_LIMIT);
+        assert_eq!(read(&mut agent), usage(50, LONG_CONTEXT_LIMIT, 1));
+        assert_eq!(read(&mut agent), None);
         // Outside the root, nothing is read.
         let mut outside = Usage::default();
-        assert_eq!(outside.read("s", Path::new("/nope"), &f.log), None);
+        assert_eq!(outside.read("s", Path::new("/nope"), &f.log, &none), None);
+    }
+
+    #[test]
+    fn a_1m_session_is_read_against_1m_from_its_first_message() {
+        // The screenshot of 2026-09-26: 52.9k on Opus 5.5 showed "ctx 26%" (of 200k), 5% of 1M.
+        let f = fixture();
+        append(&f.log, &line(by("claude-opus-5-5", 52_900)));
+        let mut usage = Usage::default();
+        let message = usage.read("s", &f.root, &f.log, &Windows::default());
+        let expected = Control::AgentUsage {
+            id: "s".into(),
+            context_tokens: 52_900,
+            context_limit: LONG_CONTEXT_LIMIT,
+            output_tokens: 0,
+        };
+        assert_eq!(message, Some(expected));
     }
 
     #[test]
@@ -743,7 +901,7 @@ mod tests {
         append(&f.log, &esc);
         let mut usage = Usage::default();
         let read = |usage: &mut Usage| {
-            usage.read("s", &f.root, &f.log);
+            usage.read("s", &f.root, &f.log, &Windows::default());
             usage.interrupted()
         };
         assert!(!read(&mut usage));

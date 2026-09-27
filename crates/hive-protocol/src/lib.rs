@@ -226,8 +226,11 @@ pub enum Control {
     /// The agent's tokens from its transcript, sent when they change (read at most once a
     /// second, after `Stop`, `SubagentStop` and `PostToolUse`) and for every agent with a usage
     /// right after the app's `Welcome`. `context_tokens` is the last turn's input with cache
-    /// writes and reads; `context_limit` the assumed window (200k, or 1M once the context
-    /// passed 200k); `output_tokens` the session's output so far.
+    /// writes and reads; `context_limit` the model's window: for a chat, its current model's
+    /// `contextWindow` from its last `result`; else the window of the transcript's model
+    /// (learned from the chats' results, or 1M for a `[1m]` variant and the models known to
+    /// be 1M), else 200k; at least 1M once the context passed 200k. `output_tokens` the
+    /// session's output so far.
     AgentUsage {
         id: String,
         context_tokens: u64,
