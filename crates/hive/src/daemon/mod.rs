@@ -443,8 +443,9 @@ impl State {
         tokio::spawn(async move { state.answer(request).await });
     }
 
-    /// [`State::projects`] for a request that changes worktrees: in turn with
-    /// [`State::worktrees_changed`], which then finds the change already sent.
+    /// [`State::projects`] for a request that changes worktrees, or lists them afresh: in turn
+    /// with [`State::worktrees_changed`], which then finds the change already sent (and never
+    /// sends a list older than this answer after it).
     fn change_worktrees(
         self: &Arc<Self>,
         request: impl FnOnce(&Projects) -> Control + Send + 'static,

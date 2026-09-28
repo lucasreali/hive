@@ -222,8 +222,9 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::ListProjects) => {
             *state.listed() = None;
             state.to_app(0, &state.projects.spaces_message()).await;
-            // A new app, or a reloaded UI: listed afresh (e.g. a project folder moved).
-            state.projects(|projects| {
+            // A new app, or a reloaded UI: listed afresh (e.g. a project folder moved), in turn
+            // with git's registry, so an older list of it never follows this one.
+            state.change_worktrees(|projects| {
                 projects.forget();
                 Control::Projects {
                     projects: projects.list(),
@@ -233,6 +234,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::AddProject { path }) => {
             let state = state.clone();
             tokio::spawn(async move {
+                // In turn with git's registry, whose list may not have the project yet.
+                let _turn = state.changing.lock().await;
                 let added = tokio::task::block_in_place(|| {
                     let project = state.projects.add(&path)?;
                     let mut reply = Control::ProjectAdded { project };
@@ -258,6 +261,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::RemoveProject { id }) => {
             let state = state.clone();
             tokio::spawn(async move {
+                // In turn with git's registry, whose list may still have the project.
+                let _turn = state.changing.lock().await;
                 let terminals = state.terminals.lock().await;
                 let sessions: HashSet<i32> = terminals.values().map(|t| t.session).collect();
                 drop(terminals);
