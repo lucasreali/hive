@@ -26,6 +26,11 @@ export interface Transport {
   writeTerminal(id: number, data: string): Promise<void>;
   resizeTerminal(id: number, cols: number, rows: number): Promise<void>;
   closeTerminal(id: number): Promise<void>;
+  /**
+   * `bytes` more of the terminal's output were written to its screen (9.19): the service stops
+   * reading a terminal's PTY while too much of its output is unacknowledged.
+   */
+  ackTerminal(id: number, bytes: number): Promise<void>;
   /** Asks for every project with its worktrees again; they arrive as `projects`. */
   listProjects(): Promise<void>;
   /** Asks the service to follow `path`; answered by `project_added` or `add_project_failed`. */
