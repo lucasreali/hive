@@ -20,10 +20,12 @@ import {
   type OpenFile,
   pinFile,
   removeTab,
+  renderedShown,
   select,
   setEdit,
   setEditing,
   setOpenFile,
+  setRendered,
   useHive,
 } from "./store";
 import { barItems, dropFile, visibleTabs } from "./tabs";
@@ -108,10 +110,13 @@ test("a file opens in the preview tab, which the next file replaces in place (11
       .map((f) => f.path);
   addTab(1, W);
   setOpenFile(file("a.ts"));
+  setRendered(true);
+  expect(renderedShown(s())).toBe(true);
   addTab(2, W);
   expect([bar(), preview()]).toEqual([[1, "a.ts", 2], ["a.ts"]]);
   // b.ts takes a.ts's place, not the end of the bar.
   setOpenFile(file("b.ts"), true, 4);
+  expect(renderedShown(s())).toBe(false); // a.ts was shown rendered (11.2): b.ts is not.
   expect([bar(), preview(), s().openFile, s().editing]).toEqual([
     [1, "b.ts", 2],
     ["b.ts"],

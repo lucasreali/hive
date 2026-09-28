@@ -86,6 +86,7 @@ export type OpenFile = { worktree: string; path: string };
 /**
  * An open file's tab (8.21). While another file is the open one, it keeps that file's own
  * editor state: editable text or diff, its edit buffer, and its view (selection and scroll).
+ * `rendered`: a Markdown file shows rendered, not as text (11.2).
  */
 export type FileTab = OpenFile & {
   editing: boolean;
@@ -96,6 +97,7 @@ export type FileTab = OpenFile & {
    * once pinned (a double click) or given unsaved edits.
    */
   preview?: boolean;
+  rendered?: boolean;
 };
 
 /** A session's context menu, at the pointer. */
@@ -611,6 +613,25 @@ export const saveFileView = (f: OpenFile, view: unknown) =>
   useHive.setState((s) => ({
     openFiles: s.openFiles.map((t) => (isFor(t, f) ? { ...t, view } : t)),
   }));
+
+/** A Markdown file (11.2): by its name, as the eye button and Ctrl+Shift+V offer it. */
+export const isMarkdown = (path: string) => path.toLowerCase().endsWith(".md");
+
+/** The open file shows rendered (11.2). */
+export const renderedShown = (s: HiveState) =>
+  !!s.openFile && !!s.openFiles.find((t) => s.openFile && isFor(t, s.openFile))?.rendered;
+
+/** Shows the open file rendered or as text again (11.2), in its tab. */
+export const setRendered = (rendered: boolean) =>
+  useHive.setState((s) => ({
+    openFiles: s.openFiles.map((t) =>
+      s.openFile && isFor(t, s.openFile) ? { ...t, rendered } : t,
+    ),
+  }));
+
+/** Ctrl+Shift+V (11.2): only while the shown tab is a Markdown file's. */
+export const markdownShown = (s: HiveState) =>
+  s.fileShown && !!s.openFile && isMarkdown(s.openFile.path);
 
 /** The line asked for was shown. */
 export const clearGotoLine = () => useHive.setState({ gotoLine: null });

@@ -3337,3 +3337,11 @@ button.link:hover {
   margin-right: 6px;
   font-size: var(--fs-meta);
 }
+
+/* A Markdown file rendered in its tab (11.2). */
+.markdown-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
