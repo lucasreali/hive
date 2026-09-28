@@ -438,10 +438,15 @@ impl Agent {
     }
 }
 
-/// The worktrees a live subagent of `agents` works in as its own (#22) and none of `agents`
-/// runs in, sorted: the `subagent_worktrees` message.
-pub fn subagent_worktrees<'a>(agents: impl Iterator<Item = &'a Agent> + Clone) -> Vec<String> {
-    let placed: HashSet<&String> = agents.clone().filter_map(|a| a.worktree.as_ref()).collect();
+/// The worktrees a live subagent of `agents` works in as its own (#22), where none of `agents`
+/// runs and none of the human's `terminals` (the worktrees they opened in) is, sorted: the
+/// `subagent_worktrees` message.
+pub fn subagent_worktrees<'a>(
+    agents: impl Iterator<Item = &'a Agent> + Clone,
+    terminals: impl Iterator<Item = &'a String>,
+) -> Vec<String> {
+    let mut placed: HashSet<&String> = agents.clone().filter_map(|a| a.worktree.as_ref()).collect();
+    placed.extend(terminals);
     let mut owned: Vec<String> = agents
         .flat_map(Agent::own_worktrees)
         .filter(|w| !placed.contains(w))
@@ -964,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_worktrees_leave_out_those_an_agent_runs_in() {
+    fn subagent_worktrees_leave_out_those_an_agent_or_a_terminal_is_in() {
         let now = Instant::now();
         let with = |placed: &str, subagents: &[(&str, &str)]| {
             let mut agent = Agent::new(1, now, 0);
@@ -975,7 +980,11 @@ mod tests {
             }
             agent
         };
-        assert_eq!(subagent_worktrees([].iter()), Vec::<String>::new());
+        let none: [String; 0] = [];
+        assert_eq!(
+            subagent_worktrees([].iter(), none.iter()),
+            Vec::<String>::new()
+        );
         let agents = [
             with(
                 "/r",
@@ -983,7 +992,16 @@ mod tests {
             ),
             with("/r/c", &[("e", "/r/b")]),
         ];
-        assert_eq!(subagent_worktrees(agents.iter()), ["/r/a", "/r/b"]);
+        assert_eq!(
+            subagent_worktrees(agents.iter(), none.iter()),
+            ["/r/a", "/r/b"]
+        );
+        // Nor those where a terminal of the human's is (9.35).
+        let terminals = ["/r/a".to_owned(), "/r/x".to_owned()];
+        assert_eq!(
+            subagent_worktrees(agents.iter(), terminals.iter()),
+            ["/r/b"]
+        );
     }
 
     fn tool(name: &str, agent: Option<&str>, description: &str) -> AgentEvent {

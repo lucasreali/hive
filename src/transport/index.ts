@@ -122,13 +122,6 @@ export interface Transport {
   watchWorktree(path: string, base: DiffBase): Promise<void>;
   /** Stops watching (the files panel closed). */
   unwatchWorktree(): Promise<void>;
-  /**
-   * Follows a subagent's conversation instead of any other: answered by `transcript`, then
-   * `transcript_appended` as it grows (or `error`).
-   */
-  watchTranscript(agent: string, subagent: string): Promise<void>;
-  /** Stops following it, unless another one replaced it. */
-  unwatchTranscript(agent: string, subagent: string): Promise<void>;
   /** The terminal shown (null: none, or a file is) and whether the window has the focus. */
   setView(terminal: number | null, focused: boolean): Promise<void>;
   /** What differs from `base` in the worktree at `path`; answered by `changes`. */

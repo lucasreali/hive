@@ -417,18 +417,6 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     assert_eq!(service.control().await, (0, watch));
     hive.unwatch_worktree().unwrap();
     assert_eq!(service.control().await, (0, Control::UnwatchWorktree));
-    hive.watch_transcript("s".into(), "a".into()).unwrap();
-    let watch = Control::WatchTranscript {
-        agent: "s".into(),
-        subagent: "a".into(),
-    };
-    assert_eq!(service.control().await, (0, watch));
-    hive.unwatch_transcript("s".into(), "a".into()).unwrap();
-    let unwatch = Control::UnwatchTranscript {
-        agent: "s".into(),
-        subagent: "a".into(),
-    };
-    assert_eq!(service.control().await, (0, unwatch));
     hive.set_view(Some(2), true).unwrap();
     let view = Control::View {
         terminal: Some(2),
@@ -786,11 +774,6 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.unwatch_worktree(), not_connected);
-    assert_eq!(hive.watch_transcript("s".into(), "a".into()), not_connected);
-    assert_eq!(
-        hive.unwatch_transcript("s".into(), "a".into()),
-        not_connected
-    );
     assert_eq!(hive.set_view(None, false), not_connected);
     assert_eq!(
         hive.list_changes("/r".into(), DiffBase::Head),
@@ -1051,8 +1034,6 @@ fn commands_reach_the_managed_hive() {
             rename_worktree,
             watch_worktree,
             unwatch_worktree,
-            watch_transcript,
-            unwatch_transcript,
             set_view,
             list_changes,
             open_file,
@@ -1126,7 +1107,6 @@ fn commands_reach_the_managed_hive() {
     let remove = json!({"path": "/r/w", "force": false});
     let rename = json!({"path": "/r/w", "name": "x"});
     let watch = json!({"path": "/r", "base": "branch"});
-    let transcript = json!({"agent": "s", "subagent": "a"});
     let view = json!({"terminal": 1, "focused": true});
     let changes = json!({"path": "/r", "base": "head"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
@@ -1162,8 +1142,6 @@ fn commands_reach_the_managed_hive() {
         ("rename_worktree", &rename),
         ("watch_worktree", &watch),
         ("unwatch_worktree", &json!({})),
-        ("watch_transcript", &transcript),
-        ("unwatch_transcript", &transcript),
         ("set_view", &view),
         ("list_changes", &changes),
         ("open_file", &file),
@@ -1229,8 +1207,6 @@ fn commands_reach_the_managed_hive() {
         ("rename_worktree", rename),
         ("watch_worktree", watch),
         ("unwatch_worktree", json!({})),
-        ("watch_transcript", transcript.clone()),
-        ("unwatch_transcript", transcript),
         ("set_view", view),
         ("list_changes", changes),
         ("open_file", file.clone()),

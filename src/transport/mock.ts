@@ -14,7 +14,6 @@ import type {
   Settings,
   Space,
   Subagent,
-  TranscriptEntry,
   Worktree,
 } from "../store";
 import { DEFAULT_SETTINGS } from "../store";
@@ -109,7 +108,7 @@ export function mockAlert(before: AgentState | undefined, after: AgentState): Al
   return agentStatus(after).pending ? "waiting" : null;
 }
 
-/** `?mock=states`: shop's worktree that subagent a3 works in, shown as its parent row (#22). */
+/** `?mock=states`: shop's worktree that subagent a3 works in; no row, a3's tooltip (9.35). */
 export const MOCK_OWN_WORKTREE = "/home/user/projects/shop/.claude/worktrees/tests-login";
 
 /**
@@ -141,14 +140,6 @@ export const MOCK_STATES: [string, AgentState, Subagent[], string | null][] = [
   ["api", "ended", [], null],
   ["api/.claude/worktrees/refactor-auth", "working", [], "Run the API tests"],
   ["api/.claude/worktrees/refactor-auth", "idle", [], null],
-];
-
-/** `?mock=states`: the conversation of each of `MOCK_STATES`' subagents. */
-export const mockTranscript = (subagent: string): TranscriptEntry[] => [
-  { role: "user", text: `Find where the login form is handled (${subagent}).`, tool: null },
-  { role: "assistant", text: "I'll search the code for the login handler.", tool: null },
-  { role: "tool", text: '{"pattern":"login","path":"src"}', tool: "Grep" },
-  { role: "assistant", text: "The login form posts to /api/session in src/auth.ts.", tool: null },
 ];
 
 function mockStates(): ServiceMessage[] {
@@ -1090,16 +1081,6 @@ export function createMockTransport(
     async unwatchWorktree() {
       watched = null;
     },
-    // Only `MOCK_STATES`' subagents have a conversation, and it never grows.
-    async watchTranscript(agent, subagent) {
-      const listed = MOCK_STATES[Number(agent.slice("mock-state-".length)) - 1]?.[2];
-      if (scenario !== "states" || !listed?.some((s) => s.id === subagent)) {
-        return void later({ type: "error", message: "no transcript is known for this subagent" });
-      }
-      const entries = mockTranscript(subagent);
-      later({ type: "transcript", agent, subagent, entries, truncated: false });
-    },
-    async unwatchTranscript() {},
     // Mock agents never finish, so nothing depends on the view.
     async setView() {},
     async resizeTerminal() {},
