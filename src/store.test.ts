@@ -1,7 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { renderHook } from "@testing-library/react";
 import {
-  type AgentState,
   activateTab,
   addTab,
   agentWorkingIn,
@@ -26,7 +25,6 @@ import {
   showTranscript,
   TRANSCRIPT_LIMIT,
   type TranscriptEntry,
-  tabPlace,
   tabsPlace,
   toggleCollapsed,
   useHive,
@@ -82,21 +80,24 @@ test("disconnected keeps the reason; unknown messages change nothing", () => {
 });
 
 test("terminal messages update only their terminal", () => {
-  apply({ type: "terminal_opened", channel: 1 });
-  apply({ type: "terminal_opened", channel: 2 });
+  apply({ type: "terminal_opened", channel: 1, worktree: null });
+  apply({ type: "terminal_opened", channel: 2, worktree: "/w" });
   apply({ type: "unhooked_agent", channel: 1 });
   apply({ type: "badge", channel: 1, text: "db" });
   expect(useHive.getState().terminals[1]?.badge).toBe("db");
   apply({ type: "terminal_exited", channel: 1, code: 3 });
   const { terminals } = useHive.getState();
-  expect(terminals[1]).toEqual({ id: 1, exited: true, code: 3, unhooked: true, badge: "" });
-  expect(terminals[2]).toEqual({ id: 2, exited: false, code: null, unhooked: false });
-  apply({ type: "terminal_opened", channel: 1 });
+  const closed = { id: 1, exited: true, code: 3, unhooked: true, badge: "", worktree: null };
+  expect(terminals[1]).toEqual(closed);
+  const open = { id: 2, exited: false, code: null, unhooked: false, worktree: "/w" };
+  expect(terminals[2]).toEqual(open);
+  apply({ type: "terminal_opened", channel: 1, worktree: null });
   expect(useHive.getState().terminals[1]).toEqual({
     id: 1,
     exited: false,
     code: null,
     unhooked: false,
+    worktree: null,
     badge: "",
   });
 });
@@ -137,13 +138,14 @@ test("tabs belong to the worktree they opened in; a project shows its main workt
   addTab(1, main.path);
   addTab(2, main.path);
   addTab(3, login.path);
-  addTab(4, `${shop.path}/.claude/worktrees/gone`); // a removed worktree's: its project's
+  addTab(4, `${shop.path}/src`); // placed by the service in its main worktree
+  apply({ type: "terminal_opened", channel: 4, worktree: main.id });
   addTab(5, "/outside");
   select(shop.id);
   expect([shown(), active()]).toEqual([[1, 2, 4], 4]);
   select(login.id);
   expect([shown(), active()]).toEqual([[3], 3]);
-  activateTab({ id: 4, cwd: `${shop.path}/.claude/worktrees/gone` });
+  activateTab({ id: 4, cwd: `${shop.path}/src` });
   expect([useHive.getState().selection, active()]).toEqual([shop.id, 4]);
   removeTab(4); // its right neighbour among the shown ones
   expect(active()).toBe(2);
@@ -185,6 +187,14 @@ test("tabs belong to the worktree they opened in; a project shows its main workt
   expect(fileVisible(useHive.getState())).toBe(true);
   setOpenFile(null);
   expect(fileVisible(useHive.getState())).toBe(false);
+
+  // A worktree that goes away leaves its tabs under its project; other places stay.
+  apply({ type: "terminal_opened", channel: 3, worktree: login.id });
+  apply({ type: "terminal_opened", channel: 5, worktree: "/unknown" });
+  apply({ type: "projects", projects: [{ ...shop, worktrees: [main, checkout] }] });
+  select(shop.id);
+  expect(shown()).toEqual([1, 3]);
+  expect(useHive.getState().terminals[5]?.worktree).toBe("/unknown");
 });
 
 const agent = (id: string, terminal = 1) => ({
@@ -219,6 +229,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
     worktree: null,
     activity: null,
     since_ms: 0,
+    writing: true,
   } as const;
   const doing = { activity: null, since_ms: 0 } as const;
   const permission = {
@@ -226,9 +237,19 @@ test("agent states are stored as sent, before or after the agent, and go with it
     urgency: 6,
     pending: true,
     interrupted: false,
+    alert: "waiting",
+    writing: true,
     ...doing,
   } as const;
-  const idle = { state: "idle", urgency: 1, pending: false, interrupted: false, ...doing } as const;
+  const idle = {
+    state: "idle",
+    urgency: 1,
+    pending: false,
+    interrupted: false,
+    alert: null,
+    writing: false,
+    ...doing,
+  } as const;
   apply({
     type: "agent_state",
     id: "a",
@@ -236,6 +257,8 @@ test("agent states are stored as sent, before or after the agent, and go with it
     urgency: 2,
     pending: false,
     interrupted: false,
+    alert: null,
+    writing: true,
     subagents: [],
     activity: null,
     since_ms: 0,
@@ -262,7 +285,7 @@ test("agent usage is stored as sent and goes with the agent", () => {
 });
 
 test("useTerminal reads one terminal", () => {
-  apply({ type: "terminal_opened", channel: 4 });
+  apply({ type: "terminal_opened", channel: 4, worktree: null });
   const { result } = renderHook(() => useTerminal(4));
   expect(result.current?.id).toBe(4);
 });
@@ -553,43 +576,42 @@ test("an agent is working in a worktree while it (or its subagent there) may wri
   const place = (id: string, at: string | null) =>
     apply({ type: "agent_detected", channel: 1, id, project: "/p", worktree: at, cwd: at });
   const none = { activity: null, since_ms: 0 };
-  const state = (id: string, state: AgentState, subagents: Subagent[] = []) =>
+  // The service says whether each may be writing; the state does not matter here.
+  const state = (id: string, writing: boolean, subagents: Subagent[] = []) =>
     apply({
       type: "agent_state",
       id,
-      state,
+      state: "idle",
       urgency: 0,
       pending: false,
       interrupted: false,
+      alert: null,
+      writing,
       subagents,
       ...none,
     });
+  const sub = (at: string, writing: boolean): Subagent => ({
+    id: "s",
+    agent_type: null,
+    state: "idle",
+    worktree: at,
+    writing,
+    ...none,
+  });
   const working = () => agentWorkingIn(useHive.getState(), worktree);
   place("a", worktree);
   expect(working()).toBe(false); // No state yet.
-  for (const [s, expected] of [
-    ["idle", false],
-    ["waiting_you", false],
-    ["error", false],
-    ["ended", false],
-    ["working", true],
-    ["with_subagents", true],
-    ["waiting_permission", true],
-  ] as const) {
-    state("a", s);
-    expect(working()).toBe(expected);
-  }
-  state("a", "idle");
+  state("a", false);
+  expect(working()).toBe(false);
+  state("a", true);
+  expect(working()).toBe(true);
+  state("a", false);
   place("b", "/elsewhere");
-  state("b", "working", [
-    { id: "s", agent_type: null, state: "working", worktree: "/other", ...none },
-  ]);
+  state("b", true, [sub("/other", true)]);
   expect(working()).toBe(false);
-  state("b", "with_subagents", [{ id: "s", agent_type: null, state: "idle", worktree, ...none }]);
+  state("b", true, [sub(worktree, false)]);
   expect(working()).toBe(false);
-  state("b", "with_subagents", [
-    { id: "s", agent_type: null, state: "working", worktree, ...none },
-  ]);
+  state("b", false, [sub(worktree, true)]);
   expect(working()).toBe(true);
 });
 
@@ -597,7 +619,7 @@ test("sessions are stored as listed; a deleted one leaves, a refused delete says
   const [a, b] = MOCK_SESSIONS;
   apply({ type: "session_deleted", id: a.id });
   expect(useHive.getState().sessions).toBeNull();
-  apply({ type: "sessions", sessions: [a, b], error: null });
+  apply({ type: "sessions", sessions: [a, b], error: null, truncated: false });
   apply({ type: "session_deleted", id: a.id });
   expect(useHive.getState().sessions).toEqual([b]);
   apply({ type: "delete_session_failed", id: b.id, message: "busy" });
@@ -609,17 +631,37 @@ test("a notice from the service shows in the status bar", () => {
   expect(useHive.getState().notice).toBe("No GitHub token for me");
 });
 
-test("a tab belongs to the deepest worktree holding its folder", () => {
+test("a tab opened in a subfolder or through a link shows under the worktree the service placed", () => {
   const [shop] = MOCK_REPOS;
-  const [main, login] = shop.worktrees;
+  const [, login] = shop.worktrees;
   apply({ type: "projects", projects: [shop] });
-  const s = useHive.getState();
-  expect(tabPlace(s, `${login.path}/src/auth`)).toBe(login.id);
-  expect(tabPlace(s, `${shop.path}/src`)).toBe(main.id);
-  expect(tabPlace(s, login.path)).toBe(login.id);
-  // A sibling folder whose name starts the same is not inside.
-  expect(tabPlace(s, `${login.path}-copy`)).toBe(main.id);
-  expect(tabPlace(s, "/elsewhere")).toBe("/elsewhere");
+  const at = () => {
+    const s = useHive.getState();
+    const panel = panelWorktree(s)?.worktree.id ?? null;
+    return [s.selection, visibleTabs(s).map((t) => t.id), panel];
+  };
+  // Until the service answers, the tab stands at its own folder.
+  addTab(1, `${login.path}/src`);
+  expect(at()).toEqual([`${login.path}/src`, [1], null]);
+  apply({ type: "terminal_opened", channel: 1, worktree: login.id });
+  expect(at()).toEqual([login.id, [1], login.id]);
+  // Answered before its tab is added (a link to the worktree).
+  apply({ type: "terminal_opened", channel: 2, worktree: login.id });
+  addTab(2, "/home/user/link-to-login");
+  expect(at()).toEqual([login.id, [1, 2], login.id]);
+  // A selection made meanwhile stays.
+  addTab(3, `${login.path}/docs`);
+  select(shop.id);
+  apply({ type: "terminal_opened", channel: 3, worktree: login.id });
+  expect(useHive.getState().selection).toBe(shop.id);
+  // Outside every project, its place is its folder.
+  addTab(4, "/outside");
+  apply({ type: "terminal_opened", channel: 4, worktree: null });
+  expect(at()).toEqual(["/outside", [4], null]);
+  // With nothing selected, the files panel shows the active terminal's worktree.
+  activateTab({ id: 3, cwd: `${login.path}/docs` });
+  select(null);
+  expect(at()).toEqual([null, [1, 2, 3, 4], login.id]);
 });
 
 test("a worktree status replaces only that worktree's; before any projects it is dropped", () => {
@@ -633,8 +675,11 @@ test("a worktree status replaces only that worktree's; before any projects it is
   const { projects } = useHive.getState();
   expect(projects?.[shop.id].worktrees[1]).toEqual({ ...login, status });
   expect(projects?.[shop.id].worktrees[2]).toBe(shop.worktrees[2]);
-  expect(projects?.[api.id]).toEqual(api);
+  // Other projects keep their objects, so their rows do not render again (9.23).
+  expect(projects?.[api.id]).toBe(api);
   expect(Object.keys(projects ?? {})).toEqual([shop.id, api.id]);
+  apply({ type: "worktree_status", path: "/nowhere", status });
+  expect(useHive.getState().projects).toBe(projects);
 });
 
 test("a subagent's conversation is kept as sent, grown by what is appended, and capped", () => {

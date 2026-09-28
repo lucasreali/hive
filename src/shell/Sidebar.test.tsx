@@ -5,6 +5,7 @@ import { type AgentState, apply, initialState, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
+import * as icons from "./icons";
 import { STATE_LABEL } from "./icons";
 import { elapsed } from "./Sidebar";
 
@@ -163,8 +164,22 @@ test("agents and their subagents show the state the service sent, named for scre
       id: "s1",
       ...agentStatus("waiting_permission"),
       subagents: [
-        { id: "a1", agent_type: "Explore", state: "working", worktree: null, ...none },
-        { id: "a2", agent_type: null, state: "waiting_permission", worktree: null, ...none },
+        {
+          id: "a1",
+          agent_type: "Explore",
+          state: "working",
+          worktree: null,
+          writing: true,
+          ...none,
+        },
+        {
+          id: "a2",
+          agent_type: null,
+          state: "waiting_permission",
+          worktree: null,
+          writing: true,
+          ...none,
+        },
       ],
     });
     apply({ type: "agent_state", id: "s2", ...agentStatus("ended"), subagents: [] });
@@ -245,6 +260,7 @@ test("rows show the time in the state and the activity, all ticking on one timer
             agent_type: "Explore",
             state: "working",
             worktree: null,
+            writing: true,
             activity: null,
             since_ms: now - 5_000,
           },
@@ -410,15 +426,19 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
       worktree,
       activity: null,
       since_ms: 0,
+      writing: true,
     }) as const;
   const subagents = (...list: ReturnType<typeof sub>[]) =>
     apply({ type: "agent_state", id: "s1", ...agentStatus("with_subagents"), subagents: list });
+  // The worktrees the service says subagents own, where no agent runs.
+  const owned = (...worktrees: string[]) => apply({ type: "subagent_worktrees", worktrees });
   act(() => {
     apply({ type: "projects", projects: [shop] });
     useHive.setState({ tabs: [{ id: 1, cwd: main.path }], activeTab: null });
     const placed = { project: shop.id, worktree: main.id, cwd: main.path };
     apply({ type: "agent_detected", channel: 1, id: "s1", ...placed });
     subagents(sub("a1", featCheckout.id), sub("a2", null));
+    owned(featCheckout.id);
   });
   const rows = () =>
     [...tree().querySelectorAll(".tree-row")].map((r) => [
@@ -448,9 +468,13 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
   act(() => {
     const placed = { project: shop.id, worktree: featCheckout.id, cwd: featCheckout.path };
     apply({ type: "agent_detected", channel: 2, id: "s2", ...placed });
+    owned();
   });
   expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(2);
-  act(() => apply({ type: "agent_removed", channel: 2, id: "s2" }));
+  act(() => {
+    apply({ type: "agent_removed", channel: 2, id: "s2" });
+    owned(featCheckout.id);
+  });
   expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(1);
   // A worktree the projects do not list yet shows nowhere and its subagent stays in place;
   // unlinked, the worktree is back at project level.
@@ -458,8 +482,15 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
   expect(tree().querySelector(".own-worktree")).toBeNull();
   expect(tree().querySelector(".owned")).toBeNull();
   expect(tree().querySelectorAll(".tree-row.subagent")).toHaveLength(2);
-  act(() => subagents(sub("a1", null), sub("a2", null)));
+  act(() => {
+    subagents(sub("a1", null), sub("a2", null));
+    owned();
+  });
   expect(rows().map(([, label]) => label)).toContain("feat-checkout");
+  // A lost service takes them with it.
+  act(() => owned(featCheckout.id));
+  act(() => apply({ type: "disconnected", reason: "gone" }));
+  expect(useHive.getState().subagentWorktrees).toEqual([]);
   expect(tree().querySelector(".own-worktree")).toBeNull();
 });
 
@@ -515,4 +546,33 @@ test("a worktree's status shows as badges explained by their tooltips", () => {
   const clean = { ...one, changes: 0, ahead: 0, behind: 0, merged: true };
   act(() => apply({ type: "worktree_status", path: login.path, status: clean }));
   expect(badges(login.path)).toEqual([["merged", "Every commit is on the main worktree's branch"]]);
+});
+
+test("a hook event re-renders only its own agent's row, not other worktrees' rows", () => {
+  render(<App />);
+  const [main, fixLogin] = shop.worktrees;
+  const at = (w: typeof main) => ({ project: shop.id, worktree: w.id, cwd: w.path });
+  act(() => {
+    apply({ type: "projects", projects: [shop, api] });
+    apply({ type: "agent_detected", channel: 1, id: "s1", ...at(fixLogin) });
+    apply({ type: "agent_detected", channel: 2, id: "s2", ...at(main) });
+    apply({ type: "agent_detected", channel: 3, id: "s3", ...at(main) });
+  });
+  // Each worktree row draws one branch icon and each agent row one state icon per render.
+  const branch = spyOn(icons, "BranchIcon");
+  const state = spyOn(icons, "StateIcon");
+  try {
+    act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("working"), subagents: [] }));
+    expect(branch).not.toHaveBeenCalled();
+    expect(state).toHaveBeenCalledTimes(1);
+    expect(state.mock.calls[0]?.[0]).toEqual({ state: "working" });
+    // A status for one worktree re-renders that row only.
+    const status = { changes: 1, ahead: 0, behind: 0, merged: false, last_commit_ms: 1 };
+    act(() => apply({ type: "worktree_status", path: api.worktrees[1].path, status }));
+    expect(branch).toHaveBeenCalledTimes(1);
+    expect(state).toHaveBeenCalledTimes(1);
+  } finally {
+    branch.mockRestore();
+    state.mockRestore();
+  }
 });

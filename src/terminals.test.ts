@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
+import LIGATURES from "./assets/fonts/ligatures.json";
 import { apply, DEFAULT_SETTINGS, initialState, setWidth, shownTerminals, useHive } from "./store";
 import { transport } from "./transport";
 
@@ -290,6 +291,23 @@ test("the font's ligature sequences are joined, longest first, and nothing else"
   ]);
   expect(ligatureRanges("plain text = >")).toEqual([]);
   expect(ligatureRanges("")).toEqual([]);
+});
+
+test("indexing the sequences by first character joins exactly what a full scan joins", () => {
+  // The scan before 9.23: every sequence tried at every character.
+  const scan = (text: string) => {
+    const ranges: [number, number][] = [];
+    for (let i = 0; i < text.length; ) {
+      const found = LIGATURES.find((sequence) => text.startsWith(sequence, i));
+      if (found) ranges.push([i, i + found.length]);
+      i += found ? found.length : 1;
+    }
+    return ranges;
+  };
+  const samples = LIGATURES.flatMap((s) => [s, `a ${s} b`, `${s}${s}`, `${s.slice(0, -1)}x`]);
+  samples.push(LIGATURES.join(""), LIGATURES.join(" "), "é → 🙂 <=> ::: plain");
+  for (const text of samples) expect([text, ligatureRanges(text)]).toEqual([text, scan(text)]);
+  expect(ligatureRanges(LIGATURES.join(" ")).length).toBe(LIGATURES.length);
 });
 
 test("a terminal joins ligatures once it is opened, with the proposed API allowed", async () => {

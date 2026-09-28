@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 
 use common::{Env, stop};
-use hive_protocol::{AgentEvent, Control, EventKind, PROTOCOL_VERSION, Role, Settings};
+use hive_protocol::{Control, FrameType, PROTOCOL_VERSION, Role, Settings};
 use serde_json::json;
 
 fn mode(path: std::path::PathBuf) -> u32 {
@@ -142,32 +142,47 @@ async fn first_message_must_be_hello() {
 }
 
 #[tokio::test]
-async fn hook_events_are_translated_and_sent_to_the_app() {
+async fn hook_payloads_stay_in_the_service() {
     let env = Env::new();
     let mut daemon = env.daemon();
     let mut app = env.app().await;
-    let mut hook = env.connect(Role::Hook).await;
-    let payload = json!({"session_id": "s1", "cwd": "/w"});
-    hook.send(
-        0,
-        Control::Hook {
-            event: "Stop".into(),
+    app.open_terminal(4, &env.path("home")).await;
+    let calls = [
+        ("SessionStart", json!({"session_id": "s1", "cwd": "/w"})),
+        (
+            "Stop",
+            json!({"session_id": "s1", "last_assistant_message": "a secret"}),
+        ),
+    ];
+    for (event, payload) in calls {
+        let mut hook = env.connect(Role::Hook).await;
+        let call = Control::Hook {
+            event: event.into(),
             terminal_id: Some("4".into()),
-            payload: payload.clone(),
-        },
-    )
-    .await;
-    let expected = AgentEvent {
-        provider: "claude-code".into(),
-        terminal_id: Some("4".into()),
-        session_id: Some("s1".into()),
-        subagent: None,
-        cwd: Some("/w".into()),
-        kind: EventKind::TurnFinished,
-        activity: None,
-        raw: payload,
-    };
-    assert_eq!(app.control().await, (0, Control::Agent(expected)));
+            payload,
+            sent_ns: hive::hook::monotonic_ns(),
+        };
+        hook.send(0, call).await;
+        assert_eq!(hook.next().await, None);
+    }
+    // Everything the service sent about the agent, up to the answer to a later request.
+    app.send(0, Control::GetDiagnostics).await;
+    let mut sent = Vec::new();
+    loop {
+        let frame = app.next().await.unwrap();
+        if frame.kind != FrameType::Control {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&frame.payload).into_owned();
+        assert!(!text.contains("secret"), "{text}");
+        let message: serde_json::Value = serde_json::from_str(&text).unwrap();
+        match message["type"].as_str().unwrap() {
+            "diagnostics" => break,
+            kind if kind.starts_with("agent") => sent.push(kind.to_owned()),
+            _ => {}
+        }
+    }
+    assert_eq!(sent, ["agent_detected", "agent_state", "agent_state"]);
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -176,25 +191,21 @@ async fn hook_events_are_translated_and_sent_to_the_app() {
 async fn a_hook_connection_is_closed_after_one_message() {
     let env = Env::new();
     let mut daemon = env.daemon();
-    let mut app = env.app().await;
-    // Not a hook event: nothing is forwarded, the connection is closed.
+    let app = env.app().await;
+    // Not a hook event: ignored, the connection is closed.
     let mut hook = env.connect(Role::Hook).await;
     hook.send(0, Control::CloseTerminal).await;
     assert_eq!(hook.next().await, None);
-    // A hook event: forwarded, then the connection is closed.
+    // A hook event: handled, then the connection is closed.
     let mut hook = env.connect(Role::Hook).await;
     let end = Control::Hook {
         event: "SessionEnd".into(),
         terminal_id: None,
         payload: json!({}),
+        sent_ns: 0,
     };
     hook.send(0, end).await;
     assert_eq!(hook.next().await, None);
-    let (_, message) = app.control().await;
-    assert!(
-        matches!(&message, Control::Agent(event) if event.kind == EventKind::SessionEnded { reason: None }),
-        "{message:?}"
-    );
     drop(app);
     assert!(daemon.wait_exit().success());
 }

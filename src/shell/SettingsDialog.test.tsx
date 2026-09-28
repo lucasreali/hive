@@ -173,6 +173,58 @@ test("the projects section edits each project's scripts", async () => {
   expect(input("Archive script").value).toBe("");
 });
 
+test("a run script keeps its fields and the focus while renamed; a late edit finds its row", async () => {
+  open();
+  section("Projects");
+  const [shop] = MOCK_REPOS;
+  act(() => apply({ type: "projects", projects: [shop] }));
+  const run = () => settings().projects[shop.id]?.scripts.run;
+  const add = (name: string, command: string) => {
+    fireEvent.change(input("New run script name"), { target: { value: name } });
+    fireEvent.change(input("New run script command"), { target: { value: command } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  };
+  add("dev", "bun dev");
+  add("test", "bun test");
+  await waitFor(() => expect(run()?.map((r) => r.name)).toEqual(["dev", "test"]));
+
+  // Renaming saves once typing pauses: the same field stays, focused.
+  const [name] = screen.getAllByLabelText("Name") as HTMLInputElement[];
+  name.focus();
+  fireEvent.change(name, { target: { value: "serve" } });
+  await waitFor(() => expect(run()?.[0]?.name).toBe("serve"));
+  expect(document.activeElement).toBe(name);
+  expect(name.isConnected).toBe(true);
+
+  // A command typed in the second row, then the first removed before it is saved: the edit
+  // still lands on its own row.
+  fireEvent.change(input("Command of test"), { target: { value: "bun test --watch" } });
+  fireEvent.click(screen.getByTitle("Remove serve"));
+  await waitFor(() => expect(run()).toEqual([{ name: "test", command: "bun test --watch" }]));
+
+  // A list stored from elsewhere shows as it is.
+  const stored = structuredClone(settings());
+  stored.projects[shop.id] = {
+    scripts: { setup: null, run: [{ name: "lint", command: "x" }], archive: null },
+  };
+  act(() => apply({ type: "settings", settings: stored }));
+  expect(input("Command of lint").value).toBe("x");
+});
+
+test("a save made before the last one is answered builds on it: both land", async () => {
+  open();
+  const set = spyOn(transport, "setSettings");
+  fireEvent.click(screen.getByLabelText("Copy on select"));
+  fireEvent.click(screen.getByLabelText("Blinking cursor"));
+  // The second waits for the answer to the first.
+  expect(set).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(set).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(useHive.getState().settingsPending).toBe(false));
+  expect(settings().terminal.copy_on_select).toBe(true);
+  expect(settings().terminal.cursor_blink).toBe(true);
+  set.mockRestore();
+});
+
 test("the service's refusal shows inline, and the typed text stays", async () => {
   open();
   fireEvent.change(input("Font size"), { target: { value: "99" } });
@@ -209,9 +261,9 @@ test("about shows both versions, the service's diagnostics and terminals without
   open();
   const ask = spyOn(transport, "getDiagnostics");
   act(() => {
-    apply({ type: "terminal_opened", channel: 3 });
+    apply({ type: "terminal_opened", channel: 3, worktree: null });
     apply({ type: "unhooked_agent", channel: 3 });
-    apply({ type: "terminal_opened", channel: 4 });
+    apply({ type: "terminal_opened", channel: 4, worktree: null });
     apply({ type: "unhooked_agent", channel: 4 });
     apply({ type: "terminal_exited", channel: 4, code: 0 });
   });

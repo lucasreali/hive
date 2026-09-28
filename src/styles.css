@@ -2651,8 +2651,12 @@ button.result-file:hover,
   color: var(--text-3);
 }
 
+/* Placed by the list's virtualizer. */
 .session {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
   border-bottom: 1px solid var(--border-subtle);
 }
 

@@ -9,7 +9,7 @@ import {
   RobotIcon,
   TerminalWindowIcon,
 } from "@phosphor-icons/react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
 import { COMMANDS } from "../shortcuts";
 import { openModal, type ProjectScripts, type Settings, scriptsOf, useHive } from "../store";
@@ -48,12 +48,30 @@ const SECTION_ICON: Record<Section, Icon> = {
   About: InfoIcon,
 };
 
-/** Sends the whole settings with `change` made to the ones in use (#37: the service checks). */
+/** Changes made while a save waits for its answer, sent together once it arrives. */
+let queued: ((next: Settings) => void)[] = [];
+
+/**
+ * Sends the whole settings with `change` made to the ones stored (#37: the service checks). One
+ * save at a time (9.24): the next one waits for the answer and builds on it, so a quick second
+ * save cannot undo the first.
+ */
 function save(change: (next: Settings) => void): void {
+  queued.push(change);
+  if (!useHive.getState().settingsPending) send();
+}
+
+function send(): void {
   const next = structuredClone(useHive.getState().settings);
-  change(next);
+  for (const change of queued) change(next);
+  queued = [];
+  useHive.setState({ settingsPending: true });
   void transport.setSettings(next);
 }
+
+useHive.subscribe((s, before) => {
+  if (before.settingsPending && !s.settingsPending && queued.length > 0) send();
+});
 
 /**
  * A text (or number) field saved once typing pauses. It keeps what was typed while the
@@ -157,7 +175,7 @@ function Toggle(props: {
   const { set } = props;
   return (
     <label className="checkbox">
-      <input type="checkbox" checked={on} onChange={(e) => save((s) => set(s, e.target.checked))} />
+      <input type="checkbox" checked={on} onChange={() => save((s) => set(s, !on))} />
       {props.label}
     </label>
   );
@@ -486,12 +504,40 @@ function ProjectScriptsSection() {
   );
 }
 
+type RunScript = ProjectScripts["run"][number];
+type RunRow = RunScript & { key: number };
+let runKeys = 0;
+const keyed = (run: RunScript[]): RunRow[] => run.map((r) => ({ ...r, key: runKeys++ }));
+const sameRuns = (a: RunScript[], b: RunScript[]) =>
+  a.length === b.length && a.every((r, i) => r.name === b[i]?.name && r.command === b[i]?.command);
+
 function ScriptFields({ id }: { id: string }) {
   const scripts = useHive((s) => scriptsOf(s.settings, id));
+  // The run scripts as shown, each row with a key of its own (9.24): renaming one keeps its
+  // fields (and the focus), and an edit names its row, never a position a removal shifted.
+  const [rows, setRows] = useState(() => keyed(scripts.run));
+  const shown = useRef(rows);
+  // A stored list other than ours, with nothing of ours on the way, is shown as it is. A refused
+  // save changes nothing stored: its edit stays shown, like a refused field's text.
+  useEffect(() => {
+    if (useHive.getState().settingsPending || sameRuns(shown.current, scripts.run)) return;
+    shown.current = keyed(scripts.run);
+    setRows(shown.current);
+  }, [scripts.run]);
+  const edit = (change: (rows: RunRow[]) => RunRow[]) => {
+    shown.current = change(shown.current);
+    setRows(shown.current);
+    const run = shown.current.map(({ name, command }) => ({ name, command }));
+    saveScripts(id, (s) => {
+      s.run = run;
+    });
+  };
+  const editRow = (key: number, change: Partial<RunScript>) =>
+    edit((rows) => rows.map((r) => (r.key === key ? { ...r, ...change } : r)));
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const add = () => {
-    saveScripts(id, (s) => void s.run.push({ name: name.trim(), command }));
+    edit((rows) => [...rows, ...keyed([{ name: name.trim(), command }])]);
     setName("");
     setCommand("");
   };
@@ -514,33 +560,25 @@ function ScriptFields({ id }: { id: string }) {
       </div>
       <div className="field">
         <span>Run scripts</span>
-        {scripts.run.map((run, i) => (
-          <div className="script-run" key={run.name}>
+        {rows.map((run) => (
+          <div className="script-run" key={run.key}>
             <Typed
-              id={`setting-run-${i}`}
+              id={`setting-run-${run.key}`}
               aria-label="Name"
               value={run.name}
-              onSave={(text) =>
-                saveScripts(id, (s) => {
-                  s.run[i].name = text.trim();
-                })
-              }
+              onSave={(text) => editRow(run.key, { name: text.trim() })}
             />
             <Typed
-              id={`setting-run-${i}-command`}
+              id={`setting-run-${run.key}-command`}
               aria-label={`Command of ${run.name}`}
               value={run.command}
-              onSave={(text) =>
-                saveScripts(id, (s) => {
-                  s.run[i].command = text;
-                })
-              }
+              onSave={(text) => editRow(run.key, { command: text })}
             />
             <button
               type="button"
               className="ghost"
               title={`Remove ${run.name}`}
-              onClick={() => saveScripts(id, (s) => void s.run.splice(i, 1))}
+              onClick={() => edit((rows) => rows.filter((r) => r.key !== run.key))}
             >
               <CloseIcon />
             </button>

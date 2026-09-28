@@ -11,7 +11,7 @@ import {
   type Settings,
   setSplit,
   shownSplit,
-  tabPlace,
+  tabWorktree,
   useHive,
 } from "./store";
 import { transport } from "./transport";
@@ -94,12 +94,18 @@ export function termOptions({ terminal: t, appearance }: Settings): ITerminalOpt
  * Ligatures (7.11): xterm draws each cell alone, so a font's ligatures never show unless a
  * character joiner hands the WebGL renderer the sequence as one unit. The list is the one the
  * bundled Hive Mono has ligatures for (scripts/build-terminal-font.sh); longest first.
+ * Indexed by first character: most characters start none, and each row of every terminal is
+ * scanned (9.23).
  */
+const BY_FIRST = new Map<string, string[]>();
+for (const sequence of LIGATURES)
+  BY_FIRST.set(sequence[0] as string, [...(BY_FIRST.get(sequence[0] as string) ?? []), sequence]);
+
 export function ligatureRanges(text: string): [number, number][] {
   const ranges: [number, number][] = [];
   let i = 0;
   while (i < text.length) {
-    const found = LIGATURES.find((sequence) => text.startsWith(sequence, i));
+    const found = BY_FIRST.get(text[i] as string)?.find((sequence) => text.startsWith(sequence, i));
     if (found) ranges.push([i, i + found.length]);
     i += found ? found.length : 1;
   }
@@ -292,10 +298,10 @@ export async function splitTerminal(id: number | null): Promise<void> {
   if (split && (split.left === id || split.right === id)) return setSplit(null);
   const tab = s.tabs.find((t) => t.id === id);
   if (!tab) return;
-  const place = tabPlace(s, tab.cwd);
+  const place = tabWorktree(s, tab);
   const same = inBarOrder(
     s,
-    s.tabs.filter((t) => tabPlace(s, t.cwd) === place),
+    s.tabs.filter((t) => tabWorktree(s, t) === place),
   );
   const next = same[(same.indexOf(tab) + 1) % same.length] as typeof tab;
   const right = next === tab ? await openTerminal(tab.cwd) : next.id;

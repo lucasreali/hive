@@ -146,7 +146,8 @@ fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
 fn tell_service(paths: &Paths, event: &str, payload: serde_json::Value) {
     let terminal_id = std::env::var("HIVE_TERMINAL_ID").ok();
     let _ = block_on(async {
-        crate::hook::forward(paths, event, terminal_id, payload).await;
+        let sent_ns = crate::hook::monotonic_ns();
+        crate::hook::forward(paths, event, terminal_id, payload, sent_ns).await;
         Ok(())
     });
 }
