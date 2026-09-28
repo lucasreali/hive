@@ -34,14 +34,17 @@ import {
   agentWorkingIn,
   diffBase,
   type FileTarget,
+  isMarkdown,
   type OpenFile,
   openFileMenu,
   type PanelView,
   panelWorktree,
+  renderedShown,
   setDiffBase,
   setEditing,
   setOpenFile,
   setPanelView,
+  setRendered,
   setRightPanel,
   useHive,
   within,
@@ -54,10 +57,11 @@ import { EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
-import { isMac, keyText } from "../window";
+import { commandKey, isMac, keyText } from "../window";
 import { askDiscard } from "./ConfirmDialog";
 import { askDelete } from "./FileMenu";
-import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
+import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, EyeIcon, TerminalIcon } from "./icons";
+import { Markdown } from "./Markdown";
 import { PullsView } from "./PullsView";
 import { RunsView } from "./RunsView";
 import { ResizeHandle } from "./resize";
@@ -969,6 +973,7 @@ export function FileView({ worktree }: { worktree: string }) {
   const edit = useHive((s) => s.edit);
   const editorNotice = useHive((s) => s.editorNotice);
   const working = useHive((s) => agentWorkingIn(s, worktree));
+  const rendered = useHive(renderedShown);
   if (openFile?.worktree !== worktree) return null;
   const why = text && notice(text);
   const dirty = !!edit && isDirty(edit);
@@ -1013,11 +1018,26 @@ export function FileView({ worktree }: { worktree: string }) {
               className="ghost text"
               title="Edit the file"
               disabled={text?.content == null || !!why}
-              onClick={() => setEditing(true)}
+              onClick={() => {
+                setRendered(false);
+                setEditing(true);
+              }}
             >
               Edit
             </button>
           ))}
+        {isMarkdown(openFile.path) && (
+          <button
+            type="button"
+            className="ghost"
+            aria-label="Show rendered Markdown"
+            aria-pressed={rendered}
+            title={keyText(`${rendered ? "Show the text" : "Show rendered"} (Ctrl+Shift+V)`)}
+            onClick={() => setRendered(!rendered)}
+          >
+            <EyeIcon />
+          </button>
+        )}
         <CommentButton />
         <button
           type="button"
@@ -1045,7 +1065,13 @@ export function FileView({ worktree }: { worktree: string }) {
       <CommentInput worktree={worktree} path={openFile.path} />
       {editorNotice && <div className="files-error">{editorNotice}</div>}
       <div className="file-view-body">
-        {edit ? (
+        {rendered ? (
+          why ? (
+            <div className="hint">{why}</div>
+          ) : (
+            <RenderedView text={edit ? edit.doc.toString() : (text?.content ?? "")} />
+          )
+        ) : edit ? (
           <EditView key={`${worktree}\n${openFile.path}`} edit={edit} />
         ) : (
           <>
@@ -1059,5 +1085,28 @@ export function FileView({ worktree }: { worktree: string }) {
       </div>
       <ReviewList worktree={worktree} />
     </section>
+  );
+}
+
+/**
+ * A Markdown file rendered (11.2), with its unsaved edits, by the sanitised renderer of #43.
+ * Ctrl+S saves any unsaved edits and shows the text again.
+ */
+function RenderedView({ text }: { text: string }) {
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!commandKey(event) || event.shiftKey || event.altKey) return;
+      if (event.key.toUpperCase() !== "S") return;
+      event.preventDefault();
+      saveOpenFile();
+      setRendered(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+  return (
+    <div className="markdown-view hive-scroll">
+      <Markdown text={text} />
+    </div>
   );
 }

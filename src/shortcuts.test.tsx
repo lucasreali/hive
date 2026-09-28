@@ -4,8 +4,9 @@ import { asMac } from "../test/mac";
 import { App } from "./App";
 import type { AgentState } from "./protocol";
 import { apply } from "./reduce";
+import { paletteCommands } from "./shell/Palette";
 import { nextPending, shortcut } from "./shortcuts";
-import { initialState, openModal, select, useHive } from "./store";
+import { initialState, openModal, renderedShown, select, setOpenFile, useHive } from "./store";
 import { closeTerminal, openTerminal, terminal } from "./terminals";
 import { transport } from "./transport";
 import { agentStatus, MOCK_REPOS } from "./transport/mock";
@@ -357,4 +358,49 @@ test("Ctrl+Shift+D splits the active terminal and pressed again un-splits", asyn
   expect(useHive.getState().split).toEqual({ left: ids[1] as number, right: ids[0] as number });
   press(ctrlShift("D"));
   expect(useHive.getState().split).toBeNull();
+});
+
+test("Ctrl+Shift+V (Cmd+Shift+V on macOS) toggles a Markdown file's tab, elsewhere the terminal pastes", async () => {
+  app();
+  let id = 0;
+  await act(async () => {
+    id = await openTerminal(api.path);
+  });
+  const toggle = "Show a Markdown file rendered or as text";
+  const offered = () => paletteCommands(useHive.getState()).some((c) => c.label === toggle);
+  act(() => setOpenFile({ worktree: api.path, path: "README.md" }));
+  expect(offered()).toBe(true);
+  expect(press(ctrlShift("V"))).toBe(true);
+  expect(renderedShown(useHive.getState())).toBe(true);
+  expect(press(ctrlShift("V"))).toBe(true);
+  expect(renderedShown(useHive.getState())).toBe(false);
+
+  act(() => setOpenFile({ worktree: api.path, path: "package.json" }));
+  expect(press(ctrlShift("V"))).toBe(false);
+  expect(offered()).toBe(false);
+
+  // The terminal shown, a Markdown file's tab behind it: Ctrl+Shift+V is the terminal's paste.
+  act(() => setOpenFile({ worktree: api.path, path: "README.md" }));
+  act(() => useHive.setState({ fileShown: false, activeTab: id }));
+  expect(offered()).toBe(false);
+  const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("pasted");
+  const paste = new KeyboardEvent("keydown", {
+    key: "V",
+    ctrlKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    terminal(id)?.textarea?.dispatchEvent(paste);
+  });
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(renderedShown(useHive.getState())).toBe(false);
+  read.mockRestore();
+
+  asMac();
+  act(() => useHive.setState({ fileShown: true }));
+  expect(press(ctrlShift("V"))).toBe(false);
+  expect(press({ key: "v", metaKey: true, shiftKey: true })).toBe(true);
+  expect(renderedShown(useHive.getState())).toBe(true);
 });

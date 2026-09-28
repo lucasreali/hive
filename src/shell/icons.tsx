@@ -13,6 +13,7 @@ import {
   MagnifyingGlassIcon,
   MinusIcon,
   CheckIcon as PhosphorCheckIcon,
+  EyeIcon as PhosphorEyeIcon,
   FileIcon as PhosphorFileIcon,
   type Icon as PhosphorIcon,
   PlusIcon as PhosphorPlusIcon,
@@ -132,5 +133,7 @@ export const TerminalIcon = icon(TerminalWindowIcon);
 
 /** A box with an arrow out of it: open elsewhere. */
 export const ExternalIcon = icon(ArrowSquareOutIcon);
+
+export const EyeIcon = icon(PhosphorEyeIcon);
 
 export const SearchIcon = icon(MagnifyingGlassIcon);
