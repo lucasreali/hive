@@ -29,7 +29,7 @@ import {
   useHive,
   type Worktree,
 } from "../store";
-import { openWith } from "../terminals";
+import { openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { ExternalIcon, RefreshIcon } from "./icons";
@@ -120,7 +120,7 @@ function useCheckedOut() {
     const s = useHive.getState();
     if (s.pullBusy?.action !== "checkout" || s.pullBusy.project !== created.project) return;
     const setup = scriptsOf(s.settings, created.project).setup;
-    if (setup) void openWith(created.path, setup);
+    if (setup) showOpenFailure(openWith(created.path, setup));
     select(created.path);
     setPullBusy(null);
   }, [created]);

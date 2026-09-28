@@ -154,6 +154,7 @@ async fn hook_events_are_translated_and_sent_to_the_app() {
             event: "Stop".into(),
             terminal_id: Some("4".into()),
             payload: payload.clone(),
+            sent_ns: 0,
         },
     )
     .await;
@@ -187,6 +188,7 @@ async fn a_hook_connection_is_closed_after_one_message() {
         event: "SessionEnd".into(),
         terminal_id: None,
         payload: json!({}),
+        sent_ns: 0,
     };
     hook.send(0, end).await;
     assert_eq!(hook.next().await, None);

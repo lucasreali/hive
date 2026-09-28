@@ -2,6 +2,7 @@ import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
 import {
   type KeyboardEvent,
   type MouseEvent,
+  memo,
   type ReactNode,
   useEffect,
   useRef,
@@ -32,7 +33,7 @@ import {
   type Worktree,
   type WorktreeStatus,
 } from "../store";
-import { openClaude } from "../terminals";
+import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { keyText } from "../window";
@@ -153,15 +154,17 @@ function SpacePicker() {
 function ProjectNode({ project }: { project: Project }) {
   const open = useHive((s) => !s.collapsed[project.id]);
   const selection = useHive((s) => s.selection);
-  const agents = inAgentOrder(
-    Object.values(useHive((s) => s.agents)),
-    useHive((s) => s.agentOrder),
-  );
-  const states = Object.values(useHive((s) => s.agentStates));
   // A subagent's own worktree shows as its parent row instead (#22), unless an agent runs there.
-  const owned = new Set(states.flatMap((st) => st.subagents.map((sub) => sub.worktree)));
-  const shown = project.worktrees.filter(
-    (w) => !owned.has(w.id) || agents.some((a) => a.worktree === w.id),
+  // The same worktree objects while that holds, so a hook event re-renders no row (9.23).
+  const shown = useHive(
+    useShallow((s) => {
+      const states = Object.values(s.agentStates);
+      const owned = new Set(states.flatMap((st) => st.subagents.map((sub) => sub.worktree)));
+      const agents = Object.values(s.agents);
+      return project.worktrees.filter(
+        (w) => !owned.has(w.id) || agents.some((a) => a.worktree === w.id),
+      );
+    }),
   );
   return (
     <li>
@@ -196,11 +199,7 @@ function ProjectNode({ project }: { project: Project }) {
         <ul>
           {project.error && <li className="tree-error">{project.error}</li>}
           {shown.map((w) => (
-            <WorktreeNode
-              key={w.id}
-              worktree={w}
-              agents={agents.filter((a) => a.worktree === w.id)}
-            />
+            <WorktreeNode key={w.id} worktree={w} />
           ))}
         </ul>
       )}
@@ -239,8 +238,20 @@ function Health({ status: s }: { status: WorktreeStatus }) {
   );
 }
 
-/** A worktree and its agents; it collapses only when it has agents, as in the prototype. */
-function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Agent[] }) {
+/**
+ * A worktree and its agents; it collapses only when it has agents, as in the prototype. It
+ * renders again only when its worktree, its agents or their order change, not on another
+ * worktree's hook event (9.23).
+ */
+const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Worktree }) {
+  const agents = useHive(
+    useShallow((s) =>
+      inAgentOrder(
+        Object.values(s.agents).filter((a) => a.worktree === w.id),
+        s.agentOrder,
+      ),
+    ),
+  );
   const open = useHive((s) => !s.collapsed[`worktree:${w.id}`]);
   const selected = useHive((s) => s.selection === w.id);
   // Agents move only among their worktree's: the service places each by its cwd (8.2).
@@ -282,7 +293,7 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
           className="new-chat"
           title="New chat: a terminal running claude"
           aria-label={`New chat in ${w.name}`}
-          onClick={() => void openClaude(w.path)}
+          onClick={() => showOpenFailure(openClaude(w.path))}
         >
           <NewChatIcon size={12} weight="bold" aria-hidden="true" />
         </button>
@@ -296,7 +307,7 @@ function WorktreeNode({ worktree: w, agents }: { worktree: Worktree; agents: Age
       )}
     </li>
   );
-}
+});
 
 /** How long a state has lasted, from its start and now (ms): "12s", "3m", "1h". */
 export function elapsed(since: number, now: number): string {
