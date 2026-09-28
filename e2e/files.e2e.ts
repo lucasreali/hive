@@ -1,9 +1,13 @@
 import { expect, type Locator, test } from "@playwright/test";
 
+/** The folder `name` of the files tree (a closed folder's accessible name has its counts). */
+const folder = (files: Locator, name: string) =>
+  files.getByRole("treeitem").filter({ has: files.page().getByText(name, { exact: true }) });
+
 /** Expands the folders `names` of the files tree, in order (they start collapsed). */
 async function open(files: Locator, ...names: string[]) {
   for (const name of names) {
-    await files.getByRole("treeitem", { name, exact: true }).click();
+    await folder(files, name).click();
   }
 }
 
@@ -28,8 +32,14 @@ test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles i
   // Only the changed files; folders start collapsed.
   await expect(files.getByRole("treeitem")).toHaveCount(3);
   await expect(files.getByRole("treeitem", { name: "README.md" })).toHaveCount(0);
+  // A closed folder sums its files' line counts (a binary file adds none), then its dot.
+  await expect(folder(files, "src")).toHaveText("src+23−48");
+  await expect(folder(files, "src").locator(".status-dot")).toBeVisible();
+  await expect(folder(files, "assets")).toHaveText("assets");
 
   await open(files, "src", "auth");
+  // Open, it shows nothing.
+  await expect(folder(files, "src")).toHaveText("src");
   await files.getByRole("treeitem", { name: /token\.ts/ }).click();
   // The file opens in its tab, in place of the terminal.
   const view = page.getByRole("region", { name: "src/auth/token.ts" });
@@ -70,10 +80,7 @@ test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles i
   await expect(session.locator(".cm-deletedChunk")).toHaveCount(0);
   // The folders opened in Files stay closed in Diff.
   await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
-  await expect(files.getByRole("treeitem", { name: "src", exact: true })).toHaveAttribute(
-    "aria-expanded",
-    "false",
-  );
+  await expect(folder(files, "src")).toHaveAttribute("aria-expanded", "false");
 });
 
 test("files panel: a changed file shows as a read-only unified diff", async ({ page }) => {

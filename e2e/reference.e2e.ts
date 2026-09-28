@@ -23,7 +23,10 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   const panel = page.getByRole("complementary", { name: "Side panel" });
   await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
   for (const name of ["src", "auth"]) {
-    await panel.getByRole("treeitem", { name, exact: true }).click();
+    await panel
+      .getByRole("treeitem")
+      .filter({ has: page.getByText(name, { exact: true }) })
+      .click();
   }
   await panel.getByRole("treeitem", { name: /session\.ts/ }).click();
   const view = page.getByRole("region", { name: "src/auth/session.ts" });
@@ -57,7 +60,10 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   // there is no terminal to send to.
   await tree.getByRole("button", { name: "refactor-auth" }).click();
   for (const name of ["src", "auth"]) {
-    await panel.getByRole("treeitem", { name, exact: true }).click();
+    await panel
+      .getByRole("treeitem")
+      .filter({ has: page.getByText(name, { exact: true }) })
+      .click();
   }
   await panel.getByRole("treeitem", { name: /token\.ts/ }).click();
   const other = page.getByRole("region", { name: "src/auth/token.ts" });

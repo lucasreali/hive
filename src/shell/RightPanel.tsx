@@ -93,11 +93,23 @@ export type FileRow =
       depth: number;
       open: boolean;
       status: FileStatus | null;
+      /** The lines changed below the folder (`Folder`). */
+      added: number;
+      removed: number;
     }
   | { kind: "file"; key: string; name: string; depth: number; file: TreeFile };
 
-/** A folder of the tree: its folders by name (sorted), its files, the strongest status inside. */
-export type Folder = { folders: [string, Folder][]; files: TreeFile[]; status: FileStatus | null };
+/**
+ * A folder of the tree: its folders by name (sorted), its files, the strongest status inside
+ * and the lines changed below it (binary files add none).
+ */
+export type Folder = {
+  folders: [string, Folder][];
+  files: TreeFile[];
+  status: FileStatus | null;
+  added: number;
+  removed: number;
+};
 
 /**
  * "All": every file the service lists (`files`, sorted), each with its status from the
@@ -124,8 +136,8 @@ const stronger = (a: FileStatus | null, b: FileStatus | null) =>
   b && (!a || STATUS[b].rank > STATUS[a].rank) ? b : a;
 
 /**
- * `files` (sorted by the service) grouped into folders, each folder's strongest status computed
- * while building. Built once per listing (9.23): moving in the tree or opening a folder only
+ * `files` (sorted by the service) grouped into folders, each folder's strongest status and line
+ * counts computed while building. Built once per listing (9.23): moving in the tree or opening a folder only
  * walks it again (`fileRows`). Grouping paths is presentation; statuses and counts are the
  * service's. `folders` (created from the tree) show even when git lists nothing in them.
  */
@@ -147,11 +159,14 @@ export function fileTree(files: TreeFile[], folders: string[] = []): Folder {
     const inner = [...folder.folders]
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([name, f]): [string, Folder] => [name, finish(f)]);
-    const status = inner.reduce(
-      (a, [, f]) => stronger(a, f.status),
-      folder.files.reduce<FileStatus | null>((a, f) => stronger(a, f.status), null),
-    );
-    return { folders: inner, files: folder.files, status };
+    const below = [...folder.files, ...inner.map(([, f]) => f)];
+    return {
+      folders: inner,
+      files: folder.files,
+      status: below.reduce<FileStatus | null>((a, f) => stronger(a, f.status), null),
+      added: below.reduce((n, f) => n + (f.added ?? 0), 0),
+      removed: below.reduce((n, f) => n + (f.removed ?? 0), 0),
+    };
   };
   return finish(root);
 }
@@ -173,7 +188,8 @@ export function fileRows(
       const key = `${tree}:${worktree}/${prefix}${name}`;
       const open = collapsed[key] === false;
       const path = `${prefix}${name}`;
-      rows.push({ kind: "folder", key, path, name, depth, open, status: inner.status });
+      const { status, added, removed } = inner;
+      rows.push({ kind: "folder", key, path, name, depth, open, status, added, removed });
       if (open) walk(inner, `${prefix}${name}/`, depth + 1);
     }
     for (const file of folder.files) {
@@ -800,7 +816,12 @@ const TreeRow = memo(function TreeRow(props: {
           <ChevronIcon open={row.open} />
           <TreeFolderIcon name={row.name} open={row.open} />
           <span className="name">{row.name}</span>
-          {!row.open && status && <span className="status-dot" />}
+          {!row.open && status && (
+            <>
+              <Counts added={row.added} removed={row.removed} />
+              <span className="status-dot" />
+            </>
+          )}
         </>
       ) : (
         <>

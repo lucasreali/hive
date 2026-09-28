@@ -190,7 +190,8 @@ test("files: a folder opened under a drag closes when it leaves; a dragged folde
 }) => {
   await page.goto("/");
   const { panel } = await openReadme(page);
-  const row = (name: string) => panel.getByRole("treeitem", { name, exact: true });
+  const row = (name: string) =>
+    panel.getByRole("treeitem").filter({ has: page.getByText(name, { exact: true }) });
   await row("docs").click();
   await row("api.md").click();
   const view = page.getByRole("region", { name: "docs/api.md" });
