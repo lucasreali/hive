@@ -487,6 +487,12 @@ mod tests {
         assert!(flows(output.send(&vec![b'y'; HIGH_WATER])).await);
     }
 
+    #[test]
+    fn the_water_marks_are_the_task_defaults() {
+        // 9.19's defaults (pending human review): the app's 64 KiB batches stay under the low one.
+        assert_eq!((HIGH_WATER, LOW_WATER), (524_288, 131_072));
+    }
+
     #[tokio::test]
     async fn output_to_a_gone_app_fails() {
         let (frames, queued) = mpsc::unbounded_channel();
