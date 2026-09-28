@@ -3377,6 +3377,7 @@ button.link:hover {
 }
 
 .run-badge {
-  margin-right: 4px;
+  /* The last indicator: it ends on the right column, as `.health` and a rollup (7.13). */
+  margin-right: 6px;
   font-size: var(--fs-meta);
 }

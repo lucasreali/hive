@@ -37,9 +37,9 @@ test("sidebar: a collapsed worktree's rollup lines up with the badges' right col
   // Away from the rows, so no "+" shows.
   await page.mouse.move(900, 600);
 
-  // No badges: the rollup ends where another row's badges end.
+  // No health badges: the rollup ends where another row's badges end (its run's last, 9.32).
   const mainRollup = row("main").first().locator(".state-icon");
-  const badges = row("feat-checkout").locator(".health");
+  const badges = row("feat-checkout").locator(".run-badge");
   expect(await right(mainRollup)).toBe(await right(badges));
   // Badges and rollup: the badges first, the rollup in the right column, no overlap.
   const fixRollup = row("fix-login").locator(".state-icon");
