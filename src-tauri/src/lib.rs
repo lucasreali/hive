@@ -212,11 +212,16 @@ impl Hive {
         }
     }
 
-    pub fn with_open(
+    /// Opens paths with `open` (the system's default app), or `reveal` (the file manager).
+    pub fn with_open<E: std::fmt::Display>(
         mut self,
-        open: impl Fn(&str, bool) -> Result<(), String> + Send + Sync + 'static,
+        open: impl Fn(&str) -> Result<(), E> + Send + Sync + 'static,
+        reveal: impl Fn(&str) -> Result<(), E> + Send + Sync + 'static,
     ) -> Self {
-        self.open = Some(Box::new(open));
+        self.open = Some(Box::new(move |path, show| {
+            let opened = if show { reveal(path) } else { open(path) };
+            opened.map_err(|e| e.to_string())
+        }));
         self
     }
 

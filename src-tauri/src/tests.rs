@@ -182,13 +182,17 @@ async fn only_a_path_the_service_sent_opens_and_only_once() {
     );
 
     let (tx, opened) = std::sync::mpsc::channel();
-    let hive = hive.with_open(move |path, reveal| {
-        tx.send((path.to_owned(), reveal)).unwrap();
-        match path {
-            "C:\\gone" => Err("no app for it".to_owned()),
-            _ => Ok(()),
+    let opener = move |reveal| {
+        let tx = tx.clone();
+        move |path: &str| {
+            tx.send((path.to_owned(), reveal)).unwrap();
+            match path {
+                "C:\\gone" => Err("no app for it"),
+                _ => Ok(()),
+            }
         }
-    });
+    };
+    let hive = hive.with_open(opener(false), opener(true));
     assert_eq!(hive.open_path(file.into(), false), refused(file)); // Taken by the try above.
     let log = "\\\\wsl.localhost\\Ubuntu\\home\\you\\.claude\\projects\\p\\s.jsonl";
     let located = Control::SessionLocated {
@@ -919,7 +923,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         next(&mut rx).await,
         json!({"type": "disconnected", "reason": "bridge gone"})
     );
-    let hive = hive.with_open(|_, _| Ok(()));
+    let hive = hive.with_open(|_| Ok::<_, String>(()), |_| Ok(()));
     let unasked = "Hive opens only a path the service sent: C:\\s.jsonl";
     assert_eq!(
         hive.open_path("C:\\s.jsonl".into(), false),

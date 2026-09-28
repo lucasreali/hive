@@ -22,14 +22,10 @@ fn main() {
             let hive = hive_lib::Hive::new(program, args)
                 .with_restart(move || handle.request_restart())
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))
-                .with_open(|path, reveal| {
-                    let opened = if reveal {
-                        tauri_plugin_opener::reveal_item_in_dir(path)
-                    } else {
-                        tauri_plugin_opener::open_path(path, None::<&str>)
-                    };
-                    opened.map_err(|e| e.to_string())
-                });
+                .with_open(
+                    |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
+                    |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
+                );
             app.manage(hive);
             // The window (`"create": false` in the config) with its guards (open point #15): the
             // webview never leaves the app and never opens another window.
