@@ -7,8 +7,8 @@ use std::fs::{File, Permissions, TryLockError};
 use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -36,7 +36,7 @@ use crate::scripts::{self, Ports};
 use crate::sessions::{self, Sessions};
 use crate::settings;
 use crate::spaces::Spaces;
-use crate::states::Agent;
+use crate::states::{self, Agent};
 use crate::terminal::{self, Input, Terminal};
 use crate::{
     bridge, changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper,
@@ -188,9 +188,13 @@ struct State {
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
+    /// The sessions list the app has (`Sessions`), so an unchanged one is not sent again.
+    listed: std::sync::Mutex<Option<Control>>,
+    /// The last `subagent_worktrees` sent, so only changes are sent.
+    owned: std::sync::Mutex<Vec<String>>,
     /// Each project's worktrees as last sent to the app (without status), so a change of
     /// git's registry the app already has (its own request, a hook) is not sent again.
-    listed: std::sync::Mutex<HashMap<String, Vec<Worktree>>>,
+    worktrees_sent: std::sync::Mutex<HashMap<String, Vec<Worktree>>>,
     /// Woken when the current space's projects change, so their registries are watched.
     refollow: tokio::sync::Notify,
     /// Held while [`State::worktrees_changed`] lists and sends.
@@ -237,6 +241,8 @@ impl State {
             restore,
             sent: Default::default(),
             listed: Default::default(),
+            owned: Default::default(),
+            worktrees_sent: Default::default(),
             refollow: Default::default(),
             changing: Mutex::new(()),
             user_path: tokio::sync::watch::Sender::new(None),
@@ -286,18 +292,18 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn listed(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<Worktree>>> {
-        self.listed
+    fn worktrees_sent(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<Worktree>>> {
+        self.worktrees_sent
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Whether the app has every one of `projects` with these worktrees.
     fn known(&self, projects: &[Project]) -> bool {
-        let listed = self.listed();
+        let sent = self.worktrees_sent();
         projects
             .iter()
-            .all(|p| listed.get(&p.id) == Some(&p.worktrees))
+            .all(|p| sent.get(&p.id) == Some(&p.worktrees))
     }
 
     /// The one place the followed projects' worktrees are known to have changed outside
@@ -332,7 +338,7 @@ impl State {
             _ => return,
         };
         for project in projects {
-            self.listed()
+            self.worktrees_sent()
                 .insert(project.id.clone(), project.worktrees.clone());
             health::fill(project);
             let mut sent = self.sent();
@@ -350,6 +356,21 @@ impl State {
         for message in changed {
             self.to_app(0, &message).await;
         }
+    }
+
+    /// Sends `subagent_worktrees` when the set changed. Called with the agents lock held, so
+    /// the changes go out in order.
+    async fn owned_changed(&self, agents: &HashMap<String, Agent>) {
+        let worktrees = states::subagent_worktrees(agents.values());
+        {
+            let mut sent = self.owned.lock().unwrap_or_else(PoisonError::into_inner);
+            if *sent == worktrees {
+                return;
+            }
+            sent.clone_from(&worktrees);
+        }
+        self.to_app(0, &Control::SubagentWorktrees { worktrees })
+            .await;
     }
 
     /// The `worktree_status` of every worktree of `projects` (only the one at `only`, when
@@ -430,6 +451,7 @@ impl State {
             let id = id.clone();
             self.to_app(channel, &Control::AgentRemoved { id }).await;
         }
+        self.owned_changed(&agents).await;
     }
 
     /// Places and announces the agent while holding the agents lock, so a `SessionEnd` or the
@@ -470,6 +492,7 @@ impl State {
         // A resumed session already has its name.
         self.retitle(&id, &mut agent).await;
         agents.insert(id, agent);
+        self.owned_changed(&agents).await;
     }
 
     /// Reads the agent's session name from its log and sends it when it changed.
@@ -518,7 +541,8 @@ impl State {
 
     /// Sent to a newly connected app right after `Welcome`: the state of every live agent.
     async fn snapshot(&self) {
-        for (id, agent) in self.agents.lock().await.iter() {
+        let agents = self.agents.lock().await;
+        for (id, agent) in agents.iter() {
             self.to_app(agent.channel, &agent.message(id)).await;
             if let Some(title) = agent.title.clone() {
                 let id = id.clone();
@@ -529,6 +553,12 @@ impl State {
                 self.to_app(agent.channel, &usage).await;
             }
         }
+        // The new app has none yet: sent unless still none.
+        self.owned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.owned_changed(&agents).await;
     }
 
     /// Queues input or a resize; ignored once the terminal is gone.
@@ -561,7 +591,9 @@ impl State {
                 }
             }
         }
-        env.extend(tokio::task::block_in_place(|| self.hive_env(cwd)));
+        let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), cwd));
+        let worktree = place.as_ref().map(|(_, worktree)| worktree.clone());
+        env.extend(tokio::task::block_in_place(|| self.hive_env(place)));
         let claude_dir = space.claude_config_dir;
         let opened = {
             let mut terminals = self.terminals.lock().await;
@@ -584,16 +616,17 @@ impl State {
             }
         };
         let reply = match opened {
-            Ok(()) => Control::TerminalOpened,
+            Ok(()) => Control::TerminalOpened { worktree },
             Err(message) => Control::Error { message },
         };
         self.to_app(channel, &reply).await;
     }
 
-    /// The `HIVE_*` environment (6.8) of a process in `cwd`: none outside the followed
-    /// worktrees, and no `HIVE_PORT` when its block cannot be given.
-    fn hive_env(&self, cwd: &str) -> Vec<(&'static str, String)> {
-        let Some((root, worktree)) = projects::place(&self.projects.list(), cwd) else {
+    /// The `HIVE_*` environment (6.8) of a process in the `place` (`projects::place`) of its
+    /// cwd: none outside the followed worktrees, and no `HIVE_PORT` when its block cannot be
+    /// given.
+    fn hive_env(&self, place: Option<(String, String)>) -> Vec<(&'static str, String)> {
+        let Some((root, worktree)) = place else {
             return Vec::new();
         };
         let port = self.ports.port(&worktree).inspect_err(|err| {
@@ -607,7 +640,7 @@ impl State {
         let Some(script) = self.settings.scripts(root).archive else {
             return Ok(());
         };
-        let env = self.hive_env(worktree);
+        let env = self.hive_env(projects::place(&self.projects.list(), worktree));
         scripts::run(&script, Path::new(worktree), &env, scripts::ARCHIVE_TIME)
     }
 
@@ -637,7 +670,24 @@ impl State {
             self.with_health(&mut reply);
             reply
         });
-        self.to_app(0, &reply).await;
+        if self.new_to_app(&reply) {
+            self.to_app(0, &reply).await;
+        }
+    }
+
+    /// Whether the app lacks `reply`: always, except a sessions list equal to the last one
+    /// sent, which is remembered.
+    fn new_to_app(&self, reply: &Control) -> bool {
+        !matches!(reply, Control::Sessions { .. })
+            || self.listed().replace(reply.clone()).as_ref() != Some(reply)
+    }
+
+    /// The sessions list the app has; `None` for a new app, or a reloaded UI (which asks for
+    /// the projects again).
+    fn listed(&self) -> std::sync::MutexGuard<'_, Option<Control>> {
+        self.listed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Answers a request on the current space's projects and their Claude sessions (in the
@@ -1033,6 +1083,7 @@ async fn pump(
         for (id, _) in agents.extract_if(|_, a| a.channel == channel) {
             state.to_app(channel, &Control::AgentRemoved { id }).await;
         }
+        state.owned_changed(&agents).await;
     }
     state
         .to_app(channel, &Control::TerminalExited { code })
@@ -1144,16 +1195,17 @@ async fn hook_connection<R: AsyncRead + Unpin>(
             payload,
             sent_ns,
         }) => {
+            // The payload stays here: the app gets only what the service makes of it.
             let event = ClaudeCode.translate(&event, terminal_id, payload);
+            state.saw(&event, sent_ns).await;
             if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } =
                 event.kind
             {
-                // The app's worktrees follow a `claude -w` or a subagent's worktree.
+                // The app's worktrees follow a `claude -w` or a subagent's worktree; listed
+                // after the agent states it changed.
                 let state = state.clone();
                 tokio::spawn(async move { state.worktrees_changed().await });
             }
-            state.saw(&event, sent_ns).await;
-            state.to_app(0, &Control::Agent(event)).await;
         }
         _ => {}
     }
@@ -1182,6 +1234,7 @@ where
         }
         *app = Some(control_tx);
     }
+    *state.listed() = None;
     state.send_settings().await;
     state.snapshot().await;
     // Only the first app after a restart resumes the sessions the last one left.
@@ -1255,6 +1308,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.to_app(0, &diagnostics).await;
         }
         Ok(Control::ListProjects) => {
+            *state.listed() = None;
             state.to_app(0, &state.projects.spaces_message()).await;
             state.projects(|projects| Control::Projects {
                 projects: projects.list(),
@@ -1397,11 +1451,15 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
                     procs::Source::System,
                     records.as_deref(),
                 ));
-                let (sessions, error) = match sessions.list(projects, &running) {
-                    Ok(sessions) => (sessions, None),
-                    Err(err) => (Vec::new(), Some(err.to_string())),
+                let ((sessions, truncated), error) = match sessions.list(projects, &running) {
+                    Ok(listed) => (listed, None),
+                    Err(err) => ((Vec::new(), false), Some(err.to_string())),
                 };
-                Control::Sessions { sessions, error }
+                Control::Sessions {
+                    sessions,
+                    error,
+                    truncated,
+                }
             })
         }
         Ok(Control::LocateSession { id, target }) => {
@@ -1683,6 +1741,27 @@ mod tests {
     }
 
     #[test]
+    fn an_unchanged_sessions_list_is_not_sent_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let list = |error: Option<&str>| Control::Sessions {
+            sessions: vec![],
+            error: error.map(Into::into),
+            truncated: false,
+        };
+        assert!(state.new_to_app(&list(None)));
+        assert!(!state.new_to_app(&list(None)));
+        assert!(state.new_to_app(&list(Some("x"))));
+        // Anything else always goes.
+        assert!(state.new_to_app(&Control::ListSessions));
+        assert!(state.new_to_app(&Control::ListSessions));
+        assert!(!state.new_to_app(&list(Some("x"))));
+        // A new app, or a reloaded UI, has none.
+        *state.listed() = None;
+        assert!(state.new_to_app(&list(Some("x"))));
+    }
+
+    #[test]
     fn a_path_ask_already_running_is_not_started_again() {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path());
@@ -1767,11 +1846,27 @@ mod tests {
         };
         let read = named.usage.read("s", dir.path(), &log);
         assert_eq!(read, Some(usage.clone()));
+        // A subagent working in a worktree of its own.
+        let mut owning = Agent::new(5, Instant::now(), 0);
+        owning.worktree = Some("/r".into());
+        let start = AgentEvent {
+            provider: "claude-code".into(),
+            terminal_id: Some("5".into()),
+            session_id: Some("u".into()),
+            subagent: Some(hive_protocol::Subagent {
+                id: "a".into(),
+                agent_type: None,
+            }),
+            cwd: Some("/r/w".into()),
+            kind: EventKind::SubagentStarted,
+            activity: None,
+            raw: serde_json::Value::Null,
+        };
+        owning.apply("u", &start, 0, Instant::now(), &|cwd| Some(cwd.to_owned()));
+        let owning_state = owning.message("u");
         let state = test_state(dir.path());
-        *state.agents.lock().await = HashMap::from([
-            ("s".to_owned(), named),
-            ("u".to_owned(), Agent::new(5, Instant::now(), 0)),
-        ]);
+        *state.agents.lock().await =
+            HashMap::from([("s".to_owned(), named), ("u".to_owned(), owning)]);
         // The same stream types as the daemon, so no second instantiation skews line coverage.
         let (client, server) = UnixStream::pair().unwrap();
         let (read, write) = server.into_split();
@@ -1784,7 +1879,7 @@ mod tests {
         });
         let mut frames = FramedRead::new(client, FrameCodec);
         let mut got = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..6 {
             let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
             let frame = next.await.expect("no snapshot").unwrap().unwrap();
             got.push((frame.channel, frame.to_control().unwrap()));
@@ -1795,6 +1890,8 @@ mod tests {
             urgency: 1,
             pending: false,
             interrupted: false,
+            alert: None,
+            writing: false,
             subagents: vec![],
             activity: None,
             since_ms: 0,
@@ -1811,7 +1908,12 @@ mod tests {
         };
         assert_eq!(got[0], (0, settings));
         assert!(got.contains(&(4, idle("s"))), "{got:?}");
-        assert!(got.contains(&(5, idle("u"))), "{got:?}");
+        assert!(got.contains(&(5, owning_state)), "{got:?}");
+        // Then the worktrees subagents own.
+        let owned = Control::SubagentWorktrees {
+            worktrees: vec!["/r/w".into()],
+        };
+        assert_eq!(got.last(), Some(&(0, owned)));
         assert!(at(&named) > at(&idle("s")), "{got:?}");
         assert_eq!(got[at(&named).unwrap()].0, 4);
         // Its usage too, once known.

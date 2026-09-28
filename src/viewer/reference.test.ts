@@ -42,13 +42,20 @@ test("the target is the active terminal of the open file's worktree", () => {
   expect(target({ agents: { s: { ...agent, terminal: 2, worktree: null } } })).toEqual({
     why: "The active terminal is in another worktree",
   });
+  // A terminal opened in a subfolder or through a link: where the service placed it.
+  const placed = { id: 1, exited: false, code: null, unhooked: false, worktree: wt };
+  expect(target({ activeTab: 1, terminals: { 1: placed } })).toEqual({
+    terminal: 1,
+    text: "@src/a.ts (lines 3–5) ",
+  });
 });
 
 test("without selected lines or a live terminal in that worktree, it says why", () => {
   expect(target({ selectedLines: null })).toEqual({ why: "Select lines to send their reference" });
   expect(target({ openFile: null })).toEqual({ why: "Select lines to send their reference" });
   expect(target({ activeTab: null })).toEqual({ why: "No terminal open" });
-  expect(target({ terminals: { 2: { id: 2, exited: true, code: 0, unhooked: false } } })).toEqual({
+  const exited = { id: 2, exited: true, code: 0, unhooked: false, worktree: wt };
+  expect(target({ terminals: { 2: exited } })).toEqual({
     why: "The terminal has exited",
   });
   expect(target({ activeTab: 1 })).toEqual({ why: "The active terminal is in another worktree" });

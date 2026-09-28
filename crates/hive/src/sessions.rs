@@ -4,8 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read};
+use std::fs::{File, Metadata};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +19,8 @@ use crate::wrapper::write_atomic;
 
 /// Most bytes read from one log; a longer one is summarized from its start.
 const LOG_LIMIT: u64 = 67_108_864; // 64 MiB
+/// Most sessions listed, the most recent; older ones are left out.
+const LIST_LIMIT: usize = 500;
 /// Most characters kept of a title or a message.
 const TEXT_LIMIT: usize = 300;
 /// Largest list of open sessions read back.
@@ -64,7 +66,7 @@ pub fn root(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         .map(|dir| dir.join("projects"))
 }
 
-/// What a log says about its session, read once per version of the file.
+/// What a log says about its session, read as the file grows.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Summary {
     pub cwd: Option<String>,
@@ -166,20 +168,26 @@ pub fn state(end: Ending, running: bool) -> AgentState {
     }
 }
 
-/// Summarizes a JSONL log, at most [`LOG_LIMIT`] bytes of it. Lines that are not JSON are
-/// skipped, and so are subagent (sidechain) and meta messages.
-pub fn summarize(log: &mut dyn Read) -> Summary {
-    let mut summary = Summary::default();
-    let (mut custom, mut ai) = (None, None);
-    let reader = BufReader::new(log.take(LOG_LIMIT));
-    for line in reader.split(b'\n').map_while(Result::ok) {
-        let Ok(record) = serde_json::from_slice::<Value>(&line) else {
-            continue;
+/// A summary being built line by line: what [`Summary`] holds so far, and the titles seen.
+#[derive(Debug, Clone, Default)]
+struct Progress {
+    summary: Summary,
+    custom: Option<String>,
+    ai: Option<String>,
+}
+
+impl Progress {
+    /// Takes one line of a JSONL log into the summary. A line that is not JSON is skipped, and
+    /// so are subagent (sidechain) and meta messages.
+    fn line(&mut self, line: &[u8]) {
+        let Ok(record) = serde_json::from_slice::<Value>(line) else {
+            return;
         };
+        let summary = &mut self.summary;
         let text = |key: &str| record.get(key).and_then(Value::as_str).map(cut);
         match record.get("type").and_then(Value::as_str) {
-            Some("custom-title") => custom = text("customTitle"),
-            Some("ai-title") => ai = text("aiTitle"),
+            Some("custom-title") => self.custom = text("customTitle"),
+            Some("ai-title") => self.ai = text("aiTitle"),
             Some(kind @ ("user" | "assistant")) => {
                 if summary.cwd.is_none() {
                     summary.cwd = text("cwd");
@@ -190,7 +198,7 @@ pub fn summarize(log: &mut dyn Read) -> Summary {
                 summary.tokens.add(&record);
                 let flag = |key: &str| record.get(key).and_then(Value::as_bool) == Some(true);
                 if flag("isSidechain") || flag("isMeta") {
-                    continue;
+                    return;
                 }
                 let message = record.get("message");
                 summary.end = ending(kind, &record, message);
@@ -202,7 +210,7 @@ pub fn summarize(log: &mut dyn Read) -> Summary {
                     summary.model = Some(model.to_owned());
                 }
                 let Some(said) = message.and_then(|m| m.get("content")).and_then(first_text) else {
-                    continue;
+                    return;
                 };
                 let role = if kind == "user" {
                     SessionRole::User
@@ -222,8 +230,61 @@ pub fn summarize(log: &mut dyn Read) -> Summary {
             _ => {}
         }
     }
-    summary.title = custom.or(ai);
-    summary
+
+    /// The summary so far; a title the user set wins over Claude's, wherever it is.
+    fn summary(self) -> Summary {
+        Summary {
+            title: self.custom.or(self.ai),
+            ..self.summary
+        }
+    }
+}
+
+/// Which version of a log was read: its inode, length and modification time.
+type Seen = (u64, u64, SystemTime);
+
+/// What was read of one log: its whole lines up to `offset` (a log is read at most up to
+/// [`LOG_LIMIT`]), and the summary of the version `seen` last.
+#[derive(Debug, Default)]
+struct Entry {
+    seen: Option<Seen>,
+    offset: u64,
+    progress: Progress,
+    summary: Summary,
+}
+
+impl Entry {
+    /// Reads what the log `seen` gained since it was last read: only the bytes after `offset`,
+    /// unless it shrank or is another file (read again from its start). A last line without
+    /// its newline (still being written) counts in the summary and is read again next time.
+    fn read(&mut self, log: &mut (impl Read + Seek), seen: Seen) -> io::Result<()> {
+        if self
+            .seen
+            .is_some_and(|(ino, len, _)| ino != seen.0 || seen.1 < len)
+        {
+            *self = Self::default();
+        }
+        log.seek(SeekFrom::Start(self.offset))?;
+        // Up to the length `seen` (what grew since is read next time), at most `LOG_LIMIT`.
+        let limit = seen.1.min(LOG_LIMIT).saturating_sub(self.offset);
+        let mut reader = BufReader::new(log.take(limit));
+        let mut line = Vec::new();
+        // Each whole line takes at least a byte, so what is left to read bounds the loop.
+        for _ in 0..=limit {
+            line.clear();
+            // The end of the log, an error, or a line still being written.
+            if reader.read_until(b'\n', &mut line).is_err() || !line.ends_with(b"\n") {
+                break;
+            }
+            self.offset += line.len() as u64;
+            self.progress.line(&line);
+        }
+        let mut last = self.progress.clone();
+        last.line(&line);
+        self.summary = last.summary();
+        self.seen = Some(seen);
+        Ok(())
+    }
 }
 
 /// A message's text: the content itself, or its first non-empty text block; trimmed and cut.
@@ -260,10 +321,11 @@ pub fn valid_id(id: &str) -> bool {
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// Each log's summary, kept until the file changes.
-type Cache = Mutex<HashMap<PathBuf, (SystemTime, u64, Summary)>>;
+/// What was read of each log.
+type Cache = Mutex<HashMap<PathBuf, Entry>>;
 
-/// The logs of one Claude directory, with each log's summary kept until the file changes.
+/// The logs of one Claude directory, each read once: a log that grew is read from where it
+/// was left.
 pub struct Sessions {
     root: Option<PathBuf>,
     cache: Arc<Cache>,
@@ -292,42 +354,47 @@ impl Sessions {
         self.root.as_deref()
     }
 
-    /// Every session whose `cwd` lies in a followed worktree, the most recent first. `running`
-    /// holds the ids of the sessions a `claude` is known to run.
+    /// Every session whose `cwd` lies in a followed worktree, the most recent first, at most
+    /// [`LIST_LIMIT`] of them, and whether older ones were left out (they are not read).
+    /// `running` holds the ids of the sessions a `claude` is known to run.
     pub fn list(
         &self,
         projects: &[Project],
         running: &HashSet<String>,
-    ) -> io::Result<Vec<Session>> {
+    ) -> io::Result<(Vec<Session>, bool)> {
         let Some(root) = &self.root else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), false));
         };
         let prefixes: Vec<String> = projects.iter().map(|p| normalized(&p.path)).collect();
         let dirs = match std::fs::read_dir(root) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), false)),
             dirs => dirs?,
         };
-        let mut sessions = Vec::new();
+        let mut logs = Vec::new();
         for dir in dirs.flatten() {
             let name = normalized(&dir.file_name().to_string_lossy());
             if !prefixes.iter().any(|p| name.starts_with(p.as_str())) {
                 continue;
             }
-            let Ok(logs) = std::fs::read_dir(dir.path()) else {
+            let Ok(entries) = std::fs::read_dir(dir.path()) else {
                 continue;
             };
-            for log in logs.flatten() {
-                if let Some(session) = self.session(projects, &log.path()) {
-                    sessions.push(session);
-                }
-            }
+            logs.extend(entries.flatten().filter_map(|e| found(e.path())));
         }
-        sessions.sort_by(|(a, _), (b, _)| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
+        logs.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
+        let mut sessions: Vec<_> = logs
+            .into_iter()
+            .filter_map(|log| self.session(projects, log))
+            .take(LIST_LIMIT + 1)
+            .collect();
+        let truncated = sessions.len() > LIST_LIMIT;
+        sessions.truncate(LIST_LIMIT);
         for (session, end) in &mut sessions {
             session.running = running.contains(&session.id);
             session.state = state(*end, session.running);
         }
-        Ok(sessions.into_iter().map(|(session, _)| session).collect())
+        let sessions = sessions.into_iter().map(|(session, _)| session).collect();
+        Ok((sessions, truncated))
     }
 
     /// The name of the session `id` that runs in `cwd` (the user's, else Claude's, else its
@@ -335,8 +402,7 @@ impl Sessions {
     /// for `cwd`.
     pub fn title(&self, id: &str, cwd: &str) -> Option<String> {
         let log = self.log(id, cwd)?;
-        let meta = log.metadata().ok()?;
-        let summary = self.summary(&log, meta.modified().ok()?, meta.len())?;
+        let summary = self.summary(&log, &log.metadata().ok()?)?;
         summary.title.or(summary.first_prompt)
     }
 
@@ -359,6 +425,7 @@ impl Sessions {
             return Err(io::Error::other(format!("invalid session id {id:?}")));
         }
         self.list(projects, &HashSet::new())?
+            .0
             .into_iter()
             .find(|s| s.id == id)
             .ok_or_else(|| io::Error::other(format!("no session {id} in the followed projects")))
@@ -380,26 +447,16 @@ impl Sessions {
         Ok(())
     }
 
-    /// The session logged at `path` (stopped until `list` says otherwise) and how its log ends,
-    /// when it is a regular `<id>.jsonl` file whose `cwd` lies in a followed worktree.
-    fn session(&self, projects: &[Project], path: &Path) -> Option<(Session, Ending)> {
-        let id = path
-            .file_name()?
-            .to_str()?
-            .strip_suffix(".jsonl")
-            .filter(|id| valid_id(id))?;
-        let meta = path.symlink_metadata().ok().filter(|m| m.is_file())?;
-        let modified = meta.modified().ok()?;
-        let summary = self.summary(path, modified, meta.len())?;
+    /// The session of `log` (stopped until `list` says otherwise) and how its log ends, when
+    /// its `cwd` lies in a followed worktree.
+    fn session(&self, projects: &[Project], log: Found) -> Option<(Session, Ending)> {
+        let summary = self.summary(&log.path, &log.meta)?;
         let cwd = summary.cwd.clone()?;
         let (project, worktree) = projects::place(projects, &cwd)?;
-        let updated_ms = modified
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
         let (last_role, last_text) = summary.last.clone().unzip();
         let end = summary.end;
         let session = Session {
-            id: id.to_owned(),
+            id: log.id,
             project,
             worktree,
             cwd,
@@ -411,25 +468,54 @@ impl Sessions {
             branch: summary.branch,
             context_tokens: summary.tokens.context,
             output_tokens: summary.tokens.output,
-            updated_ms,
-            log: path.to_string_lossy().into_owned(),
+            updated_ms: log.updated_ms,
+            log: log.path.to_string_lossy().into_owned(),
             state: state(end, false),
             running: false,
         };
         Some((session, end))
     }
 
-    fn summary(&self, path: &Path, modified: SystemTime, len: u64) -> Option<Summary> {
+    /// The summary of the log at `path`, read as far as it grew since the last time.
+    fn summary(&self, path: &Path, meta: &Metadata) -> Option<Summary> {
+        use std::os::unix::fs::MetadataExt;
+        let seen = (meta.ino(), meta.len(), meta.modified().ok()?);
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((m, l, summary)) = cache.get(path)
-            && (*m, *l) == (modified, len)
-        {
-            return Some(summary.clone());
+        let entry = cache.entry(path.to_owned()).or_default();
+        if entry.seen != Some(seen) {
+            entry.read(&mut File::open(path).ok()?, seen).ok()?;
         }
-        let summary = summarize(&mut File::open(path).ok()?);
-        cache.insert(path.to_owned(), (modified, len, summary.clone()));
-        Some(summary)
+        Some(entry.summary.clone())
     }
+}
+
+/// A session log found in a folder of Claude's: a regular `<id>.jsonl` file.
+struct Found {
+    path: PathBuf,
+    id: String,
+    meta: Metadata,
+    updated_ms: u64,
+}
+
+fn found(path: PathBuf) -> Option<Found> {
+    let id = path
+        .file_name()?
+        .to_str()?
+        .strip_suffix(".jsonl")
+        .filter(|id| valid_id(id))?
+        .to_owned();
+    let meta = path.symlink_metadata().ok().filter(|m| m.is_file())?;
+    let updated_ms = meta
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    Some(Found {
+        path,
+        id,
+        meta,
+        updated_ms,
+    })
 }
 
 #[cfg(test)]
@@ -476,6 +562,104 @@ not json
 {"type":"assistant","gitBranch":"feat","message":{"model":"<synthetic>","content":"Done."}}
 {"type":"ai-title","aiTitle":"Login fix"}
 {"type":"user","message":{"content":7}}"#;
+
+    /// The summary of a whole log, read at once.
+    fn summarize(log: &mut &[u8]) -> Summary {
+        let mut entry = Entry::default();
+        let seen = (1, log.len() as u64, UNIX_EPOCH);
+        entry.read(&mut io::Cursor::new(*log), seen).unwrap();
+        entry.summary
+    }
+
+    /// A log in memory that counts the bytes read from it.
+    struct Counted {
+        log: io::Cursor<Vec<u8>>,
+        read: usize,
+    }
+
+    impl Read for Counted {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = self.log.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl Seek for Counted {
+        fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+            self.log.seek(to)
+        }
+    }
+
+    #[test]
+    fn a_growing_log_is_read_from_where_it_was_left() {
+        let user = |text: &str| {
+            format!("{{\"type\":\"user\",\"cwd\":\"/r\",\"message\":{{\"content\":\"{text}\"}}}}\n")
+        };
+        let mut entry = Entry::default();
+        let mut counted = Counted {
+            log: io::Cursor::new(Vec::new()),
+            read: 0,
+        };
+        // Reads the log as file `ino`, and gives what it read and the summary.
+        let read = |entry: &mut Entry, counted: &mut Counted, ino: u64| {
+            counted.read = 0;
+            let len = counted.log.get_ref().len() as u64;
+            entry.read(counted, (ino, len, UNIX_EPOCH)).unwrap();
+            let summary = &entry.summary;
+            (
+                counted.read,
+                summary.messages,
+                summary.last.clone().map(|(_, t)| t),
+            )
+        };
+        let first = user("one") + &user("two");
+        counted.log.get_mut().extend(first.as_bytes());
+        assert_eq!(
+            read(&mut entry, &mut counted, 1),
+            (first.len(), 2, Some("two".into()))
+        );
+        // Only what was appended is read.
+        let third = user("three");
+        counted.log.get_mut().extend(third.as_bytes());
+        assert_eq!(
+            read(&mut entry, &mut counted, 1),
+            (third.len(), 3, Some("three".into()))
+        );
+        assert_eq!(entry.summary.first_prompt.as_deref(), Some("one"));
+        // Touched but not grown: nothing to read.
+        assert_eq!(
+            read(&mut entry, &mut counted, 1),
+            (0, 3, Some("three".into()))
+        );
+        // A line still being written counts, and is read again once whole.
+        let fourth = user("four");
+        let (start, end) = fourth.split_at(fourth.len() - 1);
+        counted.log.get_mut().extend(start.as_bytes());
+        assert_eq!(
+            read(&mut entry, &mut counted, 1),
+            (start.len(), 4, Some("four".into()))
+        );
+        counted.log.get_mut().extend(end.as_bytes());
+        assert_eq!(
+            read(&mut entry, &mut counted, 1),
+            (fourth.len(), 4, Some("four".into()))
+        );
+        let whole = counted.log.get_ref().len();
+        // A log that shrank, or another file in its place, is read again from its start.
+        counted.log.get_mut().truncate(first.len());
+        assert_eq!(
+            read(&mut entry, &mut counted, 1),
+            (first.len(), 2, Some("two".into()))
+        );
+        counted.log.get_mut().extend(third.as_bytes());
+        let len = counted.log.get_ref().len();
+        assert_eq!(
+            read(&mut entry, &mut counted, 2),
+            (len, 3, Some("three".into()))
+        );
+        assert!(len < whole);
+    }
 
     #[test]
     fn a_log_is_summarized() {
@@ -754,6 +938,32 @@ not json
     }
 
     #[test]
+    fn only_the_newest_sessions_are_listed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("projects");
+        let repo = tmp.path().join("repo");
+        let repo = repo.to_str().unwrap();
+        let folder = root.join(normalized(repo));
+        std::fs::create_dir_all(repo).unwrap();
+        for i in 0..600 {
+            touched(&log(&folder, &format!("s{i:03}.jsonl"), repo), i);
+        }
+        let sessions = Sessions::new(Some(root));
+        let (list, truncated) = sessions.list(&[project(repo)], &HashSet::new()).unwrap();
+        let ids: Vec<String> = list.into_iter().map(|s| s.id).collect();
+        let newest: Vec<String> = (100..600).rev().map(|i| format!("s{i:03}")).collect();
+        assert_eq!((ids, truncated), (newest, true));
+        // The older logs are not read (one past the cap tells that some were left out).
+        assert_eq!(sessions.cache.lock().unwrap().len(), LIST_LIMIT + 1);
+        // At the cap, nothing is left out.
+        for i in 0..100 {
+            std::fs::remove_file(folder.join(format!("s{i:03}.jsonl"))).unwrap();
+        }
+        let (list, truncated) = sessions.list(&[project(repo)], &HashSet::new()).unwrap();
+        assert_eq!((list.len(), truncated), (LIST_LIMIT, false));
+    }
+
+    #[test]
     fn sessions_of_followed_projects_are_listed_newest_first_and_deleted() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("projects");
@@ -785,7 +995,7 @@ not json
 
         let sessions = Sessions::new(Some(root.clone()));
         let followed = [project(repo), project("/other-not-followed")];
-        let list = sessions.list(&followed, &HashSet::new()).unwrap();
+        let list = sessions.list(&followed, &HashSet::new()).unwrap().0;
         let got: Vec<_> = list
             .iter()
             .map(|s| (s.id.as_str(), s.worktree.as_str(), s.title.as_deref()))
@@ -812,7 +1022,7 @@ not json
         let second = log(&folder, "h.jsonl", repo);
         touched(&second, 2);
         let running = HashSet::from(["a".to_owned(), "gone".to_owned()]);
-        let list = sessions.list(&followed, &running).unwrap();
+        let list = sessions.list(&followed, &running).unwrap().0;
         let got: Vec<_> = list
             .iter()
             .map(|s| (s.id.as_str(), s.running, s.state))
@@ -860,12 +1070,8 @@ not json
             "no session zz in the followed projects"
         );
         sessions.delete(&followed, "b").unwrap();
-        assert!(
-            sessions
-                .list(&followed, &HashSet::new())
-                .unwrap()
-                .is_empty()
-        );
+        let none = (vec![], false);
+        assert_eq!(sessions.list(&followed, &HashSet::new()).unwrap(), none);
         assert!(sessions.delete(&followed, "b").is_err());
 
         log(&folder, "a.jsonl", repo);
@@ -879,14 +1085,9 @@ not json
         assert!(folder.join("g").symlink_metadata().is_ok());
 
         // No Claude directory, or none yet: no sessions.
-        assert!(
-            Sessions::new(None)
-                .list(&followed, &HashSet::new())
-                .unwrap()
-                .is_empty()
-        );
-        let missing = Sessions::new(Some(tmp.path().join("none")));
-        assert!(missing.list(&followed, &HashSet::new()).unwrap().is_empty());
+        let listed = |sessions: Sessions| sessions.list(&followed, &HashSet::new()).unwrap();
+        assert_eq!(listed(Sessions::new(None)), none);
+        assert_eq!(listed(Sessions::new(Some(tmp.path().join("none")))), none);
         // A root that is a file cannot be listed.
         let file = Sessions::new(Some(tmp.path().join("projects/stray-file")));
         assert!(file.list(&followed, &HashSet::new()).is_err());

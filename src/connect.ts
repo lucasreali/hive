@@ -2,7 +2,7 @@ import { notify } from "./notify";
 import { openLocated, restore } from "./sessions";
 import { apply, type ServiceMessage } from "./store";
 import { transport } from "./transport";
-import { openExternal, openFolder } from "./viewer/external";
+import { openTarget } from "./viewer/external";
 
 /** Every service message: `notify` first (it compares with the state still stored), then the store. */
 function onMessage(message: ServiceMessage): void {
@@ -10,9 +10,7 @@ function onMessage(message: ServiceMessage): void {
   apply(message);
   if (message.type === "session_located") void openLocated(message);
   if (message.type === "restore_sessions") void restore(message.sessions);
-  if (message.type === "editor_target") {
-    void (message.path === "" ? openFolder(message) : openExternal(message));
-  }
+  if (message.type === "editor_target") void openTarget(message);
 }
 
 /** Connects to the service, at startup and on "Reconnect", always with the same handler. */

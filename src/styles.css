@@ -2659,6 +2659,14 @@ button.result-file:hover,
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Placed by the Sessions list's virtualizer (the pull requests list reuses `.session`). */
+.sessions .session {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
 .session:hover {
   background: var(--hover);
 }
