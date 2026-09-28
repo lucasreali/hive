@@ -22,6 +22,7 @@ import {
   moveTab,
   openFileDialog,
   openModal,
+  pinFile,
   selectedPlace,
   setOpenFile,
   setRightPanel,
@@ -111,6 +112,10 @@ function TabItem(props: {
   onMenu?: (event: MouseEvent) => void;
   title: string;
   onShow: () => void;
+  /** A double click on the label (a file's: keeps its preview tab, 11.1). */
+  onPin?: () => void;
+  /** Read by screen readers after the label (e.g. "Preview"). */
+  description?: string;
   close: string;
   onClose: () => void;
   dirty?: boolean;
@@ -129,7 +134,9 @@ function TabItem(props: {
         role="tab"
         aria-selected={props.active}
         className="tab-label"
+        aria-description={props.description}
         onClick={props.onShow}
+        onDoubleClick={props.onPin}
         onContextMenu={props.onMenu}
       >
         {props.children}
@@ -214,18 +221,23 @@ function FileTab({ file, drag }: { file: FileTabData; drag: Drag }) {
     return !!edit && isDirty(edit);
   });
   const name = file.path.slice(file.path.lastIndexOf("/") + 1);
+  const preview = !!file.preview;
   return (
     <TabItem
       drag={drag}
       active={active}
-      title={file.path}
+      title={preview ? `${file.path}\nPreview: opening another file replaces it` : file.path}
       onShow={() => setOpenFile(file)}
+      onPin={() => pinFile(file)}
+      description={preview ? "Preview" : undefined}
       close={`Close file ${name}`}
       onClose={() => closeFile(file)}
       dirty={dirty}
     >
       <FileIcon />
-      <span className="tab-name">{name}</span>
+      <span className="tab-name" data-preview={preview || undefined}>
+        {name}
+      </span>
     </TabItem>
   );
 }

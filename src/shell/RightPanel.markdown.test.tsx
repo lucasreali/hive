@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { asMac } from "../../test/mac";
 import type { ChangedFile, FileText } from "../protocol";
 import { apply } from "../reduce";
-import { initialState, select, setOpenFile, useHive } from "../store";
+import { initialState, pinFile, select, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
 import { toText } from "../viewer/buffer";
@@ -108,6 +108,8 @@ test("the rendered choice is the tab's: another Markdown file, or one opened aga
   panel();
   open("README.md");
   fireEvent.click(eye() as HTMLElement);
+  // Kept (11.1), so docs/api.md gets a tab of its own instead of replacing it.
+  act(() => pinFile({ worktree: refactor.path, path: "README.md" }));
   open("docs/api.md");
   expect(pressed()).toBe("false");
   open("README.md");

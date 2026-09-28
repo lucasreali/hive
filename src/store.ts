@@ -43,13 +43,14 @@ import {
   dropFile,
   editFor,
   fileVisible,
+  kept,
   opened,
   shownSplit,
   tabWorktree,
   visibleTabs,
   withKey,
 } from "./tabs";
-import { type EditBuffer, isFor } from "./viewer/buffer";
+import { type EditBuffer, isDirty, isFor } from "./viewer/buffer";
 
 // The one store (#30, #38). UI state is set by components; service data changes only through
 // `apply` (reduce.ts).
@@ -91,6 +92,11 @@ export type FileTab = OpenFile & {
   editing: boolean;
   edit: EditBuffer | null;
   view: unknown;
+  /**
+   * The preview tab (11.1), at most one: opening another file replaces it. It is kept (false)
+   * once pinned (a double click) or given unsaved edits.
+   */
+  preview?: boolean;
   rendered?: boolean;
 };
 
@@ -599,9 +605,9 @@ export const clearAddProjectError = () => useHive.setState({ addProjectError: nu
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });
 /**
- * Opens a file in its own tab (8.21) and shows it, as editable text when `editing`; a file
- * already open shows its tab as it was left. The file shown before keeps its state in its tab.
- * Null closes the open file's tab, without asking (`closeFile` asks).
+ * Opens a file in its own tab (8.21), the preview tab (11.1), and shows it, as editable text
+ * when `editing`; a file already open shows its tab as it was left. The file shown before keeps
+ * its state in its tab. Null closes the open file's tab, without asking (`closeFile` asks).
  */
 export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: number) =>
   useHive.setState((s) =>
@@ -638,7 +644,15 @@ export const clearGotoLine = () => useHive.setState({ gotoLine: null });
 /** Shows the open file as editable text (its buffer starts from the last answer) or not. */
 export const setEditing = (editing: boolean) =>
   useHive.setState((s) => ({ editing, edit: editing ? editFor({ ...s, editing }, s.file) : null }));
-export const setEdit = (edit: EditBuffer | null) => useHive.setState({ edit });
+/** Sets the open file's edit buffer; with unsaved edits, its tab is kept (11.1). */
+export const setEdit = (edit: EditBuffer | null) =>
+  useHive.setState((s) => ({
+    edit,
+    openFiles: edit && isDirty(edit) ? kept(s.openFiles, edit) : s.openFiles,
+  }));
+/** Keeps file `f`'s tab: it stops being the preview tab (11.1, a double click). */
+export const pinFile = (f: OpenFile) =>
+  useHive.setState((s) => ({ openFiles: kept(s.openFiles, f) }));
 export const setEditorNotice = (editorNotice: string | null) => useHive.setState({ editorNotice });
 export const setSelectedLines = (selectedLines: Lines | null) =>
   useHive.setState({ selectedLines });

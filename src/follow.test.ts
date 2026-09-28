@@ -4,6 +4,7 @@ import { apply } from "./reduce";
 import {
   addTab,
   initialState,
+  pinFile,
   select,
   setDiffBase,
   setFocused,
@@ -78,6 +79,7 @@ test("asks for the open file when it opens, its worktree changes, or the service
   const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
   const stop = followOpenFile({ openFile } as unknown as Transport);
   setOpenFile({ worktree: "/w", path: "a.ts" });
+  pinFile({ worktree: "/w", path: "a.ts" }); // Its tab stays when b.ts opens (11.1).
   expect(openFile).not.toHaveBeenCalled(); // Not connected yet.
 
   welcome();

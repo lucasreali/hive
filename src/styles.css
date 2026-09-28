@@ -503,6 +503,11 @@ label:has(> input[type="checkbox"]:disabled) {
   font-size: var(--fs-mono);
 }
 
+/* The preview tab (11.1): opening another file replaces it. */
+.tab-name[data-preview] {
+  font-style: italic;
+}
+
 /* A session's name, not a path: prose, cut when long. */
 .tab-name[data-agent] {
   max-width: 220px;

@@ -203,7 +203,17 @@ test("the open file has its tab after the terminals, shown in place of the termi
       .getAllByRole("tab")
       .map((t) => t.textContent),
   ).toEqual(["main", "app.ts"]);
+  // Opened, it is the preview tab (11.1): its name in italics, and said so; a double click keeps it.
+  const name = () => tab("app.ts").querySelector(".tab-name") as HTMLElement;
+  expect(tab("app.ts").closest(".tab")?.getAttribute("title")).toBe(
+    "src/app.ts\nPreview: opening another file replaces it",
+  );
+  expect(tab("app.ts").getAttribute("aria-description")).toBe("Preview");
+  expect(name().hasAttribute("data-preview")).toBe(true);
+  fireEvent.doubleClick(tab("app.ts"));
   expect(tab("app.ts").closest(".tab")?.getAttribute("title")).toBe("src/app.ts");
+  expect(tab("app.ts").hasAttribute("aria-description")).toBe(false);
+  expect(name().hasAttribute("data-preview")).toBe(false);
   expect(tabs()).toEqual(["false", "true"]);
   expect(host().hidden).toBe(true);
   expect(screen.getByRole("region", { name: "src/app.ts" })).toBeDefined();

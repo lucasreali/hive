@@ -12,14 +12,20 @@ import { App } from "./App";
 import { savedTabOrder, saveTabOrder } from "./persist";
 import { apply } from "./reduce";
 import {
+  activateTab,
   addTab,
   type HiveState,
   initialState,
   moveTab,
+  type OpenFile,
+  pinFile,
   removeTab,
+  renderedShown,
   select,
   setEdit,
+  setEditing,
   setOpenFile,
+  setRendered,
   useHive,
 } from "./store";
 import { barItems, dropFile, visibleTabs } from "./tabs";
@@ -37,6 +43,11 @@ const s = () => useHive.getState();
 /** The bar's tabs: a file by its path, a terminal by its id. */
 const bar = () => barItems(s()).map((t) => ("path" in t ? t.path : t.id));
 const file = (path: string, worktree = W) => ({ worktree, path });
+/** Opens `f` and keeps its tab (a double click, 11.1), so the next file gets a tab of its own. */
+const keepOpen = (f: OpenFile, editing?: boolean, line?: number) => {
+  setOpenFile(f, editing, line);
+  pinFile(f);
+};
 
 beforeEach(() => {
   useHive.setState(initialState, true);
@@ -68,35 +79,89 @@ const answer = (path: string, content: string) =>
 const type = (text: string) => setEdit({ ...(s().edit as EditBuffer), doc: toText(text) });
 
 test("two files open in two tabs, each keeping its own edits, editing mode and view", () => {
-  setOpenFile(file("a.ts"), true);
+  keepOpen(file("a.ts"), true);
   answer("a.ts", "a\n");
   type("mine a\n");
-  setOpenFile(file("b.ts"));
+  keepOpen(file("b.ts"));
   expect(s()).toMatchObject({ openFile: file("b.ts"), editing: false, edit: null });
   answer("b.ts", "b\n");
   expect(s().edit).toBeNull(); // Not editing b.ts: its answers keep no buffer.
-  setOpenFile(file("a.ts"));
+  keepOpen(file("a.ts"));
   expect(s().editing).toBe(true);
   expect(s().edit?.doc.toString()).toBe("mine a\n");
   // A save answered while the file is in the background still reaches its tab.
   const sending = { ...(s().edit as EditBuffer), saving: toText("mine a\n") };
   setEdit(sending);
-  setOpenFile(file("b.ts"));
+  keepOpen(file("b.ts"));
   apply({ type: "file_saved", ...file("a.ts"), version: "v2" });
   expect(s().openFiles[0]?.edit?.version).toBe("v2");
   apply({ type: "save_failed", ...file("a.ts"), error: "io", message: "no" });
   expect(s().openFiles[0]?.edit?.error).toBe("no");
   // Opening a file already open shows its tab; nothing is added.
-  setOpenFile(file("b.ts"), true, 3);
+  keepOpen(file("b.ts"), true, 3);
   expect([bar(), s().gotoLine]).toEqual([["a.ts", "b.ts"], { ...file("b.ts"), line: 3 }]);
   expect(s().editing).toBe(false);
 });
 
-test("new tabs go last in opening order, terminals and files mixed; a drag reorders them", () => {
+test("a file opens in the preview tab, which the next file replaces in place (11.1)", () => {
+  const preview = () =>
+    s()
+      .openFiles.filter((f) => f.preview)
+      .map((f) => f.path);
   addTab(1, W);
   setOpenFile(file("a.ts"));
+  setRendered(true);
+  expect(renderedShown(s())).toBe(true);
   addTab(2, W);
+  expect([bar(), preview()]).toEqual([[1, "a.ts", 2], ["a.ts"]]);
+  // b.ts takes a.ts's place, not the end of the bar.
+  setOpenFile(file("b.ts"), true, 4);
+  expect(renderedShown(s())).toBe(false); // a.ts was shown rendered (11.2): b.ts is not.
+  expect([bar(), preview(), s().openFile, s().editing]).toEqual([
+    [1, "b.ts", 2],
+    ["b.ts"],
+    file("b.ts"),
+    true,
+  ]);
+  expect(s().tabOrder).toEqual(["tab:1", `file:${W}\nb.ts`, "tab:2"]);
+  // Opening a file already open only shows it: b.ts stays the preview.
+  activateTab({ id: 2, cwd: W });
   setOpenFile(file("b.ts"));
+  expect([bar(), preview(), s().fileShown]).toEqual([[1, "b.ts", 2], ["b.ts"], true]);
+  // Pinned, it stays; the next file is the preview, last. At most one preview.
+  pinFile(file("b.ts"));
+  const kept = s().openFiles;
+  pinFile(file("b.ts"));
+  expect(s().openFiles).toBe(kept); // Already kept: nothing changes.
+  setOpenFile(file("c.ts"));
+  setOpenFile(file("d.ts"));
+  expect([bar(), preview()]).toEqual([[1, "b.ts", 2, "d.ts"], ["d.ts"]]);
+  // Unsaved edits keep it, and it stays kept once saved.
+  setEditing(true); // As leaveFile does for a file already open.
+  answer("d.ts", "d\n");
+  expect(preview()).toEqual(["d.ts"]); // Its answer is no edit.
+  type("mine\n");
+  expect(preview()).toEqual([]);
+  apply({ type: "file_saved", ...file("d.ts"), version: "v2" });
+  setOpenFile(file("e.ts"));
+  expect([bar(), preview()]).toEqual([[1, "b.ts", 2, "d.ts", "e.ts"], ["e.ts"]]);
+  // A preview of another worktree closes: the new one goes last in its own bar.
+  select(checkout.id);
+  setOpenFile(file("f.ts", checkout.path));
+  select(null);
+  expect([bar(), preview()]).toEqual([[1, "b.ts", 2, "d.ts", "f.ts"], ["f.ts"]]);
+  // A preview with unsaved edits (whatever its flag says) is never replaced.
+  const at = { saved: null, version: null, conflict: null, saving: null, error: null, recheck: 0 };
+  useHive.setState({ edit: { ...file("f.ts", checkout.path), doc: toText("x\n"), ...at } });
+  setOpenFile(file("g.ts", checkout.path));
+  expect(preview()).toEqual(["f.ts", "g.ts"]);
+});
+
+test("new tabs go last in opening order, terminals and files mixed; a drag reorders them", () => {
+  addTab(1, W);
+  keepOpen(file("a.ts"));
+  addTab(2, W);
+  keepOpen(file("b.ts"));
   expect(bar()).toEqual([1, "a.ts", 2, "b.ts"]);
   expect(s().tabOrder).toEqual(["tab:1", `file:${W}\na.ts`, "tab:2", `file:${W}\nb.ts`]);
   moveTab(`file:${W}\nb.ts`, "tab:1", false);
@@ -111,7 +176,7 @@ test("new tabs go last in opening order, terminals and files mixed; a drag reord
   // Another worktree's tabs keep their places; its bar has its own order.
   select(checkout.id);
   addTab(3, checkout.path);
-  setOpenFile(file("c.ts", checkout.path));
+  keepOpen(file("c.ts", checkout.path));
   moveTab(`file:${checkout.path}\nc.ts`, "tab:3", false);
   expect(bar()).toEqual(["c.ts", 3]);
   select(fixLogin.id);
@@ -125,7 +190,7 @@ test("the order is remembered for a reload: files and sessions, not a run's chan
   addTab(1, W);
   apply({ type: "agent_detected", channel: 1, id: "s1", project: shop.id, worktree: W, cwd: W });
   addTab(2, W);
-  setOpenFile(file("a.ts"));
+  keepOpen(file("a.ts"));
   moveTab(`file:${W}\na.ts`, "session:s1", false);
   expect(bar()).toEqual(["a.ts", 1, 2]);
   expect(savedTabOrder()).toEqual([`file:${W}\na.ts`, "session:s1"]);
@@ -137,7 +202,7 @@ test("the order is remembered for a reload: files and sessions, not a run's chan
   addTab(7, W);
   addTab(8, W);
   apply({ type: "agent_detected", channel: 8, id: "s1", project: shop.id, worktree: W, cwd: W });
-  setOpenFile(file("a.ts"));
+  keepOpen(file("a.ts"));
   expect(bar()).toEqual(["a.ts", 8, 7]);
   // Closing tabs forgets them.
   removeTab(8);
@@ -158,7 +223,7 @@ test("a saved order that cannot be read is empty; a failing storage keeps the mo
     throw new Error("full");
   });
   addTab(1, W);
-  setOpenFile(file("a.ts"));
+  keepOpen(file("a.ts"));
   moveTab(`file:${W}\na.ts`, "tab:1", false);
   expect(bar()).toEqual(["a.ts", 1]);
   setItem.mockRestore();
@@ -172,9 +237,9 @@ test("a saved order that cannot be read is empty; a failing storage keeps the mo
 
 test("closing a tab shows its neighbour in the bar, a file or a terminal", () => {
   addTab(1, W);
-  setOpenFile(file("a.ts"));
+  keepOpen(file("a.ts"));
   addTab(2, W);
-  setOpenFile(file("b.ts"));
+  keepOpen(file("b.ts"));
   // The shown file's tab closes: the one on its left (it was last) shows.
   setOpenFile(null);
   expect([bar(), s().fileShown, s().activeTab]).toEqual([[1, "a.ts", 2], false, 2]);
@@ -185,8 +250,8 @@ test("closing a tab shows its neighbour in the bar, a file or a terminal", () =>
   setOpenFile(null);
   expect([s().fileShown, s().activeTab, s().openFile]).toEqual([false, 1, null]);
   // A file not shown closes alone; a place with files but no terminal shows its last file.
-  setOpenFile(file("c.ts"));
-  setOpenFile(file("d.ts"));
+  keepOpen(file("c.ts"));
+  keepOpen(file("d.ts"));
   useHive.setState({ fileShown: false });
   useHive.setState((x) => dropFile(x, file("c.ts")));
   expect([bar(), s().fileShown, s().openFile]).toEqual([[1, "d.ts"], false, file("d.ts")]);
@@ -207,15 +272,15 @@ test("Ctrl+Shift+D and closing follow the bar's order", async () => {
 });
 
 test("a file moved into another folder (8.3) keeps its tab, its place and its unsaved edits", () => {
-  setOpenFile(file("a.ts"), true);
+  keepOpen(file("a.ts"), true);
   answer("a.ts", "a\n");
   type("mine\n");
   addTab(1, W);
-  setOpenFile(file("b.ts"));
+  keepOpen(file("b.ts"));
   // Moved while in the background, then while shown.
   apply({ type: "file_renamed", worktree: W, path: "a.ts", to: "lib/a.ts" });
   expect(bar()).toEqual(["lib/a.ts", 1, "b.ts"]);
-  setOpenFile(file("lib/a.ts"));
+  keepOpen(file("lib/a.ts"));
   expect(s().edit?.doc.toString()).toBe("mine\n");
   expect(s().edit?.path).toBe("lib/a.ts");
   apply({ type: "file_renamed", worktree: W, path: "lib/a.ts", to: "src/lib/a.ts" });
@@ -227,11 +292,11 @@ test("a file moved into another folder (8.3) keeps its tab, its place and its un
 test("a renamed or moved file keeps its tab and its place; a deleted one's tab closes", () => {
   const listing = (files: string[], truncated = false) =>
     apply({ type: "files", path: W, files, truncated });
-  setOpenFile(file("a.ts"), true);
+  keepOpen(file("a.ts"), true);
   answer("a.ts", "a\n");
   addTab(1, W);
-  setOpenFile(file("b.ts"));
-  setOpenFile(file("c.ts"));
+  keepOpen(file("b.ts"));
+  keepOpen(file("c.ts"));
   apply({ type: "file_renamed", worktree: W, path: "a.ts", to: "src/a.ts" });
   expect(bar()).toEqual(["src/a.ts", 1, "b.ts", "c.ts"]);
   expect(s().openFiles[0]?.edit?.path).toBe("src/a.ts");
@@ -243,16 +308,16 @@ test("a renamed or moved file keeps its tab and its place; a deleted one's tab c
   listing(["src/a.ts", "c.ts"]);
   expect(bar()).toEqual(["src/a.ts", 1, "c.ts"]);
   // With unsaved edits it asks first.
-  setOpenFile(file("src/a.ts"));
+  keepOpen(file("src/a.ts"));
   type("mine\n");
-  setOpenFile(file("c.ts"));
+  keepOpen(file("c.ts"));
   listing([]);
   expect(bar()).toEqual(["src/a.ts", 1]); // c.ts closed; src/a.ts asks.
   expect(s().question?.text).toBe("src/a.ts was deleted. Your unsaved changes to it will be lost.");
   act(() => s().question?.run());
   expect(bar()).toEqual([1]);
   // Another worktree's listing, or the first one, closes nothing.
-  setOpenFile(file("d.ts"));
+  keepOpen(file("d.ts"));
   apply({ type: "files", path: checkout.path, files: [], truncated: false });
   listing([]);
   expect(bar()).toEqual([1, "d.ts"]);
@@ -267,11 +332,11 @@ test("a deleted file or folder leaves the tree at once and its tabs close, askin
   });
   useHive.setState({ newFolders: { [W]: ["src/empty", "other"] } });
   for (const path of ["src/b.ts", "src/lib/c.ts", "srcx/d.ts", "a.ts"]) {
-    setOpenFile(file(path), true);
+    keepOpen(file(path), true);
     answer(path, "x\n");
     if (path !== "srcx/d.ts") type(`${path} mine\n`);
   }
-  setOpenFile(file("src/b.ts", checkout.path));
+  keepOpen(file("src/b.ts", checkout.path));
   // Every open file, another worktree's marked.
   const open = () => s().openFiles.map((f) => (f.worktree === W ? f.path : `other:${f.path}`));
   // Clean tabs under the folder close at once; the dirty ones ask, in one question.
@@ -300,7 +365,7 @@ test("dirty files deleted one after another are asked about in one question, ove
   const paths = ["a.ts", "b.ts", "c.ts"];
   apply({ type: "files", path: W, files: [...paths, "d.ts"], truncated: false });
   for (const path of paths) {
-    setOpenFile(file(path), true);
+    keepOpen(file(path), true);
     answer(path, "x\n");
     type(`${path} mine\n`);
   }
@@ -323,10 +388,10 @@ test("the bar shows every tab in its order; a drag shows a drop line; the × ask
   act(() => {
     apply({ type: "projects", projects: [shop] });
     select(fixLogin.id);
-    setOpenFile(file("a.ts"), true);
+    keepOpen(file("a.ts"), true);
     answer("a.ts", "a\n");
     type("mine\n");
-    setOpenFile(file("b.ts"));
+    keepOpen(file("b.ts"));
   });
   const tabs = () =>
     within(screen.getByRole("tablist", { name: "Open terminals and files" }))

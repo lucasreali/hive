@@ -39,6 +39,7 @@ import {
   openFileMenu,
   type PanelView,
   panelWorktree,
+  pinFile,
   renderedShown,
   setDiffBase,
   setEditing,
@@ -733,6 +734,11 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
           if (index < 0) return;
           setActive(index);
           pick(rows[index] as FileRow);
+        }}
+        // A double click keeps the file's tab (11.1): its first click opened it as the preview.
+        onDoubleClick={(e) => {
+          const row = rows[indexAt(e)];
+          if (row?.kind === "file") pinFile({ worktree, path: row.key });
         }}
         // On a row, its menu; on the tree itself: a click below the rows (the root), or the Menu
         // key (the active row).

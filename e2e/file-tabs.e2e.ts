@@ -7,14 +7,51 @@ const names = (page: Page) =>
     .locator(".tab-name")
     .allTextContents();
 
-/** Opens `name` from the Files tree of the selected worktree, as editable text. */
+/**
+ * Opens `name` from the Files tree of the selected worktree, as editable text, and keeps its tab
+ * (a double click, 11.1), so the next file gets a tab of its own.
+ */
 async function openFile(page: Page, name: string) {
   const panel = page.getByRole("region", { name: "Files" });
-  await panel.getByRole("treeitem", { name, exact: true }).click();
+  await panel.getByRole("treeitem", { name, exact: true }).dblclick();
   const view = page.getByRole("region", { name });
   await expect(view.locator(".cm-content")).not.toBeEmpty();
   return view;
 }
+
+test("preview tab: a file opened replaces the preview; a double click keeps it (11.1)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  const panel = page.getByRole("region", { name: "Files" });
+  const row = (name: string) => panel.getByRole("treeitem", { name, exact: true });
+  const bar = page.getByRole("tablist", { name: "Open terminals and files" });
+  const italic = (name: string) =>
+    bar.locator(".tab-name", { hasText: name }).evaluate((e) => getComputedStyle(e).fontStyle);
+
+  // Opening A then B: one tab, B's, in italics and said to be a preview.
+  await row("README.md").click();
+  await row("package.json").click();
+  await expect.poll(() => names(page)).toEqual(["package.json"]);
+  expect(await italic("package.json")).toBe("italic");
+  await expect(page.getByRole("tab", { name: "package.json" })).toHaveAttribute(
+    "aria-description",
+    "Preview",
+  );
+  // A double click on the tab keeps it: the next file gets its own tab.
+  await page.getByRole("tab", { name: "package.json" }).dblclick();
+  expect(await italic("package.json")).toBe("normal");
+  await row("README.md").click();
+  await expect.poll(() => names(page)).toEqual(["package.json", "README.md"]);
+  // A double click on the tree row keeps it too.
+  await row("README.md").dblclick();
+  expect(await italic("README.md")).toBe("normal");
+  await expect(bar.locator(".tab-name[data-preview]")).toHaveCount(0);
+});
 
 test("file tabs: each file keeps its edits; tabs reorder by drag, remembered after a reload", async ({
   page,
