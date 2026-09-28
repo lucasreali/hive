@@ -57,7 +57,6 @@ export function goToAgent(agent: Agent): void {
     selection: agent.id,
     activeTab: tab?.id ?? s.activeTab,
     fileShown: tab ? false : s.fileShown,
-    transcriptShown: null,
   });
 }
 

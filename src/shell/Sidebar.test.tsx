@@ -184,18 +184,27 @@ test("agents and their subagents show the state the service sent, named for scre
     });
     apply({ type: "agent_state", id: "s2", ...agentStatus("ended"), subagents: [] });
   });
-  const rows = [...tree().querySelectorAll(".tree-row.agent, .tree-row.subagent")].map((r) => [
-    r.className,
+  const rows = [...tree().querySelectorAll(".tree-row.agent")].map((r) => [
     r.querySelector(".state-icon")?.getAttribute("aria-label"),
     r.querySelector(".state-label")?.textContent,
     r.querySelector(".label")?.textContent,
   ]);
   expect(rows).toEqual([
-    ["tree-row agent", "ended", "ended", "Claude"],
-    ["tree-row agent", "waiting for permission", "waiting for permission", "Claude"],
-    ["tree-row subagent", "working", "working", "subagent: Explore"],
-    ["tree-row subagent", "waiting for permission", "waiting for permission", "subagent: unknown"],
+    ["ended", "ended", "Claude"],
+    ["waiting for permission", "waiting for permission", "Claude"],
   ]);
+  // Each subagent is one quiet line under its agent (9.35): its state's icon and its type.
+  const lines = () =>
+    [...tree().querySelectorAll(".subagent-line")].map((l) => [
+      l.querySelector(".state-icon")?.getAttribute("aria-label"),
+      l.querySelector(".subagent-type")?.textContent,
+    ]);
+  expect(lines()).toEqual([
+    ["working", "Explore"],
+    ["waiting for permission", "subagent"],
+  ]);
+  const s1 = tree().querySelectorAll(".tree-row.agent")[1] as HTMLElement;
+  expect(s1.parentElement?.querySelectorAll(".subagent-line")).toHaveLength(2);
   // Every state has its own shape.
   const shapes = new Set<string>();
   for (const state of Object.keys(STATE_LABEL) as AgentState[]) {
@@ -208,21 +217,26 @@ test("agents and their subagents show the state the service sent, named for scre
     shapes.add(icon.innerHTML.replace(/<title>.*<\/title>/, ""));
   }
   expect(shapes.size).toBe(9);
-  // A subagent row shows its conversation (6.10), selected in place of its agent.
-  const explore = screen.getByRole("button", { name: /subagent: Explore/ });
-  fireEvent.click(explore);
-  expect(useHive.getState().transcriptShown).toEqual({ agent: "s1", subagent: "a1" });
-  expect(useHive.getState().selection).toBe("s1");
-  expect(explore.getAttribute("aria-current")).toBe("true");
-  const s1 = tree().querySelectorAll(".tree-row.agent")[1] as HTMLElement;
-  expect(s1.dataset.selected).toBe("false");
-  // Its agent's row shows the terminal again.
+  // A subagent line is no control: nothing in it takes the focus, and clicking it or asking
+  // for its menu changes nothing (no conversation, selection or tab).
+  const line = tree().querySelector(".subagent-line") as HTMLElement;
+  expect(line.querySelector("button, [tabindex]")).toBeNull();
+  expect(line.hasAttribute("tabindex")).toBe(false);
+  const place = () => {
+    const s = useHive.getState();
+    return [s.selection, s.activeTab, s.fileShown, s.menu, s.projectMenu];
+  };
+  const before = place();
+  fireEvent.click(line);
+  fireEvent.click(line.querySelector(".subagent-type") as HTMLElement);
+  fireEvent.contextMenu(line);
+  expect(place()).toEqual(before);
+  // Its agent's row still shows the agent's terminal.
   fireEvent.click(within(s1).getByRole("button"));
-  expect(useHive.getState().transcriptShown).toBeNull();
-  expect(explore.getAttribute("aria-current")).toBe("false");
+  expect(useHive.getState().activeTab).toBe(1);
   // Subagents that ended leave the tree.
   act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("idle"), subagents: [] }));
-  expect(tree().querySelector(".tree-row.subagent")).toBeNull();
+  expect(tree().querySelector(".subagent-line")).toBeNull();
 });
 
 test("elapsed time reads in seconds, minutes, then hours", () => {
@@ -261,18 +275,37 @@ test("rows show the time in the state and the activity, all ticking on one timer
             state: "working",
             worktree: null,
             writing: true,
-            activity: null,
+            activity: "Reading src/y.ts",
             since_ms: now - 5_000,
+          },
+          {
+            id: "a2",
+            agent_type: "Plan",
+            state: "idle",
+            worktree: null,
+            writing: false,
+            activity: null,
+            since_ms: now - 65_000,
           },
         ],
       });
     });
     const meta = () => [...tree().querySelectorAll(".state-meta")].map((m) => m.textContent);
-    expect(meta()).toEqual(["2m · Editing src/x.ts", "5s"]);
+    // A subagent's line: its type, its activity (none while idle), then its time.
+    const lines = () =>
+      [...tree().querySelectorAll(".subagent-line")].map((l) =>
+        [...l.querySelectorAll("span")].map((s) => `${s.className}=${s.textContent}`),
+      );
+    expect(meta()).toEqual(["2m · Editing src/x.ts"]);
+    expect(lines()).toEqual([
+      ["subagent-type=Explore", "subagent-activity=Reading src/y.ts", "subagent-time=5s"],
+      ["subagent-type=Plan", "subagent-time=1m"],
+    ]);
     expect(ticks()).toHaveLength(1);
     clock.mockReturnValue(now + 3_600_000);
     act(() => (ticks()[0][0] as () => void)());
-    expect(meta()).toEqual(["1h · Editing src/x.ts", "1h"]);
+    expect(meta()).toEqual(["1h · Editing src/x.ts"]);
+    expect(lines().map((l) => l.at(-1))).toEqual(["subagent-time=1h", "subagent-time=1h"]);
     // The context used shows once the service sent it, on the agent's row only.
     const ctx = () => [...tree().querySelectorAll(".state-ctx")].map((m) => m.textContent);
     expect(ctx()).toEqual([]);
@@ -415,7 +448,7 @@ test("arrow keys move in the tree and collapse or expand a project", () => {
   expect(document.activeElement).toBe(row("shop"));
 });
 
-test("a subagent's own worktree is its parent row, not at project level", () => {
+test("a subagent's own worktree has no row; its path is the subagent line's tooltip", () => {
   render(<App />);
   const [main, , featCheckout] = shop.worktrees;
   const sub = (id: string, worktree: string | null) =>
@@ -428,16 +461,15 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
       since_ms: 0,
       writing: true,
     }) as const;
-  const subagents = (...list: ReturnType<typeof sub>[]) =>
-    apply({ type: "agent_state", id: "s1", ...agentStatus("with_subagents"), subagents: list });
-  // The worktrees the service says subagents own, where no agent runs.
+  // The worktrees the service says subagents own, where no agent or terminal of the human's is.
   const owned = (...worktrees: string[]) => apply({ type: "subagent_worktrees", worktrees });
   act(() => {
     apply({ type: "projects", projects: [shop] });
     useHive.setState({ tabs: [{ id: 1, cwd: main.path }], activeTab: null });
     const placed = { project: shop.id, worktree: main.id, cwd: main.path };
     apply({ type: "agent_detected", channel: 1, id: "s1", ...placed });
-    subagents(sub("a1", featCheckout.id), sub("a2", null));
+    const subagents = [sub("a1", featCheckout.id), sub("a2", null)];
+    apply({ type: "agent_state", id: "s1", ...agentStatus("with_subagents"), subagents });
     owned(featCheckout.id);
   });
   const rows = () =>
@@ -449,49 +481,23 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
     ["tree-row project", "shop"],
     ["tree-row worktree", "main"],
     ["tree-row agent", "Claude"],
-    ["tree-row own-worktree", "feat-checkout"],
-    ["tree-row subagent", "subagent: Explore"],
-    ["tree-row subagent", "subagent: Explore"],
     ["tree-row worktree", "fix-login"],
   ]);
-  const own = tree().querySelector(".own-worktree") as HTMLElement;
-  expect(own.title).toBe(featCheckout.path);
-  // Project → Worktree → Agent at every level: the subagent is indented under it.
-  expect(own.nextElementSibling?.matches("ul.owned")).toBe(true);
-  expect(tree().querySelectorAll(".owned .tree-row.subagent")).toHaveLength(1);
-  // It is out of the arrow keys' way; clicking it shows the agent's terminal.
-  const button = within(own).getByRole("button");
-  expect(button.tabIndex).toBe(-1);
-  fireEvent.click(button);
-  expect(useHive.getState().activeTab).toBe(1);
-  // An agent of its own keeps it at project level too.
-  act(() => {
-    const placed = { project: shop.id, worktree: featCheckout.id, cwd: featCheckout.path };
-    apply({ type: "agent_detected", channel: 2, id: "s2", ...placed });
-    owned();
-  });
-  expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(2);
-  act(() => {
-    apply({ type: "agent_removed", channel: 2, id: "s2" });
-    owned(featCheckout.id);
-  });
-  expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(1);
-  // A worktree the projects do not list yet shows nowhere and its subagent stays in place;
-  // unlinked, the worktree is back at project level.
-  act(() => subagents(sub("a1", "/elsewhere"), sub("a2", null)));
-  expect(tree().querySelector(".own-worktree")).toBeNull();
-  expect(tree().querySelector(".owned")).toBeNull();
-  expect(tree().querySelectorAll(".tree-row.subagent")).toHaveLength(2);
-  act(() => {
-    subagents(sub("a1", null), sub("a2", null));
-    owned();
-  });
-  expect(rows().map(([, label]) => label)).toContain("feat-checkout");
-  // A lost service takes them with it.
+  const titles = [...tree().querySelectorAll<HTMLElement>(".subagent-line")].map((l) => l.title);
+  expect(titles).toEqual([featCheckout.path, ""]);
+  const checkout = () => screen.queryAllByRole("button", { name: "feat-checkout" });
+  expect(checkout()).toHaveLength(0);
+  // Once the service leaves it out (an agent or a terminal of the human's is there), it shows
+  // as a normal worktree, at project level.
+  act(() => owned());
+  expect(checkout()).toHaveLength(1);
+  expect(rows()).toContainEqual(["tree-row worktree", "feat-checkout"]);
   act(() => owned(featCheckout.id));
+  expect(checkout()).toHaveLength(0);
+  // A lost service takes them with it.
   act(() => apply({ type: "disconnected", reason: "gone" }));
   expect(useHive.getState().subagentWorktrees).toEqual([]);
-  expect(tree().querySelector(".own-worktree")).toBeNull();
+  expect(checkout()).toHaveLength(1);
 });
 
 test("a worktree's + opens a new chat there: a terminal running claude", async () => {
