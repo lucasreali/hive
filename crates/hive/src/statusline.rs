@@ -321,6 +321,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_input_names_the_project_up_to_the_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (claude, project) = (tmp.path().join("claude"), tmp.path().join("p"));
+        settings(&claude.join("settings.json"), "printf user");
+        settings(&project.join(".claude/settings.json"), "printf project");
+        let json = json!({ "workspace": { "project_dir": project } }).to_string();
+        // Exactly the limit, then one byte more (its first bytes alone still whole JSON).
+        let mut input = json.clone() + &" ".repeat(MAX_INPUT - json.len());
+        assert_eq!(
+            statusline(&claude, input.as_bytes(), false).await.0,
+            b"project"
+        );
+        input.push(' ');
+        assert_eq!(
+            statusline(&claude, input.as_bytes(), false).await.0,
+            b"user"
+        );
+    }
+
+    #[tokio::test]
     async fn an_oversized_input_is_not_read_but_still_given_whole() {
         let tmp = tempfile::tempdir().unwrap();
         let claude = tmp.path().join("claude");
