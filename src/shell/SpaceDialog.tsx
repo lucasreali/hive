@@ -12,12 +12,6 @@ type TextKey = Exclude<keyof SpaceEnv, "gh_account">;
 /** The environment fields, in the dialog's order: what each sets in the space's terminals. */
 const FIELDS: { key: TextKey; label: string; placeholder: string; help: string }[] = [
   {
-    key: "claude_config_dir",
-    label: "Claude config folder",
-    placeholder: "/home/you/.claude-work",
-    help: "CLAUDE_CONFIG_DIR: the space's Claude account, settings and sessions.",
-  },
-  {
     key: "git_name",
     label: "Git name",
     placeholder: "Your Name",
@@ -38,7 +32,6 @@ const FIELDS: { key: TextKey; label: string; placeholder: string; help: string }
 ];
 
 const NO_ENV: SpaceEnv = {
-  claude_config_dir: null,
   git_name: null,
   git_email: null,
   gh_config_dir: null,

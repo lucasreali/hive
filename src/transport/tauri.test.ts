@@ -38,6 +38,9 @@ test("each terminal gets its own byte channel", async () => {
   expect([cmd, args]).toEqual(["open_terminal", { cwd: "/w", cols: 80, rows: 24 }]);
   (onData as Channel<ArrayBuffer>).onmessage(new Uint8Array([104, 105]).buffer);
   expect(received).toEqual([new Uint8Array([104, 105])]);
+  // With a Claude account (12.2).
+  await tauriTransport.openTerminal("/w", 80, 24, () => {}, { config_dir: "/c" });
+  expect(calls[1]?.[1]).toMatchObject({ cwd: "/w", account: { config_dir: "/c" } });
 });
 
 test("terminal and project actions call their commands", async () => {
@@ -50,7 +53,6 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.addProject("/r");
   await tauriTransport.removeProject("/r");
   const env = {
-    claude_config_dir: null,
     git_name: "Me",
     git_email: null,
     gh_config_dir: null,

@@ -321,6 +321,7 @@ const session = (
     updated_ms: Date.now() - ago * MINUTE,
     state,
     running,
+    config_dir: null,
     log: `/home/user/.claude/projects/${cwd.replaceAll(/[^A-Za-z0-9]/g, "-")}/${id}.jsonl`,
   };
 };
@@ -543,7 +544,6 @@ export function createMockTransport(
   const find = (id: string) => projects.find((p) => p.id === id);
   // Spaces as `hive::spaces` keeps them: every project starts in "Default".
   const noEnv = {
-    claude_config_dir: null,
     git_name: null,
     git_email: null,
     gh_config_dir: null,
@@ -582,6 +582,8 @@ export function createMockTransport(
     line: string;
     cwd: string;
     agent: string | null;
+    /** Its `CLAUDE_CONFIG_DIR` (12.2): the account asked for, else the current one. */
+    claude: string | null;
   };
   const terminals = new Map<number, MockTerminal>();
   const encoder = new TextEncoder();
@@ -816,7 +818,10 @@ export function createMockTransport(
       later({ type: "settings", settings });
     },
     async setSettings(next) {
-      settings = next;
+      // A current Claude account that is gone falls back to the default one, as in the service.
+      const { accounts, account } = next.claude;
+      const known = accounts.some((a) => a.config_dir === account);
+      settings = { ...next, claude: { accounts, account: known ? account : null } };
       later({ type: "settings", settings });
     },
     async openSettingsFile() {
@@ -1036,9 +1041,10 @@ export function createMockTransport(
       const windows_path = error ? null : unc;
       later({ type: "editor_target", worktree, path, error, windows_path });
     },
-    async openTerminal(cwd, _cols, _rows, onData) {
+    async openTerminal(cwd, _cols, _rows, onData, account) {
       const id = ++last;
-      terminals.set(id, { onData, line: "", cwd, agent: null });
+      const claude = account ? account.config_dir : settings.claude.account;
+      terminals.set(id, { onData, line: "", cwd, agent: null, claude });
       later({ type: "terminal_opened", channel: id, worktree: place(cwd) });
       setTimeout(() => print(id, PROMPT), 0);
       if (scenario === "load") void replay(id);
@@ -1071,6 +1077,7 @@ export function createMockTransport(
           const text = line.slice(11).trim();
           later({ type: "badge", channel: id, text: text === "--clear" ? "" : text });
         }
+        if (line === "echo $CLAUDE_CONFIG_DIR") print(id, `\r\n${terminal.claude ?? ""}`);
         if (line.startsWith("cd ")) {
           const dir = line.slice(3);
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;

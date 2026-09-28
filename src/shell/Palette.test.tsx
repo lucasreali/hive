@@ -161,7 +161,6 @@ test("the selected worktree's run scripts are commands that type them into a new
 
 test("worktrees are the current space's only", () => {
   const env = {
-    claude_config_dir: null,
     git_name: null,
     git_email: null,
     gh_config_dir: null,

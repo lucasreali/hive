@@ -71,6 +71,36 @@ test("keeps the settings it is given in memory", async () => {
   ]);
 });
 
+test("new terminals get the current Claude account, or the one asked for (12.2)", async () => {
+  const { transport, messages } = await connected();
+  const work = { name: "Work", config_dir: "/w/.claude" };
+  const settings = { ...DEFAULT_SETTINGS, claude: { accounts: [work], account: "/w/.claude" } };
+  await transport.setSettings(settings);
+  const outputs: string[] = [];
+  const decoder = new TextDecoder();
+  const open = async (account?: { config_dir: string | null }) => {
+    const index = outputs.push("") - 1;
+    const onData = (b: Uint8Array) => {
+      outputs[index] += decoder.decode(b);
+    };
+    const id = await transport.openTerminal("/w", 80, 24, onData, account);
+    await transport.writeTerminal(id, "echo $CLAUDE_CONFIG_DIR\r");
+  };
+  await open();
+  await open({ config_dir: null });
+  await tick();
+  expect(outputs[0]).toContain("echo $CLAUDE_CONFIG_DIR\r\n/w/.claude");
+  expect(outputs[1]).not.toContain("/w/.claude");
+  // Removing the current account makes the default one current.
+  await transport.setSettings({ ...settings, claude: { accounts: [], account: "/w/.claude" } });
+  await tick();
+  const last = messages.at(-1);
+  expect(last?.type === "settings" && last.settings.claude).toEqual({
+    accounts: [],
+    account: null,
+  });
+});
+
 test("answers the settings file's path and the diagnostics", async () => {
   const transport = createMockTransport();
   const messages: ServiceMessage[] = [];
@@ -954,7 +984,6 @@ test("folders are browsed on both sides of the fake machine", async () => {
 const SHOP = "/home/user/projects/shop";
 const API = "/home/user/projects/api";
 const NO_ENV: SpaceEnv = {
-  claude_config_dir: null,
   git_name: null,
   git_email: null,
   gh_config_dir: null,

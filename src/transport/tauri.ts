@@ -15,9 +15,9 @@ export const tauriTransport: Transport = {
   async connect(onMessage) {
     await invoke("connect", { onMessage: new Channel<ServiceMessage>(onMessage) });
   },
-  openTerminal(cwd, cols, rows, onData) {
+  openTerminal(cwd, cols, rows, onData, account) {
     const channel = new Channel<ArrayBuffer>((bytes) => onData(new Uint8Array(bytes)));
-    return invoke<number>("open_terminal", { cwd, cols, rows, onData: channel });
+    return invoke<number>("open_terminal", { cwd, cols, rows, account, onData: channel });
   },
   writeTerminal: (id, data) => send("write_terminal", { id, data }),
   resizeTerminal: (id, cols, rows) => send("resize_terminal", { id, cols, rows }),

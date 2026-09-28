@@ -34,6 +34,11 @@ test("resume commands go on with the session, or fork it", () => {
   expect(resumeArgs(session, true)).toBe(`--resume ${session.id} --fork-session`);
   const odd = { ...session, cwd: "/home/me/it's here" };
   expect(resumeCommand(odd)).toBe(`cd '/home/me/it'\\''s here' && claude --resume ${session.id}`);
+  // Another account's session names its folder (12.2).
+  const work = { ...session, config_dir: "/home/me/.claude work" };
+  expect(resumeCommand(work)).toBe(
+    `cd '${session.cwd}' && CLAUDE_CONFIG_DIR='/home/me/.claude work' claude --resume ${session.id}`,
+  );
   expect(sessionName(session)).toBe("Fix the login redirect");
   expect(sessionName({ ...session, title: null })).toBe(session.id);
 });
@@ -41,8 +46,10 @@ test("resume commands go on with the session, or fork it", () => {
 test("resume shows a running session's terminal, else runs claude --resume in its folder", async () => {
   const open = spyOn(transport, "openTerminal").mockResolvedValue(3);
   const write = spyOn(transport, "writeTerminal").mockResolvedValue();
-  await resume(stopped);
+  await resume({ ...stopped, config_dir: "/w" });
   expect(open.mock.calls[0]?.[0]).toBe(stopped.cwd);
+  // As the account it ran as.
+  expect(open.mock.calls[0]?.[4]).toEqual({ config_dir: "/w" });
   expect(write).toHaveBeenCalledWith(3, `claude --resume ${stopped.id}\r`);
 
   // Running in terminal 3: its tab is shown instead; a fork still opens a new terminal.
@@ -75,10 +82,13 @@ test("the sessions open when the app last closed are resumed, one after the othe
     .mockRejectedValueOnce("gone");
   const write = spyOn(transport, "writeTerminal").mockResolvedValue();
   await restore([
-    { id: "a", cwd: "/r" },
-    { id: "b", cwd: "/r/x" },
+    { id: "a", cwd: "/r", config_dir: "/w" },
+    { id: "b", cwd: "/r/x", config_dir: null },
   ]);
-  expect(open.mock.calls.map((c) => c[0])).toEqual(["/r", "/r/x"]);
+  expect(open.mock.calls.map((c) => [c[0], c[4]])).toEqual([
+    ["/r", { config_dir: "/w" }],
+    ["/r/x", { config_dir: null }],
+  ]);
   expect(write).toHaveBeenCalledWith(4, "claude --resume a\r");
   expect(notice()).toBe("Cannot resume the session in /r/x: gone");
   open.mockRestore();

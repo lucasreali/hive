@@ -21,13 +21,17 @@ export const resumeArgs = (session: Session, fork = false) =>
 /** A shell word for `text`, single-quoted (fish and POSIX shells read it the same). */
 const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
-/** What to type in any terminal to go on with the session. */
-export const resumeCommand = (session: Session) =>
-  `cd ${quoted(session.cwd)} && claude ${resumeArgs(session)}`;
+/** What to type in any terminal to go on with the session, as the account it ran as (12.2). */
+export const resumeCommand = (session: Session) => {
+  const dir = session.config_dir;
+  const env = dir === null ? "" : `CLAUDE_CONFIG_DIR=${quoted(dir)} `;
+  return `cd ${quoted(session.cwd)} && ${env}claude ${resumeArgs(session)}`;
+};
 
 /**
  * Goes on with the session: shows its terminal when it runs in one, else runs
- * `claude --resume` in a new terminal in its folder. `fork` always starts a new session.
+ * `claude --resume` in a new terminal in its folder, as the Claude account it ran as (its log is
+ * in that account's folder, 12.2). `fork` always starts a new session.
  */
 export async function resume(session: Session, fork = false): Promise<void> {
   const s = useHive.getState();
@@ -37,7 +41,7 @@ export async function resume(session: Session, fork = false): Promise<void> {
   // Running outside Hive: a second `claude` on the same session would write the same log.
   if (session.running && !fork) return;
   try {
-    await openClaude(session.cwd, resumeArgs(session, fork));
+    await openClaude(session.cwd, resumeArgs(session, fork), { config_dir: session.config_dir });
   } catch (error) {
     showNotice("error", `Cannot open a terminal in ${session.cwd}: ${error}`);
   }
@@ -45,12 +49,12 @@ export async function resume(session: Session, fork = false): Promise<void> {
 
 /**
  * The sessions that ran in Hive's terminals when the app last closed: each is resumed in a new
- * terminal in its folder, one after the other.
+ * terminal in its folder, as its terminal's Claude account, one after the other.
  */
 export async function restore(sessions: OpenSession[]): Promise<void> {
-  for (const { id, cwd } of sessions) {
+  for (const { id, cwd, config_dir } of sessions) {
     try {
-      await openClaude(cwd, `--resume ${id}`);
+      await openClaude(cwd, `--resume ${id}`, { config_dir });
     } catch (error) {
       showNotice("error", `Cannot resume the session in ${cwd}: ${error}`);
     }

@@ -16,7 +16,6 @@ afterEach(() => {
 
 const [shop, api] = MOCK_REPOS;
 const NO_ENV = {
-  claude_config_dir: null,
   git_name: null,
   git_email: null,
   gh_config_dir: null,
