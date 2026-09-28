@@ -2122,13 +2122,14 @@ mod tests {
         assert_eq!(Frame::control(0, &status).to_control().unwrap(), status);
         // A service from before the line counts is still read: none.
         let old = br#"{"type":"worktree_status","path":"/r/w","status":{"changes":3,"ahead":2,"behind":null,"merged":false,"last_commit_ms":1000}}"#;
-        let Control::WorktreeStatus {
-            status: Some(old), ..
-        } = serde_json::from_slice(old).unwrap()
-        else {
-            panic!("a status")
-        };
-        assert_eq!((old.changes, old.added, old.removed), (3, 0, 0));
+        let mut none = status;
+        if let Control::WorktreeStatus {
+            status: Some(s), ..
+        } = &mut none
+        {
+            (s.added, s.removed) = (0, 0);
+        }
+        assert_eq!(serde_json::from_slice::<Control>(old).unwrap(), none);
     }
 
     #[test]
