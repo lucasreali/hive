@@ -110,6 +110,11 @@ fn user_command(claude_dir: Option<&Path>, project: Option<&Path>) -> Option<Str
 
 /// The `statusLine` command of the settings file `file`, when it has one.
 fn command_in(file: &Path) -> Option<String> {
+    // Never a FIFO or a device (e.g. a link to `/dev/tty`): reading it could block for good.
+    // ponytail: a swap between this check and the open needs write access to the folder.
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
     let mut file = std::fs::File::open(file).ok()?;
     let text = crate::git::read_limited(&mut file, SETTINGS_LIMIT).ok()?;
     let settings: Value = serde_json::from_slice(&text).ok()?;
@@ -273,6 +278,13 @@ mod tests {
             std::fs::write(project.join(".claude/settings.local.json"), text).unwrap();
             assert_eq!(pick().as_deref(), Some("shared"), "{text}");
         }
+        // Nor a FIFO, which is not opened.
+        let local = project.join(".claude/settings.local.json");
+        std::fs::remove_file(&local).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&local).status();
+        assert!(made.unwrap().success());
+        assert_eq!(pick().as_deref(), Some("shared"));
+        std::fs::remove_file(&local).unwrap();
         // Too large to be read.
         let big = format!(
             "{{\"statusLine\": {{\"type\": \"command\", \"command\": \"big\"}}, \"x\": \"{}\"}}",
