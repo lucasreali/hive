@@ -1988,14 +1988,16 @@ button.chevron:hover {
   color: var(--accent);
 }
 
-/* The space select (6.14), at the left of the sidebar header: quiet until hovered. */
+/* The space select (6.14), at the left of the sidebar header: quiet until hovered; the
+   Actions branch picker (10.2) fits its .pulls-bar the same way. */
 .space-select {
   flex: 1;
   min-width: 0;
   margin-right: auto;
 }
 
-.space-select .select-trigger {
+.space-select .select-trigger,
+.pulls-bar .select-trigger {
   height: 24px;
   cursor: pointer;
   background: transparent;
@@ -2004,7 +2006,8 @@ button.chevron:hover {
   font-size: var(--fs-small);
 }
 
-.space-select .select-trigger:hover {
+.space-select .select-trigger:hover,
+.pulls-bar .select-trigger:hover {
   background: var(--hover);
 }
 
@@ -3074,11 +3077,23 @@ body[data-resizing] {
   align-items: center;
   gap: 5px;
   flex: none;
+  /* Not the right panel's 24 px icon width: it would clip "← Pull requests" (10.1). */
+  width: auto;
   white-space: nowrap;
+}
+
+/* A long branch shortens (10.2) instead of pushing the bar wider than the panel. */
+.pulls-bar .select {
+  min-width: 0;
+  max-width: 60%;
 }
 
 .pulls-updated {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-3);
   font-size: var(--fs-meta);
   text-align: right;
