@@ -1,4 +1,4 @@
-import { type HiveState, type Lines, useHive } from "../store";
+import { type HiveState, type Lines, tabWorktree, useHive } from "../store";
 import { terminal } from "../terminals";
 import { transport } from "../transport";
 
@@ -19,14 +19,14 @@ export function reference(path: string, { from, to }: Lines): string {
 /**
  * The terminal that may take references to `worktree`'s files, or why there is none: the live
  * active terminal, in that worktree (the one its agent is placed in by the service, else the
- * one it opened in), since the paths are relative to that worktree.
+ * one the service placed the terminal in), since the paths are relative to that worktree.
  */
 export function terminalIn(s: HiveState, worktree: string): { terminal: number } | { why: string } {
   const tab = s.tabs.find((t) => t.id === s.activeTab);
   if (!tab) return { why: "No terminal open" };
   if (s.terminals[tab.id]?.exited) return { why: "The terminal has exited" };
   const agent = Object.values(s.agents).find((a) => a.terminal === tab.id);
-  if ((agent ? agent.worktree : tab.cwd) !== worktree) {
+  if ((agent ? agent.worktree : tabWorktree(s, tab)) !== worktree) {
     return { why: "The active terminal is in another worktree" };
   }
   return { terminal: tab.id };

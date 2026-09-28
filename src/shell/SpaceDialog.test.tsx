@@ -147,7 +147,7 @@ test("inbox items name their agent's space when there are several", () => {
   const status = (state: AgentState): ServiceMessage => ({
     type: "agent_state",
     id: "a",
-    ...agentStatus(state),
+    ...agentStatus(state, null, 0, state === "working" ? null : "waiting"),
     subagents: [],
   });
   act(() => apply(status("working")));

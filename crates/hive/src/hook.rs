@@ -13,7 +13,6 @@ use futures_util::SinkExt;
 use hive_protocol::{Control, Frame, FrameCodec, Role};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::net::UnixStream;
 use tokio_util::codec::FramedWrite;
 
 use crate::VERSION;
@@ -116,7 +115,8 @@ pub async fn badge(paths: &Paths, terminal: u32, text: String) -> io::Result<()>
 /// [`SEND_TIMEOUT`].
 async fn send(paths: &Paths, channel: u32, message: &Control) -> io::Result<()> {
     let sent = async {
-        let stream = UnixStream::connect(paths.socket()).await?;
+        // Only to our own service (`Paths::connect`).
+        let stream = paths.connect().await?;
         let mut writer = FramedWrite::new(stream, FrameCodec);
         let hello = Control::hello(Role::Hook, VERSION);
         writer.send(Frame::control(0, &hello)).await?;

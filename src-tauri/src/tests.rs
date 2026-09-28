@@ -307,11 +307,12 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
     };
     assert_eq!(service.control().await, (1, open));
 
-    service.send(1, Control::TerminalOpened).await;
+    let worktree = Some("/w".into());
+    service.send(1, Control::TerminalOpened { worktree }).await;
     service.writer.send(Frame::terminal(1, "$ ")).await.unwrap();
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "terminal_opened", "channel": 1})
+        json!({"type": "terminal_opened", "channel": 1, "worktree": "/w"})
     );
     assert_eq!(next(&mut bytes).await, b"$ ");
 
@@ -330,7 +331,9 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
 
     // Nothing reaches the UI for a channel it did not open; channel 0 always does.
     service.writer.send(Frame::terminal(7, "x")).await.unwrap();
-    service.send(7, Control::TerminalOpened).await;
+    service
+        .send(7, Control::TerminalOpened { worktree: None })
+        .await;
     let error = Control::Error {
         message: "m".into(),
     };

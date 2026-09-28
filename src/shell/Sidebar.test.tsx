@@ -164,8 +164,22 @@ test("agents and their subagents show the state the service sent, named for scre
       id: "s1",
       ...agentStatus("waiting_permission"),
       subagents: [
-        { id: "a1", agent_type: "Explore", state: "working", worktree: null, ...none },
-        { id: "a2", agent_type: null, state: "waiting_permission", worktree: null, ...none },
+        {
+          id: "a1",
+          agent_type: "Explore",
+          state: "working",
+          worktree: null,
+          writing: true,
+          ...none,
+        },
+        {
+          id: "a2",
+          agent_type: null,
+          state: "waiting_permission",
+          worktree: null,
+          writing: true,
+          ...none,
+        },
       ],
     });
     apply({ type: "agent_state", id: "s2", ...agentStatus("ended"), subagents: [] });
@@ -246,6 +260,7 @@ test("rows show the time in the state and the activity, all ticking on one timer
             agent_type: "Explore",
             state: "working",
             worktree: null,
+            writing: true,
             activity: null,
             since_ms: now - 5_000,
           },
@@ -411,15 +426,19 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
       worktree,
       activity: null,
       since_ms: 0,
+      writing: true,
     }) as const;
   const subagents = (...list: ReturnType<typeof sub>[]) =>
     apply({ type: "agent_state", id: "s1", ...agentStatus("with_subagents"), subagents: list });
+  // The worktrees the service says subagents own, where no agent runs.
+  const owned = (...worktrees: string[]) => apply({ type: "subagent_worktrees", worktrees });
   act(() => {
     apply({ type: "projects", projects: [shop] });
     useHive.setState({ tabs: [{ id: 1, cwd: main.path }], activeTab: null });
     const placed = { project: shop.id, worktree: main.id, cwd: main.path };
     apply({ type: "agent_detected", channel: 1, id: "s1", ...placed });
     subagents(sub("a1", featCheckout.id), sub("a2", null));
+    owned(featCheckout.id);
   });
   const rows = () =>
     [...tree().querySelectorAll(".tree-row")].map((r) => [
@@ -449,9 +468,13 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
   act(() => {
     const placed = { project: shop.id, worktree: featCheckout.id, cwd: featCheckout.path };
     apply({ type: "agent_detected", channel: 2, id: "s2", ...placed });
+    owned();
   });
   expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(2);
-  act(() => apply({ type: "agent_removed", channel: 2, id: "s2" }));
+  act(() => {
+    apply({ type: "agent_removed", channel: 2, id: "s2" });
+    owned(featCheckout.id);
+  });
   expect(screen.getAllByRole("button", { name: "feat-checkout" })).toHaveLength(1);
   // A worktree the projects do not list yet shows nowhere and its subagent stays in place;
   // unlinked, the worktree is back at project level.
@@ -459,8 +482,15 @@ test("a subagent's own worktree is its parent row, not at project level", () => 
   expect(tree().querySelector(".own-worktree")).toBeNull();
   expect(tree().querySelector(".owned")).toBeNull();
   expect(tree().querySelectorAll(".tree-row.subagent")).toHaveLength(2);
-  act(() => subagents(sub("a1", null), sub("a2", null)));
+  act(() => {
+    subagents(sub("a1", null), sub("a2", null));
+    owned();
+  });
   expect(rows().map(([, label]) => label)).toContain("feat-checkout");
+  // A lost service takes them with it.
+  act(() => owned(featCheckout.id));
+  act(() => apply({ type: "disconnected", reason: "gone" }));
+  expect(useHive.getState().subagentWorktrees).toEqual([]);
   expect(tree().querySelector(".own-worktree")).toBeNull();
 });
 

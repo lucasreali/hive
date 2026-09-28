@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -65,7 +66,10 @@ fn hook_without_a_service_exits_zero_quickly() {
 #[test]
 fn hook_gives_up_on_a_service_that_does_not_read() {
     let env = Env::new();
-    std::fs::create_dir(env.path("run/hive")).unwrap();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(env.path("run/hive"))
+        .unwrap();
     // Accepts connections (backlog) but never reads: a large write blocks.
     let _listener = std::os::unix::net::UnixListener::bind(env.socket()).unwrap();
     let big = format!("\"{}\"", "x".repeat(hive::hook::MAX_INPUT - 2));
@@ -77,6 +81,21 @@ fn hook_gives_up_on_a_service_that_does_not_read() {
         elapsed >= Duration::from_millis(200) && elapsed < Duration::from_secs(2),
         "{elapsed:?}"
     );
+}
+
+#[test]
+fn hook_never_connects_in_a_runtime_directory_others_can_access() {
+    let env = Env::new();
+    std::fs::create_dir(env.path("run/hive")).unwrap();
+    std::fs::set_permissions(env.path("run/hive"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Another user's socket, planted before Hive starts.
+    let planted = std::os::unix::net::UnixListener::bind(env.socket()).unwrap();
+    planted.set_nonblocking(true).unwrap();
+    let out = hook(&env, &["Stop"], b"{}");
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    let accepted = planted.accept().map(drop).map_err(|err| err.kind());
+    assert_eq!(accepted, Err(std::io::ErrorKind::WouldBlock));
 }
 
 #[test]
@@ -130,7 +149,9 @@ async fn badge_reaches_the_app_on_its_terminal_cleaned_and_cut() {
     // A hook connection that closes after its hello, or sends garbage, forwards nothing.
     drop(env.connect(Role::Hook).await);
     let mut garbage = env.connect(Role::Hook).await;
-    garbage.send(1, Control::TerminalOpened).await;
+    garbage
+        .send(1, Control::TerminalOpened { worktree: None })
+        .await;
     drop(garbage);
     // Not an open terminal: dropped.
     assert!(badge(&env, Some("9"), &["ignored"]).status.success());

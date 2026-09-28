@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::Stdio;
 
 use hive_protocol::AgentState::{self, *};
-use hive_protocol::{Control, OpenSession, Role, SessionTarget, SubagentState};
+use hive_protocol::{Alert, Control, OpenSession, Role, SessionTarget, SubagentState};
 use serde_json::{Value, json};
 
 use crate::common::Conn;
@@ -63,6 +63,7 @@ fn merged(mut base: Value, extra: Value) -> Value {
     base
 }
 
+/// The message of a change into `state`: one that waits for the user alerts.
 fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control {
     Control::AgentState {
         id: id.into(),
@@ -70,10 +71,21 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         urgency: state.urgency(),
         pending: state.pending(),
         interrupted: false,
+        alert: state.pending().then_some(Alert::Waiting),
+        writing: state.writes(),
         subagents,
         activity: None,
         since_ms: 0,
     }
+}
+
+/// The message of an agent that finished: working or with subagents, then waiting for you.
+fn finished(id: &str, subagents: Vec<SubagentState>) -> Control {
+    let mut message = state(id, WaitingYou, subagents);
+    if let Control::AgentState { alert, .. } = &mut message {
+        *alert = Some(Alert::Finished);
+    }
+    message
 }
 
 fn sub(id: &str, state: AgentState) -> SubagentState {
@@ -84,6 +96,7 @@ fn sub(id: &str, state: AgentState) -> SubagentState {
         worktree: None,
         activity: None,
         since_ms: 0,
+        writing: state.writes(),
     }
 }
 
@@ -141,6 +154,15 @@ async fn a_subagents_own_worktree_is_sent_with_it() {
         ..sub(id, Working)
     };
     let with = |subagents| vec![(1, state("s", WithSubagents, subagents))];
+    // The worktrees subagents own where no agent runs, when they changed.
+    let owned = |worktrees: &[&String]| {
+        let worktrees = worktrees.iter().map(|w| w.to_string()).collect();
+        (0, Control::SubagentWorktrees { worktrees })
+    };
+    let and = |mut seen: Vec<(u32, Control)>, more| {
+        seen.push(more);
+        seen
+    };
 
     // In its agent's worktree a subagent has none of its own.
     let seen = hook(
@@ -155,7 +177,7 @@ async fn a_subagents_own_worktree_is_sent_with_it() {
     // A `WorktreeCreate` naming the subagent gives it the new worktree.
     let create = subagent("a", json!({"name": "sub-a"}));
     let seen = worktree_hook(&repo, &mut app, "hook-create", create).await;
-    assert_eq!(seen, with(vec![owning("a", &sub_a)]));
+    assert_eq!(seen, and(with(vec![owning("a", &sub_a)]), owned(&[&sub_a])));
     // One naming nobody: the subagent whose events come from inside it owns it.
     let create = json!({"session_id": "s", "cwd": root, "name": "sub-b"});
     assert_eq!(
@@ -166,11 +188,25 @@ async fn a_subagents_own_worktree_is_sent_with_it() {
     std::fs::create_dir(format!("{sub_b}/src")).unwrap();
     let inside = subagent("b", json!({"cwd": format!("{sub_b}/src")}));
     let seen = hook(&repo, &mut app, "1", "SubagentStart", inside).await;
-    assert_eq!(seen, with(vec![owning("a", &sub_a), owning("b", &sub_b)]));
+    let both = with(vec![owning("a", &sub_a), owning("b", &sub_b)]);
+    assert_eq!(seen, and(both, owned(&[&sub_a, &sub_b])));
+    // An agent of the user's own in a subagent's worktree shows it as usual, until it ends.
+    app.open_terminal(2, &repo.root).await;
+    let start = json!({"session_id": "s2", "cwd": sub_b});
+    let seen = hook(&repo, &mut app, "2", "SessionStart", start).await;
+    let placed = detected("s2", Some((&root, &sub_b)), &sub_b);
+    let idle = (2, state("s2", Idle, vec![]));
+    assert_eq!(seen, [(2, placed), idle, owned(&[&sub_a])]);
+    let end = json!({"session_id": "s2", "cwd": sub_b});
+    let seen = hook(&repo, &mut app, "2", "SessionEnd", end).await;
+    let removed = (2, Control::AgentRemoved { id: "s2".into() });
+    let ended = (2, state("s2", Ended, vec![]));
+    assert_eq!(seen, [ended, removed, owned(&[&sub_a, &sub_b])]);
     // Removing the worktree unlinks it; the subagent leaving takes its own along.
     let remove = json!({"session_id": "s", "cwd": sub_a, "worktree_path": sub_a});
     let seen = worktree_hook(&repo, &mut app, "hook-remove", remove).await;
-    assert_eq!(seen, with(vec![sub("a", Working), owning("b", &sub_b)]));
+    let one = with(vec![sub("a", Working), owning("b", &sub_b)]);
+    assert_eq!(seen, and(one, owned(&[&sub_b])));
     let seen = hook(
         &repo,
         &mut app,
@@ -179,7 +215,7 @@ async fn a_subagents_own_worktree_is_sent_with_it() {
         subagent("b", json!({})),
     )
     .await;
-    assert_eq!(seen, with(vec![sub("a", Working)]));
+    assert_eq!(seen, and(with(vec![sub("a", Working)]), owned(&[])));
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -352,7 +388,7 @@ async fn agent_states_follow_hook_events_and_terminal_silence() {
 
     // Rule 2: the terminal prints nothing for 5 s (an interrupt fires no Stop).
     let waited = std::time::Instant::now();
-    assert_eq!(app.control().await, (1, state("s", WaitingYou, vec![])));
+    assert_eq!(app.control().await, (1, finished("s", vec![])));
     assert!(waited.elapsed() >= std::time::Duration::from_secs(4));
 
     let seen = hook(
@@ -432,6 +468,8 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             urgency: WaitingYou.urgency(),
             pending,
             interrupted: false,
+            alert: Some(Alert::Finished),
+            writing: false,
             subagents: vec![],
             activity: None,
             since_ms: 0,
@@ -474,12 +512,16 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         ask(Control::ListSessions).await,
         Control::Sessions {
             sessions: vec![],
-            error: None
+            error: None,
+            truncated: false,
         }
     );
     let added = ask(Control::AddProject { path: root.clone() }).await;
     assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
-    let Control::Sessions { sessions, error } = ask(Control::ListSessions).await else {
+    let Control::Sessions {
+        sessions, error, ..
+    } = ask(Control::ListSessions).await
+    else {
         panic!("expected sessions")
     };
     let mut ids: Vec<_> = sessions
@@ -570,6 +612,20 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         .collect();
     running.sort();
     assert_eq!(running, [(outside, false), ("old", false), ("s", true)]);
+    // Unchanged, the list is not sent again.
+    app.send(0, Control::ListSessions).await;
+    let locate = Control::LocateSession {
+        id: "s".into(),
+        target: SessionTarget::Log,
+    };
+    app.send(0, locate).await;
+    loop {
+        match app.control().await {
+            (0, Control::SessionLocated { .. }) => break,
+            (0, Control::Sessions { .. }) => panic!("an unchanged list was sent again"),
+            _ => {}
+        }
+    }
     let mut ask = async |message: Control| {
         app.send(0, message).await;
         loop {
@@ -594,6 +650,23 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         Control::SessionDeleted { id: "old".into() }
     );
     assert!(!logs.join("old.jsonl").exists());
+    // Changed, it is: the unchanged one never comes.
+    app.send(0, Control::ListSessions).await;
+    let sessions = loop {
+        if let (0, Control::Sessions { sessions, .. }) = app.control().await {
+            break sessions;
+        }
+    };
+    assert!(sessions.iter().all(|s| s.id != "old"), "{sessions:?}");
+    // A reloaded UI asks for the projects again, and gets the list again.
+    app.send(0, Control::ListProjects).await;
+    app.send(0, Control::ListSessions).await;
+    let again = loop {
+        if let (0, Control::Sessions { sessions, .. }) = app.control().await {
+            break sessions;
+        }
+    };
+    assert_eq!(again, sessions);
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -607,7 +680,10 @@ async fn unreadable_session_logs_are_reported() {
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     app.send(0, Control::ListSessions).await;
-    let Control::Sessions { sessions, error } = app.control().await.1 else {
+    let Control::Sessions {
+        sessions, error, ..
+    } = app.control().await.1
+    else {
         panic!("expected sessions")
     };
     assert!(sessions.is_empty());
@@ -953,10 +1029,11 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
     if let Control::AgentState {
         pending,
         interrupted: quiet,
+        alert,
         ..
     } = &mut interrupted
     {
-        (*pending, *quiet) = (false, true);
+        (*pending, *quiet, *alert) = (false, true, None);
     }
     assert_eq!(next_state(&mut app).await, interrupted);
 
@@ -992,7 +1069,7 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
     let again = main(json!({"transcript_path": log, "source": "compact"}));
     assert_eq!(hook(&repo, &mut app, "1", "SessionStart", again).await, []);
     let seen = hook(&repo, &mut app, "1", "Stop", main(json!({}))).await;
-    assert_eq!(seen, [(1, state("s", WaitingYou, vec![sub("a", Working)]))]);
+    assert_eq!(seen, [(1, finished("s", vec![sub("a", Working)]))]);
     drop(app);
     assert!(daemon.wait_exit().success());
 }

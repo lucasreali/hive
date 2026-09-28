@@ -16,7 +16,9 @@ use crate::paths::Paths;
 pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn run(paths: &Paths, hive: &Path) -> io::Result<()> {
-    let stream = match UnixStream::connect(paths.socket()).await {
+    // Only to our own service (`Paths::connect`). A missing or insecure runtime directory goes
+    // to `start_daemon`, whose `prepare_runtime` creates it or refuses it with a clear error.
+    let stream = match paths.connect().await {
         Ok(stream) => stream,
         Err(_) => {
             start_daemon(paths, hive)?;
@@ -56,10 +58,9 @@ fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
 }
 
 async fn connect_when_ready(paths: &Paths) -> io::Result<UnixStream> {
-    let socket = paths.socket();
     let connect = async {
         loop {
-            if let Ok(stream) = UnixStream::connect(&socket).await {
+            if let Ok(stream) = paths.connect().await {
                 return stream;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
