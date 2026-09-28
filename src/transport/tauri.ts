@@ -23,6 +23,11 @@ export const tauriTransport: Transport = {
   selectSpace: (id) => invoke("select_space", { id }),
   listGhAccounts: (ghConfigDir) => invoke("list_gh_accounts", { ghConfigDir }),
   switchGhAccount: (ghConfigDir, account) => invoke("switch_gh_account", { ghConfigDir, account }),
+  listPulls: (project, force) => invoke("list_pulls", { project, force }),
+  openPull: (project, number) => invoke("open_pull", { project, number }),
+  actOnPull: (project, number, action) => invoke("act_on_pull", { project, number, action }),
+  createPull: (worktree, title, body, base, draft) =>
+    invoke("create_pull", { worktree, title, body, base, draft }),
   listDirs: (path, windows) => invoke("list_dirs", { path, windows }),
   listBranches: (project) => invoke("list_branches", { project }),
   validateWorktreeName: (project, name) => invoke("validate_worktree_name", { project, name }),

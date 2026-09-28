@@ -569,6 +569,35 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         account,
     };
     assert_eq!(service.control().await, (0, switch));
+    hive.list_pulls("/r".into(), true).unwrap();
+    let list = Control::ListPulls {
+        project: "/r".into(),
+        force: true,
+    };
+    assert_eq!(service.control().await, (0, list));
+    hive.open_pull("/r".into(), 7).unwrap();
+    let open = Control::OpenPull {
+        project: "/r".into(),
+        number: 7,
+    };
+    assert_eq!(service.control().await, (0, open));
+    hive.act_on_pull("/r".into(), 7, PullAction::Close).unwrap();
+    let act = Control::ActOnPull {
+        project: "/r".into(),
+        number: 7,
+        action: PullAction::Close,
+    };
+    assert_eq!(service.control().await, (0, act));
+    hive.create_pull("/r/w".into(), "t".into(), "b".into(), "main".into(), true)
+        .unwrap();
+    let create = Control::CreatePull {
+        worktree: "/r/w".into(),
+        title: "t".into(),
+        body: "b".into(),
+        base: "main".into(),
+        draft: true,
+    };
+    assert_eq!(service.control().await, (0, create));
     hive.open_settings_file().unwrap();
     assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
     hive.get_diagnostics().unwrap();
@@ -775,6 +804,14 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         login: "l".into(),
     };
     assert_eq!(hive.switch_gh_account(None, account), not_connected);
+    assert_eq!(hive.list_pulls("/r".into(), false), not_connected);
+    assert_eq!(hive.open_pull("/r".into(), 1), not_connected);
+    assert_eq!(
+        hive.act_on_pull("/r".into(), 1, PullAction::Ready),
+        not_connected
+    );
+    let create = hive.create_pull("/r".into(), "t".into(), String::new(), "m".into(), false);
+    assert_eq!(create, not_connected);
     assert_eq!(hive.open_settings_file(), not_connected);
     assert_eq!(hive.get_diagnostics(), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
@@ -981,6 +1018,10 @@ fn commands_reach_the_managed_hive() {
             select_space,
             list_gh_accounts,
             switch_gh_account,
+            list_pulls,
+            open_pull,
+            act_on_pull,
+            create_pull,
             open_settings_file,
             get_diagnostics
         ])
@@ -1038,6 +1079,11 @@ fn commands_reach_the_managed_hive() {
     let update = json!({"id": "w", "name": "W", "env": {"git_name": "Me"}});
     let space = json!({"id": "w"});
     let switch_gh = json!({"account": {"host": "h", "login": "me"}});
+    let list_pulls = json!({"project": "/r", "force": false});
+    let open_pull = json!({"project": "/r", "number": 7});
+    let act_on_pull = json!({"project": "/r", "number": 7, "action": {"kind": "checkout"}});
+    let create_pull =
+        json!({"worktree": "/r/w", "title": "t", "body": "", "base": "main", "draft": false});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
@@ -1072,6 +1118,10 @@ fn commands_reach_the_managed_hive() {
         ("select_space", &space),
         ("list_gh_accounts", &json!({"ghConfigDir": null})),
         ("switch_gh_account", &switch_gh),
+        ("list_pulls", &list_pulls),
+        ("open_pull", &open_pull),
+        ("act_on_pull", &act_on_pull),
+        ("create_pull", &create_pull),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
     ] {
@@ -1128,6 +1178,10 @@ fn commands_reach_the_managed_hive() {
         ("delete_space", space.clone()),
         ("remove_project", space.clone()),
         ("select_space", space),
+        ("list_pulls", list_pulls),
+        ("open_pull", open_pull),
+        ("act_on_pull", act_on_pull),
+        ("create_pull", create_pull),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

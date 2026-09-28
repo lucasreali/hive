@@ -228,19 +228,28 @@ impl Projects {
 
     /// The followed project holding the worktree `path`, when it is not the main one.
     fn linked(&self, path: &str) -> io::Result<(Project, Worktree)> {
+        match self.holding(path)? {
+            (_, wt) if wt.main => Err(io::Error::other(format!(
+                "{path} is the project's main worktree"
+            ))),
+            found => Ok(found),
+        }
+    }
+
+    /// The followed project holding the worktree `path` (its main one included), and it.
+    pub fn holding(&self, path: &str) -> io::Result<(Project, Worktree)> {
         let found = self.list().into_iter().find_map(|p| {
             let wt = p.worktrees.iter().find(|w| w.path == path).cloned();
             wt.map(|wt| (p, wt))
         });
-        match found {
-            Some((_, wt)) if wt.main => Err(io::Error::other(format!(
-                "{path} is the project's main worktree"
-            ))),
-            Some(found) => Ok(found),
-            None => Err(io::Error::other(format!(
-                "{path} is not a worktree of a followed project"
-            ))),
-        }
+        found.ok_or_else(|| {
+            io::Error::other(format!("{path} is not a worktree of a followed project"))
+        })
+    }
+
+    /// The followed project `id` with its worktrees.
+    pub fn followed(&self, id: &str) -> io::Result<Project> {
+        self.root(id).map(|_| project(id))
     }
 
     /// `path` when it is a worktree of a followed project: the path comes from the app.
