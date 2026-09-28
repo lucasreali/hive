@@ -191,8 +191,6 @@ pub enum Control {
     Badge {
         text: String,
     },
-    /// A provider event translated to the internal model.
-    Agent(AgentEvent),
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
     /// An agent started in this terminal (the frame channel is its `HIVE_TERMINAL_ID`). It is
@@ -1366,27 +1364,6 @@ mod tests {
             distro: None,
         };
         assert_eq!(frame.to_control().unwrap(), welcome);
-    }
-
-    #[test]
-    fn agent_event_round_trips_through_a_control_frame() {
-        let msg = Control::Agent(AgentEvent {
-            provider: "claude-code".into(),
-            terminal_id: Some("3".into()),
-            session_id: Some("s".into()),
-            subagent: Some(Subagent {
-                id: "a".into(),
-                agent_type: None,
-            }),
-            cwd: None,
-            kind: EventKind::Notification {
-                notification: Notification::Other("x".into()),
-            },
-            activity: None,
-            raw: serde_json::json!({"k": [1, 2]}),
-        });
-        let frame = Frame::control(0, &msg);
-        assert_eq!(frame.to_control().unwrap(), msg);
     }
 
     #[test]

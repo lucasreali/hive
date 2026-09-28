@@ -1023,17 +1023,18 @@ async fn hook_connection<R: AsyncRead + Unpin>(
             payload,
             sent_ns,
         }) => {
+            // The payload stays here: the app gets only what the service makes of it.
             let event = ClaudeCode.translate(&event, terminal_id, payload);
+            state.saw(&event, sent_ns).await;
             if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } =
                 event.kind
             {
-                // The app's worktrees follow a `claude -w` or a subagent's worktree.
+                // The app's worktrees follow a `claude -w` or a subagent's worktree; listed
+                // after the agent states it changed.
                 state.projects(|projects| Control::Projects {
                     projects: projects.list(),
                 });
             }
-            state.saw(&event, sent_ns).await;
-            state.to_app(0, &Control::Agent(event)).await;
         }
         _ => {}
     }
