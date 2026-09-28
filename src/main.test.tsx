@@ -9,9 +9,9 @@ test("mounts the app into #root", async () => {
   expect(document.querySelector("#root header")?.textContent).toBe("Hive");
   // Outside Tauri the mock transport connects.
   await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
-  expect(document.querySelector("#root footer")?.textContent).toBe(
-    `WSL: Ubuntuconnectedv${version}`,
-  );
+  const footer = document.querySelector("#root footer")?.textContent;
+  expect(footer).toStartWith("WSL: UbuntuconnectedSession 42% · resets ");
+  expect(footer).toEndWith(`v${version}`);
   // Unmounted, so this app does not keep reacting to the store in later tests.
   act(() => root.unmount());
   document.body.innerHTML = "";

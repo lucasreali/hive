@@ -36,7 +36,9 @@ test("messages: a failure is a toast bottom-right above the status bar that stay
   expect(toast.y + toast.height).toBeLessThanOrEqual(bar.y);
   expect(bar.y - (toast.y + toast.height)).toBeLessThanOrEqual(16);
   // The status bar holds no message: the place, the connection and the version only.
-  await expect(statusbar).toHaveText(/^WSL(: \S+)?connectedv\d+\.\d+\.\d+$/);
+  await expect(statusbar).toHaveText(
+    /^WSL(: \S+)?connectedSession 42% · resets \d\d:\d\dv\d+\.\d+\.\d+$/,
+  );
 
   // A confirmation fades after about 4 s; the error stays until dismissed.
   await tree.getByRole("button", { name: "fix-login", exact: true }).click({ button: "right" });

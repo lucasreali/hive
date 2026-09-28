@@ -1067,6 +1067,12 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
+/* Right-aligned, before the version (12.1) */
+.session-usage {
+  margin-left: auto;
+  margin-right: 16px;
+}
+
 /* Connection block (#29): covers the workspace while the service is unusable */
 .workspace {
   position: relative;

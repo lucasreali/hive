@@ -35,6 +35,8 @@ export type ServiceMessage =
   | { type: "agent_title"; channel: number; id: string; title: string }
   | ({ type: "agent_state"; id: string } & AgentStatus)
   | ({ type: "agent_usage"; id: string } & AgentUsage)
+  // The current account's 5-hour window (12.1); null when none came yet or it reset.
+  | { type: "session_usage"; usage: SessionWindow | null }
   | { type: "subagent_worktrees"; worktrees: string[] }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
@@ -365,6 +367,9 @@ export type AgentStatus = {
  * What `agent_usage` says: the last turn's context, the window the service assumes, and the
  * session's output tokens.
  */
+/** A Claude account's 5-hour usage window: the percentage used and when it resets (Unix s). */
+export type SessionWindow = { used_percentage: number; resets_at: number };
+
 export type AgentUsage = { context_tokens: number; context_limit: number; output_tokens: number };
 
 /**

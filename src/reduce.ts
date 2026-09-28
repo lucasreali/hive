@@ -135,6 +135,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
+    case "session_usage":
+      return { sessionUsage: m.usage };
     case "agent_usage": {
       const { type: _, id, ...usage } = m;
       return { agentUsage: { ...s.agentUsage, [id]: usage } };
@@ -415,6 +417,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       // The service is gone, and every agent and the watches with it.
       return {
         connection: { status: "disconnected", reason: m.reason },
+        sessionUsage: null,
         agents: {},
         agentStates: {},
         subagentWorktrees: [],

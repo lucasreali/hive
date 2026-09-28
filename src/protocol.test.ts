@@ -38,6 +38,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     since_ms: true,
   },
   agent_usage: { id: true, context_tokens: true, context_limit: true, output_tokens: true },
+  session_usage: { usage: true },
   subagent_worktrees: { worktrees: true },
   projects: { projects: true },
   project_added: { project: true },
