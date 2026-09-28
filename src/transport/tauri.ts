@@ -28,6 +28,11 @@ export const tauriTransport: Transport = {
   actOnPull: (project, number, action) => invoke("act_on_pull", { project, number, action }),
   createPull: (worktree, title, body, base, draft) =>
     invoke("create_pull", { worktree, title, body, base, draft }),
+  listRuns: (project, branch, force) => invoke("list_runs", { project, branch, force }),
+  openRun: (project, run) => invoke("open_run", { project, run }),
+  openJobLog: (project, job) => invoke("open_job_log", { project, job }),
+  actOnRun: (project, run, action, branch) =>
+    invoke("act_on_run", { project, run, action, branch }),
   listDirs: (path, windows) => invoke("list_dirs", { path, windows }),
   listBranches: (project) => invoke("list_branches", { project }),
   validateWorktreeName: (project, name) => invoke("validate_worktree_name", { project, name }),

@@ -39,6 +39,8 @@ export type PullCheck = {
   workflow: string | null;
   state: CheckState;
   url: string | null;
+  /** Its Actions run, when its page is one (the Actions view shows it). */
+  run: number | null;
 };
 export type PullFile = { path: string; additions: number; deletions: number };
 export type PullDetail = {

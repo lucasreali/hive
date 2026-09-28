@@ -52,8 +52,15 @@ const detail = (number: number, extra: Partial<PullDetail> = {}): PullDetail => 
     { author: "octo-2", body: "", at: "bad date", review: null },
   ],
   checks: [
-    { name: "test", workflow: "CI", state: "failing", url: "https://github.com/x/1" },
-    { name: "ci/legacy", workflow: null, state: "passing", url: null },
+    { name: "test", workflow: "CI", state: "failing", url: "https://github.com/x/1", run: null },
+    { name: "ci/legacy", workflow: null, state: "passing", url: null, run: null },
+    {
+      name: "build",
+      workflow: "CI",
+      state: "passing",
+      url: "https://github.com/x/actions/runs/5/job/6",
+      run: 5,
+    },
   ],
   files: [{ path: "src/login.ts", additions: 12, deletions: 3 }],
   ...extra,
@@ -200,8 +207,8 @@ test("details: merging and closing ask first; a refusal shows gh's message", () 
   expect(markdown.querySelector("a")).toBeNull();
   expect(markdown.querySelector("img")).toBeNull();
   expect(markdown.textContent).toBe("Fixes it. shot");
-  const checks = within(body).getByRole("region", { name: "Checks (2)" });
-  expect(checks.querySelectorAll(".pull-check")).toHaveLength(2);
+  const checks = within(body).getByRole("region", { name: "Checks (3)" });
+  expect(checks.querySelectorAll(".pull-check")).toHaveLength(3);
   fireEvent.click(within(checks).getByRole("button", { name: "test" }));
   expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://github.com/x/1");
   const notes = within(body).getByRole("region", { name: "Reviews and comments (2)" });
@@ -256,6 +263,16 @@ test("details: merging and closing ask first; a refusal shows gh's message", () 
   fireEvent.click(within(body).getByRole("button", { name: "Close" }));
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
   expect(act_).toHaveBeenLastCalledWith(shop.id, 12, { kind: "close" });
+
+  // An Actions job's check shows its run in the Actions view (9.32).
+  const run = spyOn(transport, "openRun").mockResolvedValue();
+  const runs = spyOn(transport, "listRuns").mockResolvedValue();
+  fireEvent.click(within(body).getByRole("button", { name: "build" }));
+  expect(run).toHaveBeenCalledWith(shop.id, 5);
+  expect(screen.getByRole("region", { name: "Actions" })).toBeTruthy();
+  act(() => setPanelView("pulls"));
+  run.mockRestore();
+  runs.mockRestore();
 
   // Its worktree is shown from here; back to the list.
   act(() => select(shop.id));
