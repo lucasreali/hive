@@ -98,19 +98,23 @@ pub fn git_state(name: Option<&OsStr>) -> bool {
     matches!(name.and_then(OsStr::to_str), Some("HEAD" | "index"))
 }
 
-/// When a burst of events is over: `QUIET` after the last one, at most `MAX_DELAY` after the
+/// When a burst of events is over: `quiet` after the last one, at most `max` after the
 /// first. The clock is passed in.
 #[derive(Debug, Clone, Copy)]
 pub struct Debounce {
     first: Instant,
     last: Instant,
+    quiet: Duration,
+    max: Duration,
 }
 
 impl Debounce {
-    pub fn new(now: Instant) -> Self {
+    pub fn new(now: Instant, quiet: Duration, max: Duration) -> Self {
         Self {
             first: now,
             last: now,
+            quiet,
+            max,
         }
     }
 
@@ -119,7 +123,7 @@ impl Debounce {
     }
 
     pub fn deadline(&self) -> Instant {
-        (self.last + QUIET).min(self.first + MAX_DELAY)
+        (self.last + self.quiet).min(self.first + self.max)
     }
 }
 
@@ -228,7 +232,8 @@ impl Watcher {
                     let event = event.ok_or(io::ErrorKind::BrokenPipe)?;
                     if self.saw(event) {
                         let now = Instant::now();
-                        burst.get_or_insert(Debounce::new(now)).event(now);
+                        let debounce = Debounce::new(now, QUIET, MAX_DELAY);
+                        burst.get_or_insert(debounce).event(now);
                     }
                 }
                 () = settled, if deadline.is_some() => return Ok(()),
@@ -384,7 +389,7 @@ mod tests {
     #[test]
     fn a_burst_settles_after_a_quiet_spell_or_the_longest_delay() {
         let start = Instant::now();
-        let mut debounce = Debounce::new(start);
+        let mut debounce = Debounce::new(start, QUIET, MAX_DELAY);
         assert_eq!(debounce.deadline(), start + QUIET);
         debounce.event(start + QUIET / 2);
         assert_eq!(debounce.deadline(), start + QUIET / 2 + QUIET);
