@@ -608,7 +608,8 @@ impl State {
 
     /// Answers a project request off the frame loop, since git can take a while.
     fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
-        self.answer(false, request);
+        let state = self.clone();
+        tokio::spawn(async move { state.answer(request).await });
     }
 
     /// [`State::projects`] for a request that changes worktrees: in turn with
@@ -617,28 +618,21 @@ impl State {
         self: &Arc<Self>,
         request: impl FnOnce(&Projects) -> Control + Send + 'static,
     ) {
-        self.answer(true, request);
-    }
-
-    fn answer(
-        self: &Arc<Self>,
-        in_turn: bool,
-        request: impl FnOnce(&Projects) -> Control + Send + 'static,
-    ) {
         let state = self.clone();
         tokio::spawn(async move {
-            let _turn = match in_turn {
-                true => Some(state.changing.lock().await),
-                false => None,
-            };
-            // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
-            let reply = tokio::task::block_in_place(|| {
-                let mut reply = request(&state.projects);
-                state.with_health(&mut reply);
-                reply
-            });
-            state.to_app(0, &reply).await;
+            let _turn = state.changing.lock().await;
+            state.answer(request).await;
         });
+    }
+
+    async fn answer(&self, request: impl FnOnce(&Projects) -> Control) {
+        // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
+        let reply = tokio::task::block_in_place(|| {
+            let mut reply = request(&self.projects);
+            self.with_health(&mut reply);
+            reply
+        });
+        self.to_app(0, &reply).await;
     }
 
     /// Answers a request on the current space's projects and their Claude sessions (in the
