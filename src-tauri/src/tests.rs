@@ -1326,6 +1326,13 @@ async fn an_unsigned_release_is_neither_offered_nor_installed() {
     // Downloaded at once, but its signature fails the check.
     assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(invoke(&webview, "check_update", json!({})), Ok(Value::Null));
+    // The command checks in the background: it downloads the release again.
+    let checked = async {
+        while downloads.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(WAIT, checked).await.unwrap();
     assert_eq!(
         invoke(&webview, "install_update", json!({})),
         Ok(Value::Null)

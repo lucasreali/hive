@@ -3,6 +3,7 @@ import {
   LIMITS,
   PANEL_CLOSE_AT,
   type Side,
+  saveWidths,
   setRightPanel,
   setWidth,
   useHive,
@@ -44,9 +45,11 @@ export function ResizeHandle({ side }: { side: Side }) {
         stop();
         return setRightPanel(null);
       }
-      setWidth(side, wanted);
+      setWidth(side, wanted, false);
     };
+    // Storage is written once per drag, on release, not on every pointer move.
     const stop = () => {
+      saveWidths();
       delete document.body.dataset.resizing;
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", stop);
