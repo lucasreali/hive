@@ -1637,7 +1637,7 @@ mod tests {
             activity: None,
             raw: serde_json::Value::Null,
         };
-        owning.apply("u", &start, Instant::now(), &|cwd| Some(cwd.to_owned()));
+        owning.apply("u", &start, 0, Instant::now(), &|cwd| Some(cwd.to_owned()));
         let owning_state = owning.message("u");
         let state = test_state(dir.path());
         *state.agents.lock().await =

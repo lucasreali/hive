@@ -971,7 +971,7 @@ mod tests {
             agent.worktree = Some(placed.into());
             for (id, cwd) in subagents {
                 let start = hook("SubagentStart", Some(id), json!({"cwd": cwd}));
-                agent.apply("s", &start, now, &|cwd| Some(cwd.to_owned()));
+                agent.apply("s", &start, 0, now, &|cwd| Some(cwd.to_owned()));
             }
             agent
         };
