@@ -1047,13 +1047,10 @@ pub mod commands {
         hive.open_in_editor(worktree, path)
     }
 
-    /// Async, so off the main thread: opening a `\\wsl.localhost` path may wait for WSL.
+    // ponytail: sync like every command here (an `async` command left a macro line uncovered);
+    // opening a `\\wsl.localhost` path may briefly wait for WSL on the main thread.
     #[tauri::command]
-    pub async fn open_path(
-        hive: State<'_, Hive>,
-        path: String,
-        reveal: bool,
-    ) -> Result<(), String> {
+    pub fn open_path(hive: State<'_, Hive>, path: String, reveal: bool) -> Result<(), String> {
         hive.open_path(path, reveal)
     }
 
