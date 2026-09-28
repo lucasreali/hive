@@ -598,8 +598,8 @@ export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ righ
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });
 /**
  * Opens a file in its own tab (8.21), the preview tab (11.1), and shows it, as editable text
- * when `editing`; a file already open shows its tab as it was left. The file shown before keeps its state in its tab.
- * Null closes the open file's tab, without asking (`closeFile` asks).
+ * when `editing`; a file already open shows its tab as it was left. The file shown before keeps
+ * its state in its tab. Null closes the open file's tab, without asking (`closeFile` asks).
  */
 export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: number) =>
   useHive.setState((s) =>
