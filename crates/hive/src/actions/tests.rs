@@ -315,6 +315,7 @@ case "$1 $2" in
   "run view") cat '{VIEW}' ;;
   "api --hostname") case "$4" in
       */jobs/2/logs) seq 1 300000 ;;
+      */jobs/13/logs) echo 'HTTP 410: Gone' >&2; exit 1 ;;
       *) cat '{LOG}' ;;
     esac ;;
 esac
@@ -496,6 +497,30 @@ fn a_run_and_its_failed_job_log_are_asked_for() {
     );
     assert!(log.ends_with("\n299999\n300000"));
     assert!(log.lines().next().unwrap().parse::<u64>().is_ok());
+    // gh refuses: its message instead.
+    let refused = setup.answer(Control::OpenRun {
+        project: id.clone(),
+        run: 13,
+    });
+    let error = "gh run view failed: run 13 cannot be cancelled since it has already completed";
+    let expected = Control::Run {
+        project: id.clone(),
+        run: 13,
+        detail: None,
+        error: Some(error.into()),
+    };
+    assert_eq!(refused, [expected]);
+    let gone = setup.answer(Control::OpenJobLog {
+        project: id.clone(),
+        job: 13,
+    });
+    let expected = Control::JobLog {
+        project: id,
+        job: 13,
+        log: None,
+        error: Some("gh api --hostname failed: HTTP 410: Gone".into()),
+    };
+    assert_eq!(gone, [expected]);
 }
 
 #[test]

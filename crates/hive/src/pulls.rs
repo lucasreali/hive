@@ -201,18 +201,14 @@ fn fetch(
 /// The `pull` message for pull request `number` of the project `id`.
 fn open(gh: &Gh, projects: &Projects, id: &str, number: u64) -> Control {
     let pull = located(projects, id).and_then(|(project, env, repo)| {
-        let (number, repo) = (number.to_string(), repo.arg());
-        let args = [
-            "pr",
-            "view",
-            &number,
-            "--repo",
-            &repo,
-            "--json",
-            VIEW_FIELDS,
-        ];
+        let (number, arg) = (number.to_string(), repo.arg());
+        let args = ["pr", "view", &number, "--repo", &arg, "--json", VIEW_FIELDS];
         let out = run(gh, &env, Path::new(&project.path), &args, VIEW_OUTPUT)?;
-        parse_view(&out, &project.worktrees)
+        let mut pull = parse_view(&out, &project.worktrees)?;
+        for check in &mut pull.checks {
+            check.run = check.url.as_deref().and_then(|url| run_of(url, &repo));
+        }
+        Ok(pull)
     });
     let (pull, error) = match pull {
         Ok(pull) => (Some(pull), None),
@@ -643,19 +639,23 @@ fn check(item: &Value) -> PullCheck {
         false => check_state(text(item, state)).unwrap_or(CheckState::Skipped),
     };
     let workflow = line(item, "/workflowName");
-    let url = link(text(item, url));
-    // An Actions job's page: `…/actions/runs/<run>/job/<job>`.
-    let run = url
-        .as_deref()
-        .and_then(|url| url.split_once("/actions/runs/"));
-    let run = run.and_then(|(_, rest)| rest.split('/').next()?.parse().ok());
     PullCheck {
         name: line(item, name),
         workflow: (!workflow.is_empty()).then_some(workflow),
         state,
-        url,
-        run,
+        url: link(text(item, url)),
+        // Set by `open`, which knows the repository.
+        run: None,
     }
+}
+
+/// The run of an Actions job's page, `https://<host>/<owner>/<name>/actions/runs/<run>/job/<job>`,
+/// when it is `repo`'s own: anyone may point a check at any page, even another repository's.
+fn run_of(url: &str, repo: &Repo) -> Option<u64> {
+    let Repo { host, owner, name } = repo;
+    let runs = format!("https://{host}/{owner}/{name}/actions/runs/");
+    let own = url.get(..runs.len())?.eq_ignore_ascii_case(&runs);
+    own.then(|| url[runs.len()..].split('/').next()?.parse().ok())?
 }
 
 /// Reviews with a verdict or a text, and comments not hidden, oldest first; the newest
