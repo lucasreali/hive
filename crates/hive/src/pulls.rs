@@ -18,9 +18,10 @@ use serde_json::Value;
 
 use crate::adapter::{clip, invisible};
 use crate::gh::Gh;
+use crate::git::{self, Stdout};
 use crate::hook::now_ms;
 use crate::projects::Projects;
-use crate::{git, worktree};
+use crate::worktree;
 
 /// How often the list may be fetched from GitHub without `force`.
 pub const INTERVAL: Duration = Duration::from_secs(120);
@@ -33,11 +34,11 @@ const FIRST: &str = "first=30";
 /// The fields of `gh pr view --json` read for the details.
 const VIEW_FIELDS: &str = "number,title,body,url,state,isDraft,isCrossRepository,author,headRefName,headRefOid,baseRefName,reviewDecision,reviews,comments,statusCheckRollup,files,additions,deletions,mergeable,updatedAt";
 /// Most bytes read from `gh` for the list, the details and an action.
-const LIST_OUTPUT: u64 = 1 << 20;
-const VIEW_OUTPUT: u64 = 8 << 20;
-const ACTION_OUTPUT: u64 = 64 << 10;
+const LIST_OUTPUT: Stdout = Stdout::Max(1 << 20);
+const VIEW_OUTPUT: Stdout = Stdout::Max(8 << 20);
+pub(crate) const ACTION_OUTPUT: Stdout = Stdout::Max(64 << 10);
 /// Most characters of a title, a name or a branch.
-const LINE_LIMIT: usize = 256;
+pub(crate) const LINE_LIMIT: usize = 256;
 /// Most bytes of a description, of a review or comment, and of a URL.
 const BODY_LIMIT: usize = 64 << 10;
 const NOTE_LIMIT: usize = 16 << 10;
@@ -51,15 +52,15 @@ const FILES_LIMIT: usize = 300;
 
 /// A repository on a GitHub host.
 #[derive(Debug, PartialEq, Eq)]
-struct Repo {
-    host: String,
-    owner: String,
-    name: String,
+pub(crate) struct Repo {
+    pub(crate) host: String,
+    pub(crate) owner: String,
+    pub(crate) name: String,
 }
 
 impl Repo {
     /// `gh`'s `--repo` value.
-    fn arg(&self) -> String {
+    pub(crate) fn arg(&self) -> String {
         format!("{}/{}/{}", self.host, self.owner, self.name)
     }
 }
@@ -164,7 +165,7 @@ fn list(
 }
 
 /// The list's key in the [`Cache`]: the project and the space's account.
-fn key(id: &str, env: &SpaceEnv) -> String {
+pub(crate) fn key(id: &str, env: &SpaceEnv) -> String {
     format!("{id}\n{:?}\n{:?}", env.gh_config_dir, env.gh_account)
 }
 
@@ -360,7 +361,7 @@ fn create(
 }
 
 /// The followed project `id`, its space's environment and its GitHub repository.
-fn located(projects: &Projects, id: &str) -> Result<(Project, SpaceEnv, Repo), String> {
+pub(crate) fn located(projects: &Projects, id: &str) -> Result<(Project, SpaceEnv, Repo), String> {
     let project = projects.followed(id).map_err(|err| err.to_string())?;
     let env = projects.space_env(id);
     let repo = remote(Path::new(&project.path), host(&env))?;
@@ -368,7 +369,7 @@ fn located(projects: &Projects, id: &str) -> Result<(Project, SpaceEnv, Repo), S
 }
 
 /// The GitHub host of a space: its account's, else github.com.
-fn host(env: &SpaceEnv) -> &str {
+pub(crate) fn host(env: &SpaceEnv) -> &str {
     env.gh_account
         .as_ref()
         .map_or("github.com", |account| account.host.as_str())
@@ -376,9 +377,15 @@ fn host(env: &SpaceEnv) -> &str {
 
 /// `gh <args>` as the space runs it. An error (`gh`'s stderr) is cut at [`ERROR_LIMIT`] and
 /// names the command by its first two words: the rest can be long (the query, a description).
-fn run(gh: &Gh, env: &SpaceEnv, cwd: &Path, args: &[&str], limit: u64) -> Result<Vec<u8>, String> {
+pub(crate) fn run(
+    gh: &Gh,
+    env: &SpaceEnv,
+    cwd: &Path,
+    args: &[&str],
+    keep: Stdout,
+) -> Result<Vec<u8>, String> {
     let short: Vec<&str> = args.iter().take(2).copied().collect();
-    gh.run(env, cwd, args, limit).map_err(|err| {
+    gh.run(env, cwd, args, keep).map_err(|err| {
         let err = err.replacen(&args.join(" "), &short.join(" "), 1);
         multiline(&err, ERROR_LIMIT)
     })
@@ -453,24 +460,24 @@ fn parse_url(url: &str, host: &str) -> Option<Repo> {
 }
 
 /// The string at `pointer` in `value`; empty when there is none.
-fn text<'a>(value: &'a Value, pointer: &str) -> &'a str {
+pub(crate) fn text<'a>(value: &'a Value, pointer: &str) -> &'a str {
     value
         .pointer(pointer)
         .and_then(Value::as_str)
         .unwrap_or_default()
 }
 
-fn number(value: &Value, pointer: &str) -> u64 {
+pub(crate) fn number(value: &Value, pointer: &str) -> u64 {
     value.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
 }
 
-fn items<'a>(value: &'a Value, pointer: &str) -> &'a [Value] {
+pub(crate) fn items<'a>(value: &'a Value, pointer: &str) -> &'a [Value] {
     let list = value.pointer(pointer).and_then(Value::as_array);
     list.map_or(&[], Vec::as_slice)
 }
 
 /// A line of untrusted text to show ([`clip`]).
-fn line(value: &Value, pointer: &str) -> String {
+pub(crate) fn line(value: &Value, pointer: &str) -> String {
     clip(text(value, pointer), LINE_LIMIT)
 }
 
@@ -488,7 +495,7 @@ fn multiline(text: &str, max: usize) -> String {
 }
 
 /// A link to open: `https://` only, without spaces or invisible characters.
-fn link(url: &str) -> Option<String> {
+pub(crate) fn link(url: &str) -> Option<String> {
     let clean = !url.chars().any(|c| c.is_whitespace() || invisible(c));
     (url.starts_with("https://") && url.len() <= URL_LIMIT && clean).then(|| url.to_owned())
 }
@@ -636,11 +643,18 @@ fn check(item: &Value) -> PullCheck {
         false => check_state(text(item, state)).unwrap_or(CheckState::Skipped),
     };
     let workflow = line(item, "/workflowName");
+    let url = link(text(item, url));
+    // An Actions job's page: `…/actions/runs/<run>/job/<job>`.
+    let run = url
+        .as_deref()
+        .and_then(|url| url.split_once("/actions/runs/"));
+    let run = run.and_then(|(_, rest)| rest.split('/').next()?.parse().ok());
     PullCheck {
         name: line(item, name),
         workflow: (!workflow.is_empty()).then_some(workflow),
         state,
-        url: link(text(item, url)),
+        url,
+        run,
     }
 }
 
@@ -711,7 +725,7 @@ struct Entry {
 
 /// What a list request does.
 #[derive(Debug, PartialEq)]
-enum Plan {
+pub(crate) enum Plan {
     Send(Box<Control>),
     Fetch,
     Wait,
@@ -720,7 +734,7 @@ enum Plan {
 impl Cache {
     /// What a list request for `key` does at `now`: a fetch only when none runs, and the last
     /// list is older than [`INTERVAL`] or `force`d, and GitHub's rate limit is not holding.
-    fn plan(&mut self, key: &str, force: bool, now: Instant) -> Plan {
+    pub(crate) fn plan(&mut self, key: &str, force: bool, now: Instant) -> Plan {
         let entry = self.0.entry(key.to_owned()).or_default();
         let limited = entry.retry.is_some_and(|retry| now < retry);
         let fresh = entry.asked.is_some_and(|asked| now - asked < INTERVAL);
@@ -734,15 +748,18 @@ impl Cache {
         }
     }
 
-    /// Keeps the list fetched for `key` at `now`. After GitHub's rate limit (its error says
-    /// so) the next fetch waits twice as long as the last one, from [`INTERVAL`] up to
-    /// [`BACKOFF_LIMIT`], and the error tells when.
-    fn done(&mut self, key: &str, mut reply: Control, now: Instant) -> Control {
+    /// Keeps the list (`pulls`, or 9.32's `runs`) fetched for `key` at `now`. After GitHub's
+    /// rate limit (its error says so) the next fetch waits twice as long as the last one, from
+    /// [`INTERVAL`] up to [`BACKOFF_LIMIT`], and the error tells when.
+    pub(crate) fn done(&mut self, key: &str, mut reply: Control, now: Instant) -> Control {
         let entry = self.0.entry(key.to_owned()).or_default();
         entry.busy = false;
         entry.asked = Some(now);
         let limited = match &mut reply {
             Control::Pulls {
+                error: Some(error), ..
+            }
+            | Control::Runs {
                 error: Some(error), ..
             } if error.to_ascii_lowercase().contains("rate limit") => Some(error),
             _ => None,

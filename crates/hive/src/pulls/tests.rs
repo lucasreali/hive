@@ -229,6 +229,8 @@ fn the_recorded_details_keep_reviews_and_comments_fit_to_show() {
             url: Some(
                 "https://github.com/cli/cli/actions/runs/33771463812/job/100702465720".into()
             ),
+            // Its run, for the Actions view (9.32).
+            run: Some(33771463812),
         }
     );
     assert_eq!(
@@ -267,6 +269,7 @@ fn checks_and_statuses_have_one_state() {
             workflow: None,
             state: CheckState::Running,
             url: None,
+            run: None,
         }
     );
     assert_eq!(run("COMPLETED", "FAILURE").state, CheckState::Failing);
@@ -281,6 +284,7 @@ fn checks_and_statuses_have_one_state() {
             workflow: None,
             state: CheckState::Running,
             url: Some("https://ci.example/1".into()),
+            run: None,
         }
     );
     for (state, expected) in [

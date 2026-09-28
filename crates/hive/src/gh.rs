@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use hive_protocol::{GhAccount, GhLogin, SpaceEnv};
 
-use crate::git;
+use crate::git::{self, Stdout};
 
 /// How long one `gh` command may take (most of them call GitHub).
 pub const TIME: Duration = Duration::from_secs(30);
@@ -64,13 +64,13 @@ impl Gh {
 
     /// `gh <args>` in `cwd` (the service's when `None`) with `config_dir` as `GH_CONFIG_DIR`
     /// and `vars` (an account's token, [`token_vars`]); any exit code outside `ok` is an error
-    /// carrying `gh`'s stderr, and so is more than `limit` bytes or `time` passing.
+    /// carrying `gh`'s stderr, and so is more stdout than `keep` allows or `time` passing.
     fn output(
         &self,
         (config_dir, vars): (Option<&str>, &[(&'static str, String)]),
         cwd: Option<&Path>,
         args: &[&str],
-        (ok, limit, time): (&[i32], u64, Duration),
+        (ok, keep, time): (&[i32], Stdout, Duration),
     ) -> Result<Vec<u8>, String> {
         let mut command = Command::new(&self.program);
         for key in CLEARED {
@@ -97,7 +97,7 @@ impl Gh {
             command.current_dir(cwd);
         }
         let os: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
-        let out = git::limited(command, "gh", &os, &[], ok, limit, Some(time));
+        let out = git::limited(command, "gh", &os, &[], ok, keep, Some(time));
         out.map_err(|err| match err.kind() {
             io::ErrorKind::NotFound => NOT_INSTALLED.to_owned(),
             _ => err.to_string(),
@@ -110,7 +110,12 @@ impl Gh {
     pub fn accounts(&self, config_dir: Option<&str>) -> Result<Vec<GhLogin>, String> {
         // 1: no account at all, or the active one failed (the others are still listed).
         let args = ["auth", "status"];
-        let out = self.output((config_dir, &[]), None, &args, (&[0, 1], AUTH_OUTPUT, TIME))?;
+        let out = self.output(
+            (config_dir, &[]),
+            None,
+            &args,
+            (&[0, 1], Stdout::Max(AUTH_OUTPUT), TIME),
+        )?;
         let accounts = parse_status(&String::from_utf8_lossy(&out));
         match accounts.is_empty() {
             true => Err(NOT_LOGGED_IN.to_owned()),
@@ -123,7 +128,7 @@ impl Gh {
         check_account(account)?;
         let GhAccount { host, login } = account;
         let args = ["auth", "token", "--hostname", host, "--user", login];
-        let limits = (&[0][..], AUTH_OUTPUT, LOCAL_TIME);
+        let limits = (&[0][..], Stdout::Max(AUTH_OUTPUT), LOCAL_TIME);
         let out = self.output((config_dir, &[]), None, &args, limits)?;
         let out = String::from_utf8(out).unwrap_or_default();
         let token = out.trim();
@@ -139,7 +144,7 @@ impl Gh {
         check_account(account)?;
         let GhAccount { host, login } = account;
         let args = ["auth", "switch", "--hostname", host, "--user", login];
-        let limits = (&[0][..], AUTH_OUTPUT, LOCAL_TIME);
+        let limits = (&[0][..], Stdout::Max(AUTH_OUTPUT), LOCAL_TIME);
         self.output((config_dir, &[]), None, &args, limits)
             .map(drop)
     }
@@ -176,7 +181,7 @@ impl Gh {
 
     /// `gh <args>` in `cwd` as a terminal of the space with `env` would run it: with its
     /// `GH_CONFIG_DIR` and its account's `GH_TOKEN` and `GH_HOST` (`gh`'s active account
-    /// without one). At most `limit` bytes of stdout, within [`TIME`]; the error (`gh`'s
+    /// without one). Its stdout kept as `keep` says, within [`TIME`]; the error (`gh`'s
     /// stderr, or why there is no token) is fit to show as is. For the pull requests (9.31)
     /// and Actions (9.32) views: the stdout is untrusted, to parse with its own limits.
     pub fn run(
@@ -184,14 +189,14 @@ impl Gh {
         env: &SpaceEnv,
         cwd: &Path,
         args: &[&str],
-        limit: u64,
+        keep: Stdout,
     ) -> Result<Vec<u8>, String> {
         let config_dir = env.gh_config_dir.as_deref();
         let vars = match &env.gh_account {
             Some(account) => token_vars(account, self.token(config_dir, account)?),
             None => Vec::new(),
         };
-        self.output((config_dir, &vars), Some(cwd), args, (&[0], limit, TIME))
+        self.output((config_dir, &vars), Some(cwd), args, (&[0], keep, TIME))
     }
 }
 
@@ -540,24 +545,26 @@ esac
             gh_config_dir: Some("/cfg".into()),
             ..SpaceEnv::default()
         };
-        let out = fake.gh.run(&env, &dir, &["pr", "list"], 1024).unwrap();
+        let most = Stdout::Max(1024);
+        let out = fake.gh.run(&env, &dir, &["pr", "list"], most).unwrap();
         assert_eq!(out, b"ran pr list\n");
         let at = dir.display();
         assert_eq!(fake.log(), format!("pr list|||/cfg|1|{at}\n"));
         env.gh_account = Some(account("github.com", "me"));
-        fake.gh.run(&env, &dir, &["run", "list"], 1024).unwrap();
+        fake.gh.run(&env, &dir, &["run", "list"], most).unwrap();
         let last = fake.log().lines().last().unwrap().to_owned();
         assert_eq!(last, format!("run list|tok-me|github.com|/cfg|1|{at}"));
-        let big = fake.gh.run(&env, &dir, &["big", "out"], 99).unwrap_err();
-        assert_eq!(big, "gh big out printed more than 99 bytes");
-        assert_eq!(
-            fake.gh.run(&env, &dir, &["big", "out"], 100).unwrap().len(),
-            100
-        );
+        let big = fake.gh.run(&env, &dir, &["big", "out"], Stdout::Max(99));
+        assert_eq!(big.unwrap_err(), "gh big out printed more than 99 bytes");
+        let all = fake.gh.run(&env, &dir, &["big", "out"], Stdout::Max(100));
+        assert_eq!(all.unwrap().len(), 100);
+        // Or only its tail.
+        let tail = fake.gh.run(&env, &dir, &["big", "out"], Stdout::Tail(7));
+        assert_eq!(tail.unwrap(), [0; 7]);
         // No token, nothing run.
         env.gh_account = Some(account("github.com", "fail"));
         let calls = fake.log().lines().count();
-        let err = fake.gh.run(&env, &dir, &["pr", "list"], 1024).unwrap_err();
+        let err = fake.gh.run(&env, &dir, &["pr", "list"], most).unwrap_err();
         assert!(err.starts_with("gh auth token"), "{err}");
         assert_eq!(fake.log().lines().count(), calls + 1);
     }

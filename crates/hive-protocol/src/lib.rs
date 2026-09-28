@@ -390,6 +390,67 @@ pub enum Control {
         number: Option<u64>,
         message: String,
     },
+    /// App → service: the latest workflow runs of a followed project's GitHub repository
+    /// (9.32), on `branch` only when given; answered by `Runs`. Fetched from GitHub as
+    /// `ListPulls` is: at most once per 2 minutes for a project, branch and account unless
+    /// `force`d.
+    ListRuns {
+        project: String,
+        branch: Option<String>,
+        force: bool,
+    },
+    /// The runs, the newest first; `error` says why none could be listed.
+    Runs {
+        project: String,
+        branch: Option<String>,
+        runs: Vec<RunSummary>,
+        /// When GitHub was asked (ms since the epoch); 0 when it was not.
+        fetched_ms: u64,
+        error: Option<String>,
+    },
+    /// App → service: one run's jobs and steps, answered by `Run`.
+    OpenRun {
+        project: String,
+        run: u64,
+    },
+    Run {
+        project: String,
+        run: u64,
+        detail: Option<RunDetail>,
+        error: Option<String>,
+    },
+    /// App → service: the tail of job `job`'s log, answered by `JobLog`.
+    OpenJobLog {
+        project: String,
+        job: u64,
+    },
+    JobLog {
+        project: String,
+        job: u64,
+        log: Option<String>,
+        error: Option<String>,
+    },
+    /// App → service: re-runs or cancels run `run` (the app asks before cancelling).
+    /// Answered by `RunDone`, then `Run` and the `branch` list (as in `ListRuns`) again, or
+    /// by `RunFailed`.
+    ActOnRun {
+        project: String,
+        run: u64,
+        action: RunAction,
+        branch: Option<String>,
+    },
+    /// An action on a run worked; `message` is shown as is.
+    RunDone {
+        project: String,
+        run: u64,
+        message: String,
+    },
+    /// An action on a run failed: `gh`'s message.
+    RunFailed {
+        project: String,
+        run: u64,
+        message: String,
+    },
     /// App → service: the local and remote branches of a followed project, answered by
     /// `Branches`.
     ListBranches {
@@ -1102,6 +1163,77 @@ pub struct PullCheck {
     pub state: CheckState,
     /// Its page (`https://` only).
     pub url: Option<String>,
+    /// The Actions run it belongs to, when its page is one (9.32's run view).
+    pub run: Option<u64>,
+}
+
+/// A workflow run as the Actions view lists it (9.32).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSummary {
+    /// GitHub's id (`databaseId`), for `OpenRun` and `ActOnRun`.
+    pub id: u64,
+    /// Its number within its workflow.
+    pub number: u64,
+    pub workflow: String,
+    /// What GitHub shows as its title (the commit message, the pull request's title…).
+    pub title: String,
+    pub branch: String,
+    /// What started it (`push`, `pull_request`, `schedule`…).
+    pub event: String,
+    pub state: CheckState,
+    /// GitHub's conclusion once completed, else its status: lowercase letters and `_`
+    /// (`success`, `failure`, `cancelled`, `in_progress`, `queued`…).
+    pub status: String,
+    /// Its page (`https://` only; empty otherwise).
+    pub url: String,
+    /// ISO 8601, as GitHub gives them.
+    pub created_at: String,
+    pub started_at: String,
+    pub updated_at: String,
+    /// The id of the project's worktree on its branch, if any.
+    pub worktree: Option<String>,
+}
+
+/// A run's jobs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunDetail {
+    pub summary: RunSummary,
+    pub jobs: Vec<RunJob>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunJob {
+    /// GitHub's id, for `OpenJobLog`.
+    pub id: u64,
+    pub name: String,
+    pub state: CheckState,
+    /// As in [`RunSummary`].
+    pub status: String,
+    pub url: String,
+    /// ISO 8601; GitHub's zero time (year 1) until it happened.
+    pub started_at: String,
+    pub completed_at: String,
+    pub steps: Vec<RunStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunStep {
+    pub number: u64,
+    pub name: String,
+    pub state: CheckState,
+    /// As in [`RunSummary`].
+    pub status: String,
+}
+
+/// What `ActOnRun` does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RunAction {
+    /// Runs it again: every job, or only the failed ones.
+    Rerun {
+        failed: bool,
+    },
+    Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2436,6 +2568,7 @@ mod tests {
                     workflow: None,
                     state: CheckState::Skipped,
                     url: None,
+                    run: Some(3),
                 }],
                 files: vec![PullFile {
                     path: "f".into(),
@@ -2446,7 +2579,7 @@ mod tests {
             error: None,
         };
         let json = serde_json::to_string(&detail).unwrap();
-        let tail = r#""notes":[{"author":"a","body":"n","at":"t","review":"approved"}],"checks":[{"name":"c","workflow":null,"state":"skipped","url":null}],"files":[{"path":"f","additions":3,"deletions":4}]"#;
+        let tail = r#""notes":[{"author":"a","body":"n","at":"t","review":"approved"}],"checks":[{"name":"c","workflow":null,"state":"skipped","url":null,"run":3}],"files":[{"path":"f","additions":3,"deletions":4}]"#;
         assert!(json.contains(tail), "{json}");
         for msg in [
             detail,
@@ -2484,6 +2617,110 @@ mod tests {
             (PullAction::Checkout, r#"{"kind":"checkout"}"#),
         ] {
             assert_eq!(serde_json::to_string(&action).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn actions_run_messages_have_their_wire_shape() {
+        let summary = RunSummary {
+            id: 36,
+            number: 2,
+            workflow: "ci".into(),
+            title: "T".into(),
+            branch: "main".into(),
+            event: "push".into(),
+            state: CheckState::Failing,
+            status: "failure".into(),
+            url: "https://github.com/o/r/actions/runs/36".into(),
+            created_at: "c".into(),
+            started_at: "s".into(),
+            updated_at: "u".into(),
+            worktree: Some("/r".into()),
+        };
+        let runs = Control::Runs {
+            project: "/r".into(),
+            branch: Some("main".into()),
+            runs: vec![summary.clone()],
+            fetched_ms: 1,
+            error: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&runs).unwrap(),
+            r#"{"type":"runs","project":"/r","branch":"main","runs":[{"id":36,"number":2,"workflow":"ci","title":"T","branch":"main","event":"push","state":"failing","status":"failure","url":"https://github.com/o/r/actions/runs/36","created_at":"c","started_at":"s","updated_at":"u","worktree":"/r"}],"fetched_ms":1,"error":null}"#
+        );
+        let run = Control::Run {
+            project: "/r".into(),
+            run: 36,
+            detail: Some(RunDetail {
+                summary,
+                jobs: vec![RunJob {
+                    id: 7,
+                    name: "test".into(),
+                    state: CheckState::Running,
+                    status: "in_progress".into(),
+                    url: String::new(),
+                    started_at: "s".into(),
+                    completed_at: "c".into(),
+                    steps: vec![RunStep {
+                        number: 1,
+                        name: "Set up job".into(),
+                        state: CheckState::Passing,
+                        status: "success".into(),
+                    }],
+                }],
+            }),
+            error: None,
+        };
+        let json = serde_json::to_string(&run).unwrap();
+        let jobs = r#""jobs":[{"id":7,"name":"test","state":"running","status":"in_progress","url":"","started_at":"s","completed_at":"c","steps":[{"number":1,"name":"Set up job","state":"passing","status":"success"}]}]"#;
+        assert!(json.contains(jobs), "{json}");
+        let act: Control = serde_json::from_str(
+            r#"{"type":"act_on_run","project":"/r","run":36,"action":{"kind":"rerun","failed":true},"branch":null}"#,
+        )
+        .unwrap();
+        let rerun = Control::ActOnRun {
+            project: "/r".into(),
+            run: 36,
+            action: RunAction::Rerun { failed: true },
+            branch: None,
+        };
+        assert_eq!(act, rerun);
+        let cancel = serde_json::to_string(&RunAction::Cancel).unwrap();
+        assert_eq!(cancel, r#"{"kind":"cancel"}"#);
+        for msg in [
+            run,
+            rerun,
+            Control::ListRuns {
+                project: "/r".into(),
+                branch: None,
+                force: true,
+            },
+            Control::OpenRun {
+                project: "/r".into(),
+                run: 36,
+            },
+            Control::OpenJobLog {
+                project: "/r".into(),
+                job: 7,
+            },
+            Control::JobLog {
+                project: "/r".into(),
+                job: 7,
+                log: Some("x".into()),
+                error: None,
+            },
+            Control::RunDone {
+                project: "/r".into(),
+                run: 36,
+                message: "m".into(),
+            },
+            Control::RunFailed {
+                project: "/r".into(),
+                run: 36,
+                message: "m".into(),
+            },
+        ] {
+            assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
         }
     }
 }
