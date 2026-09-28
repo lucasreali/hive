@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { OpenPull, PullBusy, PullDetail, PullError, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
 import {
   type EditBuffer,
@@ -53,6 +54,10 @@ export type ServiceMessage =
   | { type: "space_failed"; message: string }
   | ({ type: "gh_accounts" } & GhAccounts)
   | { type: "notice"; message: string }
+  | ({ type: "pulls" } & Pulls)
+  | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
+  | { type: "pull_done"; project: string; number: number; message: string }
+  | { type: "pull_failed"; project: string; number: number | null; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -548,6 +553,7 @@ export type Modal =
   | "palette"
   | "file-name"
   | "confirm"
+  | "new-pull"
   | null;
 /**
  * A yes/no question asked in a Hive dialog (8.20), never the WebView's `confirm`: `run` happens
@@ -569,7 +575,7 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView = "files" | "changes" | "sessions";
+export type PanelView = "files" | "changes" | "sessions" | "pulls";
 
 export type HiveState = {
   // UI state
@@ -715,6 +721,12 @@ export type HiveState = {
   gotoLine: (OpenFile & { line: number }) | null;
   /** The followed subagent's conversation; check `agent` and `subagent`. */
   transcript: Transcript | null;
+  /** The last `pulls` of each project (9.31). */
+  pulls: Record<string, Pulls>;
+  /** The pull request whose details the Pull requests view shows, or null for the list. */
+  openPull: OpenPull | null;
+  pullBusy: PullBusy | null;
+  pullError: PullError | null;
 };
 
 export const initialState: HiveState = {
@@ -793,6 +805,10 @@ export const initialState: HiveState = {
   sessionsTruncated: false,
   gotoLine: null,
   transcript: null,
+  pulls: {},
+  openPull: null,
+  pullBusy: null,
+  pullError: null,
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -1145,6 +1161,26 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { spaceError: m.message };
     case "notice":
       return { notice: m.message };
+    case "pulls": {
+      const { type: _, ...pulls } = m;
+      return { pulls: { ...s.pulls, [m.project]: pulls } };
+    }
+    case "pull": {
+      const shown = s.openPull;
+      if (shown?.project !== m.project || shown.number !== m.number) return {};
+      return { openPull: { ...shown, detail: m.pull, error: m.error } };
+    }
+    case "pull_done":
+      return {
+        pullBusy: null,
+        pullError: null,
+        notice: m.message,
+        modal: s.modal === "new-pull" ? null : s.modal,
+      };
+    case "pull_failed": {
+      const { type: _, ...pullError } = m;
+      return { pullBusy: null, pullError };
+    }
     case "gh_accounts": {
       const { type: _, ...accounts } = m;
       return { ghAccounts: accounts };
@@ -1480,6 +1516,14 @@ export const markInboxRead = () =>
     ),
   }));
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
+/**
+ * Shows why `action` failed as the notice (9.21), after `what` ("Cannot open a terminal"),
+ * so a failed request is never swallowed. Returns `action` with the failure handled.
+ */
+export const showFailure = <T>(action: Promise<T>, what = ""): Promise<T> => {
+  action.catch((error: unknown) => setNotice(what ? `${what}: ${error}` : String(error)));
+  return action;
+};
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });

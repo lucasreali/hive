@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import type { PullAction } from "../pulls";
 import type {
   DiffBase,
   GhAccount,
@@ -56,6 +57,26 @@ export interface Transport {
    * answered by `gh_accounts`.
    */
   switchGhAccount(ghConfigDir: string | null, account: GhAccount): Promise<void>;
+  /**
+   * The project's pull requests (9.31); answered by `pulls`. Without `force` the service sends
+   * a list under 2 minutes old again instead of asking GitHub.
+   */
+  listPulls(project: string, force: boolean): Promise<void>;
+  /** One pull request's details; answered by `pull`. */
+  openPull(project: string, number: number): Promise<void>;
+  /**
+   * Answered by `pull_done` (then `pull` and `pulls` again) or `pull_failed`; a checkout by
+   * `worktree_created`. Ask before merging or closing.
+   */
+  actOnPull(project: string, number: number, action: PullAction): Promise<void>;
+  /** A pull request from `worktree`'s branch; answered by `pull_done` or `pull_failed`. */
+  createPull(
+    worktree: string,
+    title: string,
+    body: string,
+    base: string,
+    draft: boolean,
+  ): Promise<void>;
   /**
    * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
    * empty); answered by `dirs`.

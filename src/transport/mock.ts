@@ -19,6 +19,7 @@ import type {
 } from "../store";
 import { DEFAULT_SETTINGS } from "../store";
 import type { Transport } from ".";
+import { createMockPulls } from "./mockPulls";
 import { loadReplay, type ReplayEvent } from "./replay";
 
 const PROMPT = "mock$ ";
@@ -623,6 +624,7 @@ export function createMockTransport(
     later({ type: "projects", projects });
   };
   const holder = (path: string) => projects.find((p) => p.worktrees.some((w) => w.path === path));
+  const pulls = createMockPulls(later, (path) => holder(path)?.id ?? null);
   // As `Projects::linked`: only a linked worktree of a followed project.
   const linkedRefusal = (path: string) => {
     if (!holder(path)) return `${path} is not a worktree of a followed project`;
@@ -786,6 +788,14 @@ export function createMockTransport(
       for (const l of ghLogins) l.active = l.login === account.login && l.host === account.host;
       sendGhAccounts(ghConfigDir);
     },
+    listPulls: pulls.listPulls,
+    openPull: pulls.openPull,
+    async actOnPull(project, number, action) {
+      // A checkout is a new worktree `pr-<number>`, as the service makes it.
+      if (action.kind === "checkout") return this.createWorktree(project, `pr-${number}`, null);
+      pulls.act(project, number, action);
+    },
+    createPull: pulls.createPull,
     async selectSpace(id) {
       changeSpaces(() => {
         if (!space(id)) return `no space "${id}"`;

@@ -4,6 +4,7 @@ import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
 import { ConfirmDialog } from "./shell/ConfirmDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { FileMenu, FileNameDialog } from "./shell/FileMenu";
+import { NewPullDialog } from "./shell/NewPullDialog";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { Palette } from "./shell/Palette";
 import { RightPanel } from "./shell/RightPanel";
@@ -64,6 +65,7 @@ export function App() {
         {modal === "palette" && !blocked && <Palette />}
         {modal === "file-name" && !blocked && <FileNameDialog />}
         {modal === "confirm" && !blocked && <ConfirmDialog />}
+        {modal === "new-pull" && !blocked && <NewPullDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {!blocked && <WorktreeMenu />}

@@ -1,0 +1,30 @@
+# The pull requests view's list (TODO 9.31) in one request per refresh: the repository's merge
+# methods, the account's own pull requests and those asking for its review. Sent by
+# hive::pulls, recorded by scripts/spike/record-gh.sh.
+query($owner: String!, $name: String!, $mine: String!, $review: String!, $first: Int!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner
+    url
+    mergeCommitAllowed
+    squashMergeAllowed
+    rebaseMergeAllowed
+    viewerDefaultMergeMethod
+  }
+  mine: search(query: $mine, type: ISSUE, first: $first) { nodes { ...pull } }
+  review: search(query: $review, type: ISSUE, first: $first) { nodes { ...pull } }
+}
+
+fragment pull on PullRequest {
+  number
+  title
+  url
+  state
+  isDraft
+  isCrossRepository
+  headRefName
+  baseRefName
+  updatedAt
+  author { login }
+  reviewDecision
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+}
