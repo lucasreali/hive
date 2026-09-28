@@ -1,7 +1,7 @@
 import { ORDER_LIMIT } from "./persist";
 import type { FileText } from "./protocol";
 import type { FileTab, HiveState, OpenFile, Split, Tab } from "./store";
-import { type EditBuffer, fromDisk, isFor, startEdit } from "./viewer/buffer";
+import { type EditBuffer, fromDisk, isDirty, isFor, startEdit } from "./viewer/buffer";
 
 // The bar, tab and file-tab selectors: pure functions of the store's state.
 
@@ -43,18 +43,36 @@ export function opened(s: HiveState, file: OpenFile, editing: boolean, line?: nu
     s.openFile && isFor(f, s.openFile) ? { ...f, editing: s.editing, edit: s.edit } : f,
   );
   const tab = openFiles.find((f) => isFor(f, file));
+  // A new tab is the preview tab (11.1): it takes the old preview's place in its worktree's bar;
+  // one of another worktree closes. One with unsaved edits is kept, whatever its flag says.
+  const old = tab ? undefined : openFiles.find((f) => f.preview && !(f.edit && isDirty(f.edit)));
+  const key = fileKey(file);
+  const order = !old
+    ? s.tabOrder
+    : old.worktree === worktree
+      ? s.tabOrder.map((k) => (k === fileKey(old) ? key : k))
+      : s.tabOrder.filter((k) => k !== fileKey(old));
   return {
     ...shown,
     openFiles: tab
       ? openFiles
-      : [...openFiles, { worktree, path, editing, edit: null, view: null }],
-    tabOrder: withKey(s.tabOrder, fileKey(file)),
+      : [
+          ...openFiles.filter((f) => f !== old),
+          { worktree, path, editing, edit: null, view: null, preview: true },
+        ],
+    tabOrder: withKey(order, key),
     openFile: { worktree, path },
     editing: tab ? tab.editing : editing,
     edit: tab ? tab.edit : null,
     editorNotice: null,
   };
 }
+
+/** `files` with file `f`'s tab kept (11.1): no longer the preview tab. */
+export const kept = (files: FileTab[], f: OpenFile): FileTab[] =>
+  files.some((t) => t.preview && isFor(t, f))
+    ? files.map((t) => (isFor(t, f) ? { ...t, preview: false } : t))
+    : files;
 
 /**
  * Closes file `f`'s tab. When it was shown, the tab beside it in the bar (the right one, else

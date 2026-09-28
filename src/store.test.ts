@@ -15,6 +15,7 @@ import {
   openFileMenu,
   openModal,
   panelWorktree,
+  pinFile,
   removeTab,
   select,
   setEdit,
@@ -497,9 +498,14 @@ test("a folder's rename or move carries the open files under it and its folders'
   setOpenFile({ worktree: "/w", path: "src/a.ts" }, true);
   apply(fileAnswer("one\n", "src/a.ts"));
   setEdit({ ...(s().edit as EditBuffer), doc: toText("mine\n") });
-  setOpenFile({ worktree: "/w", path: "src/lib/b.ts" });
-  setOpenFile({ worktree: "/w", path: "srcx/c.ts" });
-  setOpenFile({ worktree: "/x", path: "src/a.ts" });
+  for (const f of [
+    { worktree: "/w", path: "src/lib/b.ts" },
+    { worktree: "/w", path: "srcx/c.ts" },
+    { worktree: "/x", path: "src/a.ts" },
+  ]) {
+    setOpenFile(f);
+    pinFile(f);
+  }
   useHive.setState({
     collapsed: {
       "files:/w/src": false,

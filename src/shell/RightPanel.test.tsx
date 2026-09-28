@@ -312,6 +312,42 @@ test("clicking a file opens it in a tab; folders collapse; the tab's close close
   expect(tabs.querySelector("[role=tab]")).toBeNull();
 });
 
+test("a file opens in the preview tab; a double click on its row keeps it (11.1)", () => {
+  panel();
+  act(() => select(refactor.id));
+  act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
+  expand();
+  const names = () =>
+    screen.getByRole("tablist", { name: "Open terminals and files" }).querySelectorAll(".tab-name");
+  const shown = () => [...names()].map((n) => [n.textContent, n.hasAttribute("data-preview")]);
+  fireEvent.click(screen.getByRole("treeitem", { name: /token\.ts/ }));
+  expect(shown()).toEqual([["token.ts", true]]);
+  // Another file takes the preview tab's place.
+  fireEvent.click(screen.getByRole("treeitem", { name: /package\.json/ }));
+  expect(shown()).toEqual([["package.json", true]]);
+  // A double click (after its two clicks) keeps it; the next file gets a tab of its own.
+  const row = screen.getByRole("treeitem", { name: /package\.json/ });
+  fireEvent.click(row);
+  fireEvent.click(row);
+  fireEvent.doubleClick(row);
+  fireEvent.click(screen.getByRole("treeitem", { name: /token\.ts/ }));
+  expect(shown()).toEqual([
+    ["package.json", false],
+    ["token.ts", true],
+  ]);
+  // A folder's double click only toggles it (twice): no file is kept.
+  const auth = screen.getByRole("treeitem", { name: "auth" });
+  fireEvent.click(auth);
+  fireEvent.click(auth);
+  fireEvent.doubleClick(auth);
+  // Below the rows: nothing.
+  fireEvent.doubleClick(screen.getByRole("tree", { name: "Files" }));
+  expect(shown()).toEqual([
+    ["package.json", false],
+    ["token.ts", true],
+  ]);
+});
+
 test("a file without changes says so", () => {
   panel();
   act(() => select(refactor.id));
