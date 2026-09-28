@@ -2,10 +2,14 @@ import type { ServiceMessage, WorktreeFiles } from "./protocol";
 import {
   type FileTab,
   type HiveState,
+  inCurrentSpace,
+  leaveSpace,
   type OpenFile,
   owner,
   type Question,
   runsKey,
+  selected,
+  spacePlace,
   type Terminal,
   useHive,
   type WorktreeDialog,
@@ -179,14 +183,22 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return removedProject(s, m.id);
     case "remove_project_failed":
       return withNotice(s, "error", m.message);
-    case "spaces":
+    case "spaces": {
       // The answer to the space dialog's request: it has done its job.
-      return {
+      const spaces = {
         spaces: m.spaces,
         currentSpace: m.current,
         spaceError: null,
         modal: s.modal === "new-space" || s.modal === "edit-space" ? null : s.modal,
       };
+      // Another space shows the place last selected there (11.5), unless the selection is
+      // already in it: going to an agent there switched the space, and its agent stays.
+      const next = { ...s, ...spaces };
+      const switched = s.currentSpace !== null && m.current !== s.currentSpace;
+      if (!switched || inCurrentSpace(next, s.selection)) return spaces;
+      const left = { ...next, ...leaveSpace(s) };
+      return { ...spaces, spacePlaces: left.spacePlaces, ...selected(left, spacePlace(left)) };
+    }
     case "space_failed":
       return { spaceError: m.message };
     case "notice":

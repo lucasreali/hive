@@ -106,9 +106,13 @@ export const tabWorktree = (s: HiveState, tab: Tab): string =>
 
 /**
  * Whose tabs the tab bar shows: the selected worktree (a selected project stands for its main
- * worktree); a selected agent's terminal's worktree. Null (nothing selected) shows every tab.
+ * worktree); a selected agent's terminal's worktree. Null (nothing selected) shows every tab,
+ * except in an empty space: none.
  */
 export function tabsPlace(s: HiveState): string | null {
+  // An empty space has no place, so no tabs (11.5): "" is no tab's worktree.
+  const space = s.spaces?.find((x) => x.id === s.currentSpace);
+  if (s.selection === null && space?.projects.length === 0) return "";
   const agent = s.agents[s.selection ?? ""];
   if (!agent) return s.selection;
   const tab = s.tabs.find((t) => t.id === agent.terminal);
