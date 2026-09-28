@@ -2,125 +2,143 @@
 //! receives, written to `app-messages.json` next to this file. `src/protocol.test.ts` runs each
 //! through the app's reducer and checks it against the app's types, so a message renamed, or a
 //! field renamed, added or removed here fails the frontend's tests until the app follows.
+//! Every message also has its row in `docs/architecture.md`'s message catalog (9.26).
 
 use hive_protocol::*;
 
-/// Whether the app receives `message` (service → app); every `true` arm needs a sample in
-/// `samples`. No wildcard: a new variant does not compile until it is sorted here.
-fn to_app(message: &Control) -> bool {
-    use Control::*;
-    match message {
-        Hello { .. }
-        | OpenTerminal { .. }
-        | Resize { .. }
+/// Every `Control` variant, sorted into the ones the app sends and the ones it receives
+/// (service → app). It defines `to_app` (no wildcard: a new variant does not compile until it is
+/// sorted here) and `VARIANTS`, whose every received one needs a sample in `samples`.
+macro_rules! sort {
+    (sent: $($sent:ident)|+; received: $($received:ident)|+;) => {
+        /// Whether the app receives `message`.
+        fn to_app(message: &Control) -> bool {
+            match message {
+                $(Control::$sent { .. })|+ => false,
+                $(Control::$received { .. })|+ => true,
+            }
+        }
+        /// Every variant, by name, with whether the app receives it.
+        const VARIANTS: &[(&str, bool)] = &[
+            $((stringify!($sent), false),)+
+            $((stringify!($received), true),)+
+        ];
+    };
+}
+
+sort! {
+    sent:
+        Hello
+        | OpenTerminal
+        | Resize
         | CloseTerminal
-        | Ack { .. }
-        | Hook { .. }
+        | Ack
+        | Hook
         | ListProjects
-        | AddProject { .. }
-        | RemoveProject { .. }
-        | CreateSpace { .. }
-        | UpdateSpace { .. }
-        | DeleteSpace { .. }
-        | SelectSpace { .. }
-        | ListGhAccounts { .. }
-        | SwitchGhAccount { .. }
-        | ListPulls { .. }
-        | OpenPull { .. }
-        | ActOnPull { .. }
-        | CreatePull { .. }
-        | ListRuns { .. }
-        | OpenRun { .. }
-        | OpenJobLog { .. }
-        | ActOnRun { .. }
-        | ListBranches { .. }
-        | ValidateWorktreeName { .. }
-        | CreateWorktree { .. }
-        | RemoveWorktree { .. }
-        | RenameWorktree { .. }
-        | WatchWorktree { .. }
+        | AddProject
+        | RemoveProject
+        | CreateSpace
+        | UpdateSpace
+        | DeleteSpace
+        | SelectSpace
+        | ListGhAccounts
+        | SwitchGhAccount
+        | ListPulls
+        | OpenPull
+        | ActOnPull
+        | CreatePull
+        | ListRuns
+        | OpenRun
+        | OpenJobLog
+        | ActOnRun
+        | ListBranches
+        | ValidateWorktreeName
+        | CreateWorktree
+        | RemoveWorktree
+        | RenameWorktree
+        | WatchWorktree
         | UnwatchWorktree
-        | View { .. }
-        | ListChanges { .. }
+        | View
+        | ListChanges
         | ListSessions
-        | LocateSession { .. }
-        | DeleteSession { .. }
-        | SearchFiles { .. }
-        | ListDirs { .. }
-        | OpenFile { .. }
-        | SaveFile { .. }
-        | CreateFile { .. }
-        | RenameFile { .. }
-        | MoveFile { .. }
-        | CreateFolder { .. }
-        | DeleteFile { .. }
-        | OpenInEditor { .. }
+        | LocateSession
+        | DeleteSession
+        | SearchFiles
+        | ListDirs
+        | OpenFile
+        | SaveFile
+        | CreateFile
+        | RenameFile
+        | MoveFile
+        | CreateFolder
+        | DeleteFile
+        | OpenInEditor
         | GetSettings
-        | SetSettings { .. }
+        | SetSettings
         | OpenSettingsFile
-        | GetDiagnostics => false,
-        Welcome { .. }
-        | VersionMismatch { .. }
-        | TerminalOpened { .. }
-        | TerminalExited { .. }
-        | Badge { .. }
+        | GetDiagnostics;
+    received:
+        Welcome
+        | VersionMismatch
+        | TerminalOpened
+        | TerminalExited
+        | Badge
         | UnhookedAgent
-        | AgentDetected { .. }
-        | AgentState { .. }
-        | SubagentWorktrees { .. }
-        | AgentTitle { .. }
-        | AgentUsage { .. }
-        | AgentRemoved { .. }
-        | Projects { .. }
-        | ProjectAdded { .. }
-        | AddProjectFailed { .. }
-        | ProjectRemoved { .. }
-        | RemoveProjectFailed { .. }
-        | Spaces { .. }
-        | SpaceFailed { .. }
-        | GhAccounts { .. }
-        | Notice { .. }
-        | Pulls { .. }
-        | Pull { .. }
-        | PullDone { .. }
-        | PullFailed { .. }
-        | Runs { .. }
-        | Run { .. }
-        | JobLog { .. }
-        | RunDone { .. }
-        | RunFailed { .. }
-        | Branches { .. }
-        | WorktreeNameValidated { .. }
-        | WorktreeCreated { .. }
-        | CreateWorktreeFailed { .. }
-        | WorktreeRemoved { .. }
-        | RemoveWorktreeFailed { .. }
-        | WorktreeRenamed { .. }
-        | RenameWorktreeFailed { .. }
-        | WorktreeStatus { .. }
-        | Files { .. }
-        | Changes { .. }
-        | Sessions { .. }
-        | RestoreSessions { .. }
-        | SessionLocated { .. }
-        | SessionDeleted { .. }
-        | DeleteSessionFailed { .. }
-        | SearchResults { .. }
-        | Dirs { .. }
-        | File { .. }
-        | FileSaved { .. }
-        | SaveFailed { .. }
-        | FileCreated { .. }
-        | FileRenamed { .. }
-        | FolderCreated { .. }
-        | FileDeleted { .. }
-        | FileOpFailed { .. }
-        | EditorTarget { .. }
-        | Settings { .. }
-        | SettingsFailed { .. }
-        | Diagnostics { .. }
-        | Error { .. } => true,
-    }
+        | AgentDetected
+        | AgentState
+        | SubagentWorktrees
+        | AgentTitle
+        | AgentUsage
+        | AgentRemoved
+        | Projects
+        | ProjectAdded
+        | AddProjectFailed
+        | ProjectRemoved
+        | RemoveProjectFailed
+        | Spaces
+        | SpaceFailed
+        | GhAccounts
+        | Notice
+        | Pulls
+        | Pull
+        | PullDone
+        | PullFailed
+        | Runs
+        | Run
+        | JobLog
+        | RunDone
+        | RunFailed
+        | Branches
+        | WorktreeNameValidated
+        | WorktreeCreated
+        | CreateWorktreeFailed
+        | WorktreeRemoved
+        | RemoveWorktreeFailed
+        | WorktreeRenamed
+        | RenameWorktreeFailed
+        | WorktreeStatus
+        | Files
+        | Changes
+        | Sessions
+        | RestoreSessions
+        | SessionLocated
+        | SessionDeleted
+        | DeleteSessionFailed
+        | SearchResults
+        | Dirs
+        | File
+        | FileSaved
+        | SaveFailed
+        | FileCreated
+        | FileRenamed
+        | FolderCreated
+        | FileDeleted
+        | FileOpFailed
+        | EditorTarget
+        | Settings
+        | SettingsFailed
+        | Diagnostics
+        | Error;
 }
 
 fn s(text: &str) -> String {
@@ -462,6 +480,16 @@ fn the_app_messages_fixture_holds_one_sample_of_each_message_the_app_receives() 
     types.sort_unstable();
     types.dedup();
     assert_eq!(types.len(), samples.len(), "one sample per message");
+    let mut received: Vec<String> = VARIANTS
+        .iter()
+        .filter(|(_, to_app)| *to_app)
+        .map(|(name, _)| tag(name))
+        .collect();
+    received.sort_unstable();
+    assert_eq!(
+        types, received,
+        "every message the app receives has a sample"
+    );
 
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/app-messages.json");
     let before = std::fs::read_to_string(path).unwrap_or_default();
@@ -471,4 +499,64 @@ fn the_app_messages_fixture_holds_one_sample_of_each_message_the_app_receives() 
         before == now,
         "{path} was stale and has been rewritten: commit it"
     );
+}
+
+/// A variant's `"type"`: its name in snake_case, as `#[serde(rename_all = "snake_case")]` gives it.
+fn tag(name: &str) -> String {
+    let mut tag = String::new();
+    for c in name.chars() {
+        if c.is_ascii_uppercase() && !tag.is_empty() {
+            tag.push('_');
+        }
+        tag.push(c.to_ascii_lowercase());
+    }
+    tag
+}
+
+/// Each row of `docs/architecture.md`'s message catalog: the message's `"type"` and whether it
+/// goes to the app (its direction ends at the app or a client).
+fn catalog() -> Vec<(String, bool)> {
+    let doc = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/architecture.md"
+    ));
+    let table = doc
+        .split("### Message catalog")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").find(|part| part.starts_with('|')))
+        .unwrap_or_default();
+    table
+        .lines()
+        .filter_map(|row| {
+            let mut cells = row.split(" | ");
+            let message = cells.next()?.strip_prefix("| `")?;
+            let tag = message.split([' ', '`']).next()?;
+            let direction = cells.next()?;
+            Some((
+                tag.to_owned(),
+                direction.ends_with("app") || direction.ends_with("client"),
+            ))
+        })
+        .collect()
+}
+
+/// The catalog lists every `Control` message once, in the direction `to_app` sorts it, and no
+/// message that no longer exists.
+#[test]
+fn the_architecture_catalog_lists_every_message_exactly() {
+    let mut catalog = catalog();
+    catalog.sort_unstable();
+    let mut code: Vec<(String, bool)> = VARIANTS
+        .iter()
+        .map(|&(name, to_app)| (tag(name), to_app))
+        .collect();
+    code.sort_unstable();
+    let missing: Vec<_> = code.iter().filter(|m| !catalog.contains(m)).collect();
+    let stale: Vec<_> = catalog.iter().filter(|m| !code.contains(m)).collect();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "not in the catalog as (type, to the app): {missing:?}; in the catalog, not in the code: {stale:?}"
+    );
+    assert_eq!(catalog, code, "one row per message");
+    assert_eq!(tag("RenameWorktreeFailed"), "rename_worktree_failed");
 }
