@@ -171,9 +171,10 @@ function PullList({ project, worktree }: { project: Project; worktree: Worktree 
         <button
           type="button"
           className="secondary pulls-create"
+          title={`Create pull request from ${worktree.branch}`}
           onClick={() => newPull(project.id, worktree.id)}
         >
-          Create pull request from {worktree.branch}
+          Create pull request from <span className="pulls-create-branch">{worktree.branch}</span>
         </button>
       )}
       {!pulls && <div className="hint">Loading…</div>}
