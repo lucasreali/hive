@@ -74,6 +74,10 @@ fn main() {
             commands::open_pull,
             commands::act_on_pull,
             commands::create_pull,
+            commands::list_runs,
+            commands::open_run,
+            commands::open_job_log,
+            commands::act_on_run,
             commands::open_settings_file,
             commands::get_diagnostics,
         ])
