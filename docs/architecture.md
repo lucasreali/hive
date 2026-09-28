@@ -59,7 +59,8 @@ Every message is a frame, big-endian: `[type: u8][channel: u32][length: u32][pay
 - **type** `0` = control: the payload is one JSON `Control` message, tagged by `"type"` in snake_case. **type** `1` = terminal: the payload is raw PTY bytes.
 - **channel** `0` is the connection itself. Channels from `1` up are terminals, and the channel number is also the terminal's `HIVE_TERMINAL_ID`.
 - **Size limit.** The maximum payload is 4 MiB (`MAX_PAYLOAD`) in both directions. The decoder never panics: it fails with `Oversized`, `UnknownType` or `Json` errors. A message too big to encode never ends a connection: the app's Rust side refuses the command with the `Oversized` error (e.g. saving a huge paste), and the service's writer drops the frame with a warning in `daemon.log`.
-- **Priority.** The service's writer always drains queued control frames before terminal frames (`biased` select). Terminal output goes through a bounded queue of 256 frames, so a slow app slows the PTYs instead of growing memory.
+- **Priority.** The service's writer always drains queued control frames before terminal frames. Terminal frames wait in one queue per terminal, and the writer takes the terminals in turn (channel order, wrapping), so a keystroke's echo waits for at most one frame of each other terminal.
+- **Flow control (9.19).** The app acknowledges each terminal's output once xterm.js has written it (`ack {bytes}`). The service stops reading a terminal's PTY while more than 512 KiB of its output is unacknowledged (`terminal::HIGH_WATER`) and reads it again under 128 KiB (`LOW_WATER`), so a flooding program (`yes`, `cat` of a huge file) waits for the screen instead of growing memory in the service, Tauri or the webview, and each terminal's queue holds at most 512 KiB and one read (64 KiB). Tauri forwards terminal output without blocking; the acknowledgements are what bound it.
 
 ### Handshake
 
@@ -80,6 +81,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | terminal frame | both | n | Keystrokes (app → service) or output (service → app). |
 | `resize {cols, rows}` | app → service | n | Resize the PTY. |
 | `close_terminal` | app → service | n | End the terminal's processes. |
+| `ack {bytes}` | app → service | n | `bytes` more of terminal n's output were written to its screen (see Flow control above); ignored once the terminal is gone. |
 | `terminal_exited {code}` | service → app | n | The shell exited; `code` is null when it was killed by a signal. The channel is free again. |
 | `hook {event, terminal_id, payload, sent_ns}` | `hive hook` → service | 0 | One raw hook call. `sent_ns` is `CLOCK_MONOTONIC` in ns when `hive hook` started (one clock for every process on the machine), so the service applies agent states in the order Claude sent them (see [Agent states](#agent-states)). The service closes the connection once it has handled it. The payload stays in the service: the app gets only what the service makes of it (`agent_detected`, `agent_state`, …). |
 | `badge {text}` | `hive badge` → service → app | n | Terminal n's label (`hive badge`); empty clears it. The service drops control and invisible (zero-width, bidi) characters, trims, cuts it at 40 characters (the last one becomes "…") and forwards it only while terminal n is open; `hive badge` sends it on a hook-role connection, which closes after it. The app drops the label when the terminal exits. |
@@ -192,7 +194,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 ### Terminal from the UI
 1. `openTerminal(cwd, cols, rows, onData)`: Rust picks the next channel (never reused while the app runs), registers `onData` and sends `open_terminal` on it. The call resolves with the channel id.
 2. Output bytes for that channel go only to its `onData`. Control messages for channels the UI did not open are dropped.
-3. `writeTerminal` sends terminal frames, split at `MAX_PAYLOAD`; `resizeTerminal` and `closeTerminal` send `resize` and `close_terminal`.
+3. `writeTerminal` sends terminal frames, split at `MAX_PAYLOAD`; `resizeTerminal`, `closeTerminal` and `ackTerminal` send `resize`, `close_terminal` and `ack`.
 4. `terminal_exited` releases the channel's `onData`.
 
 ### Terminals in the UI (xterm.js)
@@ -203,6 +205,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 4. Keys: `interceptKeys(handler)` sees every key event first and keeps the app shortcuts from the terminal (see Shortcuts); then Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes through the clipboard API (#35; on macOS Cmd+C and Cmd+V, and Ctrl+C/Ctrl+Shift+V reach the shell); everything else goes to xterm and, as `onData`, to `writeTerminal`. Input stops once the terminal exited.
 5. `closeTerminal(id)` sends `close_terminal` unless the shell already exited, disposes the `Terminal` and removes the tab (the right neighbour, or the new last tab, is shown). An exited terminal keeps its tab, marked "exited", until closed; `unhooked_agent` adds a "no hooks" badge.
 6. The `terminal` settings (see [Settings](#settings)) and the theme's colors are each terminal's xterm options (`termOptions`), set on new terminals and on every open one when `settings` change (the shown one refits). With `copy_on_select`, a new selection is copied to the clipboard.
+7. Each `term.write` of output has a callback: once xterm.js has parsed the bytes they count as written, and every 64 KiB (`ACK_BYTES`, under the service's 128 KiB low mark) `ackTerminal` acknowledges them (9.19, see Flow control in [Wire protocol](#wire-protocol)). Hidden terminals parse their output too, so they keep acknowledging it; an exited one stops. Output that arrives before `openTerminal` resolves is acknowledged with the next batch.
 
 ### Shortcuts (#35)
 `src/shortcuts.ts` has one `keydown` listener on the window and one command table, `COMMANDS` (id, label, keys, action): `shortcut()` runs the command whose keys were pressed, and the settings' Shortcuts section lists them. A focused terminal gives each key to `interceptKeys` first: a shortcut is kept from xterm, which leaves it unhandled, so it bubbles up to the window listener and runs once; every other key (Ctrl+Shift+C/V included) is the terminal's.
@@ -318,7 +321,7 @@ See [Handshake](#handshake). A refused client is not the app, so the daemon keep
 1. `open_terminal` on channel n.
 2. The service spawns `fish -C 'set -gx PATH <bin> $PATH'` on a new PTY. fish is the session leader, and the environment has `HIVE_TERMINAL_ID=n` and `TERM=xterm-256color`, plus, in a followed worktree, `HIVE_PORT`, `HIVE_WORKTREE_PATH` and `HIVE_ROOT_PATH` (see [Project scripts and ports](#project-scripts-and-ports-68)).
 3. The service replies `terminal_opened`.
-4. A pump task copies PTY output into terminal frames. There is no scrollback on the service side. Typing and output never wait for another task (9.13): input goes through a per-terminal queue found under a short std lock, and the pump records the time of the last output in an atomic shared with the registry, so neither waits while agents are placed or their logs read.
+4. A pump task copies PTY output into terminal frames. There is no scrollback on the service side. Typing and output never wait for another task (9.13): input goes through a per-terminal queue found under a short std lock, and the pump records the time of the last output in an atomic shared with the registry, so neither waits while agents are placed or their logs read. The pump waits only for the app's acknowledgements of its own output (`terminal::Output`, a count shared with `ack` through a `watch`, found under the same std lock as the input queue; see Flow control in [Wire protocol](#wire-protocol)); input never waits for them.
 5. When fish exits, the pump ends the terminal's other process groups as on `close_terminal` and sends `terminal_exited {code}`. If another process keeps the PTY open (a disowned job, a `setsid` child), the output still gets 200 ms first (9.15).
 6. `close_terminal` ends the terminal's session (see below). The exit is reported by the pump.
 
