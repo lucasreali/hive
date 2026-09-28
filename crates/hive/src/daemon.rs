@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     AgentEvent, Control, DiffBase, EventKind, Frame, FrameCodec, FrameError, FrameType, GhAccount,
-    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget,
+    OpenSession, PROTOCOL_VERSION, Project, Role, SaveError, SessionTarget, Worktree,
 };
 use pty_process::OwnedReadPty;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -29,6 +29,7 @@ use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
 use crate::projects::{self, Projects};
+use crate::registry::Registry;
 use crate::scripts::{self, Ports};
 use crate::sessions::{self, Sessions};
 use crate::settings;
@@ -121,6 +122,7 @@ async fn serve(
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
+    let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -135,8 +137,10 @@ async fn serve(
     // (waiting for the lock) instead of a listen queue nobody accepts.
     drop(listener);
     let _ = std::fs::remove_file(socket);
-    watcher.abort();
-    health.abort();
+    let files = state.watching.lock().await.take();
+    for task in [watcher, health, registry].into_iter().chain(files) {
+        stop(task).await;
+    }
     // Before the terminals end (and their sessions with them): what to resume next time.
     state.save_open().await;
     let sessions: Vec<i32> = state
@@ -148,6 +152,14 @@ async fn serve(
         .collect();
     terminal::end_sessions(&sessions).await;
     Ok(())
+}
+
+/// Stops a background task and waits until it has. One caught in blocking work
+/// (`block_in_place`) finishes it and polls its next timer while the runtime still runs:
+/// polling a timer once the runtime shuts down panics.
+async fn stop(task: tokio::task::JoinHandle<()>) {
+    task.abort();
+    let _ = task.await;
 }
 
 /// The service's state. Lock order, when one task holds several: `terminals` → `agents` →
@@ -185,6 +197,13 @@ struct State {
     listed: std::sync::Mutex<Option<Control>>,
     /// The last `subagent_worktrees` sent, so only changes are sent.
     owned: std::sync::Mutex<Vec<String>>,
+    /// Each project's worktrees as last sent to the app (without status), so a change of
+    /// git's registry the app already has (its own request, a hook) is not sent again.
+    worktrees_sent: std::sync::Mutex<HashMap<String, Vec<Worktree>>>,
+    /// Woken when the current space's projects change, so their registries are watched.
+    refollow: tokio::sync::Notify,
+    /// Held while [`State::worktrees_changed`] lists and sends.
+    changing: Mutex<()>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for at start and again, in the
     /// background, while no `claude` is on it: the user's shell never holds up the frames.
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
@@ -230,6 +249,9 @@ impl State {
             sent: Default::default(),
             listed: Default::default(),
             owned: Default::default(),
+            worktrees_sent: Default::default(),
+            refollow: Default::default(),
+            changing: Mutex::new(()),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
             pulls: Default::default(),
@@ -281,6 +303,40 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn worktrees_sent(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<Worktree>>> {
+        self.worktrees_sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether the app has every one of `projects` with these worktrees.
+    fn known(&self, projects: &[Project]) -> bool {
+        let sent = self.worktrees_sent();
+        projects
+            .iter()
+            .all(|p| sent.get(&p.id) == Some(&p.worktrees))
+    }
+
+    /// The one place the followed projects' worktrees are known to have changed outside
+    /// Hive's own requests: a worktree hook, or git's registry (9.36). The app gets the
+    /// projects again, with health, unless they are what it has (both saw the same change).
+    async fn worktrees_changed(&self) {
+        // One change at a time, so the second of two at once sees what the first sent.
+        let _turn = self.changing.lock().await;
+        let reply = tokio::task::block_in_place(|| {
+            let projects = self.projects.list();
+            if self.known(&projects) {
+                return None;
+            }
+            let mut reply = Control::Projects { projects };
+            self.with_health(&mut reply);
+            Some(reply)
+        });
+        if let Some(reply) = reply {
+            self.to_app(0, &reply).await;
+        }
+    }
+
     /// Gives the worktrees of the projects in a reply their status (git, so on a blocking
     /// thread), remembered as sent.
     fn with_health(&self, reply: &mut Control) {
@@ -293,6 +349,8 @@ impl State {
             _ => return,
         };
         for project in projects {
+            self.worktrees_sent()
+                .insert(project.id.clone(), project.worktrees.clone());
             health::fill(project);
             let mut sent = self.sent();
             for w in &project.worktrees {
@@ -627,17 +685,32 @@ impl State {
     /// Answers a project request off the frame loop, since git can take a while.
     fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
         let state = self.clone();
+        tokio::spawn(async move { state.answer(request).await });
+    }
+
+    /// [`State::projects`] for a request that changes worktrees: in turn with
+    /// [`State::worktrees_changed`], which then finds the change already sent.
+    fn change_worktrees(
+        self: &Arc<Self>,
+        request: impl FnOnce(&Projects) -> Control + Send + 'static,
+    ) {
+        let state = self.clone();
         tokio::spawn(async move {
-            // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
-            let reply = tokio::task::block_in_place(|| {
-                let mut reply = request(&state.projects);
-                state.with_health(&mut reply);
-                reply
-            });
-            if state.new_to_app(&reply) {
-                state.to_app(0, &reply).await;
-            }
+            let _turn = state.changing.lock().await;
+            state.answer(request).await;
         });
+    }
+
+    async fn answer(&self, request: impl FnOnce(&Projects) -> Control) {
+        // The daemon's runtime is multi-threaded, so other tasks keep running meanwhile.
+        let reply = tokio::task::block_in_place(|| {
+            let mut reply = request(&self.projects);
+            self.with_health(&mut reply);
+            reply
+        });
+        if self.new_to_app(&reply) {
+            self.to_app(0, &reply).await;
+        }
     }
 
     /// Whether the app lacks `reply`: always, except a sessions list equal to the last one
@@ -678,7 +751,11 @@ impl State {
     async fn change_spaces(&self, change: impl FnOnce(&mut Spaces) -> Result<(), String>) {
         let changed = tokio::task::block_in_place(|| self.projects.change_spaces(change));
         let reply = match changed {
-            Ok(()) => self.projects.spaces_message(),
+            Ok(()) => {
+                // A space switch changes the projects followed.
+                self.refollow.notify_one();
+                self.projects.spaces_message()
+            }
             Err(message) => Control::SpaceFailed { message },
         };
         self.to_app(0, &reply).await;
@@ -717,6 +794,12 @@ impl State {
     fn github(self: &Arc<Self>, request: Control) {
         let state = self.clone();
         tokio::spawn(async move {
+            // A checkout makes a worktree: in turn with the registry watch, as
+            // `change_worktrees`.
+            let _turn = match request {
+                Control::ActOnPull { .. } => Some(state.changing.lock().await),
+                _ => None,
+            };
             let gh = state.gh().await;
             let replies = tokio::task::block_in_place(|| {
                 let projects = &state.projects;
@@ -755,6 +838,7 @@ impl State {
                     .await;
             }
         };
+        self.refollow.notify_one();
         self.to_app(0, &self.projects.spaces_message()).await;
         let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
             Ok(settings) => settings.map(|settings| Control::Settings { settings }),
@@ -934,6 +1018,32 @@ async fn watch_files(state: Arc<State>, path: String, base: DiffBase) {
     }
 }
 
+/// Watches git's worktree registry of the current space's projects (9.36): however a
+/// worktree is added or removed, the app gets the projects again, once per burst.
+async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
+    let mut registry = match registry {
+        Ok(registry) => registry,
+        // E.g. no inotify instance left: the worktrees still follow hooks and the app.
+        Err(err) => return eprintln!("hive: warning: cannot watch git's worktrees: {err}"),
+    };
+    let mut started = false;
+    loop {
+        let roots = state.projects.roots();
+        // Before listing, so a change made meanwhile is seen next time.
+        tokio::task::block_in_place(|| registry.follow(&roots));
+        // After a change, and after the projects followed changed: what happened in a
+        // registry while it was not watched yet (e.g. right after a space switch) is sent too.
+        if started {
+            state.worktrees_changed().await;
+        }
+        started = true;
+        tokio::select! {
+            () = state.refollow.notified() => {}
+            () = registry.changed() => {}
+        }
+    }
+}
+
 fn error(err: io::Error) -> Control {
     Control::Error {
         message: err.to_string(),
@@ -1101,9 +1211,8 @@ async fn hook_connection<R: AsyncRead + Unpin>(
             {
                 // The app's worktrees follow a `claude -w` or a subagent's worktree; listed
                 // after the agent states it changed.
-                state.projects(|projects| Control::Projects {
-                    projects: projects.list(),
-                });
+                let state = state.clone();
+                tokio::spawn(async move { state.worktrees_changed().await });
             }
         }
         _ => {}
@@ -1222,6 +1331,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 let reply = match added {
                     Ok(reply) => {
                         // It joined the current space.
+                        state.refollow.notify_one();
                         state.to_app(0, &state.projects.spaces_message()).await;
                         reply
                     }
@@ -1294,7 +1404,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             project,
             name,
             base,
-        }) => state.projects(move |projects| {
+        }) => state.change_worktrees(move |projects| {
             match projects.create_worktree(&project, &name, base.as_deref()) {
                 Ok((project, created)) => Control::WorktreeCreated {
                     project,
@@ -1310,7 +1420,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         }),
         Ok(Control::RemoveWorktree { path, force }) => {
             let archiving = state.clone();
-            state.projects(move |projects| {
+            state.change_worktrees(move |projects| {
                 let archive = |root: &str| archiving.archive(root, &path);
                 match projects.remove_worktree(&path, force, procs::Source::System, archive) {
                     Ok(project) => Control::WorktreeRemoved { project, path },
@@ -1321,22 +1431,20 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 }
             })
         }
-        Ok(Control::RenameWorktree { path, name }) => {
-            state.projects(move |projects| {
-                match projects.rename_worktree(&path, &name, procs::Source::System) {
-                    Ok((project, to)) => Control::WorktreeRenamed {
-                        project,
-                        from: path,
-                        path: to,
-                    },
-                    Err(err) => Control::RenameWorktreeFailed {
-                        path,
-                        name,
-                        message: err.to_string(),
-                    },
-                }
-            })
-        }
+        Ok(Control::RenameWorktree { path, name }) => state.change_worktrees(move |projects| {
+            match projects.rename_worktree(&path, &name, procs::Source::System) {
+                Ok((project, to)) => Control::WorktreeRenamed {
+                    project,
+                    from: path,
+                    path: to,
+                },
+                Err(err) => Control::RenameWorktreeFailed {
+                    path,
+                    name,
+                    message: err.to_string(),
+                },
+            }
+        }),
         Ok(Control::ListChanges { path, base }) => {
             state.projects(move |projects| changes::answer(&projects.list(), path, base))
         }
@@ -1365,13 +1473,16 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         }
         Ok(Control::LocateSession { id, target }) => {
             state.sessions(move |projects, sessions, _| {
-                let located = sessions.find(projects, &id).and_then(|session| {
-                    let path = match target {
-                        SessionTarget::Log => session.log,
-                        SessionTarget::Folder => session.cwd,
-                    };
-                    file::windows(Path::new(&path), OsStr::new("wslpath"))
-                });
+                let wslpath = OsStr::new("wslpath");
+                let located = sessions
+                    .find(projects, &id)
+                    .and_then(|session| match target {
+                        SessionTarget::Log => file::windows(Path::new(&session.log), wslpath),
+                        // The log's `cwd` is untrusted: checked as a worktree's folder is (9.10).
+                        SessionTarget::Folder => {
+                            file::windows_path(Path::new(&session.cwd), "", wslpath)
+                        }
+                    });
                 Control::SessionLocated {
                     id,
                     target,
@@ -1692,6 +1803,54 @@ mod tests {
             Ports::new(dir.join("ports.json")),
             restore,
         ))
+    }
+
+    #[test]
+    fn a_stopped_task_is_out_of_its_blocking_work_before_the_runtime_shuts_down() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ms = std::time::Duration::from_millis;
+        let work = {
+            let blocked = blocked.clone();
+            move || {
+                tokio::task::block_in_place(|| std::thread::sleep(ms(300)));
+                blocked.store(true, Ordering::SeqCst);
+                ms(10_000)
+            }
+        };
+        // Blocking work, then a timer polled in the same step (one line: the task never
+        // gets past the timer, it is stopped there).
+        let task = runtime.spawn(async move { tokio::time::sleep(work()).await });
+        runtime.block_on(async {
+            tokio::time::sleep(ms(50)).await;
+            stop(task).await;
+        });
+        assert!(blocked.load(Ordering::SeqCst));
+        runtime.shutdown_background();
+    }
+
+    #[test]
+    fn the_registry_watch_ends_only_without_a_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // It ends instead of waiting for changes forever.
+        let failed = Err(io::Error::other("no inotify"));
+        runtime.block_on(watch_registry(state.clone(), failed));
+        // With a watcher it follows the projects (again on a change of them) until stopped.
+        state.refollow.notify_one();
+        let watching = runtime.spawn(watch_registry(state, Registry::new()));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!watching.is_finished());
+        // Not waited for: a watch that never yields (a broken `Registry::changed`) cannot
+        // hold the test up.
+        runtime.shutdown_background();
     }
 
     #[test]

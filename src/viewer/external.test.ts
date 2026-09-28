@@ -43,7 +43,7 @@ test("a requested editor_target opens once", async () => {
     await openTarget(target(folder, null, ""), true);
     await openTarget({ ...target(settings, null, ""), worktree: "" }, true);
   }
-  expect(opened).toEqual([{ path: unc }, { path: folder }, { path: settings }]);
+  expect(opened).toEqual([unc, folder, settings].map((path) => ({ path, reveal: false })));
 });
 
 afterEach(() => {
@@ -68,7 +68,7 @@ test("the Windows path opens with its default app inside Tauri", async () => {
   });
   setOpenFile({ worktree: "/w", path: "a.ts" });
   await openExternal(target(unc), true);
-  expect(calls).toEqual([["plugin:opener|open_path", { path: unc }]]);
+  expect(calls).toEqual([["open_path", { path: unc, reveal: false }]]);
   expect(notice()).toBeNull();
 
   mockIPC(() => {
@@ -103,7 +103,7 @@ test("a worktree's folder opens in the Explorer, or the status bar says why not"
   });
   const folder = "\\\\wsl.localhost\\Ubuntu\\w\\";
   await openFolder(target(folder, null, ""), true);
-  expect(calls).toEqual([["plugin:opener|open_path", { path: folder }]]);
+  expect(calls).toEqual([["open_path", { path: folder, reveal: false }]]);
   const status = () => useHive.getState().notice;
   expect(status()).toBeNull();
   await openFolder(target(null, "wslpath failed: x", ""), true);

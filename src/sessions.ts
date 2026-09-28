@@ -1,9 +1,9 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { OpenSession, ServiceMessage, Session, SessionTarget } from "./protocol";
 import { activateTab, ask, setNotice, useHive } from "./store";
 import { openClaude } from "./terminals";
 import { transport } from "./transport";
+import { openPath } from "./viewer/external";
 
 // What the sidebar's Sessions do with a Claude session. Claude runs in a Hive terminal as the
 // user would run it; logs and folders open with Windows' own apps.
@@ -75,7 +75,7 @@ export async function openLocated(located: Located, tauri = isTauri()): Promise<
   if (!located.windows_path) return setNotice(located.error);
   if (!tauri) return setNotice(`Only the Hive app opens ${located.windows_path}`);
   try {
-    await (handing === "reveal" ? revealItemInDir : openPath)(located.windows_path);
+    await openPath(located.windows_path, handing === "reveal");
   } catch (error) {
     setNotice(String(error));
   }

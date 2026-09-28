@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hive</title>
+    <!-- Never an inline <style> in this file: Tauri would add a nonce to the CSP's style-src
+         (src-tauri/tauri.conf.json), which cancels its 'unsafe-inline' and breaks xterm and
+         CodeMirror in release builds only. -->
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
 
