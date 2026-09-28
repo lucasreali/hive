@@ -229,6 +229,8 @@ fn the_recorded_details_keep_reviews_and_comments_fit_to_show() {
             url: Some(
                 "https://github.com/cli/cli/actions/runs/33771463812/job/100702465720".into()
             ),
+            // Its run is set by `open`, which knows the repository.
+            run: None,
         }
     );
     assert_eq!(
@@ -267,6 +269,7 @@ fn checks_and_statuses_have_one_state() {
             workflow: None,
             state: CheckState::Running,
             url: None,
+            run: None,
         }
     );
     assert_eq!(run("COMPLETED", "FAILURE").state, CheckState::Failing);
@@ -281,6 +284,7 @@ fn checks_and_statuses_have_one_state() {
             workflow: None,
             state: CheckState::Running,
             url: Some("https://ci.example/1".into()),
+            run: None,
         }
     );
     for (state, expected) in [
@@ -326,6 +330,32 @@ fn checks_and_statuses_have_one_state() {
     assert_eq!(view(&[]).summary.checks, None);
     let many: Vec<(&str, &str)> = vec![done; CHECKS_LIMIT + 1];
     assert_eq!(view(&many).checks.len(), CHECKS_LIMIT);
+}
+
+#[test]
+fn only_the_repository_own_actions_jobs_name_their_run() {
+    let repo = Repo {
+        host: "github.com".into(),
+        owner: "Me".into(),
+        name: "r".into(),
+    };
+    let run = |url: &str| run_of(url, &repo);
+    assert_eq!(
+        run("https://github.com/me/r/actions/runs/36/job/7"),
+        Some(36)
+    );
+    assert_eq!(run("https://github.com/Me/r/actions/runs/36"), Some(36));
+    for url in [
+        "https://evil.example/actions/runs/36/job/7",
+        "https://github.com/me/rx/actions/runs/36/job/7",
+        "https://github.com/other/r/actions/runs/36/job/7",
+        "https://github.com/me/r/actions/runs/x/job/7",
+        "https://github.com/me/r/actions/runs.evil/36",
+        "https://github.com/me/r/pull/36",
+        "https://github.com",
+    ] {
+        assert_eq!(run(url), None, "{url}");
+    }
 }
 
 #[test]
@@ -796,6 +826,8 @@ fn details_and_actions_send_the_right_arguments() {
         panic!("{open:?}")
     };
     assert_eq!(pull.head, HEAD);
+    // The recorded checks are cli/cli's runs, not o/r's: none opens in the Actions view.
+    assert!(pull.checks.iter().all(|c| c.run.is_none()));
     let repo = "github.com/o/r";
     let id = setup.id.as_str();
     assert_eq!(

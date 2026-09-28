@@ -15,6 +15,8 @@ use nix::unistd::Pid;
 const OUTPUT_LIMIT: u64 = 16_777_216; // 16 MiB
 /// Most bytes read from one git command's stderr.
 const STDERR_LIMIT: u64 = 67_108_864; // 64 MiB
+/// How much [`read_tail`] reads at a time.
+const TAIL_BLOCK: u64 = 65_536;
 /// The longest a git command that only reads may take (e.g. on a hung network drive).
 pub const TIME_LIMIT: Duration = Duration::from_secs(10);
 
@@ -67,11 +69,20 @@ fn run_within(
 ) -> io::Result<Vec<u8>> {
     let mut command = command(dir);
     command.args(args);
-    limited(command, "git", args, input, ok, limit, time)
+    limited(command, "git", args, input, ok, Stdout::Max(limit), time)
+}
+
+/// How much of a command's stdout [`limited`] keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stdout {
+    /// All of it, at most this many bytes: more is an error.
+    Max(u64),
+    /// Its last bytes only, however much it prints (a log's tail).
+    Tail(u64),
 }
 
 /// Runs `command`, already given its `args` (`program` names it in errors), as
-/// [`run_within`] runs git: `input` on stdin, at most `limit` bytes of stdout, errors carrying
+/// [`run_within`] runs git: `input` on stdin, its stdout kept as `keep` says, errors carrying
 /// its stderr only (never its stdout), and everything it started killed after `time`. A
 /// program that cannot start is an error of that kind (`NotFound` when it is not installed).
 pub fn limited(
@@ -80,7 +91,7 @@ pub fn limited(
     args: &[&OsStr],
     input: &[u8],
     ok: &[i32],
-    limit: u64,
+    keep: Stdout,
     time: Option<Duration>,
 ) -> io::Result<Vec<u8>> {
     if time.is_some() {
@@ -114,7 +125,10 @@ pub fn limited(
                 expired
             })
         });
-        let out = stdout.map_or(Ok(Vec::new()), |mut out| read_limited(&mut out, limit));
+        let out = stdout.map_or(Ok(Vec::new()), |mut out| match keep {
+            Stdout::Max(limit) => read_limited(&mut out, limit),
+            Stdout::Tail(limit) => read_tail(&mut out, limit),
+        });
         let err = err.join().unwrap_or_default();
         drop(finished);
         let expired = watchdog.is_some_and(|w| w.join().unwrap_or_default());
@@ -130,6 +144,7 @@ pub fn limited(
         );
         return Err(io::Error::new(io::ErrorKind::TimedOut, message));
     }
+    let (Stdout::Max(limit) | Stdout::Tail(limit)) = keep;
     let out = out.map_err(|_| {
         io::Error::other(format!(
             "{program} {command} printed more than {limit} bytes"
@@ -166,6 +181,19 @@ pub fn read_limited(input: &mut dyn Read, limit: u64) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// The last `keep` bytes of `input`, however long it is: read [`TAIL_BLOCK`] bytes at a time.
+pub fn read_tail(input: &mut dyn Read, keep: u64) -> io::Result<Vec<u8>> {
+    let mut tail = Vec::new();
+    loop {
+        let read = input.take(TAIL_BLOCK).read_to_end(&mut tail)?;
+        let over = tail.len().saturating_sub(keep as usize);
+        tail.drain(..over);
+        if read == 0 {
+            return Ok(tail);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +201,11 @@ mod tests {
     #[test]
     fn input_is_size_limited() {
         assert_eq!(read_limited(&mut &b"abcd"[..], 4).unwrap(), b"abcd");
+        // A tail: the last bytes of an input over several blocks.
+        let long: Vec<u8> = (0..3 * TAIL_BLOCK).map(|i| i as u8).collect();
+        let tail = read_tail(&mut &long[..], 5).unwrap();
+        assert_eq!(tail, long[long.len() - 5..]);
+        assert_eq!(read_tail(&mut &b"abc"[..], 5).unwrap(), b"abc");
         let err = read_limited(&mut &b"abcde"[..], 4).unwrap_err();
         assert_eq!(err.to_string(), "input larger than 4 bytes");
     }

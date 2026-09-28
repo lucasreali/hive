@@ -16,7 +16,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction, Role,
-    SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -680,6 +680,48 @@ impl Hive {
         self.link().send(0, &create)
     }
 
+    /// The answer arrives as `runs` (9.32).
+    pub fn list_runs(
+        &self,
+        project: String,
+        branch: Option<String>,
+        force: bool,
+    ) -> Result<(), String> {
+        let list = Control::ListRuns {
+            project,
+            branch,
+            force,
+        };
+        self.link().send(0, &list)
+    }
+
+    /// The answer arrives as `run`.
+    pub fn open_run(&self, project: String, run: u64) -> Result<(), String> {
+        self.link().send(0, &Control::OpenRun { project, run })
+    }
+
+    /// The answer arrives as `job_log`.
+    pub fn open_job_log(&self, project: String, job: u64) -> Result<(), String> {
+        self.link().send(0, &Control::OpenJobLog { project, job })
+    }
+
+    /// The answer arrives as `run_done` or `run_failed`.
+    pub fn act_on_run(
+        &self,
+        project: String,
+        run: u64,
+        action: RunAction,
+        branch: Option<String>,
+    ) -> Result<(), String> {
+        let act = Control::ActOnRun {
+            project,
+            run,
+            action,
+            branch,
+        };
+        self.link().send(0, &act)
+    }
+
     /// The answer arrives as `editor_target` with an empty `worktree`.
     pub fn open_settings_file(&self) -> Result<(), String> {
         self.link().send(0, &Control::OpenSettingsFile)
@@ -1193,6 +1235,37 @@ pub mod commands {
         draft: bool,
     ) -> Result<(), String> {
         hive.create_pull(worktree, title, body, base, draft)
+    }
+
+    #[tauri::command]
+    pub fn list_runs(
+        hive: State<'_, Hive>,
+        project: String,
+        branch: Option<String>,
+        force: bool,
+    ) -> Result<(), String> {
+        hive.list_runs(project, branch, force)
+    }
+
+    #[tauri::command]
+    pub fn open_run(hive: State<'_, Hive>, project: String, run: u64) -> Result<(), String> {
+        hive.open_run(project, run)
+    }
+
+    #[tauri::command]
+    pub fn open_job_log(hive: State<'_, Hive>, project: String, job: u64) -> Result<(), String> {
+        hive.open_job_log(project, job)
+    }
+
+    #[tauri::command]
+    pub fn act_on_run(
+        hive: State<'_, Hive>,
+        project: String,
+        run: u64,
+        action: RunAction,
+        branch: Option<String>,
+    ) -> Result<(), String> {
+        hive.act_on_run(project, run, action, branch)
     }
 
     #[tauri::command]

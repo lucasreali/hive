@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { PullAction } from "../pulls";
+import type { RunAction } from "../runs";
 import type {
   DiffBase,
   GhAccount,
@@ -82,6 +83,20 @@ export interface Transport {
     base: string,
     draft: boolean,
   ): Promise<void>;
+  /**
+   * The project's latest Actions runs (9.32), on `branch` only when not null; answered by
+   * `runs`. Without `force` the service sends a list under 2 minutes old again.
+   */
+  listRuns(project: string, branch: string | null, force: boolean): Promise<void>;
+  /** One run's jobs and steps; answered by `run`. */
+  openRun(project: string, run: number): Promise<void>;
+  /** The end of a job's log; answered by `job_log`. */
+  openJobLog(project: string, job: number): Promise<void>;
+  /**
+   * Answered by `run_done` (then `run` and the `branch` list again) or `run_failed`. Ask
+   * before cancelling.
+   */
+  actOnRun(project: string, run: number, action: RunAction, branch: string | null): Promise<void>;
   /**
    * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
    * empty); answered by `dirs`.

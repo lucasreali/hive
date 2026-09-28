@@ -23,12 +23,13 @@ test("agents: placed by their cwd, clicking one shows its terminal, exiting remo
   await expect(agents).toHaveCount(1);
   expect((await rows()).slice(0, 5)).toEqual([
     "shop",
-    "main",
-    // Its pull request (9.31) after the health badges.
-    "fix-login↑3↓1●2#12",
+    // Each worktree's latest Actions run (9.32) last.
+    "main✓",
+    // Its pull request (9.31) after the health badges, then its run.
+    "fix-login↑3↓1●2#12✗",
     // The icon's name, the title, the state's name and the time in it.
     expect.stringMatching(/^idleClaudeidle\ds$/),
-    "feat-checkout↑1●2",
+    "feat-checkout↑1●2●",
   ]);
   // A worktree with agents (chevron) and one without line up their branch icons (7.13).
   const iconX = async (name: string) =>

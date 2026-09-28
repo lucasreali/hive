@@ -1,0 +1,90 @@
+2026-09-27T10:33:42.5134152Z [32m✓ built in 3.50s[39m
+2026-09-27T10:33:42.5457073Z ##[end-action id=__self.__run_2;outcome=success;conclusion=success;duration_ms=11826]
+2026-09-27T10:33:42.5489270Z ##[group]Run args=()
+2026-09-27T10:33:42.5489546Z [36;1margs=()[0m
+2026-09-27T10:33:42.5489911Z [36;1mif [ "$IN_DIFF" = true ]; then args=(--in-diff diff.patch); fi[0m
+2026-09-27T10:33:42.5490289Z [36;1mcargo mutants --in-place --baseline=skip --timeout "$TIMEOUT" \[0m
+2026-09-27T10:33:42.5490672Z [36;1m  --shard "$SHARD" --sharding round-robin "${args[@]}"[0m
+2026-09-27T10:33:42.5526304Z shell: /usr/bin/bash -e {0}
+2026-09-27T10:33:42.5526673Z env:
+2026-09-27T10:33:42.5526933Z   CARGO_TERM_COLOR: always
+2026-09-27T10:33:42.5527196Z   MUTANTS_PER_SHARD: 25
+2026-09-27T10:33:42.5527452Z   MAX_SHARDS: 20
+2026-09-27T10:33:42.5527689Z   CARGO_HOME: /home/runner/.cargo
+2026-09-27T10:33:42.5527969Z   CARGO_INCREMENTAL: 0
+2026-09-27T10:33:42.5528260Z   CACHE_ON_FAILURE: false
+2026-09-27T10:33:42.5528519Z   IN_DIFF: false
+2026-09-27T10:33:42.5528755Z   SHARD: 17/20
+2026-09-27T10:33:42.5528979Z   TIMEOUT: 115
+2026-09-27T10:33:42.5529208Z ##[endgroup]
+2026-09-27T10:33:42.7421389Z Found 86 mutants to test
+2026-09-27T10:52:13.3209279Z [31m[1mMISSED  [0m src-tauri/src/lib.rs:747:9: replace [38;5;13mcommands::check_update[0m with [33m()[0m in [36m4s[0m [2mbuild[0m + [36m0s[0m [2mtest[0m
+2026-09-27T10:52:13.3224646Z ##[warning] replace commands::check_update with ()
+2026-09-27T10:52:34.8691013Z 86 mutants tested in 19m: 1 missed, 79 caught, 6 unviable
+2026-09-27T10:52:34.8717389Z ##[error]Process completed with exit code 2.
+2026-09-27T10:52:34.8768563Z ##[group]Run actions/upload-artifact@v6
+2026-09-27T10:52:34.8768839Z with:
+2026-09-27T10:52:34.8769074Z   name: mutants-shard-17
+2026-09-27T10:52:34.8769297Z   path: mutants.out
+2026-09-27T10:52:34.8769516Z   retention-days: 7
+2026-09-27T10:52:34.8769724Z   if-no-files-found: warn
+2026-09-27T10:52:34.8769942Z   compression-level: 6
+2026-09-27T10:52:34.8770308Z   overwrite: false
+2026-09-27T10:52:34.8770549Z   include-hidden-files: false
+2026-09-27T10:52:34.8770800Z env:
+2026-09-27T10:52:34.8770997Z   CARGO_TERM_COLOR: always
+2026-09-27T10:52:34.8771225Z   MUTANTS_PER_SHARD: 25
+2026-09-27T10:52:34.8771464Z   MAX_SHARDS: 20
+2026-09-27T10:52:34.8771677Z   CARGO_HOME: /home/runner/.cargo
+2026-09-27T10:52:34.8771925Z   CARGO_INCREMENTAL: 0
+2026-09-27T10:52:34.8772349Z   CACHE_ON_FAILURE: false
+2026-09-27T10:52:34.8772692Z ##[endgroup]
+2026-09-27T10:52:35.0109130Z With the provided path, there will be 180 files uploaded
+2026-09-27T10:52:35.0110838Z Artifact name is valid!
+2026-09-27T10:52:35.0111781Z Root directory input is valid!
+2026-09-27T10:52:35.2856808Z Beginning upload of artifact content to blob storage
+2026-09-27T10:52:35.7716298Z Uploaded bytes 776856
+2026-09-27T10:52:35.8119589Z Finished uploading artifact content to blob storage!
+2026-09-27T10:52:35.8120368Z SHA256 digest of uploaded artifact zip is 7ec23d67fd23c1fc7517a46c88180d585f812545b00524a1656c8ee762e3ad3f
+2026-09-27T10:52:35.8120833Z Finalizing artifact upload
+2026-09-27T10:52:36.1220710Z Artifact mutants-shard-17.zip successfully finalized. Artifact ID 10929653695
+2026-09-27T10:52:36.1221287Z Artifact mutants-shard-17 has been successfully uploaded! Final size is 776856 bytes. Artifact ID is 10929653695
+2026-09-27T10:52:36.1224179Z Artifact download URL: https://github.com/o/r/actions/runs/36312609118/artifacts/10929653695
+2026-09-27T10:52:36.1366194Z Post job cleanup.
+2026-09-27T10:52:36.1370852Z ##[start-action display=Run oven-sh/setup-bun@v2;id=__c07f0b5c-675d-4eb0-99a7-4ea9dc6fd626.__oven-sh_setup-bun]
+2026-09-27T10:52:36.1373538Z ##[end-action id=__c07f0b5c-675d-4eb0-99a7-4ea9dc6fd626.__oven-sh_setup-bun;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-27T10:52:36.1375555Z ##[start-action display=Run Swatinem/rust-cache@v2;id=__c07f0b5c-675d-4eb0-99a7-4ea9dc6fd626.__Swatinem_rust-cache]
+2026-09-27T10:52:36.1381377Z ##[end-action id=__c07f0b5c-675d-4eb0-99a7-4ea9dc6fd626.__Swatinem_rust-cache;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-27T10:52:36.1438603Z Post job cleanup.
+2026-09-27T10:52:36.2092077Z [command]/usr/bin/git version
+2026-09-27T10:52:36.2121770Z git version 2.55.0
+2026-09-27T10:52:36.2147645Z Temporarily overriding HOME='/home/runner/work/_temp/fabd4f40-b637-413d-bb9c-c6052c7690d8' before making global git config changes
+2026-09-27T10:52:36.2148672Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-27T10:52:36.2151339Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/hive/hive
+2026-09-27T10:52:36.2175305Z Removing SSH command configuration
+2026-09-27T10:52:36.2181019Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-27T10:52:36.2207541Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-27T10:52:36.2381194Z Removing HTTP extra header
+2026-09-27T10:52:36.2386222Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-27T10:52:36.2413489Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-27T10:52:36.2580257Z Removing includeIf entries pointing to credentials config files
+2026-09-27T10:52:36.2584766Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-27T10:52:36.2601337Z includeif.gitdir:/home/runner/work/hive/hive/.git.path
+2026-09-27T10:52:36.2607740Z includeif.gitdir:/home/runner/work/hive/hive/.git/worktrees/*.path
+2026-09-27T10:52:36.2608428Z includeif.gitdir:/github/workspace/.git.path
+2026-09-27T10:52:36.2608877Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-27T10:52:36.2611199Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/hive/hive/.git.path
+2026-09-27T10:52:36.2630039Z /home/runner/work/_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2638835Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/hive/hive/.git.path /home/runner/work/_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2667339Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/hive/hive/.git/worktrees/*.path
+2026-09-27T10:52:36.2685468Z /home/runner/work/_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2695093Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/hive/hive/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2724330Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-27T10:52:36.2741930Z /github/runner_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2748149Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2775182Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-27T10:52:36.2795960Z /github/runner_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2805892Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config
+2026-09-27T10:52:36.2833268Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-27T10:52:36.2991745Z Removing credentials config '/home/runner/work/_temp/git-credentials-907b37a0-e7f0-4bae-bce8-a592fe1d4273.config'
+2026-09-27T10:52:36.3137581Z Cleaning up orphan processes
