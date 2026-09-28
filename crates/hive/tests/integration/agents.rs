@@ -390,8 +390,19 @@ async fn hook_events_delivered_out_of_order_apply_in_the_order_they_were_sent() 
     // Handled, but the older event leaves the permission prompt shown.
     assert_eq!(deliver(&mut app, "PreToolUse", 1).await, []);
     // A later call of the real `hive hook` is stamped after both.
-    let seen = hook(&repo, &mut app, "1", "Stop", json!({"session_id": "s"})).await;
-    assert_eq!(seen, [(1, state("s", WaitingYou, vec![]))]);
+    let mut child = repo
+        .env
+        .hive()
+        .args(["hook", "Stop"])
+        .env("HIVE_TERMINAL_ID", "1")
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(br#"{"session_id": "s"}"#).unwrap();
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    assert_eq!(app.control().await, (1, state("s", WaitingYou, vec![])));
     drop(app);
     assert!(daemon.wait_exit().success());
 }
