@@ -25,7 +25,6 @@ import {
   type Project,
   type Subagent,
   select,
-  showTranscript,
   spaceProjects,
   stepAgent,
   toggleCollapsed,
@@ -154,9 +153,9 @@ function SpacePicker() {
 function ProjectNode({ project }: { project: Project }) {
   const open = useHive((s) => !s.collapsed[project.id]);
   const selection = useHive((s) => s.selection);
-  // A subagent's own worktree shows as its parent row instead (#22); the service leaves out
-  // those an agent runs in. The same worktree objects while that holds, so a hook event
-  // re-renders no row (9.23).
+  // A subagent's own worktree has no row, only its line's tooltip (9.35); the service leaves
+  // out those where an agent or a terminal of the human's is. The same worktree objects while
+  // that holds, so a hook event re-renders no row (9.23).
   const shown = useHive(
     useShallow((s) => project.worktrees.filter((w) => !s.subagentWorktrees.includes(w.id))),
   );
@@ -375,8 +374,8 @@ function StateLines({
 }
 
 /**
- * An agent, under the worktree the service placed it in, with its live subagents; clicking the
- * agent shows its terminal, clicking a subagent its conversation (6.10). States are the service's (#37); until the first
+ * An agent, under the worktree the service placed it in, with its live subagents as quiet lines
+ * (9.35); clicking the agent shows its terminal. States are the service's (#37); until the first
  * `agent_state` arrives the agent shows as idle, as `SessionStart` leaves it.
  */
 function AgentRow({
@@ -388,9 +387,7 @@ function AgentRow({
 }) {
   const tab = useHive((s) => s.tabs.find((t) => t.id === agent.terminal));
   const picked = useHive((s) => s.selection === agent.id);
-  // While a subagent's conversation shows, its row is the selected one.
-  const covered = useHive((s) => s.transcriptShown !== null);
-  const shown = (useHive((s) => s.activeTab === agent.terminal) || picked) && !covered;
+  const shown = useHive((s) => s.activeTab === agent.terminal) || picked;
   const status = useHive((s) => s.agentStates[agent.id]);
   const usage = useHive((s) => s.agentUsage[agent.id]);
   // The session's name, as on its tab; until it has one, "Claude".
@@ -438,7 +435,7 @@ function AgentRow({
       {status && status.subagents.length > 0 && (
         <ul>
           {status.subagents.map((sub) => (
-            <SubagentNode key={sub.id} agent={agent.id} sub={sub} />
+            <SubagentLine key={sub.id} sub={sub} />
           ))}
         </ul>
       )}
@@ -447,48 +444,18 @@ function AgentRow({
 }
 
 /**
- * A subagent; with a worktree of its own, that worktree is its parent row (Project → Worktree →
- * Agent at every level, #22). Clicking either row shows the subagent's conversation.
+ * A live subagent (9.35): one quiet line under its agent with its state's icon, its type, what
+ * it is doing and the time in its state. Nothing to click, select or focus. Its own worktree has
+ * no row (the service's `subagent_worktrees`); its path is the line's tooltip.
  */
-function SubagentNode({ agent, sub }: { agent: string; sub: Subagent }) {
-  const w = useHive((s) =>
-    Object.values(s.projects ?? {})
-      .flatMap((p) => p.worktrees)
-      .find((w) => w.id === sub.worktree),
-  );
-  const shown = useHive(
-    (s) => s.transcriptShown?.agent === agent && s.transcriptShown.subagent === sub.id,
-  );
-  const show = () => showTranscript(agent, sub.id);
-  const row = (
-    <div className="tree-row subagent" data-selected={shown}>
-      <button type="button" className="row-main" aria-current={shown} onClick={show}>
-        <StateLines
-          state={sub.state}
-          doing={sub}
-          title={
-            <>
-              <span className="prefix">subagent: </span>
-              {sub.agent_type ?? "unknown"}
-            </>
-          }
-        />
-      </button>
-    </div>
-  );
-  // Until the service's next `projects` lists its worktree, the subagent stays in place.
-  if (!w) return <li>{row}</li>;
+function SubagentLine({ sub }: { sub: Subagent }) {
+  const now = useNow();
   return (
-    <li>
-      <div className="tree-row own-worktree" title={w.path}>
-        <button type="button" className="row-own" tabIndex={-1} onClick={show}>
-          <BranchIcon />
-          <span className="label">{w.name}</span>
-        </button>
-      </div>
-      <ul className="owned">
-        <li>{row}</li>
-      </ul>
+    <li className="subagent-line" title={sub.worktree ?? undefined}>
+      <StateIcon state={sub.state} />
+      <span className="subagent-type">{sub.agent_type ?? "subagent"}</span>
+      {sub.activity && <span className="subagent-activity">{sub.activity}</span>}
+      <span className="subagent-time">{elapsed(sub.since_ms, now)}</span>
     </li>
   );
 }

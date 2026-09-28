@@ -909,127 +909,6 @@ label:has(> input[type="checkbox"]:disabled) {
   flex-direction: column;
 }
 
-/* A subagent's conversation (6.10), read-only, in place of the terminals. */
-.transcript-view .file-view-bar .path {
-  direction: ltr;
-  font-family: var(--font-sans);
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-}
-
-/* The scroller and what floats over it when scrolled up (8.13). */
-.conversation {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.transcript {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-
-.transcript > ol {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.transcript-entry {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  gap: 12px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-body);
-}
-
-.transcript-role {
-  flex: none;
-  width: 80px;
-  font-size: var(--fs-meta);
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.transcript-text {
-  flex: 1;
-  min-width: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text);
-}
-
-.conversation-prompt .transcript-role,
-.transcript-entry[data-role="user"] .transcript-role {
-  color: var(--accent);
-}
-
-.transcript-entry[data-role="tool"] .transcript-text {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono);
-  color: var(--text-2);
-}
-
-/* Scrolled up (8.13): the prompt bar at the top and the round "back to bottom" button. */
-.conversation-prompt {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
-  font-size: var(--fs-body);
-  text-align: left;
-  color: var(--text);
-}
-
-.conversation-prompt:hover {
-  background: var(--hover);
-}
-
-.conversation-prompt-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.conversation-bottom {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--panel);
-  color: var(--text-2);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.conversation-bottom:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
 /* CodeMirror scrolls inside it (src/viewer/editor.ts). */
 .code-view {
   flex: 1;
@@ -1452,101 +1331,85 @@ button.chevron:hover {
   min-width: 0;
 }
 
-/* Agent and subagent rows: state icon, then the title over the state's name. */
-.tree-row.agent,
-.tree-row.subagent {
+/* Agent rows: state icon, then the title over the state's name. */
+.tree-row.agent {
   padding: 4px 8px 5px 40px;
 }
 
-.tree-row.subagent,
-.tree-row.own-worktree {
+.agent .row-main {
+  align-items: flex-start;
+  gap: 7px;
+}
+
+/*
+ * A live subagent (9.35): one quiet line under its agent, smaller and dimmer than a row, with
+ * nothing to click or hover. Tree lines go from the agent down to each; the last one stops.
+ */
+.subagent-line {
   --line: 45px;
   position: relative;
-  padding-left: 56px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 8px 0 56px;
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+  cursor: default;
 }
 
-.tree-row.own-worktree {
-  height: 22px;
-  padding-right: 8px;
-}
-
-/* A subagent's own worktree is its parent row (#22): the subagent goes one step further in. */
-.owned .tree-row.subagent {
-  --line: 61px;
-  padding-left: 72px;
-}
-
-/* Tree lines from the parent down to each child row; the last one stops at its row. */
-.tree-row.subagent::before,
-.tree-row.subagent::after,
-.tree-row.own-worktree::before,
-.tree-row.own-worktree::after {
+.subagent-line::before,
+.subagent-line::after {
   content: "";
   position: absolute;
   left: var(--line);
   background: var(--tree-line);
 }
 
-.tree-row.subagent::before,
-.tree-row.own-worktree::before {
+.subagent-line::before {
   top: 0;
   width: 1px;
   height: 100%;
 }
 
-li:last-child > .tree-row.subagent::before,
-li:last-child > .tree-row.own-worktree::before {
-  height: 12px;
+.subagent-line:last-child::before {
+  height: 9px;
 }
 
-.tree-row.subagent::after,
-.tree-row.own-worktree::after {
-  top: 11px;
+.subagent-line::after {
+  top: 9px;
   width: 8px;
   height: 1px;
 }
 
-/* The agent's line goes on past an own worktree's subagent to the next sibling. */
-.owned {
-  position: relative;
-}
-
-li:not(:last-child) > .owned::before {
-  content: "";
-  position: absolute;
-  left: 45px;
-  top: 0;
-  width: 1px;
-  height: 100%;
-  background: var(--tree-line);
-}
-
-.row-own {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  text-align: left;
-}
-
-.own-worktree .label {
-  font-family: var(--font-mono);
-  font-size: var(--fs-small);
+.subagent-type {
+  flex: none;
   color: var(--text-2);
 }
 
-.agent .row-main,
-.subagent .row-main {
-  align-items: flex-start;
-  gap: 7px;
+.subagent-activity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-time {
+  flex: none;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 
 .state-icon {
   flex: none;
   margin-top: 1px;
+}
+
+/* A subagent line's icon is smaller than an agent's. */
+.subagent-line .state-icon {
+  width: 11px;
+  height: 11px;
+  margin-top: 0;
 }
 
 /* A collapsed row's rollup ends where the badges end: one right column of indicators (7.13). */
@@ -1598,10 +1461,6 @@ li:not(:last-child) > .owned::before {
   display: flex;
   flex-direction: column;
   gap: 1px;
-}
-
-.subagent .prefix {
-  color: var(--text-3);
 }
 
 .state-line {
