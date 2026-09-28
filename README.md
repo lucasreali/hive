@@ -8,11 +8,13 @@ Why another one: tools like [Orca](https://github.com/stablyai/orca) (Electron +
 
 ## Features
 
-**Agent states in the sidebar.** The tree is Project → Worktree → Agent → Subagents. A subagent with its own worktree is nested under that worktree. States come from Claude Code hooks:
+**Agent states in the sidebar.** The tree is Project → Worktree → Agent. Each live subagent is one small, dim line under its agent: its state, its type, what it is doing and for how long (its own worktree, if any, as the tooltip). States come from Claude Code hooks:
 
 | State | Color | Meaning |
 |---|---|---|
-| waiting for permission | yellow | a permission prompt or a question is waiting for you |
+| waiting for permission | yellow | a permission prompt is waiting for you |
+| waiting for plan approval | yellow | a plan is waiting for your approval (`ExitPlanMode`) |
+| waiting for your answer | yellow | a question is waiting for your answer (`AskUserQuestion`, an MCP form) |
 | error | red | the turn failed (`StopFailure`) |
 | waiting for you | orange | the turn ended, or the terminal went silent for 5 s (an interrupted turn fires no hook) |
 | working | blue | a prompt or a tool call is running |
@@ -22,19 +24,23 @@ Why another one: tools like [Orca](https://github.com/stablyai/orca) (Electron +
 
 The most urgent state wins: a subagent waiting for permission puts its agent in that state. A collapsed project or worktree shows the most urgent state inside it.
 
-**Pending bell.** Waiting for permission, error and waiting for you count as pending. The bell in the title bar shows how many agents are pending; clicking it or pressing **F8** jumps to the next one.
+**Pending bell.** Waiting for permission, a plan or an answer, error and waiting for you count as pending. The bell in the title bar shows how many agents are pending; clicking it or pressing **F8** jumps to the next one.
 
-**Notifications.** A short tone when an agent enters waiting for permission, waiting for you or error, and an OS notification when an agent finishes its turn. No notification (and no pending count) when Hive has focus and that agent's terminal is the one you are looking at.
+**Notifications.** A short tone when an agent enters a pending state, and an OS notification when an agent finishes its turn. Interrupting an agent yourself never alerts. No notification (and no pending count) when Hive has focus and that agent's terminal is the one you are looking at.
 
 **Embedded terminals.** xterm.js tabs, grouped per worktree: the tab bar shows the selected worktree's terminals. A tab running Claude shows the agent's state and the session name Claude gave it. Any number of terminals; only visible ones use WebGL.
 
 **Worktrees.** Create one from any local or remote branch. Hive follows Claude Code's convention (`.claude/worktrees/<name>/`, branch `worktree-<name>`, the same as `claude -w <name>`) and copies the files listed in `.worktreeinclude`. The new worktree can open a terminal with `claude` already started. Worktrees created by `claude -w` or by subagents in Hive's terminals go through Hive too, and disappear from the sidebar when Claude removes them. Right-click a worktree to rename it, delete it, open a terminal there, copy its path or open its folder.
 
-**Files, diff and editor.** The side panel (Files | Diff | Sessions) shows the worktree's files and git changes, updated live while the agent works. Files open in CodeMirror 6 with a read-only diff against `HEAD`. You can edit and save: the save is refused if the file changed on disk since you opened it, and a clean buffer reloads by itself. File search by name or content.
+**Files, diff and editor.** The side panel (Files | Diff | Sessions | PRs | Actions) shows the worktree's files and git changes, updated live while the agent works. Files open in CodeMirror 6 with a read-only diff against `HEAD`, or against where the worktree's branch left the main branch. You can edit and save: the save is refused if the file changed on disk since you opened it, and a clean buffer reloads by itself. File search by name or content.
 
 **Code references.** Select lines in the viewer or the diff and press **Ctrl+Shift+L**: Hive types `@src/checkout/validators.ts (lines 44–46)` into the active terminal (no Enter).
 
 **Session history.** The Sessions tab lists the Claude sessions of the shown worktree, including sessions run outside Hive, with their state. Resume one, fork it into a new session, copy its resume command or ID, open its log, or delete it.
+
+**Spaces.** Group projects into spaces (work, personal), each with its own identity for the terminals opened in it: Claude config folder, git name and email, GitHub CLI config folder and account.
+
+**Pull requests and Actions.** The side panel's PRs view lists your pull requests and those waiting for your review, through the GitHub CLI (`gh`) with the space's account: details, checks, reviews, ready, merge, close, check out into a new worktree, or create one from a worktree's branch. The Actions view lists the latest workflow runs, their jobs and the end of a failed job's log, and re-runs or cancels a run. The sidebar shows each worktree's pull request and latest run.
 
 **Sessions restored.** Terminals and agents end when Hive closes (it asks first if an agent is busy). The Claude sessions that were open come back with `claude --resume` the next time Hive starts.
 
@@ -175,7 +181,7 @@ bun run e2e             # Playwright; needs libnss3 and libnspr4
 
 - 100% line coverage in Rust and in the frontend, plus mutation testing on the changed code. Excluded files are listed with their reasons in [`COVERAGE_EXCLUSIONS.md`](COVERAGE_EXCLUSIONS.md).
 - Integration tests run the real `hive` with a temporary `HOME`/`XDG_*` and a stand-in `claude`; they never touch your environment.
-- CI: [`ci.yml`](.github/workflows/ci.yml) runs every gate on each push, the diff's mutants in parallel shards ([`mutants.yml`](.github/workflows/mutants.yml)); [`mutants-full.yml`](.github/workflows/mutants-full.yml) tests every mutant of `main` nightly and opens an issue for the survivors. [`macos.yml`](.github/workflows/macos.yml) runs on every push to `main` (clippy, coverage and mutants of the macOS-only code, `bun test`, a release bundle). [`release.yml`](.github/workflows/release.yml) runs on `v*` tags.
+- CI: [`ci.yml`](.github/workflows/ci.yml) runs every gate on each push, the diff's mutants in parallel shards ([`mutants.yml`](.github/workflows/mutants.yml)); [`mutants-full.yml`](.github/workflows/mutants-full.yml) tests every mutant of `main` nightly and opens an issue for the survivors. [`macos.yml`](.github/workflows/macos.yml) runs on every push to `main` and `task/*` branches (clippy, coverage and mutants of the macOS-only code, `bun test`, and a release bundle when the change can affect it). [`release.yml`](.github/workflows/release.yml) runs on `v*` tags.
 
 ### Releasing
 
@@ -192,7 +198,7 @@ Only through the package managers' CLIs, never by editing manifests or lockfiles
 
 ## Status
 
-A personal project, at v0.1.x: expect rough edges.
+A personal project, at v0.4.x: expect rough edges.
 
 ## License
 
