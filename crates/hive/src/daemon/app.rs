@@ -423,17 +423,54 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             let home = std::env::var_os("HOME").map(PathBuf::from);
             dirs::answer(path, windows, home.as_deref(), &dirs::WINDOWS)
         }),
-        Ok(
-            request @ (Control::SearchFiles { .. }
-            | Control::OpenFile { .. }
-            | Control::SaveFile { .. }
-            | Control::CreateFile { .. }
-            | Control::RenameFile { .. }
-            | Control::MoveFile { .. }
-            | Control::DeleteFile { .. }
-            | Control::CreateFolder { .. }
-            | Control::OpenInEditor { .. }),
-        ) => state.projects(move |projects| file::answer(projects, request)),
+        Ok(Control::SearchFiles { worktree, query }) => {
+            state.projects(move |projects| file::answer::search(projects, worktree, query))
+        }
+        Ok(Control::OpenFile {
+            worktree,
+            path,
+            base,
+        }) => state.projects(move |projects| file::answer::open(projects, worktree, path, base)),
+        Ok(Control::SaveFile {
+            worktree,
+            path,
+            content,
+            version,
+        }) => state.projects(move |projects| {
+            file::answer::save(projects, worktree, path, &content, version.as_deref())
+        }),
+        Ok(Control::CreateFile {
+            worktree,
+            folder,
+            name,
+        }) => {
+            state.projects(move |projects| file::answer::create(projects, worktree, &folder, &name))
+        }
+        Ok(Control::CreateFolder {
+            worktree,
+            folder,
+            name,
+        }) => state.projects(move |projects| {
+            file::answer::create_folder(projects, worktree, &folder, &name)
+        }),
+        Ok(Control::RenameFile {
+            worktree,
+            path,
+            name,
+        }) => state.projects(move |projects| file::answer::rename(projects, worktree, path, &name)),
+        Ok(Control::MoveFile {
+            worktree,
+            path,
+            folder,
+        }) => {
+            state.projects(move |projects| file::answer::move_to(projects, worktree, path, &folder))
+        }
+        Ok(Control::DeleteFile { worktree, path }) => {
+            state.projects(move |projects| file::answer::delete(projects, worktree, path))
+        }
+        Ok(Control::OpenInEditor { worktree, path }) => {
+            state.projects(move |projects| file::answer::editor(projects, worktree, path))
+        }
         _ => {
             let message = "unexpected message from the app".to_owned();
             state.to_app(channel, &Control::Error { message }).await;
