@@ -780,6 +780,19 @@ mod tests {
         let err = store.migrate(legacy(&[(&long, "/l"), (&long, "/m")]));
         assert_eq!(err, Err("The name is longer than 64 characters".into()));
         assert_eq!(store.get().0.claude.accounts, made);
+        // As many names are tried as it takes: one more than the accounts and the default one.
+        let fresh = Store::load(tmp.path().join("fresh/settings.json"));
+        let numbered = legacy(&[("Default 2", "/a"), ("Default", "/b")]);
+        assert_eq!(fresh.migrate(numbered), Ok(()));
+        let names: Vec<String> = fresh
+            .get()
+            .0
+            .claude
+            .accounts
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(names, ["Default 2", "Default 3"]);
         // An ignored settings file is not replaced.
         std::fs::write(&file, "{").unwrap();
         let ignored = Store::load(file.clone());
