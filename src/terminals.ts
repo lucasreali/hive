@@ -12,7 +12,7 @@ import {
   setSplit,
   showFailure,
   shownSplit,
-  tabPlace,
+  tabWorktree,
   useHive,
 } from "./store";
 import { transport } from "./transport";
@@ -306,10 +306,10 @@ export async function splitTerminal(id: number | null): Promise<void> {
   if (split && (split.left === id || split.right === id)) return setSplit(null);
   const tab = s.tabs.find((t) => t.id === id);
   if (!tab) return;
-  const place = tabPlace(s, tab.cwd);
+  const place = tabWorktree(s, tab);
   const same = inBarOrder(
     s,
-    s.tabs.filter((t) => tabPlace(s, t.cwd) === place),
+    s.tabs.filter((t) => tabWorktree(s, t) === place),
   );
   const next = same[(same.indexOf(tab) + 1) % same.length] as typeof tab;
   const right = next === tab ? await openTerminal(tab.cwd) : next.id;

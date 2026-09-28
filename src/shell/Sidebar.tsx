@@ -157,17 +157,11 @@ function SpacePicker() {
 function ProjectNode({ project }: { project: Project }) {
   const open = useHive((s) => !s.collapsed[project.id]);
   const selection = useHive((s) => s.selection);
-  // A subagent's own worktree shows as its parent row instead (#22), unless an agent runs there.
-  // The same worktree objects while that holds, so a hook event re-renders no row (9.23).
+  // A subagent's own worktree shows as its parent row instead (#22); the service leaves out
+  // those an agent runs in. The same worktree objects while that holds, so a hook event
+  // re-renders no row (9.23).
   const shown = useHive(
-    useShallow((s) => {
-      const states = Object.values(s.agentStates);
-      const owned = new Set(states.flatMap((st) => st.subagents.map((sub) => sub.worktree)));
-      const agents = Object.values(s.agents);
-      return project.worktrees.filter(
-        (w) => !owned.has(w.id) || agents.some((a) => a.worktree === w.id),
-      );
-    }),
+    useShallow((s) => project.worktrees.filter((w) => !s.subagentWorktrees.includes(w.id))),
   );
   return (
     <li>

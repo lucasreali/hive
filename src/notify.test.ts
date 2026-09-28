@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { notify, TONE_GAP_MS } from "./notify";
 import {
   type AgentState,
+  type Alert,
   addToInbox,
   apply,
   DEFAULT_SETTINGS,
@@ -59,76 +60,61 @@ afterEach(() => {
   delete (window as unknown as Record<string, unknown>).Notification;
 });
 
-const state = (id: string, s: AgentState) => ({
+const state = (id: string, s: AgentState, alert: Alert | null = null) => ({
   type: "agent_state" as const,
   id,
-  ...agentStatus(s),
+  ...agentStatus(s, null, 0, alert),
   subagents: [],
 });
 
 /** Feeds a message the way main.tsx does, at `clock + at`. */
-function feed(id: string, s: AgentState, at = 0) {
-  const m = state(id, s);
+function feed(id: string, s: AgentState, alert: Alert | null, at = 0) {
+  const m = state(id, s, alert);
   notify(m, useHive.getState(), clock + at);
   apply(m);
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
-test("a tone only when entering an alerting state, not while staying in it", () => {
-  feed("a", "working");
+// Which change alerts is the service's (`states::Agent`, tested there); here, only what each
+// alert shows.
+
+test("a tone for each alert; a message without one raises nothing", async () => {
   for (const s of ["waiting_plan", "waiting_answer", "waiting_permission", "error"] as const) {
-    feed("a", s, tones * TONE_GAP_MS * 2);
+    feed("a", s, "waiting", tones * TONE_GAP_MS * 2);
   }
   expect(tones).toBe(4);
-  feed("a", "error", 10 * TONE_GAP_MS);
-  feed("a", "idle", 20 * TONE_GAP_MS);
-  feed("a", "with_subagents", 30 * TONE_GAP_MS);
-  feed("a", "ended", 40 * TONE_GAP_MS);
-  expect(tones).toBe(4);
-});
-
-test("an agent's first state and the snapshot after welcome stay silent", async () => {
-  apply({ type: "welcome", version: "1", distro: null });
-  feed("a", "waiting_you");
-  feed("b", "error");
-  feed("c", "waiting_permission");
-  // A reconnect: disconnected clears the store, so the new snapshot is silent too.
-  apply({ type: "disconnected", reason: "gone" });
-  apply({ type: "welcome", version: "1", distro: null });
-  feed("a", "error", TONE_GAP_MS * 2);
+  // An agent's first state, a state that needs nobody, the snapshot after welcome, an interrupt.
+  feed("a", "working", null, 10 * TONE_GAP_MS);
+  feed("b", "waiting_you", null, 20 * TONE_GAP_MS);
+  const interrupted = { ...state("a", "waiting_you"), pending: false, interrupted: true };
+  notify(interrupted, useHive.getState(), clock + 30 * TONE_GAP_MS);
   await settle();
-  expect(tones).toBe(0);
-  expect(shown).toEqual([]);
+  expect([tones, useHive.getState().inbox.length, shown]).toEqual([4, 4, []]);
 });
 
 test("the tone follows the volume setting; 0 plays none", () => {
-  feed("a", "working");
-  feed("a", "error");
+  feed("a", "error", "waiting");
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.notifications.volume = 40;
   apply({ type: "settings", settings });
-  feed("a", "working", TONE_GAP_MS);
-  feed("a", "error", TONE_GAP_MS);
+  feed("a", "error", "waiting", TONE_GAP_MS);
   settings.notifications.volume = 0;
   apply({ type: "settings", settings: structuredClone(settings) });
-  feed("a", "working", 2 * TONE_GAP_MS);
-  feed("a", "error", 2 * TONE_GAP_MS);
+  feed("a", "error", "waiting", 2 * TONE_GAP_MS);
   expect([tones, gains]).toEqual([2, [0.15, 0.06]]);
 });
 
 test("several agents changing at once play one tone", () => {
-  for (const id of ["a", "b", "c"]) feed(id, "working");
-  feed("a", "waiting_you");
-  feed("b", "error", 10);
-  feed("c", "waiting_permission", TONE_GAP_MS - 1);
+  feed("a", "waiting_you", "finished");
+  feed("b", "error", "waiting", 10);
+  feed("c", "waiting_permission", "waiting", TONE_GAP_MS - 1);
   expect(tones).toBe(1);
-  feed("a", "working", TONE_GAP_MS);
-  feed("a", "error", TONE_GAP_MS);
+  feed("a", "error", "waiting", TONE_GAP_MS);
   expect(tones).toBe(2);
 });
 
-test("finishing (working or with subagents → waiting for you) notifies with the place", async () => {
+test("finishing notifies with the place", async () => {
   useHive.setState({
     projects: {
       p: {
@@ -152,17 +138,12 @@ test("finishing (working or with subagents → waiting for you) notifies with th
   });
   apply({ type: "agent_detected", channel: 1, id: "a", project: "p", worktree: "w", cwd: null });
   apply({ type: "agent_detected", channel: 2, id: "b", project: "p", worktree: null, cwd: null });
-  feed("a", "working");
-  feed("a", "waiting_you");
-  feed("b", "with_subagents");
-  feed("b", "waiting_you");
-  feed("c", "working");
-  feed("c", "waiting_you");
-  // Not a finish: from idle, or into another alerting state.
-  feed("a", "idle");
-  feed("a", "waiting_you");
-  feed("b", "working");
-  feed("b", "waiting_permission");
+  feed("a", "waiting_you", "finished");
+  feed("b", "waiting_you", "finished");
+  feed("c", "waiting_you", "finished");
+  // Waiting for you without having finished (e.g. from idle), or any other alert.
+  feed("a", "waiting_you", "waiting");
+  feed("b", "waiting_permission", "waiting");
   await settle();
   expect(shown).toEqual([
     { title: "Agent finished", body: "shop · feat: waiting for you" },
@@ -172,24 +153,10 @@ test("finishing (working or with subagents → waiting for you) notifies with th
 });
 
 test("an agent finishing already seen (not pending) gets its tone but no notification", async () => {
-  feed("a", "working");
-  const seen = { ...state("a", "waiting_you"), pending: false };
+  const seen = { ...state("a", "waiting_you", "finished"), pending: false };
   notify(seen, useHive.getState(), clock);
   await settle();
   expect([tones, shown]).toEqual([1, []]);
-});
-
-test("an agent the user interrupted raises nothing: no tone, inbox or notification", async () => {
-  feed("a", "waiting_answer");
-  const tone = tones;
-  const inbox = useHive.getState().inbox.length;
-  const interrupted = { ...state("a", "waiting_you"), pending: false, interrupted: true };
-  notify(interrupted, useHive.getState(), clock + TONE_GAP_MS * 4);
-  apply(interrupted);
-  feed("a", "working", TONE_GAP_MS * 8);
-  notify(interrupted, useHive.getState(), clock + TONE_GAP_MS * 12);
-  await settle();
-  expect([tones, useHive.getState().inbox.length, shown]).toEqual([tone, inbox, []]);
 });
 
 test("other messages are ignored", () => {
@@ -199,18 +166,15 @@ test("other messages are ignored", () => {
 
 test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", () => {
   apply({ type: "agent_title", channel: 1, id: "a", title: "fix login" });
-  feed("a", "working");
-  feed("a", "waiting_you");
-  feed("a", "waiting_permission");
-  feed("b", "idle");
-  feed("b", "waiting_you");
-  feed("b", "error");
+  feed("a", "waiting_you", "finished");
+  feed("a", "waiting_permission", "waiting");
+  feed("b", "waiting_you", "waiting");
+  feed("b", "error", "waiting");
   // Muted: no tone, but still an alert.
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.notifications.volume = 0;
   apply({ type: "settings", settings });
-  feed("b", "idle");
-  notify(state("b", "waiting_permission"), useHive.getState(), clock, 1234);
+  notify(state("b", "waiting_permission", "waiting"), useHive.getState(), clock, 1234);
   const { inbox } = useHive.getState();
   expect(inbox.map((i) => [i.id, i.agent, i.state, i.text])).toEqual([
     [5, "b", "waiting_permission", "Claude is waiting for permission"],
@@ -220,8 +184,8 @@ test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", 
     [1, "a", "waiting_you", "fix login finished"],
   ]);
   expect(inbox[0]?.at).toBe(1234);
-  feed("a", "waiting_plan");
-  feed("a", "waiting_answer");
+  feed("a", "waiting_plan", "waiting");
+  feed("a", "waiting_answer", "waiting");
   const texts = useHive.getState().inbox.map((i) => i.text);
   expect(texts.slice(0, 2)).toEqual([
     "fix login is waiting for your answer",

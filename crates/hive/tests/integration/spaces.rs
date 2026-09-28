@@ -113,7 +113,10 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         title: "Work task".into(),
     };
     assert!(seen.contains(&(1, title)), "{seen:?}");
-    let Control::Sessions { sessions, error } = ask(&mut app, Control::ListSessions).await else {
+    let Control::Sessions {
+        sessions, error, ..
+    } = ask(&mut app, Control::ListSessions).await
+    else {
         panic!("expected sessions")
     };
     let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
@@ -129,6 +132,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     let empty = Control::Sessions {
         sessions: vec![],
         error: None,
+        truncated: false,
     };
     assert_eq!(listed, empty);
     let refused = ask(&mut app, add(&root)).await;
@@ -369,7 +373,11 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
         message: "No GitHub token for octo-gone on github.com: this terminal uses gh's active account (gh auth token --hostname github.com --user octo-gone failed: no oauth token found for octo-gone)".into(),
     };
     assert_eq!(app.control().await, (0, notice));
-    assert_eq!(app.control().await, (3, Control::TerminalOpened));
+    let worktree = Some(repo.root.display().to_string());
+    assert_eq!(
+        app.control().await,
+        (3, Control::TerminalOpened { worktree })
+    );
 
     // gh's own active account changes only when asked for.
     let switch = Control::SwitchGhAccount {

@@ -5,6 +5,8 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::PathBuf;
 
+use tokio::net::UnixStream;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
     /// `$XDG_RUNTIME_DIR/hive`, or `/tmp/hive-<uid>` when it is unset.
@@ -97,9 +99,19 @@ impl Paths {
             .recursive(true)
             .mode(0o700)
             .create(&self.runtime)?;
+        self.check_runtime()
+    }
+
+    /// Refuses a runtime directory another user owns or others can access: the socket in it
+    /// could be someone else's. Checked before the bridge and `hive hook` connect (a planted
+    /// `/tmp/hive-<uid>` with a listening socket would get every keystroke and saved file).
+    pub fn check_runtime(&self) -> io::Result<()> {
+        self.check_runtime_as(nix::unistd::getuid().as_raw())
+    }
+
+    fn check_runtime_as(&self, uid: u32) -> io::Result<()> {
         // lstat: a symlink reports mode 0777 and fails the mode check.
         let meta = std::fs::symlink_metadata(&self.runtime)?;
-        let uid = nix::unistd::getuid().as_raw();
         if meta.uid() != uid || meta.mode() & 0o077 != 0 {
             return Err(io::Error::other(format!(
                 "refusing insecure runtime directory {} (must be a directory owned by you with mode 0700)",
@@ -108,6 +120,26 @@ impl Paths {
         }
         Ok(())
     }
+
+    /// Connects to the service socket, only in a runtime directory of ours and only to a
+    /// service run by us: the peer check also covers a directory swapped after the check
+    /// (e.g. an `XDG_RUNTIME_DIR` in a shared folder).
+    pub async fn connect(&self) -> io::Result<UnixStream> {
+        self.check_runtime()?;
+        let stream = UnixStream::connect(self.socket()).await?;
+        check_peer(&stream, nix::unistd::getuid().as_raw())?;
+        Ok(stream)
+    }
+}
+
+fn check_peer(stream: &UnixStream, uid: u32) -> io::Result<()> {
+    let peer = stream.peer_cred()?.uid();
+    if peer != uid {
+        return Err(io::Error::other(format!(
+            "refusing a hive socket run by another user (uid {peer})"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -201,6 +233,50 @@ mod tests {
             err.to_string().contains("insecure runtime directory"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn runtime_dir_of_another_user_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths_in(tmp.path());
+        paths.prepare_runtime().unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        paths.check_runtime_as(me).unwrap();
+        let err = paths.check_runtime_as(me + 1).unwrap_err();
+        assert!(
+            err.to_string().contains("insecure runtime directory"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_peer_of_another_user_is_refused() {
+        // The other end stays open: macOS has no peer credentials for a closed peer.
+        let (ours, _theirs) = UnixStream::pair().unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        check_peer(&ours, me).unwrap();
+        let err = check_peer(&ours, me + 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("refusing a hive socket run by another user (uid {me})")
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_reaches_our_own_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths_in(tmp.path());
+        paths.prepare_runtime().unwrap();
+        let listener = tokio::net::UnixListener::bind(paths.socket()).unwrap();
+        paths.connect().await.unwrap();
+        listener.accept().await.unwrap();
+    }
+
+    #[test]
+    fn missing_runtime_dir_fails_the_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = paths_in(tmp.path()).check_runtime().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
