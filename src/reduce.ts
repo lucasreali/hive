@@ -402,8 +402,16 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         subagentWorktrees: [],
         worktreeFiles: null,
       };
+    case "error":
+    case "session_located":
+    case "restore_sessions":
+    case "editor_target":
+      // Answered where they were asked (see `ServiceMessage`), not stored.
+      return {};
     default:
-      // Messages without a store entry yet (e.g. `agent`, `error`) change nothing.
+      // Every known type has its case: a new one fails the typecheck here, and a type the app
+      // does not know (a newer service) changes nothing.
+      m satisfies never;
       return {};
   }
 }
