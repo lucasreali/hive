@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, Role, SessionTarget,
-    Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction, Role,
+    SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -576,6 +576,50 @@ impl Hive {
         self.link().send(0, &switch)
     }
 
+    /// The answer arrives as `pulls` (9.31).
+    pub fn list_pulls(&self, project: String, force: bool) -> Result<(), String> {
+        self.link().send(0, &Control::ListPulls { project, force })
+    }
+
+    /// The answer arrives as `pull`.
+    pub fn open_pull(&self, project: String, number: u64) -> Result<(), String> {
+        self.link().send(0, &Control::OpenPull { project, number })
+    }
+
+    /// The answer arrives as `pull_done` or `pull_failed` (a checkout: `worktree_created`).
+    pub fn act_on_pull(
+        &self,
+        project: String,
+        number: u64,
+        action: PullAction,
+    ) -> Result<(), String> {
+        let act = Control::ActOnPull {
+            project,
+            number,
+            action,
+        };
+        self.link().send(0, &act)
+    }
+
+    /// The answer arrives as `pull_done` or `pull_failed`.
+    pub fn create_pull(
+        &self,
+        worktree: String,
+        title: String,
+        body: String,
+        base: String,
+        draft: bool,
+    ) -> Result<(), String> {
+        let create = Control::CreatePull {
+            worktree,
+            title,
+            body,
+            base,
+            draft,
+        };
+        self.link().send(0, &create)
+    }
+
     /// The answer arrives as `editor_target` with an empty `worktree`.
     pub fn open_settings_file(&self) -> Result<(), String> {
         self.link().send(0, &Control::OpenSettingsFile)
@@ -731,6 +775,7 @@ pub mod commands {
     pub fn check_update<R: Runtime>(app: AppHandle<R>) {
         use tauri_plugin_updater::UpdaterExt;
         tauri::async_runtime::spawn(async move {
+            // Only a newer release, downloaded and signed, reaches the UI (`update_ready`).
             app.state::<Hive>().check_update(app.updater()).await;
         });
     }
@@ -1034,6 +1079,38 @@ pub mod commands {
         account: GhAccount,
     ) -> Result<(), String> {
         hive.switch_gh_account(gh_config_dir, account)
+    }
+
+    #[tauri::command]
+    pub fn list_pulls(hive: State<'_, Hive>, project: String, force: bool) -> Result<(), String> {
+        hive.list_pulls(project, force)
+    }
+
+    #[tauri::command]
+    pub fn open_pull(hive: State<'_, Hive>, project: String, number: u64) -> Result<(), String> {
+        hive.open_pull(project, number)
+    }
+
+    #[tauri::command]
+    pub fn act_on_pull(
+        hive: State<'_, Hive>,
+        project: String,
+        number: u64,
+        action: PullAction,
+    ) -> Result<(), String> {
+        hive.act_on_pull(project, number, action)
+    }
+
+    #[tauri::command]
+    pub fn create_pull(
+        hive: State<'_, Hive>,
+        worktree: String,
+        title: String,
+        body: String,
+        base: String,
+        draft: bool,
+    ) -> Result<(), String> {
+        hive.create_pull(worktree, title, body, base, draft)
     }
 
     #[tauri::command]

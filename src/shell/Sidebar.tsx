@@ -33,7 +33,7 @@ import {
   type Worktree,
   type WorktreeStatus,
 } from "../store";
-import { openClaude } from "../terminals";
+import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { keyText } from "../window";
@@ -46,6 +46,7 @@ import {
   STATE_LABEL,
   StateIcon,
 } from "./icons";
+import { PullBadge, usePullBadges } from "./PullsView";
 import { ResizeHandle } from "./resize";
 
 /**
@@ -80,6 +81,7 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
 export function Sidebar() {
   const list = useHive(useShallow(spaceProjects));
   const width = useHive((s) => s.sidebarWidth);
+  usePullBadges(list.map((p) => p.id));
   return (
     <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree} style={{ width }}>
       <ResizeHandle side="sidebar" />
@@ -283,6 +285,7 @@ const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Wor
           <span className="label">{w.name}</span>
         </button>
         {w.status && <Health status={w.status} />}
+        <PullBadge worktree={w.id} />
         {/* After the badges, in the row's right column of indicators (7.13). */}
         {!open && <Rollup agents={(a) => a.worktree === w.id} />}
         <button
@@ -290,7 +293,7 @@ const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Wor
           className="new-chat"
           title="New chat: a terminal running claude"
           aria-label={`New chat in ${w.name}`}
-          onClick={() => void openClaude(w.path)}
+          onClick={() => showOpenFailure(openClaude(w.path))}
         >
           <NewChatIcon size={12} weight="bold" aria-hidden="true" />
         </button>

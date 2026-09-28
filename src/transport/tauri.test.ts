@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { DEFAULT_SETTINGS, type ServiceMessage } from "../store";
+import { DEFAULT_SETTINGS, type ServiceMessage, setNotice, useHive } from "../store";
 import { tauriTransport } from "./tauri";
 
 type Args = Record<string, unknown>;
@@ -129,4 +129,47 @@ test("terminal and project actions call their commands", async () => {
     ["check_update", {}],
     ["install_update", {}],
   ]);
+});
+
+test("pull request actions call their commands", async () => {
+  const calls = record();
+  await tauriTransport.listPulls("/r", true);
+  await tauriTransport.openPull("/r", 7);
+  await tauriTransport.actOnPull("/r", 7, { kind: "close" });
+  await tauriTransport.createPull("/r/w", "T", "B", "main", true);
+  expect(calls).toEqual([
+    ["list_pulls", { project: "/r", force: true }],
+    ["open_pull", { project: "/r", number: 7 }],
+    ["act_on_pull", { project: "/r", number: 7, action: { kind: "close" } }],
+    ["create_pull", { worktree: "/r/w", title: "T", body: "B", base: "main", draft: true }],
+  ]);
+});
+
+test("a command that fails shows why as the notice, and rejects already handled (9.21)", async () => {
+  mockIPC(() => {
+    throw "the hive link is down";
+  });
+  // Every command but these three: a new one sent with a bare `invoke` fails here.
+  const own = ["connect", "openTerminal", "saveFile"];
+  const methods = Object.entries(tauriTransport).filter(([name]) => !own.includes(name));
+  expect(methods.length).toBe(Object.keys(tauriTransport).length - own.length);
+  for (const [name, method] of methods) {
+    setNotice(null);
+    const failure = await (method as () => Promise<void>)().then(
+      () => "sent",
+      (error: unknown) => error,
+    );
+    expect([name, failure, useHive.getState().notice]).toEqual([
+      name,
+      "the hive link is down",
+      "the hive link is down",
+    ]);
+  }
+  // These leave the failure to their caller.
+  setNotice(null);
+  await expect(tauriTransport.openTerminal("/w", 80, 24, () => {})).rejects.toBe(
+    "the hive link is down",
+  );
+  await expect(tauriTransport.saveFile("/w", "a", "", null)).rejects.toBe("the hive link is down");
+  expect(useHive.getState().notice).toBeNull();
 });

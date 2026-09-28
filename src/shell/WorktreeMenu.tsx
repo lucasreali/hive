@@ -27,7 +27,7 @@ import {
   useHive,
   type Worktree,
 } from "../store";
-import { openTerminal, openWith } from "../terminals";
+import { openTerminal, openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
@@ -137,7 +137,11 @@ export function WorktreeMenu() {
       : undefined;
   return (
     <ContextMenu at={menu} label={`Worktree ${w.name}`} onClose={closeMenu}>
-      <button type="button" role="menuitem" onClick={act(() => void openTerminal(w.path))}>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={act(() => showOpenFailure(openTerminal(w.path)))}
+      >
         <TerminalWindowIcon {...ICON} />
         New terminal here
       </button>
@@ -147,7 +151,7 @@ export function WorktreeMenu() {
           role="menuitem"
           key={run.name}
           title={run.command}
-          onClick={act(() => void openWith(w.path, run.command))}
+          onClick={act(() => showOpenFailure(openWith(w.path, run.command)))}
         >
           <PlayIcon {...ICON} />
           Run: {run.name}
@@ -261,7 +265,12 @@ export function RemoveMergedDialog() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          for (const w of chosen) void transport.removeWorktree(w.path, false);
+          for (const w of chosen) {
+            // Not sent (the notice says why): the row is no longer "Removing…".
+            transport
+              .removeWorktree(w.path, false)
+              .catch(() => setSent((was) => new Set([...was].filter((path) => path !== w.path))));
+          }
           setSent(new Set([...sent, ...chosen.map((w) => w.path)]));
         }}
       >

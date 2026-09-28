@@ -35,8 +35,11 @@ export function confirmClose(): boolean {
 /** Installs the update found at startup (4.19); the app restarts, or says why it could not. */
 export function installUpdate(): void {
   openModal(null);
-  useHive.setState((s) => ({ update: s.update && { ...s.update, installing: true } }));
-  void transport.installUpdate();
+  const installing = (installing: boolean) =>
+    useHive.setState((s) => ({ update: s.update && { ...s.update, installing } }));
+  installing(true);
+  // Not sent (the notice says why): the button comes back.
+  transport.installUpdate().catch(() => installing(false));
 }
 
 /** The update button: restarting ends agents as closing does, so it asks the same way. */

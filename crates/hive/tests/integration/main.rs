@@ -19,6 +19,8 @@ mod hook;
 #[cfg(test)]
 mod projects;
 #[cfg(test)]
+mod pulls;
+#[cfg(test)]
 mod registry;
 #[cfg(test)]
 mod scripts;

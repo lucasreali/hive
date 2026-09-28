@@ -331,6 +331,65 @@ pub enum Control {
     Notice {
         message: String,
     },
+    /// App → service: the pull requests of a followed project's GitHub repository (9.31),
+    /// answered by `Pulls`. Without `force`, a list fetched less than 2 minutes ago is sent
+    /// again instead of asking GitHub.
+    ListPulls {
+        project: String,
+        force: bool,
+    },
+    /// The pull requests the project's space account opened and those asking for its review,
+    /// the most recently updated first; `error` says why none could be listed (no GitHub
+    /// remote, `gh`'s message, GitHub's rate limit and when Hive asks again).
+    Pulls {
+        project: String,
+        repo: Option<PullRepo>,
+        mine: Vec<PullSummary>,
+        review: Vec<PullSummary>,
+        /// When GitHub was asked (ms since the epoch); 0 when it was not.
+        fetched_ms: u64,
+        error: Option<String>,
+    },
+    /// App → service: one pull request's details, answered by `Pull`.
+    OpenPull {
+        project: String,
+        number: u64,
+    },
+    Pull {
+        project: String,
+        number: u64,
+        pull: Option<PullDetail>,
+        error: Option<String>,
+    },
+    /// App → service: acts on a pull request (the app asks before merging or closing).
+    /// Answered by `PullDone` (then the pull request and the list again) or `PullFailed`; a
+    /// checkout by `WorktreeCreated`.
+    ActOnPull {
+        project: String,
+        number: u64,
+        action: PullAction,
+    },
+    /// App → service: opens a pull request from the branch of the worktree `worktree` into
+    /// `base`. Answered by `PullDone` (then the list again) or `PullFailed` with no number.
+    CreatePull {
+        worktree: String,
+        title: String,
+        body: String,
+        base: String,
+        draft: bool,
+    },
+    /// An action on a pull request worked; `message` is shown as is.
+    PullDone {
+        project: String,
+        number: u64,
+        message: String,
+    },
+    /// An action on a pull request (`number`), or creating one (none), failed: `gh`'s message.
+    PullFailed {
+        project: String,
+        number: Option<u64>,
+        message: String,
+    },
     /// App → service: the local and remote branches of a followed project, answered by
     /// `Branches`.
     ListBranches {
@@ -927,6 +986,145 @@ pub struct SpaceEnv {
 pub struct GhAccount {
     pub host: String,
     pub login: String,
+}
+
+/// A project's GitHub repository (9.31).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullRepo {
+    /// `owner/name`.
+    pub name: String,
+    pub url: String,
+    /// The merge methods the repository allows, and the one GitHub offers first.
+    pub merge_methods: Vec<MergeMethod>,
+    pub default_merge: Option<MergeMethod>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMethod {
+    Merge,
+    Squash,
+    Rebase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullState {
+    Open,
+    Draft,
+    Merged,
+    Closed,
+}
+
+/// What the reviews decided, when the repository asks for reviews.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+}
+
+/// A check's state, or all of a commit's together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckState {
+    Passing,
+    Failing,
+    Running,
+    /// Skipped, neutral or stale: neither passing nor failing.
+    Skipped,
+}
+
+/// A pull request as the list shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullSummary {
+    pub number: u64,
+    pub title: String,
+    /// Its page on GitHub (`https://` only; empty otherwise).
+    pub url: String,
+    pub state: PullState,
+    /// Its head branch and the branch it goes into.
+    pub branch: String,
+    pub base: String,
+    pub author: String,
+    pub review: Option<ReviewDecision>,
+    /// All the checks of its last commit together; none when it has none.
+    pub checks: Option<CheckState>,
+    /// ISO 8601, as GitHub gives it.
+    pub updated_at: String,
+    /// The id of the project's worktree on its branch (same repository only), if any.
+    pub worktree: Option<String>,
+}
+
+/// A pull request's details.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullDetail {
+    pub summary: PullSummary,
+    /// Its description (Markdown, untrusted), cut at 64 KiB.
+    pub body: String,
+    /// The head commit, for `PullAction::Merge`.
+    pub head: String,
+    pub additions: u64,
+    pub deletions: u64,
+    /// GitHub found conflicts with the base.
+    pub conflicts: bool,
+    /// Reviews and comments, oldest first (hidden comments left out), at most 50.
+    pub notes: Vec<PullNote>,
+    pub checks: Vec<PullCheck>,
+    pub files: Vec<PullFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullNote {
+    pub author: String,
+    /// Markdown, untrusted, cut at 16 KiB.
+    pub body: String,
+    /// ISO 8601.
+    pub at: String,
+    /// A review's verdict; none for a comment.
+    pub review: Option<ReviewState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullCheck {
+    pub name: String,
+    pub workflow: Option<String>,
+    pub state: CheckState,
+    /// Its page (`https://` only).
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullFile {
+    pub path: String,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// What `ActOnPull` does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PullAction {
+    /// Draft → ready for review.
+    Ready,
+    Close,
+    /// Only while `head` is still its head commit (the one the human saw).
+    Merge {
+        method: MergeMethod,
+        head: String,
+    },
+    /// Into a new worktree `pr-<number>` on the pull request's branch.
+    Checkout,
 }
 
 /// An account as `gh auth status` lists it.
@@ -2166,5 +2364,126 @@ mod tests {
             FrameError::UnknownType(7).to_string(),
             "unknown frame type 7"
         );
+    }
+
+    #[test]
+    fn pull_request_messages_have_their_wire_shape() {
+        let summary = PullSummary {
+            number: 7,
+            title: "T".into(),
+            url: "https://github.com/o/r/pull/7".into(),
+            state: PullState::Draft,
+            branch: "b".into(),
+            base: "main".into(),
+            author: "me".into(),
+            review: Some(ReviewDecision::ChangesRequested),
+            checks: Some(CheckState::Running),
+            updated_at: "2026-09-25T08:18:47Z".into(),
+            worktree: None,
+        };
+        let pulls = Control::Pulls {
+            project: "/r".into(),
+            repo: Some(PullRepo {
+                name: "o/r".into(),
+                url: "https://github.com/o/r".into(),
+                merge_methods: vec![MergeMethod::Squash],
+                default_merge: None,
+            }),
+            mine: vec![summary.clone()],
+            review: vec![],
+            fetched_ms: 1,
+            error: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&pulls).unwrap(),
+            r#"{"type":"pulls","project":"/r","repo":{"name":"o/r","url":"https://github.com/o/r","merge_methods":["squash"],"default_merge":null},"mine":[{"number":7,"title":"T","url":"https://github.com/o/r/pull/7","state":"draft","branch":"b","base":"main","author":"me","review":"changes_requested","checks":"running","updated_at":"2026-09-25T08:18:47Z","worktree":null}],"review":[],"fetched_ms":1,"error":null}"#
+        );
+        let merge: Control = serde_json::from_str(
+            r#"{"type":"act_on_pull","project":"/r","number":7,"action":{"kind":"merge","method":"rebase","head":"abc"}}"#,
+        )
+        .unwrap();
+        let action = PullAction::Merge {
+            method: MergeMethod::Rebase,
+            head: "abc".into(),
+        };
+        let project = "/r".to_owned();
+        assert_eq!(
+            merge,
+            Control::ActOnPull {
+                project: project.clone(),
+                number: 7,
+                action
+            }
+        );
+        let detail = Control::Pull {
+            project,
+            number: 7,
+            pull: Some(PullDetail {
+                summary,
+                body: "b".into(),
+                head: "abc".into(),
+                additions: 1,
+                deletions: 2,
+                conflicts: true,
+                notes: vec![PullNote {
+                    author: "a".into(),
+                    body: "n".into(),
+                    at: "t".into(),
+                    review: Some(ReviewState::Approved),
+                }],
+                checks: vec![PullCheck {
+                    name: "c".into(),
+                    workflow: None,
+                    state: CheckState::Skipped,
+                    url: None,
+                }],
+                files: vec![PullFile {
+                    path: "f".into(),
+                    additions: 3,
+                    deletions: 4,
+                }],
+            }),
+            error: None,
+        };
+        let json = serde_json::to_string(&detail).unwrap();
+        let tail = r#""notes":[{"author":"a","body":"n","at":"t","review":"approved"}],"checks":[{"name":"c","workflow":null,"state":"skipped","url":null}],"files":[{"path":"f","additions":3,"deletions":4}]"#;
+        assert!(json.contains(tail), "{json}");
+        for msg in [
+            detail,
+            Control::ListPulls {
+                project: "/r".into(),
+                force: true,
+            },
+            Control::OpenPull {
+                project: "/r".into(),
+                number: 1,
+            },
+            Control::CreatePull {
+                worktree: "/r".into(),
+                title: "t".into(),
+                body: String::new(),
+                base: "main".into(),
+                draft: false,
+            },
+            Control::PullDone {
+                project: "/r".into(),
+                number: 1,
+                message: "m".into(),
+            },
+            Control::PullFailed {
+                project: "/r".into(),
+                number: None,
+                message: "m".into(),
+            },
+        ] {
+            assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
+        }
+        for (action, json) in [
+            (PullAction::Ready, r#"{"kind":"ready"}"#),
+            (PullAction::Close, r#"{"kind":"close"}"#),
+            (PullAction::Checkout, r#"{"kind":"checkout"}"#),
+        ] {
+            assert_eq!(serde_json::to_string(&action).unwrap(), json);
+        }
     }
 }
