@@ -21,8 +21,27 @@ fn main() {
             let handle = app.handle().clone();
             let hive = hive_lib::Hive::new(program, args)
                 .with_restart(move || handle.request_restart())
-                .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()));
+                .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))
+                .with_open(|path, reveal| {
+                    let opened = if reveal {
+                        tauri_plugin_opener::reveal_item_in_dir(path)
+                    } else {
+                        tauri_plugin_opener::open_path(path, None::<&str>)
+                    };
+                    opened.map_err(|e| e.to_string())
+                });
             app.manage(hive);
+            // The window (`"create": false` in the config) with its guards (open point #15): the
+            // webview never leaves the app and never opens another window.
+            let window = app.config().app.windows.first().cloned();
+            let window = window.ok_or("hive-app: no window in tauri.conf.json")?;
+            let dev = tauri::is_dev()
+                .then(|| app.config().build.dev_url.clone())
+                .flatten();
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
+                .on_navigation(move |url| hive_lib::app_url(url, macos, dev.as_ref()))
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                .build()?;
             #[cfg(windows)]
             disable_browser_keys(app);
             Ok(())
@@ -35,6 +54,7 @@ fn main() {
             commands::write_terminal,
             commands::resize_terminal,
             commands::close_terminal,
+            commands::ack_terminal,
             commands::list_projects,
             commands::add_project,
             commands::list_branches,
@@ -61,6 +81,7 @@ fn main() {
             commands::delete_file,
             commands::create_folder,
             commands::open_in_editor,
+            commands::open_path,
             commands::get_settings,
             commands::set_settings,
             commands::create_space,
@@ -74,6 +95,10 @@ fn main() {
             commands::open_pull,
             commands::act_on_pull,
             commands::create_pull,
+            commands::list_runs,
+            commands::open_run,
+            commands::open_job_log,
+            commands::act_on_run,
             commands::open_settings_file,
             commands::get_diagnostics,
         ])

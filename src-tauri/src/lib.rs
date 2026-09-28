@@ -5,7 +5,7 @@
 //! plus a `channel` field. Terminal output goes, as raw bytes, to the `Channel` given for that
 //! terminal by `open_terminal`. No Tauri events are used.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction, Role,
-    SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -60,6 +60,8 @@ const STDERR_LIMIT: u64 = 16_384;
 const EXIT_WAIT: Duration = Duration::from_secs(2);
 
 const NOT_CONNECTED: &str = "not connected to the hive service";
+/// How many paths the service sent (`editor_target`, `session_located`) wait for `open_path`.
+const APPROVED_LIMIT: usize = 16;
 
 /// Program and arguments that start `hive bridge`: from Windows through WSL (#14, 4.18), or
 /// natively when `macos` (5.2). `HIVE_WSL_DISTRO` picks the WSL distribution (Windows only)
@@ -90,6 +92,20 @@ pub fn bridge_command(
     (program.into(), args)
 }
 
+/// Whether the webview may load `url` (open point #15): only the app itself, from the one origin
+/// Tauri serves it from (`tauri://localhost` when `macos`, `http://tauri.localhost` on Windows)
+/// or, in a development build, from the dev server `dev`. Links open outside, through the
+/// opener plugin.
+pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool {
+    let (scheme, host) = if macos {
+        ("tauri", "localhost")
+    } else {
+        ("http", "tauri.localhost")
+    };
+    let bundled = url.scheme() == scheme && url.host_str() == Some(host) && url.port().is_none();
+    bundled || dev.is_some_and(|dev| dev.origin() == url.origin())
+}
+
 /// Tauri state: the bridge command and the live link to the service.
 pub struct Hive {
     program: OsString,
@@ -99,10 +115,14 @@ pub struct Hive {
     restart: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs a downloaded update's installer; given by `main.rs` (`with_install`).
     install: Option<Box<Installer>>,
+    /// Opens a path, or shows it in the file manager; given by `main.rs` (`with_open`).
+    open: Option<Box<Opener>>,
 }
 
 /// Runs the installer of a downloaded update.
 type Installer = dyn Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync;
+/// Opens `path` with the system's default app, or shows it in the file manager when `reveal`.
+type Opener = dyn Fn(&str, bool) -> Result<(), String> + Send + Sync;
 
 #[derive(Default)]
 struct Link {
@@ -120,9 +140,19 @@ struct Link {
     /// The newer release `check_update` found and downloaded, for `install_update` or the
     /// app's exit (4.19).
     update: Option<(Update, Vec<u8>)>,
+    /// The paths the service sent for the app to open, oldest first, each for one `open_path`.
+    approved: VecDeque<String>,
 }
 
 impl Link {
+    /// Lets `open_path` open `path` once; the oldest waiting path goes past [`APPROVED_LIMIT`].
+    fn approve(&mut self, path: String) {
+        if self.approved.len() == APPROVED_LIMIT {
+            self.approved.pop_front();
+        }
+        self.approved.push_back(path);
+    }
+
     fn to_ui(&self, message: Value) {
         if let Some(ui) = &self.ui {
             let _ = ui.send(message);
@@ -178,7 +208,32 @@ impl Hive {
             link: Arc::default(),
             restart: None,
             install: None,
+            open: None,
         }
+    }
+
+    pub fn with_open(
+        mut self,
+        open: impl Fn(&str, bool) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.open = Some(Box::new(open));
+        self
+    }
+
+    /// Opens `path` with the system's default app, or shows it in the file manager when
+    /// `reveal` (open point #15): only a path the service just sent in `editor_target` or
+    /// `session_located` (checked there: `hive::file::windows_path`, 9.8; a session's log), and
+    /// each at most once, even when opening it fails. The webview itself has no permission to
+    /// open a path, so a script in it can open nothing else.
+    pub fn open_path(&self, path: String, reveal: bool) -> Result<(), String> {
+        let mut link = self.link();
+        let Some(at) = link.approved.iter().position(|approved| *approved == path) else {
+            return Err(format!("Hive opens only a path the service sent: {path}"));
+        };
+        link.approved.remove(at);
+        drop(link);
+        let open = self.open.as_ref().ok_or("this app cannot open paths")?;
+        open(&path, reveal)
     }
 
     pub fn with_restart(mut self, restart: impl Fn() + Send + Sync + 'static) -> Self {
@@ -333,6 +388,11 @@ impl Hive {
 
     pub fn close_terminal(&self, id: u32) -> Result<(), String> {
         self.link().send(id, &Control::CloseTerminal)
+    }
+
+    /// `bytes` more of terminal `id`'s output were written to its screen (9.19).
+    pub fn ack_terminal(&self, id: u32, bytes: u32) -> Result<(), String> {
+        self.link().send(id, &Control::Ack { bytes })
     }
 
     /// Asks for every project with its worktrees; they arrive as `projects`.
@@ -620,6 +680,48 @@ impl Hive {
         self.link().send(0, &create)
     }
 
+    /// The answer arrives as `runs` (9.32).
+    pub fn list_runs(
+        &self,
+        project: String,
+        branch: Option<String>,
+        force: bool,
+    ) -> Result<(), String> {
+        let list = Control::ListRuns {
+            project,
+            branch,
+            force,
+        };
+        self.link().send(0, &list)
+    }
+
+    /// The answer arrives as `run`.
+    pub fn open_run(&self, project: String, run: u64) -> Result<(), String> {
+        self.link().send(0, &Control::OpenRun { project, run })
+    }
+
+    /// The answer arrives as `job_log`.
+    pub fn open_job_log(&self, project: String, job: u64) -> Result<(), String> {
+        self.link().send(0, &Control::OpenJobLog { project, job })
+    }
+
+    /// The answer arrives as `run_done` or `run_failed`.
+    pub fn act_on_run(
+        &self,
+        project: String,
+        run: u64,
+        action: RunAction,
+        branch: Option<String>,
+    ) -> Result<(), String> {
+        let act = Control::ActOnRun {
+            project,
+            run,
+            action,
+            branch,
+        };
+        self.link().send(0, &act)
+    }
+
     /// The answer arrives as `editor_target` with an empty `worktree`.
     pub fn open_settings_file(&self) -> Result<(), String> {
         self.link().send(0, &Control::OpenSettingsFile)
@@ -730,6 +832,12 @@ async fn pump<R: AsyncRead + Unpin>(
                 return End::Refused;
             }
             "terminal_exited" => drop(link.terminals.remove(&frame.channel)),
+            // A path the app may open once (`open_path`).
+            "editor_target" | "session_located" => {
+                if let Some(path) = value["windows_path"].as_str() {
+                    link.approve(path.to_owned());
+                }
+            }
             _ => {}
         }
         link.to_ui(value);
@@ -741,6 +849,8 @@ async fn pump<R: AsyncRead + Unpin>(
 fn disconnected(link: &mut Link, reason: String) {
     link.frames = None;
     link.welcome = None;
+    // A path from an ended connection never opens.
+    link.approved.clear();
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
@@ -818,6 +928,11 @@ pub mod commands {
     #[tauri::command]
     pub fn close_terminal(hive: State<'_, Hive>, id: u32) -> Result<(), String> {
         hive.close_terminal(id)
+    }
+
+    #[tauri::command]
+    pub fn ack_terminal(hive: State<'_, Hive>, id: u32, bytes: u32) -> Result<(), String> {
+        hive.ack_terminal(id, bytes)
     }
 
     #[tauri::command]
@@ -1031,6 +1146,13 @@ pub mod commands {
         hive.open_in_editor(worktree, path)
     }
 
+    // ponytail: sync like every command here (an `async` command left a macro line uncovered);
+    // opening a `\\wsl.localhost` path may briefly wait for WSL on the main thread.
+    #[tauri::command]
+    pub fn open_path(hive: State<'_, Hive>, path: String, reveal: bool) -> Result<(), String> {
+        hive.open_path(path, reveal)
+    }
+
     #[tauri::command]
     pub fn get_settings(hive: State<'_, Hive>) -> Result<(), String> {
         hive.get_settings()
@@ -1113,6 +1235,37 @@ pub mod commands {
         draft: bool,
     ) -> Result<(), String> {
         hive.create_pull(worktree, title, body, base, draft)
+    }
+
+    #[tauri::command]
+    pub fn list_runs(
+        hive: State<'_, Hive>,
+        project: String,
+        branch: Option<String>,
+        force: bool,
+    ) -> Result<(), String> {
+        hive.list_runs(project, branch, force)
+    }
+
+    #[tauri::command]
+    pub fn open_run(hive: State<'_, Hive>, project: String, run: u64) -> Result<(), String> {
+        hive.open_run(project, run)
+    }
+
+    #[tauri::command]
+    pub fn open_job_log(hive: State<'_, Hive>, project: String, job: u64) -> Result<(), String> {
+        hive.open_job_log(project, job)
+    }
+
+    #[tauri::command]
+    pub fn act_on_run(
+        hive: State<'_, Hive>,
+        project: String,
+        run: u64,
+        action: RunAction,
+        branch: Option<String>,
+    ) -> Result<(), String> {
+        hive.act_on_run(project, run, action, branch)
     }
 
     #[tauri::command]

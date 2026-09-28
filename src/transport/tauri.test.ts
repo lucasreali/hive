@@ -43,6 +43,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.writeTerminal(7, "ls\r");
   await tauriTransport.resizeTerminal(7, 100, 30);
   await tauriTransport.closeTerminal(7);
+  await tauriTransport.ackTerminal(7, 65536);
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
   await tauriTransport.removeProject("/r");
@@ -91,6 +92,7 @@ test("terminal and project actions call their commands", async () => {
     ["write_terminal", { id: 7, data: "ls\r" }],
     ["resize_terminal", { id: 7, cols: 100, rows: 30 }],
     ["close_terminal", { id: 7 }],
+    ["ack_terminal", { id: 7, bytes: 65536 }],
     ["list_projects", {}],
     ["add_project", { path: "/r" }],
     ["remove_project", { id: "/r" }],
@@ -142,6 +144,23 @@ test("pull request actions call their commands", async () => {
     ["open_pull", { project: "/r", number: 7 }],
     ["act_on_pull", { project: "/r", number: 7, action: { kind: "close" } }],
     ["create_pull", { worktree: "/r/w", title: "T", body: "B", base: "main", draft: true }],
+  ]);
+});
+
+test("Actions run actions call their commands", async () => {
+  const calls = record();
+  await tauriTransport.listRuns("/r", "main", false);
+  await tauriTransport.openRun("/r", 9);
+  await tauriTransport.openJobLog("/r", 4);
+  await tauriTransport.actOnRun("/r", 9, { kind: "rerun", failed: true }, null);
+  expect(calls).toEqual([
+    ["list_runs", { project: "/r", branch: "main", force: false }],
+    ["open_run", { project: "/r", run: 9 }],
+    ["open_job_log", { project: "/r", job: 4 }],
+    [
+      "act_on_run",
+      { project: "/r", run: 9, action: { kind: "rerun", failed: true }, branch: null },
+    ],
   ]);
 });
 

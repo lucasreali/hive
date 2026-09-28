@@ -57,6 +57,7 @@ Object.defineProperty(document, "fonts", {
 afterAll(() => Reflect.deleteProperty(document, "fonts"));
 
 const {
+  ACK_BYTES,
   closeTerminal,
   interceptKeys,
   ligatureRanges,
@@ -123,6 +124,36 @@ test("output written before the tab is shown is kept, and the tab opens shown", 
     99,
     "/repo/wt",
   ]);
+});
+
+test("output written to the screen is acknowledged in batches, hidden or not (9.19)", async () => {
+  const ack = spyOn(transport, "ackTerminal");
+  let out = (_bytes: Uint8Array) => {};
+  const openSpy = spyOn(transport, "openTerminal").mockImplementation(async (_c, _w, _h, o) => {
+    out = o;
+    // Before the service answers: counted, acknowledged with the next batch.
+    o(new Uint8Array(10));
+    return 42;
+  });
+  const { id, term } = await open();
+  openSpy.mockRestore();
+  showTerminal(null);
+  out(new Uint8Array(ACK_BYTES - 11));
+  await written(term);
+  expect(ack).not.toHaveBeenCalled();
+  out(new Uint8Array(1));
+  out(new Uint8Array(ACK_BYTES));
+  await written(term);
+  expect(ack.mock.calls).toEqual([
+    [id, ACK_BYTES],
+    [id, ACK_BYTES],
+  ]);
+  // Once the shell exited nothing is left to slow down.
+  apply({ type: "terminal_exited", channel: id, code: 0 });
+  out(new Uint8Array(ACK_BYTES));
+  await written(term);
+  expect(ack).toHaveBeenCalledTimes(2);
+  ack.mockRestore();
 });
 
 test("the scrollback setting applies to new terminals", async () => {

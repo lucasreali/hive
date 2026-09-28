@@ -4,6 +4,7 @@ import {
   GitDiffIcon,
   GitPullRequestIcon,
   MagnifyingGlassIcon,
+  PlayCircleIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -57,6 +58,7 @@ import { askDiscard } from "./ConfirmDialog";
 import { askDelete } from "./FileMenu";
 import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
 import { PullsView } from "./PullsView";
+import { RunsView } from "./RunsView";
 import { ResizeHandle } from "./resize";
 import { SessionsView } from "./SessionsView";
 
@@ -261,8 +263,9 @@ const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
     label: "Sessions",
     icon: <ClockCounterClockwiseIcon size={14} aria-hidden="true" />,
   },
-  // 9.31; 9.32's "Actions" goes beside it.
+  // 9.31 and 9.32.
   { view: "pulls", label: "PRs", icon: <GitPullRequestIcon size={14} aria-hidden="true" /> },
+  { view: "actions", label: "Actions", icon: <PlayCircleIcon size={14} aria-hidden="true" /> },
 ];
 
 /**
@@ -311,6 +314,13 @@ export function RightPanel() {
           {view === "changes" && <FileTree worktree={target.worktree.path} changedOnly />}
           {view === "sessions" && <SessionsView worktree={target.worktree.id} />}
           {view === "pulls" && <PullsView project={target.project} worktree={target.worktree} />}
+          {view === "actions" && (
+            <RunsView
+              key={target.worktree.id}
+              project={target.project}
+              worktree={target.worktree}
+            />
+          )}
         </section>
       ) : (
         <div className="right-panel-empty">{NOTHING_SHOWN}</div>

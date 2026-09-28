@@ -133,6 +133,13 @@ async function loadBundledFonts(): Promise<void> {
   fitShown();
 }
 
+/**
+ * Output written to a terminal's screen is acknowledged to the service in batches of at least
+ * this many bytes (9.19). The service stops reading a PTY with more than 512 KiB of its output
+ * unacknowledged and reads it again under 128 KiB, so what a batch holds back stays under that.
+ */
+export const ACK_BYTES = 64 * 1024;
+
 /** How long the host must keep its size before terminals are refitted and the PTY resized. */
 export const RESIZE_DEBOUNCE_MS = 50;
 
@@ -182,9 +189,20 @@ export async function openTerminal(cwd: string): Promise<number> {
     linkHandler: LINKS,
     ...termOptions(useHive.getState().settings),
   });
-  let id: number;
+  // 0 until the service answers (terminal channels start at 1): output can come first.
+  let id = 0;
+  let unacked = 0;
+  // Hidden terminals parse their output too, so they keep acknowledging it.
+  const written = (bytes: number) => {
+    unacked += bytes;
+    if (!id || unacked < ACK_BYTES || useHive.getState().terminals[id]?.exited) return;
+    void transport.ackTerminal(id, unacked);
+    unacked = 0;
+  };
   try {
-    id = await transport.openTerminal(cwd, term.cols, term.rows, (bytes) => term.write(bytes));
+    id = await transport.openTerminal(cwd, term.cols, term.rows, (bytes) =>
+      term.write(bytes, () => written(bytes.length)),
+    );
   } catch (error) {
     term.dispose();
     throw error;
