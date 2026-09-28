@@ -1820,8 +1820,8 @@ mod tests {
                     std::thread::sleep(ms(300));
                     blocked.store(true, Ordering::SeqCst);
                 });
-                // Polled only while the runtime still runs.
-                tokio::time::sleep(ms(10_000)).await;
+                // A timer, polled only while the runtime still runs.
+                tokio::time::sleep(ms(0)).await;
             }
         });
         runtime.block_on(async {
