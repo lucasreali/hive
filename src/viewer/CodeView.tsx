@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { clearGotoLine, type FileText, saveFileView, setSelectedLines, useHive } from "../store";
+import type { FileText } from "../protocol";
+import { clearGotoLine, saveFileView, setSelectedLines, useHive } from "../store";
 import { isFor } from "./buffer";
 import { createViewer, restoreView, revealLine, snapshot, type Viewer } from "./editor";
 

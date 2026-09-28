@@ -1,12 +1,6 @@
 import { expect, test } from "bun:test";
-import {
-  type AgentState,
-  DEFAULT_SETTINGS,
-  type ServiceMessage,
-  type Settings,
-  type Space,
-  type SpaceEnv,
-} from "../store";
+import type { AgentState, ServiceMessage, Settings, Space, SpaceEnv } from "../protocol";
+import { DEFAULT_SETTINGS } from "../store";
 import {
   agentStatus,
   createMockTransport,

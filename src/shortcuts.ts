@@ -1,5 +1,5 @@
+import type { Agent } from "./protocol";
 import {
-  type Agent,
   type HiveState,
   openModal,
   owner,

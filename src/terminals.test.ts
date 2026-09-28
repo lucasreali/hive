@@ -3,7 +3,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
 import LIGATURES from "./assets/fonts/ligatures.json";
-import { apply, DEFAULT_SETTINGS, initialState, setWidth, shownTerminals, useHive } from "./store";
+import { apply } from "./reduce";
+import { DEFAULT_SETTINGS, initialState, setWidth, useHive } from "./store";
+import { shownTerminals } from "./tabs";
 import { transport } from "./transport";
 
 // happy-dom has no WebGL: a fake addon records what the manager does with the renderer.

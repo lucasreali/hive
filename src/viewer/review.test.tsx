@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { apply, type HiveState, initialState, useHive } from "../store";
+import { apply } from "../reduce";
+import { type HiveState, initialState, useHive } from "../store";
 import { closeTerminal, mountTerminals, openTerminal, terminal } from "../terminals";
 import { transport } from "../transport";
 import {

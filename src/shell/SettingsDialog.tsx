@@ -11,8 +11,9 @@ import {
 } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
+import type { ProjectScripts, Settings } from "../protocol";
 import { COMMANDS } from "../shortcuts";
-import { openModal, type ProjectScripts, type Settings, scriptsOf, useHive } from "../store";
+import { openModal, scriptsOf, useHive } from "../store";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";

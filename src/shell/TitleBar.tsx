@@ -2,8 +2,9 @@ import { ArrowCircleUpIcon, BellIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { spaceName } from "../notify";
+import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
-import { type Agent, markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
+import { markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
 import { isMac, windowAction } from "../window";
 import { requestUpdate } from "./CloseAppDialog";
 import {

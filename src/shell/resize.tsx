@@ -1,14 +1,6 @@
 import type { KeyboardEvent, PointerEvent } from "react";
-import {
-  LIMITS,
-  PANEL_CLOSE_AT,
-  type Side,
-  saveWidths,
-  setRightPanel,
-  setWidth,
-  useHive,
-  widthKey,
-} from "../store";
+import { LIMITS, PANEL_CLOSE_AT, type Side, saveWidths, widthKey } from "../persist";
+import { setRightPanel, setWidth, useHive } from "../store";
 
 /** How far an arrow key moves the edge (pixels; percent for the split). */
 const STEP = { sidebar: 16, panel: 16, split: 2 };
@@ -49,7 +41,7 @@ export function ResizeHandle({ side }: { side: Side }) {
     };
     // Storage is written once per drag, on release, not on every pointer move.
     const stop = () => {
-      saveWidths();
+      saveWidths(useHive.getState());
       delete document.body.dataset.resizing;
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", stop);

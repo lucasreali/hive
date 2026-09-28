@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
-import { type AgentState, apply, DEFAULT_SETTINGS, initialState, useHive } from "../store";
+import type { AgentState } from "../protocol";
+import { apply } from "../reduce";
+import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { agentStatus } from "../transport/mock";
 
 afterEach(() => {

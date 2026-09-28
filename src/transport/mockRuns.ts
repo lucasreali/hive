@@ -1,5 +1,5 @@
+import type { ServiceMessage } from "../protocol";
 import type { RunAction, RunDetail, RunJob, RunSummary } from "../runs";
-import type { ServiceMessage } from "../store";
 
 const SHOP = "/home/user/projects/shop";
 const URL = "https://github.com/user/shop/actions/runs";

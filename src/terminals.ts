@@ -2,19 +2,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
+import type { Settings } from "./protocol";
 import { openLink, safeUrl } from "./shell/Markdown";
-import {
-  addTab,
-  focusPane,
-  inBarOrder,
-  removeTab,
-  type Settings,
-  setSplit,
-  showFailure,
-  shownSplit,
-  tabWorktree,
-  useHive,
-} from "./store";
+import { addTab, focusPane, removeTab, setSplit, showFailure, useHive } from "./store";
+import { inBarOrder, shownSplit, tabWorktree } from "./tabs";
 import { transport } from "./transport";
 import { commandKey, isMac } from "./window";
 

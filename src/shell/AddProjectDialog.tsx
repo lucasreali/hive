@@ -1,6 +1,7 @@
 import { ArrowUpIcon, GitBranchIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { clearAddProjectError, openModal, safeStorage, useHive } from "../store";
+import { safeStorage } from "../persist";
+import { clearAddProjectError, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { CloseIcon, FolderIcon, ICON } from "./icons";

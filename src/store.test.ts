@@ -1,32 +1,29 @@
 import { beforeEach, expect, test } from "bun:test";
 import { renderHook } from "@testing-library/react";
+import type { ServiceMessage, Subagent } from "./protocol";
+import { apply } from "./reduce";
 import {
   activateTab,
   addTab,
   agentWorkingIn,
-  apply,
   DEFAULT_SETTINGS,
-  fileVisible,
   initialState,
   openFileDialog,
   openFileMenu,
   openModal,
   panelWorktree,
   removeTab,
-  type ServiceMessage,
-  type Subagent,
   select,
   setEdit,
   setEditing,
   setEditorNotice,
   setOpenFile,
   setRightPanel,
-  tabsPlace,
   toggleCollapsed,
   useHive,
   useTerminal,
-  visibleTabs,
 } from "./store";
+import { fileVisible, tabsPlace, visibleTabs } from "./tabs";
 import { MOCK_REPOS, MOCK_SESSIONS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";
 

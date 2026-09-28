@@ -1,6 +1,4 @@
 import { isTauri } from "@tauri-apps/api/core";
-import type { PullAction } from "../pulls";
-import type { RunAction } from "../runs";
 import type {
   DiffBase,
   GhAccount,
@@ -8,7 +6,9 @@ import type {
   SessionTarget,
   Settings,
   SpaceEnv,
-} from "../store";
+} from "../protocol";
+import type { PullAction } from "../pulls";
+import type { RunAction } from "../runs";
 import { tauriTransport } from "./tauri";
 
 /**

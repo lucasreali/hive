@@ -1,7 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
-import { addTab, apply, initialState, select, setEdit, setOpenFile, useHive } from "../store";
+import { apply } from "../reduce";
+import { addTab, initialState, select, setEdit, setOpenFile, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";

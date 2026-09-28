@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { version } from "../../package.json";
 import { asMac } from "../../test/mac";
-import { apply, initialState, useHive } from "../store";
+import { apply } from "../reduce";
+import { initialState, useHive } from "../store";
 import { StatusBar } from "./StatusBar";
 
 afterEach(() => {

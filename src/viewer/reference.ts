@@ -1,4 +1,5 @@
-import { type HiveState, type Lines, tabWorktree, useHive } from "../store";
+import { type HiveState, type Lines, useHive } from "../store";
+import { tabWorktree } from "../tabs";
 import { terminal } from "../terminals";
 import { transport } from "../transport";
 

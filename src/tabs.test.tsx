@@ -9,23 +9,20 @@ import {
   within,
 } from "@testing-library/react";
 import { App } from "./App";
+import { savedTabOrder, saveTabOrder } from "./persist";
+import { apply } from "./reduce";
 import {
   addTab,
-  apply,
-  barItems,
-  dropFile,
   type HiveState,
   initialState,
   moveTab,
   removeTab,
-  savedTabOrder,
-  saveTabOrder,
   select,
   setEdit,
   setOpenFile,
   useHive,
-  visibleTabs,
 } from "./store";
+import { barItems, dropFile, visibleTabs } from "./tabs";
 import { closeTerminal, splitTerminal } from "./terminals";
 import { MOCK_REPOS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";

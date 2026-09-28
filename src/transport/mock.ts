@@ -15,7 +15,7 @@ import type {
   Space,
   Subagent,
   Worktree,
-} from "../store";
+} from "../protocol";
 import { DEFAULT_SETTINGS } from "../store";
 import type { Transport } from ".";
 import { createMockPulls } from "./mockPulls";

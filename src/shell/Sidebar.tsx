@@ -9,28 +9,30 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import type {
+  Agent,
+  AgentState,
+  AgentUsage,
+  Doing,
+  Project,
+  Subagent,
+  Worktree,
+  WorktreeStatus,
+} from "../protocol";
 import { useReorder } from "../reorder";
 import {
-  type Agent,
-  type AgentState,
-  type AgentUsage,
   activateTab,
-  type Doing,
   inAgentOrder,
   mostUrgent,
   moveAgent,
   openMenu,
   openModal,
   openProjectMenu,
-  type Project,
-  type Subagent,
   select,
   spaceProjects,
   stepAgent,
   toggleCollapsed,
   useHive,
-  type Worktree,
-  type WorktreeStatus,
 } from "../store";
 import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";

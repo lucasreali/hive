@@ -3,17 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { asMac } from "../../test/mac";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
-import {
-  apply,
-  DEFAULT_SETTINGS,
-  initialState,
-  NO_SCRIPTS,
-  openModal,
-  type Project,
-  type Session,
-  select,
-  useHive,
-} from "../store";
+import type { Project, Session } from "../protocol";
+import { apply } from "../reduce";
+import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, select, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
 import { type EditBuffer, toText } from "../viewer/buffer";

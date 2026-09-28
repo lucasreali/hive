@@ -2,7 +2,8 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 import { newPull } from "../pulls";
-import { apply, initialState, useHive } from "../store";
+import { apply } from "../reduce";
+import { initialState, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
 

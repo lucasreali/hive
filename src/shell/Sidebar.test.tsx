@@ -1,7 +1,9 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
-import { type AgentState, apply, initialState, useHive } from "../store";
+import type { AgentState } from "../protocol";
+import { apply } from "../reduce";
+import { initialState, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";

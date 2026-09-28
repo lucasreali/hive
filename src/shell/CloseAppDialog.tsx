@@ -1,4 +1,5 @@
-import { type AgentState, type HiveState, openModal, useHive } from "../store";
+import type { AgentState } from "../protocol";
+import { type HiveState, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { closeWindow } from "../window";
 import { CloseIcon } from "./icons";

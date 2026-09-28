@@ -3,7 +3,8 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { version } from "../package.json";
 import { asMac } from "../test/mac";
 import { App } from "./App";
-import { apply, initialState, useHive } from "./store";
+import { apply } from "./reduce";
+import { initialState, useHive } from "./store";
 import { MOCK_REPOS } from "./transport/mock";
 
 afterEach(() => {

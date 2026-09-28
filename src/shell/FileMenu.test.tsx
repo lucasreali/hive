@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { apply, initialState, openFileMenu, useHive } from "../store";
+import { apply } from "../reduce";
+import { initialState, openFileMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { askDelete, FileMenu, FileNameDialog } from "./FileMenu";

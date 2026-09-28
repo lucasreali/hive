@@ -17,12 +17,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useReorder } from "../reorder";
 import {
   activateTab,
-  barItems,
-  barKey,
   type FileTab as FileTabData,
-  fileKey,
-  fileTabState,
-  fileVisible,
   type HiveState,
   moveTab,
   openFileDialog,
@@ -30,13 +25,20 @@ import {
   selectedPlace,
   setOpenFile,
   setRightPanel,
-  shownSplit,
-  shownTerminals,
   type Tab,
   useHive,
   useTerminal,
-  visibleTabs,
 } from "../store";
+import {
+  barItems,
+  barKey,
+  fileKey,
+  fileTabState,
+  fileVisible,
+  shownSplit,
+  shownTerminals,
+  visibleTabs,
+} from "../tabs";
 import {
   closeTerminal,
   mountTerminals,

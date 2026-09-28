@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { type ServiceMessage, setEditorNotice, setNotice, useHive } from "../store";
+import type { ServiceMessage } from "../protocol";
+import { setEditorNotice, setNotice, useHive } from "../store";
 import { transport } from "../transport";
 import { isMac } from "../window";
 import { isFor } from "./buffer";

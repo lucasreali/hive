@@ -1,15 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import {
-  activateTab,
-  ask,
-  type OpenSession,
-  type ServiceMessage,
-  type Session,
-  type SessionTarget,
-  setNotice,
-  useHive,
-} from "./store";
+import type { OpenSession, ServiceMessage, Session, SessionTarget } from "./protocol";
+import { activateTab, ask, setNotice, useHive } from "./store";
 import { openClaude } from "./terminals";
 import { transport } from "./transport";
 

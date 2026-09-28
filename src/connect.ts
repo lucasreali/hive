@@ -1,6 +1,7 @@
 import { notify } from "./notify";
+import type { ServiceMessage } from "./protocol";
+import { apply } from "./reduce";
 import { openLocated, restore } from "./sessions";
-import { apply, type ServiceMessage } from "./store";
 import { transport } from "./transport";
 import { openTarget } from "./viewer/external";
 

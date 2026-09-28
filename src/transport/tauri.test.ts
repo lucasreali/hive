@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { DEFAULT_SETTINGS, type ServiceMessage, setNotice, useHive } from "../store";
+import type { ServiceMessage } from "../protocol";
+import { DEFAULT_SETTINGS, setNotice, useHive } from "../store";
 import { tauriTransport } from "./tauri";
 
 type Args = Record<string, unknown>;
