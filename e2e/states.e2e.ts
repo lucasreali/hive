@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("states: every agent and subagent shows the state icon the service sent", async ({ page }) => {
   await page.goto("/?mock=states");
   const tree = page.getByRole("navigation", { name: "Projects" });
-  const rows = tree.locator(".tree-row.agent, .tree-row.subagent");
+  const rows = tree.locator(".tree-row.agent, .subagent-line");
   await expect(rows).toHaveCount(11);
   const shown = await rows.evaluateAll((els) =>
     els.map((el) => {
@@ -13,7 +13,7 @@ test("states: every agent and subagent shows the state icon the service sent", a
       return [
         el.className,
         icon.getAttribute("aria-label"),
-        el.querySelector(".label")?.textContent,
+        el.querySelector(".label, .subagent-type")?.textContent,
         box.width,
         box.height,
       ];
@@ -21,11 +21,11 @@ test("states: every agent and subagent shows the state icon the service sent", a
   );
   expect(shown).toEqual([
     ["tree-row agent", "running subagents", "Claude", "14px", "14px"],
-    ["tree-row subagent", "working", "subagent: Explore", "14px", "14px"],
-    ["tree-row subagent", "working", "subagent: unknown", "14px", "14px"],
+    ["subagent-line", "working", "Explore", "11px", "11px"],
+    ["subagent-line", "working", "subagent", "11px", "11px"],
     ["tree-row agent", "waiting for permission", "Claude", "14px", "14px"],
-    ["tree-row subagent", "waiting for permission", "subagent: general-purpose", "14px", "14px"],
-    ["tree-row subagent", "waiting for your answer", "subagent: Explore", "14px", "14px"],
+    ["subagent-line", "waiting for permission", "general-purpose", "11px", "11px"],
+    ["subagent-line", "waiting for your answer", "Explore", "11px", "11px"],
     ["tree-row agent", "waiting for you", "Claude", "14px", "14px"],
     ["tree-row agent", "error", "Claude", "14px", "14px"],
     ["tree-row agent", "ended", "Claude", "14px", "14px"],
@@ -37,14 +37,50 @@ test("states: every agent and subagent shows the state icon the service sent", a
   await expect(permission).toHaveCSS("color", "rgb(222, 193, 132)");
   const working = tree.locator(".tree-row.agent .state-label[data-state=working]");
   await expect(working).toHaveCSS("color", "rgb(169, 175, 188)");
-  // Working spins, in its state's color.
+  // Working spins, in its state's color, on a subagent's line too.
   const spinning = tree.locator(".tree-row.agent .state-icon[data-state=working]");
   await expect(spinning).toHaveCSS("animation-name", "hive-spin");
   await expect(spinning).toHaveCSS("color", "rgb(116, 173, 232)");
+  const subSpinning = tree.locator(".subagent-line .state-icon[data-state=working]").first();
+  await expect(subSpinning).toHaveCSS("color", "rgb(116, 173, 232)");
   // After the state's name: the time in it and what the agent is doing, muted, on one line.
   const meta = permission.locator("xpath=..").locator(".state-meta");
   await expect(meta).toHaveText(/^\d+m · Editing src\/auth\/login\.ts$/);
   await expect(meta).toHaveCSS("white-space", "nowrap");
+});
+
+test("states: a subagent is one quiet line under its agent that does nothing when clicked", async ({
+  page,
+}) => {
+  await page.goto("/?mock=states");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  const line = tree.locator(".subagent-line").first();
+  const agent = tree.locator(".tree-row.agent").first();
+  // Its type, what it is doing and the time in its state, on one line shorter than an agent's
+  // row, smaller and muted as the agent's time and activity are.
+  await expect(line.locator(".subagent-type")).toHaveText("Explore");
+  await expect(line.locator(".subagent-activity")).toHaveText("Searching useSession");
+  await expect(line.locator(".subagent-activity")).toHaveCSS("text-overflow", "ellipsis");
+  await expect(line.locator(".subagent-time")).toHaveText(/^\d+[smh]$/);
+  const [lineBox, agentBox] = [await line.boundingBox(), await agent.boundingBox()];
+  expect(lineBox?.height).toBe(18);
+  expect(agentBox?.height).toBeGreaterThan(18);
+  await expect(line).toHaveCSS("font-size", "11px");
+  const muted = await agent.locator(".state-meta").evaluate((el) => getComputedStyle(el).color);
+  await expect(line).toHaveCSS("color", muted);
+  // No hover state, nothing to focus, and a click or a right-click changes nothing.
+  const current = page.locator("[aria-current=true]");
+  const before = await current.count();
+  await line.hover();
+  await expect(line).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(line).toHaveCSS("cursor", "default");
+  await expect(line.locator("button, [tabindex]")).toHaveCount(0);
+  await line.click();
+  await line.click({ button: "right" });
+  await expect(current).toHaveCount(before);
+  await expect(agent).toHaveAttribute("data-selected", "false");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(page.locator(".file-view")).toHaveCount(0);
 });
 
 test("states: collapsed nodes show the most urgent state inside; F8 walks the pending agents", async ({
@@ -80,33 +116,28 @@ test("states: collapsed nodes show the most urgent state inside; F8 walks the pe
   await expect(selected).toHaveText("waiting for you");
 });
 
-test("states: a subagent's own worktree is its parent row, not at project level", async ({
+test("states: a subagent's own worktree has no row; its path is the line's tooltip", async ({
   page,
 }) => {
   await page.goto("/?mock=states");
   const tree = page.getByRole("navigation", { name: "Projects" });
-  const own = tree.locator(".tree-row.own-worktree");
-  await expect(own).toHaveCount(1);
-  await expect(own).toHaveText("tests-login");
-  await expect(own).toHaveAttribute(
+  const line = tree.locator(".subagent-line", { hasText: "general-purpose" });
+  await expect(line).toHaveAttribute(
     "title",
     "/home/user/projects/shop/.claude/worktrees/tests-login",
   );
-  const owned = own.locator("xpath=following-sibling::ul[1]").locator(".tree-row.subagent");
-  await expect(owned).toHaveCount(1);
-  await expect(owned).toHaveText(/subagent: general-purpose/);
-  await expect(tree.locator(".tree-row.worktree", { hasText: "tests-login" })).toHaveCount(0);
-  // 22px, at the subagents' indent; its subagent one step (16px) further in. The agent's tree
-  // line goes on past both to the next subagent.
-  const [height, padding, line] = await own.evaluate((el) => [
-    el.getBoundingClientRect().height,
-    getComputedStyle(el).paddingLeft,
-    getComputedStyle(el, "::before").height,
+  await expect(tree.locator(".tree-row", { hasText: "tests-login" })).toHaveCount(0);
+  // At the subagents' indent, with the agent's tree line down to each; the last one stops at its
+  // line.
+  const lines = await tree
+    .locator(".subagent-line")
+    .evaluateAll((els) =>
+      els.map((el) => [getComputedStyle(el).paddingLeft, getComputedStyle(el, "::before").height]),
+    );
+  expect(lines).toEqual([
+    ["56px", "18px"],
+    ["56px", "9px"],
+    ["56px", "18px"],
+    ["56px", "9px"],
   ]);
-  expect([height, padding, line]).toEqual([22, "56px", "22px"]);
-  const [subPadding, through] = await owned.evaluate((el) => [
-    getComputedStyle(el).paddingLeft,
-    getComputedStyle(el.closest("ul") as Element, "::before").left,
-  ]);
-  expect([subPadding, through]).toEqual(["72px", "45px"]);
 });

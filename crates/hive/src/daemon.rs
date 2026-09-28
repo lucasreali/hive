@@ -137,9 +137,10 @@ async fn serve(
     // (waiting for the lock) instead of a listen queue nobody accepts.
     drop(listener);
     let _ = std::fs::remove_file(socket);
-    watcher.abort();
-    health.abort();
-    registry.abort();
+    let files = state.watching.lock().await.take();
+    for task in [watcher, health, registry].into_iter().chain(files) {
+        stop(task).await;
+    }
     // Before the terminals end (and their sessions with them): what to resume next time.
     state.save_open().await;
     let sessions: Vec<i32> = state
@@ -151,6 +152,14 @@ async fn serve(
         .collect();
     terminal::end_sessions(&sessions).await;
     Ok(())
+}
+
+/// Stops a background task and waits until it has. One caught in blocking work
+/// (`block_in_place`) finishes it and polls its next timer while the runtime still runs:
+/// polling a timer once the runtime shuts down panics.
+async fn stop(task: tokio::task::JoinHandle<()>) {
+    task.abort();
+    let _ = task.await;
 }
 
 /// The service's state. Lock order, when one task holds several: `terminals` → `agents` →
@@ -165,12 +174,13 @@ struct State {
     terminals: Mutex<HashMap<u32, Terminal>>,
     /// Each open terminal's input queue and output (for the app's acknowledgements), by channel.
     inputs: std::sync::Mutex<HashMap<u32, (mpsc::UnboundedSender<Input>, terminal::Output)>>,
+    /// The worktree each open terminal opened in, by channel, when it is one: a subagent's
+    /// own worktree with a terminal of the human's is not only the subagent's (9.35).
+    terminal_worktrees: std::sync::Mutex<HashMap<u32, String>>,
     /// Detected agents by session id, with their terminal and state.
     agents: Mutex<HashMap<String, Agent>>,
     /// The task watching the worktree of the app's files panel.
     watching: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// The subagent transcript the app shows, polled every [`watch::INTERVAL`].
-    transcript: Mutex<Option<transcript::Watch>>,
     /// The terminal in view in the focused app window (the app's `view`); 0 when none, since
     /// terminal channels start at 1.
     watched: AtomicU32,
@@ -226,9 +236,9 @@ impl State {
             app: Mutex::new(None),
             terminals: Mutex::new(HashMap::new()),
             inputs: Default::default(),
+            terminal_worktrees: Default::default(),
             agents: Mutex::new(HashMap::new()),
             watching: Mutex::new(None),
-            transcript: Mutex::new(None),
             watched: AtomicU32::new(0),
             bin_dir,
             projects,
@@ -363,7 +373,13 @@ impl State {
     /// Sends `subagent_worktrees` when the set changed. Called with the agents lock held, so
     /// the changes go out in order.
     async fn owned_changed(&self, agents: &HashMap<String, Agent>) {
-        let worktrees = states::subagent_worktrees(agents.values());
+        let worktrees = {
+            let terminals = self
+                .terminal_worktrees
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            states::subagent_worktrees(agents.values(), terminals.values())
+        };
         {
             let mut sent = self.owned.lock().unwrap_or_else(PoisonError::into_inner);
             if *sent == worktrees {
@@ -631,10 +647,22 @@ impl State {
             }
         };
         let reply = match opened {
-            Ok(()) => Control::TerminalOpened { worktree },
+            Ok(()) => {
+                if let Some(worktree) = worktree.clone() {
+                    let mut worktrees = self
+                        .terminal_worktrees
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    worktrees.insert(channel, worktree);
+                }
+                Control::TerminalOpened { worktree }
+            }
             Err(message) => Control::Error { message },
         };
         self.to_app(channel, &reply).await;
+        // A subagent's worktree the human opened a terminal in shows again.
+        let agents = self.agents.lock().await;
+        self.owned_changed(&agents).await;
     }
 
     /// The `HIVE_*` environment (6.8) of a process in the `place` (`projects::place`) of its
@@ -866,41 +894,6 @@ impl State {
         }
     }
 
-    /// Follows the subagent's transcript instead of any other: sends what it holds now, then
-    /// (from [`watch_terminals`]) what is appended. Only a detected agent's subagent, with a
-    /// transcript inside its Claude projects folder (its space's), is followed.
-    async fn watch_transcript(&self, agent: String, subagent: String) {
-        let agents = self.agents.lock().await;
-        let found = agents.get(&agent);
-        let parent = found.and_then(|a| a.transcript.clone());
-        let sessions = self
-            .sessions
-            .at(found.and_then(|a| a.claude_dir.as_deref()));
-        drop(agents);
-        let mut watching = self.transcript.lock().await;
-        let path = parent.and_then(|p| transcript::subagent_path(&p, &subagent));
-        let (Some(path), Some(root)) = (path, sessions.root()) else {
-            *watching = None;
-            let message = "no transcript is known for this subagent".to_owned();
-            return self.to_app(0, &Control::Error { message }).await;
-        };
-        let mut watch = transcript::Watch::new(agent, subagent, path, root.to_owned());
-        let first = tokio::task::block_in_place(|| watch.start());
-        *watching = Some(watch);
-        self.to_app(0, &first).await;
-    }
-
-    /// Stops following the subagent's transcript, unless another one replaced it meanwhile.
-    async fn unwatch_transcript(&self, agent: &str, subagent: &str) {
-        let mut watching = self.transcript.lock().await;
-        if watching
-            .as_ref()
-            .is_some_and(|w| w.agent == agent && w.subagent == subagent)
-        {
-            *watching = None;
-        }
-    }
-
     /// Ends the terminal's processes, off the frame loop; its exit is reported by [`pump`].
     fn close(self: &Arc<Self>, channel: u32) {
         let state = self.clone();
@@ -971,7 +964,7 @@ async fn watch_terminals(state: Arc<State>) {
             if agent.busy() {
                 agent.usage.due = true;
             }
-            // Its space's Claude projects folder, as for its subagents' transcripts.
+            // Its space's Claude projects folder, which its transcript must stay inside.
             let sessions = state.sessions.at(agent.claude_dir.as_deref());
             let (Some(path), Some(root), true) =
                 (&agent.transcript, sessions.root(), agent.usage.due)
@@ -989,14 +982,6 @@ async fn watch_terminals(state: Arc<State>) {
             {
                 state.to_app(agent.channel, &message).await;
             }
-        }
-        let mut transcript = state.transcript.lock().await;
-        let appended = transcript.as_mut().and_then(|watch| {
-            // A bounded read (see `transcript::Watch`), off the other tasks' threads.
-            tokio::task::block_in_place(|| watch.poll())
-        });
-        if let Some(message) = appended {
-            state.to_app(0, &message).await;
         }
     }
 }
@@ -1106,6 +1091,11 @@ async fn pump(
         let mut terminals = state.terminals.lock().await;
         terminals.remove(&channel);
         state.inputs().remove(&channel);
+        state
+            .terminal_worktrees
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&channel);
         let mut agents = state.agents.lock().await;
         for (id, _) in agents.extract_if(|_, a| a.channel == channel) {
             state.to_app(channel, &Control::AgentRemoved { id }).await;
@@ -1297,12 +1287,6 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::CloseTerminal) => state.close(channel),
         Ok(Control::WatchWorktree { path, base }) => state.watch_worktree(Some((path, base))).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
-        Ok(Control::WatchTranscript { agent, subagent }) => {
-            state.watch_transcript(agent, subagent).await
-        }
-        Ok(Control::UnwatchTranscript { agent, subagent }) => {
-            state.unwatch_transcript(&agent, &subagent).await
-        }
         Ok(Control::View { terminal, focused }) => {
             let watched = terminal.filter(|_| focused).unwrap_or(0);
             state.watched.store(watched, Ordering::Relaxed);
@@ -1831,6 +1815,33 @@ mod tests {
             Ports::new(dir.join("ports.json")),
             restore,
         ))
+    }
+
+    #[test]
+    fn a_stopped_task_is_out_of_its_blocking_work_before_the_runtime_shuts_down() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ms = std::time::Duration::from_millis;
+        let task = runtime.spawn({
+            let blocked = blocked.clone();
+            async move {
+                tokio::task::block_in_place(|| {
+                    std::thread::sleep(ms(300));
+                    blocked.store(true, Ordering::SeqCst);
+                });
+                // Polled only while the runtime still runs.
+                tokio::time::sleep(ms(10_000)).await;
+            }
+        });
+        runtime.block_on(async {
+            tokio::time::sleep(ms(50)).await;
+            stop(task).await;
+        });
+        assert!(blocked.load(Ordering::SeqCst));
+        runtime.shutdown_background();
     }
 
     #[test]

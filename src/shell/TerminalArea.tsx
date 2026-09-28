@@ -59,7 +59,6 @@ import {
 } from "./icons";
 import { closeFile, FileView } from "./RightPanel";
 import { ResizeHandle } from "./resize";
-import { TranscriptView } from "./TranscriptView";
 import { ContextMenu } from "./WorktreeMenu";
 
 /** Screen 1e: shown once the service said there are no projects. */
@@ -154,9 +153,9 @@ function TabItem(props: {
  */
 function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: Drag }) {
   const { tab, onMenu } = props;
-  const active = useHive((s) => s.activeTab === tab.id && !s.fileShown && !s.transcriptShown);
+  const active = useHive((s) => s.activeTab === tab.id && !s.fileShown);
   const split = useHive((s) => {
-    const shown = !s.fileShown && !s.transcriptShown && shownSplit(s);
+    const shown = !s.fileShown && shownSplit(s);
     return !!shown && s.activeTab !== tab.id && (shown.left === tab.id || shown.right === tab.id);
   });
   const state = useTerminal(tab.id);
@@ -375,7 +374,6 @@ export function TerminalArea() {
   const drag = useReorder("tabs", moveTab, true);
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);
-  const transcript = useHive((s) => s.transcriptShown);
   const percent = useHive((s) => s.splitPercent);
   const [menu, setMenu] = useState<TabMenu | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -416,15 +414,8 @@ export function TerminalArea() {
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file || !!transcript} />
+        <TerminalHost hidden={tabs.length === 0 || !!file} />
         {file && <FileView worktree={file.worktree} />}
-        {transcript && (
-          <TranscriptView
-            key={`${transcript.agent}\n${transcript.subagent}`}
-            agent={transcript.agent}
-            subagent={transcript.subagent}
-          />
-        )}
       </div>
     </section>
   );
