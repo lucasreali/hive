@@ -2,6 +2,7 @@ import {
   ClockCounterClockwiseIcon,
   FilesIcon,
   GitDiffIcon,
+  GitPullRequestIcon,
   MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -54,6 +55,7 @@ import { isMac, keyText } from "../window";
 import { askDiscard } from "./ConfirmDialog";
 import { askDelete } from "./FileMenu";
 import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, TerminalIcon } from "./icons";
+import { PullsView } from "./PullsView";
 import { ResizeHandle } from "./resize";
 import { SessionsView } from "./SessionsView";
 
@@ -258,6 +260,8 @@ const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
     label: "Sessions",
     icon: <ClockCounterClockwiseIcon size={14} aria-hidden="true" />,
   },
+  // 9.31; 9.32's "Actions" goes beside it.
+  { view: "pulls", label: "PRs", icon: <GitPullRequestIcon size={14} aria-hidden="true" /> },
 ];
 
 /**
@@ -305,6 +309,7 @@ export function RightPanel() {
           {view === "files" && <FilesView worktree={target.worktree.path} />}
           {view === "changes" && <FileTree worktree={target.worktree.path} changedOnly />}
           {view === "sessions" && <SessionsView worktree={target.worktree.id} />}
+          {view === "pulls" && <PullsView project={target.project} worktree={target.worktree} />}
         </section>
       ) : (
         <div className="right-panel-empty">{NOTHING_SHOWN}</div>
