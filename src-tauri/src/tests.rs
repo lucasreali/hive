@@ -483,6 +483,8 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
     assert_eq!(service.control().await, (1, resize));
     hive.close_terminal(1).unwrap();
     assert_eq!(service.control().await, (1, Control::CloseTerminal));
+    hive.ack_terminal(1, 4096).unwrap();
+    assert_eq!(service.control().await, (1, Control::Ack { bytes: 4096 }));
 
     // Nothing reaches the UI for a channel it did not open; channel 0 always does.
     service.writer.send(Frame::terminal(7, "x")).await.unwrap();
@@ -910,6 +912,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.write_terminal(1, "x"), not_connected);
     assert_eq!(hive.resize_terminal(1, 1, 1), not_connected);
     assert_eq!(hive.close_terminal(1), not_connected);
+    assert_eq!(hive.ack_terminal(1, 1), not_connected);
     assert_eq!(hive.list_projects(), not_connected);
     assert_eq!(hive.add_project("/r".into()), not_connected);
     assert_eq!(hive.list_branches("/r".into()), not_connected);
@@ -1176,6 +1179,7 @@ fn commands_reach_the_managed_hive() {
             write_terminal,
             resize_terminal,
             close_terminal,
+            ack_terminal,
             list_projects,
             add_project,
             list_branches,
@@ -1228,6 +1232,7 @@ fn commands_reach_the_managed_hive() {
     let write = json!({"id": 1, "data": "x"});
     let resize = json!({"id": 1, "cols": 80, "rows": 24});
     let close = json!({"id": 1});
+    let ack = json!({"id": 1, "bytes": 4096});
 
     let not_connected = Err(json!(NOT_CONNECTED));
     assert_eq!(
@@ -1246,6 +1251,7 @@ fn commands_reach_the_managed_hive() {
         invoke(&webview, "close_terminal", close.clone()),
         not_connected
     );
+    assert_eq!(invoke(&webview, "ack_terminal", ack.clone()), not_connected);
     assert_eq!(invoke(&webview, "list_projects", json!({})), not_connected);
     let add = json!({"path": "/r"});
     assert_eq!(invoke(&webview, "add_project", add.clone()), not_connected);
@@ -1339,6 +1345,7 @@ fn commands_reach_the_managed_hive() {
     assert_eq!(invoke(&webview, "write_terminal", write), Ok(Value::Null));
     assert_eq!(invoke(&webview, "resize_terminal", resize), Ok(Value::Null));
     assert_eq!(invoke(&webview, "close_terminal", close), Ok(Value::Null));
+    assert_eq!(invoke(&webview, "ack_terminal", ack), Ok(Value::Null));
     assert_eq!(
         invoke(&webview, "list_projects", json!({})),
         Ok(Value::Null)

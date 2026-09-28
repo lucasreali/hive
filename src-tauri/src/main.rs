@@ -54,6 +54,7 @@ fn main() {
             commands::write_terminal,
             commands::resize_terminal,
             commands::close_terminal,
+            commands::ack_terminal,
             commands::list_projects,
             commands::add_project,
             commands::list_branches,

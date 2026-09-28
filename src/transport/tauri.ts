@@ -21,6 +21,7 @@ export const tauriTransport: Transport = {
   writeTerminal: (id, data) => send("write_terminal", { id, data }),
   resizeTerminal: (id, cols, rows) => send("resize_terminal", { id, cols, rows }),
   closeTerminal: (id) => send("close_terminal", { id }),
+  ackTerminal: (id, bytes) => send("ack_terminal", { id, bytes }),
   listProjects: () => send("list_projects"),
   addProject: (path) => send("add_project", { path }),
   removeProject: (id) => send("remove_project", { id }),

@@ -365,3 +365,109 @@ async fn login_shells_run_the_user_files_and_keep_hive_bin_first() {
         assert!(daemon.wait_exit().success(), "{shell}");
     }
 }
+
+/// Bytes of terminal `channel`'s output read until at least `enough` came, or none for 1 s.
+async fn read_output(app: &mut crate::common::Conn, channel: u32, enough: usize) -> usize {
+    let mut bytes = 0;
+    while bytes < enough {
+        let quiet = Duration::from_secs(1);
+        let Ok(frame) = tokio::time::timeout(quiet, app.next()).await else {
+            break;
+        };
+        let frame = frame.expect("connection closed");
+        if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == channel {
+            bytes += frame.payload.len();
+        }
+    }
+    bytes
+}
+
+/// Resident memory of the process `pid`, in KiB.
+fn rss_kib(pid: u32) -> usize {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
+#[tokio::test]
+async fn a_flooded_terminal_waits_for_the_app_to_acknowledge_its_output() {
+    use hive::terminal::HIGH_WATER;
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let mut app = env.connect(Role::App).await;
+    app.open_terminal(1, &env.path("home")).await;
+    app.input(1, "yes\r").await;
+    let mut unacked = read_output(&mut app, 1, 64 * 1024).await;
+    // The app stops reading and acknowledging: the service does not keep what `yes` prints.
+    let before = rss_kib(daemon.0.id());
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let grown = rss_kib(daemon.0.id()).saturating_sub(before);
+    assert!(grown < 16 * 1024, "the service grew by {grown} KiB");
+    // It sent no more than the high water mark and one read.
+    let most = HIGH_WATER + 64 * 1024;
+    unacked += read_output(&mut app, 1, usize::MAX).await;
+    assert!((HIGH_WATER + 1..=most).contains(&unacked), "{unacked}");
+    // Acknowledged, the output flows again, until the app is behind again.
+    let bytes = u32::try_from(unacked).unwrap();
+    app.send(1, Control::Ack { bytes }).await;
+    let more = read_output(&mut app, 1, usize::MAX).await;
+    assert!((HIGH_WATER + 1..=most).contains(&more), "{more}");
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+/// The next frame, read as the app does: terminal 1's output is acknowledged once written.
+async fn acked(app: &mut crate::common::Conn) -> hive_protocol::Frame {
+    let frame = app.next().await.expect("connection closed");
+    if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == 1 {
+        let bytes = u32::try_from(frame.payload.len()).unwrap();
+        app.send(1, Control::Ack { bytes }).await;
+    }
+    frame
+}
+
+#[tokio::test]
+async fn a_terminal_echoes_within_the_load_test_bounds_while_another_floods() {
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let mut app = env.connect(Role::App).await;
+    app.open_terminal(1, &env.path("home")).await;
+    app.open_terminal(2, &env.path("home")).await;
+    app.input(2, "echo ok-(math 1 + 1)\r").await;
+    app.output_until(2, "ok-2").await;
+    app.input(1, "yes\r").await;
+    let mut flooded = 0;
+    while flooded < 1024 * 1024 {
+        let frame = acked(&mut app).await;
+        if frame.channel == 1 {
+            flooded += frame.payload.len();
+        }
+    }
+    // Typed at 10 keys/s as in the load test (1.11): each key's echo is timed.
+    let mut latencies = Vec::new();
+    for key in "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz".chars() {
+        let typed = Instant::now();
+        app.input(2, &key.to_string()).await;
+        loop {
+            let frame = acked(&mut app).await;
+            if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == 2 {
+                break;
+            }
+        }
+        latencies.push(typed.elapsed());
+        // The rest of fish's redraw, until the next key.
+        let pause = typed + Duration::from_millis(100);
+        while tokio::time::timeout_at(pause.into(), acked(&mut app))
+            .await
+            .is_ok()
+        {}
+    }
+    latencies.sort();
+    let at = |percent: usize| latencies[latencies.len() * percent / 100];
+    assert!(at(95) < Duration::from_millis(50), "{latencies:?}");
+    assert!(at(99) < Duration::from_millis(100), "{latencies:?}");
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

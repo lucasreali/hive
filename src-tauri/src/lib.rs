@@ -390,6 +390,11 @@ impl Hive {
         self.link().send(id, &Control::CloseTerminal)
     }
 
+    /// `bytes` more of terminal `id`'s output were written to its screen (9.19).
+    pub fn ack_terminal(&self, id: u32, bytes: u32) -> Result<(), String> {
+        self.link().send(id, &Control::Ack { bytes })
+    }
+
     /// Asks for every project with its worktrees; they arrive as `projects`.
     pub fn list_projects(&self) -> Result<(), String> {
         self.link().send(0, &Control::ListProjects)
@@ -881,6 +886,11 @@ pub mod commands {
     #[tauri::command]
     pub fn close_terminal(hive: State<'_, Hive>, id: u32) -> Result<(), String> {
         hive.close_terminal(id)
+    }
+
+    #[tauri::command]
+    pub fn ack_terminal(hive: State<'_, Hive>, id: u32, bytes: u32) -> Result<(), String> {
+        hive.ack_terminal(id, bytes)
     }
 
     #[tauri::command]

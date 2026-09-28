@@ -43,6 +43,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.writeTerminal(7, "ls\r");
   await tauriTransport.resizeTerminal(7, 100, 30);
   await tauriTransport.closeTerminal(7);
+  await tauriTransport.ackTerminal(7, 65536);
   await tauriTransport.listProjects();
   await tauriTransport.addProject("/r");
   await tauriTransport.removeProject("/r");
@@ -91,6 +92,7 @@ test("terminal and project actions call their commands", async () => {
     ["write_terminal", { id: 7, data: "ls\r" }],
     ["resize_terminal", { id: 7, cols: 100, rows: 30 }],
     ["close_terminal", { id: 7 }],
+    ["ack_terminal", { id: 7, bytes: 65536 }],
     ["list_projects", {}],
     ["add_project", { path: "/r" }],
     ["remove_project", { id: "/r" }],

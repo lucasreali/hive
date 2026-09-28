@@ -6,12 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use hive_protocol::Frame;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use pty_process::{OwnedReadPty, OwnedWritePty, Size};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Child;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::procs;
 use crate::watch::Watch;
@@ -62,6 +63,54 @@ impl LastOutput {
 
     pub fn get(&self) -> Instant {
         self.start + Duration::from_nanos(self.since.load(Ordering::Relaxed))
+    }
+}
+
+/// Output the app has not acknowledged above which a terminal's PTY is no longer read (9.19).
+pub const HIGH_WATER: usize = 512 * 1024;
+/// Output the app has not acknowledged under which a paused terminal's PTY is read again.
+pub const LOW_WATER: usize = 128 * 1024;
+
+/// A terminal's output on its way to the app (9.19): its queue holds at most what the app
+/// has not acknowledged as written to its screen, [`HIGH_WATER`] plus one read, so a flooding
+/// terminal slows its own program down, never another terminal nor the service's memory.
+/// Clones share the count: the pump sends, the app's `ack` lowers it, without a lock.
+#[derive(Clone)]
+pub struct Output {
+    channel: u32,
+    frames: mpsc::UnboundedSender<Frame>,
+    unacked: watch::Sender<usize>,
+}
+
+impl Output {
+    pub fn new(channel: u32, frames: mpsc::UnboundedSender<Frame>) -> Self {
+        Self {
+            channel,
+            frames,
+            unacked: watch::Sender::new(0),
+        }
+    }
+
+    /// Queues `bytes` for the app; above [`HIGH_WATER`] unacknowledged, returns only once
+    /// under [`LOW_WATER`]. False when the app is gone.
+    pub async fn send(&self, bytes: &[u8]) -> bool {
+        // Counted first: the app may acknowledge it as soon as it is queued.
+        self.unacked.send_modify(|n| *n += bytes.len());
+        let frame = Frame::terminal(self.channel, Bytes::copy_from_slice(bytes));
+        if self.frames.send(frame).is_err() {
+            return false;
+        }
+        if *self.unacked.borrow() > HIGH_WATER {
+            // Never fails: `self` is a sender.
+            let _ = self.unacked.subscribe().wait_for(|&n| n < LOW_WATER).await;
+        }
+        true
+    }
+
+    /// The app wrote `bytes` of this terminal's output to its screen.
+    pub fn ack(&self, bytes: u32) {
+        let bytes = bytes as usize;
+        self.unacked.send_modify(|n| *n = n.saturating_sub(bytes));
     }
 }
 
@@ -392,6 +441,63 @@ mod tests {
         pump.touch();
         assert!(last.get() >= started + Duration::from_millis(5));
         assert!(last.get() <= Instant::now());
+    }
+
+    /// Whether `send` is still waiting for acknowledgements.
+    async fn waits(send: &mut std::pin::Pin<&mut impl Future<Output = bool>>) -> bool {
+        tokio::time::timeout(Duration::from_millis(50), send.as_mut())
+            .await
+            .is_err()
+    }
+
+    /// Whether `send` returns true without waiting for acknowledgements (bounded, so a
+    /// mutant that always waits fails instead of hanging).
+    async fn flows(send: impl Future<Output = bool>) -> bool {
+        tokio::time::timeout(Duration::from_secs(5), send)
+            .await
+            .unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn output_pauses_above_the_high_water_and_resumes_under_the_low_water() {
+        let (frames, mut queued) = mpsc::unbounded_channel();
+        let output = Output::new(7, frames);
+        let app = output.clone();
+        // Up to the high water mark, output flows.
+        assert!(flows(output.send(&vec![b'y'; HIGH_WATER - 1])).await);
+        assert!(flows(output.send(b"y")).await);
+        // One byte more and the terminal waits, with that byte already queued.
+        let send = output.send(b"!");
+        tokio::pin!(send);
+        assert!(waits(&mut send).await);
+        let sizes: Vec<usize> = std::iter::from_fn(|| queued.try_recv().ok())
+            .map(|frame| {
+                assert_eq!(frame.channel, 7);
+                frame.payload.len()
+            })
+            .collect();
+        assert_eq!(sizes, [HIGH_WATER - 1, 1, 1]);
+        // Down to the low water mark it still waits (no flapping at the high one).
+        app.ack(u32::try_from(HIGH_WATER + 1 - LOW_WATER).unwrap());
+        assert!(waits(&mut send).await);
+        app.ack(1);
+        assert!(flows(send).await);
+        // Acknowledging more than was sent counts as everything.
+        app.ack(u32::MAX);
+        assert!(flows(output.send(&vec![b'y'; HIGH_WATER])).await);
+    }
+
+    #[test]
+    fn the_water_marks_are_the_task_defaults() {
+        // 9.19's defaults (pending human review): the app's 64 KiB batches stay under the low one.
+        assert_eq!((HIGH_WATER, LOW_WATER), (524_288, 131_072));
+    }
+
+    #[tokio::test]
+    async fn output_to_a_gone_app_fails() {
+        let (frames, queued) = mpsc::unbounded_channel();
+        drop(queued);
+        assert!(!Output::new(1, frames).send(b"x").await);
     }
 
     #[test]
