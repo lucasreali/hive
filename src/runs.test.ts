@@ -27,6 +27,8 @@ const all: Runs = {
 
 test("lists are kept by project and branch; badges read the all-branches one", () => {
   const fixLogin = `${SHOP}/.claude/worktrees/fix-login`;
+  // A mock transport of another test file may still answer after its reset: start empty.
+  useHive.setState({ runs: {} });
   apply({ type: "runs", ...all, branch: "worktree-fix-login", runs: [] });
   // A branch's own list names no badge.
   expect(runOf(useHive.getState(), fixLogin)).toEqual([]);
