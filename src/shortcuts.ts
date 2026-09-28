@@ -1,6 +1,7 @@
 import type { Agent } from "./protocol";
 import {
   type HiveState,
+  leaveSpace,
   markdownShown,
   openModal,
   owner,
@@ -49,9 +50,12 @@ export function nextPending(): void {
 export function goToAgent(agent: Agent): void {
   const s = useHive.getState();
   const space = spaceOf(s, agent.project);
-  if (space && space.id !== s.currentSpace) void transport.selectSpace(space.id);
+  const away = space && space.id !== s.currentSpace;
+  if (away) void transport.selectSpace(space.id);
   const tab = s.tabs.find((t) => t.id === agent.terminal);
   useHive.setState({
+    // The place left behind is the one that space shows again (11.5).
+    ...(away ? leaveSpace(s) : {}),
     collapsed: {
       ...s.collapsed,
       [agent.project ?? ""]: false,
