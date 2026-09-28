@@ -25,6 +25,8 @@ pub const MAX_INPUT: usize = 524_288; // 512 KiB
 const SEND_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub async fn run(event: &str, record: Option<&Path>, paths: &Paths, input: impl AsyncRead + Unpin) {
+    // Stamped first, so reading a large payload cannot put this call after a later one.
+    let sent_ns = monotonic_ns();
     let payload = read_payload(input).await;
     let terminal_id = std::env::var("HIVE_TERMINAL_ID").ok();
     if let Some(file) = record
@@ -35,16 +37,24 @@ pub async fn run(event: &str, record: Option<&Path>, paths: &Paths, input: impl 
             file.display()
         );
     }
-    forward(paths, event, terminal_id, payload).await;
+    forward(paths, event, terminal_id, payload, sent_ns).await;
 }
 
-/// Sends one hook call to the service, giving up after [`SEND_TIMEOUT`]; errors are ignored.
-/// `hive worktree hook-create`/`hook-remove` also report their work through here.
-pub async fn forward(paths: &Paths, event: &str, terminal_id: Option<String>, payload: Value) {
+/// Sends one hook call stamped `sent_ns` ([`monotonic_ns`]) to the service, giving up after
+/// [`SEND_TIMEOUT`]; errors are ignored. `hive worktree hook-create`/`hook-remove` also report
+/// their work through here.
+pub async fn forward(
+    paths: &Paths,
+    event: &str,
+    terminal_id: Option<String>,
+    payload: Value,
+    sent_ns: u64,
+) {
     let hook = Control::Hook {
         event: event.to_owned(),
         terminal_id,
         payload,
+        sent_ns,
     };
     let _ = send(paths, 0, &hook).await;
 }
@@ -58,6 +68,16 @@ async fn read_payload(input: impl AsyncRead + Unpin) -> Value {
     }
     serde_json::from_slice(&buf)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&buf).into_owned()))
+}
+
+/// `CLOCK_MONOTONIC` in ns: one clock for every process on the machine, so it orders hook
+/// calls made by different `hive hook` processes (0 if it cannot be read).
+pub fn monotonic_ns() -> u64 {
+    nix::time::clock_gettime(nix::time::ClockId::CLOCK_MONOTONIC).map_or(0, |t| {
+        (t.tv_sec() as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(t.tv_nsec() as u64)
+    })
 }
 
 /// The wall clock, in ms since the Unix epoch (0 before it).
@@ -137,6 +157,15 @@ mod tests {
             payload,
             json!({ "hive_error": "hook input unreadable or larger than 512 KiB" })
         );
+    }
+
+    #[test]
+    fn the_monotonic_clock_moves_forward() {
+        let before = monotonic_ns();
+        std::thread::sleep(Duration::from_millis(2));
+        let after = monotonic_ns();
+        assert!(before > 0);
+        assert!(after >= before + 2_000_000, "{before} {after}");
     }
 
     #[test]

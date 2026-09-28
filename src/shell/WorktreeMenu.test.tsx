@@ -84,6 +84,30 @@ test("the menu key opens it under the row", () => {
   expect(useHive.getState().menu).toEqual({ worktree: login.id, x: 24, y: 0 });
 });
 
+test("Esc or Tab gives the focus back to the row; a dialog an item opens keeps it", () => {
+  show();
+  const r = row("fix-login");
+  for (const key of ["Escape", "Tab"]) {
+    r.focus();
+    rightClick("fix-login");
+    expect(document.activeElement).toBe(item("New terminal here"));
+    fireEvent.keyDown(menu() as HTMLElement, { key });
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(r);
+  }
+  // Focus that moved on stays where it went.
+  rightClick("fix-login");
+  const other = row("main");
+  other.focus();
+  fireEvent.keyDown(menu() as HTMLElement, { key: "Escape" });
+  expect(document.activeElement).toBe(other);
+  r.focus();
+  rightClick("fix-login");
+  fireEvent.click(item("Rename…"));
+  const dialog = screen.getByRole("dialog", { name: "Rename worktree" });
+  expect(dialog.contains(document.activeElement)).toBe(true);
+});
+
 test("arrows move between enabled items; Esc, Tab, a click outside, scrolling and blur close it", () => {
   show();
   rightClick("main");

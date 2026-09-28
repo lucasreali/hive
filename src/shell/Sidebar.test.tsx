@@ -5,6 +5,7 @@ import { type AgentState, apply, initialState, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
+import * as icons from "./icons";
 import { STATE_LABEL } from "./icons";
 import { elapsed } from "./Sidebar";
 
@@ -515,4 +516,33 @@ test("a worktree's status shows as badges explained by their tooltips", () => {
   const clean = { ...one, changes: 0, ahead: 0, behind: 0, merged: true };
   act(() => apply({ type: "worktree_status", path: login.path, status: clean }));
   expect(badges(login.path)).toEqual([["merged", "Every commit is on the main worktree's branch"]]);
+});
+
+test("a hook event re-renders only its own agent's row, not other worktrees' rows", () => {
+  render(<App />);
+  const [main, fixLogin] = shop.worktrees;
+  const at = (w: typeof main) => ({ project: shop.id, worktree: w.id, cwd: w.path });
+  act(() => {
+    apply({ type: "projects", projects: [shop, api] });
+    apply({ type: "agent_detected", channel: 1, id: "s1", ...at(fixLogin) });
+    apply({ type: "agent_detected", channel: 2, id: "s2", ...at(main) });
+    apply({ type: "agent_detected", channel: 3, id: "s3", ...at(main) });
+  });
+  // Each worktree row draws one branch icon and each agent row one state icon per render.
+  const branch = spyOn(icons, "BranchIcon");
+  const state = spyOn(icons, "StateIcon");
+  try {
+    act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("working"), subagents: [] }));
+    expect(branch).not.toHaveBeenCalled();
+    expect(state).toHaveBeenCalledTimes(1);
+    expect(state.mock.calls[0]?.[0]).toEqual({ state: "working" });
+    // A status for one worktree re-renders that row only.
+    const status = { changes: 1, ahead: 0, behind: 0, merged: false, last_commit_ms: 1 };
+    act(() => apply({ type: "worktree_status", path: api.worktrees[1].path, status }));
+    expect(branch).toHaveBeenCalledTimes(1);
+    expect(state).toHaveBeenCalledTimes(1);
+  } finally {
+    branch.mockRestore();
+    state.mockRestore();
+  }
 });

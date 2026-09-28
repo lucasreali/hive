@@ -8,9 +8,9 @@ import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
 import { REFRESH_MS } from "./SessionsView";
 
 afterEach(() => {
+  setSystemTime();
   for (const tab of useHive.getState().tabs) closeTerminal(tab.id);
   mock.restore();
-  setSystemTime();
   cleanup();
   useHive.setState(initialState, true);
 });
@@ -41,9 +41,8 @@ const icons = () =>
   );
 
 test("Sessions lists the shown worktree's sessions only, searched", () => {
-  // The mock's ages count from when it was loaded, which may be minutes before this test.
-  const checkout = MOCK_SESSIONS.find((x) => x.title === "Checkout totals");
-  setSystemTime((checkout?.updated_ms ?? 0) + 55 * 60_000);
+  // The fake sessions' times are set when the mock loads, maybe minutes before this runs.
+  setSystemTime(checkout.updated_ms + 55 * 60_000);
   const listed = show(shop.id);
   expect(listed).toHaveBeenCalledTimes(1);
   expect(screen.getByText("Loading…")).toBeDefined();
