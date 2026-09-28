@@ -850,6 +850,15 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     let (channel, _bytes) = output();
     hive.open_terminal("/w".into(), 80, 24, channel).unwrap();
     service.control().await;
+    // A path sent but not opened before the connection ends.
+    let located = Control::SessionLocated {
+        id: "s".into(),
+        target: SessionTarget::Log,
+        windows_path: Some("C:\\s.jsonl".into()),
+        error: None,
+    };
+    service.send(0, located).await;
+    next(&mut rx).await;
     drop(service);
     assert_eq!(
         next(&mut rx).await,
@@ -858,6 +867,12 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(
         next(&mut rx).await,
         json!({"type": "disconnected", "reason": "bridge gone"})
+    );
+    let hive = hive.with_open(|_, _| Ok(()));
+    let unasked = "Hive opens only a path the service sent: C:\\s.jsonl";
+    assert_eq!(
+        hive.open_path("C:\\s.jsonl".into(), false),
+        Err(unasked.into())
     );
     let not_connected = Err(NOT_CONNECTED.to_owned());
     assert_eq!(hive.write_terminal(1, "x"), not_connected);

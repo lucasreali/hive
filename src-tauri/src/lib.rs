@@ -758,6 +758,8 @@ async fn pump<R: AsyncRead + Unpin>(
 fn disconnected(link: &mut Link, reason: String) {
     link.frames = None;
     link.welcome = None;
+    // A path from an ended connection never opens.
+    link.approved.clear();
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
