@@ -299,6 +299,28 @@ test("a deleted file or folder leaves the tree at once and its tabs close, askin
   expect(open()).toEqual(["a.ts", "other:src/b.ts"]);
 });
 
+test("dirty files deleted one after another are asked about in one question, over the dialog open", () => {
+  const paths = ["a.ts", "b.ts", "c.ts"];
+  apply({ type: "files", path: W, files: [...paths, "d.ts"], truncated: false });
+  for (const path of paths) {
+    setOpenFile(file(path), true);
+    answer(path, "x\n");
+    type(`${path} mine\n`);
+  }
+  useHive.setState({ modal: "settings" });
+  // Each goes in its own message: the question grows instead of being replaced.
+  apply({ type: "file_deleted", worktree: W, path: "a.ts" });
+  apply({ type: "files", path: W, files: ["c.ts", "d.ts"], truncated: false });
+  apply({ type: "file_deleted", worktree: W, path: "c.ts" });
+  expect(s().modal).toBe("confirm");
+  expect(s().question?.text).toBe(
+    "a.ts, b.ts, c.ts were deleted. Your unsaved changes to them will be lost.",
+  );
+  expect(s().question?.back).toBe("settings");
+  act(() => s().question?.run());
+  expect(s().openFiles).toEqual([]);
+});
+
 test("the bar shows every tab in its order; a drag shows a drop line; the × asks when dirty", () => {
   render(<App />);
   act(() => {

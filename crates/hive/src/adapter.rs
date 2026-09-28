@@ -113,7 +113,7 @@ fn activity(tool: &str, payload: &Value) -> String {
 
 /// Control characters, and the format and separator characters that would make shown text
 /// invisible or reorder it (zero-width, bidi controls, line/paragraph separators, BOM).
-fn invisible(c: char) -> bool {
+pub fn invisible(c: char) -> bool {
     c.is_control()
         || matches!(c, '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}')
 }

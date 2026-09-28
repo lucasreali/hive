@@ -83,6 +83,13 @@ impl Gh {
             .env("GH_SPINNER_DISABLED", "1")
             .env("NO_COLOR", "1")
             .env("GH_PAGER", "cat")
+            // The git that `gh` runs (e.g. `gh pr checkout`) gets what `git::command` passes
+            // Hive's own: no fsmonitor program, no signature check.
+            .env("GIT_CONFIG_COUNT", "2")
+            .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+            .env("GIT_CONFIG_VALUE_0", "false")
+            .env("GIT_CONFIG_KEY_1", "log.showSignature")
+            .env("GIT_CONFIG_VALUE_1", "false")
             .args(args);
         command.envs(config_dir.map(|dir| ("GH_CONFIG_DIR", dir)));
         command.envs(vars.iter().cloned());

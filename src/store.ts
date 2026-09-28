@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { OpenPull, PullBusy, PullDetail, PullError, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
 import {
   type EditBuffer,
@@ -51,6 +52,10 @@ export type ServiceMessage =
   | { type: "space_failed"; message: string }
   | ({ type: "gh_accounts" } & GhAccounts)
   | { type: "notice"; message: string }
+  | ({ type: "pulls" } & Pulls)
+  | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
+  | { type: "pull_done"; project: string; number: number; message: string }
+  | { type: "pull_failed"; project: string; number: number | null; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -531,6 +536,7 @@ export type Modal =
   | "palette"
   | "file-name"
   | "confirm"
+  | "new-pull"
   | null;
 /**
  * A yes/no question asked in a Hive dialog (8.20), never the WebView's `confirm`: `run` happens
@@ -543,6 +549,8 @@ export type Question = {
   run: () => void;
   /** The dialog asked from, shown again (still open underneath) once answered. */
   back?: Modal;
+  /** The deleted files with unsaved edits it asks about: a later deletion adds to them. */
+  deleted?: OpenFile[];
 };
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
@@ -550,7 +558,7 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView = "files" | "changes" | "sessions";
+export type PanelView = "files" | "changes" | "sessions" | "pulls";
 
 export type HiveState = {
   // UI state
@@ -635,6 +643,8 @@ export type HiveState = {
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
   settingsError: string | null;
+  /** A `set_settings` sent and not answered yet: the next save waits for its answer (9.24). */
+  settingsPending: boolean;
   /** The last `diagnostics`, or null until asked. */
   diagnostics: Diagnostics | null;
   /** In the service's order; `null` until the service sent the list. */
@@ -687,6 +697,12 @@ export type HiveState = {
   gotoLine: (OpenFile & { line: number }) | null;
   /** The followed subagent's conversation; check `agent` and `subagent`. */
   transcript: Transcript | null;
+  /** The last `pulls` of each project (9.31). */
+  pulls: Record<string, Pulls>;
+  /** The pull request whose details the Pull requests view shows, or null for the list. */
+  openPull: OpenPull | null;
+  pullBusy: PullBusy | null;
+  pullError: PullError | null;
 };
 
 export const initialState: HiveState = {
@@ -727,6 +743,7 @@ export const initialState: HiveState = {
   connection: { status: "connecting" },
   settings: DEFAULT_SETTINGS,
   settingsError: null,
+  settingsPending: false,
   diagnostics: null,
   projects: null,
   addProjectError: null,
@@ -762,6 +779,10 @@ export const initialState: HiveState = {
   sessionsError: null,
   gotoLine: null,
   transcript: null,
+  pulls: {},
+  openPull: null,
+  pullBusy: null,
+  pullError: null,
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -807,9 +828,17 @@ export function safeStorage(): Storage | null {
   }
 }
 
-/** Sets a side's width (kept within its limits) and remembers both. */
-export function setWidth(side: Side, width: number): void {
+/**
+ * Sets a side's width (kept within its limits) and, unless `persist` is false (a drag in
+ * progress, saved once on release by `saveWidths`), remembers them all.
+ */
+export function setWidth(side: Side, width: number, persist = true): void {
   useHive.setState({ [widthKey(side)]: clampWidth(side, width) });
+  if (persist) saveWidths();
+}
+
+/** Remembers the current widths between runs. */
+export function saveWidths(): void {
   const { sidebarWidth, panelWidth, splitPercent } = useHive.getState();
   try {
     safeStorage()?.setItem(STORAGE, JSON.stringify({ sidebarWidth, panelWidth, splitPercent }));
@@ -994,9 +1023,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "welcome":
       return { connection: { status: "connected", version: m.version, distro: m.distro } };
     case "settings":
-      return { settings: m.settings, settingsError: null };
+      return { settings: m.settings, settingsError: null, settingsPending: false };
     case "settings_failed":
-      return { settingsError: m.message, notice: m.message };
+      return { settingsError: m.message, notice: m.message, settingsPending: false };
     case "diagnostics": {
       const { type: _, ...diagnostics } = m;
       return { diagnostics };
@@ -1085,6 +1114,26 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { spaceError: m.message };
     case "notice":
       return { notice: m.message };
+    case "pulls": {
+      const { type: _, ...pulls } = m;
+      return { pulls: { ...s.pulls, [m.project]: pulls } };
+    }
+    case "pull": {
+      const shown = s.openPull;
+      if (shown?.project !== m.project || shown.number !== m.number) return {};
+      return { openPull: { ...shown, detail: m.pull, error: m.error } };
+    }
+    case "pull_done":
+      return {
+        pullBusy: null,
+        pullError: null,
+        notice: m.message,
+        modal: s.modal === "new-pull" ? null : s.modal,
+      };
+    case "pull_failed": {
+      const { type: _, ...pullError } = m;
+      return { pullBusy: null, pullError };
+    }
     case "gh_accounts": {
       const { type: _, ...accounts } = m;
       return { ghAccounts: accounts };
@@ -1131,13 +1180,15 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         removeFailures: { ...s.worktreeDialog.removeFailures, [m.path]: m.message },
       });
     case "worktree_status": {
-      if (!s.projects) return {};
-      const patch = (w: Worktree) => (w.path === m.path ? { ...w, status: m.status } : w);
-      const projects = Object.values(s.projects).map((p) => ({
-        ...p,
-        worktrees: p.worktrees.map(patch),
-      }));
-      return { projects: Object.fromEntries(projects.map((p) => [p.id, p])) };
+      // Only the project that owns the path changes: every other row keeps its objects (9.23).
+      const p = Object.values(s.projects ?? {}).find((p) =>
+        p.worktrees.some((w) => w.path === m.path),
+      );
+      if (!p) return {};
+      const worktrees = p.worktrees.map((w) =>
+        w.path === m.path ? { ...w, status: m.status } : w,
+      );
+      return { projects: { ...s.projects, [p.id]: { ...p, worktrees } } };
     }
     case "rename_worktree_failed": {
       const { type: _, ...failure } = m;
@@ -1335,16 +1386,22 @@ function closeDeleted(s: HiveState, gone: OpenFile[]): HiveState {
     gone.filter((f) => !dirty.includes(f)),
   );
   if (dirty.length === 0) return next;
-  const [one] = dirty;
+  // Files deleted earlier may still wait for their answer: one question names them all (9.24),
+  // over the same dialog underneath.
+  const open = s.modal === "confirm" ? s.question : null;
+  const all = [...(open?.deleted ?? []), ...dirty];
+  const [one] = all;
   const text =
-    dirty.length === 1
+    all.length === 1
       ? `${one?.path} was deleted. Your unsaved changes to it will be lost.`
-      : `${dirty.map((f) => f.path).join(", ")} were deleted. Your unsaved changes to them will be lost.`;
-  const question = {
+      : `${all.map((f) => f.path).join(", ")} were deleted. Your unsaved changes to them will be lost.`;
+  const question: Question = {
     title: "Discard changes?",
     text,
     action: "Discard",
-    run: () => useHive.setState((s) => dropAll(s, dirty)),
+    run: () => useHive.setState((s) => dropAll(s, all)),
+    back: open ? open.back : s.modal,
+    deleted: all,
   };
   return { ...next, modal: "confirm", question };
 }
@@ -1411,6 +1468,14 @@ export const markInboxRead = () =>
     ),
   }));
 export const setNotice = (notice: string | null) => useHive.setState({ notice });
+/**
+ * Shows why `action` failed as the notice (9.21), after `what` ("Cannot open a terminal"),
+ * so a failed request is never swallowed. Returns `action` with the failure handled.
+ */
+export const showFailure = <T>(action: Promise<T>, what = ""): Promise<T> => {
+  action.catch((error: unknown) => setNotice(what ? `${what}: ${error}` : String(error)));
+  return action;
+};
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });

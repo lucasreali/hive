@@ -2018,8 +2018,10 @@ li:not(:last-child) > .owned::before {
   margin-right: auto;
 }
 
-/* Project scripts (6.8): multi-line scripts and one row per run script */
-.settings-body .field textarea {
+/* Project scripts (6.8): multi-line scripts and one row per run script; a pull request's
+   description (9.31) */
+.settings-body .field textarea,
+.dialog-body .field textarea {
   padding: 6px 10px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -2031,7 +2033,8 @@ li:not(:last-child) > .owned::before {
   resize: vertical;
 }
 
-.settings-body .field textarea:focus {
+.settings-body .field textarea:focus,
+.dialog-body .field textarea:focus {
   border-color: var(--focus);
   box-shadow: 0 0 0 1px var(--focus);
 }
@@ -3108,4 +3111,225 @@ body[data-resizing] {
 .gh-account .select {
   flex: 1;
   min-width: 0;
+}
+
+/* Pull requests view (9.31); its list rows reuse the Sessions rows (.session). */
+.pulls {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.pulls ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pulls .hint {
+  padding: 4px 12px 8px;
+}
+
+.pulls-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-small);
+}
+
+.pulls-bar .ghost:not(.icon) {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  white-space: nowrap;
+}
+
+.pulls-updated {
+  flex: 1;
+  color: var(--text-3);
+  font-size: var(--fs-meta);
+  text-align: right;
+}
+
+.pulls-error {
+  margin: 8px 12px;
+  color: var(--state-error);
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+}
+
+.pulls-create {
+  align-self: flex-start;
+  margin: 8px 12px 0;
+}
+
+.pulls-head {
+  margin: 12px 12px 4px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.pull[data-here="true"] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pull-state {
+  flex: none;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--on-accent);
+  background: var(--state-idle);
+}
+
+.pull-state[data-state="draft"] {
+  background: var(--text-3);
+}
+
+.pull-state[data-state="merged"] {
+  background: var(--state-subagents);
+}
+
+.pull-state[data-state="closed"] {
+  background: var(--state-error);
+}
+
+.pull-checks {
+  flex: none;
+  font-weight: 600;
+}
+
+.pull-checks[data-state="passing"] {
+  color: var(--git-added);
+}
+
+.pull-checks[data-state="failing"] {
+  color: var(--git-deleted);
+}
+
+.pull-checks[data-state="running"] {
+  color: var(--state-permission);
+}
+
+.pull-checks[data-state="skipped"] {
+  color: var(--text-3);
+}
+
+.pull-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+}
+
+.pull-body .pulls-head {
+  margin: 8px 0 0;
+}
+
+.pull-body .hint {
+  padding: 0;
+}
+
+.pull-heading {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+
+.pull-number {
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.pull-body .session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.pull-actions,
+.pull-merge {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pull-actions .secondary.danger {
+  color: var(--state-error);
+}
+
+.pull-merge .select {
+  min-width: 150px;
+}
+
+.pull-check,
+.pull-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.pull-file .label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.pull-note {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pull-note b {
+  color: var(--text);
+}
+
+button.link {
+  padding: 0;
+  color: var(--accent);
+  text-align: left;
+}
+
+button.link:hover {
+  text-decoration: underline;
+}
+
+.pull-badge {
+  flex: none;
+  margin-right: 4px;
+  font-size: var(--fs-meta);
+  color: var(--state-idle);
+}
+
+.pull-badge[data-state="draft"] {
+  color: var(--text-3);
+}
+
+.pull-badge[data-state="merged"] {
+  color: var(--state-subagents);
+}
+
+.pull-badge[data-state="closed"] {
+  color: var(--state-error);
+}
+
+.pull-badge:hover {
+  text-decoration: underline;
 }

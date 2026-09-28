@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { addToInbox, apply, initialState, pendingAgents, useHive } from "../store";
 import { transport } from "../transport";
@@ -25,6 +26,17 @@ function offered(agents: string[] = []) {
   act(() => apply({ type: "update_ready", version: "0.2.0" }));
   return install;
 }
+
+test("an install that cannot be sent is shown as the notice; the button comes back (9.21)", async () => {
+  offered().mockRestore();
+  const restore = unsent("installUpdate");
+  fireEvent.click(button() as HTMLElement);
+  expect(button()?.textContent).toBe("Restarting…");
+  await waitFor(() => expect(button()?.textContent).toBe("Restart to update to v0.2.0"));
+  restore();
+  expect(useHive.getState().notice).toBe(LINK_DOWN);
+  expect((button() as HTMLButtonElement).disabled).toBe(false);
+});
 
 test("no update, no button", () => {
   render(<App />);

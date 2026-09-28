@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import type { PullAction } from "../pulls";
 import type {
   DiffBase,
   GhAccount,
@@ -7,7 +8,6 @@ import type {
   Settings,
   SpaceEnv,
 } from "../store";
-import { createMockTransport } from "./mock";
 import { tauriTransport } from "./tauri";
 
 /**
@@ -57,6 +57,26 @@ export interface Transport {
    * answered by `gh_accounts`.
    */
   switchGhAccount(ghConfigDir: string | null, account: GhAccount): Promise<void>;
+  /**
+   * The project's pull requests (9.31); answered by `pulls`. Without `force` the service sends
+   * a list under 2 minutes old again instead of asking GitHub.
+   */
+  listPulls(project: string, force: boolean): Promise<void>;
+  /** One pull request's details; answered by `pull`. */
+  openPull(project: string, number: number): Promise<void>;
+  /**
+   * Answered by `pull_done` (then `pull` and `pulls` again) or `pull_failed`; a checkout by
+   * `worktree_created`. Ask before merging or closing.
+   */
+  actOnPull(project: string, number: number, action: PullAction): Promise<void>;
+  /** A pull request from `worktree`'s branch; answered by `pull_done` or `pull_failed`. */
+  createPull(
+    worktree: string,
+    title: string,
+    body: string,
+    base: string,
+    draft: boolean,
+  ): Promise<void>;
   /**
    * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
    * empty); answered by `dirs`.
@@ -160,12 +180,18 @@ export interface Transport {
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
  * `?mock=empty` starts it with no projects; `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
- * every terminal (the load test, 1.11).
+ * every terminal (the load test, 1.11). The fake service is a chunk of its own, loaded only
+ * then (9.24): the app's startup bundle does not carry it.
  */
-export function pickTransport(tauri = isTauri(), search = location.search): Transport {
+export async function pickTransport(
+  tauri = isTauri(),
+  search = location.search,
+): Promise<Transport> {
   const params = new URLSearchParams(search);
   const mock = params.get("mock");
-  return tauri && mock === null ? tauriTransport : createMockTransport(mock, params.get("cast"));
+  if (tauri && mock === null) return tauriTransport;
+  const { createMockTransport } = await import("./mock");
+  return createMockTransport(mock, params.get("cast"));
 }
 
-export const transport = pickTransport();
+export const transport = await pickTransport();

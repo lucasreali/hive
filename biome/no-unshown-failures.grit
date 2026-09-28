@@ -1,0 +1,14 @@
+// 9.21: a failed request is shown, never swallowed. Every transport command but `connect`,
+// `openTerminal` and `saveFile` shows its own failure (`send` in src/transport/tauri.ts); these
+// and the terminal openers reject, so a click or key hands them to `showOpenFailure` (or
+// `showFailure` in src/store.ts) instead of dropping them with `void`.
+`void $call` where {
+  $call <: or {
+    `$f($...)` where { $f <: or { `openTerminal`, `openClaude`, `openWith`, `splitTerminal` } },
+    `transport.$m($...)` where { $m <: or { `connect`, `openTerminal`, `saveFile` } }
+  },
+  register_diagnostic(
+    span = $call,
+    message = "This rejects on failure: wrap it in `showOpenFailure` or `showFailure` instead of `void` (9.21)."
+  )
+}

@@ -8,7 +8,7 @@ import { transport } from "./transport";
 import { watchFocus } from "./window";
 
 // The update check answers on the channel `connect` gives, so it goes second.
-void connect().then(() => transport.checkUpdate());
+void connect().then(() => void transport.checkUpdate());
 followOpenFile(transport);
 followPanel(transport);
 watchFocus(setFocused);
