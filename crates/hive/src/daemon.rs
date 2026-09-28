@@ -1598,17 +1598,19 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn without_a_watcher_the_registry_is_not_watched() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_registry_watch_ends_only_without_a_watcher() {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path());
         let failed = Err(io::Error::other("no inotify"));
+        let ms = std::time::Duration::from_millis;
         // It ends instead of waiting for changes forever.
-        let ended = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            watch_registry(state, failed),
-        );
+        let ended = tokio::time::timeout(ms(5000), watch_registry(state.clone(), failed));
         assert!(ended.await.is_ok());
+        // With a watcher it follows the projects (again on a change of them) until aborted.
+        state.refollow.notify_one();
+        let watching = watch_registry(state, Registry::new());
+        assert!(tokio::time::timeout(ms(500), watching).await.is_err());
     }
 
     #[test]
