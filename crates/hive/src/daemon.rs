@@ -1,7 +1,7 @@
 //! `hive daemon`: the service. Lives exactly as long as the app connection.
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, Permissions, TryLockError};
 use std::io;
@@ -10,8 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
-
-use bytes::Bytes;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
@@ -40,9 +38,6 @@ use crate::terminal::{self, Input, Terminal};
 use crate::{
     bridge, changes, dirs, file, health, procs, search, transcript, watch, worktree, wrapper,
 };
-
-/// Terminal output waiting to be written to the app; bounded so a slow app slows the PTYs down.
-const TERMINAL_QUEUE: usize = 256;
 
 /// How often a service waiting for the lock tries it again.
 const LOCK_RETRY: Duration = Duration::from_millis(20);
@@ -165,8 +160,8 @@ struct State {
     app: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
-    /// Each open terminal's input queue, by channel.
-    inputs: std::sync::Mutex<HashMap<u32, mpsc::UnboundedSender<Input>>>,
+    /// Each open terminal's input queue and output (for the app's acknowledgements), by channel.
+    inputs: std::sync::Mutex<HashMap<u32, (mpsc::UnboundedSender<Input>, terminal::Output)>>,
     /// Detected agents by session id, with their terminal and state.
     agents: Mutex<HashMap<String, Agent>>,
     /// The task watching the worktree of the app's files panel.
@@ -264,7 +259,10 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn inputs(&self) -> std::sync::MutexGuard<'_, HashMap<u32, mpsc::UnboundedSender<Input>>> {
+    fn inputs(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<u32, (mpsc::UnboundedSender<Input>, terminal::Output)>>
+    {
         self.inputs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -481,8 +479,16 @@ impl State {
 
     /// Queues input or a resize; ignored once the terminal is gone.
     fn input(&self, channel: u32, input: Input) {
-        if let Some(terminal) = self.inputs().get(&channel) {
+        if let Some((terminal, _)) = self.inputs().get(&channel) {
             let _ = terminal.send(input);
+        }
+    }
+
+    /// The app wrote `bytes` of the terminal's output to its screen (9.19); ignored once the
+    /// terminal is gone.
+    fn ack(&self, channel: u32, bytes: u32) {
+        if let Some((_, output)) = self.inputs().get(&channel) {
+            output.ack(bytes);
         }
     }
 
@@ -492,7 +498,7 @@ impl State {
         cwd: &str,
         cols: u16,
         rows: u16,
-        output: mpsc::Sender<Frame>,
+        frames: mpsc::UnboundedSender<Frame>,
     ) {
         // Its space's environment (6.14) with its GitHub account's token (9.30), and its
         // worktree's `HIVE_*` (6.8), placed before the lock since placing lists worktrees.
@@ -523,7 +529,8 @@ impl State {
                             let last = terminal.last_output.clone();
                             let session = terminal.session;
                             slot.insert(terminal);
-                            self.inputs().insert(channel, input);
+                            let output = terminal::Output::new(channel, frames);
+                            self.inputs().insert(channel, (input, output.clone()));
                             let state = self.clone();
                             tokio::spawn(pump(state, channel, session, pty, child, output, last));
                         },
@@ -887,10 +894,10 @@ async fn pump(
     session: i32,
     mut pty: OwnedReadPty,
     mut child: Child,
-    output: mpsc::Sender<Frame>,
+    output: terminal::Output,
     last_output: terminal::LastOutput,
 ) {
-    let copy = copy(&mut pty, channel, &output, &last_output);
+    let copy = copy(&mut pty, &output, &last_output);
     tokio::pin!(copy);
     let status = tokio::select! {
         () = &mut copy => child.wait().await,
@@ -916,18 +923,17 @@ async fn pump(
         .await;
 }
 
-/// Copies PTY output to the app until the PTY closes or the app is gone.
+/// Copies PTY output to the app until the PTY closes or the app is gone. While the app is
+/// behind, the PTY is not read, so the program in it waits (9.19).
 async fn copy(
     pty: &mut OwnedReadPty,
-    channel: u32,
-    output: &mpsc::Sender<Frame>,
+    output: &terminal::Output,
     last_output: &terminal::LastOutput,
 ) {
     let mut buf = vec![0; 64 * 1024];
     while let Ok(n @ 1..) = pty.read(&mut buf).await {
         last_output.touch();
-        let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
-        if output.send(frame).await.is_err() {
+        if !output.send(&buf[..n]).await {
             break;
         }
     }
@@ -1049,7 +1055,9 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     let (control_tx, control_rx) = mpsc::unbounded_channel();
-    let (terminal_tx, terminal_rx) = mpsc::channel(TERMINAL_QUEUE);
+    // Unbounded, but each terminal's share is bounded by what the app has not acknowledged
+    // ([`terminal::Output`]), so one terminal never makes another wait to queue.
+    let (terminal_tx, terminal_rx) = mpsc::unbounded_channel();
     {
         let mut app = state.app.lock().await;
         if app.is_some() {
@@ -1080,7 +1088,7 @@ where
     true
 }
 
-async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame>) {
+async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSender<Frame>) {
     let channel = frame.channel;
     let message = match frame.kind {
         FrameType::Terminal => return state.input(channel, Input::Data(frame.payload)),
@@ -1091,6 +1099,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             state.open(channel, &cwd, cols, rows, output.clone()).await;
         }
         Ok(Control::Resize { cols, rows }) => state.input(channel, Input::Resize { cols, rows }),
+        Ok(Control::Ack { bytes }) => state.ack(channel, bytes),
         Ok(Control::CloseTerminal) => state.close(channel),
         Ok(Control::WatchWorktree { path, base }) => state.watch_worktree(Some((path, base))).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
@@ -1459,18 +1468,30 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
     }
 }
 
-/// Writes queued frames, always draining control frames before terminal frames.
+/// Writes queued frames, always draining control frames before terminal frames. Terminal
+/// frames wait in one queue per terminal, taken in turn (9.19): a keystroke's echo waits for
+/// at most one frame of each other terminal, however much a flooding one has queued.
 async fn write_prioritized<W: AsyncWrite + Unpin>(
     mut writer: FramedWrite<W, FrameCodec>,
     mut control: mpsc::UnboundedReceiver<Frame>,
-    mut terminal: mpsc::Receiver<Frame>,
+    mut terminal: mpsc::UnboundedReceiver<Frame>,
 ) {
+    let mut turns = Turns::default();
     loop {
-        let frame = tokio::select! {
-            biased;
-            Some(frame) = control.recv() => frame,
-            Some(frame) = terminal.recv() => frame,
-            else => return,
+        while let Ok(frame) = terminal.try_recv() {
+            turns.push(frame);
+        }
+        let frame = match control.try_recv() {
+            Ok(frame) => frame,
+            Err(_) => match turns.next() {
+                Some(frame) => frame,
+                None => tokio::select! {
+                    biased;
+                    Some(frame) = control.recv() => frame,
+                    Some(frame) = terminal.recv() => frame,
+                    else => return,
+                },
+            },
         };
         match writer.send(frame).await {
             // Nothing was written: the app misses this message, not every later one.
@@ -1483,6 +1504,45 @@ async fn write_prioritized<W: AsyncWrite + Unpin>(
     }
 }
 
+/// Terminal frames by terminal, handed out one terminal after the other.
+#[derive(Default)]
+struct Turns {
+    queues: BTreeMap<u32, VecDeque<Frame>>,
+    /// The terminal whose frame went last.
+    last: u32,
+}
+
+impl Turns {
+    fn push(&mut self, frame: Frame) {
+        self.queues
+            .entry(frame.channel)
+            .or_default()
+            .push_back(frame);
+    }
+
+    /// The next frame of the first terminal after the last one served, wrapping around.
+    fn next(&mut self) -> Option<Frame> {
+        let after = (
+            std::ops::Bound::Excluded(self.last),
+            std::ops::Bound::Unbounded,
+        );
+        let first = || self.queues.keys().next();
+        let channel = *self
+            .queues
+            .range(after)
+            .next()
+            .map(|(c, _)| c)
+            .or_else(first)?;
+        let queue = self.queues.get_mut(&channel)?;
+        let frame = queue.pop_front();
+        if queue.is_empty() {
+            self.queues.remove(&channel);
+        }
+        self.last = channel;
+        frame
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1490,9 +1550,9 @@ mod tests {
     #[tokio::test]
     async fn control_frames_are_written_before_queued_terminal_frames() {
         let (control_tx, control_rx) = mpsc::unbounded_channel();
-        let (terminal_tx, terminal_rx) = mpsc::channel(8);
-        terminal_tx.send(Frame::terminal(1, "out")).await.unwrap();
-        terminal_tx.send(Frame::terminal(1, "more")).await.unwrap();
+        let (terminal_tx, terminal_rx) = mpsc::unbounded_channel();
+        terminal_tx.send(Frame::terminal(1, "out")).unwrap();
+        terminal_tx.send(Frame::terminal(1, "more")).unwrap();
         control_tx
             .send(Frame::control(0, &Control::CloseTerminal))
             .unwrap();
@@ -1517,6 +1577,29 @@ mod tests {
                 Frame::terminal(1, "more"),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn terminals_take_turns_to_be_written() {
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
+        let (terminal_tx, terminal_rx) = mpsc::unbounded_channel();
+        for frame in [(2, "a1"), (2, "a2"), (2, "a3"), (1, "b1"), (u32::MAX, "c1")] {
+            terminal_tx.send(Frame::terminal(frame.0, frame.1)).unwrap();
+        }
+        let (client, server) = tokio::io::duplex(1024);
+        let writer = FramedWrite::new(server, FrameCodec);
+        tokio::spawn(write_prioritized(writer, control_rx, terminal_rx));
+        let mut read = FramedRead::new(client, FrameCodec);
+        let time = std::time::Duration::from_secs(5);
+        let mut next = async || tokio::time::timeout(time, read.next()).await.unwrap();
+        let mut next = async || next().await.unwrap().unwrap().payload;
+        // The first after the lowest channel, wrapping around after the highest.
+        for want in ["b1", "a1", "c1", "a2", "a3"] {
+            assert_eq!(next().await, want);
+        }
+        // Frames queued after the others emptied are written as they come.
+        terminal_tx.send(Frame::terminal(5, "d1")).unwrap();
+        assert_eq!(next().await, "d1");
     }
 
     fn test_state(dir: &Path) -> Arc<State> {
@@ -1677,11 +1760,11 @@ mod tests {
     #[tokio::test]
     async fn a_frame_too_big_to_write_is_dropped_and_writing_goes_on() {
         let (control_tx, control_rx) = mpsc::unbounded_channel();
-        let (terminal_tx, terminal_rx) = mpsc::channel(1);
+        let (terminal_tx, terminal_rx) = mpsc::unbounded_channel();
         let huge = Frame {
             kind: FrameType::Control,
             channel: 0,
-            payload: Bytes::from(vec![b' '; hive_protocol::MAX_PAYLOAD + 1]),
+            payload: bytes::Bytes::from(vec![b' '; hive_protocol::MAX_PAYLOAD + 1]),
         };
         control_tx.send(huge).unwrap();
         control_tx
@@ -1705,7 +1788,7 @@ mod tests {
     #[tokio::test]
     async fn writer_stops_when_the_peer_is_gone() {
         let (control_tx, control_rx) = mpsc::unbounded_channel();
-        let (_terminal_tx, terminal_rx) = mpsc::channel(1);
+        let (_terminal_tx, terminal_rx) = mpsc::unbounded_channel::<Frame>();
         control_tx.send(Frame::terminal(1, "x")).unwrap();
         let (client, server) = tokio::io::duplex(64);
         drop(client);
