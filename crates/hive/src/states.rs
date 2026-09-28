@@ -4,7 +4,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{AgentEvent, AgentState, Control, EventKind, Notification, SubagentState};
+use hive_protocol::{
+    AgentEvent, AgentState, Alert, Control, EventKind, Notification, SubagentState,
+};
 use serde_json::Value;
 
 /// Subagents kept per agent; later ones are ignored, so a message always fits in a frame.
@@ -51,6 +53,9 @@ pub struct Agent {
     waiting: HashSet<String>,
     /// Last hook event for the agent or a subagent; silence is counted from here at the latest.
     last_event: Instant,
+    /// The latest `sent_ns` applied to the agent itself (key `None`) and to each live subagent:
+    /// an older event arrived late and does not change that one's state or activity.
+    stamps: HashMap<Option<String>, u64>,
     /// Whether its terminal is the one in view in the focused app window (the app's `view`);
     /// the daemon keeps it current.
     pub watched: bool,
@@ -87,6 +92,7 @@ impl Agent {
             launched: HashMap::new(),
             waiting: HashSet::new(),
             last_event: now,
+            stamps: HashMap::new(),
             watched: false,
             seen: false,
             interrupted: false,
@@ -103,9 +109,14 @@ impl Agent {
         ms + now.saturating_duration_since(at).as_millis() as u64
     }
 
-    /// Applies one hook event of this agent (or of one of its subagents). `place` answers the
-    /// worktree containing a cwd; it is slow, so it is asked once per new subagent cwd.
-    /// Returns the new message when it changed.
+    /// Applies one hook event of this agent (or of one of its subagents), stamped `sent_ns`
+    /// by `hive hook` (`Control::Hook`). `place` answers the worktree containing a cwd; it is
+    /// slow, so it is asked once per new subagent cwd. Returns the new message when it changed.
+    ///
+    /// Hook calls reach the service in any order (each on its own connection), so an event
+    /// older than the last one applied to the same agent or subagent keeps only what does not
+    /// depend on order (worktrees, background launches, a subagent leaving): its state and
+    /// activity are not applied.
     ///
     /// A subagent owns a worktree (#22) when a `WorktreeCreate` carries its `agent_id`, or
     /// else when its own events come from a worktree other than its agent's (the `cwd`
@@ -122,10 +133,13 @@ impl Agent {
         &mut self,
         id: &str,
         event: &AgentEvent,
+        sent_ns: u64,
         now: Instant,
         place: &dyn Fn(&str) -> Option<String>,
     ) -> Option<Control> {
-        self.changed(id, now, false, |agent| {
+        let stream = event.subagent.as_ref().map(|s| s.id.clone());
+        let stale = self.stamps.get(&stream).is_some_and(|&last| sent_ns < last);
+        let message = self.changed(id, now, false, |agent| {
             agent.last_event = now;
             if let EventKind::WorktreeRemoved { path: Some(path) } = &event.kind {
                 let gone = agent
@@ -153,6 +167,9 @@ impl Agent {
                 agent.prune(live.map_or(&[], Vec::as_slice));
             }
             let Some(sub) = &event.subagent else {
+                if stale {
+                    return;
+                }
                 // A compaction shows as working, then gives back what it interrupted.
                 let saved = agent.compacting.take();
                 match event.kind {
@@ -180,7 +197,9 @@ impl Agent {
             let known = agent.subagents.iter().position(|s| s.id == sub.id);
             let current = known.map_or(AgentState::Idle, |i| agent.subagents[i].state);
             let state = state_of(&event.kind, current);
-            if let Some(i) = known {
+            if let Some(i) = known
+                && !stale
+            {
                 follow(&mut agent.subagents[i].activity, event);
             }
             if let EventKind::WorktreeCreated {
@@ -195,7 +214,9 @@ impl Agent {
                 return;
             }
             let Some(state) = state else { return };
-            agent.waiting.remove(&sub.id);
+            if !stale {
+                agent.waiting.remove(&sub.id);
+            }
             let i = match known {
                 Some(i) => i,
                 None if agent.subagents.len() < MAX_SUBAGENTS
@@ -209,13 +230,16 @@ impl Agent {
                         worktree: None,
                         activity: event.activity.clone(),
                         since_ms: 0,
+                        writing: false,
                     });
                     agent.subagents.len() - 1
                 }
                 None => return,
             };
             let known = &mut agent.subagents[i];
-            known.state = state;
+            if !stale {
+                known.state = state;
+            }
             if let Some(task) = launch(&event.raw) {
                 let ids = agent.launched.entry(sub.id.clone()).or_default();
                 if ids.len() == MAX_LAUNCHED {
@@ -233,7 +257,16 @@ impl Agent {
             }
             agent.placed.insert(sub.id.clone(), cwd.clone());
             known.worktree = place(cwd).filter(|w| w != own);
-        })
+        });
+        // Only live subagents keep a stamp, so there are at most `MAX_SUBAGENTS` of them.
+        let live = stream
+            .as_ref()
+            .is_none_or(|sub| self.subagents.iter().any(|s| &s.id == sub));
+        if live {
+            let last = self.stamps.entry(stream).or_default();
+            *last = sent_ns.max(*last);
+        }
+        message
     }
 
     /// Keeps each waiting subagent's launches that are still in `live` (`background_tasks`),
@@ -258,6 +291,7 @@ impl Agent {
     fn leave(&mut self, id: &str) {
         self.subagents.retain(|s| s.id != id);
         self.placed.remove(id);
+        self.stamps.remove(&Some(id.to_owned()));
         self.launched.remove(id);
         self.waiting.remove(id);
     }
@@ -316,20 +350,36 @@ impl Agent {
         }
     }
 
-    /// The `agent_state` message. Rule 1: the most urgent of the agent, its subagents and
-    /// "with subagents" (when any is live) is shown. A seen agent is not pending.
+    /// The `agent_state` message, without an alert (the first one, the snapshot after
+    /// `Welcome`). Rule 1: the most urgent of the agent, its subagents and "with subagents"
+    /// (when any is live) is shown. A seen agent is not pending.
     pub fn message(&self, id: &str) -> Control {
+        self.status(id, None)
+    }
+
+    fn status(&self, id: &str, alert: Option<Alert>) -> Control {
         let state = self.displayed();
+        let subagents = self.subagents.iter().map(|s| SubagentState {
+            writing: s.state.writes(),
+            ..s.clone()
+        });
         Control::AgentState {
             id: id.to_owned(),
             state,
             urgency: state.urgency(),
             pending: state.pending() && !self.seen,
             interrupted: self.interrupted,
-            subagents: self.subagents.clone(),
+            alert,
+            writing: state.writes(),
+            subagents: subagents.collect(),
             activity: self.activity.clone(),
             since_ms: self.since_ms,
         }
+    }
+
+    /// The worktrees its live subagents work in as their own.
+    fn own_worktrees(&self) -> impl Iterator<Item = &String> {
+        self.subagents.iter().filter_map(|s| s.worktree.as_ref())
     }
 
     fn displayed(&self) -> AgentState {
@@ -343,7 +393,8 @@ impl Agent {
 
     /// Applies `update`; when the displayed state changed, the agent is seen only if it just
     /// finished (working or with subagents → waiting for you) while watched (hive.md item 5),
-    /// or was made to wait for you `quiet`ly (an interrupt).
+    /// or was made to wait for you `quiet`ly (an interrupt). That change alerts (2.4): it
+    /// finished, or it waits for the user (a pending state); an interrupt never does.
     /// A state that changed (the displayed one, or a subagent's) begins at `now`.
     fn changed(
         &mut self,
@@ -362,20 +413,43 @@ impl Agent {
         update(self);
         let shown = self.displayed();
         let wall = self.wall(now);
+        let mut alert = None;
         if shown != was {
             let busy = matches!(was, AgentState::Working | AgentState::WithSubagents);
+            let finished = busy && shown == AgentState::WaitingYou;
             self.interrupted = quiet && shown == AgentState::WaitingYou;
-            self.seen = self.interrupted || self.watched && busy && shown == AgentState::WaitingYou;
+            self.seen = self.interrupted || self.watched && finished;
             self.since_ms = wall;
+            // One expression: every instantiation of `changed` runs each of its lines.
+            alert = if finished {
+                Some(Alert::Finished)
+            } else {
+                shown.pending().then_some(Alert::Waiting)
+            }
+            .filter(|_| !self.interrupted);
         }
         for sub in &mut self.subagents {
             if subagents.get(&sub.id) != Some(&sub.state) {
                 sub.since_ms = wall;
             }
         }
-        let after = self.message(id);
+        let after = self.status(id, alert);
         (after != before).then_some(after)
     }
+}
+
+/// The worktrees a live subagent of `agents` works in as its own (#22) and none of `agents`
+/// runs in, sorted: the `subagent_worktrees` message.
+pub fn subagent_worktrees<'a>(agents: impl Iterator<Item = &'a Agent> + Clone) -> Vec<String> {
+    let placed: HashSet<&String> = agents.clone().filter_map(|a| a.worktree.as_ref()).collect();
+    let mut owned: Vec<String> = agents
+        .flat_map(Agent::own_worktrees)
+        .filter(|w| !placed.contains(w))
+        .cloned()
+        .collect();
+    owned.sort();
+    owned.dedup();
+    owned
 }
 
 /// Keeps the activity an event brings; a new prompt, the end of a turn, a session or a
@@ -503,7 +577,7 @@ mod tests {
     impl Agent {
         /// `apply` for events whose cwd is in no worktree.
         fn feed(&mut self, id: &str, event: &AgentEvent, now: Instant) -> Option<Control> {
-            self.apply(id, event, now, &|_| None)
+            self.apply(id, event, 0, now, &|_| None)
         }
     }
 
@@ -830,11 +904,86 @@ mod tests {
                 urgency: 2,
                 pending: false,
                 interrupted: false,
+                alert: None,
+                writing: true,
                 subagents: vec![],
                 activity: None,
                 since_ms: 1_005,
             })
         );
+    }
+
+    /// The alert and `writing` of a message `apply` sent.
+    fn alerts(sent: Option<Control>) -> Option<(Option<Alert>, bool)> {
+        let Some(Control::AgentState { alert, writing, .. }) = sent else {
+            return None;
+        };
+        Some((alert, writing))
+    }
+
+    #[test]
+    fn a_new_state_alerts_when_the_agent_finished_or_waits_for_the_user() {
+        use Alert::*;
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        let mut feed = |name: &str, extra| alerts(agent.feed("s", &hook(name, None, extra), now));
+        let (none, ask) = (json!({}), json!({"tool_name": "AskUserQuestion"}));
+        assert_eq!(feed("PreToolUse", none.clone()), Some((None, true)));
+        // Working, then waiting for you: it finished.
+        assert_eq!(feed("Stop", none.clone()), Some((Some(Finished), false)));
+        // Staying there sends nothing, so nothing alerts again.
+        assert_eq!(feed("Stop", none.clone()), None);
+        // Entering any other state that waits for the user alerts too.
+        let entered = Some((Some(Waiting), true));
+        assert_eq!(feed("PermissionRequest", none.clone()), entered);
+        assert_eq!(feed("PreToolUse", ask), entered);
+        assert_eq!(
+            feed("StopFailure", none.clone()),
+            Some((Some(Waiting), false))
+        );
+        assert_eq!(feed("SessionStart", none.clone()), Some((None, false)));
+        // From idle it did not finish anything.
+        let idle = json!({"notification_type": "idle_prompt"});
+        assert_eq!(feed("Notification", idle), Some((Some(Waiting), false)));
+        assert_eq!(feed("SessionEnd", none), Some((None, false)));
+        // The snapshot after `Welcome` never alerts.
+        assert_eq!(alerts(Some(agent.message("s"))), Some((None, false)));
+
+        // With subagents, then waiting for you: it finished too.
+        let mut agent = Agent::new(1, now, 0);
+        let start = hook("SubagentStart", Some("a"), json!({}));
+        assert_eq!(alerts(agent.feed("s", &start, now)), Some((None, true)));
+        let stop = hook("Stop", Some("a"), json!({}));
+        let sent = alerts(agent.feed("s", &stop, now));
+        assert_eq!(sent, Some((Some(Finished), false)));
+
+        // An interrupt: the user did it, so nothing alerts.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &hook("PermissionRequest", None, json!({})), now);
+        assert_eq!(alerts(agent.interrupt("s", now)), Some((None, false)));
+    }
+
+    #[test]
+    fn subagent_worktrees_leave_out_those_an_agent_runs_in() {
+        let now = Instant::now();
+        let with = |placed: &str, subagents: &[(&str, &str)]| {
+            let mut agent = Agent::new(1, now, 0);
+            agent.worktree = Some(placed.into());
+            for (id, cwd) in subagents {
+                let start = hook("SubagentStart", Some(id), json!({"cwd": cwd}));
+                agent.apply("s", &start, 0, now, &|cwd| Some(cwd.to_owned()));
+            }
+            agent
+        };
+        assert_eq!(subagent_worktrees([].iter()), Vec::<String>::new());
+        let agents = [
+            with(
+                "/r",
+                &[("a", "/r/b"), ("b", "/r/a"), ("c", "/r/c"), ("d", "/r")],
+            ),
+            with("/r/c", &[("e", "/r/b")]),
+        ];
+        assert_eq!(subagent_worktrees(agents.iter()), ["/r/a", "/r/b"]);
     }
 
     fn tool(name: &str, agent: Option<&str>, description: &str) -> AgentEvent {
@@ -970,6 +1119,8 @@ mod tests {
                 urgency: 3,
                 pending: false,
                 interrupted: false,
+                alert: None,
+                writing: true,
                 subagents: vec![SubagentState {
                     id: "a".into(),
                     agent_type: Some("Explore".into()),
@@ -977,6 +1128,7 @@ mod tests {
                     worktree: None,
                     activity: None,
                     since_ms: 0,
+                    writing: true,
                 }],
                 activity: None,
                 since_ms: 0,
@@ -1139,7 +1291,8 @@ mod tests {
         agent.watched = true;
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
         let sent = agent.feed("s", &hook("Stop", None, json!({})), now);
-        assert_eq!(sent, Some(agent.message("s")));
+        // Seen (not pending, below), yet it still finished: a tone and an inbox item.
+        assert_eq!(alerts(sent), Some((Some(Alert::Finished), false)));
         assert_eq!((shown(&agent).0, pending(&agent)), (WaitingYou, false));
         // Looking away later keeps it seen, and so do events that change nothing shown.
         agent.watched = false;
@@ -1239,39 +1392,97 @@ mod tests {
             Some(if own { "/r/w" } else { "/r" }.to_owned())
         };
         // Without the agent's own worktree nothing is placed.
-        assert!(agent.apply("s", &at("/r/w"), now, &place).is_some());
+        assert!(agent.apply("s", &at("/r/w"), 0, now, &place).is_some());
         assert_eq!((asked.get(), worktrees(&agent)), (0, vec![("a", None)]));
         agent.worktree = Some("/r".into());
         // In the agent's worktree: not its own; the same cwd is not placed twice.
-        assert_eq!(agent.apply("s", &at("/r/src"), now, &place), None);
-        assert_eq!(agent.apply("s", &at("/r/src"), now, &place), None);
+        assert_eq!(agent.apply("s", &at("/r/src"), 0, now, &place), None);
+        assert_eq!(agent.apply("s", &at("/r/src"), 0, now, &place), None);
         assert_eq!((asked.get(), worktrees(&agent)), (1, vec![("a", None)]));
-        let sent = agent.apply("s", &at("/r/w/src"), now, &place);
+        let sent = agent.apply("s", &at("/r/w/src"), 0, now, &place);
         assert_eq!(sent, Some(agent.message("s")));
         assert_eq!(worktrees(&agent), [("a", Some("/r/w"))]);
         // Once linked, it keeps it wherever it goes.
-        assert_eq!(agent.apply("s", &at("/r"), now, &place), None);
+        assert_eq!(agent.apply("s", &at("/r"), 0, now, &place), None);
         assert_eq!(asked.get(), 2);
         // Leaving forgets it all: back with the same cwd, it is placed again.
         agent.feed("s", &hook("SubagentStop", Some("a"), json!({})), now);
-        agent.apply("s", &at("/r/w/src"), now, &place);
+        agent.apply("s", &at("/r/w/src"), 0, now, &place);
         assert_eq!(
             (asked.get(), worktrees(&agent)),
             (3, vec![("a", Some("/r/w"))])
         );
         // A subagent without a cwd, or with one too long, is not placed.
         let b = |extra| hook("PreToolUse", Some("b"), extra);
-        agent.apply("s", &b(json!({})), now, &place);
+        agent.apply("s", &b(json!({})), 0, now, &place);
         let long = format!("/r/w/{}", "x".repeat(MAX_PATH));
-        agent.apply("s", &b(json!({"cwd": long})), now, &place);
+        agent.apply("s", &b(json!({"cwd": long})), 0, now, &place);
         assert_eq!(asked.get(), 3);
         let at_limit = &long[..MAX_PATH];
-        agent.apply("s", &b(json!({"cwd": at_limit})), now, &place);
+        agent.apply("s", &b(json!({"cwd": at_limit})), 0, now, &place);
         assert_eq!(asked.get(), 4);
         assert_eq!(
             worktrees(&agent),
             [("a", Some("/r/w")), ("b", Some("/r/w"))]
         );
+    }
+
+    #[test]
+    fn an_event_older_than_the_last_one_applied_does_not_change_the_state() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        let at = |agent: &mut Agent, event: &AgentEvent, sent| {
+            agent.apply("s", event, sent, now, &|_| None)
+        };
+        let edit = json!({"tool_name": "Edit", "tool_input": {"file_path": "/a"}});
+        let (pre, ask) = (
+            hook("PreToolUse", None, edit.clone()),
+            hook("PermissionRequest", None, edit),
+        );
+        // Sent in this order, delivered in reverse: the later one's state and activity win.
+        assert!(at(&mut agent, &ask, 20).is_some());
+        assert_eq!(at(&mut agent, &pre, 10), None);
+        assert_eq!(shown(&agent), (WaitingPermission, vec![]));
+        assert_eq!(agent.activity.as_deref(), Some("Editing /a"));
+        // The older one did not lower the bar; an event sent at the same time applies.
+        assert_eq!(at(&mut agent, &pre, 15), None);
+        at(&mut agent, &hook("PostToolUse", None, json!({})), 20);
+        assert_eq!(shown(&agent), (Working, vec![]));
+
+        // Each subagent has its own order: a's later event does not hold b's back, nor the
+        // agent's.
+        let sub = |name, id, extra| hook(name, Some(id), extra);
+        at(&mut agent, &sub("PermissionRequest", "a", json!({})), 50);
+        at(&mut agent, &sub("SubagentStart", "b", json!({})), 30);
+        at(&mut agent, &hook("Stop", None, json!({})), 40);
+        let subs = vec![("a".into(), WaitingPermission), ("b".into(), Working)];
+        assert_eq!(shown(&agent), (WaitingPermission, subs.clone()));
+        // A late event of a subagent changes neither its state nor its activity.
+        let bash = json!({"tool_name": "Bash", "tool_input": {"command": "ls"}});
+        assert_eq!(at(&mut agent, &sub("PreToolUse", "a", bash), 45), None);
+        assert_eq!(shown(&agent).1, subs);
+        assert_eq!(agent.subagents[0].activity, None);
+        // Nor wakes one that stopped to wait on its background task, which it still records.
+        at(&mut agent, &launched("b", "backgroundTaskId", "t1"), 31);
+        at(
+            &mut agent,
+            &stop_with("SubagentStop", Some("b"), &["t1"]),
+            35,
+        );
+        at(&mut agent, &launched("b", "backgroundTaskId", "t2"), 32);
+        assert!(agent.waiting.contains("b"));
+        at(&mut agent, &stop_with("Stop", None, &["t2"]), 60);
+        assert_eq!(shown(&agent).1[1], ("b".into(), Working));
+        // A subagent that left starts over.
+        at(
+            &mut agent,
+            &stop_with("SubagentStop", Some("a"), &["t2"]),
+            55,
+        );
+        assert!(!agent.stamps.contains_key(&Some("a".into())));
+        at(&mut agent, &sub("PreToolUse", "a", json!({})), 1);
+        let subs = vec![("b".into(), Working), ("a".into(), Working)];
+        assert_eq!(shown(&agent).1, subs);
     }
 
     /// `PostToolUse` of a subagent's tool that started background task `task` under `key`.

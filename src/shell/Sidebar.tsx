@@ -155,12 +155,10 @@ function ProjectNode({ project }: { project: Project }) {
     Object.values(useHive((s) => s.agents)),
     useHive((s) => s.agentOrder),
   );
-  const states = Object.values(useHive((s) => s.agentStates));
-  // A subagent's own worktree shows as its parent row instead (#22), unless an agent runs there.
-  const owned = new Set(states.flatMap((st) => st.subagents.map((sub) => sub.worktree)));
-  const shown = project.worktrees.filter(
-    (w) => !owned.has(w.id) || agents.some((a) => a.worktree === w.id),
-  );
+  // A subagent's own worktree shows as its parent row instead (#22); the service leaves out
+  // those an agent runs in.
+  const owned = useHive((s) => s.subagentWorktrees);
+  const shown = project.worktrees.filter((w) => !owned.includes(w.id));
   return (
     <li>
       <div

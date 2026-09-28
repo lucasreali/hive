@@ -9,7 +9,7 @@ bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 hive-protocol = { version = "0.1.0", path = "../hive-protocol" }
-nix = { version = "0.31.3", features = ["signal", "user", "process", "fs"] }
+nix = { version = "0.31.3", features = ["signal", "user", "process", "fs", "time"] }
 notify = "8.2.0"
 pty-process = { version = "0.5.3", features = ["async"] }
 serde = { version = "1.0.229", features = ["derive"] }

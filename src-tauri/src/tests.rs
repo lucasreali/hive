@@ -307,11 +307,12 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
     };
     assert_eq!(service.control().await, (1, open));
 
-    service.send(1, Control::TerminalOpened).await;
+    let worktree = Some("/w".into());
+    service.send(1, Control::TerminalOpened { worktree }).await;
     service.writer.send(Frame::terminal(1, "$ ")).await.unwrap();
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "terminal_opened", "channel": 1})
+        json!({"type": "terminal_opened", "channel": 1, "worktree": "/w"})
     );
     assert_eq!(next(&mut bytes).await, b"$ ");
 
@@ -328,7 +329,9 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
 
     // Nothing reaches the UI for a channel it did not open; channel 0 always does.
     service.writer.send(Frame::terminal(7, "x")).await.unwrap();
-    service.send(7, Control::TerminalOpened).await;
+    service
+        .send(7, Control::TerminalOpened { worktree: None })
+        .await;
     let error = Control::Error {
         message: "m".into(),
     };
@@ -840,18 +843,36 @@ async fn a_malformed_stream_disconnects_with_the_protocol_error() {
         next(&mut rx).await,
         json!({"type": "disconnected", "reason": "unknown frame type 9"})
     );
+}
 
+#[tokio::test]
+async fn a_control_message_it_cannot_read_is_skipped() {
     let (_hive, mut service, mut rx) = welcomed().await;
-    service
-        .writer
-        .get_mut()
-        .write_all(&[0, 0, 0, 0, 0, 0, 0, 0, 1, b'{'])
-        .await
-        .unwrap();
-    let message = next(&mut rx).await;
-    assert_eq!(message["type"], "disconnected");
-    let reason = message["reason"].as_str().unwrap();
-    assert!(reason.starts_with("invalid control message"), "{reason}");
+    for payload in [&b"{"[..], b"[1]", br#"{"type":7}"#] {
+        let frame = Frame {
+            kind: FrameType::Control,
+            channel: 0,
+            payload: payload.to_vec().into(),
+        };
+        service.writer.send(frame).await.unwrap();
+    }
+    // The connection stays up and the next message arrives as the service sent it, even one
+    // this side does not know.
+    service.send(0, Control::ListSessions).await;
+    let raw = Frame {
+        kind: FrameType::Control,
+        channel: 0,
+        payload: br#"{"type":"newer","n":1}"#.to_vec().into(),
+    };
+    service.writer.send(raw).await.unwrap();
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "list_sessions", "channel": 0})
+    );
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "newer", "n": 1, "channel": 0})
+    );
 }
 
 /// A `Hive` whose bridge is `sh -c <script>`.

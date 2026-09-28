@@ -209,9 +209,9 @@ test("about shows both versions, the service's diagnostics and terminals without
   open();
   const ask = spyOn(transport, "getDiagnostics");
   act(() => {
-    apply({ type: "terminal_opened", channel: 3 });
+    apply({ type: "terminal_opened", channel: 3, worktree: null });
     apply({ type: "unhooked_agent", channel: 3 });
-    apply({ type: "terminal_opened", channel: 4 });
+    apply({ type: "terminal_opened", channel: 4, worktree: null });
     apply({ type: "unhooked_agent", channel: 4 });
     apply({ type: "terminal_exited", channel: 4, code: 0 });
   });

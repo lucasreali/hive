@@ -238,8 +238,9 @@ impl Conn {
             .unwrap();
     }
 
-    /// Opens a terminal in `cwd` and waits until it is running.
-    pub async fn open_terminal(&mut self, channel: u32, cwd: &std::path::Path) {
+    /// Opens a terminal in `cwd`, waits until it is running and returns the worktree the
+    /// service placed it in.
+    pub async fn open_terminal(&mut self, channel: u32, cwd: &std::path::Path) -> Option<String> {
         let cwd = cwd.to_string_lossy().into_owned();
         self.send(
             channel,
@@ -250,7 +251,10 @@ impl Conn {
             },
         )
         .await;
-        assert_eq!(self.control().await, (channel, Control::TerminalOpened));
+        match self.control().await {
+            (at, Control::TerminalOpened { worktree }) if at == channel => worktree,
+            other => panic!("expected terminal {channel} to open, got {other:?}"),
+        }
     }
 
     /// Collects the terminal's output until it contains `needle`, skipping control frames.

@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{Control, EventKind, Role};
+use hive_protocol::{Control, Role};
 use serde_json::{Value, json};
 
 use crate::common::Env;
@@ -27,21 +27,23 @@ fn hook(env: &Env, args: &[&str], stdin: &[u8]) -> Output {
 }
 
 #[tokio::test]
-async fn hook_call_reaches_the_app_and_prints_nothing() {
+async fn hook_call_reaches_the_service_and_prints_nothing() {
     let env = Env::new();
     let mut daemon = env.daemon();
     let mut app = env.app().await;
-    let payload = json!({"session_id": "s", "cwd": "/w", "hook_event_name": "Stop"});
-    let out = hook(&env, &["Stop"], payload.to_string().as_bytes());
+    app.open_terminal(9, &env.path("home")).await;
+    let payload = json!({"session_id": "s", "cwd": "/w", "hook_event_name": "SessionStart"});
+    let out = hook(&env, &["SessionStart"], payload.to_string().as_bytes());
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
     assert!(out.stderr.is_empty());
-    let (_, Control::Agent(event)) = app.control().await else {
-        panic!("expected an agent event")
+    let detected = Control::AgentDetected {
+        id: "s".into(),
+        project: None,
+        worktree: None,
+        cwd: Some("/w".into()),
     };
-    assert_eq!(event.kind, EventKind::TurnFinished);
-    assert_eq!(event.terminal_id.as_deref(), Some("9"));
-    assert_eq!(event.raw, payload);
+    assert_eq!(app.control().await, (9, detected));
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -128,7 +130,9 @@ async fn badge_reaches_the_app_on_its_terminal_cleaned_and_cut() {
     // A hook connection that closes after its hello, or sends garbage, forwards nothing.
     drop(env.connect(Role::Hook).await);
     let mut garbage = env.connect(Role::Hook).await;
-    garbage.send(1, Control::TerminalOpened).await;
+    garbage
+        .send(1, Control::TerminalOpened { worktree: None })
+        .await;
     drop(garbage);
     // Not an open terminal: dropped.
     assert!(badge(&env, Some("9"), &["ignored"]).status.success());

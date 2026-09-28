@@ -106,6 +106,7 @@ test("a scenario fails the connection instead", async () => {
         "spaces",
         "projects",
         ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state", "agent_usage"]),
+        "subagent_worktrees",
       ],
     ],
   ] as const) {
@@ -125,6 +126,9 @@ test("states: shop also lists the worktree a subagent owns", async () => {
   expect(shop?.worktrees.map((w) => w.id).at(-1)).toBe(MOCK_OWN_WORKTREE);
   const owners = MOCK_STATES.flatMap(([, , subs]) => subs).filter((s) => s.worktree);
   expect(owners.map((s) => [s.id, s.worktree])).toEqual([["a3", MOCK_OWN_WORKTREE]]);
+  // No agent runs there, so it shows under its subagent only.
+  const owned = { type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] };
+  expect(messages.at(-1)).toEqual(owned as ServiceMessage);
   // Other scenarios keep the fake repositories as they are.
   expect(MOCK_REPOS[0].worktrees.map((w) => w.id)).not.toContain(MOCK_OWN_WORKTREE);
 });
@@ -171,7 +175,7 @@ test("projects are added from the fake repositories only", async () => {
 test("a terminal prints a prompt, echoes input and repeats the line", async () => {
   const { transport, messages, id, output } = await opened();
   expect(id).toBe(1);
-  expect(messages.at(-1)).toEqual({ type: "terminal_opened", channel: 1 });
+  expect(messages.at(-1)).toEqual({ type: "terminal_opened", channel: 1, worktree: null });
   expect(output()).toBe("mock$ ");
   await transport.writeTerminal(id, "hi\r\r");
   expect(output()).toBe("mock$ hi\r\nhi\r\nmock$ \r\nmock$ ");
@@ -206,6 +210,11 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   await tick();
   const fixLogin = `${shop.path}/.claude/worktrees/fix-login`;
   const agent = { type: "agent_detected", channel: id, id: "mock-session-1" } as const;
+  // Its terminal is placed in the deepest worktree holding its folder.
+  const inside = await transport.openTerminal(`${fixLogin}/src`, 80, 24, () => {});
+  await tick();
+  const placed = { type: "terminal_opened", channel: inside, worktree: fixLogin };
+  expect(messages).toContainEqual(placed as ServiceMessage);
   const state = (state: AgentState, activity: string | null = null): ServiceMessage => ({
     type: "agent_state",
     id: agent.id,
@@ -222,12 +231,16 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
     state("idle"),
   ]);
   // `state <state>` moves it there after the line set it working; an unknown state does not.
-  await transport.writeTerminal(id, "state error\rstate bogus\r");
+  // Entering a state that waits for the user alerts; working → waiting for you finished.
+  await transport.writeTerminal(id, "state error\rstate bogus\rstate waiting_you\r");
   await tick();
-  expect(messages.slice(-3).map((m) => m.type === "agent_state" && m.state)).toEqual([
-    "working",
-    "error",
-    "working",
+  const alerts = messages.slice(-5).map((m) => m.type === "agent_state" && [m.state, m.alert]);
+  expect(alerts).toEqual([
+    ["working", null],
+    ["error", "waiting"],
+    ["working", null],
+    ["working", null],
+    ["waiting_you", "finished"],
   ]);
   await transport.writeTerminal(id, "exit\r");
   await tick();
@@ -285,17 +298,17 @@ test("agent states carry the service's urgency and pending flag", () => {
     "waiting_plan",
     "waiting_permission",
   ] as const;
-  const doing = { activity: null, since_ms: 0 };
+  const doing = { activity: null, since_ms: 0, interrupted: false, alert: null };
   expect([...calm, ...pending].map((s) => agentStatus(s))).toEqual([
-    { state: "ended", urgency: 0, pending: false, interrupted: false, ...doing },
-    { state: "idle", urgency: 1, pending: false, interrupted: false, ...doing },
-    { state: "working", urgency: 2, pending: false, interrupted: false, ...doing },
-    { state: "with_subagents", urgency: 3, pending: false, interrupted: false, ...doing },
-    { state: "waiting_you", urgency: 4, pending: true, interrupted: false, ...doing },
-    { state: "error", urgency: 5, pending: true, interrupted: false, ...doing },
-    { state: "waiting_answer", urgency: 6, pending: true, interrupted: false, ...doing },
-    { state: "waiting_plan", urgency: 7, pending: true, interrupted: false, ...doing },
-    { state: "waiting_permission", urgency: 8, pending: true, interrupted: false, ...doing },
+    { state: "ended", urgency: 0, pending: false, writing: false, ...doing },
+    { state: "idle", urgency: 1, pending: false, writing: false, ...doing },
+    { state: "working", urgency: 2, pending: false, writing: true, ...doing },
+    { state: "with_subagents", urgency: 3, pending: false, writing: true, ...doing },
+    { state: "waiting_you", urgency: 4, pending: true, writing: false, ...doing },
+    { state: "error", urgency: 5, pending: true, writing: false, ...doing },
+    { state: "waiting_answer", urgency: 6, pending: true, writing: true, ...doing },
+    { state: "waiting_plan", urgency: 7, pending: true, writing: true, ...doing },
+    { state: "waiting_permission", urgency: 8, pending: true, writing: true, ...doing },
   ]);
   expect(agentStatus("working", "Run tests", 7)).toMatchObject({
     activity: "Run tests",
