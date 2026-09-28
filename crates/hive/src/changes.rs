@@ -321,8 +321,8 @@ pub fn totals(dir: &Path, entries: &[Entry], counts: &Counts) -> Totals {
     };
     for entry in entries {
         let (added, removed) = lines(dir, entry, counts, &mut budget);
-        totals.added += added.unwrap_or(0);
-        totals.removed += removed.unwrap_or(0);
+        totals.added = totals.added.saturating_add(added.unwrap_or(0));
+        totals.removed = totals.removed.saturating_add(removed.unwrap_or(0));
     }
     totals
 }
@@ -377,14 +377,7 @@ pub fn count_lines(path: &Path, budget: &mut u64) -> Option<u64> {
         return None;
     };
     *budget = left;
-    // Never waits: a FIFO put in its place since it was measured opens at once and reads as
-    // empty or fails, where a blocking open would wait for a writer forever.
-    let nonblocking = nix::fcntl::OFlag::O_NONBLOCK.bits();
-    let open = OpenOptions::new()
-        .read(true)
-        .custom_flags(nonblocking)
-        .open(path);
-    let mut file = open.ok()?;
+    let mut file = open_nonblocking(path).ok()?;
     // Its size as it was measured: a file still growing is counted next time.
     let bytes = read_limited(&mut file, meta.len()).ok()?;
     if bytes[..bytes.len().min(BINARY_PROBE)].contains(&0) {
@@ -393,6 +386,16 @@ pub fn count_lines(path: &Path, budget: &mut u64) -> Option<u64> {
     let lines = bytes.iter().filter(|&&b| b == b'\n').count();
     let unterminated = bytes.last().is_some_and(|&b| b != b'\n');
     Some((lines + usize::from(unterminated)) as u64)
+}
+
+/// Opens `path` for reading without ever waiting: a FIFO swapped in for a measured file opens
+/// at once and reads as empty or fails, where a blocking open would wait for a writer forever.
+fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
+    let nonblocking = nix::fcntl::OFlag::O_NONBLOCK.bits();
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(nonblocking)
+        .open(path)
 }
 
 fn os(path: &[u8]) -> &OsStr {
@@ -507,6 +510,21 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
         assert_eq!(count_lines(&fifo, &mut budget), None);
         assert_eq!(budget, 10);
+    }
+
+    #[test]
+    fn a_fifo_opens_and_reads_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        // On another thread, so a blocking open fails the test instead of hanging it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let read = open_nonblocking(&fifo).and_then(|mut f| read_limited(&mut f, 10));
+            tx.send(read.map_err(|e| e.to_string())).unwrap();
+        });
+        let read = rx.recv_timeout(std::time::Duration::from_secs(5));
+        assert_eq!(read, Ok(Ok(vec![])), "no writer: empty, at once");
     }
 
     #[test]
