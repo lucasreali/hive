@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { OpenPull, PullBusy, PullDetail, PullError, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
+import type { JobLog, OpenRun, RunBusy, RunDetail, RunError, Runs } from "./runs";
 import {
   type EditBuffer,
   failed,
@@ -58,6 +59,11 @@ export type ServiceMessage =
   | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
   | { type: "pull_done"; project: string; number: number; message: string }
   | { type: "pull_failed"; project: string; number: number | null; message: string }
+  | ({ type: "runs" } & Runs)
+  | { type: "run"; project: string; run: number; detail: RunDetail | null; error: string | null }
+  | ({ type: "job_log" } & JobLog)
+  | { type: "run_done"; project: string; run: number; message: string }
+  | { type: "run_failed"; project: string; run: number; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -555,7 +561,9 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView = "files" | "changes" | "sessions" | "pulls";
+export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions";
+/** The key of a project's Actions runs on `branch` (all branches: null) in `HiveState.runs`. */
+export const runsKey = (project: string, branch: string | null) => `${project}\n${branch ?? ""}`;
 
 export type HiveState = {
   // UI state
@@ -703,6 +711,13 @@ export type HiveState = {
   openPull: OpenPull | null;
   pullBusy: PullBusy | null;
   pullError: PullError | null;
+  /** The last `runs` of each project and branch filter, by `runsKey` (9.32). */
+  runs: Record<string, Runs>;
+  /** The run whose jobs the Actions view shows, or null for the list. */
+  openRun: OpenRun | null;
+  jobLog: JobLog | null;
+  runBusy: RunBusy | null;
+  runError: RunError | null;
 };
 
 export const initialState: HiveState = {
@@ -783,6 +798,11 @@ export const initialState: HiveState = {
   openPull: null,
   pullBusy: null,
   pullError: null,
+  runs: {},
+  openRun: null,
+  jobLog: null,
+  runBusy: null,
+  runError: null,
 };
 
 // Side panel widths: UI preferences, kept in the window's storage between runs.
@@ -1153,6 +1173,26 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "pull_failed": {
       const { type: _, ...pullError } = m;
       return { pullBusy: null, pullError };
+    }
+    case "runs": {
+      const { type: _, ...runs } = m;
+      return { runs: { ...s.runs, [runsKey(m.project, m.branch)]: runs } };
+    }
+    case "run": {
+      const shown = s.openRun;
+      if (shown?.project !== m.project || shown.run !== m.run) return {};
+      return { openRun: { ...shown, detail: m.detail, error: m.error } };
+    }
+    case "job_log": {
+      const shown = s.jobLog;
+      if (shown?.project !== m.project || shown.job !== m.job) return {};
+      return { jobLog: { ...shown, log: m.log, error: m.error } };
+    }
+    case "run_done":
+      return { runBusy: null, runError: null, notice: m.message };
+    case "run_failed": {
+      const { type: _, ...runError } = m;
+      return { runBusy: null, runError };
     }
     case "gh_accounts": {
       const { type: _, ...accounts } = m;

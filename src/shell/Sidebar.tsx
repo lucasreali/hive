@@ -46,6 +46,7 @@ import {
   StateIcon,
 } from "./icons";
 import { PullBadge, usePullBadges } from "./PullsView";
+import { RunBadge, useRunBadges } from "./RunsView";
 import { ResizeHandle } from "./resize";
 
 /**
@@ -80,7 +81,9 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
 export function Sidebar() {
   const list = useHive(useShallow(spaceProjects));
   const width = useHive((s) => s.sidebarWidth);
-  usePullBadges(list.map((p) => p.id));
+  const ids = list.map((p) => p.id);
+  usePullBadges(ids);
+  useRunBadges(ids);
   return (
     <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree} style={{ width }}>
       <ResizeHandle side="sidebar" />
@@ -279,6 +282,7 @@ const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Wor
         </button>
         {w.status && <Health status={w.status} />}
         <PullBadge worktree={w.id} />
+        <RunBadge worktree={w.id} />
         {/* After the badges, in the row's right column of indicators (7.13). */}
         {!open && <Rollup agents={(a) => a.worktree === w.id} />}
         <button

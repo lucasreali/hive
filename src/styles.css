@@ -3200,3 +3200,51 @@ button.link:hover {
 .pull-badge:hover {
   text-decoration: underline;
 }
+
+/* The Actions view (9.32): a run's jobs, their steps and a failed job's log tail. */
+.run-job summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  cursor: pointer;
+}
+
+.run-job summary .label {
+  flex: 1;
+  min-width: 0;
+}
+
+.run-steps {
+  margin: 0;
+  padding: 0 0 4px 20px;
+  list-style: none;
+}
+
+.run-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  color: var(--text-2);
+}
+
+.run-log {
+  max-height: 320px;
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.run-badge {
+  /* The last indicator: it ends on the right column, as `.health` and a rollup (7.13). */
+  margin-right: 6px;
+  font-size: var(--fs-meta);
+}

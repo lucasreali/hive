@@ -35,6 +35,10 @@ export const tauriTransport: Transport = {
   actOnPull: (project, number, action) => send("act_on_pull", { project, number, action }),
   createPull: (worktree, title, body, base, draft) =>
     send("create_pull", { worktree, title, body, base, draft }),
+  listRuns: (project, branch, force) => send("list_runs", { project, branch, force }),
+  openRun: (project, run) => send("open_run", { project, run }),
+  openJobLog: (project, job) => send("open_job_log", { project, job }),
+  actOnRun: (project, run, action, branch) => send("act_on_run", { project, run, action, branch }),
   listDirs: (path, windows) => send("list_dirs", { path, windows }),
   listBranches: (project) => send("list_branches", { project }),
   validateWorktreeName: (project, name) => send("validate_worktree_name", { project, name }),

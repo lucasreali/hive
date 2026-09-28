@@ -197,6 +197,8 @@ struct State {
     asking_path: std::sync::atomic::AtomicBool,
     /// The pull requests lists fetched (9.31).
     pulls: std::sync::Mutex<crate::pulls::Cache>,
+    /// The Actions runs lists fetched (9.32).
+    runs: std::sync::Mutex<crate::pulls::Cache>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -236,6 +238,7 @@ impl State {
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
             pulls: Default::default(),
+            runs: Default::default(),
         }
     }
 
@@ -702,14 +705,23 @@ impl State {
         });
     }
 
-    /// Answers a request of the pull requests view (9.31) off the frame loop: `gh` asks
-    /// GitHub.
-    fn pulls(self: &Arc<Self>, request: Control) {
+    /// Answers a request of the pull requests (9.31) or Actions (9.32) view off the frame
+    /// loop: `gh` asks GitHub.
+    fn github(self: &Arc<Self>, request: Control) {
         let state = self.clone();
         tokio::spawn(async move {
             let gh = state.gh().await;
             let replies = tokio::task::block_in_place(|| {
-                let mut replies = crate::pulls::answer(&gh, &state.projects, &state.pulls, request);
+                let projects = &state.projects;
+                let mut replies = match request {
+                    Control::ListRuns { .. }
+                    | Control::OpenRun { .. }
+                    | Control::OpenJobLog { .. }
+                    | Control::ActOnRun { .. } => {
+                        crate::actions::answer(&gh, projects, &state.runs, request)
+                    }
+                    _ => crate::pulls::answer(&gh, projects, &state.pulls, request),
+                };
                 replies
                     .iter_mut()
                     .for_each(|reply| state.with_health(reply));
@@ -1239,8 +1251,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             request @ (Control::ListPulls { .. }
             | Control::OpenPull { .. }
             | Control::ActOnPull { .. }
-            | Control::CreatePull { .. }),
-        ) => state.pulls(request),
+            | Control::CreatePull { .. }
+            | Control::ListRuns { .. }
+            | Control::OpenRun { .. }
+            | Control::OpenJobLog { .. }
+            | Control::ActOnRun { .. }),
+        ) => state.github(request),
         Ok(Control::ListBranches { project }) => state.projects(move |projects| {
             let (branches, error) = match projects.branches(&project) {
                 Ok(branches) => (branches, None),

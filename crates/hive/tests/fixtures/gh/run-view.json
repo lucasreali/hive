@@ -1,0 +1,230 @@
+{
+ "conclusion": "failure",
+ "createdAt": "2026-09-27T10:27:47Z",
+ "databaseId": 36312609118,
+ "displayTitle": "mutants-full",
+ "event": "schedule",
+ "headBranch": "main",
+ "headSha": "78a109ffef54b76e5fb6fc0615ad68374afb7776",
+ "jobs": [
+  {
+   "completedAt": "2026-09-27T10:27:59Z",
+   "conclusion": "success",
+   "databaseId": 108601308599,
+   "name": "mutants / plan",
+   "startedAt": "2026-09-27T10:27:50Z",
+   "status": "completed",
+   "steps": [
+    {
+     "conclusion": "success",
+     "name": "Set up job",
+     "number": 1,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run actions/checkout@v6",
+     "number": 2,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run dtolnay/rust-toolchain@stable",
+     "number": 3,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run taiki-e/install-action@v2",
+     "number": 4,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run args=()",
+     "number": 5,
+     "status": "completed"
+    },
+    {
+     "conclusion": "skipped",
+     "name": "Run actions/upload-artifact@v6",
+     "number": 6,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Post Run actions/checkout@v6",
+     "number": 12,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Complete job",
+     "number": 13,
+     "status": "completed"
+    }
+   ],
+   "url": "https://github.com/o/r/actions/runs/36312609118/job/108601308599"
+  },
+  {
+   "completedAt": "2026-09-27T10:52:38Z",
+   "conclusion": "failure",
+   "databaseId": 108601869461,
+   "name": "mutants / shard (17)",
+   "startedAt": "2026-09-27T10:31:38Z",
+   "status": "completed",
+   "steps": [
+    {
+     "conclusion": "success",
+     "name": "Set up job",
+     "number": 1,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run actions/checkout@v6",
+     "number": 2,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run rui314/setup-mold@v1",
+     "number": 3,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run ./.github/actions/setup-rust",
+     "number": 4,
+     "status": "completed"
+    },
+    {
+     "conclusion": "skipped",
+     "name": "Run actions/download-artifact@v6",
+     "number": 5,
+     "status": "completed"
+    },
+    {
+     "conclusion": "failure",
+     "name": "Run args=()",
+     "number": 6,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run actions/upload-artifact@v6",
+     "number": 7,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Post Run ./.github/actions/setup-rust",
+     "number": 13,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Post Run actions/checkout@v6",
+     "number": 14,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Complete job",
+     "number": 15,
+     "status": "completed"
+    }
+   ],
+   "url": "https://github.com/o/r/actions/runs/36312609118/job/108601869461"
+  },
+  {
+   "completedAt": "2026-09-27T10:54:42Z",
+   "conclusion": "failure",
+   "databaseId": 108605218694,
+   "name": "mutants / gather",
+   "startedAt": "2026-09-27T10:54:29Z",
+   "status": "completed",
+   "steps": [
+    {
+     "conclusion": "success",
+     "name": "Set up job",
+     "number": 1,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run actions/download-artifact@v6",
+     "number": 2,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run mkdir -p mutants.out shards",
+     "number": 3,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run actions/upload-artifact@v6",
+     "number": 4,
+     "status": "completed"
+    },
+    {
+     "conclusion": "failure",
+     "name": "Run # Every shard that ran to the end wrote its `outcomes.json`.",
+     "number": 5,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Complete job",
+     "number": 6,
+     "status": "completed"
+    }
+   ],
+   "url": "https://github.com/o/r/actions/runs/36312609118/job/108605218694"
+  },
+  {
+   "completedAt": "2026-09-27T10:54:52Z",
+   "conclusion": "success",
+   "databaseId": 108605255129,
+   "name": "report",
+   "startedAt": "2026-09-27T10:54:44Z",
+   "status": "completed",
+   "steps": [
+    {
+     "conclusion": "success",
+     "name": "Set up job",
+     "number": 1,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run actions/download-artifact@v6",
+     "number": 2,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Run title=\"Nightly mutation testing: surviving mutants\"",
+     "number": 3,
+     "status": "completed"
+    },
+    {
+     "conclusion": "success",
+     "name": "Complete job",
+     "number": 4,
+     "status": "completed"
+    }
+   ],
+   "url": "https://github.com/o/r/actions/runs/36312609118/job/108605255129"
+  }
+ ],
+ "name": "mutants-full",
+ "number": 1,
+ "startedAt": "2026-09-27T10:27:47Z",
+ "status": "completed",
+ "updatedAt": "2026-09-27T10:54:53Z",
+ "url": "https://github.com/o/r/actions/runs/36312609118",
+ "workflowName": "mutants-full"
+}

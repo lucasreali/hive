@@ -589,6 +589,35 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         draft: true,
     };
     assert_eq!(service.control().await, (0, create));
+    hive.list_runs("/r".into(), Some("b".into()), true).unwrap();
+    let list = Control::ListRuns {
+        project: "/r".into(),
+        branch: Some("b".into()),
+        force: true,
+    };
+    assert_eq!(service.control().await, (0, list));
+    hive.open_run("/r".into(), 9).unwrap();
+    let open = Control::OpenRun {
+        project: "/r".into(),
+        run: 9,
+    };
+    assert_eq!(service.control().await, (0, open));
+    hive.open_job_log("/r".into(), 4).unwrap();
+    let log = Control::OpenJobLog {
+        project: "/r".into(),
+        job: 4,
+    };
+    assert_eq!(service.control().await, (0, log));
+    let rerun = RunAction::Rerun { failed: true };
+    hive.act_on_run("/r".into(), 9, rerun.clone(), None)
+        .unwrap();
+    let act = Control::ActOnRun {
+        project: "/r".into(),
+        run: 9,
+        action: rerun,
+        branch: None,
+    };
+    assert_eq!(service.control().await, (0, act));
     hive.open_settings_file().unwrap();
     assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
     hive.get_diagnostics().unwrap();
@@ -798,6 +827,11 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     let create = hive.create_pull("/r".into(), "t".into(), String::new(), "m".into(), false);
     assert_eq!(create, not_connected);
+    assert_eq!(hive.list_runs("/r".into(), None, false), not_connected);
+    assert_eq!(hive.open_run("/r".into(), 1), not_connected);
+    assert_eq!(hive.open_job_log("/r".into(), 1), not_connected);
+    let cancel = hive.act_on_run("/r".into(), 1, RunAction::Cancel, None);
+    assert_eq!(cancel, not_connected);
     assert_eq!(hive.open_settings_file(), not_connected);
     assert_eq!(hive.get_diagnostics(), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
@@ -1024,6 +1058,10 @@ fn commands_reach_the_managed_hive() {
             open_pull,
             act_on_pull,
             create_pull,
+            list_runs,
+            open_run,
+            open_job_log,
+            act_on_run,
             open_settings_file,
             get_diagnostics
         ])
@@ -1083,6 +1121,11 @@ fn commands_reach_the_managed_hive() {
     let list_pulls = json!({"project": "/r", "force": false});
     let open_pull = json!({"project": "/r", "number": 7});
     let act_on_pull = json!({"project": "/r", "number": 7, "action": {"kind": "checkout"}});
+    let list_runs = json!({"project": "/r", "branch": "b", "force": false});
+    let open_run = json!({"project": "/r", "run": 9});
+    let open_job_log = json!({"project": "/r", "job": 4});
+    let act_on_run =
+        json!({"project": "/r", "run": 9, "action": {"kind": "cancel"}, "branch": null});
     let create_pull =
         json!({"worktree": "/r/w", "title": "t", "body": "", "base": "main", "draft": false});
     for (cmd, args) in [
@@ -1121,6 +1164,10 @@ fn commands_reach_the_managed_hive() {
         ("open_pull", &open_pull),
         ("act_on_pull", &act_on_pull),
         ("create_pull", &create_pull),
+        ("list_runs", &list_runs),
+        ("open_run", &open_run),
+        ("open_job_log", &open_job_log),
+        ("act_on_run", &act_on_run),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
     ] {
@@ -1179,6 +1226,10 @@ fn commands_reach_the_managed_hive() {
         ("open_pull", open_pull),
         ("act_on_pull", act_on_pull),
         ("create_pull", create_pull),
+        ("list_runs", list_runs),
+        ("open_run", open_run),
+        ("open_job_log", open_job_log),
+        ("act_on_run", act_on_run),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

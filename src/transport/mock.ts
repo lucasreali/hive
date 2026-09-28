@@ -19,6 +19,7 @@ import type {
 import { DEFAULT_SETTINGS } from "../store";
 import type { Transport } from ".";
 import { createMockPulls } from "./mockPulls";
+import { createMockRuns } from "./mockRuns";
 import { loadReplay, type ReplayEvent } from "./replay";
 
 const PROMPT = "mock$ ";
@@ -616,6 +617,7 @@ export function createMockTransport(
   };
   const holder = (path: string) => projects.find((p) => p.worktrees.some((w) => w.path === path));
   const pulls = createMockPulls(later, (path) => holder(path)?.id ?? null);
+  const runs = createMockRuns(later);
   // As `Projects::linked`: only a linked worktree of a followed project.
   const linkedRefusal = (path: string) => {
     if (!holder(path)) return `${path} is not a worktree of a followed project`;
@@ -787,6 +789,10 @@ export function createMockTransport(
       pulls.act(project, number, action);
     },
     createPull: pulls.createPull,
+    listRuns: runs.listRuns,
+    openRun: runs.openRun,
+    openJobLog: runs.openJobLog,
+    actOnRun: runs.actOnRun,
     async selectSpace(id) {
       changeSpaces(() => {
         if (!space(id)) return `no space "${id}"`;
