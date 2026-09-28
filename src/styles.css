@@ -2654,13 +2654,17 @@ button.result-file:hover,
   color: var(--text-3);
 }
 
-/* Placed by the list's virtualizer. */
 .session {
+  position: relative;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Placed by the Sessions list's virtualizer (the pull requests list reuses `.session`). */
+.sessions .session {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .session:hover {
