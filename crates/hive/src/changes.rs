@@ -519,12 +519,13 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
         // On another thread, so a blocking open fails the test instead of hanging it.
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let read = open_nonblocking(&fifo).and_then(|mut f| read_limited(&mut f, 10));
-            tx.send(read.map_err(|e| e.to_string())).unwrap();
+        let reader = std::thread::spawn(move || {
+            let file = open_nonblocking(&fifo);
+            tx.send(file.and_then(|mut f| read_limited(&mut f, 10)).ok())
         });
         let read = rx.recv_timeout(std::time::Duration::from_secs(5));
-        assert_eq!(read, Ok(Ok(vec![])), "no writer: empty, at once");
+        assert_eq!(read, Ok(Some(vec![])), "no writer: empty, at once");
+        assert!(reader.join().unwrap().is_ok());
     }
 
     #[test]
