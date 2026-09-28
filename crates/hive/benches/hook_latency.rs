@@ -1,5 +1,6 @@
-//! Hook latency: time from starting `hive hook` until its event reaches the app
-//! connection (the service forwards it right after receiving it). Target: p99 < 20 ms.
+//! Hook latency: time from starting `hive hook` until the service has handled its event, seen
+//! on the app connection as the `agent_detected` a `SessionStart` from a terminal gives.
+//! Target: p99 < 20 ms.
 //! Run with `cargo bench -p hive --bench hook_latency`; exits non-zero above the target.
 
 use std::error::Error;
@@ -49,20 +50,36 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .send(Frame::control(0, &Control::hello(Role::App, hive::VERSION)))
         .await?;
     from_daemon.next().await.ok_or("no welcome")??;
+    let open = Control::OpenTerminal {
+        cwd: dir.path().join("home").display().to_string(),
+        cols: 80,
+        rows: 24,
+    };
+    to_daemon.send(Frame::control(1, &open)).await?;
+    loop {
+        let frame = from_daemon.next().await.ok_or("service closed")??;
+        if matches!(frame.to_control(), Ok(Control::TerminalOpened)) {
+            break;
+        }
+    }
 
-    let payload =
-        br#"{"session_id":"bench","cwd":"/tmp","hook_event_name":"PreToolUse","tool_name":"Bash"}"#;
     let mut samples = Vec::with_capacity(RUNS);
-    for _ in 0..RUNS {
+    for run in 0..RUNS {
+        // A new session each time, so each call is announced.
+        let payload = format!(r#"{{"session_id":"bench-{run}","cwd":"/tmp"}}"#);
         let start = Instant::now();
         let mut hook = hive(dir.path())
-            .args(["hook", "PreToolUse"])
+            .args(["hook", "SessionStart"])
+            .env("HIVE_TERMINAL_ID", "1")
             .stdin(Stdio::piped())
             .spawn()?;
-        hook.stdin.take().ok_or("no stdin")?.write_all(payload)?;
+        hook.stdin
+            .take()
+            .ok_or("no stdin")?
+            .write_all(payload.as_bytes())?;
         loop {
             let frame = from_daemon.next().await.ok_or("service closed")??;
-            if matches!(frame.to_control(), Ok(Control::Agent(_))) {
+            if matches!(frame.to_control(), Ok(Control::AgentDetected { .. })) {
                 break;
             }
         }

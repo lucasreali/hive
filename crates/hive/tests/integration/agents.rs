@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use crate::common::Conn;
 use crate::worktree::Repo;
 
-/// Runs `hive hook <event>` from terminal `terminal`, like Claude Code does, and returns the
-/// app's messages up to the forwarded event (so the service has handled the call).
+/// Sends a hook call from terminal `terminal` as `hive hook <event>` does, and returns the
+/// app's messages up to the point the service has handled it.
 pub(crate) async fn hook(
     repo: &Repo,
     app: &mut Conn,
@@ -17,27 +17,40 @@ pub(crate) async fn hook(
     event: &str,
     payload: Value,
 ) -> Vec<(u32, Control)> {
-    let mut child = repo
-        .env
-        .hive()
-        .args(["hook", event])
-        .env("HIVE_TERMINAL_ID", terminal)
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    stdin.write_all(payload.to_string().as_bytes()).unwrap();
-    drop(stdin);
-    assert!(child.wait().unwrap().success());
-    forwarded(app).await
+    let sent_ns = hive::hook::monotonic_ns();
+    hook_sent(repo, app, terminal, event, payload, sent_ns).await
 }
 
-/// The app's messages up to the next forwarded hook event.
-async fn forwarded(app: &mut Conn) -> Vec<(u32, Control)> {
+/// [`hook`] stamped `sent_ns`.
+async fn hook_sent(
+    repo: &Repo,
+    app: &mut Conn,
+    terminal: &str,
+    event: &str,
+    payload: Value,
+    sent_ns: u64,
+) -> Vec<(u32, Control)> {
+    let mut conn = repo.env.connect(Role::Hook).await;
+    let hook = Control::Hook {
+        event: event.into(),
+        terminal_id: Some(terminal.into()),
+        payload,
+        sent_ns,
+    };
+    conn.send(0, hook).await;
+    // The service closes a hook connection once it has handled the call.
+    assert_eq!(conn.next().await, None);
+    settled(app).await
+}
+
+/// The app's messages up to the answer to a `get_diagnostics` sent now, so up to everything
+/// the service sent before.
+pub(crate) async fn settled(app: &mut Conn) -> Vec<(u32, Control)> {
+    app.send(0, Control::GetDiagnostics).await;
     let mut seen = Vec::new();
     loop {
         match app.control().await {
-            (0, Control::Agent(_)) => return seen,
+            (0, Control::Diagnostics { .. }) => return seen,
             other => seen.push(other),
         }
     }
@@ -75,7 +88,7 @@ fn sub(id: &str, state: AgentState) -> SubagentState {
 }
 
 /// Runs `hive worktree <hook>` from terminal 1 and returns the app's messages up to the
-/// forwarded event, leaving out the `projects` it triggers.
+/// `projects` it triggers, which the service lists once it has handled the call.
 async fn worktree_hook(
     repo: &Repo,
     app: &mut Conn,
@@ -93,15 +106,13 @@ async fn worktree_hook(
     stdin.write_all(payload.to_string().as_bytes()).unwrap();
     drop(stdin);
     assert!(child.wait().unwrap().success());
-    let (mut seen, mut forwarded, mut listed) = (Vec::new(), false, false);
-    while !(forwarded && listed) {
+    let mut seen = Vec::new();
+    loop {
         match app.control().await {
-            (0, Control::Agent(_)) => forwarded = true,
-            (0, Control::Projects { .. }) => listed = true,
+            (0, Control::Projects { .. }) => return seen,
             other => seen.push(other),
         }
     }
-    seen
 }
 
 #[tokio::test]
@@ -368,28 +379,15 @@ async fn hook_events_delivered_out_of_order_apply_in_the_order_they_were_sent() 
     hook(&repo, &mut app, "1", "SessionStart", start).await;
     // Two calls stamped by `hive hook` in one order reach the service in the other.
     let deliver = async |app: &mut Conn, event: &str, sent_ns| {
-        let mut conn = repo.env.connect(Role::Hook).await;
         let payload = json!({"session_id": "s"});
-        let terminal_id = Some("1".into());
-        let event = event.into();
-        conn.send(
-            0,
-            Control::Hook {
-                event,
-                terminal_id,
-                payload,
-                sent_ns,
-            },
-        )
-        .await;
-        forwarded(app).await
+        hook_sent(&repo, app, "1", event, payload, sent_ns).await
     };
     let asking = state("s", WaitingPermission, vec![]);
     assert_eq!(
         deliver(&mut app, "PermissionRequest", 2).await,
         [(1, asking)]
     );
-    // Still forwarded, but the older event leaves the permission prompt shown.
+    // Handled, but the older event leaves the permission prompt shown.
     assert_eq!(deliver(&mut app, "PreToolUse", 1).await, []);
     // A later call of the real `hive hook` is stamped after both.
     let seen = hook(&repo, &mut app, "1", "Stop", json!({"session_id": "s"})).await;
