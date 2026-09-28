@@ -633,8 +633,11 @@ test("a worktree status replaces only that worktree's; before any projects it is
   const { projects } = useHive.getState();
   expect(projects?.[shop.id].worktrees[1]).toEqual({ ...login, status });
   expect(projects?.[shop.id].worktrees[2]).toBe(shop.worktrees[2]);
-  expect(projects?.[api.id]).toEqual(api);
+  // Other projects keep their objects, so their rows do not render again (9.23).
+  expect(projects?.[api.id]).toBe(api);
   expect(Object.keys(projects ?? {})).toEqual([shop.id, api.id]);
+  apply({ type: "worktree_status", path: "/nowhere", status });
+  expect(useHive.getState().projects).toBe(projects);
 });
 
 test("a subagent's conversation is kept as sent, grown by what is appended, and capped", () => {

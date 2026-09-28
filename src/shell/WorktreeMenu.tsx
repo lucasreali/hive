@@ -81,6 +81,16 @@ export function ContextMenu(props: {
       window.removeEventListener("resize", onClose);
     };
   }, [onClose, anchor]);
+  // Closed with Esc, Tab or an item, focus goes back where it was (9.24), not to `<body>`;
+  // unless it moved on meanwhile (a dialog the item opened, a click elsewhere).
+  useLayoutEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    const el = ref.current as HTMLDivElement;
+    return () => {
+      const now = document.activeElement;
+      if (!now || now === document.body || el.contains(now)) before?.focus();
+    };
+  }, []);
   useLayoutEffect(() => {
     const el = ref.current as HTMLDivElement;
     el.style.left = `${Math.max(0, Math.min(at.x, window.innerWidth - el.offsetWidth))}px`;
