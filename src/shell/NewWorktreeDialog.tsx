@@ -1,7 +1,12 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
 import { openModal, scriptsOf, select, useHive } from "../store";
-import { openClaude, openTerminal as openTerminalIn, openWith } from "../terminals";
+import {
+  openClaude,
+  openTerminal as openTerminalIn,
+  openWith,
+  showOpenFailure,
+} from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { BranchIcon, CheckIcon, CloseIcon } from "./icons";
@@ -65,8 +70,8 @@ export function NewWorktreeDialog() {
     if (!created || handled.current === created) return;
     handled.current = created;
     const setup = scriptsOf(useHive.getState().settings, created.project).setup;
-    if (setup) void openWith(created.path, setup);
-    if (openTerminal) void (startClaude ? openClaude : openTerminalIn)(created.path);
+    if (setup) showOpenFailure(openWith(created.path, setup));
+    if (openTerminal) showOpenFailure((startClaude ? openClaude : openTerminalIn)(created.path));
     select(created.path);
     if (created.notes.length === 0) close();
   }, [created, openTerminal, startClaude]);

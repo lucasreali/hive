@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply, initialState, openModal, useHive } from "../store";
 import { transport } from "../transport";
@@ -104,6 +105,20 @@ test("the typed path's Linux form goes to the service, and the answer closes the
   await waitFor(() => expect(useHive.getState().modal).toBeNull());
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByRole("button", { name: "shop" })).toBeDefined();
+});
+
+test("an add that cannot be sent is shown as the notice; the dialog stays usable (9.21)", async () => {
+  const dialog = open();
+  type(shop.path);
+  await waitFor(() => expect(submit().disabled).toBe(false));
+  const restore = unsent("addProject");
+  fireEvent.click(submit());
+  await waitFor(() => expect(useHive.getState().notice).toBe(LINK_DOWN));
+  restore();
+  expect(screen.getByRole("button", { name: LINK_DOWN })).toBeDefined();
+  expect(dialog.open).toBe(true);
+  expect(submit().disabled).toBe(false);
+  expect(field().value).toBe(shop.path);
 });
 
 test("in WSL, Windows folders are browsed as Windows paths and the choice is remembered", async () => {

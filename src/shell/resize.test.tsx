@@ -151,3 +151,35 @@ test("dragging the split terminals' divider sets the left pane's share, remember
   fireEvent.keyDown(divider, { key: "ArrowLeft" });
   expect(useHive.getState().splitPercent).toBe(78);
 });
+
+test("a drag writes the storage once, on release; each key press writes it once", () => {
+  render(<App />);
+  const left = handle("Resize the sidebar");
+  const own = Object.getOwnPropertyDescriptor(window, "localStorage");
+  const writes: string[] = [];
+  const counting = {
+    getItem: () => writes.at(-1) ?? null,
+    setItem: (_: string, v: string) => writes.push(v),
+  };
+  Object.defineProperty(window, "localStorage", { configurable: true, get: () => counting });
+  try {
+    fireEvent.pointerDown(left, { pointerId: 1 });
+    act(() => {
+      for (const x of [300, 310, 320, 330])
+        left.dispatchEvent(new PointerEvent("pointermove", { clientX: x, bubbles: true }));
+    });
+    expect(writes).toEqual([]);
+    expect(useHive.getState().sidebarWidth).toBe(330);
+    act(() => {
+      left.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    });
+    expect(writes).toHaveLength(1);
+    expect(savedWidths().sidebarWidth).toBe(330);
+    fireEvent.keyDown(left, { key: "ArrowRight" });
+    fireEvent.keyDown(left, { key: "ArrowRight" });
+    expect(writes).toHaveLength(3);
+    expect(savedWidths().sidebarWidth).toBe(362);
+  } finally {
+    if (own) Object.defineProperty(window, "localStorage", own);
+  }
+});

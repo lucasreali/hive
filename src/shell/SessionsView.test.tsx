@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 import { apply, initialState, select, setPanelView, setRightPanel, useHive } from "../store";
@@ -8,6 +8,7 @@ import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
 import { REFRESH_MS } from "./SessionsView";
 
 afterEach(() => {
+  setSystemTime();
   for (const tab of useHive.getState().tabs) closeTerminal(tab.id);
   mock.restore();
   cleanup();
@@ -40,6 +41,8 @@ const icons = () =>
   );
 
 test("Sessions lists the shown worktree's sessions only, searched", () => {
+  // The fake sessions' times are set when the mock loads, maybe minutes before this runs.
+  setSystemTime(checkout.updated_ms + 55 * 60_000);
   const listed = show(shop.id);
   expect(listed).toHaveBeenCalledTimes(1);
   expect(screen.getByText("Loading…")).toBeDefined();

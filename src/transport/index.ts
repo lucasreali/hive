@@ -9,7 +9,6 @@ import type {
   Settings,
   SpaceEnv,
 } from "../store";
-import { createMockTransport } from "./mock";
 import { tauriTransport } from "./tauri";
 
 /**
@@ -196,12 +195,18 @@ export interface Transport {
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
  * `?mock=empty` starts it with no projects; `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
- * every terminal (the load test, 1.11).
+ * every terminal (the load test, 1.11). The fake service is a chunk of its own, loaded only
+ * then (9.24): the app's startup bundle does not carry it.
  */
-export function pickTransport(tauri = isTauri(), search = location.search): Transport {
+export async function pickTransport(
+  tauri = isTauri(),
+  search = location.search,
+): Promise<Transport> {
   const params = new URLSearchParams(search);
   const mock = params.get("mock");
-  return tauri && mock === null ? tauriTransport : createMockTransport(mock, params.get("cast"));
+  if (tauri && mock === null) return tauriTransport;
+  const { createMockTransport } = await import("./mock");
+  return createMockTransport(mock, params.get("cast"));
 }
 
-export const transport = pickTransport();
+export const transport = await pickTransport();

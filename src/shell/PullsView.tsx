@@ -30,7 +30,7 @@ import {
   useHive,
   type Worktree,
 } from "../store";
-import { openWith } from "../terminals";
+import { openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { ExternalIcon, RefreshIcon } from "./icons";
@@ -121,7 +121,7 @@ function useCheckedOut() {
     const s = useHive.getState();
     if (s.pullBusy?.action !== "checkout" || s.pullBusy.project !== created.project) return;
     const setup = scriptsOf(s.settings, created.project).setup;
-    if (setup) void openWith(created.path, setup);
+    if (setup) showOpenFailure(openWith(created.path, setup));
     select(created.path);
     setPullBusy(null);
   }, [created]);
@@ -384,10 +384,9 @@ function PullDetails({ open, repo }: { open: OpenPull; repo: PullRepo | null }) 
           ))}
         </Part>
         <Part title={`Reviews and comments (${d.notes.length})`}>
-          {d.notes.map((n, i) => (
-            // Notes have no id of their own; their order never changes while shown.
-            // biome-ignore lint/suspicious/noArrayIndexKey: see above
-            <li key={i} className="pull-note">
+          {d.notes.map((n) => (
+            // Notes have no id of their own: who wrote it, when, and its verdict.
+            <li key={`${n.author}\n${n.at}\n${n.review}`} className="pull-note">
               <div className="session-meta">
                 <b>{n.author}</b>
                 {n.review && ` ${VERDICT[n.review]}`} · {since(n.at)}

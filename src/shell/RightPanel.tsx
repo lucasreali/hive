@@ -12,6 +12,7 @@ import {
   type KeyboardEvent,
   lazy,
   type MouseEvent,
+  memo,
   type ReactNode,
   Suspense,
   useEffect,
@@ -88,7 +89,8 @@ export type FileRow =
     }
   | { kind: "file"; key: string; name: string; depth: number; file: TreeFile };
 
-type Folder = { folders: Map<string, Folder>; files: TreeFile[] };
+/** A folder of the tree: its folders by name (sorted), its files, the strongest status inside. */
+export type Folder = { folders: [string, Folder][]; files: TreeFile[]; status: FileStatus | null };
 
 /**
  * "All": every file the service lists (`files`, sorted), each with its status from the
@@ -110,20 +112,19 @@ export function allFiles(listed: string[], changed: ChangedFile[]): TreeFile[] {
   ].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
+/** The status of higher rank; null when neither changed. */
+const stronger = (a: FileStatus | null, b: FileStatus | null) =>
+  b && (!a || STATUS[b].rank > STATUS[a].rank) ? b : a;
+
 /**
- * The visible rows of the files tree: `files` (sorted by the service) grouped into folders,
- * folders before files. A folder starts collapsed and is open only when
- * `collapsed["<tree>:<worktree>/<path>"]` is false: each tree (Files, Diff) opens its own folders. Grouping paths is presentation; statuses and counts are the service's.
- * `folders` (created from the tree) show even when git lists nothing in them.
+ * `files` (sorted by the service) grouped into folders, each folder's strongest status computed
+ * while building. Built once per listing (9.23): moving in the tree or opening a folder only
+ * walks it again (`fileRows`). Grouping paths is presentation; statuses and counts are the
+ * service's. `folders` (created from the tree) show even when git lists nothing in them.
  */
-export function fileRows(
-  worktree: string,
-  files: TreeFile[],
-  collapsed: Record<string, boolean>,
-  tree: "files" | "changes" = "files",
-  folders: string[] = [],
-): FileRow[] {
-  const root: Folder = { folders: new Map(), files: [] };
+export function fileTree(files: TreeFile[], folders: string[] = []): Folder {
+  type Building = { folders: Map<string, Building>; files: TreeFile[] };
+  const root: Building = { folders: new Map(), files: [] };
   const folderOf = (parts: string[]) => {
     let folder = root;
     for (const part of parts) {
@@ -135,13 +136,37 @@ export function fileRows(
   };
   for (const path of folders) folderOf(path.split("/"));
   for (const file of files) folderOf(file.path.split("/").slice(0, -1)).files.push(file);
+  const finish = (folder: Building): Folder => {
+    const inner = [...folder.folders]
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([name, f]): [string, Folder] => [name, finish(f)]);
+    const status = inner.reduce(
+      (a, [, f]) => stronger(a, f.status),
+      folder.files.reduce<FileStatus | null>((a, f) => stronger(a, f.status), null),
+    );
+    return { folders: inner, files: folder.files, status };
+  };
+  return finish(root);
+}
+
+/**
+ * The visible rows of `root` (from `fileTree`), folders before files. A folder starts collapsed
+ * and is open only when `collapsed["<tree>:<worktree>/<path>"]` is false: each tree (Files,
+ * Diff) opens its own folders.
+ */
+export function fileRows(
+  worktree: string,
+  root: Folder,
+  collapsed: Record<string, boolean>,
+  tree: "files" | "changes" = "files",
+): FileRow[] {
   const rows: FileRow[] = [];
   const walk = (folder: Folder, prefix: string, depth: number) => {
-    for (const [name, inner] of [...folder.folders].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    for (const [name, inner] of folder.folders) {
       const key = `${tree}:${worktree}/${prefix}${name}`;
       const open = collapsed[key] === false;
       const path = `${prefix}${name}`;
-      rows.push({ kind: "folder", key, path, name, depth, open, status: strongest(inner) });
+      rows.push({ kind: "folder", key, path, name, depth, open, status: inner.status });
       if (open) walk(inner, `${prefix}${name}/`, depth + 1);
     }
     for (const file of folder.files) {
@@ -181,18 +206,6 @@ function openTreeMenu(worktree: string, row: FileRow | undefined, at?: Element |
     const y = pointer ? event.clientY : box.bottom;
     openFileMenu({ ...fileTarget(worktree, row), x, y });
   };
-}
-
-/** The status of highest rank inside a folder; null when nothing inside changed. */
-function strongest(folder: Folder): FileStatus | null {
-  const inside = [
-    ...folder.files.map((f) => f.status),
-    ...[...folder.folders.values()].map(strongest),
-  ];
-  return inside.reduce<FileStatus | null>(
-    (a, b) => (b && (!a || STATUS[b].rank > STATUS[a].rank) ? b : a),
-    null,
-  );
 }
 
 const plus = (n: number | null) => (n ? `+${n}` : "");
@@ -500,12 +513,13 @@ function ContentResults({ worktree, query }: { worktree: string; query: string }
       : null,
   );
   const files = useTreeFiles(worktree);
+  const byFile = useMemo(() => new Map(files.map((f) => [f.path, f])), [files]);
   if (!results) return <div className="hint search-hint">Searching…</div>;
   if (results.error) return <div className="files-error">{results.error}</div>;
   const byPath = new Map<string, SearchMatch[]>();
   for (const m of results.matches) byPath.set(m.path, [...(byPath.get(m.path) ?? []), m]);
   const fileOf = (path: string): TreeFile =>
-    files.find((f) => f.path === path) ?? {
+    byFile.get(path) ?? {
       path,
       status: null,
       old_path: null,
@@ -613,11 +627,19 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   const collapsed = useHive((s) => s.collapsed);
   const open = useHive((s) => (s.openFile?.worktree === worktree ? s.openFile.path : null));
   const newFolders = useHive((s) => (changedOnly ? undefined : s.newFolders[worktree]));
-  const files = useMemo(
-    () => (all ? allFiles(all.files, changes?.files ?? []) : (changes?.files ?? [])),
-    [all, changes],
+  const root = useMemo(
+    () =>
+      fileTree(
+        all ? allFiles(all.files, changes?.files ?? []) : (changes?.files ?? []),
+        newFolders,
+      ),
+    [all, changes, newFolders],
   );
-  const rows = fileRows(worktree, files, collapsed, changedOnly ? "changes" : "files", newFolders);
+  // Only opening or closing a folder walks the tree again, not moving in it or dragging (9.23).
+  const rows = useMemo(
+    () => fileRows(worktree, root, collapsed, changedOnly ? "changes" : "files"),
+    [worktree, root, collapsed, changedOnly],
+  );
   const [active, setActive] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -638,7 +660,8 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   const moved = useHive((s) =>
     !changedOnly && s.movedRow?.worktree === worktree ? s.movedRow.path : null,
   );
-  const movedAt = rows.findIndex((r) => (r.kind === "folder" ? r.path : r.key) === moved);
+  const movedAt =
+    moved === null ? -1 : rows.findIndex((r) => (r.kind === "folder" ? r.path : r.key) === moved);
   useEffect(() => {
     if (movedAt < 0) return;
     setActive(movedAt);
@@ -679,72 +702,108 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
         tabIndex={0}
         aria-activedescendant={rows[at] ? `${id}-${at}` : undefined}
         onKeyDown={onKeyDown}
-        // On the tree itself: a click below the rows (the root), or the Menu key (the active row).
+        // The rows' clicks, menus and drags are handled here, so a row renders again only when
+        // what it shows changes, not on every ↑/↓ (9.23).
+        onClick={(e) => {
+          const index = indexAt(e);
+          if (index < 0) return;
+          setActive(index);
+          pick(rows[index] as FileRow);
+        }}
+        // On a row, its menu; on the tree itself: a click below the rows (the root), or the Menu
+        // key (the active row).
         onContextMenu={(e) => {
-          const key = !(e.clientX || e.clientY);
-          const row = key ? document.getElementById(`${id}-${at}`) : null;
-          openTreeMenu(worktree, key ? rows[at] : undefined, row)(e);
+          const index = indexAt(e);
+          if (index >= 0) setActive(index);
+          const on = index >= 0 ? index : e.clientX || e.clientY ? -1 : at;
+          openTreeMenu(worktree, rows[on], document.getElementById(`${id}-${on}`))(e);
+        }}
+        onDragStart={(e) => {
+          const row = rows[indexAt(e)];
+          if (row) drag.start(e, row);
         }}
         style={{ height: virtual.getTotalSize(), position: "relative" }}
       >
         {virtual.getVirtualItems().map((item) => {
-          const row = rows[item.index];
-          const status = row.kind === "folder" ? row.status : row.file.status;
+          const row = rows[item.index] as FileRow;
           return (
-            // biome-ignore lint/a11y/useKeyWithClickEvents: the tree handles the keys.
-            <div
+            <TreeRow
               key={row.key}
-              id={`${id}-${item.index}`}
-              role="treeitem"
-              tabIndex={-1}
-              aria-expanded={row.kind === "folder" ? row.open : undefined}
-              aria-selected={row.kind === "file" && row.key === open}
-              className="file-row"
-              data-active={item.index === at}
-              data-status={status ? STATUS[status].letter : undefined}
-              data-deleted={status === "deleted"}
-              data-index={item.index}
-              data-file-drop={row.kind === "folder" && row.path === drag.over}
-              draggable={!changedOnly && (row.kind === "folder" || status !== "deleted")}
-              onDragStart={(e) => drag.start(e, row)}
-              title={row.kind === "file" ? row.key : undefined}
-              style={{ transform: `translateY(${item.start}px)`, paddingLeft: 8 + row.depth * 14 }}
-              onClick={() => {
-                setActive(item.index);
-                pick(row);
-              }}
-              onContextMenu={(e) => {
-                setActive(item.index);
-                openTreeMenu(worktree, row)(e);
-              }}
-            >
-              {row.kind === "folder" ? (
-                <>
-                  <ChevronIcon open={row.open} />
-                  <TreeFolderIcon name={row.name} open={row.open} />
-                  <span className="name">{row.name}</span>
-                  {!row.open && status && <span className="status-dot" />}
-                </>
-              ) : (
-                <>
-                  <span className="chevron-space" />
-                  <TreeFileIcon name={row.name} />
-                  <span className="name">{row.name}</span>
-                  <Counts added={row.file.added} removed={row.file.removed} />
-                  {status && (
-                    <span className="status-letter" title={status}>
-                      {STATUS[status].letter}
-                    </span>
-                  )}
-                </>
-              )}
-            </div>
+              row={row}
+              index={item.index}
+              start={item.start}
+              id={id}
+              active={item.index === at}
+              selected={row.kind === "file" && row.key === open}
+              dropTarget={row.kind === "folder" && row.path === drag.over}
+              movable={!changedOnly}
+            />
           );
         })}
       </div>
     </div>
   );
 }
+
+/** Which row of the tree an event happened on; -1 for the tree itself. */
+function indexAt(e: { target: EventTarget }): number {
+  const at = (e.target as Element).closest("[data-index]")?.getAttribute("data-index");
+  return at == null ? -1 : Number(at);
+}
+
+/** A row of the files tree; the tree handles its keys, clicks, menu and drag. */
+const TreeRow = memo(function TreeRow(props: {
+  row: FileRow;
+  index: number;
+  start: number;
+  id: string;
+  active: boolean;
+  selected: boolean;
+  dropTarget: boolean;
+  movable: boolean;
+}) {
+  const { row, index } = props;
+  const status = row.kind === "folder" ? row.status : row.file.status;
+  return (
+    <div
+      id={`${props.id}-${index}`}
+      role="treeitem"
+      tabIndex={-1}
+      aria-expanded={row.kind === "folder" ? row.open : undefined}
+      aria-selected={props.selected}
+      className="file-row"
+      data-active={props.active}
+      data-status={status ? STATUS[status].letter : undefined}
+      data-deleted={status === "deleted"}
+      data-index={index}
+      data-file-drop={props.dropTarget}
+      draggable={props.movable && (row.kind === "folder" || status !== "deleted")}
+      title={row.kind === "file" ? row.key : undefined}
+      style={{ transform: `translateY(${props.start}px)`, paddingLeft: 8 + row.depth * 14 }}
+    >
+      {row.kind === "folder" ? (
+        <>
+          <ChevronIcon open={row.open} />
+          <TreeFolderIcon name={row.name} open={row.open} />
+          <span className="name">{row.name}</span>
+          {!row.open && status && <span className="status-dot" />}
+        </>
+      ) : (
+        <>
+          <span className="chevron-space" />
+          <TreeFileIcon name={row.name} />
+          <span className="name">{row.name}</span>
+          <Counts added={row.file.added} removed={row.file.removed} />
+          {status && (
+            <span className="status-letter" title={status}>
+              {STATUS[status].letter}
+            </span>
+          )}
+        </>
+      )}
+    </div>
+  );
+});
 
 /** How long a closed folder must be hovered while dragging before it opens. */
 export const HOVER_OPEN_MS = 600;
@@ -793,10 +852,7 @@ function useFileDrag(worktree: string, rows: FileRow[]) {
   };
   // A folder does not open after the tree is gone.
   useEffect(() => () => clearTimeout(hover.current?.timer), []);
-  const rowAt = (e: DragEvent) => {
-    const at = (e.target as Element).closest("[data-index]")?.getAttribute("data-index");
-    return at == null ? undefined : rows[Number(at)];
-  };
+  const rowAt = (e: DragEvent) => rows[indexAt(e)];
   const start = (e: DragEvent, row: FileRow) => {
     const { path } = fileTarget(worktree, row);
     if (path === null) return;
