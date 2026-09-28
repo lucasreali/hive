@@ -757,24 +757,26 @@ async fn pump<R: AsyncRead + Unpin>(
             }
             continue;
         }
-        let message = match frame.to_control() {
-            Ok(message) => message,
-            Err(error) => return End::Broken(error.to_string()),
+        // Forwarded as the service's JSON: only the type is read here. One message this side
+        // cannot read is skipped; the connection and its terminals stay up.
+        let value = serde_json::from_slice::<Value>(&frame.payload).ok();
+        let Some(mut value) = value.filter(|value| value["type"].is_string()) else {
+            eprintln!("hive-app: skipped a control message it cannot read");
+            continue;
         };
         // Messages for a terminal this UI did not open (e.g. one closed by a reload) are
         // dropped.
         if frame.channel != 0 && !link.terminals.contains_key(&frame.channel) {
             continue;
         }
-        let mut value = serde_json::to_value(&message).unwrap_or_default();
         value["channel"] = frame.channel.into();
-        match message {
-            Control::Welcome { .. } => {
+        match value["type"].as_str().unwrap_or_default() {
+            "welcome" => {
                 link.welcome = Some(value.clone());
                 // The UI always gets the projects after the handshake.
                 let _ = link.send(0, &Control::ListProjects);
             }
-            Control::VersionMismatch { .. } => {
+            "version_mismatch" => {
                 // The UI shows both sides, so it gets the app's own versions too.
                 value["app_version"] = VERSION.into();
                 value["app_protocol"] = PROTOCOL_VERSION.into();
@@ -782,15 +784,13 @@ async fn pump<R: AsyncRead + Unpin>(
                 link.frames = None;
                 return End::Refused;
             }
-            Control::TerminalExited { .. } => drop(link.terminals.remove(&frame.channel)),
-            Control::EditorTarget {
-                windows_path: Some(path),
-                ..
+            "terminal_exited" => drop(link.terminals.remove(&frame.channel)),
+            // A path the app may open once (`open_path`).
+            "editor_target" | "session_located" => {
+                if let Some(path) = value["windows_path"].as_str() {
+                    link.approve(path.to_owned());
+                }
             }
-            | Control::SessionLocated {
-                windows_path: Some(path),
-                ..
-            } => link.approve(path),
             _ => {}
         }
         link.to_ui(value);

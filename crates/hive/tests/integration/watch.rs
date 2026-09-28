@@ -48,10 +48,8 @@ async fn claude_that_sent_session_start_is_not_reported() {
         .spawn()
         .unwrap();
     hook.stdin.take().unwrap().write_all(b"{}").unwrap();
+    // It exits once it has sent the call.
     assert!(hook.wait().unwrap().success());
-    let (_, Control::Agent(_)) = app.control().await else {
-        panic!("expected the SessionStart event")
-    };
     // Longer than the detection delay plus one check interval.
     let quiet = tokio::time::timeout(Duration::from_secs(7), app.control()).await;
     assert!(quiet.is_err(), "unexpected message: {quiet:?}");

@@ -8,20 +8,12 @@ import {
 } from "./store";
 import { showNotification } from "./window";
 
-// Presentation of state changes the service sent (hive.md item 5, #37): a tone when an agent
-// enters an alerting state, an OS notification when it finishes, unless the service says it is
-// not pending (it finished in view of the focused window: already seen). Nothing here computes a
-// state.
+// Presentation of the alerts the service decided (hive.md item 5, 2.4, #37): a tone and an
+// inbox item for each `agent_state` with an `alert`, and an OS notification when the agent
+// finished, unless the service says it is not pending (it finished in view of the focused
+// window: already seen). Nothing here computes a state or a transition.
 
-const ALERTING: AgentState[] = [
-  "waiting_permission",
-  "waiting_plan",
-  "waiting_answer",
-  "waiting_you",
-  "error",
-];
-const BUSY: AgentState[] = ["working", "with_subagents"];
-/** What an alert says after the agent's name; "finished" when it stops working. */
+/** What an alert says after the agent's name; "finished" when it finished. */
 const ALERT_TEXT: Partial<Record<AgentState, string>> = {
   waiting_permission: "is waiting for permission",
   waiting_plan: "is waiting for plan approval",
@@ -68,9 +60,8 @@ export function spaceName(s: HiveState, id: string): string | undefined {
 }
 
 /**
- * Call before `apply(message)`, so the store still holds the previous state. An agent's first
- * state is not a change and stays silent; so is the snapshot after `welcome`, which always
- * lands in an empty store (a fresh page, or after `disconnected` cleared it).
+ * Presents a message's alert. The service sets `alert` only on the message whose state changed,
+ * never on an agent's first state, the snapshot after `welcome` or an interrupt.
  */
 export function notify(
   message: ServiceMessage,
@@ -78,23 +69,17 @@ export function notify(
   now = performance.now(),
   wall = Date.now(),
 ): void {
-  if (message.type !== "agent_state") return;
-  const before = s.agentStates[message.id]?.state;
-  const after = message.state;
-  // The user interrupted it: they are at the keyboard, so nothing alerts.
-  if (before === undefined || before === after || message.interrupted) return;
-  if (ALERTING.includes(after)) {
-    const name = s.agentTitles[message.id] ?? "Claude";
-    const what = after === "waiting_you" && BUSY.includes(before) ? "finished" : ALERT_TEXT[after];
-    const space = spaceName(s, message.id);
-    addToInbox({ agent: message.id, state: after, at: wall, text: `${name} ${what}`, space });
-  }
+  if (message.type !== "agent_state" || !message.alert) return;
+  const { id, state, alert } = message;
+  const name = s.agentTitles[id] ?? "Claude";
+  const what = alert === "finished" ? "finished" : ALERT_TEXT[state];
+  addToInbox({ agent: id, state, at: wall, text: `${name} ${what}`, space: spaceName(s, id) });
   const volume = s.settings.notifications.volume;
-  if (volume > 0 && ALERTING.includes(after) && now - lastTone >= TONE_GAP_MS) {
+  if (volume > 0 && now - lastTone >= TONE_GAP_MS) {
     lastTone = now;
     tone(volume);
   }
-  if (after === "waiting_you" && BUSY.includes(before) && message.pending) {
+  if (alert === "finished" && message.pending) {
     const where = agentPlace(s, message.id);
     void showNotification(
       "Agent finished",

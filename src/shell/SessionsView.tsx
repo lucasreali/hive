@@ -10,7 +10,8 @@ import {
   TerminalWindowIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
-import { type MouseEvent, useEffect, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import {
   ago,
   copy,
@@ -49,6 +50,7 @@ function menuAt(session: Session) {
 export function SessionsView({ worktree }: { worktree: string }) {
   const sessions = useHive((s) => s.sessions);
   const error = useHive((s) => s.sessionsError);
+  const truncated = useHive((s) => s.sessionsTruncated);
   const agents = useHive((s) => s.agents);
   const [query, setQuery] = useState("");
   const space = useHive((s) => s.currentSpace);
@@ -64,6 +66,14 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const matches = (x: Session) =>
     [x.title, x.last_text, x.branch, x.id].some((v) => v?.toLowerCase().includes(q));
   const shown = (sessions ?? []).filter((x) => x.worktree === worktree && matches(x));
+  // Hundreds of sessions: only the rows in view are rendered, each measured as it shows.
+  const scroller = useRef<HTMLDivElement>(null);
+  const virtual = useVirtualizer({
+    count: shown.length,
+    getScrollElement: () => scroller.current,
+    estimateSize: () => 72,
+    overscan: 6,
+  });
   return (
     <>
       <div className="files-search sessions-search">
@@ -90,26 +100,55 @@ export function SessionsView({ worktree }: { worktree: string }) {
         </button>
       </div>
       {error && <div className="files-error">{error}</div>}
-      <ul className="sessions hive-scroll" aria-label="Sessions">
-        {sessions && shown.length === 0 && (
-          <li className="hint">No Claude sessions in this worktree.</li>
-        )}
-        {shown.map((x) => (
-          <SessionRow key={x.id} session={x} live={!!agents[x.id]} />
-        ))}
-      </ul>
+      <div className="sessions hive-scroll" ref={scroller}>
+        <ul aria-label="Sessions" style={{ height: virtual.getTotalSize(), position: "relative" }}>
+          {sessions && shown.length === 0 && (
+            <li className="hint">No Claude sessions in this worktree.</li>
+          )}
+          {virtual.getVirtualItems().map((item) => {
+            const x = shown[item.index];
+            return (
+              <SessionRow
+                key={x.id}
+                session={x}
+                live={!!agents[x.id]}
+                index={item.index}
+                measure={virtual.measureElement}
+                top={item.start}
+              />
+            );
+          })}
+        </ul>
+        {truncated && <div className="hint">Older sessions are not listed.</div>}
+      </div>
     </>
   );
 }
 
-function SessionRow({ session: x, live }: { session: Session; live: boolean }) {
+interface RowProps {
+  session: Session;
+  live: boolean;
+  /** Its place in the list, where the virtualizer puts it and how it measures it. */
+  index: number;
+  measure: (row: HTMLLIElement | null) => void;
+  top: number;
+}
+
+function SessionRow({ session: x, live, index, measure, top }: RowProps) {
   // A session in a Hive terminal has its live state; any other, the one its log tells.
   const state = useHive((s) => (live ? (s.agentStates[x.id]?.state ?? "idle") : x.state));
   const menu = menuAt(x);
   // Running outside Hive: nothing to do here, and nothing said.
   const title = live ? "Show its terminal" : x.running ? undefined : "Resume in its worktree";
   return (
-    <li className="session" data-live={live} data-running={x.running}>
+    <li
+      className="session"
+      data-live={live}
+      data-running={x.running}
+      data-index={index}
+      ref={measure}
+      style={{ transform: `translateY(${top}px)` }}
+    >
       <button
         type="button"
         className="session-main"

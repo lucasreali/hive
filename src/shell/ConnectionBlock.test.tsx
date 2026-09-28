@@ -3,8 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { asMac } from "../../test/mac";
 import { App } from "../App";
 import { apply, initialState, setOpenFile, useHive } from "../store";
-import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
+import { openInEditor } from "../viewer/external";
 
 afterEach(() => {
   cleanup();
@@ -87,7 +87,7 @@ test("after a reconnect, messages reach the same handler as at startup", async (
   // `editor_target` is handled outside the store: only the full handler shows the notice.
   const [shop] = MOCK_REPOS;
   act(() => setOpenFile({ worktree: shop.path, path: "README.md" }));
-  await transport.openInEditor(shop.path, "README.md");
+  openInEditor(shop.path, "README.md");
   await waitFor(() =>
     expect(useHive.getState().editorNotice).toStartWith(
       "Only the Hive app opens an external editor",
