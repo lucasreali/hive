@@ -2,7 +2,8 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
-import { addToInbox, apply, initialState, pendingAgents, useHive } from "../store";
+import { apply } from "../reduce";
+import { addToInbox, initialState, pendingAgents, useHive } from "../store";
 import { transport } from "../transport";
 import { agentStatus } from "../transport/mock";
 

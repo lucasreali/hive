@@ -9,17 +9,10 @@ import {
   within,
 } from "@testing-library/react";
 import { App } from "./App";
+import { savedAgentOrder } from "./persist";
+import { apply } from "./reduce";
 import { moveNextTo, useReorder } from "./reorder";
-import {
-  apply,
-  initialState,
-  moveAgent,
-  pendingAgents,
-  savedAgentOrder,
-  stepAgent,
-  treeAgents,
-  useHive,
-} from "./store";
+import { initialState, moveAgent, pendingAgents, stepAgent, treeAgents, useHive } from "./store";
 import { agentStatus, MOCK_REPOS } from "./transport/mock";
 
 afterEach(() => {

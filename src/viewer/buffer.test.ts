@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { FileText } from "../store";
+import type { FileText } from "../protocol";
 import {
   type EditBuffer,
   failed,

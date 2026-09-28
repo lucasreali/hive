@@ -28,8 +28,9 @@ test("files tree: ↑/↓ in a 50 000-file worktree stays under a frame", async 
   // 50 folders of 20 folders of 50 files, the first ten top folders and their folders open:
   // 10 500 rows to move through.
   const rows = await page.evaluate(async (count) => {
-    const url = "/src/store.ts";
-    const { apply, useHive } = await import(/* @vite-ignore */ url);
+    const [reduce, store] = ["/src/reduce.ts", "/src/store.ts"];
+    const { apply } = await import(/* @vite-ignore */ reduce);
+    const { useHive } = await import(/* @vite-ignore */ store);
     const path = "/home/user/projects/shop/.claude/worktrees/fix-login";
     const files = Array.from(
       { length: count },

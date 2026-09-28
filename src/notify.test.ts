@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { notify, TONE_GAP_MS } from "./notify";
+import type { AgentState, Alert } from "./protocol";
+import { apply } from "./reduce";
 import {
-  type AgentState,
-  type Alert,
   addToInbox,
-  apply,
   DEFAULT_SETTINGS,
   type HiveState,
   INBOX_LIMIT,

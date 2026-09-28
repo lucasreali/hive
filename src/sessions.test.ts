@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { apply } from "./reduce";
 import {
   ago,
   copy,
@@ -14,7 +15,7 @@ import {
   sessionTokens,
   tokens,
 } from "./sessions";
-import { apply, initialState, useHive } from "./store";
+import { initialState, useHive } from "./store";
 import { closeTerminal } from "./terminals";
 import { transport } from "./transport";
 import { MOCK_SESSIONS } from "./transport/mock";

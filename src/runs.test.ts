@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { apply } from "./reduce";
 import {
   actOnRun,
   duration,
@@ -10,7 +11,7 @@ import {
   showRun,
   words,
 } from "./runs";
-import { apply, initialState, runsKey, useHive } from "./store";
+import { initialState, runsKey, useHive } from "./store";
 import { transport } from "./transport";
 import { MOCK_RUNS } from "./transport/mockRuns";
 

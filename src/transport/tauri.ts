@@ -1,5 +1,6 @@
 import { Channel, type InvokeArgs, invoke } from "@tauri-apps/api/core";
-import { type ServiceMessage, showFailure } from "../store";
+import type { ServiceMessage } from "../protocol";
+import { showFailure } from "../store";
 import type { Transport } from ".";
 
 /**

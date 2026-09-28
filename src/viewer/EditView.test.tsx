@@ -3,9 +3,11 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { asMac } from "../../test/mac";
+import type { FileText } from "../protocol";
+import { apply } from "../reduce";
 import { ConfirmDialog } from "../shell/ConfirmDialog";
 import { TerminalArea } from "../shell/TerminalArea";
-import { apply, type FileText, initialState, setOpenFile, useHive } from "../store";
+import { initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
 import { saveOpenFile } from "./EditView";
 

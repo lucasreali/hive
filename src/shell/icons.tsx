@@ -25,7 +25,7 @@ import {
   XCircleIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import type { AgentState } from "../store";
+import type { AgentState } from "../protocol";
 
 // The title bar's Hive logo: a honeycomb of seven hollow cells (the human's drawing), in the color
 // of the text beside it.

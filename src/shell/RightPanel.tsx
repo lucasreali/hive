@@ -22,30 +22,31 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import type {
+  ChangedFile,
+  Changes,
+  DiffBase,
+  FileStatus,
+  SearchMatch,
+  Worktree,
+} from "../protocol";
 import {
   agentWorkingIn,
-  type ChangedFile,
-  type Changes,
-  type DiffBase,
   diffBase,
-  dropFile,
-  type FileStatus,
   type FileTarget,
-  fileTabState,
   type OpenFile,
   openFileMenu,
   type PanelView,
   panelWorktree,
-  type SearchMatch,
   setDiffBase,
   setEditing,
   setOpenFile,
   setPanelView,
   setRightPanel,
   useHive,
-  type Worktree,
   within,
 } from "../store";
+import { dropFile, fileTabState } from "../tabs";
 import { transport } from "../transport";
 import { isDirty } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";

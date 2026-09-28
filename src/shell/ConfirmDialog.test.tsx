@@ -1,7 +1,8 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
-import { apply, ask, initialState, useHive } from "../store";
+import { apply } from "../reduce";
+import { ask, initialState, useHive } from "../store";
 import { askDiscard } from "./ConfirmDialog";
 
 afterEach(() => {

@@ -2,15 +2,10 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
 import { agentPlace, notify } from "../notify";
+import type { AgentState, ServiceMessage, Space } from "../protocol";
+import { apply } from "../reduce";
 import { goToAgent } from "../shortcuts";
-import {
-  type AgentState,
-  apply,
-  initialState,
-  type ServiceMessage,
-  type Space,
-  useHive,
-} from "../store";
+import { initialState, useHive } from "../store";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
 

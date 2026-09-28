@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ServiceMessage } from "../store";
+import type { ServiceMessage } from "../protocol";
 import { createMockTransport, MOCK_REPOS } from "./mock";
 import { MOCK_LOG, MOCK_RUNS } from "./mockRuns";
 

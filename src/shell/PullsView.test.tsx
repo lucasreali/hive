@@ -2,8 +2,8 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
 import { PULLS_INTERVAL_MS, type PullDetail, type Pulls } from "../pulls";
+import { apply } from "../reduce";
 import {
-  apply,
   DEFAULT_SETTINGS,
   initialState,
   NO_SCRIPTS,

@@ -1,6 +1,7 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import type { Project, Worktree } from "../protocol";
 import {
   actOnPull,
   type CheckState,
@@ -20,16 +21,7 @@ import {
 } from "../pulls";
 import { showRun } from "../runs";
 import { ago } from "../sessions";
-import {
-  ask,
-  type Project,
-  scriptsOf,
-  select,
-  setPanelView,
-  setRightPanel,
-  useHive,
-  type Worktree,
-} from "../store";
+import { ask, scriptsOf, select, setPanelView, setRightPanel, useHive } from "../store";
 import { openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";

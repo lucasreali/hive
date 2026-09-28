@@ -1,4 +1,5 @@
-import { ask, fileTabState, openModal, useHive } from "../store";
+import { ask, openModal, useHive } from "../store";
+import { fileTabState } from "../tabs";
 import { transport } from "../transport";
 import { isDirty } from "../viewer/buffer";
 import { CloseIcon } from "./icons";

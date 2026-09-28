@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ask, currentSpace, type GhAccount, openModal, type SpaceEnv, useHive } from "../store";
+import type { GhAccount, SpaceEnv } from "../protocol";
+import { ask, currentSpace, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { CloseIcon } from "./icons";

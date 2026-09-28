@@ -1,8 +1,8 @@
 import { beforeEach, expect, mock, test } from "bun:test";
 import { followOpenFile, followPanel, followView } from "./follow";
+import { apply } from "./reduce";
 import {
   addTab,
-  apply,
   initialState,
   select,
   setDiffBase,

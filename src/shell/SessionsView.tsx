@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
+import type { Session } from "../protocol";
 import {
   ago,
   copy,
@@ -22,7 +23,7 @@ import {
   sessionName,
   sessionTokens,
 } from "../sessions";
-import { openSessionMenu, type Session, useHive } from "../store";
+import { openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { ContextMenu } from "./WorktreeMenu";

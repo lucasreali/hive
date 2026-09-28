@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { openModal, useHive, type Worktree } from "../store";
+import type { Worktree } from "../protocol";
+import { openModal, useHive } from "../store";
 import { openTerminal, showOpenFailure } from "../terminals";
 import { BranchIcon, SearchIcon } from "./icons";
 

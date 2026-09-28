@@ -1,0 +1,525 @@
+[
+  {
+    "type": "welcome",
+    "version": "0.4.0",
+    "distro": "Ubuntu"
+  },
+  {
+    "type": "version_mismatch",
+    "protocol": 1,
+    "version": "0.4.0"
+  },
+  {
+    "type": "terminal_opened",
+    "worktree": "/r"
+  },
+  {
+    "type": "terminal_exited",
+    "code": 0
+  },
+  {
+    "type": "badge",
+    "text": "db"
+  },
+  {
+    "type": "unhooked_agent"
+  },
+  {
+    "type": "agent_detected",
+    "id": "s",
+    "project": "/r",
+    "worktree": "/r",
+    "cwd": "/r"
+  },
+  {
+    "type": "agent_state",
+    "id": "s",
+    "state": "working",
+    "urgency": 2,
+    "pending": false,
+    "interrupted": false,
+    "alert": null,
+    "writing": true,
+    "subagents": [
+      {
+        "id": "a",
+        "agent_type": "Explore",
+        "state": "working",
+        "worktree": null,
+        "activity": null,
+        "since_ms": 1,
+        "writing": false
+      }
+    ],
+    "activity": "Reading a.rs",
+    "since_ms": 1
+  },
+  {
+    "type": "subagent_worktrees",
+    "worktrees": []
+  },
+  {
+    "type": "agent_title",
+    "id": "s",
+    "title": "t"
+  },
+  {
+    "type": "agent_usage",
+    "id": "s",
+    "context_tokens": 1,
+    "context_limit": 200000,
+    "output_tokens": 2
+  },
+  {
+    "type": "agent_removed",
+    "id": "s"
+  },
+  {
+    "type": "projects",
+    "projects": [
+      {
+        "id": "/r",
+        "name": "r",
+        "path": "/r",
+        "worktrees": [
+          {
+            "id": "/r",
+            "name": "main",
+            "path": "/r",
+            "branch": "main",
+            "main": true,
+            "claude": false,
+            "status": {
+              "changes": 1,
+              "ahead": null,
+              "behind": null,
+              "merged": false,
+              "last_commit_ms": 2
+            }
+          }
+        ],
+        "error": null
+      }
+    ]
+  },
+  {
+    "type": "project_added",
+    "project": {
+      "id": "/r",
+      "name": "r",
+      "path": "/r",
+      "worktrees": [
+        {
+          "id": "/r",
+          "name": "main",
+          "path": "/r",
+          "branch": "main",
+          "main": true,
+          "claude": false,
+          "status": {
+            "changes": 1,
+            "ahead": null,
+            "behind": null,
+            "merged": false,
+            "last_commit_ms": 2
+          }
+        }
+      ],
+      "error": null
+    }
+  },
+  {
+    "type": "add_project_failed",
+    "path": "/x",
+    "error": "not_found",
+    "message": "m"
+  },
+  {
+    "type": "project_removed",
+    "id": "/r"
+  },
+  {
+    "type": "remove_project_failed",
+    "id": "/r",
+    "message": "m"
+  },
+  {
+    "type": "spaces",
+    "spaces": [
+      {
+        "id": "default",
+        "name": "Default",
+        "projects": [
+          "/r"
+        ],
+        "env": {
+          "claude_config_dir": null,
+          "git_name": null,
+          "git_email": null,
+          "gh_config_dir": null,
+          "gh_account": null
+        }
+      }
+    ],
+    "current": "default"
+  },
+  {
+    "type": "space_failed",
+    "message": "m"
+  },
+  {
+    "type": "gh_accounts",
+    "gh_config_dir": null,
+    "accounts": [],
+    "problem": null
+  },
+  {
+    "type": "notice",
+    "message": "m"
+  },
+  {
+    "type": "pulls",
+    "project": "/r",
+    "repo": null,
+    "mine": [],
+    "review": [],
+    "fetched_ms": 0,
+    "error": null
+  },
+  {
+    "type": "pull",
+    "project": "/r",
+    "number": 1,
+    "pull": null,
+    "error": "m"
+  },
+  {
+    "type": "pull_done",
+    "project": "/r",
+    "number": 1,
+    "message": "m"
+  },
+  {
+    "type": "pull_failed",
+    "project": "/r",
+    "number": null,
+    "message": "m"
+  },
+  {
+    "type": "runs",
+    "project": "/r",
+    "branch": null,
+    "runs": [],
+    "fetched_ms": 0,
+    "error": null
+  },
+  {
+    "type": "run",
+    "project": "/r",
+    "run": 1,
+    "detail": null,
+    "error": "m"
+  },
+  {
+    "type": "job_log",
+    "project": "/r",
+    "job": 1,
+    "log": "log",
+    "error": null
+  },
+  {
+    "type": "run_done",
+    "project": "/r",
+    "run": 1,
+    "message": "m"
+  },
+  {
+    "type": "run_failed",
+    "project": "/r",
+    "run": 1,
+    "message": "m"
+  },
+  {
+    "type": "branches",
+    "project": "/r",
+    "local": [
+      "main"
+    ],
+    "remote": [],
+    "current": "main",
+    "error": null
+  },
+  {
+    "type": "worktree_name_validated",
+    "project": "/r",
+    "name": "x",
+    "folder": ".claude/worktrees/x/",
+    "branch": "worktree-x",
+    "error": null
+  },
+  {
+    "type": "worktree_created",
+    "project": {
+      "id": "/r",
+      "name": "r",
+      "path": "/r",
+      "worktrees": [
+        {
+          "id": "/r",
+          "name": "main",
+          "path": "/r",
+          "branch": "main",
+          "main": true,
+          "claude": false,
+          "status": {
+            "changes": 1,
+            "ahead": null,
+            "behind": null,
+            "merged": false,
+            "last_commit_ms": 2
+          }
+        }
+      ],
+      "error": null
+    },
+    "path": "/r/.claude/worktrees/x",
+    "notes": []
+  },
+  {
+    "type": "create_worktree_failed",
+    "project": "/r",
+    "name": "x",
+    "message": "m"
+  },
+  {
+    "type": "worktree_removed",
+    "project": {
+      "id": "/r",
+      "name": "r",
+      "path": "/r",
+      "worktrees": [
+        {
+          "id": "/r",
+          "name": "main",
+          "path": "/r",
+          "branch": "main",
+          "main": true,
+          "claude": false,
+          "status": {
+            "changes": 1,
+            "ahead": null,
+            "behind": null,
+            "merged": false,
+            "last_commit_ms": 2
+          }
+        }
+      ],
+      "error": null
+    },
+    "path": "/r/.claude/worktrees/x"
+  },
+  {
+    "type": "remove_worktree_failed",
+    "path": "/r/.claude/worktrees/x",
+    "message": "m"
+  },
+  {
+    "type": "worktree_renamed",
+    "project": {
+      "id": "/r",
+      "name": "r",
+      "path": "/r",
+      "worktrees": [
+        {
+          "id": "/r",
+          "name": "main",
+          "path": "/r",
+          "branch": "main",
+          "main": true,
+          "claude": false,
+          "status": {
+            "changes": 1,
+            "ahead": null,
+            "behind": null,
+            "merged": false,
+            "last_commit_ms": 2
+          }
+        }
+      ],
+      "error": null
+    },
+    "from": "/r/.claude/worktrees/x",
+    "path": "/r/.claude/worktrees/y"
+  },
+  {
+    "type": "rename_worktree_failed",
+    "path": "/r/.claude/worktrees/x",
+    "name": "y",
+    "message": "m"
+  },
+  {
+    "type": "worktree_status",
+    "path": "/r",
+    "status": null
+  },
+  {
+    "type": "files",
+    "path": "/r",
+    "files": [
+      "a.rs"
+    ],
+    "truncated": false
+  },
+  {
+    "type": "changes",
+    "path": "/r",
+    "base": "head",
+    "branch": null,
+    "base_error": null,
+    "files": [],
+    "added": 0,
+    "removed": 0,
+    "error": null
+  },
+  {
+    "type": "sessions",
+    "sessions": [],
+    "error": null,
+    "truncated": false
+  },
+  {
+    "type": "restore_sessions",
+    "sessions": []
+  },
+  {
+    "type": "session_located",
+    "id": "s",
+    "target": "log",
+    "windows_path": null,
+    "error": "m"
+  },
+  {
+    "type": "session_deleted",
+    "id": "s"
+  },
+  {
+    "type": "delete_session_failed",
+    "id": "s",
+    "message": "m"
+  },
+  {
+    "type": "search_results",
+    "worktree": "/r",
+    "query": "q",
+    "matches": [],
+    "truncated": false,
+    "error": null
+  },
+  {
+    "type": "dirs",
+    "path": "/",
+    "windows": false,
+    "linux_path": "/",
+    "parent": null,
+    "dirs": [],
+    "error": null
+  },
+  {
+    "type": "file",
+    "worktree": "/r",
+    "path": "a.rs",
+    "content": "a",
+    "base": null,
+    "version": "v",
+    "binary": false,
+    "too_large": false,
+    "error": null
+  },
+  {
+    "type": "file_saved",
+    "worktree": "/r",
+    "path": "a.rs",
+    "version": "v"
+  },
+  {
+    "type": "save_failed",
+    "worktree": "/r",
+    "path": "a.rs",
+    "error": "conflict",
+    "message": "m"
+  },
+  {
+    "type": "file_created",
+    "worktree": "/r",
+    "path": "b.rs"
+  },
+  {
+    "type": "file_renamed",
+    "worktree": "/r",
+    "path": "b.rs",
+    "to": "c.rs"
+  },
+  {
+    "type": "folder_created",
+    "worktree": "/r",
+    "path": "d"
+  },
+  {
+    "type": "file_deleted",
+    "worktree": "/r",
+    "path": "c.rs"
+  },
+  {
+    "type": "file_op_failed",
+    "worktree": "/r",
+    "message": "m"
+  },
+  {
+    "type": "editor_target",
+    "worktree": "/r",
+    "path": "a.rs",
+    "windows_path": null,
+    "error": "m"
+  },
+  {
+    "type": "settings",
+    "settings": {
+      "terminal": {
+        "font_family": "\"Hive Mono\", \"Symbols Nerd Font\", monospace",
+        "font_size": 13,
+        "scrollback": 5000,
+        "cursor_style": "block",
+        "cursor_blink": false,
+        "copy_on_select": false
+      },
+      "appearance": {
+        "theme": "one-dark"
+      },
+      "notifications": {
+        "volume": 100
+      },
+      "agents": {
+        "silence_secs": 5,
+        "confirm_close": true
+      },
+      "worktrees": {
+        "default_base": null
+      },
+      "projects": {}
+    }
+  },
+  {
+    "type": "settings_failed",
+    "message": "m"
+  },
+  {
+    "type": "diagnostics",
+    "settings_file": "/h/.config/hive/settings.json",
+    "wrapper": "/h/.local/share/hive/bin/claude",
+    "claude": null
+  },
+  {
+    "type": "error",
+    "message": "m"
+  }
+]

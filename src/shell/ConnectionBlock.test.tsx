@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { asMac } from "../../test/mac";
 import { App } from "../App";
-import { apply, initialState, setOpenFile, useHive } from "../store";
+import { apply } from "../reduce";
+import { initialState, setOpenFile, useHive } from "../store";
 import { MOCK_REPOS } from "../transport/mock";
 import { openInEditor } from "../viewer/external";
 

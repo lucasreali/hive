@@ -1,5 +1,5 @@
+import type { ServiceMessage } from "../protocol";
 import type { PullAction, PullDetail, PullRepo, PullSummary } from "../pulls";
-import type { ServiceMessage } from "../store";
 
 const SHOP = "/home/user/projects/shop";
 const REPO: PullRepo = {

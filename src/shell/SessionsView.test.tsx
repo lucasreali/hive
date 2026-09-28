@@ -1,7 +1,8 @@
 import { afterEach, beforeAll, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
-import { apply, initialState, select, setPanelView, setRightPanel, useHive } from "../store";
+import { apply } from "../reduce";
+import { initialState, select, setPanelView, setRightPanel, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";

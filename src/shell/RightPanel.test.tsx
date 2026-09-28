@@ -18,19 +18,9 @@ import {
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import {
-  apply,
-  type ChangedFile,
-  type Changes,
-  type FileText,
-  initialState,
-  type SearchResults,
-  select,
-  setOpenFile,
-  setPanelView,
-  setRightPanel,
-  useHive,
-} from "../store";
+import type { ChangedFile, Changes, FileText, SearchResults } from "../protocol";
+import { apply } from "../reduce";
+import { initialState, select, setOpenFile, setPanelView, setRightPanel, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
 import * as RightPanelModule from "./RightPanel";

@@ -1,11 +1,5 @@
-import {
-  type AgentState,
-  addToInbox,
-  type HiveState,
-  type ServiceMessage,
-  spaceOf,
-  useHive,
-} from "./store";
+import type { AgentState, ServiceMessage } from "./protocol";
+import { addToInbox, type HiveState, spaceOf, useHive } from "./store";
 import { showNotification } from "./window";
 
 // Presentation of the alerts the service decided (hive.md item 5, 2.4, #37): a tone and an

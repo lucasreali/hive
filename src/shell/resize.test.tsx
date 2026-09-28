@@ -1,16 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
-import {
-  addTab,
-  initialState,
-  LIMITS,
-  savedWidths,
-  setRightPanel,
-  setSplit,
-  setWidth,
-  useHive,
-} from "../store";
+import { LIMITS, savedWidths } from "../persist";
+import { addTab, initialState, setRightPanel, setSplit, setWidth, useHive } from "../store";
 
 afterEach(() => {
   cleanup();

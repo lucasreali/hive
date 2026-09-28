@@ -1,6 +1,7 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import type { Project, Worktree } from "../protocol";
 import { type CheckState, PULLS_INTERVAL_MS } from "../pulls";
 import {
   actOnRun,
@@ -16,16 +17,7 @@ import {
   words,
 } from "../runs";
 import { ago } from "../sessions";
-import {
-  ask,
-  type Project,
-  runsKey,
-  select,
-  setPanelView,
-  setRightPanel,
-  useHive,
-  type Worktree,
-} from "../store";
+import { ask, runsKey, select, setPanelView, setRightPanel, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { ExternalIcon, RefreshIcon } from "./icons";

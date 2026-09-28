@@ -1,5 +1,6 @@
 import { Text } from "@codemirror/state";
-import type { FileText, OpenFile } from "../store";
+import type { FileText } from "../protocol";
+import type { OpenFile } from "../store";
 
 // The open file's edit buffer (3.5, #31): what the editor holds against what is on disk. Pure
 // UI state; the service owns the check that makes a save safe (`save_file` with `version`).

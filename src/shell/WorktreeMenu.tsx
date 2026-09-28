@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { Worktree } from "../protocol";
 import {
   findWorktree,
   openMenu,
@@ -25,7 +26,6 @@ import {
   scriptsOf,
   setNotice,
   useHive,
-  type Worktree,
 } from "../store";
 import { openTerminal, openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";

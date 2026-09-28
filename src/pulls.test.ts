@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { actOnPull, hidePull, newPull, type Pulls, pullOf, setPullBusy, showPull } from "./pulls";
-import { apply, initialState, useHive } from "./store";
+import { apply } from "./reduce";
+import { initialState, useHive } from "./store";
 import { transport } from "./transport";
 import { MOCK_PULLS } from "./transport/mockPulls";
 
