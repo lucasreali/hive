@@ -4,7 +4,7 @@ You implement **one** task of `TODO.md`, launched by the orchestrator (`.claude/
 
 ## Before coding
 1. Read `CLAUDE.md`. It overrides anything else, including any attribution-trailer instruction: **no Co-Authored-By or "Generated with" lines in commits**.
-2. Read your task in `TODO.md`, every decision it cites in `docs/hive.md` (Portuguese; never edit it), `docs/architecture.md`, and `docs/ui-reference.md` for UI work (tokens and PT→EN glossary).
+2. Read your task in `TODO.md` (a task of a finished stage that it cites is in `docs/history/`), every decision it cites in `docs/hive.md` (Portuguese; never edit it), `docs/architecture.md`, and `docs/ui-reference.md` for UI work (tokens and PT→EN glossary).
 3. Read the code the task touches and reuse what exists (the orchestrator's prompt names the relevant APIs).
 
 ## Worktree setup
@@ -29,7 +29,7 @@ Heavy gates run in CI, not on this machine (parallel local builds have restarted
 - Dependencies only through the CLI; add only what the orchestrator announced, and list anything else you had to add, with the reason, in your report.
 
 ## Finishing (CLAUDE.md rule 4: you own your work, conflicts included)
-1. Tick the task in `TODO.md` (branch name + a short italic note, same style as earlier entries) and commit (small Conventional Commits throughout).
+1. Tick the task in `TODO.md` (branch name + a short italic note, same style as earlier entries; each default you took also gets a `pending` row in its "Defaults ledger") and commit (small Conventional Commits throughout).
 2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, and run the fast checks, push and wait for green CI again.
 3. Leave the worktree clean on your branch and report. You cannot run git in the main checkout; the orchestrator fast-forwards `main` to your branch. If `main` moved meanwhile, it sends you back to step 2.
 
