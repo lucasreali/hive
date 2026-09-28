@@ -460,11 +460,16 @@ fn the_bridge_script_prefers_the_override_then_cargo_install() {
 async fn terminal_messages_and_bytes_travel_on_their_channel() {
     let (hive, mut service, mut rx) = welcomed().await;
     let (channel, mut bytes) = output();
-    assert_eq!(hive.open_terminal("/w".into(), 80, 24, channel), Ok(1));
+    let account = Some(AccountDir {
+        config_dir: Some("/c".into()),
+    });
+    let opened = hive.open_terminal("/w".into(), 80, 24, account.clone(), channel);
+    assert_eq!(opened, Ok(1));
     let open = Control::OpenTerminal {
         cwd: "/w".into(),
         cols: 80,
         rows: 24,
+        account,
     };
     assert_eq!(service.control().await, (1, open));
 
@@ -525,7 +530,10 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
     assert!(bytes.try_recv().is_err());
 
     let (channel, _bytes) = output();
-    assert_eq!(hive.open_terminal("/w".into(), 80, 24, channel), Ok(2));
+    assert_eq!(
+        hive.open_terminal("/w".into(), 80, 24, None, channel),
+        Ok(2)
+    );
 }
 
 #[tokio::test]
@@ -824,7 +832,7 @@ async fn channel_numbers_run_out_instead_of_wrapping() {
     hive.link().last_channel = u32::MAX;
     let (channel, _bytes) = output();
     assert_eq!(
-        hive.open_terminal("/".into(), 80, 24, channel),
+        hive.open_terminal("/".into(), 80, 24, None, channel),
         Err("no terminal channel left".into())
     );
 }
@@ -833,7 +841,8 @@ async fn channel_numbers_run_out_instead_of_wrapping() {
 async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
     let (hive, mut service, _old) = welcomed().await;
     let (channel, _bytes) = output();
-    hive.open_terminal("/w".into(), 80, 24, channel).unwrap();
+    hive.open_terminal("/w".into(), 80, 24, None, channel)
+        .unwrap();
     service.control().await;
 
     let (channel, mut rx) = ui();
@@ -903,7 +912,8 @@ async fn welcome_waits_for_a_ui_that_connects_later() {
 async fn bridge_exit_ends_terminals_then_disconnects() {
     let (hive, mut service, mut rx) = welcomed().await;
     let (channel, _bytes) = output();
-    hive.open_terminal("/w".into(), 80, 24, channel).unwrap();
+    hive.open_terminal("/w".into(), 80, 24, None, channel)
+        .unwrap();
     service.control().await;
     // A path sent but not opened before the connection ends.
     let located = Control::SessionLocated {
@@ -1028,7 +1038,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     let (channel, _bytes) = output();
     assert_eq!(
-        hive.open_terminal("/".into(), 1, 1, channel),
+        hive.open_terminal("/".into(), 1, 1, None, channel),
         Err(NOT_CONNECTED.into())
     );
 }
@@ -1252,6 +1262,9 @@ fn commands_reach_the_managed_hive() {
         .build()
         .unwrap();
     let open = json!({"cwd": "/", "cols": 80, "rows": 24, "onData": "__CHANNEL__:2"});
+    let account = json!({"config_dir": null});
+    let with_account =
+        json!({"cwd": "/", "cols": 80, "rows": 24, "account": account, "onData": "__CHANNEL__:2"});
     let write = json!({"id": 1, "data": "x"});
     let resize = json!({"id": 1, "cols": 80, "rows": 24});
     let close = json!({"id": 1});
@@ -1370,7 +1383,10 @@ fn commands_reach_the_managed_hive() {
         invoke(&webview, "open_terminal", open.clone()),
         Ok(json!(1))
     );
-    assert_eq!(invoke(&webview, "open_terminal", open), Ok(json!(2)));
+    assert_eq!(
+        invoke(&webview, "open_terminal", with_account),
+        Ok(json!(2))
+    );
     assert_eq!(invoke(&webview, "write_terminal", write), Ok(Value::Null));
     assert_eq!(invoke(&webview, "resize_terminal", resize), Ok(Value::Null));
     assert_eq!(invoke(&webview, "close_terminal", close), Ok(Value::Null));

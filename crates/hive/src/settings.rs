@@ -7,10 +7,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use hive_protocol::{ProjectScripts, Settings};
+use hive_protocol::{Account, AccountDir, ProjectScripts, Settings};
 
 use crate::git::read_limited;
+use crate::spaces;
 use crate::wrapper::write_atomic;
+
+/// The default Claude account's name (12.2): no `CLAUDE_CONFIG_DIR`, so `~/.claude`.
+pub const DEFAULT_ACCOUNT: &str = "Default";
 
 /// Largest settings file read or written.
 const FILE_LIMIT: u64 = 256 * 1024;
@@ -56,10 +60,67 @@ impl Store {
         self.current().clone()
     }
 
-    /// Checks and saves `settings`, which are then in use. Nothing changes on a failure.
-    pub fn set(&self, settings: Settings) -> Result<Settings, String> {
+    /// Checks and saves `settings`, which are then in use. Nothing changes on a failure. A
+    /// Claude account's folder must exist when it is new; a current account that is gone
+    /// falls back to the default one.
+    pub fn set(&self, mut settings: Settings) -> Result<Settings, String> {
         check(&settings)?;
-        self.save_in(&mut self.current(), settings)
+        let mut current = self.current();
+        let known = &current.0.claude.accounts;
+        for account in &settings.claude.accounts {
+            if known.iter().all(|a| a.config_dir != account.config_dir) {
+                spaces::claude_config_dir(Some(account.config_dir.clone()), true)?;
+            }
+        }
+        settle(&mut settings);
+        self.save_in(&mut current, settings)
+    }
+
+    /// The current Claude account's config folder (12.2); `None`: the default account.
+    pub fn account(&self) -> Option<String> {
+        self.current().0.claude.account.clone()
+    }
+
+    /// Every Claude account's config folder but the default one's.
+    pub fn account_dirs(&self) -> Vec<String> {
+        let current = self.current();
+        let accounts = current.0.claude.accounts.iter();
+        accounts.map(|a| a.config_dir.clone()).collect()
+    }
+
+    /// The Claude config folder a new terminal gets: the `asked` account's, which must be one
+    /// of the accounts, else the current one's (`None`: the default account).
+    pub fn claude_dir(&self, asked: Option<AccountDir>) -> Result<Option<String>, String> {
+        match asked.map(|a| a.config_dir) {
+            None => Ok(self.account()),
+            Some(None) => Ok(None),
+            Some(Some(dir)) if self.account_dirs().contains(&dir) => Ok(Some(dir)),
+            Some(Some(dir)) => Err(format!("No Claude account has the folder {dir}")),
+        }
+    }
+
+    /// Makes an account of each Claude config folder spaces had before accounts existed
+    /// (12.2), given as `(space name, folder)`, unless an account has it already; each is
+    /// named after its space. Nothing is saved while the settings file is ignored (saving
+    /// would replace it): the warning is returned.
+    pub fn migrate(&self, legacy: Vec<(String, String)>) -> Result<(), String> {
+        let mut current = self.current();
+        if let Some(warning) = &current.1 {
+            return Err(warning.clone());
+        }
+        let mut settings = current.0.clone();
+        let accounts = &mut settings.claude.accounts;
+        for (name, config_dir) in legacy {
+            if accounts.iter().all(|a| a.config_dir != config_dir) {
+                let name = free_name(accounts, &name);
+                accounts.push(Account { name, config_dir });
+            }
+        }
+        if settings == current.0 {
+            return Ok(());
+        }
+        check(&settings)?;
+        self.save_in(&mut current, settings).map(drop)
     }
 
     /// Saves `settings` and makes them `current` (held by the caller). Nothing changes on a
@@ -123,6 +184,7 @@ fn read(file: &Path) -> io::Result<Settings> {
     let bytes = read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
     let mut settings: Settings = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
     check(&settings).map_err(io::Error::other)?;
+    settle(&mut settings);
     if settings.terminal.font_family == OLD_FONT_DEFAULT {
         settings.terminal.font_family = Settings::default().terminal.font_family;
     }
@@ -140,8 +202,56 @@ fn save(file: &Path, settings: &Settings) -> io::Result<()> {
     write_atomic(file, &json, 0o600)
 }
 
+/// A current Claude account no account has any more is the default one.
+fn settle(settings: &mut Settings) {
+    let claude = &mut settings.claude;
+    let gone = |dir: &String| claude.accounts.iter().all(|a| a.config_dir != *dir);
+    if claude.account.as_ref().is_some_and(gone) {
+        claude.account = None;
+    }
+}
+
+/// `name`, or `name 2`, `name 3`… when an account, or the default one, has it.
+fn free_name(accounts: &[Account], name: &str) -> String {
+    let taken = |n: &str| n == DEFAULT_ACCOUNT || accounts.iter().any(|a| a.name == n);
+    // One of these is free: there are more of them than accounts.
+    let names = (1..=accounts.len() + 2).map(|n| match n {
+        1 => name.to_owned(),
+        n => format!("{name} {n}"),
+    });
+    names.into_iter().find(|n| !taken(n)).unwrap_or_default()
+}
+
+/// The Claude accounts (12.2): each name as a space's (`spaces::name_of`), unique and not the
+/// default account's; each folder as a space's was (absolute, printable), unique. Neither
+/// with spaces around it.
+fn accounts(accounts: &[Account]) -> Result<(), String> {
+    for (i, account) in accounts.iter().enumerate() {
+        let (name, dir) = (&account.name, &account.config_dir);
+        if spaces::name_of("the account", name)? != *name {
+            return Err(format!("The account name {name:?} has spaces around it"));
+        }
+        if spaces::claude_config_dir(Some(dir.clone()), false)?.as_ref() != Some(dir) {
+            return Err(format!(
+                "The Claude config folder of {name} is blank or has spaces around it"
+            ));
+        }
+        let before = &accounts[..i];
+        if name == DEFAULT_ACCOUNT || before.iter().any(|a| a.name == *name) {
+            return Err(format!("Another account is named {name}"));
+        }
+        if before.iter().any(|a| a.config_dir == *dir) {
+            return Err(format!(
+                "Another account has the Claude config folder {dir}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Every value within its range, with a message naming the first that is not.
 pub fn check(settings: &Settings) -> Result<(), String> {
+    accounts(&settings.claude.accounts)?;
     let terminal = &settings.terminal;
     range("terminal.font_size", terminal.font_size, 8, 32)?;
     range("terminal.scrollback", terminal.scrollback, 1000, 100_000)?;
@@ -524,5 +634,157 @@ mod tests {
             refused(twice),
             "projects./r.scripts.run.name \"dev\" is used twice"
         );
+    }
+
+    fn account(name: &str, dir: &str) -> Account {
+        Account {
+            name: name.into(),
+            config_dir: dir.into(),
+        }
+    }
+
+    #[test]
+    fn accounts_are_saved_read_back_and_chosen_for_new_terminals() {
+        let (tmp, store) = store();
+        let work = tmp.path().join("work").display().to_string();
+        std::fs::create_dir(&work).unwrap();
+        let mut settings = Settings::default();
+        settings.claude.accounts.push(account("Work", &work));
+        settings.claude.account = Some(work.clone());
+        assert_eq!(store.set(settings.clone()), Ok(settings.clone()));
+        assert_eq!(store.account(), Some(work.clone()));
+        assert_eq!(store.account_dirs(), std::slice::from_ref(&work));
+        let file = tmp.path().join("hive/settings.json");
+        assert_eq!(Store::load(file.clone()).get(), (settings.clone(), None));
+        // A terminal gets the current account, or the one asked for when it is an account.
+        let asked = |dir: Option<&str>| {
+            store.claude_dir(Some(AccountDir {
+                config_dir: dir.map(Into::into),
+            }))
+        };
+        assert_eq!(store.claude_dir(None), Ok(Some(work.clone())));
+        assert_eq!(asked(None), Ok(None));
+        assert_eq!(asked(Some(&work)), Ok(Some(work.clone())));
+        assert_eq!(
+            asked(Some("/other")),
+            Err("No Claude account has the folder /other".into())
+        );
+
+        // A known folder may be gone since; a new one must exist.
+        std::fs::remove_dir(&work).unwrap();
+        settings.agents.silence_secs = 9;
+        assert_eq!(store.set(settings.clone()), Ok(settings.clone()));
+        let missing = tmp.path().join("new").display().to_string();
+        let mut added = settings.clone();
+        added.claude.accounts.push(account("New", &missing));
+        assert_eq!(
+            store.set(added),
+            Err(format!(
+                "The Claude config folder: {missing} is not a folder"
+            ))
+        );
+        // Removing the current account makes the default one current.
+        settings.claude.accounts.clear();
+        let mut fallen = settings.clone();
+        fallen.claude.account = None;
+        assert_eq!(store.set(settings), Ok(fallen.clone()));
+        assert_eq!(store.account(), None);
+        // A file naming no account's folder as the current one reads as the default one.
+        std::fs::write(&file, r#"{"claude":{"account":"/gone"}}"#).unwrap();
+        assert_eq!(Store::load(file).get(), (Settings::default(), None));
+    }
+
+    #[test]
+    fn account_names_and_folders_are_checked() {
+        let refused = |accounts: &[Account]| {
+            let mut settings = Settings::default();
+            settings.claude.accounts = accounts.to_vec();
+            check(&settings).unwrap_err()
+        };
+        let long = "x".repeat(spaces::NAME_LIMIT + 1);
+        let cases = [
+            (vec![account(" ", "/a")], "Enter a name for the account"),
+            (
+                vec![account(&long, "/a")],
+                "The name is longer than 64 characters",
+            ),
+            (
+                vec![account(" Work", "/a")],
+                "The account name \" Work\" has spaces around it",
+            ),
+            (
+                vec![account("W", "a")],
+                "The Claude config folder must be an absolute path",
+            ),
+            (
+                vec![account("W", " ")],
+                "The Claude config folder of W is blank or has spaces around it",
+            ),
+            (
+                vec![account("W", "/a ")],
+                "The Claude config folder of W is blank or has spaces around it",
+            ),
+            (
+                vec![account("Default", "/a")],
+                "Another account is named Default",
+            ),
+            (
+                vec![account("W", "/a"), account("W", "/b")],
+                "Another account is named W",
+            ),
+            (
+                vec![account("W", "/a"), account("V", "/a")],
+                "Another account has the Claude config folder /a",
+            ),
+        ];
+        for (accounts, message) in cases {
+            assert_eq!(refused(&accounts), message);
+        }
+        let mut fine = Settings::default();
+        fine.claude.accounts = vec![account("W", "/a"), account("V", "/b")];
+        assert_eq!(check(&fine), Ok(()));
+    }
+
+    #[test]
+    fn the_spaces_claude_folders_become_accounts_once() {
+        let (tmp, store) = store();
+        let legacy = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+            list.iter()
+                .map(|(n, d)| (n.to_string(), d.to_string()))
+                .collect()
+        };
+        // Nothing to make: nothing is written.
+        assert_eq!(store.migrate(vec![]), Ok(()));
+        assert!(!tmp.path().join("hive").exists());
+        let spaces = [
+            ("Work", "/w"),
+            ("Default", "/d"),
+            ("Also work", "/w"),
+            ("Work", "/x"),
+            ("Default", "/y"),
+        ];
+        assert_eq!(store.migrate(legacy(&spaces)), Ok(()));
+        let made = [
+            account("Work", "/w"),
+            account("Default 2", "/d"),
+            account("Work 2", "/x"),
+            account("Default 3", "/y"),
+        ];
+        assert_eq!(store.get().0.claude.accounts, made);
+        // Idempotent: a folder already an account is not made again.
+        assert_eq!(store.migrate(legacy(&spaces)), Ok(()));
+        let file = tmp.path().join("hive/settings.json");
+        assert_eq!(Store::load(file.clone()).get().0.claude.accounts, made);
+        // A name made too long by its number is refused, and nothing changes.
+        let long = "x".repeat(spaces::NAME_LIMIT);
+        let err = store.migrate(legacy(&[(&long, "/l"), (&long, "/m")]));
+        assert_eq!(err, Err("The name is longer than 64 characters".into()));
+        assert_eq!(store.get().0.claude.accounts, made);
+        // An ignored settings file is not replaced.
+        std::fs::write(&file, "{").unwrap();
+        let ignored = Store::load(file.clone());
+        let err = ignored.migrate(legacy(&[("Z", "/z")])).unwrap_err();
+        assert!(err.starts_with("Ignoring "), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{");
     }
 }

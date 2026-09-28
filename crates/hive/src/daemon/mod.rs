@@ -58,6 +58,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
+    projects.migrate_accounts(|legacy| settings.migrate(legacy));
     let ports = Ports::new(paths.ports());
     let restore = Restore {
         file: paths.open_sessions(),
@@ -484,8 +485,8 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Answers a request on the current space's projects and their Claude sessions (in the
-    /// space's Claude folder) off the frame loop, since reading logs can take a while too.
+    /// Answers a request on the current space's projects and their Claude sessions (in every
+    /// account's Claude folder, 12.2) off the frame loop, since reading logs can take a while too.
     /// The request also gets the sessions of the detected agents, read off the frame loop
     /// too: typing never waits for the agents lock (9.13).
     fn sessions(
@@ -497,10 +498,18 @@ impl State {
             let agents = state.agents.lock().await.keys().cloned().collect();
             let asked = state.clone();
             state.projects(move |projects| {
-                let (current, claude_dir) = projects.current();
-                request(&current, &asked.sessions.at(claude_dir.as_deref()), agents)
+                request(&projects.current(), &asked.accounts_sessions(None), agents)
             });
         });
+    }
+
+    /// The sessions of `first`'s Claude config folder (a terminal's; `None`: the default
+    /// account's), then of the default account and every other account (12.2).
+    fn accounts_sessions(&self, first: Option<&str>) -> Sessions {
+        let dirs = self.settings.account_dirs();
+        let others = dirs.iter().map(|dir| Some(dir.as_str()));
+        let dirs = [first, None].into_iter().chain(others);
+        self.sessions.at(dirs)
     }
 
     /// Applies a space request (6.14): answers the spaces, or why nothing changed.

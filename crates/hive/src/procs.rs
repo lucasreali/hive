@@ -100,16 +100,17 @@ pub fn inside(source: Source, dir: &Path) -> Vec<Proc> {
 }
 
 /// The Claude session each `claude` process is known to run. A process tells it through, in
-/// this order: Claude's own record `<records>/<pid>.json` (`sessionId`), its arguments
+/// this order: Claude's own record `<records>/<pid>.json` (`sessionId`; one folder per Claude
+/// account, 12.2, the first holding it), its arguments
 /// (`--session-id <id>`, or `--resume <id>` unless it forks), or an open `<id>.jsonl` log. A
 /// process none of these name (a bare `claude`, `--continue`) marks nothing.
-pub fn claude_sessions(source: Source, records: Option<&Path>) -> HashSet<String> {
+pub fn claude_sessions(source: Source, records: &[PathBuf]) -> HashSet<String> {
     list(source)
         .into_iter()
         .filter(|p| p.comm == "claude")
         .filter_map(|p| {
-            records
-                .and_then(|dir| recorded(dir, p.pid))
+            (records.iter())
+                .find_map(|dir| recorded(dir, p.pid))
                 .or_else(|| source.args(p.pid).and_then(|args| named(&args)))
                 .or_else(|| source.open_files(p.pid).iter().find_map(|f| logged(f)))
         })
@@ -386,13 +387,15 @@ mod tests {
         fds(32, &["/dev/pts/1", "/h/.claude/history.jsonl", &log]);
         fds(33, &["/r/notes.jsonl", "/"]);
 
-        let found = claude_sessions(Source::Dir(root.path()), Some(records.path()));
+        // The first records folder without the process's record: the next one tells.
+        let folders = [root.path().join("gone"), records.path().to_owned()];
+        let found = claude_sessions(Source::Dir(root.path()), &folders);
         let mut found: Vec<_> = found.into_iter().collect();
         found.sort();
         assert_eq!(found, [id(1), id(2), id(3), id(4), id(5), id(6)]);
 
         // Without records, the arguments tell.
-        let found = claude_sessions(Source::Dir(root.path()), None);
+        let found = claude_sessions(Source::Dir(root.path()), &[]);
         assert!(
             found.contains(&id(99)) && !found.contains(&id(1)),
             "{found:?}"

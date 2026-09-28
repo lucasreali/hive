@@ -160,6 +160,10 @@ pub enum Control {
         cwd: String,
         cols: u16,
         rows: u16,
+        /// The Claude account the terminal gets (12.2): one of the settings' accounts, e.g. a
+        /// session's own to resume it; `None`: the current account.
+        #[serde(default)]
+        account: Option<AccountDir>,
     },
     /// The terminal is running. `worktree` is the id of the followed worktree holding its
     /// `cwd` (`projects::place`: resolved, the deepest wins), `None` outside every followed
@@ -876,6 +880,31 @@ pub struct Settings {
     pub worktrees: WorktreeSettings,
     /// By project id (its path).
     pub projects: BTreeMap<String, ProjectSettings>,
+    pub claude: ClaudeSettings,
+}
+
+/// The Claude accounts (12.2), besides the default one (no `CLAUDE_CONFIG_DIR`: `~/.claude`),
+/// which always exists.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaudeSettings {
+    pub accounts: Vec<Account>,
+    /// The current account's folder: new terminals get it as `CLAUDE_CONFIG_DIR`. `None`, or a
+    /// folder no account has: the default account.
+    pub account: Option<String>,
+}
+
+/// A Claude account: a name and its `CLAUDE_CONFIG_DIR`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Account {
+    pub name: String,
+    pub config_dir: String,
+}
+
+/// Which Claude account a terminal gets: `config_dir` `None` is the default account.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AccountDir {
+    pub config_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -992,7 +1021,8 @@ pub struct RunScript {
     pub command: String,
 }
 
-/// A group of projects (6.14) with an optional identity for the terminals opened in them.
+/// A group of projects (6.14) with an optional identity for the terminals opened in them (the
+/// Claude account is not the space's, 12.2: [`ClaudeSettings`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Space {
     pub id: String,
@@ -1008,8 +1038,6 @@ pub struct Space {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SpaceEnv {
-    /// `CLAUDE_CONFIG_DIR`; its `projects` folder holds the space's sessions.
-    pub claude_config_dir: Option<String>,
     /// `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME`.
     pub git_name: Option<String>,
     /// `GIT_AUTHOR_EMAIL` and `GIT_COMMITTER_EMAIL`.
@@ -1332,13 +1360,19 @@ pub struct Session {
     /// outside Hive (Claude's record of the process, its `--resume`/`--session-id`, or its
     /// open log name it).
     pub running: bool,
+    /// The Claude config folder its log is in (the account it ran as, 12.2); `None`: the
+    /// default account's.
+    pub config_dir: Option<String>,
 }
 
-/// A Claude session that ran in a Hive terminal, and the folder it ran in.
+/// A Claude session that ran in a Hive terminal, the folder it ran in and its terminal's Claude
+/// config folder (`None`: the default account, 12.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenSession {
     pub id: String,
     pub cwd: String,
+    #[serde(default)]
+    pub config_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1724,6 +1758,27 @@ mod tests {
             &Frame::control(1, &opened).payload[..],
             br#"{"type":"terminal_opened","worktree":"/r"}"#
         );
+        // Without an account: the current one (12.2); with one, `null` is the default account.
+        let open: Control =
+            serde_json::from_str(r#"{"type":"open_terminal","cwd":"/r","cols":80,"rows":24}"#)
+                .unwrap();
+        let current = Control::OpenTerminal {
+            cwd: "/r".into(),
+            cols: 80,
+            rows: 24,
+            account: None,
+        };
+        assert_eq!(open, current);
+        let default = Control::OpenTerminal {
+            cwd: "/r".into(),
+            cols: 80,
+            rows: 24,
+            account: Some(AccountDir::default()),
+        };
+        assert_eq!(
+            &Frame::control(1, &default).payload[..],
+            br#"{"type":"open_terminal","cwd":"/r","cols":80,"rows":24,"account":{"config_dir":null}}"#
+        );
         let owned = Control::SubagentWorktrees {
             worktrees: vec!["/r/.claude/worktrees/a".into()],
         };
@@ -1794,7 +1849,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&spaces).unwrap(),
-            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"claude_config_dir":null,"git_name":null,"git_email":"a@b","gh_config_dir":null,"gh_account":null}}],"current":"default"}"#
+            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"git_name":null,"git_email":"a@b","gh_config_dir":null,"gh_account":null}}],"current":"default"}"#
         );
         let accounts = Control::GhAccounts {
             gh_config_dir: Some("/g".into()),
@@ -1992,6 +2047,7 @@ mod tests {
             log: "/c/s.jsonl".into(),
             state: AgentState::Ended,
             running: false,
+            config_dir: Some("/c".into()),
         };
         let sessions = Control::Sessions {
             sessions: vec![session],
@@ -2000,7 +2056,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &sessions).payload[..],
-            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false}],"error":null,"truncated":true}"#
+            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false,"config_dir":"/c"}],"error":null,"truncated":true}"#
         );
         let usage = Control::AgentUsage {
             id: "s".into(),
@@ -2024,12 +2080,16 @@ mod tests {
             sessions: vec![OpenSession {
                 id: "s".into(),
                 cwd: "/r".into(),
+                config_dir: None,
             }],
         };
         assert_eq!(
             &Frame::control(0, &restore).payload[..],
-            br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r"}]}"#
+            br#"{"type":"restore_sessions","sessions":[{"id":"s","cwd":"/r","config_dir":null}]}"#
         );
+        // One kept before accounts (12.2) ran as the default account.
+        let old: OpenSession = serde_json::from_str(r#"{"id":"s","cwd":"/r"}"#).unwrap();
+        assert_eq!(old.config_dir, None);
         for message in [
             Control::AgentTitle {
                 id: "s".into(),
@@ -2350,13 +2410,17 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
         );
         let partial: Control = serde_json::from_str(
-            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"unknown":1}}"#,
+            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,
         )
         .unwrap();
         let mut expected = Settings::default();
+        expected.claude.accounts.push(Account {
+            name: "Work".into(),
+            config_dir: "/w".into(),
+        });
         expected.terminal.cursor_style = CursorStyle::Bar;
         expected.appearance.theme = Theme::OneLight;
         expected

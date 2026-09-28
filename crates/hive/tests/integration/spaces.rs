@@ -28,8 +28,10 @@ fn failed(message: &str) -> Control {
 async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     let repo = Repo::new();
     let root = repo.root.display().to_string();
-    let claude = repo.env.path("home/work-claude");
-    let logs = claude.join("projects").join(
+    // The default Claude account's sessions (the accounts are `accounts.rs`', 12.2).
+    let claude = repo.env.path("home/work-gh");
+    std::fs::create_dir_all(&claude).unwrap();
+    let logs = repo.env.path("home/.claude/projects").join(
         root.chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect::<String>(),
@@ -69,7 +71,6 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     );
 
     let env = SpaceEnv {
-        claude_config_dir: Some(claude.clone()),
         git_name: Some("Work Me".into()),
         git_email: Some("me@work".into()),
         gh_config_dir: Some(claude.clone()),
@@ -100,11 +101,11 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     let added = app.control().await.1;
     assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
 
-    // Its terminals get the space's identity, and its agents' sessions are in its folder.
+    // Its terminals get the space's identity (no Claude account: that is not the space's).
     app.open_terminal(1, &repo.root).await;
-    let echo = "echo \"$CLAUDE_CONFIG_DIR|$GIT_AUTHOR_NAME|$GIT_COMMITTER_NAME|$GIT_AUTHOR_EMAIL|$GIT_COMMITTER_EMAIL|$GH_CONFIG_DIR\"\r";
+    let echo = "echo \"[$CLAUDE_CONFIG_DIR]$GIT_AUTHOR_NAME|$GIT_COMMITTER_NAME|$GIT_AUTHOR_EMAIL|$GIT_COMMITTER_EMAIL|$GH_CONFIG_DIR\"\r";
     app.input(1, echo).await;
-    let expected = format!("{claude}|Work Me|Work Me|me@work|me@work|{claude}");
+    let expected = format!("[]Work Me|Work Me|me@work|me@work|{claude}");
     app.output_until(1, &expected).await;
     let start = json!({"session_id": "s", "cwd": root});
     let seen = hook(&repo, &mut app, "1", "SessionStart", start).await;
@@ -212,11 +213,8 @@ async fn a_terminal_gets_the_space_of_the_project_its_folder_resolves_into() {
     ask(&mut app, add(&other)).await;
     let added = app.control().await.1;
     assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
-    let claude = repo.env.path("home/work-claude");
-    std::fs::create_dir(&claude).unwrap();
-    let claude = claude.display().to_string();
     let env = SpaceEnv {
-        claude_config_dir: Some(claude.clone()),
+        git_name: Some("Work Me".into()),
         ..SpaceEnv::default()
     };
     let create = Control::CreateSpace {
@@ -230,15 +228,14 @@ async fn a_terminal_gets_the_space_of_the_project_its_folder_resolves_into() {
     assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
 
     // Both folders lie in `other` by their names, but in the Work project once resolved.
-    let echo = "echo \"config=$CLAUDE_CONFIG_DIR.\"\r";
+    let echo = "echo \"name=$GIT_AUTHOR_NAME.\"\r";
     for (channel, cwd) in [
         (1, format!("{other}/link")),
         (2, format!("{other}/../repo")),
     ] {
         app.open_terminal(channel, std::path::Path::new(&cwd)).await;
         app.input(channel, echo).await;
-        app.output_until(channel, &format!("config={claude}."))
-            .await;
+        app.output_until(channel, "name=Work Me.").await;
     }
     drop(app);
     assert!(daemon.wait_exit().success());
@@ -368,7 +365,14 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
     replies.push(ask(&mut app, gone).await);
     let cwd = repo.root.display().to_string();
     let (cols, rows) = (80, 24);
-    app.send(3, Control::OpenTerminal { cwd, cols, rows }).await;
+    let account = None;
+    let open = Control::OpenTerminal {
+        cwd,
+        cols,
+        rows,
+        account,
+    };
+    app.send(3, open).await;
     let notice = Control::Notice {
         message: "No GitHub token for octo-gone on github.com: this terminal uses gh's active account (gh auth token --hostname github.com --user octo-gone failed: no oauth token found for octo-gone)".into(),
     };

@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction, Role,
-    RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    AccountDir, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction,
+    Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -366,15 +366,23 @@ impl Hive {
     }
 
     /// Opens a terminal on a new channel; its output goes to `output`. Returns the channel.
+    /// A terminal in `cwd` with the Claude `account` asked for (12.2; `None`: the current one).
     pub fn open_terminal(
         &self,
         cwd: String,
         cols: u16,
         rows: u16,
+        account: Option<AccountDir>,
         output: Channel<InvokeResponseBody>,
     ) -> Result<u32, String> {
         let mut link = self.link();
-        let id = link.open(&Control::OpenTerminal { cwd, cols, rows })?;
+        let open = Control::OpenTerminal {
+            cwd,
+            cols,
+            rows,
+            account,
+        };
+        let id = link.open(&open)?;
         link.terminals.insert(id, output);
         Ok(id)
     }
@@ -899,9 +907,10 @@ pub mod commands {
         cwd: String,
         cols: u16,
         rows: u16,
+        account: Option<AccountDir>,
         on_data: Channel<InvokeResponseBody>,
     ) -> Result<u32, String> {
-        hive.open_terminal(cwd, cols, rows, on_data)
+        hive.open_terminal(cwd, cols, rows, account, on_data)
     }
 
     #[tauri::command]

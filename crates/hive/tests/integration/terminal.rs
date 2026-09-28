@@ -221,6 +221,7 @@ async fn invalid_open_requests_are_answered_with_errors() {
         cwd: cwd.into(),
         cols: 80,
         rows: 24,
+        account: None,
     };
     let home = env.path("home").to_string_lossy().into_owned();
 

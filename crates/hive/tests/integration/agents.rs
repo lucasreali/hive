@@ -770,6 +770,7 @@ async fn sessions_running_when_the_app_closes_are_sent_to_the_next_app() {
     let open = |id: &str| OpenSession {
         id: id.into(),
         cwd: root.clone(),
+        config_dir: None,
     };
     assert_eq!(
         app.control().await,
@@ -878,7 +879,7 @@ async fn an_agent_gets_its_session_name_and_its_renames() {
 /// The app's next `agent_usage`, skipping other messages.
 /// The first `agent_usage` among a hook call's messages `seen`, else the app's next one: the
 /// tick that reads the transcript may come before the call is settled.
-async fn next_usage(app: &mut Conn, seen: Vec<(u32, Control)>) -> Control {
+pub(crate) async fn next_usage(app: &mut Conn, seen: Vec<(u32, Control)>) -> Control {
     let usage = |(channel, message): &(u32, Control)| {
         *channel == 1 && matches!(message, Control::AgentUsage { .. })
     };

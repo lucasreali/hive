@@ -1,6 +1,7 @@
 //! Spaces (6.14): groups of followed projects, e.g. work and personal, each with an optional
-//! identity for the terminals opened in its projects. `hive::projects` keeps them in
-//! `<data>/hive/spaces.json`; this module holds the rules.
+//! identity for the terminals opened in its projects (git and `gh`; the Claude account is
+//! `hive::settings`', 12.2). `hive::projects` keeps them in `<data>/hive/spaces.json`; this
+//! module holds the rules.
 
 use std::path::Path;
 
@@ -11,8 +12,8 @@ use crate::gh;
 
 /// The space the flat project list of earlier versions moves into.
 pub const DEFAULT_ID: &str = "default";
-/// Longest space name, in characters.
-const NAME_LIMIT: usize = 64;
+/// Longest space (or Claude account) name, in characters.
+pub const NAME_LIMIT: usize = 64;
 /// Longest git name or email, in bytes.
 const TEXT_LIMIT: usize = 256;
 /// Longest folder path, in bytes.
@@ -180,8 +181,13 @@ fn unknown(id: &str) -> String {
 
 /// The name, trimmed: not blank, at most [`NAME_LIMIT`] characters, no control characters.
 fn check_name(name: &str) -> Result<String, String> {
+    name_of("the space", name)
+}
+
+/// The name of `what`, as [`check_name`] checks a space's.
+pub fn name_of(what: &str, name: &str) -> Result<String, String> {
     let name = text("The name", Some(name.to_owned()), usize::MAX)?;
-    let name = name.ok_or_else(|| "Enter a name for the space".to_owned())?;
+    let name = name.ok_or_else(|| format!("Enter a name for {what}"))?;
     if name.chars().count() > NAME_LIMIT {
         return Err(format!("The name is longer than {NAME_LIMIT} characters"));
     }
@@ -218,7 +224,6 @@ fn dir(field: &str, value: Option<String>, on_disk: bool) -> Result<Option<Strin
 /// The environment as kept: blank values unset, the rest checked (see [`text`], [`dir`]).
 fn check_env(env: SpaceEnv, on_disk: bool) -> Result<SpaceEnv, String> {
     Ok(SpaceEnv {
-        claude_config_dir: dir("The Claude config folder", env.claude_config_dir, on_disk)?,
         git_name: text("The git name", env.git_name, TEXT_LIMIT)?,
         git_email: text("The git email", env.git_email, TEXT_LIMIT)?,
         gh_config_dir: gh_config_dir(env.gh_config_dir, on_disk)?,
@@ -227,6 +232,11 @@ fn check_env(env: SpaceEnv, on_disk: bool) -> Result<SpaceEnv, String> {
             None => None,
         },
     })
+}
+
+/// A Claude account's config folder (12.2), as [`dir`] checks it.
+pub fn claude_config_dir(value: Option<String>, on_disk: bool) -> Result<Option<String>, String> {
+    dir("The Claude config folder", value, on_disk)
 }
 
 /// The GitHub CLI config folder, as [`dir`] checks it; also the one `gh_accounts` lists in.
@@ -238,7 +248,6 @@ pub fn gh_config_dir(value: Option<String>, on_disk: bool) -> Result<Option<Stri
 /// command).
 pub fn vars(env: &SpaceEnv) -> Vec<(&'static str, String)> {
     let vars = [
-        ("CLAUDE_CONFIG_DIR", &env.claude_config_dir),
         ("GIT_AUTHOR_NAME", &env.git_name),
         ("GIT_COMMITTER_NAME", &env.git_name),
         ("GIT_AUTHOR_EMAIL", &env.git_email),
@@ -257,10 +266,9 @@ mod tests {
 
     fn env(dir: Option<&str>, name: Option<&str>) -> SpaceEnv {
         SpaceEnv {
-            claude_config_dir: dir.map(Into::into),
             git_name: name.map(Into::into),
             git_email: None,
-            gh_config_dir: None,
+            gh_config_dir: dir.map(Into::into),
             gh_account: None,
         }
     }
@@ -405,13 +413,28 @@ mod tests {
         );
         assert_eq!(
             create(&mut spaces, "n", env(Some("rel/dir"), None)),
-            "The Claude config folder must be an absolute path"
+            "The GitHub CLI config folder must be an absolute path"
         );
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("missing").display().to_string();
         assert_eq!(
             create(&mut spaces, "n", env(Some(&missing), None)),
-            format!("The Claude config folder: {missing} is not a folder")
+            format!("The GitHub CLI config folder: {missing} is not a folder")
+        );
+        // A Claude account's folder and name (12.2) follow the same rules.
+        assert_eq!(
+            claude_config_dir(Some(missing.clone()), true),
+            Err(format!(
+                "The Claude config folder: {missing} is not a folder"
+            ))
+        );
+        assert_eq!(
+            claude_config_dir(Some(missing.clone()), false),
+            Ok(Some(missing))
+        );
+        assert_eq!(
+            name_of("the account", " "),
+            Err("Enter a name for the account".into())
         );
         let gh = SpaceEnv {
             gh_config_dir: Some("/x".repeat(2049)),
@@ -489,7 +512,6 @@ mod tests {
     fn a_space_sets_only_what_it_has() {
         assert_eq!(vars(&SpaceEnv::default()), []);
         let full = SpaceEnv {
-            claude_config_dir: Some("/c".into()),
             git_name: Some("Me".into()),
             git_email: Some("me@x".into()),
             gh_config_dir: Some("/g".into()),
@@ -500,7 +522,6 @@ mod tests {
             }),
         };
         let expected = [
-            ("CLAUDE_CONFIG_DIR", "/c"),
             ("GIT_AUTHOR_NAME", "Me"),
             ("GIT_COMMITTER_NAME", "Me"),
             ("GIT_AUTHOR_EMAIL", "me@x"),

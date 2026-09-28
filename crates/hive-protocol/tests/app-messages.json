@@ -157,7 +157,6 @@
           "/r"
         ],
         "env": {
-          "claude_config_dir": null,
           "git_name": null,
           "git_email": null,
           "gh_config_dir": null,
@@ -515,7 +514,11 @@
       "worktrees": {
         "default_base": null
       },
-      "projects": {}
+      "projects": {},
+      "claude": {
+        "accounts": [],
+        "account": null
+      }
     }
   },
   {

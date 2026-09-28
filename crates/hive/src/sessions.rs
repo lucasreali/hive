@@ -1,5 +1,6 @@
 //! Claude Code's session logs of the followed projects, for the sidebar's Sessions: every
-//! `<claude dir>/projects/<encoded cwd>/<id>.jsonl` whose `cwd` lies in a followed worktree.
+//! `<claude dir>/projects/<encoded cwd>/<id>.jsonl` whose `cwd` lies in a followed worktree, in
+//! the folder of every Claude account (12.2).
 //! Logs are only read, except when the user deletes one.
 
 use std::collections::{HashMap, HashSet};
@@ -324,34 +325,54 @@ pub fn valid_id(id: &str) -> bool {
 /// What was read of each log.
 type Cache = Mutex<HashMap<PathBuf, Entry>>;
 
-/// The logs of one Claude directory, each read once: a log that grew is read from where it
-/// was left.
+/// The logs of Claude's projects folders, each read once: a log that grew is read from where
+/// it was left.
 pub struct Sessions {
-    root: Option<PathBuf>,
+    /// The default account's projects folder (see [`root`]).
+    default: Option<PathBuf>,
+    /// Each projects folder read, with its account's Claude config folder (`None`: the default
+    /// account's).
+    roots: Vec<(Option<String>, PathBuf)>,
     cache: Arc<Cache>,
 }
 
 impl Sessions {
+    /// The logs of the default account, in `root`.
     pub fn new(root: Option<PathBuf>) -> Self {
+        let roots = root.iter().map(|root| (None, root.clone())).collect();
         Self {
-            root,
+            default: root,
+            roots,
             cache: Arc::default(),
         }
     }
 
-    /// The logs of a space's Claude config folder `claude_dir` (its `projects` folder), or
-    /// these when it has none; the summaries are shared.
-    pub fn at(&self, claude_dir: Option<&str>) -> Self {
-        let root = claude_dir.map(|dir| Path::new(dir).join("projects"));
+    /// The logs of the accounts whose Claude config folders are `dirs` (their `projects`
+    /// folders; `None`: the default account's), each folder once; the summaries are shared.
+    pub fn at<'a>(&self, dirs: impl IntoIterator<Item = Option<&'a str>>) -> Self {
+        let mut roots: Vec<(Option<String>, PathBuf)> = Vec::new();
+        for dir in dirs {
+            let root = match dir {
+                Some(dir) => Path::new(dir).join("projects"),
+                None => match &self.default {
+                    Some(root) => root.clone(),
+                    None => continue,
+                },
+            };
+            if roots.iter().all(|(_, r)| *r != root) {
+                roots.push((dir.map(str::to_owned), root));
+            }
+        }
         Self {
-            root: root.or_else(|| self.root.clone()),
+            default: self.default.clone(),
+            roots,
             cache: self.cache.clone(),
         }
     }
 
-    /// Claude's projects folder, when known.
-    pub fn root(&self) -> Option<&Path> {
-        self.root.as_deref()
+    /// Claude's projects folders.
+    pub fn roots(&self) -> Vec<PathBuf> {
+        self.roots.iter().map(|(_, root)| root.clone()).collect()
     }
 
     /// Every session whose `cwd` lies in a followed worktree, the most recent first, at most
@@ -362,24 +383,26 @@ impl Sessions {
         projects: &[Project],
         running: &HashSet<String>,
     ) -> io::Result<(Vec<Session>, bool)> {
-        let Some(root) = &self.root else {
-            return Ok((Vec::new(), false));
-        };
         let prefixes: Vec<String> = projects.iter().map(|p| normalized(&p.path)).collect();
-        let dirs = match std::fs::read_dir(root) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), false)),
-            dirs => dirs?,
-        };
         let mut logs = Vec::new();
-        for dir in dirs.flatten() {
-            let name = normalized(&dir.file_name().to_string_lossy());
-            if !prefixes.iter().any(|p| name.starts_with(p.as_str())) {
-                continue;
-            }
-            let Ok(entries) = std::fs::read_dir(dir.path()) else {
-                continue;
+        for (config_dir, root) in &self.roots {
+            let dirs = match std::fs::read_dir(root) {
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                dirs => dirs?,
             };
-            logs.extend(entries.flatten().filter_map(|e| found(e.path())));
+            for dir in dirs.flatten() {
+                let name = normalized(&dir.file_name().to_string_lossy());
+                if !prefixes.iter().any(|p| name.starts_with(p.as_str())) {
+                    continue;
+                }
+                let Ok(entries) = std::fs::read_dir(dir.path()) else {
+                    continue;
+                };
+                let found = entries
+                    .flatten()
+                    .filter_map(|e| found(e.path(), config_dir));
+                logs.extend(found);
+            }
         }
         logs.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
         let mut sessions: Vec<_> = logs
@@ -406,24 +429,13 @@ impl Sessions {
         summary.title.or(summary.first_prompt)
     }
 
-    /// The log of the session `id` that ran in `cwd`, in the folder Claude keeps for `cwd`,
-    /// when it is a regular file.
+    /// The log of the session `id` that ran in `cwd`, in the folder Claude keeps for `cwd` (in
+    /// the first projects folder holding it), when it is a regular file.
     pub fn log(&self, id: &str, cwd: &str) -> Option<PathBuf> {
-        let root = self.root.as_ref().filter(|_| valid_id(id))?;
-        let folder = normalized(cwd);
-        let name = format!("{id}.jsonl");
-        let is_log = |log: &PathBuf| log.symlink_metadata().is_ok_and(|m| m.is_file());
-        // The folder named as Claude names it first, without listing every project's (9.20).
-        let direct = root.join(&folder).join(&name);
-        if is_log(&direct) {
-            return Some(direct);
-        }
-        std::fs::read_dir(root)
-            .ok()?
-            .flatten()
-            .filter(|dir| normalized(&dir.file_name().to_string_lossy()) == folder)
-            .map(|dir| dir.path().join(&name))
-            .find(is_log)
+        let roots = self.roots.iter().filter(|_| valid_id(id));
+        roots
+            .into_iter()
+            .find_map(|(_, root)| log_in(root, id, cwd))
     }
 
     /// The listed session `id`.
@@ -479,6 +491,7 @@ impl Sessions {
             log: log.path.to_string_lossy().into_owned(),
             state: state(end, false),
             running: false,
+            config_dir: log.config_dir,
         };
         Some((session, end))
     }
@@ -496,15 +509,36 @@ impl Sessions {
     }
 }
 
-/// A session log found in a folder of Claude's: a regular `<id>.jsonl` file.
+/// The log of the session `id` that ran in `cwd`, in the folder Claude keeps for `cwd` in the
+/// projects folder `root`, when it is a regular file.
+fn log_in(root: &Path, id: &str, cwd: &str) -> Option<PathBuf> {
+    let folder = normalized(cwd);
+    let name = format!("{id}.jsonl");
+    let is_log = |log: &PathBuf| log.symlink_metadata().is_ok_and(|m| m.is_file());
+    // The folder named as Claude names it first, without listing every project's (9.20).
+    let direct = root.join(&folder).join(&name);
+    if is_log(&direct) {
+        return Some(direct);
+    }
+    std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter(|dir| normalized(&dir.file_name().to_string_lossy()) == folder)
+        .map(|dir| dir.path().join(&name))
+        .find(is_log)
+}
+
+/// A session log found in a folder of Claude's: a regular `<id>.jsonl` file, in the projects
+/// folder of the account whose Claude config folder is `config_dir`.
 struct Found {
     path: PathBuf,
     id: String,
     meta: Metadata,
     updated_ms: u64,
+    config_dir: Option<String>,
 }
 
-fn found(path: PathBuf) -> Option<Found> {
+fn found(path: PathBuf, config_dir: &Option<String>) -> Option<Found> {
     let id = path
         .file_name()?
         .to_str()?
@@ -522,6 +556,7 @@ fn found(path: PathBuf) -> Option<Found> {
         id,
         meta,
         updated_ms,
+        config_dir: config_dir.clone(),
     })
 }
 
@@ -549,12 +584,53 @@ mod tests {
     }
 
     #[test]
-    fn a_space_with_its_own_claude_folder_has_its_own_root() {
+    fn each_account_has_its_projects_folder_once() {
         let sessions = Sessions::new(Some("/h/.claude/projects".into()));
-        let space = sessions.at(Some("/work/.claude"));
-        assert_eq!(space.root(), Some(Path::new("/work/.claude/projects")));
-        assert!(Arc::ptr_eq(&space.cache, &sessions.cache));
-        assert_eq!(sessions.at(None).root(), sessions.root());
+        assert_eq!(sessions.roots(), [PathBuf::from("/h/.claude/projects")]);
+        let dirs = [Some("/w"), None, Some("/w"), Some("/h/.claude"), Some("/p")];
+        let accounts = sessions.at(dirs);
+        let roots = ["/w/projects", "/h/.claude/projects", "/p/projects"].map(PathBuf::from);
+        assert_eq!(accounts.roots(), roots);
+        assert!(Arc::ptr_eq(&accounts.cache, &sessions.cache));
+        // Derived again, the default account's folder is still known.
+        assert_eq!(accounts.at([None]).roots(), sessions.roots());
+        // Without a default one, only the accounts' folders.
+        let rootless = Sessions::new(None);
+        assert_eq!(rootless.roots(), [] as [PathBuf; 0]);
+        assert_eq!(
+            rootless.at([None, Some("/w")]).roots(),
+            [PathBuf::from("/w/projects")]
+        );
+    }
+
+    #[test]
+    fn every_accounts_sessions_are_listed_with_their_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let repo = repo.to_str().unwrap();
+        std::fs::create_dir_all(repo).unwrap();
+        let home = tmp.path().join("home/.claude/projects");
+        let work = tmp.path().join("work");
+        let folder = |root: &Path| root.join(normalized(repo));
+        touched(&log(&folder(&home), "a.jsonl", repo), 0);
+        touched(&log(&folder(&work.join("projects")), "b.jsonl", repo), 1);
+        let work = work.to_str().unwrap();
+        // An account without a projects folder yet lists nothing and fails nothing.
+        let gone = tmp.path().join("gone");
+        let dirs = [None, Some(work), gone.to_str()];
+        let sessions = Sessions::new(Some(home.clone())).at(dirs);
+        let list = sessions.list(&[project(repo)], &HashSet::new()).unwrap().0;
+        let got: Vec<_> = (list.iter())
+            .map(|s| (s.id.as_str(), s.config_dir.as_deref()))
+            .collect();
+        assert_eq!(got, [("b", Some(work)), ("a", None)]);
+        // A session's name is read from the first folder holding its log.
+        assert_eq!(sessions.title("b", repo), Some("hi b.jsonl".into()));
+        assert_eq!(sessions.title("a", repo), Some("hi a.jsonl".into()));
+        // One of them deleted, the other stays.
+        sessions.delete(&[project(repo)], "b").unwrap();
+        let list = sessions.list(&[project(repo)], &HashSet::new()).unwrap().0;
+        assert_eq!(list.len(), 1);
     }
 
     const LOG: &str = r#"{"type":"mode","mode":"x"}
@@ -862,6 +938,12 @@ not json
         let open = |id: &str, cwd: &str| OpenSession {
             id: id.into(),
             cwd: cwd.into(),
+            config_dir: None,
+        };
+        // With the Claude config folder of its terminal (12.2).
+        let c = OpenSession {
+            config_dir: Some("/w".into()),
+            ..open("c", "/r")
         };
         // Nothing ran: nothing is kept.
         save_open(&file, &[]).unwrap();
@@ -874,14 +956,14 @@ not json
                 open("a", "/r"),
                 open("x; rm", "/r"),
                 open("b", "rel"),
-                open("c", "/r"),
+                c.clone(),
             ],
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         // Ids that are not session ids, and relative folders, are dropped.
-        assert_eq!(take_open(&file), vec![open("a", "/r"), open("c", "/r")]);
+        assert_eq!(take_open(&file), vec![open("a", "/r"), c]);
         assert!(!file.exists());
         assert_eq!(take_open(&file), vec![]);
 

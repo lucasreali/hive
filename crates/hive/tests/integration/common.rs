@@ -248,6 +248,7 @@ impl Conn {
                 cwd,
                 cols: 80,
                 rows: 24,
+                account: None,
             },
         )
         .await;

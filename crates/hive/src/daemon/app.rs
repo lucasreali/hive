@@ -178,8 +178,16 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         FrameType::Control => frame.to_control(),
     };
     match message {
-        Ok(Control::OpenTerminal { cwd, cols, rows }) => {
-            state.open(channel, &cwd, cols, rows, output.clone()).await;
+        Ok(Control::OpenTerminal {
+            cwd,
+            cols,
+            rows,
+            account,
+        }) => {
+            let size = (cols, rows);
+            state
+                .open(channel, &cwd, size, account, output.clone())
+                .await;
         }
         Ok(Control::Resize { cols, rows }) => state.input(channel, Input::Resize { cols, rows }),
         Ok(Control::Ack { bytes }) => state.ack(channel, bytes),
@@ -368,14 +376,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             // Hive's terminals: their hooks name their sessions.
             state.sessions(move |projects, sessions, mut running| {
                 // Claude keeps a record of each running `claude` beside its projects folder.
-                let records = sessions
-                    .root()
-                    .and_then(Path::parent)
-                    .map(|d| d.join("sessions"));
-                running.extend(procs::claude_sessions(
-                    procs::Source::System,
-                    records.as_deref(),
-                ));
+                let roots = sessions.roots();
+                let parents = roots.iter().filter_map(|root| root.parent());
+                let records: Vec<PathBuf> = parents.map(|d| d.join("sessions")).collect();
+                running.extend(procs::claude_sessions(procs::Source::System, &records));
                 let ((sessions, truncated), error) = match sessions.list(projects, &running) {
                     Ok(listed) => (listed, None),
                     Err(err) => ((Vec::new(), false), Some(err.to_string())),
@@ -686,7 +690,7 @@ mod tests {
             context_limit: 200_000,
             output_tokens: 2,
         };
-        let read = named.usage.read("s", dir.path(), &log);
+        let read = named.usage.read("s", &[dir.path().to_owned()], &log);
         assert_eq!(read, Some(usage.clone()));
         // A subagent working in a worktree of its own.
         let mut owning = Agent::new(5, Instant::now(), 0);

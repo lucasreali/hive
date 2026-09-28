@@ -1,6 +1,8 @@
 //! Integration tests: run the real `hive` binary.
 
 #[cfg(test)]
+mod accounts;
+#[cfg(test)]
 mod agents;
 #[cfg(test)]
 mod bridge;
