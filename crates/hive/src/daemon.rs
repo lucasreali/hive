@@ -521,9 +521,11 @@ impl State {
                         |(mut terminal, input, pty, child)| {
                             terminal.claude_dir = claude_dir;
                             let last = terminal.last_output.clone();
+                            let session = terminal.session;
                             slot.insert(terminal);
                             self.inputs().insert(channel, input);
-                            tokio::spawn(pump(self.clone(), channel, pty, child, output, last));
+                            let state = self.clone();
+                            tokio::spawn(pump(state, channel, session, pty, child, output, last));
                         },
                     )
                 }
@@ -871,25 +873,35 @@ fn error(err: io::Error) -> Control {
     }
 }
 
-/// Copies PTY output to the app until the PTY closes, then reports the exit. The copy takes
-/// no lock (9.13); only the exit does.
+/// Time the output still gets once the shell exited while another process keeps the PTY
+/// open (9.15).
+const DRAIN: Duration = Duration::from_millis(200);
+
+/// Copies PTY output to the app until the shell exits, then reports the exit. The copy takes
+/// no lock (9.13); only the exit does. A disowned job or a `setsid` child can keep the PTY
+/// open after the shell exits (risk 9): the output gets [`DRAIN`], then the terminal's other
+/// process groups end as when its tab closes (#18).
 async fn pump(
     state: Arc<State>,
     channel: u32,
+    session: i32,
     mut pty: OwnedReadPty,
     mut child: Child,
     output: mpsc::Sender<Frame>,
     last_output: terminal::LastOutput,
 ) {
-    let mut buf = vec![0; 64 * 1024];
-    while let Ok(n @ 1..) = pty.read(&mut buf).await {
-        last_output.touch();
-        let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
-        if output.send(frame).await.is_err() {
-            break;
+    let copy = copy(&mut pty, channel, &output, &last_output);
+    tokio::pin!(copy);
+    let status = tokio::select! {
+        () = &mut copy => child.wait().await,
+        status = child.wait() => {
+            let _ = tokio::time::timeout(DRAIN, &mut copy).await;
+            status
         }
-    }
-    let code = child.wait().await.ok().and_then(|status| status.code());
+    };
+    // Whether or not they still hold the PTY (macOS revokes it when the shell exits).
+    terminal::end_sessions(&[session]).await;
+    let code = status.ok().and_then(|status| status.code());
     {
         let mut terminals = state.terminals.lock().await;
         terminals.remove(&channel);
@@ -902,6 +914,23 @@ async fn pump(
     state
         .to_app(channel, &Control::TerminalExited { code })
         .await;
+}
+
+/// Copies PTY output to the app until the PTY closes or the app is gone.
+async fn copy(
+    pty: &mut OwnedReadPty,
+    channel: u32,
+    output: &mpsc::Sender<Frame>,
+    last_output: &terminal::LastOutput,
+) {
+    let mut buf = vec![0; 64 * 1024];
+    while let Ok(n @ 1..) = pty.read(&mut buf).await {
+        last_output.touch();
+        let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
+        if output.send(frame).await.is_err() {
+            break;
+        }
+    }
 }
 
 /// [`projects::held`] for a folder about to be renamed or moved, with this machine's processes.

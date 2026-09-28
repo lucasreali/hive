@@ -21,6 +21,6 @@
       }
     }
   },
-  "plugins": ["./biome/no-native-dialogs.grit"],
+  "plugins": ["./biome/no-native-dialogs.grit", "./biome/no-unshown-failures.grit"],
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }
 }
