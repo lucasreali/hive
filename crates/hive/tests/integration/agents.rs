@@ -29,6 +29,11 @@ pub(crate) async fn hook(
     stdin.write_all(payload.to_string().as_bytes()).unwrap();
     drop(stdin);
     assert!(child.wait().unwrap().success());
+    forwarded(app).await
+}
+
+/// The app's messages up to the next forwarded hook event.
+async fn forwarded(app: &mut Conn) -> Vec<(u32, Control)> {
     let mut seen = Vec::new();
     loop {
         match app.control().await {
@@ -384,6 +389,47 @@ async fn agent_states_follow_hook_events_and_terminal_silence() {
     )
     .await;
     assert_eq!(seen, vec![(1, state("s", Error, vec![]))]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn hook_events_delivered_out_of_order_apply_in_the_order_they_were_sent() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let cwd = repo.root.display().to_string();
+    let start = json!({"session_id": "s", "cwd": cwd});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    // Two calls stamped by `hive hook` in one order reach the service in the other.
+    let deliver = async |app: &mut Conn, event: &str, sent_ns| {
+        let mut conn = repo.env.connect(Role::Hook).await;
+        let payload = json!({"session_id": "s"});
+        let terminal_id = Some("1".into());
+        let event = event.into();
+        conn.send(
+            0,
+            Control::Hook {
+                event,
+                terminal_id,
+                payload,
+                sent_ns,
+            },
+        )
+        .await;
+        forwarded(app).await
+    };
+    let asking = state("s", WaitingPermission, vec![]);
+    assert_eq!(
+        deliver(&mut app, "PermissionRequest", 2).await,
+        [(1, asking)]
+    );
+    // Still forwarded, but the older event leaves the permission prompt shown.
+    assert_eq!(deliver(&mut app, "PreToolUse", 1).await, []);
+    // A later call of the real `hive hook` is stamped after both.
+    let seen = hook(&repo, &mut app, "1", "Stop", json!({"session_id": "s"})).await;
+    assert_eq!(seen, [(1, state("s", WaitingYou, vec![]))]);
     drop(app);
     assert!(daemon.wait_exit().success());
 }

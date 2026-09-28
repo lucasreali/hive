@@ -175,11 +175,14 @@ pub enum Control {
     TerminalExited {
         code: Option<i32>,
     },
-    /// Raw hook payload from `hive hook`, tagged with the terminal it came from.
+    /// Raw hook payload from `hive hook`, tagged with the terminal it came from. `sent_ns` is
+    /// `CLOCK_MONOTONIC` (shared by every process on the machine) when `hive hook` started:
+    /// the service applies an agent's states in this order, not in arrival order.
     Hook {
         event: String,
         terminal_id: Option<String>,
         payload: serde_json::Value,
+        sent_ns: u64,
     },
     /// `hive badge` → service (on a hook connection) → app: a short label for the terminal on
     /// the frame channel (its `HIVE_TERMINAL_ID`); empty clears it. The service drops control

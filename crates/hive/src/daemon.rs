@@ -351,7 +351,7 @@ impl State {
     /// and detects the agent; any other event of a detected agent (or of its subagents)
     /// updates its state; its own `SessionEnd` removes it. The `SessionStart` that follows a
     /// compaction leaves a known agent as it is (state, subagents, tokens).
-    async fn saw(&self, event: &AgentEvent) {
+    async fn saw(&self, event: &AgentEvent, sent_ns: u64) {
         if event.kind == EventKind::SessionStarted {
             let compacted =
                 event.raw.get("source").and_then(serde_json::Value::as_str) == Some("compact");
@@ -377,7 +377,7 @@ impl State {
             place.map(|(_, worktree)| worktree)
         };
         agent.watched = self.watches(channel);
-        if let Some(state) = agent.apply(id, event, Instant::now(), &place) {
+        if let Some(state) = agent.apply(id, event, sent_ns, Instant::now(), &place) {
             self.to_app(channel, &state).await;
         }
         // The transcript got a message: its usage is read on the next tick (at most once a
@@ -1021,6 +1021,7 @@ async fn hook_connection<R: AsyncRead + Unpin>(
             event,
             terminal_id,
             payload,
+            sent_ns,
         }) => {
             let event = ClaudeCode.translate(&event, terminal_id, payload);
             if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } =
@@ -1031,7 +1032,7 @@ async fn hook_connection<R: AsyncRead + Unpin>(
                     projects: projects.list(),
                 });
             }
-            state.saw(&event).await;
+            state.saw(&event, sent_ns).await;
             state.to_app(0, &Control::Agent(event)).await;
         }
         _ => {}
