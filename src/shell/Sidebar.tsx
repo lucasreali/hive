@@ -48,6 +48,7 @@ import {
   StateIcon,
 } from "./icons";
 import { PullBadge, usePullBadges } from "./PullsView";
+import { Counts } from "./RightPanel";
 import { RunBadge, useRunBadges } from "./RunsView";
 import { ResizeHandle } from "./resize";
 
@@ -230,7 +231,14 @@ function Health({ status: s }: { status: WorktreeStatus }) {
           ↓{s.behind}
         </span>
       )}
-      {s.changes > 0 && <span title={`${plural(s.changes, "changed file")}`}>●{s.changes}</span>}
+      {(s.added > 0 || s.removed > 0) && (
+        <span
+          className="health-lines"
+          title={`${plural(s.changes, "changed file")}, +${s.added} −${s.removed} lines`}
+        >
+          <Counts added={s.added} removed={s.removed} />
+        </span>
+      )}
       {s.merged && <span title="Every commit is on the main worktree's branch">merged</span>}
     </span>
   );

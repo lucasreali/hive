@@ -167,21 +167,66 @@ function mockStates(): ServiceMessage[] {
   });
 }
 
-/** A stand-in for `hive::health`: `[changes, ahead, behind]` of a linked worktree, by name. */
-const HEALTH: Record<string, [number, number, number]> = {
-  "fix-login": [2, 3, 1],
-  "feat-checkout": [2, 1, 0],
-  "refactor-auth": [6, 0, 2],
+const change = (
+  path: string,
+  status: FileStatus,
+  added: number | null,
+  removed: number | null,
+  old_path: string | null = null,
+): ChangedFile => ({ path, status, old_path, added, removed });
+
+/** What differs from HEAD in the fake worktrees, by path (after the prototype's screen 1g). */
+export const MOCK_CHANGES: Record<string, ChangedFile[]> = {
+  "/home/user/projects/shop/.claude/worktrees/fix-login": [
+    change("src/auth/constants.ts", "modified", 1, 0),
+    change("src/auth/session.ts", "modified", 3, 1),
+  ],
+  "/home/user/projects/shop/.claude/worktrees/feat-checkout": [
+    change("src/checkout/CheckoutSummary.tsx", "modified", 6, 2),
+    change("src/checkout/shipping.ts", "untracked", 42, 0),
+  ],
+  "/home/user/projects/api": [
+    change("docs/api.md", "modified", 4, 2),
+    change("src/routes/orders.ts", "modified", 18, 5),
+    change("test/routes/orders.test.ts", "added", 22, 0),
+  ],
+  "/home/user/projects/api/.claude/worktrees/refactor-auth": [
+    change("assets/logo.png", "modified", null, null),
+    change("package.json", "modified", 1, 1),
+    change("src/auth/token.ts", "renamed", 2, 1, "src/auth/jwt-token.ts"),
+    change("src/legacy/jwt.ts", "deleted", 0, 30),
+    change("src/middleware/auth.ts", "modified", 21, 17),
+  ],
+};
+
+/** The lines `files` add or remove, as the service totals them (a binary file adds none). */
+const sum = (files: ChangedFile[], key: "added" | "removed") =>
+  files.reduce((n, f) => n + (f[key] ?? 0), 0);
+
+/**
+ * A stand-in for `hive::health`: `[ahead, behind]` of a linked worktree, by name; its changes
+ * are its `MOCK_CHANGES`, as the service counts them against HEAD.
+ */
+const HEALTH: Record<string, [number, number]> = {
+  "fix-login": [3, 1],
+  "feat-checkout": [1, 0],
+  "refactor-auth": [0, 2],
 };
 /** The mock's last commits: 2026-09-20. */
 const LAST_COMMIT_MS = Date.UTC(2026, 8, 20);
 
 const worktree = (root: string, name: string, main = false): Worktree => {
   const path = main ? root : `${root}/.claude/worktrees/${name}`;
-  const [changes, ahead, behind] = HEALTH[name] ?? [0, 0, 0];
+  const [ahead, behind] = HEALTH[name] ?? [0, 0];
+  const files = MOCK_CHANGES[path] ?? [];
+  const changes = {
+    changes: files.length,
+    added: sum(files, "added"),
+    removed: sum(files, "removed"),
+  };
   const status = main
-    ? { changes: 0, ahead: null, behind: null, merged: false, last_commit_ms: LAST_COMMIT_MS }
-    : { changes, ahead, behind, merged: ahead === 0, last_commit_ms: LAST_COMMIT_MS };
+    ? { ...changes, ahead: null, behind: null, merged: false, last_commit_ms: LAST_COMMIT_MS }
+    : { ...changes, ahead, behind, merged: ahead === 0, last_commit_ms: LAST_COMMIT_MS };
   const branch = main ? name : `worktree-${name}`;
   return { id: path, name, path, branch, main, claude: !main, status };
 };
@@ -369,38 +414,6 @@ const mockFiles = (worktree: Worktree) =>
     ...(worktree.main ? Array.from({ length: 400 }, (_, i) => `src/icons/icon-${i}.tsx`) : []),
   ].sort();
 
-const change = (
-  path: string,
-  status: FileStatus,
-  added: number | null,
-  removed: number | null,
-  old_path: string | null = null,
-): ChangedFile => ({ path, status, old_path, added, removed });
-
-/** What differs from HEAD in the fake worktrees, by path (after the prototype's screen 1g). */
-export const MOCK_CHANGES: Record<string, ChangedFile[]> = {
-  "/home/user/projects/shop/.claude/worktrees/fix-login": [
-    change("src/auth/constants.ts", "modified", 1, 0),
-    change("src/auth/session.ts", "modified", 3, 1),
-  ],
-  "/home/user/projects/shop/.claude/worktrees/feat-checkout": [
-    change("src/checkout/CheckoutSummary.tsx", "modified", 6, 2),
-    change("src/checkout/shipping.ts", "untracked", 42, 0),
-  ],
-  "/home/user/projects/api": [
-    change("docs/api.md", "modified", 4, 2),
-    change("src/routes/orders.ts", "modified", 18, 5),
-    change("test/routes/orders.test.ts", "added", 22, 0),
-  ],
-  "/home/user/projects/api/.claude/worktrees/refactor-auth": [
-    change("assets/logo.png", "modified", null, null),
-    change("package.json", "modified", 1, 1),
-    change("src/auth/token.ts", "renamed", 2, 1, "src/auth/jwt-token.ts"),
-    change("src/legacy/jwt.ts", "deleted", 0, 30),
-    change("src/middleware/auth.ts", "modified", 21, 17),
-  ],
-};
-
 /** The service's reason a branch base falls back to HEAD without a branch to compare with. */
 const NO_BRANCH = "No branch to compare with: this is the main worktree, or it is detached";
 
@@ -417,7 +430,6 @@ function changes(projects: Project[], path: string, asked: DiffBase): ServiceMes
   const branch = main && main.path !== path ? main.branch : null;
   const fallback = asked === "branch" && !branch;
   const files = MOCK_CHANGES[path] ?? [];
-  const sum = (key: "added" | "removed") => files.reduce((n, f) => n + (f[key] ?? 0), 0);
   return {
     type: "changes",
     path,
@@ -425,8 +437,8 @@ function changes(projects: Project[], path: string, asked: DiffBase): ServiceMes
     branch,
     base_error: fallback ? NO_BRANCH : null,
     files,
-    added: sum("added"),
-    removed: sum("removed"),
+    added: sum(files, "added"),
+    removed: sum(files, "removed"),
     error: null,
   };
 }

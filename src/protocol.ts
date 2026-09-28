@@ -116,11 +116,14 @@ export type Worktree = {
 };
 
 /**
- * Mirrors `hive_protocol::WorktreeStatus`: files changed, commits ahead of and behind the main
- * worktree's branch (null for the main worktree), all merged there, and the last commit's time.
+ * Mirrors `hive_protocol::WorktreeStatus`: files changed and their lines added and removed
+ * against HEAD, commits ahead of and behind the main worktree's branch (null for the main
+ * worktree), all merged there, and the last commit's time.
  */
 export type WorktreeStatus = {
   changes: number;
+  added: number;
+  removed: number;
   ahead: number | null;
   behind: number | null;
   merged: boolean;

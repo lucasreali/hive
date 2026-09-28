@@ -692,7 +692,15 @@ test("a tab opened in a subfolder or through a link shows under the worktree the
 test("a worktree status replaces only that worktree's; before any projects it is dropped", () => {
   const [shop, api] = MOCK_REPOS;
   const [, login] = shop.worktrees;
-  const status = { changes: 0, ahead: 0, behind: 4, merged: true, last_commit_ms: 1 };
+  const status = {
+    changes: 0,
+    added: 0,
+    removed: 0,
+    ahead: 0,
+    behind: 4,
+    merged: true,
+    last_commit_ms: 1,
+  };
   apply({ type: "worktree_status", path: login.path, status });
   expect(useHive.getState().projects).toBeNull();
   apply({ type: "projects", projects: [shop, api] });

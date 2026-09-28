@@ -1308,7 +1308,7 @@ button.chevron:hover {
   font-size: var(--fs-mono);
 }
 
-/* A worktree's status from the service: ↑ahead ↓behind ●changes, "merged". */
+/* A worktree's status from the service: ↑ahead ↓behind +added −removed, "merged". */
 .health {
   display: flex;
   flex: none;
@@ -1317,6 +1317,12 @@ button.chevron:hover {
   font-size: var(--fs-small);
   color: var(--text-3);
   white-space: nowrap;
+}
+
+.health-lines {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
 }
 
 .merged-list {

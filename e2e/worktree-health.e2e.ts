@@ -7,13 +7,19 @@ test("worktree health: badges with tooltips, and removing merged worktrees", asy
 
   // The fake service's statuses: shop's fix-login is ahead, behind and changed.
   const badges = row("fix-login").locator(".health > span");
-  await expect(badges).toHaveText(["↑3", "↓1", "●2"]);
+  await expect(badges).toHaveText(["↑3", "↓1", "+4−1"]);
   await expect(badges.first()).toHaveAttribute(
     "title",
     "3 commits not on the main worktree's branch",
   );
+  // Its changes as lines, the file count in the tooltip.
+  await expect(badges.nth(2)).toHaveAttribute("title", "2 changed files, +4 −1 lines");
   // Merged, but with changes: not one to remove.
-  await expect(row("refactor-auth").locator(".health > span")).toHaveText(["↓2", "●6", "merged"]);
+  await expect(row("refactor-auth").locator(".health > span")).toHaveText([
+    "↓2",
+    "+24−49",
+    "merged",
+  ]);
 
   // A new worktree has nothing of its own yet, so it counts as merged and clean.
   await tree.getByRole("button", { name: "api", exact: true }).click({ button: "right" });

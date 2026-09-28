@@ -342,6 +342,8 @@ test("the project menu removes merged worktrees without changes, each with its r
   const remove = spyOn(transport, "removeWorktree").mockResolvedValue();
   const health = (merged: boolean, changes: number) => ({
     changes,
+    added: changes,
+    removed: 0,
     ahead: merged ? 0 : 1,
     behind: 0,
     merged,
@@ -411,7 +413,15 @@ test("the project menu removes merged worktrees without changes, each with its r
 });
 
 test("a removal that cannot be sent is shown as an error toast; its row is no longer removing (9.21)", async () => {
-  const status = { changes: 0, ahead: 0, behind: 0, merged: true, last_commit_ms: 0 };
+  const status = {
+    changes: 0,
+    added: 0,
+    removed: 0,
+    ahead: 0,
+    behind: 0,
+    merged: true,
+    last_commit_ms: 0,
+  };
   const merged = { ...shop, worktrees: [main, { ...login, status }] };
   render(<App />);
   act(() => apply({ type: "projects", projects: [merged] }));

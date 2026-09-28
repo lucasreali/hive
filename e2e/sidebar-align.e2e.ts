@@ -16,7 +16,7 @@ test("sidebar: a collapsed worktree's rollup lines up with the badges' right col
     return b.x + b.width;
   };
 
-  // Agents in shop's main (no badges) and in fix-login (badges ↑3 ↓1 ●2).
+  // Agents in shop's main (no badges) and in fix-login (badges ↑3 ↓1 +4−1).
   const plus = page.getByTitle("New terminal or file");
   await tree.getByRole("button", { name: "main", exact: true }).first().click();
   await plus.click();

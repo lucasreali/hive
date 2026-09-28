@@ -213,8 +213,8 @@ function openTreeMenu(worktree: string, row: FileRow | undefined, at?: Element |
 const plus = (n: number | null) => (n ? `+${n}` : "");
 const minus = (n: number | null) => (n ? `−${n}` : "");
 
-/** The "+a −d" line counts; a binary file (null) shows none. */
-function Counts({ added, removed }: { added: number | null; removed: number | null }) {
+/** The "+a −d" line counts; a binary file (null) shows none, nor a side that is 0. */
+export function Counts({ added, removed }: { added: number | null; removed: number | null }) {
   return (
     <>
       <span className="count-added">{plus(added)}</span>
