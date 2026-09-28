@@ -56,3 +56,57 @@ test("the current space is edited; one with projects cannot be deleted", async (
   await expect(dialog).toHaveCount(0);
   await expect(space).toHaveText("Personal");
 });
+
+test("switching space shows the place last selected there, with its tabs", async ({ page }) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  const space = tree.getByRole("combobox", { name: "Space" });
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
+  const plus = page.getByTitle("New terminal or file");
+  const pick = async (name: string) => {
+    await space.click();
+    await page.getByRole("option", { name }).click();
+  };
+  const terminal = async () => {
+    await plus.click();
+    await page.getByRole("menuitem", { name: "Terminal" }).click();
+  };
+
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await terminal();
+  await expect(tabs.getByRole("tab")).toHaveText(["fix-login"]);
+
+  // A new space is empty: nothing selected, no tabs.
+  await pick("New space…");
+  const dialog = page.getByRole("dialog", { name: "New space" });
+  await dialog.getByLabel("Name", { exact: true }).fill("Work");
+  await dialog.getByLabel("Name", { exact: true }).press("Enter");
+  await expect(space).toHaveText("Work");
+  await expect(tabs.getByRole("tab")).toHaveCount(0);
+  await page.keyboard.press("Control+Shift+O");
+  const add = page.getByRole("dialog", { name: "Add project" });
+  await add.getByLabel("Folder", { exact: true }).fill("/home/user/dotfiles");
+  await expect(add.getByRole("button", { name: /^Add project/ })).toBeEnabled();
+  await add.getByLabel("Folder", { exact: true }).press("Enter");
+  await expect(add).toHaveCount(0);
+  await tree.getByRole("button", { name: "dotfiles", exact: true }).click();
+  await terminal();
+  await expect(tabs.getByRole("tab")).toHaveCount(1);
+  const work = (await tabs.getByRole("tab").textContent()) as string;
+
+  // Each space shows its place again, with that place's tabs.
+  await pick("Default");
+  await expect(space).toHaveText("Default");
+  await expect(tabs.getByRole("tab")).toHaveText(["fix-login"]);
+  await expect(tree.getByRole("button", { name: "fix-login" })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await page.screenshot({ path: "target/e2e/space-place.png" });
+  await pick("Work");
+  await expect(tabs.getByRole("tab")).toHaveText([work]);
+  await expect(tree.getByRole("button", { name: "dotfiles", exact: true })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+});

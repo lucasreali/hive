@@ -274,6 +274,11 @@ export type HiveState = {
   commenting: (Lines & OpenFile) | null;
   selection: string | null;
   /**
+   * By space id: the place selected when the user left that space and its project (11.5), to
+   * select again on coming back; this run only. Null: nothing was selected.
+   */
+  spacePlaces: Record<string, SpacePlace | null>;
+  /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
    * has its project's id), a folder of the Files or Diff tree by `files:` or `changes:<worktree>/<path>`
    * (folders start collapsed: one is open only when its entry is false).
@@ -404,6 +409,7 @@ export const initialState: HiveState = {
   comments: {},
   commenting: null,
   selection: null,
+  spacePlaces: {},
   collapsed: {},
   tabs: [],
   activeTab: null,
@@ -655,24 +661,26 @@ export const setSelectedLines = (selectedLines: Lines | null) =>
  * terminal stays when it is one of them, else the last of them is shown (none when it has
  * none), and the open file stays shown only when it belongs there.
  */
-export const select = (selection: string | null) =>
-  useHive.setState((s) => {
-    const next = { ...s, selection };
-    const tabs = visibleTabs(next);
-    const keep = tabs.some((t) => t.id === s.activeTab);
-    const shown = {
-      selection,
-      activeTab: keep ? s.activeTab : (tabs.at(-1)?.id ?? null),
-      fileShown: s.fileShown && fileVisible(next),
-    };
-    // A place with files but no terminal shows its last file.
-    const file = barItems(next)
-      .filter((t) => "path" in t)
-      .at(-1) as FileTab | undefined;
-    return !shown.fileShown && tabs.length === 0 && file
-      ? { ...shown, ...opened(next, file, false) }
-      : shown;
-  });
+export const select = (selection: string | null) => useHive.setState((s) => selected(s, selection));
+
+/** `select`'s change of state. */
+export function selected(s: HiveState, selection: string | null): Partial<HiveState> {
+  const next = { ...s, selection };
+  const tabs = visibleTabs(next);
+  const keep = tabs.some((t) => t.id === s.activeTab);
+  const shown = {
+    selection,
+    activeTab: keep ? s.activeTab : (tabs.at(-1)?.id ?? null),
+    fileShown: s.fileShown && fileVisible(next),
+  };
+  // A place with files but no terminal shows its last file.
+  const file = barItems(next)
+    .filter((t) => "path" in t)
+    .at(-1) as FileTab | undefined;
+  return !shown.fileShown && tabs.length === 0 && file
+    ? { ...shown, ...opened(next, file, false) }
+    : shown;
+}
 export const setFocused = (focused: boolean) => useHive.setState({ focused });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
@@ -801,6 +809,38 @@ export const spaceOf = (s: HiveState, project: string | null): Space | undefined
 /** The current space. */
 export const currentSpace = (s: HiveState): Space | undefined =>
   s.spaces?.find((space) => space.id === s.currentSpace);
+
+/** A space's remembered place (11.5): a project, worktree or agent id, and its project. */
+export type SpacePlace = { place: string; project: string | null };
+
+/** The project of place `id`: a project, a worktree or an agent. */
+const placeProject = (s: HiveState, id: string | null): string | null =>
+  s.agents[id ?? ""]?.project ?? owner(s.projects, id)?.id ?? null;
+
+/** Whether place `id` is in the current space. */
+export const inCurrentSpace = (s: HiveState, id: string | null): boolean =>
+  !!currentSpace(s)?.projects.includes(placeProject(s, id) ?? "");
+
+/** Remembers the selection as the current space's place, as the user leaves that space. */
+export function leaveSpace(s: HiveState): Partial<HiveState> {
+  if (s.currentSpace === null) return {};
+  const place =
+    s.selection === null ? null : { place: s.selection, project: placeProject(s, s.selection) };
+  return { spacePlaces: { ...s.spacePlaces, [s.currentSpace]: place } };
+}
+
+/**
+ * The place to select in the current space: the one remembered, else (gone) its project, else
+ * (gone or never selected) the space's first project; null in an empty space.
+ */
+export function spacePlace(s: HiveState): string | null {
+  const shown = spaceProjects(s).map((p) => p.id);
+  const kept = s.spacePlaces[s.currentSpace ?? ""];
+  if (kept?.project && shown.includes(kept.project)) {
+    return placeProject(s, kept.place) === kept.project ? kept.place : kept.project;
+  }
+  return shown[0] ?? null;
+}
 
 /** The projects the sidebar shows: the current space's (every one until the spaces arrive). */
 export function spaceProjects(s: HiveState): Project[] {
