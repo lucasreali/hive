@@ -341,7 +341,7 @@ test("a file opens in the preview tab; a double click on its row keeps it (11.1)
     ["token.ts", true],
   ]);
   // A folder's double click only toggles it (twice): no file is kept.
-  const auth = screen.getByRole("treeitem", { name: "auth" });
+  const auth = treeRow("auth");
   fireEvent.click(auth);
   fireEvent.click(auth);
   fireEvent.doubleClick(auth);
