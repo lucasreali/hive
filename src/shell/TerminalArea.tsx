@@ -41,6 +41,7 @@ import {
   closeTerminal,
   mountTerminals,
   openTerminal,
+  showOpenFailure,
   showTerminals,
   splitTerminal,
 } from "../terminals";
@@ -242,7 +243,11 @@ function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void
   };
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
-      <button type="button" role="menuitem" onClick={act(() => void splitTerminal(menu.tab))}>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={act(() => showOpenFailure(splitTerminal(menu.tab)))}
+      >
         <SquareSplitHorizontalIcon {...ICON} />
         {split ? "Unsplit" : "Split right"}
       </button>
@@ -284,7 +289,11 @@ function NoTerminals({ worktree }: { worktree: string }) {
       <div className="empty-state-content centered">
         <TerminalWindowIcon size={32} weight="light" aria-hidden="true" />
         <p>No terminal in {name}</p>
-        <button type="button" className="primary" onClick={() => void openTerminal(worktree)}>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => showOpenFailure(openTerminal(worktree))}
+        >
           New terminal
         </button>
       </div>
@@ -333,7 +342,11 @@ function NewTabButton({ worktree }: { worktree: string | null }) {
       </button>
       {at && worktree !== null && (
         <ContextMenu at={at} label="New tab" onClose={close} anchor={plus}>
-          <button type="button" role="menuitem" onClick={act((w) => void openTerminal(w))}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={act((w) => showOpenFailure(openTerminal(w)))}
+          >
             <TerminalWindowIcon {...ICON} />
             Terminal
           </button>

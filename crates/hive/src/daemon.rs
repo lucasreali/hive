@@ -190,6 +190,8 @@ struct State {
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
     /// Whether the user's `PATH` is being asked for.
     asking_path: std::sync::atomic::AtomicBool,
+    /// The pull requests lists fetched (9.31).
+    pulls: std::sync::Mutex<crate::pulls::Cache>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -226,6 +228,7 @@ impl State {
             sent: Default::default(),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
+            pulls: Default::default(),
         }
     }
 
@@ -521,9 +524,11 @@ impl State {
                         |(mut terminal, input, pty, child)| {
                             terminal.claude_dir = claude_dir;
                             let last = terminal.last_output.clone();
+                            let session = terminal.session;
                             slot.insert(terminal);
                             self.inputs().insert(channel, input);
-                            tokio::spawn(pump(self.clone(), channel, pty, child, output, last));
+                            let state = self.clone();
+                            tokio::spawn(pump(state, channel, session, pty, child, output, last));
                         },
                     )
                 }
@@ -625,6 +630,25 @@ impl State {
                 problem,
             };
             state.to_app(0, &reply).await;
+        });
+    }
+
+    /// Answers a request of the pull requests view (9.31) off the frame loop: `gh` asks
+    /// GitHub.
+    fn pulls(self: &Arc<Self>, request: Control) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let gh = state.gh().await;
+            let replies = tokio::task::block_in_place(|| {
+                let mut replies = crate::pulls::answer(&gh, &state.projects, &state.pulls, request);
+                replies
+                    .iter_mut()
+                    .for_each(|reply| state.with_health(reply));
+                replies
+            });
+            for reply in replies {
+                state.to_app(0, &reply).await;
+            }
         });
     }
 
@@ -871,25 +895,35 @@ fn error(err: io::Error) -> Control {
     }
 }
 
-/// Copies PTY output to the app until the PTY closes, then reports the exit. The copy takes
-/// no lock (9.13); only the exit does.
+/// Time the output still gets once the shell exited while another process keeps the PTY
+/// open (9.15).
+const DRAIN: Duration = Duration::from_millis(200);
+
+/// Copies PTY output to the app until the shell exits, then reports the exit. The copy takes
+/// no lock (9.13); only the exit does. A disowned job or a `setsid` child can keep the PTY
+/// open after the shell exits (risk 9): the output gets [`DRAIN`], then the terminal's other
+/// process groups end as when its tab closes (#18).
 async fn pump(
     state: Arc<State>,
     channel: u32,
+    session: i32,
     mut pty: OwnedReadPty,
     mut child: Child,
     output: mpsc::Sender<Frame>,
     last_output: terminal::LastOutput,
 ) {
-    let mut buf = vec![0; 64 * 1024];
-    while let Ok(n @ 1..) = pty.read(&mut buf).await {
-        last_output.touch();
-        let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
-        if output.send(frame).await.is_err() {
-            break;
+    let copy = copy(&mut pty, channel, &output, &last_output);
+    tokio::pin!(copy);
+    let status = tokio::select! {
+        () = &mut copy => child.wait().await,
+        status = child.wait() => {
+            let _ = tokio::time::timeout(DRAIN, &mut copy).await;
+            status
         }
-    }
-    let code = child.wait().await.ok().and_then(|status| status.code());
+    };
+    // Whether or not they still hold the PTY (macOS revokes it when the shell exits).
+    terminal::end_sessions(&[session]).await;
+    let code = status.ok().and_then(|status| status.code());
     {
         let mut terminals = state.terminals.lock().await;
         terminals.remove(&channel);
@@ -902,6 +936,23 @@ async fn pump(
     state
         .to_app(channel, &Control::TerminalExited { code })
         .await;
+}
+
+/// Copies PTY output to the app until the PTY closes or the app is gone.
+async fn copy(
+    pty: &mut OwnedReadPty,
+    channel: u32,
+    output: &mpsc::Sender<Frame>,
+    last_output: &terminal::LastOutput,
+) {
+    let mut buf = vec![0; 64 * 1024];
+    while let Ok(n @ 1..) = pty.read(&mut buf).await {
+        last_output.touch();
+        let frame = Frame::terminal(channel, Bytes::copy_from_slice(&buf[..n]));
+        if output.send(frame).await.is_err() {
+            break;
+        }
+    }
 }
 
 /// [`projects::held`] for a folder about to be renamed or moved, with this machine's processes.
@@ -1155,6 +1206,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::Sender<Frame
             gh_config_dir,
             account,
         }) => state.gh_accounts(gh_config_dir, Some(account)),
+        Ok(
+            request @ (Control::ListPulls { .. }
+            | Control::OpenPull { .. }
+            | Control::ActOnPull { .. }
+            | Control::CreatePull { .. }),
+        ) => state.pulls(request),
         Ok(Control::ListBranches { project }) => state.projects(move |projects| {
             let (branches, error) = match projects.branches(&project) {
                 Ok(branches) => (branches, None),

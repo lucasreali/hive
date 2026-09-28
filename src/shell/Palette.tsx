@@ -11,7 +11,7 @@ import {
   treeAgents,
   useHive,
 } from "../store";
-import { openWith } from "../terminals";
+import { openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
 import { keyText } from "../window";
@@ -88,7 +88,7 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
       extra.push({
         label: `Run: ${script.name}`,
         detail: worktree.name,
-        run: () => void openWith(worktree.path, script.command),
+        run: () => showOpenFailure(openWith(worktree.path, script.command)),
       });
     }
   }
