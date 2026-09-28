@@ -1103,6 +1103,8 @@ export function createMockTransport(
     // Mock agents never finish, so nothing depends on the view.
     async setView() {},
     async resizeTerminal() {},
+    // Its terminals print little, at the pace they are typed or replayed: no flow control.
+    async ackTerminal() {},
     async closeTerminal(id) {
       exit(id, null);
     },

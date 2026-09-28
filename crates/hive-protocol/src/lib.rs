@@ -172,6 +172,11 @@ pub enum Control {
         rows: u16,
     },
     CloseTerminal,
+    /// App → service (9.19): `bytes` more of the terminal's output were written to its screen.
+    /// The service stops reading a terminal's PTY while too much of it is unacknowledged.
+    Ack {
+        bytes: u32,
+    },
     TerminalExited {
         code: Option<i32>,
     },
@@ -1683,6 +1688,8 @@ mod tests {
         );
         let badge = Frame::control(2, &Control::Badge { text: "db".into() });
         assert_eq!(&badge.payload[..], br#"{"type":"badge","text":"db"}"#);
+        let ack = Frame::control(2, &Control::Ack { bytes: 65536 });
+        assert_eq!(&ack.payload[..], br#"{"type":"ack","bytes":65536}"#);
     }
 
     #[test]
