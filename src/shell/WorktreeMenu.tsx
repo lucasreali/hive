@@ -24,7 +24,7 @@ import {
   openProjectMenu,
   owner,
   scriptsOf,
-  setNotice,
+  showNotice,
   useHive,
 } from "../store";
 import { openTerminal, openWith, showOpenFailure } from "../terminals";
@@ -129,8 +129,8 @@ export function WorktreeMenu() {
   const copy = () =>
     navigator.clipboard
       .writeText(w.path)
-      .then(() => setNotice(`Copied ${w.path}`))
-      .catch((error) => setNotice(`Cannot copy the path: ${error}`));
+      .then(() => showNotice("info", `Copied ${w.path}`))
+      .catch((error) => showNotice("error", `Cannot copy the path: ${error}`));
   const renameWhy = w.main
     ? "The main worktree cannot be renamed"
     : !w.claude
@@ -263,7 +263,7 @@ export function RemoveMergedDialog() {
         onSubmit={(e) => {
           e.preventDefault();
           for (const w of chosen) {
-            // Not sent (the notice says why): the row is no longer "Removing…".
+            // Not sent (a toast says why): the row is no longer "Removing…".
             transport
               .removeWorktree(w.path, false)
               .catch(() => setSent((was) => new Set([...was].filter((path) => path !== w.path))));

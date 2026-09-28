@@ -3,7 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { version } from "../../package.json";
 import { asMac } from "../../test/mac";
 import { apply } from "../reduce";
-import { initialState, useHive } from "../store";
+import { initialState, showNotice, useHive } from "../store";
 import { StatusBar } from "./StatusBar";
 
 afterEach(() => {
@@ -24,4 +24,15 @@ test("shows the version on macOS without the WSL part", () => {
   render(<StatusBar />);
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(screen.getByRole("contentinfo").textContent).toBe(`macOSconnectedv${version}`);
+});
+
+test("holds no message: a failure or a confirmation shows elsewhere, as a toast (10.3)", () => {
+  render(<StatusBar />);
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
+    apply({ type: "notice", message: "No GitHub token for me" });
+    showNotice("info", "Copied /w");
+  });
+  expect(useHive.getState().notices).toHaveLength(2);
+  expect(screen.getByRole("contentinfo").textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
 });

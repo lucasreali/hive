@@ -10,6 +10,7 @@ import {
   useHive,
   type WorktreeDialog,
   within,
+  withNotice,
 } from "./store";
 import { dropFile, editFor, fileKey, fileTabState, opened } from "./tabs";
 import { type EditBuffer, failed, isDirty, isFor, saved } from "./viewer/buffer";
@@ -83,7 +84,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "settings":
       return { settings: m.settings, settingsError: null, settingsPending: false };
     case "settings_failed":
-      return { settingsError: m.message, notice: m.message, settingsPending: false };
+      return {
+        settingsError: m.message,
+        ...withNotice(s, "error", m.message),
+        settingsPending: false,
+      };
     case "diagnostics": {
       const { type: _, ...diagnostics } = m;
       return { diagnostics };
@@ -93,7 +98,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "update_failed":
       return {
         update: s.update && { ...s.update, installing: false },
-        notice: `Update failed: ${m.error}`,
+        ...withNotice(s, "error", `Update failed: ${m.error}`),
       };
     case "version_mismatch": {
       const { type: _, ...versions } = m;
@@ -173,7 +178,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "project_removed":
       return removedProject(s, m.id);
     case "remove_project_failed":
-      return { notice: m.message };
+      return withNotice(s, "error", m.message);
     case "spaces":
       // The answer to the space dialog's request: it has done its job.
       return {
@@ -185,7 +190,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "space_failed":
       return { spaceError: m.message };
     case "notice":
-      return { notice: m.message };
+      // A warning (a terminal opened without its space's GitHub account): it stays.
+      return withNotice(s, "error", m.message);
     case "pulls": {
       const { type: _, ...pulls } = m;
       return { pulls: { ...s.pulls, [m.project]: pulls } };
@@ -199,7 +205,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return {
         pullBusy: null,
         pullError: null,
-        notice: m.message,
+        ...withNotice(s, "info", m.message),
         modal: s.modal === "new-pull" ? null : s.modal,
       };
     case "pull_failed": {
@@ -221,7 +227,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { jobLog: { ...shown, log: m.log, error: m.error } };
     }
     case "run_done":
-      return { runBusy: null, runError: null, notice: m.message };
+      return { runBusy: null, runError: null, ...withNotice(s, "info", m.message) };
     case "run_failed": {
       const { type: _, ...runError } = m;
       return { runBusy: null, runError };
@@ -299,7 +305,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "session_deleted":
       return { sessions: s.sessions?.filter((x) => x.id !== m.id) ?? null };
     case "delete_session_failed":
-      return { notice: `Cannot delete the session: ${m.message}` };
+      return withNotice(s, "error", `Cannot delete the session: ${m.message}`);
     case "search_results": {
       const { type: _, ...searchResults } = m;
       return { searchResults };
@@ -389,10 +395,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       );
     }
     case "file_op_failed":
-      // Under the dialog's field, else (a drag) in the status bar.
+      // Under the dialog's field, else (a drag) as a toast.
       return s.fileDialog?.worktree === m.worktree
         ? { fileDialog: { ...s.fileDialog, error: m.message } }
-        : { notice: m.message };
+        : withNotice(s, "error", m.message);
     case "disconnected":
       // The service is gone, and every agent and the watches with it.
       return {

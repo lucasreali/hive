@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { asMac } from "../../test/mac";
+import { noticeKind, notice as toast } from "../../test/notice";
 import { initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
 import { openExternal, openFolder, openInEditor, openSettingsFile, openTarget } from "./external";
@@ -17,7 +18,7 @@ test("an editor_target the app did not ask for opens nothing", async () => {
   setOpenFile({ worktree, path: "a.ts" });
   await openTarget({ ...target("/tmp/evil.command", null, ""), worktree }, true);
   await openTarget({ ...target(unc), worktree }, true);
-  expect([calls, useHive.getState().notice, notice()]).toEqual([[], null, null]);
+  expect([calls, toast(), notice()]).toEqual([[], null, null]);
 });
 
 test("a requested editor_target opens once", async () => {
@@ -96,7 +97,7 @@ test("the service's refusal, the browser, and a file no longer open", async () =
   expect(calls).toEqual([]);
 });
 
-test("a worktree's folder opens in the Explorer, or the status bar says why not", async () => {
+test("a worktree's folder opens in the Explorer, or an error toast says why not", async () => {
   const calls: [string, unknown][] = [];
   mockIPC((cmd, args) => {
     calls.push([cmd, args]);
@@ -104,28 +105,29 @@ test("a worktree's folder opens in the Explorer, or the status bar says why not"
   const folder = "\\\\wsl.localhost\\Ubuntu\\w\\";
   await openFolder(target(folder, null, ""), true);
   expect(calls).toEqual([["open_path", { path: folder, reveal: false }]]);
-  const status = () => useHive.getState().notice;
-  expect(status()).toBeNull();
+  expect(toast()).toBeNull();
   await openFolder(target(null, "wslpath failed: x", ""), true);
-  expect(status()).toBe("wslpath failed: x");
+  expect([toast(), noticeKind()]).toEqual(["wslpath failed: x", "error"]);
+  await openFolder(target(null, null, ""), true);
+  expect(toast()).toBe("No Windows path");
   await openFolder(target(folder, null, ""), false);
-  expect(status()).toBe(`Only the Hive app opens the Explorer: ${folder}`);
+  expect(toast()).toBe(`Only the Hive app opens the Explorer: ${folder}`);
   mockIPC(() => {
     throw new Error("no Explorer");
   });
   await openFolder(target(folder, null, ""), true);
-  expect(status()).toContain("no Explorer");
+  expect(toast()).toContain("no Explorer");
   await openFolder(target(folder, null, ""));
 });
 
 test("the settings file (no worktree) opens the same way", async () => {
   const file = "\\\\wsl.localhost\\Ubuntu\\home\\you\\.config\\hive\\settings.json";
   await openFolder({ ...target(file, null, ""), worktree: "" }, false);
-  expect(useHive.getState().notice).toBe(`Only the Hive app opens the settings file: ${file}`);
+  expect(toast()).toBe(`Only the Hive app opens the settings file: ${file}`);
 });
 
 test("on macOS the folder opens in the Finder", async () => {
   asMac();
   await openFolder(target("/Users/you/w", null, ""), false);
-  expect(useHive.getState().notice).toBe("Only the Hive app opens the Finder: /Users/you/w");
+  expect(toast()).toBe("Only the Hive app opens the Finder: /Users/you/w");
 });

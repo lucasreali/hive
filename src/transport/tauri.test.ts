@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { notice, noticeKind } from "../../test/notice";
 import type { ServiceMessage } from "../protocol";
-import { DEFAULT_SETTINGS, setNotice, useHive } from "../store";
+import { DEFAULT_SETTINGS, useHive } from "../store";
 import { tauriTransport } from "./tauri";
 
 type Args = Record<string, unknown>;
@@ -165,7 +166,7 @@ test("Actions run actions call their commands", async () => {
   ]);
 });
 
-test("a command that fails shows why as the notice, and rejects already handled (9.21)", async () => {
+test("a command that fails shows why as an error toast, and rejects already handled (9.21)", async () => {
   mockIPC(() => {
     throw "the hive link is down";
   });
@@ -174,22 +175,23 @@ test("a command that fails shows why as the notice, and rejects already handled 
   const methods = Object.entries(tauriTransport).filter(([name]) => !own.includes(name));
   expect(methods.length).toBe(Object.keys(tauriTransport).length - own.length);
   for (const [name, method] of methods) {
-    setNotice(null);
+    useHive.setState({ notices: [] });
     const failure = await (method as () => Promise<void>)().then(
       () => "sent",
       (error: unknown) => error,
     );
-    expect([name, failure, useHive.getState().notice]).toEqual([
+    expect([name, failure, notice(), noticeKind()]).toEqual([
       name,
       "the hive link is down",
       "the hive link is down",
+      "error",
     ]);
   }
   // These leave the failure to their caller.
-  setNotice(null);
+  useHive.setState({ notices: [] });
   await expect(tauriTransport.openTerminal("/w", 80, 24, () => {})).rejects.toBe(
     "the hive link is down",
   );
   await expect(tauriTransport.saveFile("/w", "a", "", null)).rejects.toBe("the hive link is down");
-  expect(useHive.getState().notice).toBeNull();
+  expect(notice()).toBeNull();
 });

@@ -39,7 +39,7 @@ export function installUpdate(): void {
   const installing = (installing: boolean) =>
     useHive.setState((s) => ({ update: s.update && { ...s.update, installing } }));
   installing(true);
-  // Not sent (the notice says why): the button comes back.
+  // Not sent (a toast says why): the button comes back.
   transport.installUpdate().catch(() => installing(false));
 }
 

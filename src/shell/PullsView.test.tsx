@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { notice } from "../../test/notice";
 import { App } from "../App";
 import { PULLS_INTERVAL_MS, type PullDetail, type Pulls } from "../pulls";
 import { apply } from "../reduce";
@@ -126,9 +127,7 @@ test("each pull request shows its state, checks and review; the worktree's is ma
   expect(within(view()).queryByText(/Create pull request/)).toBeNull();
   // The repository opens on GitHub (only in the app: here the status bar says so).
   fireEvent.click(within(view()).getByRole("button", { name: "user/shop" }));
-  expect(useHive.getState().notice).toBe(
-    "Only the Hive app opens links: https://github.com/user/shop",
-  );
+  expect(notice()).toBe("Only the Hive app opens links: https://github.com/user/shop");
 
   // The service's refusal is shown as is.
   const error = "No remote of this repository is on github.com";
@@ -210,7 +209,7 @@ test("details: merging and closing ask first; a refusal shows gh's message", () 
   const checks = within(body).getByRole("region", { name: "Checks (3)" });
   expect(checks.querySelectorAll(".pull-check")).toHaveLength(3);
   fireEvent.click(within(checks).getByRole("button", { name: "test" }));
-  expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://github.com/x/1");
+  expect(notice()).toBe("Only the Hive app opens links: https://github.com/x/1");
   const notes = within(body).getByRole("region", { name: "Reviews and comments (2)" });
   expect(notes.querySelectorAll(".pull-note")[0]?.textContent).toMatch(/^octo approved · .*Nice$/);
   expect(notes.querySelectorAll(".pull-note")[1]?.textContent).toBe("octo-2 · ");
@@ -218,7 +217,7 @@ test("details: merging and closing ask first; a refusal shows gh's message", () 
     "Files (1)src/login.ts+12−3",
   );
   fireEvent.click(within(body).getByRole("button", { name: "Open on GitHub" }));
-  expect(useHive.getState().notice).toContain(mine[0]?.url);
+  expect(notice()).toContain(mine[0]?.url);
 
   // Merge: the repository's default method, asked first.
   fireEvent.click(within(body).getByRole("button", { name: "Merge" }));

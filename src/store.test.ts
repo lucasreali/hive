@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { renderHook } from "@testing-library/react";
+import { notice, noticeKind } from "../test/notice";
 import type { ServiceMessage, Subagent } from "./protocol";
 import { apply } from "./reduce";
 import {
@@ -7,7 +8,9 @@ import {
   addTab,
   agentWorkingIn,
   DEFAULT_SETTINGS,
+  dismissNotice,
   initialState,
+  NOTICE_LIMIT,
   openFileDialog,
   openFileMenu,
   openModal,
@@ -19,6 +22,8 @@ import {
   setEditorNotice,
   setOpenFile,
   setRightPanel,
+  showFailure,
+  showNotice,
   toggleCollapsed,
   useHive,
   useTerminal,
@@ -40,10 +45,10 @@ test("settings replace the defaults; a failure keeps them and says why", () => {
   expect(useHive.getState().settings).toEqual(DEFAULT_SETTINGS);
   apply({ type: "settings_failed", message: "Ignoring settings.json" });
   let s = useHive.getState();
-  expect([s.settings, s.settingsError, s.notice]).toEqual([
+  expect([s.settings, s.settingsError, s.notices.at(-1)]).toMatchObject([
     DEFAULT_SETTINGS,
     "Ignoring settings.json",
-    "Ignoring settings.json",
+    { kind: "error", text: "Ignoring settings.json" },
   ]);
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.notifications.volume = 0;
@@ -480,9 +485,9 @@ test("a rename carries the open file, its text and its edits to the new path", (
   setOpenFile(null);
   apply({ type: "file_renamed", worktree: "/w", path: "d.ts", to: "e.ts" });
   expect(s().openFile).toBeNull();
-  // A refusal without a dialog for its worktree (a drag) shows in the status bar.
+  // A refusal without a dialog for its worktree (a drag) shows as an error toast.
   apply({ type: "file_op_failed", worktree: "/w", message: "no" });
-  expect([s().fileDialog, s().notice]).toEqual([null, "no"]);
+  expect([s().fileDialog, notice(), noticeKind()]).toEqual([null, "no", "error"]);
   openFileMenu({ worktree: "/w", folder: "", path: null, x: 1, y: 2 });
   expect(s().fileMenu).toMatchObject({ x: 1 });
 });
@@ -616,12 +621,39 @@ test("sessions are stored as listed; a deleted one leaves, a refused delete says
   apply({ type: "session_deleted", id: a.id });
   expect(useHive.getState().sessions).toEqual([b]);
   apply({ type: "delete_session_failed", id: b.id, message: "busy" });
-  expect(useHive.getState().notice).toBe("Cannot delete the session: busy");
+  expect([notice(), noticeKind()]).toEqual(["Cannot delete the session: busy", "error"]);
 });
 
-test("a notice from the service shows in the status bar", () => {
+test("a notice from the service is an error toast: it stays until dismissed", () => {
   apply({ type: "notice", message: "No GitHub token for me" });
-  expect(useHive.getState().notice).toBe("No GitHub token for me");
+  expect([notice(), noticeKind()]).toEqual(["No GitHub token for me", "error"]);
+});
+
+test("toasts: each has a kind; at most 3 show, the newest last; one is dismissed by its id", () => {
+  const shown = () => useHive.getState().notices.map((n) => `${n.kind}:${n.text}`);
+  showNotice("error", "a");
+  showNotice("info", "b");
+  showNotice("error", "c");
+  expect(shown()).toEqual(["error:a", "info:b", "error:c"]);
+  // A fourth replaces the oldest.
+  showNotice("info", "d");
+  expect(shown()).toEqual(["info:b", "error:c", "info:d"]);
+  const ids = useHive.getState().notices.map((n) => n.id);
+  expect(new Set(ids).size).toBe(NOTICE_LIMIT);
+  dismissNotice(ids[1] as number);
+  expect(shown()).toEqual(["info:b", "info:d"]);
+  // An unknown id changes nothing; errors never go by themselves (only `Toasts` fades infos).
+  dismissNotice(-1);
+  expect(shown()).toEqual(["info:b", "info:d"]);
+});
+
+test("a failed action shows why as an error toast, after what it was", async () => {
+  await showFailure(Promise.reject("gone"), "Cannot open a terminal").catch(() => {});
+  expect([notice(), noticeKind()]).toEqual(["Cannot open a terminal: gone", "error"]);
+  await showFailure(Promise.reject("down")).catch(() => {});
+  expect(notice()).toBe("down");
+  await showFailure(Promise.resolve(1));
+  expect(useHive.getState().notices).toHaveLength(2);
 });
 
 test("a tab opened in a subfolder or through a link shows under the worktree the service placed", () => {

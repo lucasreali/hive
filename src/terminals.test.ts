@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
+import { notice } from "../test/notice";
 import LIGATURES from "./assets/fonts/ligatures.json";
 import { apply } from "./reduce";
 import { DEFAULT_SETTINGS, initialState, setWidth, useHive } from "./store";
@@ -194,7 +195,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
   }
   expect(fit).toHaveBeenCalledTimes(1);
   // Anything else changing in the store leaves them alone.
-  useHive.setState({ notice: "x" });
+  useHive.setState({ notices: [{ id: 0, kind: "info", text: "x" }] });
   expect(fit).toHaveBeenCalledTimes(1);
   settings.appearance.theme = "one-dark";
   apply({ type: "settings", settings: structuredClone(settings) });
@@ -251,11 +252,11 @@ test("an OSC 8 link opens outside the app, only when safe; never a browser dialo
   // A link `safeUrl` refuses (xterm already drops non-http ones) opens nothing.
   link.activate(new MouseEvent("click"), "javascript:alert(1)");
   await settle();
-  expect(useHive.getState().notice).toBeNull();
+  expect(notice()).toBeNull();
   // Outside Tauri `openLink` only says so.
   link.activate(new MouseEvent("click"), link.text);
   await settle();
-  expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://example.com/x");
+  expect(notice()).toBe("Only the Hive app opens links: https://example.com/x");
   expect(confirmSpy).not.toHaveBeenCalled();
   expect(openSpy).not.toHaveBeenCalled();
   confirmSpy.mockRestore();

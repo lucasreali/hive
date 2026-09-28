@@ -227,7 +227,7 @@ export const openClaude = (cwd: string, args = ""): Promise<number> =>
 
 /**
  * For a click or key that opens a terminal (`openTerminal`, `openClaude`, `openWith`,
- * `splitTerminal`), 9.21: a failure is shown as the notice, never swallowed.
+ * `splitTerminal`), 9.21: a failure is shown as an error toast, never swallowed.
  */
 export const showOpenFailure = (open: Promise<unknown>) =>
   void showFailure(open, "Cannot open a terminal");

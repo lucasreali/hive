@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { notice } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -28,14 +29,14 @@ function offered(agents: string[] = []) {
   return install;
 }
 
-test("an install that cannot be sent is shown as the notice; the button comes back (9.21)", async () => {
+test("an install that cannot be sent is shown as an error toast; the button comes back (9.21)", async () => {
   offered().mockRestore();
   const restore = unsent("installUpdate");
   fireEvent.click(button() as HTMLElement);
   expect(button()?.textContent).toBe("Restarting…");
   await waitFor(() => expect(button()?.textContent).toBe("Restart to update to v0.2.0"));
   restore();
-  expect(useHive.getState().notice).toBe(LINK_DOWN);
+  expect(notice()).toBe(LINK_DOWN);
   expect((button() as HTMLButtonElement).disabled).toBe(false);
 });
 
@@ -55,7 +56,7 @@ test("the update button installs at once when no agent would end", () => {
 
   // A failure says why and lets the update be tried again.
   act(() => apply({ type: "update_failed", error: "signature mismatch" }));
-  expect(useHive.getState().notice).toBe("Update failed: signature mismatch");
+  expect(notice()).toBe("Update failed: signature mismatch");
   expect((button() as HTMLButtonElement).disabled).toBe(false);
   install.mockRestore();
 });
@@ -211,6 +212,6 @@ test("an update failure without an offered update only says why", () => {
   apply({ type: "update_failed", error: "no update to install" });
   expect(useHive.getState()).toMatchObject({
     update: null,
-    notice: "Update failed: no update to install",
+    notices: [{ kind: "error", text: "Update failed: no update to install" }],
   });
 });

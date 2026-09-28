@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { notice } from "../../test/notice";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { initialState, select, setPanelView, setRightPanel, useHive } from "../store";
@@ -85,7 +86,7 @@ test("Sessions lists the shown worktree's sessions only, searched", () => {
   // A click does nothing.
   const open = spyOn(transport, "openTerminal").mockResolvedValue(8);
   fireEvent.click(main);
-  expect([open.mock.calls.length, useHive.getState().notice]).toEqual([0, null]);
+  expect([open.mock.calls.length, notice()]).toEqual([0, null]);
 
   const search = screen.getByRole("searchbox", { name: "Search sessions" });
   fireEvent.change(search, { target: { value: " REDIRECT " } });

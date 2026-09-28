@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { notice } from "../../test/notice";
 import { App } from "../App";
 import { PULLS_INTERVAL_MS } from "../pulls";
 import { apply } from "../reduce";
@@ -208,7 +209,7 @@ test("a failed run re-runs all or its failed jobs and shows its failed job's log
   );
   expect(within(body).queryByRole("button", { name: "Cancel" })).toBeNull();
   fireEvent.click(within(body).getByRole("button", { name: "Open on GitHub" }));
-  expect(useHive.getState().notice).toContain(failed.url);
+  expect(notice()).toContain(failed.url);
 
   // The failed job's log: asked for, then its end in a monospace block.
   fireEvent.click(within(body).getByRole("button", { name: "Show the end of its log" }));

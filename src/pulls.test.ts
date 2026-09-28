@@ -65,7 +65,11 @@ test("details show for the open pull request only; actions wait for their answer
   ]);
   apply({ type: "pull_done", project: SHOP, number: 20, message: "Opened pull request #20" });
   const done = useHive.getState();
-  expect([done.modal, done.pullBusy, done.notice]).toEqual([null, null, "Opened pull request #20"]);
+  expect([done.modal, done.pullBusy, done.notices.at(-1)]).toMatchObject([
+    null,
+    null,
+    { kind: "info", text: "Opened pull request #20" },
+  ]);
   // Another dialog stays.
   useHive.setState({ modal: "settings" });
   apply({ type: "pull_done", project: SHOP, number: 12, message: "Merged" });

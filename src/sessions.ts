@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { OpenSession, ServiceMessage, Session, SessionTarget } from "./protocol";
-import { activateTab, ask, setNotice, useHive } from "./store";
+import { activateTab, ask, showNotice, useHive } from "./store";
 import { openClaude } from "./terminals";
 import { transport } from "./transport";
 import { openPath } from "./viewer/external";
@@ -39,7 +39,7 @@ export async function resume(session: Session, fork = false): Promise<void> {
   try {
     await openClaude(session.cwd, resumeArgs(session, fork));
   } catch (error) {
-    setNotice(`Cannot open a terminal in ${session.cwd}: ${error}`);
+    showNotice("error", `Cannot open a terminal in ${session.cwd}: ${error}`);
   }
 }
 
@@ -52,7 +52,7 @@ export async function restore(sessions: OpenSession[]): Promise<void> {
     try {
       await openClaude(cwd, `--resume ${id}`);
     } catch (error) {
-      setNotice(`Cannot resume the session in ${cwd}: ${error}`);
+      showNotice("error", `Cannot resume the session in ${cwd}: ${error}`);
     }
   }
 }
@@ -65,28 +65,28 @@ export function locate(session: Session, target: SessionTarget, handing: Handing
 
 /**
  * The service's answer to `locate`: opens the path with Windows' default app (or shows it in
- * the Explorer). Outside Tauri, or when it failed, the status bar says so.
+ * the Explorer). Outside Tauri, or when it failed, an error toast says so.
  */
 export async function openLocated(located: Located, tauri = isTauri()): Promise<void> {
   const key = `${located.id}:${located.target}`;
   const handing = pending.get(key);
   pending.delete(key);
   if (!handing) return;
-  if (!located.windows_path) return setNotice(located.error);
-  if (!tauri) return setNotice(`Only the Hive app opens ${located.windows_path}`);
+  if (!located.windows_path) return showNotice("error", located.error ?? "No Windows path");
+  if (!tauri) return showNotice("error", `Only the Hive app opens ${located.windows_path}`);
   try {
     await openPath(located.windows_path, handing === "reveal");
   } catch (error) {
-    setNotice(String(error));
+    showNotice("error", String(error));
   }
 }
 
-/** Copies `text`, saying so (or why not) in the status bar. */
+/** Copies `text`, saying so (or why not) in a toast. */
 export const copy = (text: string, what: string) =>
   navigator.clipboard
     .writeText(text)
-    .then(() => setNotice(`Copied the ${what}`))
-    .catch((error) => setNotice(`Cannot copy the ${what}: ${error}`));
+    .then(() => showNotice("info", `Copied the ${what}`))
+    .catch((error) => showNotice("error", `Cannot copy the ${what}: ${error}`));
 
 /** A session's name: its title, else its id. */
 export const sessionName = (session: Session) => session.title ?? session.id;

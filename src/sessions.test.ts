@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { notice, noticeKind } from "../test/notice";
 import { apply } from "./reduce";
 import {
   ago,
@@ -27,7 +28,6 @@ afterEach(() => {
 });
 
 const [session, stopped] = MOCK_SESSIONS;
-const notice = () => useHive.getState().notice;
 
 test("resume commands go on with the session, or fork it", () => {
   expect(resumeArgs(session)).toBe(`--resume ${session.id}`);
@@ -117,7 +117,10 @@ test("a located log or folder opens, or is revealed, with Windows' apps", async 
 
   locate(session, "log", "open");
   await openLocated({ ...located("log", null), error: "wslpath failed: x" }, true);
-  expect(notice()).toBe("wslpath failed: x");
+  expect([notice(), noticeKind()]).toEqual(["wslpath failed: x", "error"]);
+  locate(session, "log", "open");
+  await openLocated({ ...located("log", null), error: null }, true);
+  expect(notice()).toBe("No Windows path");
   locate(session, "log", "open");
   await openLocated(located("log", "C:\\log"), false);
   expect(notice()).toBe("Only the Hive app opens C:\\log");
@@ -132,14 +135,14 @@ test("a located log or folder opens, or is revealed, with Windows' apps", async 
   asked.mockRestore();
 });
 
-test("copying says so in the status bar, or why not", async () => {
+test("copying says so in a fading toast, or why not in one that stays", async () => {
   const writeText = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   await copy("abc", "session id");
   expect(writeText).toHaveBeenCalledWith("abc");
-  expect(notice()).toBe("Copied the session id");
+  expect([notice(), noticeKind()]).toEqual(["Copied the session id", "info"]);
   writeText.mockRejectedValue("denied");
   await copy("abc", "log path");
-  expect(notice()).toBe("Cannot copy the log path: denied");
+  expect([notice(), noticeKind()]).toEqual(["Cannot copy the log path: denied", "error"]);
   writeText.mockRestore();
 });
 

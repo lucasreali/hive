@@ -41,7 +41,9 @@ test("pull requests: list, badge, details, a merge asked first and a refused one
     .getByRole("button", { name: "Merge" })
     .click();
   await expect(panel.locator(".pull-heading + .session-meta .pull-state")).toHaveText("Merged");
-  await expect(page.locator(".statusbar")).toContainText("Merged pull request #12");
+  await expect(page.getByRole("status", { name: "Messages" })).toContainText(
+    "Merged pull request #12",
+  );
   await expect(badge).toHaveAttribute("data-state", "merged");
 });
 

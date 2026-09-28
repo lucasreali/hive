@@ -2346,13 +2346,73 @@ button.chevron:hover {
   overflow-wrap: anywhere;
 }
 
-.statusbar .notice {
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-2);
+/* Notices (10.3): toasts in the bottom-right corner, above the status bar, as menus look. */
+.toasts {
+  position: fixed;
+  right: 12px;
+  bottom: calc(var(--status-h) + 8px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.toast {
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 6px 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text);
   font-size: var(--fs-small);
+  pointer-events: auto;
+  user-select: text;
+}
+
+.toast[data-kind="error"] {
+  border-left-color: var(--state-error);
+}
+
+/* A confirmation fades out as `INFO_MS` (Toasts.tsx) ends. */
+.toast[data-kind="info"] {
+  animation: toast-fade 300ms ease-in 3700ms forwards;
+}
+
+@keyframes toast-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.toast-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-2);
+}
+
+.toast-close:hover {
+  background: var(--selected);
+  color: var(--text);
 }
 
 /* The sidebar's Files: search by name or contents */

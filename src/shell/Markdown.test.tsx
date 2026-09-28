@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { cleanup, render } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
+import { notice } from "../../test/notice";
 import { initialState, useHive } from "../store";
 
 // Counts the parses (renders of react-markdown) to check the memo; it still renders.
@@ -98,19 +99,19 @@ test("a click opens the link outside the app and the webview does not navigate",
   const click = new MouseEvent("click", { bubbles: true, cancelable: true });
   link.dispatchEvent(click);
   expect(click.defaultPrevented).toBe(true);
-  expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://a.dev");
+  expect(notice()).toBe("Only the Hive app opens links: https://a.dev");
   expect(calls).toEqual([]);
   // A middle-click opens outside too; another button does nothing; neither navigates.
-  useHive.setState({ notice: null });
+  useHive.setState({ notices: [] });
   const aux = (button: number) => {
     const event = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button });
     link.dispatchEvent(event);
     return event.defaultPrevented;
   };
   expect(aux(2)).toBe(true);
-  expect(useHive.getState().notice).toBeNull();
+  expect(notice()).toBeNull();
   expect(aux(1)).toBe(true);
-  expect(useHive.getState().notice).toBe("Only the Hive app opens links: https://a.dev");
+  expect(notice()).toBe("Only the Hive app opens links: https://a.dev");
 
   await openLink("https://a.dev", true);
   expect(calls).toEqual([["plugin:opener|open_url", { url: "https://a.dev" }]]);
@@ -118,7 +119,7 @@ test("a click opens the link outside the app and the webview does not navigate",
     throw new Error("no browser");
   });
   await openLink("https://a.dev", true);
-  expect(useHive.getState().notice).toContain("no browser");
+  expect(notice()).toContain("no browser");
 });
 
 test("the same text is not parsed again; a new text is", () => {
