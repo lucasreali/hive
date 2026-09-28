@@ -706,6 +706,12 @@ impl State {
     fn pulls(self: &Arc<Self>, request: Control) {
         let state = self.clone();
         tokio::spawn(async move {
+            // A checkout makes a worktree: in turn with the registry watch, as
+            // `change_worktrees`.
+            let _turn = match request {
+                Control::ActOnPull { .. } => Some(state.changing.lock().await),
+                _ => None,
+            };
             let gh = state.gh().await;
             let replies = tokio::task::block_in_place(|| {
                 let mut replies = crate::pulls::answer(&gh, &state.projects, &state.pulls, request);
