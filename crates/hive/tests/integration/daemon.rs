@@ -372,6 +372,53 @@ async fn diagnostics_find_a_claude_installed_after_none_was_found() {
 }
 
 #[tokio::test]
+async fn the_users_shell_runs_only_once_its_path_is_needed() {
+    let env = Env::new();
+    // A shell of the test's own that notes each run, and a `claude` it finds (9.20).
+    let tools = env.path("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let runs = env.path("runs");
+    let shell = tools.join("fish");
+    let script = format!(
+        "#!/bin/sh\necho run >> '{}'\nprintf '%s\\n' \"$PATH\"\n",
+        runs.display()
+    );
+    std::fs::write(&shell, script).unwrap();
+    std::fs::write(tools.join("claude"), "").unwrap();
+    for program in [&shell, &tools.join("claude")] {
+        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut daemon = env.daemon_with(env.hive().env("PATH", &tools).env("SHELL", &shell));
+    let mut app = env.connect(Role::App).await;
+    let count = || std::fs::read_to_string(&runs).map_or(0, |runs| runs.lines().count());
+    let settle = || std::thread::sleep(std::time::Duration::from_millis(300));
+    // Not at start, nor for any other request.
+    app.send(0, Control::GetSettings).await;
+    app.control().await;
+    settle();
+    assert_eq!(count(), 0);
+    // Once for diagnostics; a `claude` found, not again.
+    for _ in 0..2 {
+        app.send(0, Control::GetDiagnostics).await;
+        let (_, diagnostics) = app.control().await;
+        assert!(
+            matches!(
+                &diagnostics,
+                Control::Diagnostics {
+                    claude: Some(_),
+                    ..
+                }
+            ),
+            "{diagnostics:?}"
+        );
+        settle();
+        assert_eq!(count(), 1);
+    }
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn the_settings_file_is_written_to_be_opened_and_diagnostics_name_it() {
     let env = Env::new();
     // A `wslpath` and a `claude` of the test's own, first on the service's `PATH`.

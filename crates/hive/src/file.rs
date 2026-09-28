@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, SaveError};
 
 use crate::changes::{self, BINARY_PROBE};
-use crate::git;
+use crate::projects::{self, Projects};
+use crate::{git, procs, search};
 
 /// Most bytes of each side (on disk, at the base) sent to the app.
 pub const TEXT_LIMIT: u64 = 1_048_576; // 1 MiB
@@ -27,6 +28,158 @@ pub enum Side {
     Missing,
     TooLarge,
     Bytes(Vec<u8>),
+}
+
+/// Answers a request on the files of a followed worktree (9.20): search, open, save, create,
+/// rename, move and delete, and where to open one in the editor. The worktree is checked to be
+/// followed first; anything else is an error.
+pub fn answer(projects: &Projects, request: Control) -> Control {
+    match request {
+        Control::SearchFiles { worktree, query } => {
+            let found = projects
+                .worktree(&worktree)
+                .and_then(|dir| search::search(&dir, &query));
+            let (matches, truncated, error) = match found {
+                Ok((matches, truncated)) => (matches, truncated, None),
+                Err(err) => (Vec::new(), false, Some(err.to_string())),
+            };
+            Control::SearchResults {
+                worktree,
+                query,
+                matches,
+                truncated,
+                error,
+            }
+        }
+        Control::OpenFile {
+            worktree,
+            path,
+            base,
+        } => {
+            let read = changes::against(&projects.list(), &worktree, base)
+                .and_then(|against| read(&against.dir, &path, against.commit.as_deref()));
+            message(worktree, path, read)
+        }
+        Control::SaveFile {
+            worktree,
+            path,
+            content,
+            version,
+        } => {
+            let saved = match projects.worktree(&worktree) {
+                Ok(dir) => save(&dir, &path, &content, version.as_deref()),
+                Err(err) => Err((SaveError::InvalidPath, err.to_string())),
+            };
+            match saved {
+                Ok(version) => Control::FileSaved {
+                    worktree,
+                    path,
+                    version,
+                },
+                Err((error, message)) => Control::SaveFailed {
+                    worktree,
+                    path,
+                    error,
+                    message,
+                },
+            }
+        }
+        Control::CreateFile {
+            worktree,
+            folder,
+            name,
+        } => {
+            let created = projects
+                .worktree(&worktree)
+                .and_then(|dir| create(&dir, &folder, &name));
+            match created {
+                Ok(path) => Control::FileCreated { worktree, path },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }
+        Control::RenameFile {
+            worktree,
+            path,
+            name,
+        } => {
+            let renamed = projects
+                .worktree(&worktree)
+                .and_then(|dir| rename(&dir, &path, &name, &held(projects)));
+            match renamed {
+                Ok(to) => Control::FileRenamed { worktree, path, to },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }
+        Control::MoveFile {
+            worktree,
+            path,
+            folder,
+        } => {
+            let moved = projects
+                .worktree(&worktree)
+                .and_then(|dir| move_to(&dir, &path, &folder, &held(projects)));
+            match moved {
+                Ok(to) => Control::FileRenamed { worktree, path, to },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }
+        Control::DeleteFile { worktree, path } => {
+            let deleted = projects
+                .worktree(&worktree)
+                .and_then(|dir| delete(&dir, &path, &held(projects)));
+            match deleted {
+                Ok(()) => Control::FileDeleted { worktree, path },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }
+        Control::CreateFolder {
+            worktree,
+            folder,
+            name,
+        } => {
+            let created = projects
+                .worktree(&worktree)
+                .and_then(|dir| create_folder(&dir, &folder, &name));
+            match created {
+                Ok(path) => Control::FolderCreated { worktree, path },
+                Err(err) => Control::FileOpFailed {
+                    worktree,
+                    message: err.to_string(),
+                },
+            }
+        }
+        Control::OpenInEditor { worktree, path } => {
+            let located = projects
+                .worktree(&worktree)
+                .and_then(|dir| windows_path(&dir, &path, OsStr::new("wslpath")));
+            Control::EditorTarget {
+                worktree,
+                path,
+                error: located.as_ref().err().map(ToString::to_string),
+                windows_path: located.ok(),
+            }
+        }
+        _ => Control::Error {
+            message: "not a file request".to_owned(),
+        },
+    }
+}
+
+/// [`projects::held`] for a folder about to be renamed or moved, with this machine's processes.
+fn held(projects: &Projects) -> impl Fn(&Path) -> io::Result<()> {
+    move |folder| projects::held(&projects.list(), folder, procs::Source::System)
 }
 
 /// The file `path` of the worktree at `dir`: on disk and at `commit` (the Changes panel's
@@ -869,6 +1022,16 @@ mod tests {
 
     fn move_to(dir: &Path, path: &str, folder: &str) -> io::Result<String> {
         super::move_to(dir, path, folder, &free)
+    }
+
+    #[test]
+    fn only_file_requests_are_answered() {
+        let dir = tempfile::tempdir().unwrap();
+        let projects = Projects::load(dir.path().join("spaces.json"), &dir.path().join("p"));
+        let error = Control::Error {
+            message: "not a file request".into(),
+        };
+        assert_eq!(super::answer(&projects, Control::ListProjects), error);
     }
 
     #[test]
