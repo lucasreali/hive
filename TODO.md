@@ -150,6 +150,15 @@ Tasks 9.3–9.27 come from the whole-repository review of 2026-09-27 (service, f
 
 ---
 
+## Stage 10 — Next release
+
+Created 2026-09-28 at the human's request. Tasks come only from the human, added here as they are asked for. Run with `/stage 10`.
+
+- [ ] **10.1 The Pull requests back button is not clipped.** In a pull request's details, the bar's back button (`PullsView.tsx`, `.pulls-bar`: arrow + "Pull requests") shows cut off on the left: the arrow is hidden and the text reads "ull requests" (seen on Windows, 2026-09-28). The button shows whole — icon and full label — at every right-panel width (280–640 px); a Playwright check at the narrowest width keeps it so.
+- [ ] **10.2 The Actions branch picker fits its bar.** In the Actions runs list, the bar's branch `Select` (`RunsView.tsx`, `.pulls-bar`) sits outside the bar's layout: a full-size bordered control, taller than the 32 px bar and flush with the panel's left edge instead of its 12 px padding (seen on Windows, 2026-09-28). It fits the bar like its other controls ("Updated …", Refresh): same height, aligned, inside the padding. Same bar as 10.1, so one task may fix both; the Playwright check covers this bar too.
+
+---
+
 ## Not now (Fase 2)
 
 Kanban screen, rich interactions (permissions and choices answered in the app), live edit view, session history. Do not build any of it during v1.
