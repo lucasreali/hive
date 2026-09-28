@@ -129,13 +129,16 @@ async fn only_the_current_spaces_projects_are_watched() {
         env: SpaceEnv::default(),
     };
     ask(&mut app, work).await;
+    // Also lets the watch follow the switch.
+    nothing_more(&mut app).await;
     add("away");
     nothing_more(&mut app).await;
-    // Back in its space, it is watched again.
+    // Back in its space, it is watched again, and what changed meanwhile is sent.
     let back = Control::SelectSpace {
         id: "default".into(),
     };
     ask(&mut app, back).await;
+    assert_eq!(names(&mut app).await, ["main", "away"]);
     add("back");
     assert_eq!(names(&mut app).await, ["main", "away", "back"]);
 

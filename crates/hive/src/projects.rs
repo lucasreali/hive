@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use crate::spaces::Spaces;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
-use crate::{git, procs};
+use crate::{git, health, procs};
 
 /// Largest spaces or project list file read.
 const FILE_LIMIT: u64 = 1024 * 1024;
@@ -250,13 +250,7 @@ impl Projects {
 
     /// `path` when it is a worktree of a followed project: the path comes from the app.
     pub fn worktree(&self, path: &str) -> io::Result<PathBuf> {
-        let followed = self.list().into_iter().flat_map(|p| p.worktrees);
-        if followed.into_iter().any(|w| w.path == path) {
-            return Ok(PathBuf::from(path));
-        }
-        Err(io::Error::other(format!(
-            "{path} is not a worktree of a followed project"
-        )))
+        followed(&self.list(), path).map(|(dir, _)| dir)
     }
 
     /// Only followed projects are acted on: the id comes from the app.
@@ -270,6 +264,20 @@ impl Projects {
     fn spaces(&self) -> MutexGuard<'_, Spaces> {
         self.spaces.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The worktree `path` of `projects` and the branch it is compared with
+/// ([`health::branch`]); an error when no project has it.
+pub fn followed(projects: &[Project], path: &str) -> io::Result<(PathBuf, Option<String>)> {
+    for project in projects {
+        if let Some(w) = project.worktrees.iter().find(|w| w.path == path) {
+            let branch = health::branch(project, w).map(str::to_owned);
+            return Ok((PathBuf::from(path), branch));
+        }
+    }
+    Err(io::Error::other(format!(
+        "{path} is not a worktree of a followed project"
+    )))
 }
 
 /// The followed worktree containing `cwd`, as `(project id, worktree id)`. Claude worktrees
