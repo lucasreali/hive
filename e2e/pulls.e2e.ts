@@ -44,3 +44,38 @@ test("pull requests: list, badge, details, a merge asked first and a refused one
   await expect(page.locator(".statusbar")).toContainText("Merged pull request #12");
   await expect(badge).toHaveAttribute("data-state", "merged");
 });
+
+// 10.1: the details' back button shows whole, icon and label, at every right-panel width.
+for (const panelWidth of [280, 640]) {
+  test(`pull requests: the back button fits its bar at ${panelWidth} px`, async ({ page }) => {
+    await page.addInitScript(
+      (w) => localStorage.setItem("hive.widths", JSON.stringify({ panelWidth: w })),
+      panelWidth,
+    );
+    await page.goto("/");
+    const tree = page.getByRole("navigation", { name: "Projects" });
+    await tree
+      .locator(".tree-row.worktree", { hasText: "fix-login" })
+      .locator(".pull-badge")
+      .click();
+    const panel = page.getByRole("region", { name: "PRs" });
+    await expect(panel.locator(".pull-heading")).toBeVisible();
+    const back = panel.getByRole("button", { name: "Pull requests" });
+    const fit = await back.evaluate((button) => {
+      const bar = button.closest(".pulls-bar") as HTMLElement;
+      const box = bar.getBoundingClientRect();
+      const inner = box.left + Number.parseFloat(getComputedStyle(bar).paddingLeft);
+      const self = button.getBoundingClientRect();
+      const icon = (button.querySelector("svg") as SVGElement).getBoundingClientRect();
+      return {
+        width: box.width,
+        inside: self.left >= inner && self.right <= box.right,
+        icon: icon.left >= self.left && icon.right <= self.right,
+        whole: button.scrollWidth <= button.clientWidth,
+      };
+    });
+    expect(Math.round(fit.width)).toBe(panelWidth - 1);
+    expect(fit).toMatchObject({ inside: true, icon: true, whole: true });
+    await expect(back).toHaveText("Pull requests");
+  });
+}
