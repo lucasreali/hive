@@ -211,8 +211,11 @@ fn a_job_log_shows_its_failed_step_without_escapes() {
         assert!(!log.contains(gone), "{gone}");
     }
     // No error: the end as it is; a line without a timestamp stays whole.
-    let plain = "2026-09-27T10:52:36.1366194Z Post job cleanup.\nno time here\n2026-09-27T10:52:36.1366194Z\n";
-    assert_eq!(log_tail(plain), "Post job cleanup.\nno time here\n");
+    let plain = "2026-09-27T10:52:36.1366194Z Post job cleanup.\nno time on this line, long as a timestamp\n2026-09-27T10:52:36.1366194Z\n";
+    assert_eq!(
+        log_tail(plain),
+        "Post job cleanup.\nno time on this line, long as a timestamp\n"
+    );
     // A carriage return redraws the line; tabs stay, other controls go.
     assert_eq!(log_tail("10%\r50%\r100%\ta\u{7}b"), "100%\tab");
 }
