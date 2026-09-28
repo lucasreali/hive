@@ -389,13 +389,13 @@ impl Agent {
             self.interrupted = quiet && shown == AgentState::WaitingYou;
             self.seen = self.interrupted || self.watched && finished;
             self.since_ms = wall;
-            alert = if self.interrupted {
-                None
-            } else if finished {
+            // One expression: every instantiation of `changed` runs each of its lines.
+            alert = if finished {
                 Some(Alert::Finished)
             } else {
                 shown.pending().then_some(Alert::Waiting)
-            };
+            }
+            .filter(|_| !self.interrupted);
         }
         for sub in &mut self.subagents {
             if subagents.get(&sub.id) != Some(&sub.state) {

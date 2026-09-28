@@ -498,11 +498,12 @@ impl State {
                 self.to_app(agent.channel, &usage).await;
             }
         }
-        let worktrees = states::subagent_worktrees(agents.values());
-        if !worktrees.is_empty() {
-            self.to_app(0, &Control::SubagentWorktrees { worktrees })
-                .await;
-        }
+        // The new app has none yet: sent unless still none.
+        self.owned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.owned_changed(&agents).await;
     }
 
     /// Queues input or a resize; ignored once the terminal is gone.
