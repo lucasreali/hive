@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { setNotice } from "../store";
+import { showNotice } from "../store";
 
 /**
  * Only these links open (8.6): anything else (`javascript:`, `file:`, relative) is plain text.
@@ -21,11 +21,11 @@ export function safeUrl(url: string): string {
  * bar says so.
  */
 export async function openLink(url: string, tauri = isTauri()): Promise<void> {
-  if (!tauri) return setNotice(`Only the Hive app opens links: ${url}`);
+  if (!tauri) return showNotice("error", `Only the Hive app opens links: ${url}`);
   try {
     await openUrl(url);
   } catch (error) {
-    setNotice(String(error));
+    showNotice("error", String(error));
   }
 }
 

@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { notice } from "../../test/notice";
 import { App } from "../App";
 import { newPull } from "../pulls";
 import { apply } from "../reduce";
@@ -56,7 +57,7 @@ test("creates from the worktree's branch into the main worktree's by default", (
     apply({ type: "pull_done", project: shop.id, number: 21, message: "Opened pull request #21" }),
   );
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(useHive.getState().notice).toBe("Opened pull request #21");
+  expect(notice()).toBe("Opened pull request #21");
   create.mockRestore();
 });
 

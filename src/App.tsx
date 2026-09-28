@@ -15,6 +15,7 @@ import { SpaceDialog } from "./shell/SpaceDialog";
 import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
+import { Toasts } from "./shell/Toasts";
 import {
   ProjectMenu,
   RemoveMergedDialog,
@@ -74,6 +75,7 @@ export function App() {
         {!blocked && <FileMenu />}
         <ConnectionBlock />
       </div>
+      <Toasts />
       <StatusBar />
     </div>
   );

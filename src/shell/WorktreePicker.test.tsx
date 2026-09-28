@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { notice } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -89,17 +90,14 @@ test("Enter opens a terminal in the picked worktree and closes the picker", asyn
   openTerminal.mockRestore();
 });
 
-test("a terminal that cannot be opened is shown as the notice, with no tab (9.21)", async () => {
+test("a terminal that cannot be opened is shown as an error toast, with no tab (9.21)", async () => {
   const restore = unsent("openTerminal");
   open();
   key("Enter");
-  await waitFor(() =>
-    expect(useHive.getState().notice).toBe(`Cannot open a terminal: ${LINK_DOWN}`),
-  );
+  await waitFor(() => expect(notice()).toBe(`Cannot open a terminal: ${LINK_DOWN}`));
   restore();
-  expect(
-    screen.getByRole("button", { name: `Cannot open a terminal: ${LINK_DOWN}` }),
-  ).toBeDefined();
+  const toasts = screen.getByRole("status", { name: "Messages" });
+  expect(within(toasts).getByText(`Cannot open a terminal: ${LINK_DOWN}`)).toBeDefined();
   expect(useHive.getState().tabs).toEqual([]);
   // Retrying from the picker opens it once the link is back.
   act(() => openModal("worktree-picker"));

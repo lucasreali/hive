@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { ServiceMessage } from "../protocol";
-import { setEditorNotice, setNotice, useHive } from "../store";
+import { setEditorNotice, showNotice, useHive } from "../store";
 import { transport } from "../transport";
 import { isMac } from "../window";
 import { isFor } from "./buffer";
@@ -62,17 +62,17 @@ export async function openExternal(target: EditorTarget, tauri = isTauri()): Pro
 /**
  * "Open in Explorer" (a worktree's menu): the service's answer for the folder (an empty
  * `path`) opens its Windows path with Windows' default app for folders, the Explorer.
- * Anything that goes wrong shows in the status bar.
+ * Anything that goes wrong shows as an error toast.
  */
 export async function openFolder(target: EditorTarget, tauri = isTauri()): Promise<void> {
-  if (!target.windows_path) return setNotice(target.error);
+  if (!target.windows_path) return showNotice("error", target.error ?? "No Windows path");
   // No worktree: the settings file ("Open settings file"), opened the same way.
   const what =
     target.worktree === "" ? "the settings file" : isMac() ? "the Finder" : "the Explorer";
-  if (!tauri) return setNotice(`Only the Hive app opens ${what}: ${target.windows_path}`);
+  if (!tauri) return showNotice("error", `Only the Hive app opens ${what}: ${target.windows_path}`);
   try {
     await openPath(target.windows_path);
   } catch (error) {
-    setNotice(String(error));
+    showNotice("error", String(error));
   }
 }

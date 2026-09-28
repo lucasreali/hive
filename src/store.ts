@@ -182,6 +182,12 @@ export type Modal =
   | "new-pull"
   | null;
 /**
+ * A message shown as a toast (10.3): an `error` (why something failed, 9.21) stays until
+ * dismissed; an `info` confirmation ("Copied …") fades after `INFO_MS` (`Toasts`).
+ */
+export type Notice = { id: number; kind: "error" | "info"; text: string };
+
+/**
  * A yes/no question asked in a Hive dialog (8.20), never the WebView's `confirm`: `run` happens
  * only when the user picks `action` (e.g. "Discard", "Delete").
  */
@@ -223,8 +229,8 @@ export type HiveState = {
   movedRow: OpenFile | null;
   /** The question of the "confirm" modal (`ask`). */
   question: Question | null;
-  /** A short message in the status bar, e.g. why the Explorer did not open. */
-  notice: string | null;
+  /** The toasts shown (10.3), oldest first, at most `NOTICE_LIMIT`. */
+  notices: Notice[];
   /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
   update: { version: string; installing: boolean } | null;
   rightPanel: RightPanel;
@@ -370,7 +376,7 @@ export const initialState: HiveState = {
   newFolders: {},
   movedRow: null,
   question: null,
-  notice: null,
+  notices: [],
   update: null,
   rightPanel: "files",
   panelView: "files",
@@ -557,13 +563,24 @@ export const markInboxRead = () =>
       pendingAgents(s).map((a) => [a.id, s.agentStates[a.id]?.state as AgentState]),
     ),
   }));
-export const setNotice = (notice: string | null) => useHive.setState({ notice });
+/** At most this many toasts show; a new one drops the oldest (10.3). */
+export const NOTICE_LIMIT = 3;
+let lastNotice = 0;
+/** `s`'s toasts with `text` added as the newest (for `reduce`). */
+export const withNotice = (s: Pick<HiveState, "notices">, kind: Notice["kind"], text: string) => ({
+  notices: [...s.notices, { id: ++lastNotice, kind, text }].slice(-NOTICE_LIMIT),
+});
+/** Shows `text` as a toast: an error stays until dismissed, a confirmation ("info") fades. */
+export const showNotice = (kind: Notice["kind"], text: string) =>
+  useHive.setState((s) => withNotice(s, kind, text));
+export const dismissNotice = (id: number) =>
+  useHive.setState((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
 /**
- * Shows why `action` failed as the notice (9.21), after `what` ("Cannot open a terminal"),
+ * Shows why `action` failed as an error toast (9.21), after `what` ("Cannot open a terminal"),
  * so a failed request is never swallowed. Returns `action` with the failure handled.
  */
 export const showFailure = <T>(action: Promise<T>, what = ""): Promise<T> => {
-  action.catch((error: unknown) => setNotice(what ? `${what}: ${error}` : String(error)));
+  action.catch((error: unknown) => showNotice("error", what ? `${what}: ${error}` : String(error)));
   return action;
 };
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });

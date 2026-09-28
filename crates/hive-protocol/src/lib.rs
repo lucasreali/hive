@@ -346,8 +346,9 @@ pub enum Control {
         accounts: Vec<GhLogin>,
         problem: Option<String>,
     },
-    /// Something the human should know that has no place of its own, shown in the status bar
-    /// as is: e.g. a terminal that could not get its space's GitHub account (9.30).
+    /// Something the human should know that has no place of its own, shown as is in a toast
+    /// that stays until dismissed: e.g. a terminal that could not get its space's GitHub
+    /// account (9.30).
     Notice {
         message: String,
     },

@@ -82,7 +82,10 @@ test("jobs and logs show for the open run and job only; actions wait for their a
   expect(useHive.getState().runError).toBeNull();
   apply({ type: "run_done", project: SHOP, run: 301, message: "Re-running the failed jobs" });
   const s = useHive.getState();
-  expect([s.runBusy, s.notice]).toEqual([null, "Re-running the failed jobs"]);
+  expect([s.runBusy, s.notices.at(-1)]).toMatchObject([
+    null,
+    { kind: "info", text: "Re-running the failed jobs" },
+  ]);
 
   showJobLog(SHOP, 1);
   hideRun();

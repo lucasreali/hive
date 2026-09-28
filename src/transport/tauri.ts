@@ -5,7 +5,7 @@ import type { Transport } from ".";
 
 /**
  * A command whose answer (if any) comes later as a service message (9.21): a failure (e.g. the
- * link is down) is shown as the notice, never swallowed. The promise still rejects, already
+ * link is down) is shown as an error toast, never swallowed. The promise still rejects, already
  * handled, so a caller that set a pending state ("Removing…") can end it.
  */
 const send = (cmd: string, args?: InvokeArgs) => showFailure(invoke<void>(cmd, args));

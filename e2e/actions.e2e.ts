@@ -21,12 +21,14 @@ test("actions: badge, a failed run's jobs and log, a re-run, a cancel asked firs
 
   // Re-run its failed jobs: running now, so it can be cancelled, once confirmed.
   await panel.getByRole("button", { name: "Re-run failed jobs" }).click();
-  await expect(page.locator(".statusbar")).toContainText("Re-running the failed jobs");
+  await expect(page.getByRole("status", { name: "Messages" })).toContainText(
+    "Re-running the failed jobs",
+  );
   await panel.getByRole("button", { name: "Cancel", exact: true }).click();
   const confirm = page.getByRole("dialog", { name: "Cancel run?" });
   await expect(confirm).toContainText("Cancel CI #101 on worktree-fix-login?");
   await confirm.getByRole("button", { name: "Cancel run" }).click();
-  await expect(page.locator(".statusbar")).toContainText("Cancelling the run");
+  await expect(page.getByRole("status", { name: "Messages" })).toContainText("Cancelling the run");
   await expect(panel.getByRole("button", { name: "Re-run all jobs" })).toBeVisible();
 
   // Back to the list, filtered on the worktree's branch; all branches on demand.

@@ -1,5 +1,5 @@
 import { version } from "../../package.json";
-import { type Connection, setNotice, useHive } from "../store";
+import { type Connection, useHive } from "../store";
 import { isMac } from "../window";
 
 const LABEL: Record<Connection["status"], string> = {
@@ -9,10 +9,9 @@ const LABEL: Record<Connection["status"], string> = {
   disconnected: "disconnected",
 };
 
-// The "N active agents" count on the right arrives with agent states (2.1).
+// The place and connection state (#141) and the app version; never a message (10.3: `Toasts`).
 export function StatusBar() {
   const connection = useHive((s) => s.connection);
-  const notice = useHive((s) => s.notice);
   // The service reports its distribution in `welcome`; until then only "WSL" is known. On
   // macOS the service runs natively and reports none.
   const distro = connection.status === "connected" ? connection.distro : null;
@@ -28,11 +27,6 @@ export function StatusBar() {
         <span>{place}</span>
         <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
-      {notice && (
-        <button type="button" className="notice" title="Dismiss" onClick={() => setNotice(null)}>
-          {notice}
-        </button>
-      )}
       <span className="app-version">v{version}</span>
     </footer>
   );

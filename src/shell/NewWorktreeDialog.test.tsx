@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { notice } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -275,15 +276,17 @@ test("a refused create is explained under the name until it changes", async () =
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 });
 
-test("a create that cannot be sent is shown as the notice; the dialog stays usable (9.21)", async () => {
+test("a create that cannot be sent is shown as an error toast; the dialog stays usable (9.21)", async () => {
   const dialog = open();
   type("unsent");
   await waitFor(() => expect(create().disabled).toBe(false));
   const restore = unsent("createWorktree");
   fireEvent.click(create());
-  await waitFor(() => expect(useHive.getState().notice).toBe(LINK_DOWN));
+  await waitFor(() => expect(notice()).toBe(LINK_DOWN));
   restore();
-  expect(screen.getByRole("button", { name: LINK_DOWN })).toBeDefined();
+  expect(
+    within(screen.getByRole("status", { name: "Messages" })).getByText(LINK_DOWN),
+  ).toBeDefined();
   expect(dialog.open).toBe(true);
   expect(create().disabled).toBe(false);
   expect(screen.queryByRole("alert")).toBeNull();

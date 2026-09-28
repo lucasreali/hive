@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 import { agentPlace, notify } from "../notify";
 import type { AgentState, ServiceMessage, Space } from "../protocol";
@@ -206,7 +206,7 @@ test("the GitHub account is one of gh's accounts, listed for the dialog's gh con
   fireEvent.blur(folder);
   expect(list).toHaveBeenLastCalledWith("/cfg");
   act(() => ghAccounts("/cfg", "No account is logged in to gh (run gh auth login)"));
-  expect(screen.getByRole("status").textContent).toBe(
+  expect(within(screen.getByRole("dialog")).getByRole("status").textContent).toBe(
     "No account is logged in to gh (run gh auth login)",
   );
   // Back to gh's active account.

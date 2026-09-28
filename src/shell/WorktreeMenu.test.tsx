@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
+import { notice, noticeKind } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import type { Project, Session } from "../protocol";
@@ -156,15 +157,17 @@ test("new terminal, copy path and Explorer act on the worktree", async () => {
   rightClick("fix-login");
   fireEvent.click(item("Copy path"));
   expect(writeText).toHaveBeenCalledWith(login.path);
-  const notice = await screen.findByTitle("Dismiss");
-  expect(notice.textContent).toBe(`Copied ${login.path}`);
-  fireEvent.click(notice);
-  expect(screen.queryByTitle("Dismiss")).toBeNull();
+  const toasts = screen.getByRole("status", { name: "Messages" });
+  await waitFor(() => expect(toasts.textContent).toBe(`Copied ${login.path}`));
+  expect(noticeKind()).toBe("info");
+  fireEvent.click(within(toasts).getByRole("button", { name: "Dismiss" }));
+  expect(toasts.textContent).toBe("");
 
   writeText.mockRejectedValue("denied");
   rightClick("fix-login");
   fireEvent.click(item("Copy path"));
-  expect((await screen.findByTitle("Dismiss")).textContent).toBe("Cannot copy the path: denied");
+  await waitFor(() => expect(toasts.textContent).toBe("Cannot copy the path: denied"));
+  expect(noticeKind()).toBe("error");
 
   rightClick("fix-login");
   fireEvent.click(item("Open in Explorer"));
@@ -407,7 +410,7 @@ test("the project menu removes merged worktrees without changes, each with its r
   expect(useHive.getState().modal).toBeNull();
 });
 
-test("a removal that cannot be sent is shown as the notice; its row is no longer removing (9.21)", async () => {
+test("a removal that cannot be sent is shown as an error toast; its row is no longer removing (9.21)", async () => {
   const status = { changes: 0, ahead: 0, behind: 0, merged: true, last_commit_ms: 0 };
   const merged = { ...shop, worktrees: [main, { ...login, status }] };
   render(<App />);
@@ -420,7 +423,7 @@ test("a removal that cannot be sent is shown as the notice; its row is no longer
   expect(box().disabled).toBe(true);
   await waitFor(() => expect(box().disabled).toBe(false));
   restore();
-  expect(useHive.getState().notice).toBe(LINK_DOWN);
+  expect(notice()).toBe(LINK_DOWN);
   expect(within(dialog).queryByRole("status")).toBeNull();
   expect(within(dialog).getByRole("button", { name: "Remove (1)" })).toBeDefined();
 });
@@ -500,7 +503,7 @@ test("removing a project asks first, Cancel does nothing, and its state goes wit
 
   // A refusal shows in the status bar and changes nothing.
   act(() => apply({ type: "remove_project_failed", id: shop.id, message: "in use by fish (1)" }));
-  expect(useHive.getState().notice).toBe("in use by fish (1)");
+  expect(notice()).toBe("in use by fish (1)");
   expect(useHive.getState().projects?.[shop.id]).toBeDefined();
 
   act(() => apply({ type: "project_removed", id: shop.id }));
