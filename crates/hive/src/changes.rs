@@ -6,8 +6,9 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Project};
@@ -376,8 +377,16 @@ pub fn count_lines(path: &Path, budget: &mut u64) -> Option<u64> {
         return None;
     };
     *budget = left;
+    // Never waits: a FIFO put in its place since it was measured opens at once and reads as
+    // empty or fails, where a blocking open would wait for a writer forever.
+    let nonblocking = nix::fcntl::OFlag::O_NONBLOCK.bits();
+    let open = OpenOptions::new()
+        .read(true)
+        .custom_flags(nonblocking)
+        .open(path);
+    let mut file = open.ok()?;
     // Its size as it was measured: a file still growing is counted next time.
-    let bytes = read_limited(&mut File::open(path).ok()?, meta.len()).ok()?;
+    let bytes = read_limited(&mut file, meta.len()).ok()?;
     if bytes[..bytes.len().min(BINARY_PROBE)].contains(&0) {
         return None;
     }
@@ -493,6 +502,10 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         assert_eq!(count_lines(&dir.path().join("link"), &mut budget), None);
         assert_eq!(count_lines(&dir.path().join("missing"), &mut budget), None);
         assert_eq!(count_lines(dir.path(), &mut budget), None);
+        // A FIFO is never opened: no writer would ever come.
+        let fifo = dir.path().join("fifo");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        assert_eq!(count_lines(&fifo, &mut budget), None);
         assert_eq!(budget, 10);
     }
 
