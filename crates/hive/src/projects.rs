@@ -3,7 +3,7 @@
 //! flat `projects.json` of earlier versions (a JSON array of top-level paths) becomes the
 //! "Default" space until the first change is saved.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -24,6 +24,8 @@ const BUSY_SHOWN: usize = 5;
 pub struct Projects {
     file: PathBuf,
     spaces: Mutex<Spaces>,
+    /// Each project with its worktrees as git last listed them (9.14), until [`Projects::forget`].
+    listed: Mutex<HashMap<String, Project>>,
 }
 
 impl Projects {
@@ -47,13 +49,29 @@ impl Projects {
         Self {
             file,
             spaces: Mutex::new(spaces),
+            listed: Mutex::default(),
         }
     }
 
     /// Every project with its worktrees, in the order they were added.
     pub fn list(&self) -> Vec<Project> {
         let paths: Vec<String> = self.spaces().projects().cloned().collect();
-        paths.iter().map(|path| project(path)).collect()
+        paths.iter().map(|path| self.project(path)).collect()
+    }
+
+    /// The project `id` with its worktrees; git lists them only when they are not known.
+    fn project(&self, id: &str) -> Project {
+        // Held while git runs: requests at once list a project once.
+        let mut listed = self.listed.lock().unwrap_or_else(PoisonError::into_inner);
+        (listed.entry(id.to_owned()))
+            .or_insert_with(|| project(id))
+            .clone()
+    }
+
+    /// Forgets every project's worktrees: they changed, or may have (the health tick). The
+    /// next request lists them again.
+    pub fn forget(&self) {
+        (self.listed.lock().unwrap_or_else(PoisonError::into_inner)).clear();
     }
 
     /// The spaces and the current one, for the app.
@@ -68,7 +86,7 @@ impl Projects {
     /// The current space's projects and Claude config folder (where its sessions are).
     pub fn current(&self) -> (Vec<Project>, Option<String>) {
         let (paths, env) = self.spaces().current();
-        let projects = paths.iter().map(|path| project(path)).collect();
+        let projects = paths.iter().map(|path| self.project(path)).collect();
         (projects, env.claude_config_dir)
     }
 
@@ -88,7 +106,7 @@ impl Projects {
         let ids: Vec<String> = self.spaces().projects().cloned().collect();
         let inside: Vec<Project> = (ids.iter())
             .filter(|id| real.starts_with(id))
-            .map(|id| project(id))
+            .map(|id| self.project(id))
             .collect();
         let listed = if inside.is_empty() {
             self.list()
@@ -116,6 +134,8 @@ impl Projects {
         save(&self.file, &next)
             .map_err(|err| format!("cannot save {}: {err}", self.file.display()))?;
         *spaces = next;
+        drop(spaces);
+        self.forget();
         Ok(())
     }
 
@@ -138,7 +158,7 @@ impl Projects {
             ProjectError::Storage
         };
         added.map_err(|message| (error, message))?;
-        Ok(project(&id))
+        Ok(self.project(&id))
     }
 
     /// Stops following the project `id` (9.28); nothing on disk changes. Refused while a
@@ -151,7 +171,12 @@ impl Projects {
         terminals: &HashSet<i32>,
     ) -> io::Result<Vec<String>> {
         self.root(id)?;
-        let worktrees: Vec<String> = project(id).worktrees.into_iter().map(|w| w.path).collect();
+        let worktrees: Vec<String> = self
+            .project(id)
+            .worktrees
+            .into_iter()
+            .map(|w| w.path)
+            .collect();
         // The root too, in case its worktrees cannot be listed (e.g. its folder is gone).
         let dirs = std::iter::once(id).chain(worktrees.iter().map(String::as_str));
         let mut busy: Vec<procs::Proc> = dirs
@@ -184,8 +209,9 @@ impl Projects {
         name: &str,
         base: Option<&str>,
     ) -> io::Result<(Project, worktree::Created)> {
-        let created = worktree::create(&self.root(id)?, name, base)?;
-        Ok((project(id), created))
+        let created = worktree::create(&self.root(id)?, name, base);
+        self.forget();
+        Ok((self.project(id), created?))
     }
 
     /// Removes the linked worktree `path` of a followed project, with `--force` when `force`;
@@ -208,8 +234,10 @@ impl Projects {
         if !force {
             ran?;
         }
-        worktree::remove_path(Path::new(&owner.id), Path::new(path), force)?;
-        Ok(project(&owner.id))
+        let removed = worktree::remove_path(Path::new(&owner.id), Path::new(path), force);
+        self.forget();
+        removed?;
+        Ok(self.project(&owner.id))
     }
 
     /// Renames the Claude worktree `path` of a followed project to `name`, never while a
@@ -227,8 +255,10 @@ impl Projects {
             )));
         }
         unused(proc, Path::new(path))?;
-        let to = worktree::rename(Path::new(&owner.id), Path::new(path), name)?;
-        Ok((project(&owner.id), to.to_string_lossy().into_owned()))
+        let to = worktree::rename(Path::new(&owner.id), Path::new(path), name);
+        self.forget();
+        let to = to?;
+        Ok((self.project(&owner.id), to.to_string_lossy().into_owned()))
     }
 
     /// The followed project holding the worktree `path`, when it is not the main one.
@@ -254,7 +284,7 @@ impl Projects {
 
     /// The followed project `id` with its worktrees.
     pub fn followed(&self, id: &str) -> io::Result<Project> {
-        self.root(id).map(|_| project(id))
+        self.root(id).map(|_| self.project(id))
     }
 
     /// `path` when it is a worktree of a followed project: the path comes from the app.
@@ -765,6 +795,39 @@ mod tests {
         assert!(projects.validate_worktree_name(&id, "free").is_ok());
         let err = projects.validate_worktree_name(&id, "Bad").unwrap_err();
         assert!(err.to_string().starts_with("invalid worktree name"));
+    }
+
+    #[test]
+    fn worktrees_are_listed_again_only_once_forgotten() {
+        use crate::health::tests::{commit, run};
+        let tmp = tempfile::tempdir().unwrap();
+        let top = tmp.path().canonicalize().unwrap();
+        let [root, other] = ["r", "o"].map(|name| {
+            let root = top.join(name);
+            std::fs::create_dir(&root).unwrap();
+            run(&root, &["init", "-q", "-b", "main"]);
+            commit(&root, "a");
+            root
+        });
+        let id = root.display().to_string();
+        let projects = load(tmp.path());
+        let count = || projects.followed(&id).unwrap().worktrees.len();
+        projects.add(&id).unwrap();
+        let add = |name: &str| {
+            let path = top.join(name).display().to_string();
+            run(&root, &["worktree", "add", "-q", "-b", name, &path]);
+        };
+        // Made behind Hive's back: not seen until forgotten.
+        add("w1");
+        assert_eq!((count(), projects.list()[0].worktrees.len()), (1, 1));
+        projects.forget();
+        assert_eq!(count(), 2);
+        // Adding a project forgets them too; adding one already followed changes nothing.
+        add("w2");
+        projects.add(&id).unwrap();
+        assert_eq!(count(), 2);
+        projects.add(&other.display().to_string()).unwrap();
+        assert_eq!(count(), 3);
     }
 
     #[test]

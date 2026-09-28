@@ -290,6 +290,8 @@ fn checkout(
         let _ = worktree::remove_path(root, &created.path, true);
     }
     let _ = git::output(root, &["branch", "-D", &format!("worktree-{name}")], &[0]);
+    // Its branch changed, or it is gone.
+    projects.forget();
     checked?;
     Ok(Control::WorktreeCreated {
         // On the pull request's branch now (the project as made, should it be unfollowed).
@@ -315,6 +317,8 @@ fn create(
     worktree: &str,
     form: Form,
 ) -> Result<(String, u64), (String, String)> {
+    // Its branch as it is now, not as last listed (9.14).
+    projects.forget();
     let (project, wt) = projects
         .holding(worktree)
         .map_err(|err| (String::new(), err.to_string()))?;
