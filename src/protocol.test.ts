@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import samples from "../crates/hive-protocol/tests/app-messages.json";
 import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
@@ -121,7 +121,10 @@ const fields = (m: object) =>
     .filter((k) => k !== "type")
     .sort();
 
-beforeEach(() => useHive.setState(initialState, true));
+const reset = () => useHive.setState(initialState, true);
+beforeEach(reset);
+// The samples' spaces and projects would leak into the next file's first test.
+afterEach(reset);
 
 test("every message the service sends is one the app knows, with the fields its type says", () => {
   const sent = Object.fromEntries(samples.map((m) => [m.type, fields(fromPump(m))]));
