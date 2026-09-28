@@ -159,6 +159,8 @@ fn project() -> Project {
             claude: false,
             status: Some(WorktreeStatus {
                 changes: 1,
+                added: 3,
+                removed: 4,
                 ahead: None,
                 behind: None,
                 merged: false,

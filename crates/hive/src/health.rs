@@ -1,4 +1,4 @@
-//! Worktree health for the sidebar: files changed, commits ahead of and behind the branch of
+//! Worktree health for the sidebar: files and lines changed, commits ahead of and behind the branch of
 //! the main worktree, whether everything is merged there, and when the last commit was made.
 //! It only reads: Hive never merges anything (#12).
 
@@ -9,16 +9,17 @@ use std::time::Duration;
 
 use hive_protocol::{Project, Worktree, WorktreeStatus};
 
-use crate::{changes, git};
+use crate::changes::{self, Totals};
+use crate::git;
 
 /// How often every followed worktree is checked again.
 pub const INTERVAL: Duration = Duration::from_secs(30);
 
 /// The status of `project`'s worktree `w`, `None` when git fails. The main worktree is
-/// counted against nothing; the others against its branch, when it has one. `files`: its
-/// changed files when already counted (`Changes::changed`), so `git status` is not run again.
-pub fn of(project: &Project, w: &Worktree, files: Option<u64>) -> Option<WorktreeStatus> {
-    read(Path::new(&w.path), branch(project, w), files).ok()
+/// counted against nothing; the others against its branch, when it has one. `totals`: its
+/// changes against `HEAD` when already counted (`changes::answer`), so git is not run again.
+pub fn of(project: &Project, w: &Worktree, totals: Option<Totals>) -> Option<WorktreeStatus> {
+    read(Path::new(&w.path), branch(project, w), totals).ok()
 }
 
 /// The branch `project`'s worktree `w` is counted against: the main worktree's, for any other
@@ -40,12 +41,12 @@ pub fn fill(project: &mut Project) {
     }
 }
 
-fn read(dir: &Path, base: Option<&str>, files: Option<u64>) -> io::Result<WorktreeStatus> {
-    let changes = match files {
-        Some(files) => files,
-        None => changes::parse_status(&git(dir, &changes::STATUS)?).len() as u64,
-    };
+fn read(dir: &Path, base: Option<&str>, totals: Option<Totals>) -> io::Result<WorktreeStatus> {
     let [seconds] = numbers(&git(dir, &["log", "-1", "--format=%ct", "HEAD", "--"])?)?;
+    let totals = match totals {
+        Some(totals) => totals,
+        None => count(dir)?,
+    };
     let (ahead, behind) = match base {
         Some(base) => {
             // A full ref name: a branch can never be read as an option.
@@ -57,7 +58,9 @@ fn read(dir: &Path, base: Option<&str>, files: Option<u64>) -> io::Result<Worktr
         None => (None, None),
     };
     Ok(WorktreeStatus {
-        changes,
+        changes: totals.files,
+        added: totals.added,
+        removed: totals.removed,
         ahead,
         behind,
         // Nothing ahead: every commit of HEAD is on the base branch, which is what
@@ -65,6 +68,13 @@ fn read(dir: &Path, base: Option<&str>, files: Option<u64>) -> io::Result<Worktr
         merged: ahead == Some(0),
         last_commit_ms: seconds.saturating_mul(1000),
     })
+}
+
+/// The worktree's changes against `HEAD`, as `changes::list` totals them.
+fn count(dir: &Path) -> io::Result<Totals> {
+    let entries = changes::parse_status(&git(dir, &changes::STATUS)?);
+    let counts = changes::parse_numstat(&git(dir, &changes::numstat("HEAD"))?);
+    Ok(changes::totals(dir, &entries, &counts))
 }
 
 /// Exactly `N` numbers separated by white space.
@@ -132,9 +142,12 @@ pub(crate) mod tests {
         }
     }
 
-    fn status(changes: u64, counts: Option<(u64, u64)>) -> Option<WorktreeStatus> {
+    fn status(totals: (u64, u64, u64), counts: Option<(u64, u64)>) -> Option<WorktreeStatus> {
+        let (changes, added, removed) = totals;
         Some(WorktreeStatus {
             changes,
+            added,
+            removed,
             ahead: counts.map(|c| c.0),
             behind: counts.map(|c| c.1),
             merged: counts.is_some_and(|c| c.0 == 0),
@@ -180,10 +193,11 @@ pub(crate) mod tests {
             got,
             [
                 // The linked worktrees inside it are untracked folders, as `changes` lists them.
-                status(3, None),
-                status(0, Some((2, 1))),
-                status(2, Some((0, 1))),
-                status(0, Some((0, 1))),
+                status((3, 0, 0), None),
+                status((0, 0, 0), Some((2, 1))),
+                // An empty new file, and "a" changed on its one line.
+                status((2, 1, 1), Some((0, 1))),
+                status((0, 0, 0), Some((0, 1))),
                 None,
             ]
         );
@@ -192,19 +206,67 @@ pub(crate) mod tests {
         // worktree listed, neither.
         run(&root, &["switch", "-q", "--detach"]);
         project.worktrees[0].branch = None;
-        assert_eq!(of(&project, &project.worktrees[1], None), status(0, None));
-        // Changed files already counted are not counted again.
         assert_eq!(
-            of(&project, &project.worktrees[1], Some(9)),
-            status(9, None)
+            of(&project, &project.worktrees[1], None),
+            status((0, 0, 0), None)
+        );
+        // Changes already counted are not counted again.
+        let counted = Totals {
+            files: 9,
+            added: 8,
+            removed: 7,
+        };
+        assert_eq!(
+            of(&project, &project.worktrees[1], Some(counted)),
+            status((9, 8, 7), None)
         );
         project.worktrees.remove(0);
-        assert_eq!(of(&project, &project.worktrees[0], None), status(0, None));
+        assert_eq!(
+            of(&project, &project.worktrees[0], None),
+            status((0, 0, 0), None)
+        );
         // A base branch that no longer exists is an error.
         let err = read(&wt("ahead"), Some("missing"), None)
             .unwrap_err()
             .to_string();
         assert!(err.starts_with("git rev-list"), "{err}");
+    }
+
+    #[test]
+    fn lines_are_counted_against_head_as_the_changes_total_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run(dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("m"), "1\n2\n3\n").unwrap();
+        std::fs::write(dir.join("d"), "x\ny\n").unwrap();
+        std::fs::write(dir.join("t"), b"\0a").unwrap();
+        run(dir, &["add", "."]);
+        run(dir, &["commit", "-q", "-m", "c"]);
+        let totals = |files, added, removed| Totals {
+            files,
+            added,
+            removed,
+        };
+        // A clean worktree.
+        assert_eq!(count(dir).unwrap(), Totals::default());
+
+        // Modified (one line changed, one added), deleted, untracked (three lines, the last
+        // unterminated), and binary files, tracked or not, which add no lines.
+        std::fs::write(dir.join("m"), "1\nX\n3\n4\n").unwrap();
+        std::fs::remove_file(dir.join("d")).unwrap();
+        std::fs::write(dir.join("u"), "a\nb\nc").unwrap();
+        std::fs::write(dir.join("t"), b"\0b").unwrap();
+        std::fs::write(dir.join("bin"), b"\0\x01").unwrap();
+        assert_eq!(count(dir).unwrap(), totals(5, 5, 3));
+        // Staged or not, the same: against HEAD.
+        run(dir, &["add", "m"]);
+        assert_eq!(count(dir).unwrap(), totals(5, 5, 3));
+        // What the Changes panel totals against HEAD.
+        let listed = changes::list(dir, None).unwrap();
+        let panel = totals(listed.changed, listed.added, listed.removed);
+        assert_eq!(panel, totals(5, 5, 3));
+        let status = read(dir, None, None).unwrap();
+        assert_eq!((status.changes, status.added, status.removed), (5, 5, 3));
     }
 
     #[test]
@@ -230,9 +292,12 @@ pub(crate) mod tests {
         let mut sent = Sent::default();
         assert!(sent.changed("/w", &None), "new");
         assert!(!sent.changed("/w", &None));
-        assert!(sent.changed("/w", &status(1, None)));
-        assert!(!sent.changed("/w", &status(1, None)));
-        assert!(sent.changed("/w", &status(2, None)));
-        assert!(sent.changed("/x", &status(2, None)), "another path");
+        assert!(sent.changed("/w", &status((1, 1, 0), None)));
+        assert!(!sent.changed("/w", &status((1, 1, 0), None)));
+        assert!(sent.changed("/w", &status((2, 1, 0), None)));
+        // The same files with other lines.
+        assert!(sent.changed("/w", &status((2, 3, 0), None)));
+        assert!(sent.changed("/w", &status((2, 3, 1), None)));
+        assert!(sent.changed("/x", &status((2, 3, 1), None)), "another path");
     }
 }

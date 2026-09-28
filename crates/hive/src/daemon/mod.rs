@@ -378,13 +378,13 @@ impl State {
     fn health_changed(
         &self,
         projects: &[Project],
-        only: Option<(&str, Option<u64>)>,
+        only: Option<(&str, Option<changes::Totals>)>,
     ) -> Vec<Control> {
         let mut changed = Vec::new();
         for project in projects {
             let chosen = project.worktrees.iter();
             for w in chosen.filter(|w| only.is_none_or(|(path, _)| path == w.path)) {
-                let status = health::of(project, w, only.and_then(|(_, files)| files));
+                let status = health::of(project, w, only.and_then(|(_, totals)| totals));
                 if self.sent().changed(&w.path, &status) {
                     let path = w.path.clone();
                     changed.push(Control::WorktreeStatus { path, status });
@@ -634,8 +634,11 @@ impl State {
         // `git status` both the changes and the status's count (9.14).
         let (changes, statuses) = tokio::task::block_in_place(|| {
             let projects = self.projects.list();
-            let (changes, files) = changes::answer(&projects, path.to_owned(), base);
-            (changes, self.health_changed(&projects, Some((path, files))))
+            let (changes, totals) = changes::answer(&projects, path.to_owned(), base);
+            (
+                changes,
+                self.health_changed(&projects, Some((path, totals))),
+            )
         });
         self.to_app(0, &changes).await;
         for message in statuses {

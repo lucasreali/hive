@@ -91,6 +91,8 @@
             "claude": false,
             "status": {
               "changes": 1,
+              "added": 3,
+              "removed": 4,
               "ahead": null,
               "behind": null,
               "merged": false,
@@ -118,6 +120,8 @@
           "claude": false,
           "status": {
             "changes": 1,
+            "added": 3,
+            "removed": 4,
             "ahead": null,
             "behind": null,
             "merged": false,
@@ -273,6 +277,8 @@
           "claude": false,
           "status": {
             "changes": 1,
+            "added": 3,
+            "removed": 4,
             "ahead": null,
             "behind": null,
             "merged": false,
@@ -307,6 +313,8 @@
           "claude": false,
           "status": {
             "changes": 1,
+            "added": 3,
+            "removed": 4,
             "ahead": null,
             "behind": null,
             "merged": false,
@@ -339,6 +347,8 @@
           "claude": false,
           "status": {
             "changes": 1,
+            "added": 3,
+            "removed": 4,
             "ahead": null,
             "behind": null,
             "merged": false,

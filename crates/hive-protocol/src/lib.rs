@@ -1285,6 +1285,12 @@ pub struct Worktree {
 pub struct WorktreeStatus {
     /// Files that differ from `HEAD`, untracked ones included, as `changes` lists them.
     pub changes: u64,
+    /// Their lines added and removed against `HEAD`, as `changes` totals them (a binary file
+    /// adds none). Optional, so adding them kept protocol 1 compatible.
+    #[serde(default)]
+    pub added: u64,
+    #[serde(default)]
+    pub removed: u64,
     /// Commits of its `HEAD` missing from the branch checked out in the main worktree, and
     /// the reverse; `None` for the main worktree itself, or when that one is detached.
     pub ahead: Option<u64>,
@@ -2101,6 +2107,8 @@ mod tests {
             path: "/r/w".into(),
             status: Some(WorktreeStatus {
                 changes: 3,
+                added: 12,
+                removed: 4,
                 ahead: Some(2),
                 behind: None,
                 merged: false,
@@ -2109,9 +2117,18 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &status).payload[..],
-            br#"{"type":"worktree_status","path":"/r/w","status":{"changes":3,"ahead":2,"behind":null,"merged":false,"last_commit_ms":1000}}"#
+            br#"{"type":"worktree_status","path":"/r/w","status":{"changes":3,"added":12,"removed":4,"ahead":2,"behind":null,"merged":false,"last_commit_ms":1000}}"#
         );
         assert_eq!(Frame::control(0, &status).to_control().unwrap(), status);
+        // A service from before the line counts is still read: none.
+        let old = br#"{"type":"worktree_status","path":"/r/w","status":{"changes":3,"ahead":2,"behind":null,"merged":false,"last_commit_ms":1000}}"#;
+        let Control::WorktreeStatus {
+            status: Some(old), ..
+        } = serde_json::from_slice(old).unwrap()
+        else {
+            panic!("a status")
+        };
+        assert_eq!((old.changes, old.added, old.removed), (3, 0, 0));
     }
 
     #[test]

@@ -46,6 +46,15 @@ pub struct Changes {
     pub changed: u64,
 }
 
+/// A worktree's changes against `HEAD` as its status counts them (`health`): the files
+/// `git status` lists and their lines added and removed (a binary file adds none).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Totals {
+    pub files: u64,
+    pub added: u64,
+    pub removed: u64,
+}
+
 /// What a followed worktree's changes are compared with (9.11).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Against {
@@ -86,14 +95,19 @@ pub fn against(projects: &[Project], path: &str, asked: DiffBase) -> io::Result<
 /// Why the main worktree, or a worktree of a detached main worktree, has no branch base.
 const NO_BRANCH: &str = "No branch to compare with: this is the main worktree, or it is detached";
 
-/// The `changes` answer for the worktree `path` of `projects` against `asked`, and the files
-/// `git status` listed ([`Changes::changed`]) when it ran.
-pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> (Control, Option<u64>) {
+/// The `changes` answer for the worktree `path` of `projects` against `asked`, and, when it
+/// was listed against `HEAD`, its [`Totals`].
+pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> (Control, Option<Totals>) {
     match against(projects, &path, asked) {
         Ok(against) => {
             let listed = list(&against.dir, against.commit.as_deref());
-            let changed = listed.as_ref().ok().map(|c| c.changed);
-            (message(path, Some(against), listed), changed)
+            let totals = listed.as_ref().ok().map(|c| Totals {
+                files: c.changed,
+                added: c.added,
+                removed: c.removed,
+            });
+            let totals = totals.filter(|_| against.commit.is_none());
+            (message(path, Some(against), listed), totals)
         }
         Err(err) => (message(path, None, Err(err)), None),
     }
@@ -113,22 +127,25 @@ pub fn list(dir: &Path, commit: Option<&str>) -> io::Result<Changes> {
         }
         None => (head(dir)?, status),
     };
-    let diff = [
+    let counts = parse_numstat(&git(dir, &numstat(&base))?);
+    Ok(Changes {
+        changed,
+        ..collect(dir, entries, &counts, UNTRACKED_BUDGET)
+    })
+}
+
+/// The `git diff` whose output [`parse_numstat`] reads: from `base` to the worktree.
+pub fn numstat(base: &str) -> [&str; 8] {
+    [
         "diff",
         "--numstat",
         "-z",
         "--find-renames",
         "--no-ext-diff",
         "--no-textconv",
-        &base,
+        base,
         "--",
-    ];
-    let numstat = git(dir, &diff)?;
-    let counts = parse_numstat(&numstat);
-    Ok(Changes {
-        changed,
-        ..collect(dir, entries, &counts, UNTRACKED_BUDGET)
-    })
+    ]
 }
 
 /// `HEAD`'s commit, or the empty tree before the first commit.
@@ -203,7 +220,7 @@ pub fn message(path: String, against: Option<Against>, listed: io::Result<Change
 }
 
 /// A status entry: path, status and the path a rename came from.
-type Entry = (Vec<u8>, FileStatus, Option<Vec<u8>>);
+pub type Entry = (Vec<u8>, FileStatus, Option<Vec<u8>>);
 
 /// Parses `git status --porcelain=v2 -z`. Ignored entries and headers are skipped; an
 /// unmerged file counts as modified.
@@ -245,9 +262,12 @@ fn ordinary(xy: &[u8]) -> FileStatus {
     }
 }
 
+/// Lines added and removed by path, `None` for a binary file.
+pub type Counts = HashMap<Vec<u8>, (Option<u64>, Option<u64>)>;
+
 /// Parses `git diff --numstat -z`: path (the new one for a rename) → lines added and
 /// removed, `None` for a binary file.
-pub fn parse_numstat(out: &[u8]) -> HashMap<Vec<u8>, (Option<u64>, Option<u64>)> {
+pub fn parse_numstat(out: &[u8]) -> Counts {
     let mut counts = HashMap::new();
     let mut records = out.split(|&b| b == 0);
     while let Some(record) = records.next() {
@@ -273,24 +293,47 @@ fn number(field: &[u8]) -> Option<u64> {
     std::str::from_utf8(field).ok()?.parse().ok()
 }
 
+/// The lines an entry adds and removes: from `counts`, or for an untracked file counted here
+/// ([`count_lines`], from `budget`); `None` for a binary file.
+fn lines(
+    dir: &Path,
+    (path, status, _): &Entry,
+    counts: &Counts,
+    budget: &mut u64,
+) -> (Option<u64>, Option<u64>) {
+    match status {
+        FileStatus::Untracked => {
+            let lines = count_lines(&dir.join(os(path)), budget);
+            (lines, lines.map(|_| 0))
+        }
+        _ => counts.get(path).copied().unwrap_or((None, None)),
+    }
+}
+
+/// The [`Totals`] of the status `entries` of the worktree at `dir` with their `counts` against
+/// `HEAD`: the same lines [`list`] totals, reading the same untracked files.
+pub fn totals(dir: &Path, entries: &[Entry], counts: &Counts) -> Totals {
+    let mut budget = UNTRACKED_BUDGET;
+    let mut totals = Totals {
+        files: entries.len() as u64,
+        ..Totals::default()
+    };
+    for entry in entries {
+        let (added, removed) = lines(dir, entry, counts, &mut budget);
+        totals.added += added.unwrap_or(0);
+        totals.removed += removed.unwrap_or(0);
+    }
+    totals
+}
+
 /// Joins the status entries with their line counts (counted here for untracked files, reading
 /// at most `budget` bytes of them), sorted by path, and keeps what fits in a message.
-fn collect(
-    dir: &Path,
-    entries: Vec<Entry>,
-    counts: &HashMap<Vec<u8>, (Option<u64>, Option<u64>)>,
-    mut budget: u64,
-) -> Changes {
+fn collect(dir: &Path, entries: Vec<Entry>, counts: &Counts, mut budget: u64) -> Changes {
     let mut files: Vec<ChangedFile> = entries
         .into_iter()
-        .map(|(path, status, from)| {
-            let (added, removed) = match status {
-                FileStatus::Untracked => {
-                    let lines = count_lines(&dir.join(os(&path)), &mut budget);
-                    (lines, lines.map(|_| 0))
-                }
-                _ => counts.get(&path).copied().unwrap_or((None, None)),
-            };
+        .map(|entry| {
+            let (added, removed) = lines(dir, &entry, counts, &mut budget);
+            let (path, status, from) = entry;
             ChangedFile {
                 path: lossy(&path),
                 status,
@@ -658,7 +701,7 @@ garbage\0\
         renamed.old_path = Some("r".into());
         let modified = file("a", FileStatus::Modified, (Some(2), Some(1)));
         let untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
-        // The status counts what `git status` lists: not the branch's commits.
+        // The status counts only against HEAD: not the branch's commits.
         assert_eq!(
             answer(&projects, path.clone(), DiffBase::Branch),
             (
@@ -673,7 +716,7 @@ garbage\0\
                         untracked.clone(),
                     ]
                 ),
-                Some(2)
+                None
             )
         );
         // Against HEAD, only what is not committed.
@@ -681,7 +724,11 @@ garbage\0\
             answer(&projects, path.clone(), DiffBase::Head),
             (
                 changes(&path, DiffBase::Head, None, vec![modified, untracked]),
-                Some(2)
+                Some(Totals {
+                    files: 2,
+                    added: 3,
+                    removed: 1
+                })
             )
         );
 
