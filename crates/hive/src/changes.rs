@@ -17,6 +17,9 @@ use crate::projects;
 
 /// Untracked files larger than this are not counted (their lines show as unknown).
 const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
+/// Most bytes of untracked files read for their line counts in one listing (9.14); past it
+/// the rest show unknown counts too. Default pending the human's review.
+const UNTRACKED_BUDGET: u64 = 33_554_432; // 32 MiB
 /// Git's binary heuristic: a NUL byte in the first 8000 bytes.
 pub(crate) const BINARY_PROBE: usize = 8000;
 /// Most bytes of JSON for the files of one `changes` message, well under `MAX_PAYLOAD`.
@@ -39,6 +42,8 @@ pub struct Changes {
     pub removed: u64,
     /// How many files were left out to keep the message within its budget.
     pub truncated: usize,
+    /// The files `git status` lists: the worktree's status counts them (`health`).
+    pub changed: u64,
 }
 
 /// What a followed worktree's changes are compared with (9.11).
@@ -81,14 +86,16 @@ pub fn against(projects: &[Project], path: &str, asked: DiffBase) -> io::Result<
 /// Why the main worktree, or a worktree of a detached main worktree, has no branch base.
 const NO_BRANCH: &str = "No branch to compare with: this is the main worktree, or it is detached";
 
-/// The `changes` answer for the worktree `path` of `projects` against `asked`.
-pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> Control {
+/// The `changes` answer for the worktree `path` of `projects` against `asked`, and the files
+/// `git status` listed ([`Changes::changed`]) when it ran.
+pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> (Control, Option<u64>) {
     match against(projects, &path, asked) {
         Ok(against) => {
             let listed = list(&against.dir, against.commit.as_deref());
-            message(path, Some(against), listed)
+            let changed = listed.as_ref().ok().map(|c| c.changed);
+            (message(path, Some(against), listed), changed)
         }
-        Err(err) => message(path, None, Err(err)),
+        Err(err) => (message(path, None, Err(err)), None),
     }
 }
 
@@ -97,6 +104,7 @@ pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> Control {
 /// what `git diff` finds from it to the worktree, and the untracked files.
 pub fn list(dir: &Path, commit: Option<&str>) -> io::Result<Changes> {
     let status = parse_status(&git(dir, &STATUS)?);
+    let changed = status.len() as u64;
     let (base, entries) = match commit {
         Some(commit) => {
             let mut entries = committed(dir, commit)?;
@@ -116,7 +124,11 @@ pub fn list(dir: &Path, commit: Option<&str>) -> io::Result<Changes> {
         "--",
     ];
     let numstat = git(dir, &diff)?;
-    Ok(collect(dir, entries, &parse_numstat(&numstat)))
+    let counts = parse_numstat(&numstat);
+    Ok(Changes {
+        changed,
+        ..collect(dir, entries, &counts, UNTRACKED_BUDGET)
+    })
 }
 
 /// `HEAD`'s commit, or the empty tree before the first commit.
@@ -261,19 +273,20 @@ fn number(field: &[u8]) -> Option<u64> {
     std::str::from_utf8(field).ok()?.parse().ok()
 }
 
-/// Joins the status entries with their line counts (counted here for untracked files),
-/// sorted by path, and keeps what fits in a message.
+/// Joins the status entries with their line counts (counted here for untracked files, reading
+/// at most `budget` bytes of them), sorted by path, and keeps what fits in a message.
 fn collect(
     dir: &Path,
     entries: Vec<Entry>,
     counts: &HashMap<Vec<u8>, (Option<u64>, Option<u64>)>,
+    mut budget: u64,
 ) -> Changes {
     let mut files: Vec<ChangedFile> = entries
         .into_iter()
         .map(|(path, status, from)| {
             let (added, removed) = match status {
                 FileStatus::Untracked => {
-                    let lines = count_lines(&dir.join(os(&path)));
+                    let lines = count_lines(&dir.join(os(&path)), &mut budget);
                     (lines, lines.map(|_| 0))
                 }
                 _ => counts.get(&path).copied().unwrap_or((None, None)),
@@ -308,12 +321,20 @@ fn collect(
 }
 
 /// Lines of an untracked file, as git would count them once added; `None` for anything but
-/// a regular text file of at most [`UNTRACKED_LIMIT`] bytes.
-pub fn count_lines(path: &Path) -> Option<u64> {
-    if !path.symlink_metadata().ok()?.is_file() {
+/// a regular text file of at most [`UNTRACKED_LIMIT`] bytes, and once one does not fit in
+/// what is left of `budget` (it is then spent, so no other file is read).
+pub fn count_lines(path: &Path, budget: &mut u64) -> Option<u64> {
+    let meta = path.symlink_metadata().ok()?;
+    if !meta.is_file() || meta.len() > UNTRACKED_LIMIT {
         return None;
     }
-    let bytes = read_limited(&mut File::open(path).ok()?, UNTRACKED_LIMIT).ok()?;
+    let Some(left) = budget.checked_sub(meta.len()) else {
+        *budget = 0;
+        return None;
+    };
+    *budget = left;
+    // Its size as it was measured: a file still growing is counted next time.
+    let bytes = read_limited(&mut File::open(path).ok()?, meta.len()).ok()?;
     if bytes[..bytes.len().min(BINARY_PROBE)].contains(&0) {
         return None;
     }
@@ -406,27 +427,45 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             std::fs::write(dir.path().join(name), bytes).unwrap();
             dir.path().join(name)
         };
-        assert_eq!(count_lines(&write("empty", b"")), Some(0));
-        assert_eq!(count_lines(&write("two", b"a\nb\n")), Some(2));
-        assert_eq!(count_lines(&write("open", b"a\nb")), Some(2));
-        assert_eq!(count_lines(&write("bin", b"a\0b\n")), None);
+        let count = |path: &Path| {
+            let mut all = u64::MAX;
+            count_lines(path, &mut all)
+        };
+        assert_eq!(count(&write("empty", b"")), Some(0));
+        assert_eq!(count(&write("two", b"a\nb\n")), Some(2));
+        assert_eq!(count(&write("open", b"a\nb")), Some(2));
+        assert_eq!(count(&write("bin", b"a\0b\n")), None);
         let mut late_nul = vec![b'a'; BINARY_PROBE];
         late_nul.push(0);
-        assert_eq!(count_lines(&write("late", &late_nul)), Some(1));
-        let big = File::create(dir.path().join("big")).unwrap();
-        big.set_len(UNTRACKED_LIMIT + 1).unwrap();
-        assert_eq!(count_lines(&dir.path().join("big")), None);
-        let at_limit = File::create(dir.path().join("limit")).unwrap();
-        at_limit.set_len(UNTRACKED_LIMIT).unwrap();
-        assert_eq!(
-            count_lines(&dir.path().join("limit")),
-            None,
-            "NUL bytes: binary"
-        );
+        assert_eq!(count(&write("late", &late_nul)), Some(1));
+        let mut at_limit = vec![b'a'; UNTRACKED_LIMIT as usize - 1];
+        at_limit.push(b'\n');
+        assert_eq!(count(&write("limit", &at_limit)), Some(1));
+        at_limit.push(b'\n');
+        let big = write("big", &at_limit);
+        // Nothing that is not read spends the budget.
+        let mut budget = 10;
+        assert_eq!(count_lines(&big, &mut budget), None);
         std::os::unix::fs::symlink("two", dir.path().join("link")).unwrap();
-        assert_eq!(count_lines(&dir.path().join("link")), None);
-        assert_eq!(count_lines(&dir.path().join("missing")), None);
-        assert_eq!(count_lines(dir.path()), None);
+        assert_eq!(count_lines(&dir.path().join("link"), &mut budget), None);
+        assert_eq!(count_lines(&dir.path().join("missing"), &mut budget), None);
+        assert_eq!(count_lines(dir.path(), &mut budget), None);
+        assert_eq!(budget, 10);
+    }
+
+    #[test]
+    fn the_budget_stops_reading_untracked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, text) in [("a", "1\n2\n"), ("b", "1\n"), ("c", "123\n"), ("d", "1")] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let untracked = |name: &str| (name.as_bytes().to_vec(), FileStatus::Untracked, None);
+        let entries = ["a", "b", "c", "d"].map(untracked).to_vec();
+        // `a` and `b` fit exactly; `c` does not, and `d` is not read after it though it would fit.
+        let changes = collect(dir.path(), entries, &HashMap::new(), 7);
+        let counted: Vec<_> = changes.files.iter().map(|f| f.added).collect();
+        assert_eq!(counted, [Some(2), Some(1), None, None]);
+        assert_eq!(changes.added, 3);
     }
 
     #[test]
@@ -445,7 +484,7 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             (b"b".to_vec(), (Some(3), Some(1))),
             (b"a".to_vec(), (Some(1), Some(2))),
         ]);
-        let changes = collect(dir.path(), entries, &counts);
+        let changes = collect(dir.path(), entries, &counts, UNTRACKED_BUDGET);
         let mut renamed = file("a", FileStatus::Renamed, (Some(1), Some(2)));
         renamed.old_path = Some("old".into());
         assert_eq!(
@@ -461,6 +500,7 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
                 added: 6,
                 removed: 3,
                 truncated: 0,
+                changed: 0,
             }
         );
 
@@ -479,7 +519,7 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             .iter()
             .map(|(p, _, _)| (p.clone(), (Some(1), Some(0))))
             .collect();
-        let changes = collect(dir.path(), many, &counts);
+        let changes = collect(dir.path(), many, &counts, UNTRACKED_BUDGET);
         let shown = changes.files.len();
         assert_eq!(changes.added, 4000);
         assert_eq!(shown + changes.truncated, 4000);
@@ -618,24 +658,31 @@ garbage\0\
         renamed.old_path = Some("r".into());
         let modified = file("a", FileStatus::Modified, (Some(2), Some(1)));
         let untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
+        // The status counts what `git status` lists: not the branch's commits.
         assert_eq!(
             answer(&projects, path.clone(), DiffBase::Branch),
-            changes(
-                &path,
-                DiffBase::Branch,
-                None,
-                vec![
-                    modified.clone(),
-                    file("b", FileStatus::Added, (Some(1), Some(0))),
-                    renamed,
-                    untracked.clone(),
-                ]
+            (
+                changes(
+                    &path,
+                    DiffBase::Branch,
+                    None,
+                    vec![
+                        modified.clone(),
+                        file("b", FileStatus::Added, (Some(1), Some(0))),
+                        renamed,
+                        untracked.clone(),
+                    ]
+                ),
+                Some(2)
             )
         );
         // Against HEAD, only what is not committed.
         assert_eq!(
             answer(&projects, path.clone(), DiffBase::Head),
-            changes(&path, DiffBase::Head, None, vec![modified, untracked])
+            (
+                changes(&path, DiffBase::Head, None, vec![modified, untracked]),
+                Some(2)
+            )
         );
 
         // A detached HEAD still has a merge-base with main.
@@ -647,7 +694,7 @@ garbage\0\
         let lone = lone.display().to_string();
         let why = "No commit in common with main";
         assert_eq!(
-            answer(&projects, lone.clone(), DiffBase::Branch),
+            answer(&projects, lone.clone(), DiffBase::Branch).0,
             changes(&lone, DiffBase::Head, Some(why), vec![])
         );
 
@@ -668,16 +715,19 @@ garbage\0\
         // Only a followed worktree.
         assert_eq!(
             answer(&projects, "/nope".into(), DiffBase::Branch),
-            Control::Changes {
-                path: "/nope".into(),
-                base: DiffBase::Head,
-                branch: None,
-                base_error: None,
-                files: vec![],
-                added: 0,
-                removed: 0,
-                error: Some("/nope is not a worktree of a followed project".into()),
-            }
+            (
+                Control::Changes {
+                    path: "/nope".into(),
+                    base: DiffBase::Head,
+                    branch: None,
+                    base_error: None,
+                    files: vec![],
+                    added: 0,
+                    removed: 0,
+                    error: Some("/nope is not a worktree of a followed project".into()),
+                },
+                None
+            )
         );
     }
 
@@ -688,6 +738,7 @@ garbage\0\
             added: 1,
             removed: 0,
             truncated: 0,
+            changed: 1,
         };
         let against = Against {
             dir: PathBuf::from("/w"),

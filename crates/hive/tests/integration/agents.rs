@@ -1065,8 +1065,17 @@ async fn terminals_echo_while_agents_are_being_placed() {
         drop(stdin);
         assert!(child.wait().unwrap().success());
     };
-    start("1");
-    // Opening the pipe for writing succeeds once git, placing the first agent, reads it.
+    // Placing lists the worktrees only once they are forgotten (9.14): a worktree hook forgets
+    // them and lists them again, and placing the first agent waits for that git.
+    let mut hook = repo.env.connect(Role::Hook).await;
+    let removed = Control::Hook {
+        event: "WorktreeRemove".into(),
+        terminal_id: None,
+        payload: json!({"worktree_path": "/w"}),
+        sent_ns: 0,
+    };
+    hook.send(0, removed).await;
+    // Opening the pipe for writing succeeds once git reads it.
     let mut hold = None;
     crate::common::wait_until(|| {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1078,8 +1087,10 @@ async fn terminals_echo_while_agents_are_being_placed() {
         hold = opened.ok();
         hold.is_some()
     });
+    start("1");
     start("2");
-    // The second `SessionStart` is being handled: it holds the terminals lock by now.
+    // The first agent is being placed, and the second `SessionStart` holds the terminals
+    // lock, by now.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     app.input(1, "echo hive-(math 6 \\* 7)\r").await;
     let mut seen = String::new();

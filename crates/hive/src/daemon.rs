@@ -324,6 +324,7 @@ impl State {
         // One change at a time, so the second of two at once sees what the first sent.
         let _turn = self.changing.lock().await;
         let reply = tokio::task::block_in_place(|| {
+            self.projects.forget();
             let projects = self.projects.list();
             if self.known(&projects) {
                 return None;
@@ -359,11 +360,11 @@ impl State {
         }
     }
 
-    /// Sends `worktree_status` for every followed worktree (only the one at `only`, when
-    /// given) whose status is not the one the app has.
-    async fn refresh_health(&self, only: Option<&str>) {
+    /// Sends `worktree_status` for every followed worktree whose status is not the one the
+    /// app has.
+    async fn refresh_health(&self) {
         let changed =
-            tokio::task::block_in_place(|| self.health_changed(&self.projects.list(), only));
+            tokio::task::block_in_place(|| self.health_changed(&self.projects.list(), None));
         for message in changed {
             self.to_app(0, &message).await;
         }
@@ -391,13 +392,17 @@ impl State {
     }
 
     /// The `worktree_status` of every worktree of `projects` (only the one at `only`, when
-    /// given) whose status is not the one the app has.
-    fn health_changed(&self, projects: &[Project], only: Option<&str>) -> Vec<Control> {
+    /// given, with its changed files when counted) whose status is not the one the app has.
+    fn health_changed(
+        &self,
+        projects: &[Project],
+        only: Option<(&str, Option<u64>)>,
+    ) -> Vec<Control> {
         let mut changed = Vec::new();
         for project in projects {
             let chosen = project.worktrees.iter();
-            for w in chosen.filter(|w| only.is_none_or(|path| path == w.path)) {
-                let status = health::of(project, w);
+            for w in chosen.filter(|w| only.is_none_or(|(path, _)| path == w.path)) {
+                let status = health::of(project, w, only.and_then(|(_, files)| files));
                 if self.sent().changed(&w.path, &status) {
                     let path = w.path.clone();
                     changed.push(Control::WorktreeStatus { path, status });
@@ -876,11 +881,12 @@ impl State {
             };
             self.to_app(0, &files).await;
         }
-        // One listing of the projects gives both the changes' base and the status.
+        // One listing of the projects gives both the changes' base and the status, and one
+        // `git status` both the changes and the status's count (9.14).
         let (changes, statuses) = tokio::task::block_in_place(|| {
             let projects = self.projects.list();
-            let changes = changes::answer(&projects, path.to_owned(), base);
-            (changes, self.health_changed(&projects, Some(path)))
+            let (changes, files) = changes::answer(&projects, path.to_owned(), base);
+            (changes, self.health_changed(&projects, Some((path, files))))
         });
         self.to_app(0, &changes).await;
         for message in statuses {
@@ -985,7 +991,9 @@ async fn watch_health(state: Arc<State>, interval: std::time::Duration) {
     let mut ticks = tokio::time::interval(interval);
     loop {
         ticks.tick().await;
-        state.refresh_health(None).await;
+        // Worktrees changed by hand (e.g. a branch switched) show within a tick.
+        state.projects.forget();
+        state.refresh_health().await;
     }
 }
 
@@ -1315,8 +1323,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::ListProjects) => {
             *state.listed() = None;
             state.to_app(0, &state.projects.spaces_message()).await;
-            state.projects(|projects| Control::Projects {
-                projects: projects.list(),
+            // A new app, or a reloaded UI: listed afresh (e.g. a project folder moved).
+            state.projects(|projects| {
+                projects.forget();
+                Control::Projects {
+                    projects: projects.list(),
+                }
             })
         }
         Ok(Control::AddProject { path }) => {
@@ -1446,7 +1458,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             }
         }),
         Ok(Control::ListChanges { path, base }) => {
-            state.projects(move |projects| changes::answer(&projects.list(), path, base))
+            state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
         }
         Ok(Control::ListSessions) => {
             // Hive's terminals: their hooks name their sessions.
@@ -1937,6 +1949,13 @@ mod tests {
         assert_eq!(next(&mut sent).await, 1);
         std::fs::remove_file(root.join("new")).unwrap();
         assert_eq!(next(&mut sent).await, 0);
+        // A worktree made behind Hive's back is listed again on a tick (9.14).
+        let added = dir.path().canonicalize().unwrap().join("w");
+        git(&["worktree", "add", "-q", "-b", "w", added.to_str().unwrap()]);
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(10), sent.recv());
+        let control = frame.await.expect("no status").unwrap().to_control();
+        let json = serde_json::to_value(control.unwrap()).unwrap();
+        assert_eq!(json["path"], added.display().to_string());
         ticking.abort();
     }
 

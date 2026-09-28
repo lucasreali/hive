@@ -132,6 +132,56 @@ async fn a_file_is_read_on_disk_and_at_head() {
     stop(daemon);
 }
 
+#[tokio::test]
+async fn file_requests_list_the_worktrees_once() {
+    let repo = Repo::new();
+    // A git that logs its arguments first on the service's `PATH` (9.14).
+    let (bin, log) = (repo.env.path("bin"), repo.env.path("git.log"));
+    std::fs::create_dir(&bin).unwrap();
+    let path = std::env::var_os("PATH").unwrap();
+    let dirs = || std::env::split_paths(&path);
+    let real = dirs().map(|d| d.join("git")).find(|git| git.is_file());
+    let script = format!(
+        "#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+        log.display(),
+        real.unwrap().display()
+    );
+    std::fs::write(bin.join("git"), script).unwrap();
+    let executable = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(bin.join("git"), executable).unwrap();
+    let on_path = std::env::join_paths(std::iter::once(bin).chain(dirs())).unwrap();
+    let daemon = repo.env.daemon_with(repo.env.hive().env("PATH", on_path));
+    let lists = || {
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        logged.matches("worktree list").count()
+    };
+    let mut conn = repo.env.connect(Role::App).await;
+    let root = repo.root.display().to_string();
+    follow(&mut conn, &root).await;
+    // Its main worktree found, listed when added, and again once its registry is watched.
+    crate::common::wait_until(|| lists() >= 3);
+    let listed = lists();
+    let hello = (text("hello"), text("hello"), false, None);
+    for _ in 0..5 {
+        assert_eq!(sides(&mut conn, &root, "README").await, hello);
+    }
+    assert_eq!(lists(), listed, "listed again");
+
+    // A worktree the app creates is followed at once.
+    let create = Control::CreateWorktree {
+        project: root.clone(),
+        name: "w".into(),
+        base: None,
+    };
+    conn.send(0, create).await;
+    let Control::WorktreeCreated { path, .. } = conn.control().await.1 else {
+        panic!("expected a new worktree")
+    };
+    assert_eq!(sides(&mut conn, &path, "README").await, hello);
+    drop(conn);
+    stop(daemon);
+}
+
 async fn save(conn: &mut Conn, worktree: &str, content: &str, version: Option<String>) -> Control {
     let save = Control::SaveFile {
         worktree: worktree.to_owned(),

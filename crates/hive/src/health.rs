@@ -15,9 +15,10 @@ use crate::{changes, git};
 pub const INTERVAL: Duration = Duration::from_secs(30);
 
 /// The status of `project`'s worktree `w`, `None` when git fails. The main worktree is
-/// counted against nothing; the others against its branch, when it has one.
-pub fn of(project: &Project, w: &Worktree) -> Option<WorktreeStatus> {
-    read(Path::new(&w.path), branch(project, w)).ok()
+/// counted against nothing; the others against its branch, when it has one. `files`: its
+/// changed files when already counted (`Changes::changed`), so `git status` is not run again.
+pub fn of(project: &Project, w: &Worktree, files: Option<u64>) -> Option<WorktreeStatus> {
+    read(Path::new(&w.path), branch(project, w), files).ok()
 }
 
 /// The branch `project`'s worktree `w` is counted against: the main worktree's, for any other
@@ -29,14 +30,21 @@ pub fn branch<'a>(project: &'a Project, w: &Worktree) -> Option<&'a str> {
 
 /// Gives every worktree of `project` its status.
 pub fn fill(project: &mut Project) {
-    let statuses: Vec<_> = project.worktrees.iter().map(|w| of(project, w)).collect();
+    let statuses: Vec<_> = project
+        .worktrees
+        .iter()
+        .map(|w| of(project, w, None))
+        .collect();
     for (w, status) in project.worktrees.iter_mut().zip(statuses) {
         w.status = status;
     }
 }
 
-fn read(dir: &Path, base: Option<&str>) -> io::Result<WorktreeStatus> {
-    let changes = changes::parse_status(&git(dir, &changes::STATUS)?).len() as u64;
+fn read(dir: &Path, base: Option<&str>, files: Option<u64>) -> io::Result<WorktreeStatus> {
+    let changes = match files {
+        Some(files) => files,
+        None => changes::parse_status(&git(dir, &changes::STATUS)?).len() as u64,
+    };
     let [seconds] = numbers(&git(dir, &["log", "-1", "--format=%ct", "HEAD", "--"])?)?;
     let (ahead, behind) = match base {
         Some(base) => {
@@ -184,11 +192,18 @@ pub(crate) mod tests {
         // worktree listed, neither.
         run(&root, &["switch", "-q", "--detach"]);
         project.worktrees[0].branch = None;
-        assert_eq!(of(&project, &project.worktrees[1]), status(0, None));
+        assert_eq!(of(&project, &project.worktrees[1], None), status(0, None));
+        // Changed files already counted are not counted again.
+        assert_eq!(
+            of(&project, &project.worktrees[1], Some(9)),
+            status(9, None)
+        );
         project.worktrees.remove(0);
-        assert_eq!(of(&project, &project.worktrees[0]), status(0, None));
+        assert_eq!(of(&project, &project.worktrees[0], None), status(0, None));
         // A base branch that no longer exists is an error.
-        let err = read(&wt("ahead"), Some("missing")).unwrap_err().to_string();
+        let err = read(&wt("ahead"), Some("missing"), None)
+            .unwrap_err()
+            .to_string();
         assert!(err.starts_with("git rev-list"), "{err}");
     }
 
@@ -196,7 +211,7 @@ pub(crate) mod tests {
     fn a_repository_without_commits_has_no_status() {
         let tmp = tempfile::tempdir().unwrap();
         run(tmp.path(), &["init", "-q"]);
-        let err = read(tmp.path(), None).unwrap_err().to_string();
+        let err = read(tmp.path(), None, None).unwrap_err().to_string();
         assert!(err.starts_with("git log"), "{err}");
     }
 
