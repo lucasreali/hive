@@ -58,7 +58,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     to_daemon.send(Frame::control(1, &open)).await?;
     loop {
         let frame = from_daemon.next().await.ok_or("service closed")??;
-        if matches!(frame.to_control(), Ok(Control::TerminalOpened)) {
+        if matches!(frame.to_control(), Ok(Control::TerminalOpened { .. })) {
             break;
         }
     }
