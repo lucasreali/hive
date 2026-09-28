@@ -27,6 +27,8 @@ mod scripts;
 #[cfg(test)]
 mod spaces;
 #[cfg(test)]
+mod statusline;
+#[cfg(test)]
 mod terminal;
 #[cfg(test)]
 mod watch;

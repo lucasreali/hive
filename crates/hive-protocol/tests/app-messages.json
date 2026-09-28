@@ -71,6 +71,13 @@
     "output_tokens": 2
   },
   {
+    "type": "session_usage",
+    "usage": {
+      "used_percentage": 42,
+      "resets_at": 1738425600
+    }
+  },
+  {
     "type": "agent_removed",
     "id": "s"
   },

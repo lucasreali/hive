@@ -5,6 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use tokio::signal::unix::{SignalKind, signal};
 
 use crate::paths::Paths;
 use crate::worktree;
@@ -44,6 +45,9 @@ enum Command {
         #[arg(long)]
         clear: bool,
     },
+    /// Claude Code's statusline in Hive's terminals (JSON on stdin): reports the 5-hour usage
+    /// to the service, then runs the user's own statusline and prints what it prints.
+    Statusline,
     /// Manage git worktrees in `.claude/worktrees/` (Claude Code's convention).
     Worktree {
         #[command(subcommand)]
@@ -73,6 +77,8 @@ enum WorktreeCommand {
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let paths = Paths::from_env();
+    // `hive statusline` exits with the user's statusline's code.
+    let mut code = 0;
     let result = match cli.command {
         Command::Daemon => block_on(crate::daemon::run(&paths)),
         Command::Bridge => {
@@ -95,10 +101,14 @@ pub fn run() -> ExitCode {
             // `--clear` leaves `text` empty, which clears the badge.
             block_on(crate::hook::badge(&paths, terminal, text.join(" ")))
         }
+        Command::Statusline => block_on(statusline(&paths)).and_then(|(out, status)| {
+            code = status;
+            io::stdout().write_all(&out)
+        }),
         Command::Worktree { command } => run_worktree(command, &paths),
     };
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::from(code),
         Err(err) => {
             eprintln!("hive: {err}");
             ExitCode::FAILURE
@@ -163,9 +173,24 @@ fn report(created: worktree::Created) -> io::Result<()> {
     io::stdout().write_all(&line)
 }
 
+/// `hive statusline` (see [`crate::statusline::run`]), cancelled by a SIGTERM: Claude Code
+/// cancels a run when a newer one starts.
+async fn statusline(paths: &Paths) -> io::Result<crate::statusline::Output> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    let cancel = async move {
+        terminate.recv().await;
+    };
+    let (var, cwd) = (
+        |key: &str| std::env::var_os(key),
+        std::env::current_dir().ok(),
+    );
+    let stdin = tokio::io::stdin();
+    Ok(crate::statusline::run(paths, stdin, var, cwd, cancel).await)
+}
+
 /// Runs `task` to completion, then drops the runtime without waiting for blocking
 /// work (a pending stdin read would otherwise keep the process alive).
-fn block_on(task: impl Future<Output = std::io::Result<()>>) -> std::io::Result<()> {
+fn block_on<T>(task: impl Future<Output = std::io::Result<T>>) -> std::io::Result<T> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

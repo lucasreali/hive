@@ -80,7 +80,11 @@ fn hooks(hive: &str) -> Value {
             (event.to_owned(), json!([{ "hooks": [hook] }]))
         })
         .collect();
-    json!({ "hooks": events })
+    // Claude Code runs a statusline through a shell: `hive statusline` reports the 5-hour usage
+    // (12.1), then runs the user's own one. Being in `--settings`, it overrides theirs.
+    let hive = String::from_utf8_lossy(&sh_quote(Path::new(hive))).into_owned();
+    let statusline = json!({ "type": "command", "command": format!("{hive} statusline") });
+    json!({ "hooks": events, "statusLine": statusline })
 }
 
 fn script(bin: &Path, settings: &Path) -> Vec<u8> {
@@ -477,7 +481,10 @@ mod tests {
         let text = std::fs::read_to_string(s.paths.hooks_settings()).unwrap();
         let settings: Value = serde_json::from_str(&text).unwrap();
         let hooks = settings.as_object().unwrap()["hooks"].as_object().unwrap();
-        assert_eq!(settings.as_object().unwrap().len(), 1);
+        assert_eq!(settings.as_object().unwrap().len(), 2);
+        let statusline =
+            json!({ "type": "command", "command": "'/opt/it'\\''s hive/hive' statusline" });
+        assert_eq!(settings["statusLine"], statusline);
         assert_eq!(hooks.len(), 17);
         for event in EVENTS {
             let expected = json!([{ "hooks": [{

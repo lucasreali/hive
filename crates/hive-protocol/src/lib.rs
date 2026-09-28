@@ -196,6 +196,18 @@ pub enum Control {
     Badge {
         text: String,
     },
+    /// `hive statusline` → service (on a hook connection, 12.1): the 5-hour window Claude
+    /// Code's statusline input shows for the Claude config folder `claude_dir`
+    /// (`$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`).
+    StatuslineUsage {
+        claude_dir: String,
+        usage: SessionWindow,
+    },
+    /// The current account's 5-hour window (12.1), `None` when none came yet or it is past its
+    /// reset. Sent when it changes, and after the app's `Welcome` when there is one.
+    SessionUsage {
+        usage: Option<SessionWindow>,
+    },
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
     /// An agent started in this terminal (the frame channel is its `HIVE_TERMINAL_ID`). It is
@@ -1332,6 +1344,14 @@ pub struct Session {
     /// outside Hive (Claude's record of the process, its `--resume`/`--session-id`, or its
     /// open log name it).
     pub running: bool,
+}
+
+/// A Claude account's 5-hour usage window (`rate_limits.five_hour` of Claude Code's statusline
+/// input, 12.1): the percentage used, rounded, and when it resets (Unix epoch seconds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWindow {
+    pub used_percentage: u8,
+    pub resets_at: u64,
 }
 
 /// A Claude session that ran in a Hive terminal, and the folder it ran in.

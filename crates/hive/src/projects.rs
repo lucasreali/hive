@@ -94,6 +94,11 @@ impl Projects {
         (projects, env.claude_config_dir)
     }
 
+    /// The current space's Claude config folder, when it has one.
+    pub fn claude_config_dir(&self) -> Option<String> {
+        self.spaces().current().1.claude_config_dir
+    }
+
     /// The current space's project folders, without asking git.
     pub fn roots(&self) -> Vec<String> {
         self.spaces().current().0

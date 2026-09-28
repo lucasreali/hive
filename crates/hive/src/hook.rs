@@ -113,7 +113,7 @@ pub async fn badge(paths: &Paths, terminal: u32, text: String) -> io::Result<()>
 
 /// Opens a hook-role connection and sends one message on `channel`, giving up after
 /// [`SEND_TIMEOUT`].
-async fn send(paths: &Paths, channel: u32, message: &Control) -> io::Result<()> {
+pub(crate) async fn send(paths: &Paths, channel: u32, message: &Control) -> io::Result<()> {
     let sent = async {
         // Only to our own service (`Paths::connect`).
         let stream = paths.connect().await?;
