@@ -1825,17 +1825,17 @@ mod tests {
             .unwrap();
         let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let ms = std::time::Duration::from_millis;
-        let task = runtime.spawn({
+        let work = {
             let blocked = blocked.clone();
-            async move {
-                tokio::task::block_in_place(|| {
-                    std::thread::sleep(ms(300));
-                    blocked.store(true, Ordering::SeqCst);
-                });
-                // Polled only while the runtime still runs.
-                tokio::time::sleep(ms(10_000)).await;
+            move || {
+                tokio::task::block_in_place(|| std::thread::sleep(ms(300)));
+                blocked.store(true, Ordering::SeqCst);
+                ms(10_000)
             }
-        });
+        };
+        // Blocking work, then a timer polled in the same step (one line: the task never
+        // gets past the timer, it is stopped there).
+        let task = runtime.spawn(async move { tokio::time::sleep(work()).await });
         runtime.block_on(async {
             tokio::time::sleep(ms(50)).await;
             stop(task).await;
