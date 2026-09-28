@@ -201,6 +201,29 @@ async fn a_subagents_own_worktree_is_sent_with_it() {
         matches!(exited, (3, Control::TerminalExited { .. })),
         "{exited:?}"
     );
+    // One whose shell exits at once leaves nothing behind that would hide it (9.20).
+    let config = repo.env.path("config/fish");
+    std::fs::create_dir_all(&config).unwrap();
+    let exit = "if test \"$HIVE_TERMINAL_ID\" = 4; exec true; end\n";
+    std::fs::write(config.join("config.fish"), exit).unwrap();
+    let opened = app.open_terminal(4, std::path::Path::new(&sub_b)).await;
+    assert_eq!(opened.as_ref(), Some(&sub_b));
+    let mut seen = Vec::new();
+    loop {
+        match app.control().await {
+            (4, Control::TerminalExited { .. }) => break,
+            other => seen.push(other),
+        }
+    }
+    seen.extend(settled(&mut app).await);
+    let last = seen
+        .iter()
+        .rfind(|(_, m)| matches!(m, Control::SubagentWorktrees { .. }));
+    assert!(
+        last.is_none_or(|last| *last == owned(&[&sub_a, &sub_b])),
+        "{seen:?}"
+    );
+    std::fs::remove_file(config.join("config.fish")).unwrap();
     // An agent of the user's own in a subagent's worktree shows it as usual, until it ends.
     app.open_terminal(2, &repo.root).await;
     let start = json!({"session_id": "s2", "cwd": sub_b});

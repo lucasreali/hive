@@ -589,16 +589,22 @@ async fn worktree_hooks_update_the_apps_projects() {
 #[tokio::test]
 async fn worktrees_whose_directory_is_gone_are_not_sent_to_the_app() {
     let repo = Repo::new();
+    // Made before the project is followed: a worktree made while it is reaches the app on its
+    // own (git's registry, 9.36), which could come before the answer read below.
+    let gone = repo.create(&["gone"]);
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     let path = repo.root.display().to_string();
     app.send(0, Control::AddProject { path }).await;
-    assert!(matches!(
-        app.control().await,
-        (0, Control::ProjectAdded { .. })
-    ));
+    let (0, Control::ProjectAdded { project }) = app.control().await else {
+        panic!("expected the project");
+    };
+    assert_eq!(
+        worktree_names(std::slice::from_ref(&project)),
+        ["main", "gone"]
+    );
     // Deleted without `git worktree remove`: git still lists it, as prunable.
-    std::fs::remove_dir_all(repo.create(&["gone"])).unwrap();
+    std::fs::remove_dir_all(gone).unwrap();
     assert!(stdout(&repo.hive(&["list"])).contains("gone"));
     app.send(0, Control::ListProjects).await;
     let (0, Control::Projects { projects }) = app.control().await else {

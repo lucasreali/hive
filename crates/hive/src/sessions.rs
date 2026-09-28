@@ -411,12 +411,19 @@ impl Sessions {
     pub fn log(&self, id: &str, cwd: &str) -> Option<PathBuf> {
         let root = self.root.as_ref().filter(|_| valid_id(id))?;
         let folder = normalized(cwd);
+        let name = format!("{id}.jsonl");
+        let is_log = |log: &PathBuf| log.symlink_metadata().is_ok_and(|m| m.is_file());
+        // The folder named as Claude names it first, without listing every project's (9.20).
+        let direct = root.join(&folder).join(&name);
+        if is_log(&direct) {
+            return Some(direct);
+        }
         std::fs::read_dir(root)
             .ok()?
             .flatten()
             .filter(|dir| normalized(&dir.file_name().to_string_lossy()) == folder)
-            .map(|dir| dir.path().join(format!("{id}.jsonl")))
-            .find(|log| log.symlink_metadata().is_ok_and(|m| m.is_file()))
+            .map(|dir| dir.path().join(&name))
+            .find(is_log)
     }
 
     /// The listed session `id`.
@@ -828,6 +835,19 @@ not json
         assert_eq!(sessions.title("o", "/r/x"), None);
         assert_eq!(sessions.title("s", "/r/elsewhere"), None);
         assert_eq!(sessions.title("../s", "/r/x"), None);
+        // A folder named otherwise that normalizes the same is still searched.
+        let odd = root.join("_r_x");
+        std::fs::create_dir_all(&odd).unwrap();
+        std::fs::write(odd.join("v.jsonl"), "").unwrap();
+        assert_eq!(sessions.log("v", "/r/x"), Some(odd.join("v.jsonl")));
+        // The direct folder is looked up without listing the others (9.20).
+        let listable = std::fs::metadata(&root).unwrap().permissions();
+        std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o300))
+            .unwrap();
+        let unlisted = sessions.log("v", "/r/x");
+        let direct = sessions.log("s", "/r/x");
+        std::fs::set_permissions(&root, listable).unwrap();
+        assert_eq!((unlisted, direct), (None, Some(folder.join("s.jsonl"))));
         assert_eq!(Sessions::new(None).title("s", "/r/x"), None);
         assert_eq!(
             Sessions::new(Some(tmp.path().join("none"))).title("s", "/r/x"),

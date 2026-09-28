@@ -29,6 +29,154 @@ pub enum Side {
     Bytes(Vec<u8>),
 }
 
+/// The answers to the app's requests on the files of a followed worktree (9.20): the worktree
+/// is checked to be followed first.
+pub mod answer {
+    use std::ffi::OsStr;
+    use std::io;
+    use std::path::Path;
+
+    use hive_protocol::{Control, DiffBase, SaveError};
+
+    use crate::projects::{self, Projects};
+    use crate::{changes, procs, search};
+
+    /// `search_files`: `query` in the files of `worktree`.
+    pub fn search(projects: &Projects, worktree: String, query: String) -> Control {
+        let found = projects
+            .worktree(&worktree)
+            .and_then(|dir| search::search(&dir, &query));
+        let (matches, truncated, error) = match found {
+            Ok((matches, truncated)) => (matches, truncated, None),
+            Err(err) => (Vec::new(), false, Some(err.to_string())),
+        };
+        Control::SearchResults {
+            worktree,
+            query,
+            matches,
+            truncated,
+            error,
+        }
+    }
+
+    /// `open_file`: `path` of `worktree`, on disk and at `base`.
+    pub fn open(projects: &Projects, worktree: String, path: String, base: DiffBase) -> Control {
+        let read = changes::against(&projects.list(), &worktree, base)
+            .and_then(|against| super::read(&against.dir, &path, against.commit.as_deref()));
+        super::message(worktree, path, read)
+    }
+
+    /// `save_file`: `content` over `path` of `worktree`, if it is still at `version`.
+    pub fn save(
+        projects: &Projects,
+        worktree: String,
+        path: String,
+        content: &str,
+        version: Option<&str>,
+    ) -> Control {
+        let saved = match projects.worktree(&worktree) {
+            Ok(dir) => super::save(&dir, &path, content, version),
+            Err(err) => Err((SaveError::InvalidPath, err.to_string())),
+        };
+        match saved {
+            Ok(version) => Control::FileSaved {
+                worktree,
+                path,
+                version,
+            },
+            Err((error, message)) => Control::SaveFailed {
+                worktree,
+                path,
+                error,
+                message,
+            },
+        }
+    }
+
+    /// `create_file`: the file `name` in `folder` of `worktree`.
+    pub fn create(projects: &Projects, worktree: String, folder: &str, name: &str) -> Control {
+        let create = |dir: &Path| super::create(dir, folder, name);
+        op(projects, worktree, create, |worktree, path| {
+            Control::FileCreated { worktree, path }
+        })
+    }
+
+    /// `create_folder`: the folder `name` in `folder` of `worktree`.
+    pub fn create_folder(
+        projects: &Projects,
+        worktree: String,
+        folder: &str,
+        name: &str,
+    ) -> Control {
+        let create = |dir: &Path| super::create_folder(dir, folder, name);
+        op(projects, worktree, create, |worktree, path| {
+            Control::FolderCreated { worktree, path }
+        })
+    }
+
+    /// `rename_file`: `path` of `worktree` renamed to `name`.
+    pub fn rename(projects: &Projects, worktree: String, path: String, name: &str) -> Control {
+        let rename = |dir: &Path| super::rename(dir, &path, name, &held(projects));
+        op(projects, worktree, rename, |worktree, to| {
+            let path = path.clone();
+            Control::FileRenamed { worktree, path, to }
+        })
+    }
+
+    /// `move_file`: `path` of `worktree` moved into `folder`.
+    pub fn move_to(projects: &Projects, worktree: String, path: String, folder: &str) -> Control {
+        let move_to = |dir: &Path| super::move_to(dir, &path, folder, &held(projects));
+        op(projects, worktree, move_to, |worktree, to| {
+            let path = path.clone();
+            Control::FileRenamed { worktree, path, to }
+        })
+    }
+
+    /// `delete_file`: `path` of `worktree`.
+    pub fn delete(projects: &Projects, worktree: String, path: String) -> Control {
+        let delete = |dir: &Path| super::delete(dir, &path, &held(projects));
+        op(projects, worktree, delete, |worktree, ()| {
+            let path = path.clone();
+            Control::FileDeleted { worktree, path }
+        })
+    }
+
+    /// `open_in_editor`: the Windows path of `path` of `worktree`.
+    pub fn editor(projects: &Projects, worktree: String, path: String) -> Control {
+        let located = projects
+            .worktree(&worktree)
+            .and_then(|dir| super::windows_path(&dir, &path, OsStr::new("wslpath")));
+        Control::EditorTarget {
+            worktree,
+            path,
+            error: located.as_ref().err().map(ToString::to_string),
+            windows_path: located.ok(),
+        }
+    }
+
+    /// Runs `run` in the folder of `worktree`: `done` with what it gave, else `file_op_failed`.
+    fn op<T>(
+        projects: &Projects,
+        worktree: String,
+        run: impl FnOnce(&Path) -> io::Result<T>,
+        done: impl FnOnce(String, T) -> Control,
+    ) -> Control {
+        match projects.worktree(&worktree).and_then(|dir| run(&dir)) {
+            Ok(value) => done(worktree, value),
+            Err(err) => Control::FileOpFailed {
+                worktree,
+                message: err.to_string(),
+            },
+        }
+    }
+
+    /// [`projects::held`] for a folder about to be renamed, moved or deleted, with this
+    /// machine's processes.
+    fn held(projects: &Projects) -> impl Fn(&Path) -> io::Result<()> {
+        move |folder| projects::held(&projects.list(), folder, procs::Source::System)
+    }
+}
+
 /// The file `path` of the worktree at `dir`: on disk and at `commit` (the Changes panel's
 /// base, see `changes::against`), else `HEAD`. `path` comes from the app: it must be
 /// relative, without `..`, and must not resolve (through symlinks) outside `dir`.
