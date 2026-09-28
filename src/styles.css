@@ -396,6 +396,12 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
+@container (width < 400px) {
+  .panel-views .tab-label {
+    display: none;
+  }
+}
+
 .panel-views [role="tab"]:hover {
   color: var(--text);
 }
@@ -614,6 +620,9 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 .right-panel > .bar {
+  /* 10.4: the tabs drop their labels when the panel is too narrow for them. On the bar, not the
+     panel: a container is the containing block of fixed descendants (the panel's menus). */
+  container-type: inline-size;
   gap: 8px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--border);

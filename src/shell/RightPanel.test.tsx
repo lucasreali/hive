@@ -560,6 +560,18 @@ test("the Changes panel's header button closes it", () => {
   expect(useHive.getState().rightPanel).toBeNull();
 });
 
+// 10.4: a narrow panel shows the tabs' icons only (CSS), so each keeps its label as its name.
+test("each panel tab keeps its label as its accessible name and title", () => {
+  panel();
+  act(() => setRightPanel("files"));
+  const tabs = screen.getByRole("tablist", { name: "Panel" }).querySelectorAll('[role="tab"]');
+  const labels = ["Files", "Diff", "Sessions", "PRs", "Actions"];
+  expect([...tabs].map((t) => [t.getAttribute("aria-label"), t.getAttribute("title")])).toEqual(
+    labels.map((l) => [l, l]),
+  );
+  for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
+});
+
 test("All lists every file with the changes' statuses, deleted files included", () => {
   const changed = [file("b.ts", "added"), file("gone/x.ts", "deleted")];
   const all = allFiles(["a.ts", "b.ts", "src/c.ts"], changed);

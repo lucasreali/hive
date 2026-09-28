@@ -290,10 +290,12 @@ export function RightPanel() {
               type="button"
               role="tab"
               aria-selected={view === v.view}
+              aria-label={v.label}
+              title={v.label}
               onClick={() => setPanelView(v.view)}
             >
               {v.icon}
-              {v.label}
+              <span className="tab-label">{v.label}</span>
             </button>
           ))}
         </div>
