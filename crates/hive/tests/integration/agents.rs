@@ -839,7 +839,15 @@ async fn a_subagents_transcript_is_sent_and_followed_while_watched() {
 }
 
 /// The app's next `agent_usage`, skipping other messages.
-async fn next_usage(app: &mut Conn) -> Control {
+/// The first `agent_usage` among a hook call's messages `seen`, else the app's next one: the
+/// tick that reads the transcript may come before the call is settled.
+async fn next_usage(app: &mut Conn, seen: Vec<(u32, Control)>) -> Control {
+    let usage = |(channel, message): &(u32, Control)| {
+        *channel == 1 && matches!(message, Control::AgentUsage { .. })
+    };
+    if let Some((_, message)) = seen.into_iter().find(usage) {
+        return message;
+    }
     loop {
         if let (1, message @ Control::AgentUsage { .. }) = app.control().await {
             return message;
@@ -872,8 +880,8 @@ async fn an_agents_tokens_are_read_from_its_transcript_after_its_events() {
         output_tokens,
     };
     let tool = json!({"session_id": "s", "cwd": root, "tool_name": "Bash"});
-    hook(&repo, &mut app, "1", "PostToolUse", tool).await;
-    assert_eq!(next_usage(&mut app).await, usage(100, 200_000, 10));
+    let seen = hook(&repo, &mut app, "1", "PostToolUse", tool).await;
+    assert_eq!(next_usage(&mut app, seen).await, usage(100, 200_000, 10));
     // Another event with nothing new in the transcript sends nothing (the next usage below
     // is the appended one's).
     let tool = json!({"session_id": "s", "cwd": root, "tool_name": "Read"});
@@ -883,8 +891,11 @@ async fn an_agents_tokens_are_read_from_its_transcript_after_its_events() {
     let mut file = std::fs::File::options().append(true).open(&log).unwrap();
     file.write_all(turn("m2", 250_000, 5).as_bytes()).unwrap();
     let stop = json!({"session_id": "s", "cwd": root});
-    hook(&repo, &mut app, "1", "Stop", stop).await;
-    assert_eq!(next_usage(&mut app).await, usage(250_001, 1_000_000, 15));
+    let seen = hook(&repo, &mut app, "1", "Stop", stop).await;
+    assert_eq!(
+        next_usage(&mut app, seen).await,
+        usage(250_001, 1_000_000, 15)
+    );
     drop(app);
     assert!(daemon.wait_exit().success());
 }
