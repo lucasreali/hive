@@ -1661,19 +1661,25 @@ mod tests {
         ))
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_registry_watch_ends_only_without_a_watcher() {
+    #[test]
+    fn the_registry_watch_ends_only_without_a_watcher() {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path());
-        let failed = Err(io::Error::other("no inotify"));
-        let ms = std::time::Duration::from_millis;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         // It ends instead of waiting for changes forever.
-        let ended = tokio::time::timeout(ms(5000), watch_registry(state.clone(), failed));
-        assert!(ended.await.is_ok());
-        // With a watcher it follows the projects (again on a change of them) until aborted.
+        let failed = Err(io::Error::other("no inotify"));
+        runtime.block_on(watch_registry(state.clone(), failed));
+        // With a watcher it follows the projects (again on a change of them) until stopped.
         state.refollow.notify_one();
-        let watching = watch_registry(state, Registry::new());
-        assert!(tokio::time::timeout(ms(500), watching).await.is_err());
+        let watching = runtime.spawn(watch_registry(state, Registry::new()));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!watching.is_finished());
+        // Not waited for: a watch that never yields (a broken `Registry::changed`) cannot
+        // hold the test up.
+        runtime.shutdown_background();
     }
 
     #[test]
