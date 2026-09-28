@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hive_protocol::{Control, Project, ProjectError, SpaceEnv, Worktree};
 use serde::de::DeserializeOwned;
@@ -25,7 +25,8 @@ pub struct Projects {
     file: PathBuf,
     spaces: Mutex<Spaces>,
     /// Each project with its worktrees as git last listed them (9.14), until [`Projects::forget`].
-    listed: Mutex<HashMap<String, Project>>,
+    /// One lock per project, held while git lists it (9.20).
+    listed: Mutex<HashMap<String, Arc<Mutex<Option<Project>>>>>,
 }
 
 impl Projects {
@@ -61,11 +62,14 @@ impl Projects {
 
     /// The project `id` with its worktrees; git lists them only when they are not known.
     fn project(&self, id: &str) -> Project {
-        // Held while git runs: requests at once list a project once.
-        let mut listed = self.listed.lock().unwrap_or_else(PoisonError::into_inner);
-        (listed.entry(id.to_owned()))
-            .or_insert_with(|| project(id))
-            .clone()
+        let slot = (self.listed.lock().unwrap_or_else(PoisonError::into_inner))
+            .entry(id.to_owned())
+            .or_default()
+            .clone();
+        // Held while git runs: requests at once list a project once, and a git that hangs
+        // holds up only the requests on its own project.
+        let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        slot.get_or_insert_with(|| project(id)).clone()
     }
 
     /// Forgets every project's worktrees: they changed, or may have (the health tick). The
@@ -857,8 +861,17 @@ mod tests {
             .unwrap();
         std::io::Write::write_all(&mut config, b"[include]\n\tpath = hang\n").unwrap();
         let started = std::time::Instant::now();
-        let listed = projects.list();
+        let (listed, fine_alone) = std::thread::scope(|scope| {
+            let listing = scope.spawn(|| projects.list());
+            // While git hangs in the other project, this one is listed at once (9.20).
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let alone = std::time::Instant::now();
+            projects.followed(&fine).unwrap();
+            let alone = alone.elapsed();
+            (listing.join().unwrap(), alone)
+        });
         assert!(started.elapsed() < git::TIME_LIMIT * 2, "not killed");
+        assert!(fine_alone < git::TIME_LIMIT / 2, "waited {fine_alone:?}");
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].id, hung);
         assert!(listed[0].worktrees.is_empty());
