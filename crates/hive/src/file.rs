@@ -171,10 +171,14 @@ pub fn answer(projects: &Projects, request: Control) -> Control {
                 windows_path: located.ok(),
             }
         }
-        _ => Control::Error {
-            message: "not a file request".to_owned(),
-        },
+        _ => not_a_file_request(),
     }
+}
+
+/// The answer to a request [`answer`] is not for.
+fn not_a_file_request() -> Control {
+    let message = "not a file request".to_owned();
+    Control::Error { message }
 }
 
 /// [`projects::held`] for a folder about to be renamed or moved, with this machine's processes.
