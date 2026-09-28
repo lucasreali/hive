@@ -231,13 +231,16 @@ function Health({ status: s }: { status: WorktreeStatus }) {
           ↓{s.behind}
         </span>
       )}
-      {(s.added > 0 || s.removed > 0) && (
+      {s.added > 0 || s.removed > 0 ? (
         <span
           className="health-lines"
           title={`${plural(s.changes, "changed file")}, +${s.added} −${s.removed} lines`}
         >
           <Counts added={s.added} removed={s.removed} />
         </span>
+      ) : (
+        // Changes with no lines (binary or empty files) still show, as their file count.
+        s.changes > 0 && <span title={plural(s.changes, "changed file")}>●{s.changes}</span>
       )}
       {s.merged && <span title="Every commit is on the main worktree's branch">merged</span>}
     </span>

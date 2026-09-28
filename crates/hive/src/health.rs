@@ -70,11 +70,21 @@ fn read(dir: &Path, base: Option<&str>, totals: Option<Totals>) -> io::Result<Wo
     })
 }
 
-/// The worktree's changes against `HEAD`, as `changes::list` totals them.
+/// The worktree's changes against `HEAD`, as `changes::list` totals them. A `git diff` that
+/// fails or times out leaves the files counted, with no lines: it never hides the status.
 fn count(dir: &Path) -> io::Result<Totals> {
     let entries = changes::parse_status(&git(dir, &changes::STATUS)?);
-    let counts = changes::parse_numstat(&git(dir, &changes::numstat("HEAD"))?);
-    Ok(changes::totals(dir, &entries, &counts))
+    let Ok(numstat) = git(dir, &changes::numstat("HEAD")) else {
+        return Ok(Totals {
+            files: entries.len() as u64,
+            ..Totals::default()
+        });
+    };
+    Ok(changes::totals(
+        dir,
+        &entries,
+        &changes::parse_numstat(&numstat),
+    ))
 }
 
 /// Exactly `N` numbers separated by white space.
@@ -267,6 +277,25 @@ pub(crate) mod tests {
         assert_eq!(panel, totals(5, 5, 3));
         let status = read(dir, None, None).unwrap();
         assert_eq!((status.changes, status.added, status.removed), (5, 5, 3));
+    }
+
+    #[test]
+    fn a_failed_diff_keeps_the_status_without_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run(dir, &["init", "-q", "-b", "main"]);
+        commit(dir, "m");
+        std::fs::write(dir.join("m"), "changed\n").unwrap();
+        std::fs::write(dir.join("u"), "a\nb\n").unwrap();
+        // `git status` compares object ids; `git diff` must read the old blob, now gone.
+        let blob = crate::git::output(dir, &["rev-parse", "HEAD:m"], &[0]).unwrap();
+        let blob = String::from_utf8(blob).unwrap();
+        let (fan, rest) = blob.trim().split_at(2);
+        std::fs::remove_file(dir.join(".git/objects").join(fan).join(rest)).unwrap();
+        assert!(git(dir, &changes::numstat("HEAD")).is_err());
+
+        // The files are still counted, and the rest of the status is kept.
+        assert_eq!(read(dir, None, None).ok(), status((2, 0, 0), None));
     }
 
     #[test]

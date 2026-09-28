@@ -577,6 +577,13 @@ test("a worktree's status shows as badges explained by their tooltips", () => {
     ["−2", "1 changed file, +0 −2 lines"],
     ["merged", "Every commit is on the main worktree's branch"],
   ]);
+  // Changes that add no lines (binary or empty files) do not look clean: their file count.
+  const binary = { ...clean, changes: 2 };
+  act(() => apply({ type: "worktree_status", path: login.path, status: binary }));
+  expect(badges(login.path)).toEqual([
+    ["●2", "2 changed files"],
+    ["merged", "Every commit is on the main worktree's branch"],
+  ]);
 });
 
 test("a hook event re-renders only its own agent's row, not other worktrees' rows", () => {
