@@ -2,10 +2,13 @@ import type { Agent } from "./protocol";
 import {
   type HiveState,
   leaveSpace,
+  markdownShown,
   openModal,
   owner,
   pendingAgents,
+  renderedShown,
   selectedPlace,
+  setRendered,
   setRightPanel,
   spaceOf,
   spaceProjects,
@@ -64,8 +67,17 @@ export function goToAgent(agent: Agent): void {
   });
 }
 
-/** An app command: its shortcut (`keys`, written for Windows: Ctrl stands for Cmd on macOS). */
-export type Command = { id: string; label: string; keys: string; run: () => void };
+/**
+ * An app command: its shortcut (`keys`, written for Windows: Ctrl stands for Cmd on macOS). One
+ * with `when` exists only while it holds: its keys are free for the terminal otherwise.
+ */
+export type Command = {
+  id: string;
+  label: string;
+  keys: string;
+  run: () => void;
+  when?: (s: HiveState) => boolean;
+};
 
 /**
  * Every app command with a shortcut: `shortcut()` runs them, the settings' Shortcuts section
@@ -127,6 +139,14 @@ export const COMMANDS: readonly Command[] = [
     run: startComment,
   },
   { id: "next-pending", label: "Go to the next pending agent", keys: "F8", run: nextPending },
+  {
+    // 11.2: VS Code's key, the terminal's paste everywhere but on a Markdown file's tab.
+    id: "toggle-markdown",
+    label: "Show a Markdown file rendered or as text",
+    keys: "Ctrl+Shift+V",
+    when: markdownShown,
+    run: () => setRendered(!renderedShown(useHive.getState())),
+  },
 ];
 
 /** Whether `event` presses `keys` ("F8", "Ctrl+,", "Ctrl+Shift+T"), with no other modifier. */
@@ -151,7 +171,7 @@ export function shortcut(event: KeyboardEvent): (() => void) | null {
   // task: the shortcuts count it closed as soon as it is.
   const dialog = s.modal !== null && document.querySelector("dialog[open]") !== null;
   if (blocked || dialog) return null;
-  return COMMANDS.find((c) => presses(c.keys, event))?.run ?? null;
+  return COMMANDS.find((c) => presses(c.keys, event) && (c.when?.(s) ?? true))?.run ?? null;
 }
 
 function onKeyDown(event: KeyboardEvent): void {

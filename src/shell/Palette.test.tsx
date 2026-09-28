@@ -62,7 +62,8 @@ test("lists every command with its keys but itself, then agents and worktrees", 
   expect(commands).toEqual([
     "Commands",
     [
-      ...COMMANDS.filter((c) => c.id !== "palette").map((c) => c.label),
+      // No Markdown file shown: its toggle (11.2) is not offered.
+      ...COMMANDS.filter((c) => c.id !== "palette" && !c.when).map((c) => c.label),
       "Remove merged worktrees…",
       "Remove project…",
     ],

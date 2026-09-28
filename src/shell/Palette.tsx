@@ -63,7 +63,7 @@ export function rank(items: PaletteItem[], query: string): PaletteItem[] {
 }
 
 /**
- * The palette's commands: every shortcut command but the palette itself, then the commands
+ * The palette's commands: every shortcut command that applies now but the palette itself, then the commands
  * without a shortcut that apply now, among them the selected worktree's run scripts (6.8).
  */
 export function paletteCommands(s: HiveState): PaletteItem[] {
@@ -93,7 +93,7 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
     }
   }
   if (!("why" in reviewTarget(s))) extra.push({ label: "Send review", run: sendReview });
-  return [...COMMANDS.filter((c) => c.id !== "palette"), ...extra];
+  return [...COMMANDS.filter((c) => c.id !== "palette" && (c.when?.(s) ?? true)), ...extra];
 }
 
 /** Agents in tree order (of every space), then the current space's worktrees: Enter selects and shows it. */
