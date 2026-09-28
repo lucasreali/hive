@@ -137,9 +137,10 @@ async fn serve(
     // (waiting for the lock) instead of a listen queue nobody accepts.
     drop(listener);
     let _ = std::fs::remove_file(socket);
-    watcher.abort();
-    health.abort();
-    registry.abort();
+    let files = state.watching.lock().await.take();
+    for task in [watcher, health, registry].into_iter().chain(files) {
+        stop(task).await;
+    }
     // Before the terminals end (and their sessions with them): what to resume next time.
     state.save_open().await;
     let sessions: Vec<i32> = state
@@ -151,6 +152,14 @@ async fn serve(
         .collect();
     terminal::end_sessions(&sessions).await;
     Ok(())
+}
+
+/// Stops a background task and waits until it has. One caught in blocking work
+/// (`block_in_place`) finishes it and polls its next timer while the runtime still runs:
+/// polling a timer once the runtime shuts down panics.
+async fn stop(task: tokio::task::JoinHandle<()>) {
+    task.abort();
+    let _ = task.await;
 }
 
 /// The service's state. Lock order, when one task holds several: `terminals` → `agents` →
@@ -1794,6 +1803,33 @@ mod tests {
             Ports::new(dir.join("ports.json")),
             restore,
         ))
+    }
+
+    #[test]
+    fn a_stopped_task_is_out_of_its_blocking_work_before_the_runtime_shuts_down() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ms = std::time::Duration::from_millis;
+        let task = runtime.spawn({
+            let blocked = blocked.clone();
+            async move {
+                tokio::task::block_in_place(|| {
+                    std::thread::sleep(ms(300));
+                    blocked.store(true, Ordering::SeqCst);
+                });
+                // Polled only while the runtime still runs.
+                tokio::time::sleep(ms(10_000)).await;
+            }
+        });
+        runtime.block_on(async {
+            tokio::time::sleep(ms(50)).await;
+            stop(task).await;
+        });
+        assert!(blocked.load(Ordering::SeqCst));
+        runtime.shutdown_background();
     }
 
     #[test]
