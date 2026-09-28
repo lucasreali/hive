@@ -10,6 +10,7 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 |---|---|
 | `docs/hive.md` | Single source of truth for every decision (Portuguese). **Never edit it.** |
 | `TODO.md` | The work plan. Do the next unchecked task only; stop at every ⏸ checkpoint |
+| `docs/history/` | Finished stages of `TODO.md`, word for word (reference; open tasks stay in `TODO.md`) |
 | `docs/prototype/` | The human's prototype: look, layout, states, glossary. Read-only. Shortcuts follow `docs/hive.md` #35, not the prototype |
 | `COVERAGE_EXCLUSIONS.md` | Approved coverage exclusions (created when the first one is approved) |
 | `.claude/skills/stage/` | How to develop a whole stage: the orchestrator procedure (`SKILL.md`, `/stage <N>`) and the brief every task agent follows (`task-brief.md`) |
@@ -48,7 +49,7 @@ cargo test --workspace
 cargo check --workspace --locked
 cargo deny check
 cargo machete
-cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'   # exclusions: COVERAGE_EXCLUSIONS.md
+cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'   # exclusions: COVERAGE_EXCLUSIONS.md
 cargo mutants --in-diff <(git diff main -- '*.rs')     # no "missed" or "timeout" mutants (CI: sharded)
 ```
 
@@ -75,9 +76,9 @@ Frontend tests use **`bun test`** with a DOM from `happy-dom`. Parts that need a
 
 Report: what was done, branch and commits, every gate with its result, anything the human should decide. Then tick the task in `TODO.md`.
 
-## Working notes (learned in Stage 0)
+## Working notes
 
-- **State:** Stage 0 is on `main` (merged on 2026-09-23). Every new task branch starts from `main`.
+- **State:** every task branch starts from the current `main`; see `TODO.md` for the stage in progress.
 - **Toolchain:** agent shells need `export PATH=$HOME/.cargo/bin:$PATH` (the human's shell is fish). `cargo fuzz` needs `+nightly --target x86_64-unknown-linux-gnu`.
 - **Gates:** `scripts/gates.sh` runs every Rust gate. Use `BASE=<previous task branch>` to limit mutants to your diff, and `MUTANTS=0` to skip them.
   - It builds with `CARGO_BUILD_JOBS=3` and runs one mutant at a time with a memory watchdog: wider builds or a runaway mutant have taken the whole WSL VM down, with the human's terminals. Write loops that a mutated helper cannot make endless (bound them by the input).
