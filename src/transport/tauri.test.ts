@@ -147,6 +147,23 @@ test("pull request actions call their commands", async () => {
   ]);
 });
 
+test("Actions run actions call their commands", async () => {
+  const calls = record();
+  await tauriTransport.listRuns("/r", "main", false);
+  await tauriTransport.openRun("/r", 9);
+  await tauriTransport.openJobLog("/r", 4);
+  await tauriTransport.actOnRun("/r", 9, { kind: "rerun", failed: true }, null);
+  expect(calls).toEqual([
+    ["list_runs", { project: "/r", branch: "main", force: false }],
+    ["open_run", { project: "/r", run: 9 }],
+    ["open_job_log", { project: "/r", job: 4 }],
+    [
+      "act_on_run",
+      { project: "/r", run: 9, action: { kind: "rerun", failed: true }, branch: null },
+    ],
+  ]);
+});
+
 test("a command that fails shows why as the notice, and rejects already handled (9.21)", async () => {
   mockIPC(() => {
     throw "the hive link is down";

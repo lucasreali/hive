@@ -18,6 +18,7 @@ import {
   setPullBusy,
   showPull,
 } from "../pulls";
+import { showRun } from "../runs";
 import { ago } from "../sessions";
 import {
   ask,
@@ -353,8 +354,17 @@ function PullDetails({ open, repo }: { open: OpenPull; repo: PullRepo | null }) 
           {d.checks.map((c) => (
             <li key={`${c.workflow}/${c.name}`} className="pull-check">
               <Checks state={c.state} />
-              {c.url ? (
-                <button type="button" className="link" onClick={() => void openLink(c.url ?? "")}>
+              {c.run !== null || c.url ? (
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => {
+                    // An Actions job: its run in the Actions view (9.32).
+                    if (c.run === null) return void openLink(c.url ?? "");
+                    setPanelView("actions");
+                    showRun(project, c.run);
+                  }}
+                >
                   {c.name}
                 </button>
               ) : (
@@ -374,10 +384,9 @@ function PullDetails({ open, repo }: { open: OpenPull; repo: PullRepo | null }) 
           ))}
         </Part>
         <Part title={`Reviews and comments (${d.notes.length})`}>
-          {d.notes.map((n, i) => (
-            // Notes have no id of their own; their order never changes while shown.
-            // biome-ignore lint/suspicious/noArrayIndexKey: see above
-            <li key={i} className="pull-note">
+          {d.notes.map((n) => (
+            // Notes have no id of their own: who wrote it, when, and its verdict.
+            <li key={`${n.author}\n${n.at}\n${n.review}`} className="pull-note">
               <div className="session-meta">
                 <b>{n.author}</b>
                 {n.review && ` ${VERDICT[n.review]}`} · {since(n.at)}
