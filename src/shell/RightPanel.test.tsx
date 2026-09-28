@@ -94,6 +94,12 @@ function panel() {
 
 const rows = () => screen.queryAllByRole("treeitem").map((r) => [r.textContent, r.dataset.status]);
 const tree = () => screen.getByRole("tree", { name: "Files" });
+/** A row's name without its counts and letter: a closed folder's accessible name has its counts. */
+const named = (name: string | RegExp) =>
+  typeof name === "string"
+    ? (_: string, row: Element | null) => row?.querySelector(".name")?.textContent === name
+    : name;
+const treeRow = (name: string | RegExp) => screen.getByRole("treeitem", { name: named(name) });
 
 /** Opens every folder of the tree: they all start collapsed. */
 function expand() {
@@ -177,9 +183,10 @@ test("the selected worktree's changes: summary, totals, letters and counts", () 
   expect(screen.queryByText(/changed|No changes/)).toBeNull();
   act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
   expect(document.querySelector(".files-summary")?.textContent).toBe("5 files changed+24−49");
+  // A closed folder sums its files' counts; a binary file (logo.png) adds none.
   expect(rows()).toEqual([
     ["assets", "M"],
-    ["src", "D"],
+    ["src+23−48", "D"],
     ["package.json+1−1M", "M"],
   ]);
   expand();
@@ -299,11 +306,9 @@ test("clicking a file opens it in a tab; folders collapse; the tab's close close
   act(() => useHive.setState({ selectedLines: { from: 1, to: 1 } }));
   expect(send.title).toBe("No terminal open");
 
-  fireEvent.click(screen.getByRole("treeitem", { name: "auth" }));
+  fireEvent.click(treeRow("auth"));
   expect(screen.queryByRole("treeitem", { name: /token\.ts/ })).toBeNull();
-  expect(
-    screen.getByRole("treeitem", { name: "auth" }).querySelector(".status-dot"),
-  ).not.toBeNull();
+  expect(treeRow("auth").querySelector(".status-dot")).not.toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: "Close file token.ts" }));
   expect(useHive.getState().openFile).toBeNull();
@@ -465,8 +470,7 @@ test("rows show the library's icon for their name, its defaults for unknown ones
   );
   const props = { className: "tree-icon", width: 14, height: 14, "aria-hidden": true } as const;
   const svg = (el: ReactElement) => renderToStaticMarkup(el);
-  const icon = (name: string | RegExp) =>
-    screen.getByRole("treeitem", { name }).querySelector(".tree-icon")?.outerHTML;
+  const icon = (name: string | RegExp) => treeRow(name).querySelector(".tree-icon")?.outerHTML;
   // The named folder has its own icon; the unknown one the default, closed then open.
   const src = svg(getIconForFolder({ folderName: "src", ...props }));
   expect(src).not.toBe(svg(<DefaultFolderIcon {...props} />));
@@ -496,11 +500,9 @@ test("the tree works from the keyboard", () => {
   key("ArrowUp");
   expect(active()?.textContent).toBe("assets");
   key("ArrowLeft");
-  expect(rows()[1]).toEqual(["src", "D"]);
+  expect(rows()[1]).toEqual(["src+23−48", "D"]);
   key("ArrowLeft");
-  expect(screen.getByRole("treeitem", { name: "assets" }).getAttribute("aria-expanded")).toBe(
-    "false",
-  );
+  expect(treeRow("assets").getAttribute("aria-expanded")).toBe("false");
   key("ArrowRight");
   key("ArrowRight");
   expect(rows()[1]?.[0]).toBe("logo.pngM");
@@ -509,9 +511,7 @@ test("the tree works from the keyboard", () => {
   expect(useHive.getState().openFile?.path).toBe("assets/logo.png");
   key("ArrowUp");
   key(" ");
-  expect(screen.getByRole("treeitem", { name: "assets" }).getAttribute("aria-expanded")).toBe(
-    "false",
-  );
+  expect(treeRow("assets").getAttribute("aria-expanded")).toBe("false");
   // Other keys are left alone.
   expect(fireEvent.keyDown(tree(), { key: "a" })).toBe(true);
   for (let i = 0; i < 20; i++) key("ArrowDown");
@@ -572,6 +572,73 @@ test("each panel tab keeps its label as its accessible name and title", () => {
   for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
 });
 
+test("a folder sums the line counts of every changed file below it; binary files add none", () => {
+  const counted = (path: string, added: number | null, removed: number | null) => ({
+    ...file(path),
+    added,
+    removed,
+  });
+  const root = fileTree(
+    allFiles(
+      ["a/x.ts", "a/b/y.ts", "a/b/c/z.ts", "a/bin/p.png", "clean/u.ts"],
+      [
+        counted("a/x.ts", 3, 1),
+        { ...counted("a/b/y.ts", 5, 0), status: "added" },
+        counted("a/b/c/z.ts", 2, 7),
+        { ...counted("a/b/gone.ts", 0, 4), status: "deleted" },
+        counted("a/bin/p.png", null, null),
+      ],
+    ),
+  );
+  const open = { "files:/w/a": false, "files:/w/a/b": false };
+  const folders = fileRows("/w", root, open).flatMap((r) =>
+    r.kind === "folder" ? [[r.path, r.status, r.added, r.removed]] : [],
+  );
+  expect(folders).toEqual([
+    ["a", "deleted", 10, 12],
+    ["a/b", "deleted", 7, 11],
+    ["a/b/c", "modified", 2, 7],
+    ["a/bin", "modified", 0, 0],
+    ["clean", null, 0, 0],
+  ]);
+  expect([root.status, root.added, root.removed]).toEqual(["deleted", 10, 12]);
+});
+
+test("a closed folder shows its counts before its dot; an open or clean one shows nothing", () => {
+  filesView();
+  const binary = { ...file("art/logo.png"), added: null, removed: null };
+  act(() =>
+    apply({
+      type: "changes",
+      ...changes(fixLogin.path, [
+        { ...file("src/auth/a.ts"), added: 12, removed: 4 },
+        { ...file("src/b.ts", "deleted"), added: 0, removed: 3 },
+        binary,
+      ]),
+    }),
+  );
+  act(() => apply({ type: "files", path: fixLogin.path, files: ["lib/x.ts"], truncated: false }));
+  const parts = (name: string) =>
+    [...treeRow(name).children].slice(2).map((e) => [e.className, e.textContent]);
+  expect(parts("src")).toEqual([
+    ["name", "src"],
+    ["count-added", "+12"],
+    ["count-removed", "−7"],
+    ["status-dot", ""],
+  ]);
+  // Its accessible name has the counts, as a file's does.
+  expect(screen.getByRole("treeitem", { name: "src +12 −7" })).toBe(treeRow("src"));
+  // Only binary files: the dot only.
+  expect(treeRow("art").textContent).toBe("art");
+  expect(treeRow("art").querySelector(".status-dot")).not.toBeNull();
+  // Nothing changed inside: nothing.
+  expect(parts("lib")).toEqual([["name", "lib"]]);
+  // Open: nothing; its closed folder inside sums its own files.
+  fireEvent.click(treeRow("src"));
+  expect(parts("src")).toEqual([["name", "src"]]);
+  expect(treeRow("auth").textContent).toBe("auth+12−4");
+});
+
 test("All lists every file with the changes' statuses, deleted files included", () => {
   const changed = [file("b.ts", "added"), file("gone/x.ts", "deleted")];
   const all = allFiles(["a.ts", "b.ts", "src/c.ts"], changed);
@@ -623,13 +690,13 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
   setPanelView("changes");
   const diff = render(<RightPanel />);
   // Folders opened in Files stay closed in Diff, and back.
-  expect(rows()).toEqual([["src", "M"]]);
+  expect(rows()).toEqual([["src+1", "M"]]);
   expect(screen.queryByText(/cut short/)).toBeNull();
   expand();
   fireEvent.click(screen.getByText("auth"));
   expect(rows()).toEqual([
     ["src", "M"],
-    ["auth", "M"],
+    ["auth+1", "M"],
   ]);
   diff.unmount();
   render(<FilesView worktree={fixLogin.path} />);
@@ -827,7 +894,7 @@ test("a right click opens the files menu for its row, below the rows for the roo
   fireEvent.contextMenu(tree());
   expect(menu()).toEqual({ ...at, folder: "", path: "README.md", x: 10, y: 30 });
   // On a row without the pointer: under the row itself.
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "src" }));
+  fireEvent.contextMenu(treeRow("src"));
   expect(menu()).toMatchObject({ folder: "src", path: "src", x: 0, y: 0 });
 });
 
@@ -841,21 +908,19 @@ test("folders created from the tree show even when git lists nothing in them", (
   ]);
   filesView();
   act(() => apply({ type: "folder_created", worktree: fixLogin.path, path: "src/empty" }));
-  expect(screen.getByRole("treeitem", { name: "empty" }).getAttribute("aria-expanded")).toBe(
-    "false",
-  );
+  expect(treeRow("empty").getAttribute("aria-expanded")).toBe("false");
   // Only the Files tree shows them, not the Diff one.
   cleanup();
   setPanelView("changes");
   render(<RightPanel />);
   expand();
-  expect(screen.queryByRole("treeitem", { name: "empty" })).toBeNull();
+  expect(screen.queryByRole("treeitem", { name: named("empty") })).toBeNull();
 });
 
 test("a file dragged onto a folder, a file or below the rows moves there", async () => {
   const moved = spyOn(transport, "moveFile").mockResolvedValue();
   filesView();
-  const row = (name: string | RegExp) => screen.getByRole("treeitem", { name });
+  const row = treeRow;
   const dataTransfer = {};
   // The events' own data transfer (the testing library copies the one passed).
   let last: DataTransfer | null = null;
@@ -931,7 +996,6 @@ test("a file dragged onto a folder, a file or below the rows moves there", async
   for (const type of ["dragstart", "dragover"]) document.removeEventListener(type, seen);
 });
 
-const treeRow = (name: string | RegExp) => screen.getByRole("treeitem", { name });
 const isOpen = (name: string) => treeRow(name).getAttribute("aria-expanded") === "true";
 const openFolders = (...folders: string[]) =>
   act(() =>

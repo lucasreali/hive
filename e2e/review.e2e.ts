@@ -34,7 +34,10 @@ test("review comments on the diff are pasted into the terminal as one text", asy
   const panel = page.getByRole("complementary", { name: "Side panel" });
   await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
   for (const name of ["src", "auth"]) {
-    await panel.getByRole("treeitem", { name, exact: true }).click();
+    await panel
+      .getByRole("treeitem")
+      .filter({ has: page.getByText(name, { exact: true }) })
+      .click();
   }
   await panel.getByRole("treeitem", { name: /session\.ts/ }).click();
   const view = page.getByRole("region", { name: "src/auth/session.ts" });
