@@ -445,9 +445,10 @@ async fn a_terminal_echoes_within_the_load_test_bounds_while_another_floods() {
             flooded += frame.payload.len();
         }
     }
-    // Typed at 10 keys/s as in the load test (1.11): each key's echo is timed.
+    // Typed as in the load test (1.11): 120 keys, 10 keys/s, each key's echo timed, so its
+    // p99 is the second slowest (with fewer keys it would be the slowest one alone).
     let mut latencies = Vec::new();
-    for key in "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz".chars() {
+    for key in "abcdefghijklmnopqrstuvwxyz".chars().cycle().take(120) {
         let typed = Instant::now();
         app.input(2, &key.to_string()).await;
         loop {
@@ -464,10 +465,12 @@ async fn a_terminal_echoes_within_the_load_test_bounds_while_another_floods() {
             .is_ok()
         {}
     }
+    // Shown in typing order, so a slow start shows as such.
+    let typed = format!("{latencies:?}");
     latencies.sort();
     let at = |percent: usize| latencies[latencies.len() * percent / 100];
-    assert!(at(95) < Duration::from_millis(50), "{latencies:?}");
-    assert!(at(99) < Duration::from_millis(100), "{latencies:?}");
+    assert!(at(95) < Duration::from_millis(50), "{typed}");
+    assert!(at(99) < Duration::from_millis(100), "{typed}");
     drop(app);
     assert!(daemon.wait_exit().success());
 }
