@@ -725,8 +725,8 @@ pub mod terminal {
 
         use super::*;
 
-        /// How long a shell gets to show something (PowerShell starts slowly on a busy runner).
-        const SHOWN: Duration = Duration::from_secs(60);
+        /// How long a shell gets to show something (a mutant that breaks it fails within 120 s).
+        const SHOWN: Duration = Duration::from_secs(20);
 
         /// A terminal of a shell in a temporary folder, its output gathered as it comes (the
         /// console host waits for its output to be read).

@@ -16,8 +16,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
-/// How long anything may take (PowerShell starts slowly on a busy runner).
-const TIMEOUT: Duration = Duration::from_secs(60);
+/// How long anything may take: short, so that a mutant that breaks the service fails well within
+/// cargo-mutants' 120 s instead of timing out.
+const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A throwaway profile: app data, settings, home and Claude folder in a temporary folder.
 struct Env {
