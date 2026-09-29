@@ -34,8 +34,9 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
     version: "0.0.0-mock",
     app_protocol: 1,
     app_version: "mock",
+    bundled: true,
   },
-  disconnected: { type: "disconnected", reason: "mock: the hive bridge exited" },
+  disconnected: { type: "disconnected", reason: "mock: the hive bridge exited", bundled: true },
 };
 /** `?mock=load`: when the first terminal's replay starts, and how much later each next one does. */
 export const LOAD_START_MS = 500;

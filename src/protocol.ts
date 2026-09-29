@@ -16,13 +16,15 @@ export type ServiceMessage =
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
-  // `protocol`/`version` are the service's; `app_*` are added by the app side (Rust).
+  // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
+  // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
       type: "version_mismatch";
       protocol: number;
       version: string;
       app_protocol: number;
       app_version: string;
+      bundled: boolean;
     }
   // `worktree`: the followed worktree the service placed the terminal's cwd in, null outside.
   | { type: "terminal_opened"; channel: number; worktree: string | null }
@@ -101,7 +103,7 @@ export type ServiceMessage =
       error: string | null;
     }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
-  | { type: "disconnected"; reason: string };
+  | { type: "disconnected"; reason: string; bundled: boolean };
 
 /** Mirrors `hive_protocol::Worktree`: every field comes from the service. */
 export type Worktree = {

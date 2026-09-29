@@ -65,15 +65,25 @@ test("welcome and version_mismatch set the connection", () => {
     version: "0.1.0",
     distro: "Ubuntu",
   });
-  const versions = { protocol: 2, version: "0.2.0", app_protocol: 1, app_version: "0.1.0" };
+  const versions = {
+    protocol: 2,
+    version: "0.2.0",
+    app_protocol: 1,
+    app_version: "0.1.0",
+    bundled: false,
+  };
   apply({ type: "version_mismatch", ...versions });
   expect(useHive.getState().connection).toEqual({ status: "version_mismatch", ...versions });
 });
 
 test("disconnected keeps the reason; unknown messages change nothing", () => {
-  apply({ type: "disconnected", reason: "the hive bridge exited" });
+  apply({ type: "disconnected", reason: "the hive bridge exited", bundled: false });
   const before = useHive.getState();
-  expect(before.connection).toEqual({ status: "disconnected", reason: "the hive bridge exited" });
+  expect(before.connection).toEqual({
+    status: "disconnected",
+    reason: "the hive bridge exited",
+    bundled: false,
+  });
   apply({ type: "agent" } as unknown as ServiceMessage);
   expect(useHive.getState()).toEqual(before);
 });
@@ -216,7 +226,7 @@ test("agents are stored as the service places them and removed by id", () => {
   apply({ type: "agent_removed", channel: 2, id: "unknown" });
   expect(Object.keys(useHive.getState().agents)).toEqual(["b"]);
   // A lost service takes every agent with it.
-  apply({ type: "disconnected", reason: "gone" });
+  apply({ type: "disconnected", reason: "gone", bundled: false });
   expect(useHive.getState().agents).toEqual({});
 });
 
@@ -270,7 +280,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
   });
   apply({ type: "agent_removed", channel: 1, id: "a" });
   expect(Object.keys(useHive.getState().agentStates)).toEqual(["b"]);
-  apply({ type: "disconnected", reason: "gone" });
+  apply({ type: "disconnected", reason: "gone", bundled: false });
   expect(useHive.getState().agentStates).toEqual({});
 });
 
@@ -377,7 +387,7 @@ test("files replace the watched worktree's list; a disconnect drops it", () => {
   apply({ type: "files", path: "/b", files: ["y", "z"], truncated: true });
   const files = { path: "/b", files: ["y", "z"], truncated: true };
   expect(useHive.getState().worktreeFiles).toEqual(files);
-  apply({ type: "disconnected", reason: "gone" });
+  apply({ type: "disconnected", reason: "gone", bundled: false });
   expect(useHive.getState().worktreeFiles).toBeNull();
 });
 

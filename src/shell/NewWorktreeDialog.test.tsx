@@ -320,7 +320,7 @@ test("close, cancel and Esc close the dialog; it needs a project and a connectio
     cleanup();
   }
   open();
-  act(() => apply({ type: "disconnected", reason: "gone" }));
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   expect(screen.queryByRole("dialog")).toBeNull();
   cleanup();
   useHive.setState(initialState, true);

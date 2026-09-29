@@ -414,7 +414,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "disconnected":
       // The service is gone, and every agent and the watches with it.
       return {
-        connection: { status: "disconnected", reason: m.reason },
+        connection: { status: "disconnected", reason: m.reason, bundled: m.bundled },
         agents: {},
         agentStates: {},
         subagentWorktrees: [],

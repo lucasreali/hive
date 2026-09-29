@@ -47,7 +47,7 @@ test("the service watches the worktree the open files panel shows, and nothing e
   setRightPanel("files");
   expect(calls).toEqual([shop.id, api.id, null, api.id]);
   // A new connection has no watch: nothing to stop, and it is sent again.
-  apply({ type: "disconnected", reason: "gone" });
+  apply({ type: "disconnected", reason: "gone", bundled: false });
   apply({ type: "welcome", version: "0.1.0", distro: null });
   expect(calls).toEqual([shop.id, api.id, null, api.id, api.id]);
   stop();
@@ -99,7 +99,7 @@ test("asks for the open file when it opens, its worktree changes, or the service
   // Closing b.ts's tab shows a.ts's, beside it (8.21).
   setOpenFile(null);
   expect(openFile.mock.calls.at(-1)).toEqual(["/w", "a.ts", "head"]);
-  apply({ type: "disconnected", reason: "gone" });
+  apply({ type: "disconnected", reason: "gone", bundled: false });
   stop();
   setOpenFile({ worktree: "/w", path: "c.ts" });
   expect(openFile).toHaveBeenCalledTimes(5);
@@ -159,7 +159,7 @@ test("tells the service the terminal in view and the window focus, when either c
   expect(setView.mock.calls.at(-1)).toEqual([2, false]);
   useHive.setState({ fileShown: true });
   // A new service is told again once connected.
-  apply({ type: "disconnected", reason: "gone" });
+  apply({ type: "disconnected", reason: "gone", bundled: false });
   setFocused(true);
   expect(setView).toHaveBeenCalledTimes(6);
   welcome();

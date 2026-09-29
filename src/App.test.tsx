@@ -38,10 +38,11 @@ test("status bar follows the connection status", () => {
       version: "0.2.0",
       app_protocol: 1,
       app_version: "0.1.0",
+      bundled: false,
     }),
   );
   expect(status.textContent).toBe("WSLversion mismatch");
-  act(() => apply({ type: "disconnected", reason: "gone" }));
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   expect(status.textContent).toBe("WSLdisconnected");
 });
 
