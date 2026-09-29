@@ -587,11 +587,10 @@ mod tests {
 
     #[test]
     fn the_root_follows_claude_config_dir_then_home() {
-        let (c, h, doubled) = if cfg!(windows) {
-            (r"C:\c", r"C:\h", r"C:\\h\.claude\")
-        } else {
-            ("/c", "/h", "//h/.claude/")
-        };
+        #[cfg(windows)]
+        let (c, h, doubled) = (r"C:\c", r"C:\h", r"C:\\h\.claude\");
+        #[cfg(unix)]
+        let (c, h, doubled) = ("/c", "/h", "//h/.claude/");
         let root = |vars: &[(&str, &str)]| super::root(var(vars));
         assert_eq!(
             root(&[("CLAUDE_CONFIG_DIR", c), ("HOME", h)]),

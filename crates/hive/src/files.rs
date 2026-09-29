@@ -484,8 +484,8 @@ mod tests {
         write(&root, ".git/other");
         assert!(!changes(&mut watcher, NEVER).await);
         // Nor a folder's own change (its mode here; Windows reports one for the write in the
-        // ignored tree above).
-        #[cfg(unix)]
+        // ignored tree above). Not on macOS: FSEvents still flags `src` as just created.
+        #[cfg(target_os = "linux")]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::Permissions::from_mode(0o700);
