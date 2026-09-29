@@ -389,10 +389,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 let parents = roots.iter().filter_map(|root| root.parent());
                 let records: Vec<PathBuf> = parents.map(|d| d.join("sessions")).collect();
                 running.extend(procs::claude_sessions(procs::Source::System, &records));
-                let ((sessions, truncated), error) = match sessions.list(projects, &running) {
-                    Ok(listed) => (listed, None),
-                    Err(err) => ((Vec::new(), false), Some(err.to_string())),
-                };
+                let (sessions, truncated, error) = sessions.list(projects, &running);
                 Control::Sessions {
                     sessions,
                     error,

@@ -22,6 +22,8 @@ const FILE_LIMIT: u64 = 256 * 1024;
 const TEXT_LIMIT: usize = 256;
 /// Longest script kept.
 const SCRIPT_LIMIT: usize = 16 * 1024;
+/// Most Claude accounts kept: checked first, since the other account checks are pairwise.
+const ACCOUNT_LIMIT: usize = 64;
 
 pub struct Store {
     file: PathBuf,
@@ -226,6 +228,9 @@ fn free_name(accounts: &[Account], name: &str) -> String {
 /// default account's; each folder as a space's was (absolute, printable), unique. Neither
 /// with spaces around it.
 fn accounts(accounts: &[Account]) -> Result<(), String> {
+    if accounts.len() > ACCOUNT_LIMIT {
+        return Err(format!("At most {ACCOUNT_LIMIT} accounts can be added"));
+    }
     for (i, account) in accounts.iter().enumerate() {
         let (name, dir) = (&account.name, &account.config_dir);
         if spaces::name_of("the account", name)? != *name {
@@ -747,6 +752,13 @@ mod tests {
         let mut fine = Settings::default();
         fine.claude.accounts = vec![account("W", "/a"), account("V", "/b")];
         assert_eq!(check(&fine), Ok(()));
+        // At most ACCOUNT_LIMIT accounts, counted before anything else is checked.
+        let many = |n: usize| (0..n).map(|i| account(&format!("A{i}"), &format!("/{i}")));
+        fine.claude.accounts = many(ACCOUNT_LIMIT).collect();
+        assert_eq!(check(&fine), Ok(()));
+        let mut too_many: Vec<Account> = many(ACCOUNT_LIMIT + 1).collect();
+        too_many[0].name = " ".into();
+        assert_eq!(refused(&too_many), "At most 64 accounts can be added");
     }
 
     // `/a` is no absolute path on Windows.
