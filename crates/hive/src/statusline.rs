@@ -187,7 +187,7 @@ async fn user(
         let ((), out) = tokio::join!(feed, read);
         let out = out?;
         let status = child.wait().await.ok()?;
-        Some((out, status.code().map_or(1, |code| code as u8)))
+        Some((out, status.code().map_or(1, crate::wrapper::exit_byte)))
     };
     let output = tokio::time::timeout(time, run).await.ok().flatten();
     // Ended in time: what it left running in the background (e.g. a cache refresh) stays.
@@ -457,6 +457,23 @@ mod tests {
             user(&shell, "printf ok", big, &b""[..], Duration::from_secs(5)).await,
             Some((b"ok".to_vec(), 0))
         );
+    }
+
+    #[tokio::test]
+    async fn an_exit_code_past_a_byte_is_a_failure() {
+        use crate::wrapper::exit_byte;
+        assert_eq!(exit_byte(0), 0);
+        assert_eq!(exit_byte(255), 255);
+        assert_eq!(exit_byte(256), 1);
+        assert_eq!(exit_byte(-1), 1);
+        // Windows codes are 32-bit: 256 would wrap to 0, a success.
+        #[cfg(windows)]
+        {
+            let cmd = ["cmd".into(), "/c".into()];
+            let time = Duration::from_secs(5);
+            let ran = user(&cmd, "exit 256", vec![], &b""[..], time).await;
+            assert_eq!(ran, Some((vec![], 1)));
+        }
     }
 
     #[tokio::test]

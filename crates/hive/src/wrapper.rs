@@ -240,6 +240,12 @@ fn sh_quote(path: &Path) -> Vec<u8> {
     out
 }
 
+/// A program's exit `code` as `hive`'s: 0–255 as it is, any other code (on Windows an
+/// `NTSTATUS`, such as a program ended by Ctrl+C) 1, so that a failure never reads as a success.
+pub fn exit_byte(code: i32) -> u8 {
+    u8::try_from(code).unwrap_or(1)
+}
+
 /// Replaces `path` in one step, so a terminal never runs a half-written file.
 /// Writes `path` through a temporary file created with `mode` and renamed over it.
 pub(crate) fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
