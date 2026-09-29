@@ -785,13 +785,10 @@ pub mod terminal {
             }
         }
 
-        /// Whether process `pid` ends within a few seconds (or is gone already).
-        fn ends(pid: i32) -> bool {
-            let process = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid as u32) });
-            process.map_or(true, |process| {
-                let waited = unsafe { WaitForSingleObject(process.as_raw_handle(), 5000) };
-                waited == WAIT_OBJECT_0
-            })
+        /// Whether `process` ends within a few seconds.
+        fn ends(process: &OwnedHandle) -> bool {
+            let waited = unsafe { WaitForSingleObject(process.as_raw_handle(), 5000) };
+            waited == WAIT_OBJECT_0
         }
 
         #[tokio::test]
@@ -872,10 +869,13 @@ pub mod terminal {
                 }
             };
             let ping = tokio::time::timeout(SHOWN, ping).await.unwrap();
+            // Opened while it runs: its handle outlives it.
+            let ping = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, ping as u32) });
+            let ping = ping.unwrap();
             let started = Instant::now();
             end_sessions(&[shell.session]).await;
             assert!(started.elapsed() >= GRACE, "{:?}", started.elapsed());
-            assert!(ends(ping));
+            assert!(ends(&ping));
         }
 
         #[tokio::test]
