@@ -498,7 +498,7 @@ test("a subagent's own worktree has no row; its path is the subagent line's tool
   act(() => owned(featCheckout.id));
   expect(checkout()).toHaveLength(0);
   // A lost service takes them with it.
-  act(() => apply({ type: "disconnected", reason: "gone" }));
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   expect(useHive.getState().subagentWorktrees).toEqual([]);
   expect(checkout()).toHaveLength(1);
 });

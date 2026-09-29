@@ -67,11 +67,13 @@ const APPROVED_LIMIT: usize = 16;
 /// natively when `macos` (5.2). `HIVE_WSL_DISTRO` picks the WSL distribution (Windows only)
 /// and `HIVE_BRIDGE` the `hive` binary (an absolute path, for development). `bundled` is where
 /// the installer put `hive`, used when that file exists. Nothing is ever spliced into the script.
+/// The flag says whether the bridge runs that bundled `hive` (an installed app) rather than
+/// `HIVE_BRIDGE` or `cargo install`'s (development), for the connection dialog (12.4).
 pub fn bridge_command(
     macos: bool,
     var: &dyn Fn(&str) -> Option<OsString>,
     bundled: Option<PathBuf>,
-) -> (OsString, Vec<OsString>) {
+) -> (OsString, Vec<OsString>, bool) {
     let var = |key| var(key).filter(|value| !value.is_empty());
     let mut args = Vec::new();
     if !macos {
@@ -81,15 +83,13 @@ pub fn bridge_command(
         args.extend(["--exec", "/bin/sh"].map(OsString::from));
     }
     args.extend(["-c", BRIDGE_SCRIPT, "sh"].map(OsString::from));
-    args.push(var("HIVE_BRIDGE").unwrap_or_default());
-    args.push(
-        bundled
-            .filter(|path| path.is_file())
-            .unwrap_or_default()
-            .into(),
-    );
+    let over = var("HIVE_BRIDGE");
+    let bundled = bundled.filter(|path| path.is_file());
+    let runs_bundled = over.is_none() && bundled.is_some();
+    args.push(over.unwrap_or_default());
+    args.push(bundled.unwrap_or_default().into());
     let program = if macos { "/bin/sh" } else { "wsl.exe" };
-    (program.into(), args)
+    (program.into(), args, runs_bundled)
 }
 
 /// Whether the webview may load `url` (open point #15): only the app itself, from the one origin
@@ -142,6 +142,10 @@ struct Link {
     update: Option<(Update, Vec<u8>)>,
     /// The paths the service sent for the app to open, oldest first, each for one `open_path`.
     approved: VecDeque<String>,
+    /// Whether the bridge runs the installer's `hive` (`bridge_command`); sent with
+    /// `version_mismatch` and `disconnected`, so the UI shows only fixes an installed app's
+    /// user can apply (12.4).
+    bundled: bool,
 }
 
 impl Link {
@@ -239,6 +243,12 @@ impl Hive {
         drop(link);
         let open = self.open.as_ref().ok_or("this app cannot open paths")?;
         open(&path, reveal)
+    }
+
+    /// Tells the UI the bridge runs the installer's `hive` (see `bridge_command`).
+    pub fn with_bundled(self, bundled: bool) -> Self {
+        self.link().bundled = bundled;
+        self
     }
 
     pub fn with_restart(mut self, restart: impl Fn() + Send + Sync + 'static) -> Self {
@@ -821,6 +831,7 @@ async fn pump<R: AsyncRead + Unpin>(
                 // The UI shows both sides, so it gets the app's own versions too.
                 value["app_version"] = VERSION.into();
                 value["app_protocol"] = PROTOCOL_VERSION.into();
+                value["bundled"] = link.bundled.into();
                 link.to_ui(value);
                 link.frames = None;
                 return End::Refused;
@@ -848,7 +859,7 @@ fn disconnected(link: &mut Link, reason: String) {
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
-    link.to_ui(json!({"type": "disconnected", "reason": reason}));
+    link.to_ui(json!({"type": "disconnected", "reason": reason, "bundled": link.bundled}));
 }
 
 /// Handles the app's run events: on exit the connection ends before the process does.

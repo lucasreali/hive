@@ -43,7 +43,7 @@ test("shows the current account's session usage with its reset in local time (12
   expect(screen.getByRole("contentinfo").textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
   act(() => {
     apply({ type: "session_usage", usage: { used_percentage: 7, resets_at } });
-    apply({ type: "disconnected", reason: "gone" });
+    apply({ type: "disconnected", reason: "gone", bundled: false });
   });
   expect(screen.getByRole("contentinfo").textContent).toBe(`WSLdisconnectedv${version}`);
 });

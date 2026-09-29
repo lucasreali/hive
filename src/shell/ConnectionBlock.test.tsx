@@ -23,7 +23,7 @@ test("no block while connecting or connected", () => {
   expect(workspace().inert).toBe(false);
 });
 
-test("a version mismatch blocks the workspace with both versions and the fix", () => {
+test("a version mismatch in a development build blocks the workspace with both versions and the fixes", () => {
   render(<App />);
   act(() =>
     apply({
@@ -32,6 +32,7 @@ test("a version mismatch blocks the workspace with both versions and the fix", (
       version: "0.2.0",
       app_protocol: 1,
       app_version: "0.1.0",
+      bundled: false,
     }),
   );
   const block = dialog() as HTMLElement;
@@ -48,7 +49,7 @@ test("a version mismatch blocks the workspace with both versions and the fix", (
 
 test("a disconnect shows the reason, and reconnect connects again", async () => {
   render(<App />);
-  act(() => apply({ type: "disconnected", reason: "wsl.exe: distro not found" }));
+  act(() => apply({ type: "disconnected", reason: "wsl.exe: distro not found", bundled: false }));
   const block = dialog() as HTMLElement;
   expect(block.textContent).toContain("Lost the connection to the hive service");
   expect(block.querySelector("pre")?.textContent).toBe("wsl.exe: distro not found");
@@ -62,6 +63,42 @@ test("a disconnect shows the reason, and reconnect connects again", async () => 
   expect(workspace().inert).toBe(false);
 });
 
+test("an installed app shows only fixes its user can apply, never cargo", () => {
+  render(<App />);
+  act(() =>
+    apply({
+      type: "version_mismatch",
+      protocol: 2,
+      version: "0.2.0",
+      app_protocol: 1,
+      app_version: "0.1.0",
+      bundled: true,
+    }),
+  );
+  const mismatch = dialog() as HTMLElement;
+  expect(mismatch.textContent).toContain("App0.1.0 (protocol 1)Service0.2.0 (protocol 2)");
+  expect(mismatch.querySelector("pre")?.textContent).toBe("pkill -f 'hive daemon'");
+  expect(mismatch.textContent).toContain("If it keeps happening, reinstall Hive.");
+  expect(mismatch.textContent).not.toContain("cargo");
+  act(() => apply({ type: "disconnected", reason: "wsl.exe: distro not found", bundled: true }));
+  const lost = dialog() as HTMLElement;
+  expect(lost.querySelector("pre")?.textContent).toBe("wsl.exe: distro not found");
+  expect(lost.textContent).toContain(
+    "Reconnect, or restart Hive. If it keeps failing, reinstall Hive.",
+  );
+  expect(lost.textContent).not.toContain("cargo");
+  expect(screen.getByText("Reconnect")).toBeDefined();
+});
+
+test("a disconnect in a development build points at cargo install", () => {
+  render(<App />);
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
+  expect(dialog()?.textContent).toContain(
+    "check that hive is installed in WSL: cargo install --path crates/hive",
+  );
+  expect(dialog()?.textContent).not.toContain("reinstall");
+});
+
 test("on macOS the fixes do not mention WSL", () => {
   asMac();
   render(<App />);
@@ -72,17 +109,18 @@ test("on macOS the fixes do not mention WSL", () => {
       version: "0.2.0",
       app_protocol: 1,
       app_version: "0.1.0",
+      bundled: false,
     }),
   );
   expect(dialog()?.textContent).toContain("Stop the old one:pkill");
-  act(() => apply({ type: "disconnected", reason: "gone" }));
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   expect(dialog()?.textContent).toContain("check that hive is installed: cargo install");
   expect(dialog()?.textContent).not.toContain("WSL");
 });
 
 test("after a reconnect, messages reach the same handler as at startup", async () => {
   render(<App />);
-  act(() => apply({ type: "disconnected", reason: "gone" }));
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   fireEvent.click(screen.getByText("Reconnect"));
   await waitFor(() => expect(useHive.getState().connection.status).toBe("connected"));
   // `editor_target` is handled outside the store: only the full handler shows the notice.
