@@ -124,7 +124,7 @@ fn pipe_name(user: &str, runtime: &Path) -> String {
 /// the user could get again.)
 fn check_owner(pipe: &impl AsRawHandle, user: &str) -> io::Result<()> {
     let (mut owner, mut descriptor) = (std::ptr::null_mut(), std::ptr::null_mut());
-    win32(unsafe {
+    let found = unsafe {
         GetSecurityInfo(
             pipe.as_raw_handle(),
             SE_KERNEL_OBJECT,
@@ -135,7 +135,8 @@ fn check_owner(pipe: &impl AsRawHandle, user: &str) -> io::Result<()> {
             std::ptr::null_mut(),
             &mut descriptor,
         )
-    })?;
+    };
+    win32(found)?;
     // The owner lives in the descriptor.
     let owner = sid_text(owner);
     unsafe { LocalFree(descriptor) };
@@ -233,14 +234,15 @@ fn instance(name: &str, user: &str, first: bool) -> io::Result<NamedPipeServer> 
     let sddl = format!("O:{user}D:P(A;;GA;;;{user})\0");
     let sddl: Vec<u16> = sddl.encode_utf16().collect();
     let (mut descriptor, size) = (std::ptr::null_mut(), std::ptr::null_mut());
-    check(unsafe {
+    let converted = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl.as_ptr(),
             SDDL_REVISION_1,
             &mut descriptor,
             size,
         )
-    })?;
+    };
+    check(converted)?;
     let mut attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: descriptor,
