@@ -29,6 +29,10 @@ impl Drop for Env {
             std::thread::sleep(Duration::from_millis(20));
         }
         for proc in self.processes() {
+            hive::terminal::debug(&format!(
+                "Env drop kills {proc:?} of {}",
+                self.path("run").display()
+            ));
             let pid = nix::unistd::Pid::from_raw(proc.pid);
             let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
         }
@@ -88,6 +92,11 @@ impl Env {
         for sub in ["home", "run", "data", "config"] {
             std::fs::create_dir(env.path(sub)).unwrap();
         }
+        hive::terminal::debug(&format!(
+            "Env new {} for {:?}",
+            env.path("run").display(),
+            std::thread::current().name()
+        ));
         env
     }
 

@@ -1,0 +1,52 @@
+# TEMPORARY (12 macOS flakes): runs the integration tests many times on macOS and prints what
+# ended terminals. Removed before the task is reported.
+name: stress
+
+on:
+  push:
+    branches: ["task/12-macos-flakes"]
+
+jobs:
+  stress:
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: brew install fish
+      - run: fish --version; which python3; for i in 1 2 3 4 5; do sh -c 'echo $$'; done
+      - run: cargo test -p hive --test integration --no-run
+      - name: stress
+        run: |
+          (while true; do date +%s; ps -axo pid,pgid,sess,pcpu,etime,comm -r | head -12; sleep 5; done) > /tmp/cpu.log 2>&1 &
+          fails=0
+          for i in $(seq 1 ${RUNS:-20}); do
+            if ! cargo test -p hive --test integration > out-$i.txt 2>&1; then
+              fails=$((fails+1))
+              echo "=== run $i failed"
+              grep -E "^test .* FAILED|panicked at|left:|right:|^\[" out-$i.txt | cut -c1-600
+            fi
+          done
+          echo "failed runs: $fails of ${RUNS:-20}"
+      - if: always()
+        name: signals
+        run: |
+          grep -c . /tmp/hive-debug.log || true
+          # The temp dirs of the failed tests: everything logged in them, then every signal
+          # sent to one of their shells from anywhere.
+          for dir in $(cat out-*.txt | grep -oE '\.tmp[A-Za-z0-9]{6}' | sort -u | head -10); do
+            echo "===== $dir"
+            grep -F "$dir/" /tmp/hive-debug.log | head -120
+            for pid in $(grep -F "$dir/" /tmp/hive-debug.log | grep -oE 'shell=[0-9]+' | cut -d= -f2 | sort -u); do
+              echo "--- signals to $pid"
+              grep -E "(pid|pgrp|session): $pid[,} ]" /tmp/hive-debug.log | head -20
+            done
+          done
+      - if: always()
+        name: cpu
+        run: head -400 /tmp/cpu.log
