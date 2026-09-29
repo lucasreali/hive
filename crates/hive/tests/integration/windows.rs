@@ -296,6 +296,17 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
     git(&["commit", "-q", "--allow-empty", "-m", "init"]);
     let repo_cwd = repo.to_string_lossy().into_owned();
     open(&mut app, 5, &repo_cwd).await;
+    // The user's PowerShell profile (from the real Documents folder) runs in the terminal: only
+    // when `claude` is the wrapper and the next one on `PATH` the fake is it typed, never the
+    // real one.
+    let fake = env.path("fake").join("claude.exe");
+    let (wrapper, fake) = (wrapper.display(), fake.display());
+    let first = format!(
+        "$c = @(Get-Command claude -All); \
+         if ($c[0].Source -eq '{wrapper}' -and $c[1].Source -eq '{fake}') {{ 'claude=' + 'fake' }}"
+    );
+    app.type_line(5, &first).await;
+    app.shows(5, "claude=fake").await;
     app.type_line(5, "claude SessionStart s2 WorktreeCreate w1")
         .await;
     let detected = |message: Option<&Control>, _: &str| matches!(message, Some(Control::AgentDetected { id, .. }) if id == "s2");
