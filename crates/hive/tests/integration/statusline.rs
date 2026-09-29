@@ -1,11 +1,11 @@
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use hive_protocol::{Control, SessionWindow, SpaceEnv};
 use serde_json::{Value, json};
 
-use crate::common::Env;
+use crate::common::{Env, wait_until};
 use crate::hook::run;
 
 /// Makes `command` the user's statusline in the Claude config folder `claude`.
@@ -118,4 +118,34 @@ fn hives_own_statusline_as_the_users_prints_nothing_without_a_service() {
         "{:?}",
         start.elapsed()
     );
+}
+
+#[test]
+fn a_sigterm_ends_the_users_statusline_and_prints_nothing() {
+    let env = Env::new();
+    user_statusline(&env.path("home/.claude"), "sleep 5; echo late");
+    let child = env
+        .hive()
+        .arg("statusline")
+        .current_dir(env.dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Claude Code cancels a run once the user's statusline is running.
+    wait_until(|| env.processes().iter().any(|p| p.comm == "sleep"));
+    let start = Instant::now();
+    let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
+    // Its statusline ended with it.
+    wait_until(|| env.processes().is_empty());
 }

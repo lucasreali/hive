@@ -11,6 +11,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use hive_protocol::{Control, SessionWindow};
+use nix::sys::signal::{Signal, killpg};
+use nix::unistd::Pid;
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
@@ -145,9 +147,12 @@ async fn user(
         .env(GUARD, "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        // Its own process group: cancelled or late, what it started ends with it.
+        .process_group(0)
         .kill_on_drop(true)
         .spawn()
         .ok()?;
+    let mut group = Group(child.id());
     let mut stdin = child.stdin.take()?;
     let stdout = child.stdout.take()?;
     let feed = async move {
@@ -167,7 +172,24 @@ async fn user(
         let status = child.wait().await.ok()?;
         Some((out, status.code().map_or(1, |code| code as u8)))
     };
-    tokio::time::timeout(time, run).await.ok()?
+    let output = tokio::time::timeout(time, run).await.ok().flatten();
+    // Ended in time: what it left running in the background (e.g. a cache refresh) stays.
+    if output.is_some() {
+        group.0 = None;
+    }
+    output
+}
+
+/// Kills the process group led by its pid, when dropped with one.
+struct Group(Option<u32>);
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        // A group with members keeps its id, so this cannot reach another process's group.
+        if let Some(pid) = self.0.and_then(|pid| i32::try_from(pid).ok()) {
+            let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+        }
+    }
 }
 
 /// The service's side: the latest 5-hour window of each Claude config folder (in memory only),
@@ -389,6 +411,17 @@ mod tests {
         let over = "head -c 65537 /dev/zero";
         assert_eq!(run(over, 5000).await, None);
         assert_eq!(run("sleep 5", 100).await, None);
+        // Late, what it started ends too; in time, what it left in the background stays.
+        let tmp = tempfile::tempdir().unwrap();
+        let (late, kept) = (tmp.path().join("late"), tmp.path().join("kept"));
+        let background =
+            |file: &Path| format!("(sleep 0.3; touch '{}') >/dev/null &", file.display());
+        assert_eq!(run(&format!("{} wait", background(&late)), 100).await, None);
+        let done = run(&format!("{} printf ok", background(&kept)), 5000).await;
+        assert_eq!(done, Some((b"ok".to_vec(), 0)));
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(!late.exists());
+        assert!(kept.exists());
         // Killed by a signal: printed, exit 1.
         assert_eq!(
             run("printf x; kill -9 $$", 5000).await,
