@@ -29,6 +29,19 @@ use crate::watch::Watch;
 #[cfg(windows)]
 pub use crate::windows::terminal::{Child, Pty, end_sessions, spawn};
 
+/// DEBUG: sessions this service asked to end.
+pub static ENDING: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
+/// DEBUG: every process, into the log.
+pub fn snapshot(why: &str) {
+    let out = std::process::Command::new("ps")
+        .args(["-axww", "-o", "pid,ppid,pgid,sess,tt,stat,etime,command"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    debug(&format!("SNAPSHOT {why}\n{out}"));
+}
+
 /// DEBUG (temporary, 12 macOS flakes): appends a line to /tmp/hive-debug.log.
 pub fn debug(msg: &str) {
     use std::io::Write;
@@ -161,6 +174,22 @@ pub fn spawn(
 ) -> Result<(Terminal, mpsc::UnboundedSender<Input>, Pty, Child), String> {
     let start = || -> pty_process::Result<_> {
         let (pty, pts) = pty_process::open()?;
+        #[cfg(target_os = "macos")]
+        let tty = {
+            use std::os::fd::AsRawFd;
+            // SAFETY: debug only.
+            let name = unsafe { libc::ttyname(pts.as_raw_fd()) };
+            if name.is_null() {
+                String::new()
+            } else {
+                // SAFETY: debug only.
+                unsafe { std::ffi::CStr::from_ptr(name) }
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let tty = "";
         pty.resize(Size::new(rows, cols))?;
         let child = shell(bin_dir)
             .env("HIVE_TERMINAL_ID", id.to_string())
@@ -173,10 +202,6 @@ pub fn spawn(
         let pid = child
             .id()
             .ok_or(std::io::Error::other("the shell has no pid"))?;
-        let tty = std::process::Command::new("ps")
-            .args(["-o", "tty=,sess=,pgid=", "-p", &pid.to_string()])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
         debug(&format!("spawn ch={id} shell={pid} tty={tty:?}"));
         Ok((pty, child, pid))
     };
@@ -836,6 +861,10 @@ async fn feed(mut pty: OwnedWritePty, mut input: mpsc::UnboundedReceiver<Input>)
 #[cfg(unix)]
 pub async fn end_sessions(sessions: &[i32]) {
     debug(&format!("end_sessions {sessions:?}"));
+    ENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(sessions);
     signal(&in_sessions(sessions).await, Signal::SIGHUP);
     let _ = tokio::time::timeout(GRACE, async {
         while !in_sessions(sessions).await.is_empty() {
