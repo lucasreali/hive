@@ -8,6 +8,10 @@ on:
     branches: [main, "task/**"]
   workflow_dispatch:
 
+# The checks only read the repository.
+permissions:
+  contents: read
+
 # A newer push to the same branch supersedes the running checks (as ci.yml).
 concurrency:
   group: macos-${{ github.ref }}
