@@ -58,13 +58,23 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-mutants
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo clippy -p hive -p hive-protocol --all-targets --locked -- -D warnings
-      # Runs `cargo test` of both crates instrumented; every Windows file needs all its lines.
-      - run: cargo llvm-cov -p hive -p hive-protocol --locked --no-fail-fast --no-report
-      - run: cargo llvm-cov report --show-missing-lines
+      # TEMPORARY diagnostic (12.5 mutant timeouts): the known timeouts, with cargo test and
+      # with nextest, a long timeout to see how long they take, and the processes every 15 s.
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-nextest
       - run: |
-          cargo llvm-cov report --json --summary-only --output-path cov.json
-          jq -e '[.data[0].files[] | select(.filename | test("crates.hive.src.windows"))]
-            | length > 0 and all(.summary.lines.percent == 100)' cov.json
-      # `--no-config`: `.cargo/mutants.toml` excludes these files for Linux (and runs nextest).
-      - run: cargo mutants --no-config -p hive -f 'crates/hive/src/windows*.rs' -j 2 --timeout 120
+          (while true; do date -u +%T; powershell -NoProfile -Command "Get-CimInstance Win32_Process | Sort-Object CreationDate | Select-Object -Last 30 ProcessId,ParentProcessId,Name,CreationDate,CommandLine | Format-Table -AutoSize | Out-String -Width 400"; sleep 15; done) > procs.txt 2>&1 &
+          re='(==.*names_in)|(!= with ==.*check_owner)|(sid_text.*xyzzy)|(path_shell)'
+          date -u +%T; cargo mutants --no-config -p hive -f crates/hive/src/windows.rs --re "$re" -j 1 --timeout 400 -o cargo-test || true
+          date -u +%T; cargo mutants --no-config -p hive -f crates/hive/src/windows.rs --re "$re" -j 1 --timeout 400 --test-tool nextest -o nextest || true
+          date -u +%T
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-diagnostic
+          path: |
+            cargo-test/mutants.out
+            nextest/mutants.out
+            procs.txt
+          retention-days: 3
