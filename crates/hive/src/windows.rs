@@ -1946,9 +1946,11 @@ mod tests {
             .prefix(".hive-test-")
             .tempdir_in(".")
             .unwrap();
-        assert!(here.path().is_relative(), "{here:?}");
-        std::fs::write(here.path().join("gh.exe"), "").unwrap();
-        let path = std::env::join_paths([here.path(), &system]).unwrap();
+        // Named from the current folder (the crate's).
+        let relative = Path::new(here.path().file_name().unwrap());
+        std::fs::write(relative.join("gh.exe"), "").unwrap();
+        assert!(relative.join("gh.exe").is_file());
+        let path = std::env::join_paths([relative, &system]).unwrap();
         assert_eq!(on_path(OsStr::new("gh"), &path), None);
     }
 
