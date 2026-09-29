@@ -361,10 +361,12 @@ pub mod terminal {
         }
     }
 
-    /// A running terminal: its console (held to keep it open) and its processes' job.
+    /// A running terminal: its console (held to keep it open), its processes' job, and its
+    /// shell (held so that its process id, the session id, is not reused until it ended).
     struct Session {
         _console: Arc<Console>,
         job: OwnedHandle,
+        _shell: Arc<OwnedHandle>,
     }
 
     /// The running terminals, by session id.
@@ -389,7 +391,7 @@ pub mod terminal {
     }
 
     /// A [`Child`] of `process`, told of its exit by a thread that waits for it.
-    fn waited(process: OwnedHandle) -> Child {
+    fn waited(process: Arc<OwnedHandle>) -> Child {
         let (exited, exit) = watch::channel(None);
         std::thread::spawn(move || {
             let mut code = 0;
@@ -472,10 +474,11 @@ pub mod terminal {
         let resumed = unsafe { ResumeThread(thread.as_raw_handle()) };
         check((resumed != u32::MAX).into())?;
         let session = started.dwProcessId as i32;
-        let resize = Arc::downgrade(&console);
+        let (resize, process) = (Arc::downgrade(&console), Arc::new(process));
         let kept = Session {
             _console: console,
             job,
+            _shell: process.clone(),
         };
         sessions().insert(session, kept);
         Ok((session, resize, output, input, waited(process)))
