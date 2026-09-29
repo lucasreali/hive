@@ -27,7 +27,6 @@ pub mod sessions;
 pub mod settings;
 pub mod spaces;
 pub mod states;
-#[cfg(unix)]
 pub mod statusline;
 pub mod terminal;
 pub mod transcript;
