@@ -27,6 +27,18 @@ test("shows the version on macOS without the WSL part", () => {
   expect(screen.getByRole("contentinfo").textContent).toBe(`macOSconnectedv${version}`);
 });
 
+test("shows Windows while the service runs on Windows itself (12.5.4)", () => {
+  render(<StatusBar />);
+  act(() => apply({ type: "app_mode", mode: "native", wsl: true }));
+  expect(screen.getByTitle("Service connection").textContent).toBe("Windowsconnecting");
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  expect(screen.getByRole("contentinfo").textContent).toBe(`Windowsconnectedv${version}`);
+  // In WSL mode, its distribution as before.
+  act(() => apply({ type: "app_mode", mode: "wsl", wsl: true }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" }));
+  expect(screen.getByTitle("WSL connection").textContent).toBe("WSL: Ubuntuconnected");
+});
+
 test("shows the current account's session usage with its reset in local time (12.1)", () => {
   render(<StatusBar />);
   const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;

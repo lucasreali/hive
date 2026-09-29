@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type {
   AccountDir,
+  AppMode,
   DiffBase,
   GhAccount,
   ServiceMessage,
@@ -19,6 +20,12 @@ import { tauriTransport } from "./tauri";
 export interface Transport {
   /** Starts (or, after a reload, re-attaches to) the service. Resolves once requested. */
   connect(onMessage: (message: ServiceMessage) => void): Promise<void>;
+  /**
+   * Runs the service in WSL or on Windows from now on (12.5.4), the first run's choice or the
+   * settings' switch: the app keeps it and reconnects, answering `app_mode` then the new
+   * connection's messages.
+   */
+  setMode(mode: AppMode): Promise<void>;
   /**
    * Opens a terminal in `cwd` and resolves with its id (the frame channel). It gets the Claude
    * `account` (12.2), which must be one of the settings' accounts; without one, the current one.

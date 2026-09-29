@@ -42,15 +42,16 @@ function AccountSelect() {
 export function StatusBar() {
   const connection = useHive((s) => s.connection);
   // The service reports its distribution in `welcome`; until then only "WSL" is known. On
-  // macOS the service runs natively and reports none.
+  // macOS, and on Windows in native mode (12.5.4), the service runs natively and reports none.
+  const windows = useHive((s) => s.appMode?.mode === "native");
   const distro = connection.status === "connected" ? connection.distro : null;
-  const place = distro ? `WSL: ${distro}` : isMac() ? "macOS" : "WSL";
+  const place = windows ? "Windows" : distro ? `WSL: ${distro}` : isMac() ? "macOS" : "WSL";
   return (
     <footer className="statusbar">
       <div
         className="connection"
         data-status={connection.status}
-        title={isMac() ? "Service connection" : "WSL connection"}
+        title={isMac() || windows ? "Service connection" : "WSL connection"}
       >
         <span className="connection-dot" />
         <span>{place}</span>

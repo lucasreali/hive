@@ -1,6 +1,7 @@
 import type {
   AgentState,
   Alert,
+  AppMode,
   ChangedFile,
   DiffBase,
   Dirs,
@@ -527,6 +528,7 @@ function nameError(project: Project, name: string): string | null {
  * a save checks the version as the service does and keeps the text.
  * Service messages arrive asynchronously, as they do from the real service.
  * `scenario` ("mismatch" or "disconnected") answers `connect` with that failure instead;
+ * "choose" asks where the service runs first (`app_mode`, 12.5.4) and connects on `setMode`;
  * "empty" starts with no projects; "update" offers version 9.9.9, whose install fails; "states" adds `MOCK_STATES`' agents and the worktree one of their subagents owns. "load" (1.11) replays a recording into every terminal right
  * after its prompt, at recorded timing, each terminal starting `LOAD_STAGGER_MS` later than
  * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
@@ -741,22 +743,35 @@ export function createMockTransport(
     if (watched === cwd) sendFiles(cwd);
   };
 
+  // `?mock=choose` plays the first run on Windows with WSL (12.5.4): asked where the service
+  // runs, it starts only once a mode is chosen, a native one without a distribution.
+  let mode: AppMode | null = null;
+  const handshake = () => {
+    const failure = HANDSHAKE[scenario ?? ""];
+    later(failure ?? (mode === "native" ? { ...WELCOME, distro: null } : WELCOME));
+    if (failure) return;
+    later({ type: "settings", settings });
+    sendSpaces();
+    later({ type: "projects", projects });
+    if (scenario === "states") {
+      for (const m of mockStates()) later(m);
+      later({ type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] });
+    }
+    // The current account's session window (12.1), resetting in 2 hours.
+    const resets_at = Math.floor(Date.now() / 1000) + 2 * 3600;
+    later({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
+  };
+
   return {
     async connect(onMessage) {
       send = onMessage;
-      const failure = HANDSHAKE[scenario ?? ""];
-      later(failure ?? WELCOME);
-      if (failure) return;
-      later({ type: "settings", settings });
-      sendSpaces();
-      later({ type: "projects", projects });
-      if (scenario === "states") {
-        for (const m of mockStates()) later(m);
-        later({ type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] });
-      }
-      // The current account's session window (12.1), resetting in 2 hours.
-      const resets_at = Math.floor(Date.now() / 1000) + 2 * 3600;
-      later({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
+      if (scenario === "choose") later({ type: "app_mode", mode, wsl: true });
+      if (scenario !== "choose" || mode) handshake();
+    },
+    async setMode(next) {
+      mode = next;
+      later({ type: "app_mode", mode, wsl: true });
+      handshake();
     },
     async listProjects() {
       sendSpaces();
