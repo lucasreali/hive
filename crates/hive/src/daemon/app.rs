@@ -435,7 +435,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             })
         }
         Ok(Control::ListDirs { path, windows }) => state.projects(move |_| {
-            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let home = std::env::var_os(dirs::HOME).map(PathBuf::from);
             dirs::answer(path, windows, home.as_deref(), &dirs::WINDOWS)
         }),
         Ok(Control::SearchFiles { worktree, query }) => {

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, SaveError};
 
 use crate::changes::{self, BINARY_PROBE};
+use crate::paths::canonical;
 use crate::{git, mode};
 
 /// Most bytes of each side (on disk, at the base) sent to the app.
@@ -194,8 +195,8 @@ fn relative(path: &str) -> io::Result<&Path> {
 
 /// `path` resolved (symlinks followed), when it stays inside `dir`.
 fn inside(dir: &Path, path: &Path) -> io::Result<PathBuf> {
-    let real = path.canonicalize()?;
-    if !real.starts_with(dir.canonicalize()?) {
+    let real = canonical(path)?;
+    if !real.starts_with(canonical(dir)?) {
         return Err(io::Error::other("the file resolves outside the worktree"));
     }
     Ok(real)
@@ -225,7 +226,7 @@ fn on_disk(dir: &Path, rel: &Path) -> io::Result<Side> {
 /// that resolves inside `dir`; with the file's permission bits when it exists. Never `.git` or
 /// inside it (#56): a committed symlink into `.git` would let a save rewrite its `config`.
 fn target(dir: &Path, rel: &Path) -> io::Result<(PathBuf, Option<u32>)> {
-    let root = dir.canonicalize()?;
+    let root = canonical(dir)?;
     if let Some(real) = resolve(dir, rel)? {
         let real = not_git(&root, real)?;
         let mode = mode::of(&real.metadata()?);
@@ -271,7 +272,12 @@ pub fn save_with(
     let name = target.file_name().unwrap_or_default().to_string_lossy();
     let n = SAVES.fetch_add(1, Ordering::Relaxed);
     let temp = target.with_file_name(format!(".{name}.hive-{}-{n}.tmp", std::process::id()));
-    let io = |err: io::Error| (SaveError::Io, err.to_string());
+    let io = |err: io::Error| {
+        // Windows refuses to open or replace a file another program keeps locked.
+        #[cfg(windows)]
+        let err = crate::windows::in_use(err, &name);
+        (SaveError::Io, err.to_string())
+    };
     let file = mode::private(OpenOptions::new().write(true).create_new(true))
         .open(&temp)
         .map_err(io)?;
@@ -321,12 +327,11 @@ fn file_name(name: &str) -> io::Result<&str> {
     Ok(name)
 }
 
-/// `path` (resolved, inside `root`) relative to `root`, as the tree lists it.
+/// `path` (resolved, inside `root`) relative to `root`, as the tree lists it (as git, with `/`
+/// on Windows too).
 fn relative_to(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+    let path = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
+    path.replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 /// `err`, with a clearer message when the target name is taken.
@@ -367,7 +372,7 @@ fn not_git(root: &Path, folder: PathBuf) -> io::Result<PathBuf> {
 /// inside `dir`. Returns the new file's path relative to the worktree.
 pub fn create(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
     let name = file_name(name)?;
-    let root = dir.canonicalize()?;
+    let root = canonical(dir)?;
     let parent = folder_in(dir, &root, folder)?;
     let path = parent.join(name);
     OpenOptions::new()
@@ -384,7 +389,7 @@ pub fn create(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
 /// new folder's path relative to the worktree.
 pub fn create_folder(dir: &Path, folder: &str, name: &str) -> io::Result<String> {
     let name = file_name(name)?;
-    let root = dir.canonicalize()?;
+    let root = canonical(dir)?;
     let parent = folder_in(dir, &root, folder)?;
     let path = parent.join(name);
     mode::folder(&mut fs::DirBuilder::new(), 0o755)
@@ -420,7 +425,7 @@ fn source(dir: &Path, root: &Path, path: &str) -> io::Result<(PathBuf, bool)> {
     // A folder (not a symlink) resolved as stored, so `held` compares it with resolved paths
     // even when the app spelled it in another case.
     let from = if kind.is_dir() {
-        from.canonicalize()?
+        canonical(&from)?
     } else {
         from
     };
@@ -447,7 +452,7 @@ pub fn rename_with(
     unlink: &dyn Fn(&Path) -> io::Result<()>,
 ) -> io::Result<String> {
     let name = file_name(name)?;
-    let root = dir.canonicalize()?;
+    let root = canonical(dir)?;
     let (from, folder) = source(dir, &root, path)?;
     move_entry(
         &root,
@@ -474,7 +479,7 @@ pub fn move_with(
     held: Held,
     unlink: &dyn Fn(&Path) -> io::Result<()>,
 ) -> io::Result<String> {
-    let root = dir.canonicalize()?;
+    let root = canonical(dir)?;
     let (from, is_folder) = source(dir, &root, path)?;
     let to = folder_in(dir, &root, folder)?.join(from.file_name().unwrap_or_default());
     if to == from {
@@ -493,12 +498,12 @@ pub const DELETE_DEPTH: usize = 64;
 /// itself, never what it points to; a folder with what it holds, never following a symlink in
 /// it (`remove_dir_all`), unless `held` refuses it or [`bounded`] does.
 pub fn delete(dir: &Path, path: &str, held: Held) -> io::Result<()> {
-    let root = dir.canonicalize()?;
+    let root = canonical(dir)?;
     let (at, kind) = entry(dir, &root, path)?;
     if kind.is_dir() {
         // `held` compares it resolved as stored (only the case may differ); the removal goes by
         // `at`, whose last name is not followed even if it turned into a symlink meanwhile.
-        held(&at.canonicalize()?)?;
+        held(&canonical(&at)?)?;
         bounded(&root, &at, path)?;
         // ponytail: what an agent adds between the count and the removal is removed too.
         fs::remove_dir_all(&at)?;
@@ -769,7 +774,7 @@ fn plain_name(real: &Path) -> io::Result<()> {
 pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<String> {
     if path.is_empty() {
         // The worktree's own folder, for the Windows Explorer or the Finder.
-        let real = dir.canonicalize()?;
+        let real = canonical(dir)?;
         if !real.is_dir() {
             return Err(io::Error::other(format!(
                 "{} is not a folder",
@@ -1212,21 +1217,25 @@ mod tests {
         assert!(at("a.ts", "/nonexistent/wslpath").is_err());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "linux"))]
     #[test]
-    fn a_file_is_located_on_macos_unless_macos_would_run_it() {
+    fn a_file_is_located_as_it_is_where_the_app_runs_beside_the_service() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.ts"), "").unwrap();
-        let real = dir.path().canonicalize().unwrap().join("a.ts");
+        // Nothing is executable by its bits on Windows: a `Makefile` opens.
+        std::fs::write(dir.path().join("Makefile"), "").unwrap();
+        let top = canonical(dir.path()).unwrap();
         let at = |path: &str| {
             windows_path(dir.path(), path, OsStr::new("wslpath")).map_err(|e| e.to_string())
         };
-        assert_eq!(at("a.ts"), Ok(real.display().to_string()));
-        assert_eq!(
-            at(""),
-            Ok(dir.path().canonicalize().unwrap().display().to_string())
-        );
+        assert_eq!(at("a.ts"), Ok(top.join("a.ts").display().to_string()));
+        assert_eq!(at(""), Ok(top.display().to_string()));
         assert_eq!(at("nope"), Err("nope does not exist".to_owned()));
+        #[cfg(windows)]
+        assert_eq!(
+            at("Makefile"),
+            Ok(top.join("Makefile").display().to_string())
+        );
     }
 
     #[cfg(unix)]
@@ -1338,7 +1347,6 @@ mod tests {
         assert_eq!(notes.map_err(|e| e.to_string()), Err(run));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_worktree_folder_opens_unless_it_is_a_bundle_or_an_odd_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -1348,7 +1356,7 @@ mod tests {
             windows_path(&folder, "", OsStr::new("echo")).map_err(|e| e.to_string())
         };
         assert!(at("shop.9.8-task").is_ok());
-        let real = dir.path().canonicalize().unwrap();
+        let real = canonical(dir.path()).unwrap();
         let bundle = |name: &str| {
             let folder = real.join(name).display().to_string();
             Err(format!("{SYSTEM} might run or install the folder {folder}"))
@@ -1362,9 +1370,13 @@ mod tests {
         std::fs::write(dir.path().join("shop.exe"), "").unwrap();
         let beside = "Windows could run shop.exe beside shop instead of opening it";
         assert_eq!(at("shop"), Err(beside.to_owned()));
-        let odd = "\"shop.\" could open another file on Windows: it ends in a dot or a space, \
-                   or holds one of <>:\"|?*\\";
-        assert_eq!(at("shop."), Err(odd.to_owned()));
+        // Windows itself cannot make such a name.
+        #[cfg(unix)]
+        {
+            let odd = "\"shop.\" could open another file on Windows: it ends in a dot or a \
+                       space, or holds one of <>:\"|?*\\";
+            assert_eq!(at("shop."), Err(odd.to_owned()));
+        }
         // A file where a folder is expected (a session log's `cwd`) would be run or opened.
         let file = windows_path(&dir.path().join("shop.exe"), "", OsStr::new("echo"));
         let not_folder = format!("{} is not a folder", real.join("shop.exe").display());
@@ -1757,7 +1769,6 @@ mod tests {
         assert_eq!(move_to(dir.path(), "a", "ab").unwrap(), "ab/a");
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_held_folder_is_not_renamed_or_moved() {
         let dir = tempfile::tempdir().unwrap();
@@ -1778,7 +1789,7 @@ mod tests {
         assert!(super::move_to(dir.path(), "src/lib", "", &busy).is_err());
         assert!(dir.path().join("src/lib").is_dir() && !dir.path().join("core").exists());
         // Asked with the folder resolved; a file is never asked about.
-        let lib = dir.path().canonicalize().unwrap().join("src/lib");
+        let lib = canonical(dir.path()).unwrap().join("src").join("lib");
         assert_eq!(*asked.borrow(), [lib.clone(), lib]);
         assert_eq!(
             super::rename(dir.path(), "src/a.ts", "b.ts", &busy).unwrap(),
@@ -1923,7 +1934,7 @@ mod tests {
         assert!(dir.path().join("src").is_dir());
         // Asked with the folder resolved; a file is never asked about.
         super::delete(dir.path(), "a", &busy).unwrap();
-        let src = dir.path().canonicalize().unwrap().join("src");
+        let src = canonical(dir.path()).unwrap().join("src");
         assert_eq!(*asked.borrow(), [src]);
     }
 

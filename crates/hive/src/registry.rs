@@ -20,6 +20,7 @@ use tokio::time::Instant;
 
 use crate::files::Debounce;
 use crate::git;
+use crate::paths::canonical;
 
 /// A change is reported once events have stopped for this long (a burst of `git worktree
 /// add`s or a prune is one change)…
@@ -151,7 +152,7 @@ fn common_dir(root: &Path) -> Option<PathBuf> {
     let out = git::output(root, &["rev-parse", "--git-common-dir"], &[0]).ok()?;
     let dir = String::from_utf8_lossy(&out);
     // Relative to `root` unless git gives an absolute path.
-    root.join(dir.trim_end_matches('\n')).canonicalize().ok()
+    canonical(&root.join(dir.trim_end_matches('\n'))).ok()
 }
 
 #[cfg(test)]

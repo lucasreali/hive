@@ -579,33 +579,36 @@ fn found(path: PathBuf, config_dir: &Option<String>) -> Option<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use hive_protocol::Worktree;
 
-    #[cfg(unix)]
     fn var<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into())
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_root_follows_claude_config_dir_then_home() {
+        let (c, h, doubled) = if cfg!(windows) {
+            (r"C:\c", r"C:\h", r"C:\\h\.claude\")
+        } else {
+            ("/c", "/h", "//h/.claude/")
+        };
         let root = |vars: &[(&str, &str)]| super::root(var(vars));
         assert_eq!(
-            root(&[("CLAUDE_CONFIG_DIR", "/c"), ("HOME", "/h")]),
-            Some("/c/projects".into())
+            root(&[("CLAUDE_CONFIG_DIR", c), ("HOME", h)]),
+            Some(Path::new(c).join("projects"))
         );
         assert_eq!(
-            root(&[("CLAUDE_CONFIG_DIR", ""), ("HOME", "/h")]),
-            Some("/h/.claude/projects".into())
+            root(&[("CLAUDE_CONFIG_DIR", ""), ("HOME", h)]),
+            Some(Path::new(h).join(".claude").join("projects"))
         );
         assert_eq!(root(&[]), None);
         // One key per folder, however it is written: unset, empty or explicit.
         let dir = |vars: &[(&str, &str)]| super::claude_dir(var(vars));
-        let default = Some(PathBuf::from("/h/.claude"));
-        assert_eq!(dir(&[("HOME", "/h/")]), default);
-        assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", ""), ("HOME", "/h")]), default);
-        assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", "//h/.claude/")]), default);
+        let default = Some(Path::new(h).join(".claude"));
+        let slashed = format!("{h}{}", std::path::MAIN_SEPARATOR);
+        assert_eq!(dir(&[("HOME", &slashed)]), default);
+        assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", ""), ("HOME", h)]), default);
+        assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", doubled)]), default);
     }
 
     #[test]
@@ -969,9 +972,9 @@ not json
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn open_sessions_are_kept_once() {
+        let r = if cfg!(windows) { r"C:\r" } else { "/r" };
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("data/open-sessions.json");
         let open = |id: &str, cwd: &str| OpenSession {
@@ -982,7 +985,7 @@ not json
         // With the Claude config folder of its terminal (12.2).
         let c = OpenSession {
             config_dir: Some("/w".into()),
-            ..open("c", "/r")
+            ..open("c", r)
         };
         // Nothing ran: nothing is kept.
         save_open(&file, &[]).unwrap();
@@ -991,28 +994,30 @@ not json
 
         save_open(
             &file,
-            &[
-                open("a", "/r"),
-                open("x; rm", "/r"),
-                open("b", "rel"),
-                c.clone(),
-            ],
+            &[open("a", r), open("x; rm", r), open("b", "rel"), c.clone()],
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
         // Ids that are not session ids, and relative folders, are dropped.
-        assert_eq!(take_open(&file), vec![open("a", "/r"), c]);
+        assert_eq!(take_open(&file), vec![open("a", r), c]);
         assert!(!file.exists());
         assert_eq!(take_open(&file), vec![]);
 
         // A list kept while Hive had chats (7.3, removed in 9.2): their sessions are dropped.
-        let old = r#"[{"id":"a","cwd":"/r","kind":"terminal"},{"id":"c","cwd":"/r","kind":"chat"},{"id":"b","cwd":"/r"}]"#;
-        std::fs::write(&file, old).unwrap();
-        assert_eq!(take_open(&file), vec![open("a", "/r"), open("b", "/r")]);
+        let old = serde_json::json!([
+            {"id": "a", "cwd": r, "kind": "terminal"},
+            {"id": "c", "cwd": r, "kind": "chat"},
+            {"id": "b", "cwd": r},
+        ]);
+        std::fs::write(&file, old.to_string()).unwrap();
+        assert_eq!(take_open(&file), vec![open("a", r), open("b", r)]);
 
         // A long list (over a few KiB) is read back whole.
-        let many: Vec<OpenSession> = (0..200).map(|i| open(&format!("s{i}"), "/r")).collect();
+        let many: Vec<OpenSession> = (0..200).map(|i| open(&format!("s{i}"), r)).collect();
         save_open(&file, &many).unwrap();
         assert!(file.metadata().unwrap().len() > 4096);
         assert_eq!(take_open(&file), many);
@@ -1022,7 +1027,7 @@ not json
         assert!(!file.exists());
         // A folder in the way cannot be written over.
         std::fs::create_dir_all(&file).unwrap();
-        assert!(save_open(&file, &[open("a", "/r")]).is_err());
+        assert!(save_open(&file, &[open("a", r)]).is_err());
     }
 
     #[test]
@@ -1035,7 +1040,6 @@ not json
         assert_eq!(normalized("/home/me/my.app_x"), "-home-me-my-app-x");
     }
 
-    #[cfg(unix)]
     fn project(path: &str) -> Project {
         let wt = |path: &str, main: bool| Worktree {
             id: path.into(),
@@ -1058,19 +1062,17 @@ not json
         }
     }
 
-    #[cfg(unix)]
     fn log(dir: &Path, name: &str, cwd: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         let path = dir.join(name);
-        let line =
-            format!(r#"{{"type":"user","cwd":"{cwd}","message":{{"content":"hi {name}"}}}}"#);
-        std::fs::write(&path, line).unwrap();
+        let content = format!("hi {name}");
+        let line = serde_json::json!({"type": "user", "cwd": cwd, "message": {"content": content}});
+        std::fs::write(&path, line.to_string()).unwrap();
         path
     }
 
     /// Sets `path`'s modification time `secs` seconds after a fixed time: files written one
     /// after the other can share an mtime, so the order under test is set, not raced.
-    #[cfg(unix)]
     fn touched(path: &Path, secs: u64) {
         let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
         File::options()
@@ -1081,7 +1083,6 @@ not json
             .unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn only_the_newest_sessions_are_listed() {
         let tmp = tempfile::tempdir().unwrap();

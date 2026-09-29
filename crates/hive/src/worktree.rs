@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::git;
+use crate::paths::canonical;
 
 /// Largest hook payload accepted on stdin.
 pub const HOOK_INPUT_LIMIT: u64 = 64 * 1024;
@@ -283,9 +284,9 @@ fn existing(dir: &Path, name: &str) -> io::Result<Option<PathBuf>> {
 /// `WorktreeRemove` hook: removes `worktree_path`, which must be a worktree directly under
 /// its repository's `.claude/worktrees/`.
 pub fn hook_remove(payload: &Value) -> io::Result<()> {
-    let path = Path::new(field(payload, "worktree_path")?).canonicalize()?;
+    let path = canonical(Path::new(field(payload, "worktree_path")?))?;
     let root = main_root(&path)?;
-    if path.parent() != Some(root.join(WORKTREES_DIR).canonicalize()?.as_path()) {
+    if path.parent() != Some(canonical(&root.join(WORKTREES_DIR))?.as_path()) {
         return Err(io::Error::other(format!(
             "refusing to remove {}: not under {}",
             path.display(),

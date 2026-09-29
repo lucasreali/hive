@@ -1,9 +1,10 @@
 //! Browsing folders for "Add project": the subfolders of a typed folder, given as a Linux path
-//! or, for the Windows side of WSL, as a Windows path converted with `wslpath -u`.
+//! or, for the Windows side of WSL, as a Windows path converted with `wslpath -u`. A service on
+//! native Windows takes every path as a Windows one, as it is.
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use hive_protocol::{Control, Dir};
@@ -26,6 +27,9 @@ pub const WINDOWS: Windows<'static> = Windows {
     wslpath: "wslpath",
 };
 
+/// The variable holding the home folder the browser starts from.
+pub const HOME: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+
 /// Answers `ListDirs`: `path` (Windows when `windows`; the home folder when empty) as a Linux
 /// path, and the subfolders of the folder it ends in, or of the one holding its last name.
 pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windows) -> Control {
@@ -33,7 +37,7 @@ pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windo
         Ok((path, linux, parent, dirs)) => Control::Dirs {
             path,
             windows,
-            linux_path: Some(linux),
+            linux_path: linux,
             parent,
             dirs,
             error: None,
@@ -49,9 +53,9 @@ pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windo
     }
 }
 
-/// The path as typed (or the home folder), as a Linux path, the folder above the listed one,
-/// and the listed subfolders.
-type Listing = (String, String, Option<String>, Vec<Dir>);
+/// The path as typed (or the home folder), as a Linux path (none for the drives), the folder
+/// above the listed one, and the listed subfolders.
+type Listing = (String, Option<String>, Option<String>, Vec<Dir>);
 
 fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> io::Result<Listing> {
     if path.len() > PATH_LIMIT {
@@ -59,21 +63,33 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
             "paths are at most {PATH_LIMIT} bytes"
         )));
     }
-    let separators: &[char] = if windows { &['\\', '/'] } else { &['/'] };
-    let path = match (path.is_empty(), windows) {
+    // Only a service in WSL converts Windows paths; on Windows they are its own.
+    let wsl = windows && cfg!(unix);
+    let separators: &[char] = if windows || cfg!(windows) {
+        &['\\', '/']
+    } else {
+        &['/']
+    };
+    let path = match (path.is_empty(), wsl) {
         (false, _) => path.to_owned(),
         (true, true) => with_separator(run(programs.cmd, &["/c", "echo", "%USERPROFILE%"])?, '\\'),
         (true, false) => {
-            let home = home.ok_or_else(|| io::Error::other("HOME is not set"))?;
-            with_separator(home.to_string_lossy().into_owned(), '/')
+            let home = home.ok_or_else(|| io::Error::other(format!("{HOME} is not set")))?;
+            with_separator(home.to_string_lossy().into_owned(), MAIN_SEPARATOR)
         }
     };
-    let linux = if windows {
+    // On Windows, a name without a separator is the start of a drive: the drives, which the
+    // app filters by it as by any last name.
+    #[cfg(windows)]
+    if path.find(separators).is_none() {
+        return Ok((path, None, None, crate::windows::drives()));
+    }
+    let linux = if wsl {
         run(programs.wslpath, &["-u", &path])?
     } else {
         path.clone()
     };
-    if !linux.starts_with('/') {
+    if !Path::new(&linux).is_absolute() {
         return Err(io::Error::other("type a full path"));
     }
     let typed = Path::new(&linux);
@@ -87,7 +103,7 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     let above = path.rfind(separators).map_or("", |i| &path[..i]);
     let above = above.trim_end_matches(separators);
     let parent = above.rfind(separators).map(|i| path[..=i].to_owned());
-    Ok((path, linux, parent, dirs))
+    Ok((path, Some(linux), parent, dirs))
 }
 
 fn with_separator(mut path: String, separator: char) -> String {
@@ -146,13 +162,16 @@ fn run(program: &str, args: &[&str]) -> io::Result<String> {
     Ok(line.to_owned())
 }
 
-// A WSL browser (`wslpath`, Linux paths) until 12.5.6b.
 #[cfg(test)]
-#[cfg(unix)]
 mod tests {
-    use std::os::unix::fs::symlink;
-
     use super::*;
+
+    /// The top folder of this system, and a folder always in it.
+    const ROOT: (&str, &str) = if cfg!(windows) {
+        (r"C:\", "Users")
+    } else {
+        ("/", "tmp")
+    };
 
     fn dir(name: &str, git: bool) -> Dir {
         Dir {
@@ -189,6 +208,7 @@ mod tests {
 
     /// Written by a `sh` of its own: a file this process writes can be held open by a child
     /// another test thread forks meanwhile, and running it then fails with "Text file busy".
+    #[cfg(unix)]
     fn script(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
         let written = std::process::Command::new("sh")
@@ -211,9 +231,16 @@ mod tests {
         // A worktree's `.git` is a file.
         fs::write(root.join("work/.git"), "gitdir: /x\n").unwrap();
         fs::write(root.join("file"), "").unwrap();
-        symlink(root.join("b"), root.join("link")).unwrap();
-        symlink(root.join("file"), root.join("file-link")).unwrap();
-        let top = format!("{}/", root.display());
+        // A link to a folder is listed, one to a file is not (Windows: no links without a
+        // privilege, so a stand-in folder).
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("b"), root.join("link")).unwrap();
+            std::os::unix::fs::symlink(root.join("file"), root.join("file-link")).unwrap();
+        }
+        #[cfg(windows)]
+        fs::create_dir(root.join("link")).unwrap();
+        let top = format!("{}{MAIN_SEPARATOR}", root.display());
         let (path, linux, parent, dirs, error) = ask(&top, false, None, &WINDOWS);
         assert_eq!((path, linux, error), (top.clone(), Some(top), None));
         // macOS ignores case in names: there `a` is the folder `A`.
@@ -238,14 +265,14 @@ mod tests {
         ]);
         assert_eq!(dirs, expected);
         let above = root.parent().unwrap().display().to_string();
-        assert_eq!(parent, Some(format!("{above}/")));
+        assert_eq!(parent, Some(format!("{above}{MAIN_SEPARATOR}")));
 
         // Without a trailing separator, the last name is a filter: its folder is listed.
-        let typed = format!("{}/re", root.display());
+        let typed = format!("{}{MAIN_SEPARATOR}re", root.display());
         let (path, linux, parent, dirs, _) = ask(&typed, false, None, &WINDOWS);
         assert_eq!((path, linux), (typed.clone(), Some(typed)));
         assert_eq!(dirs.len(), expected.len());
-        assert_eq!(parent, Some(format!("{above}/")));
+        assert_eq!(parent, Some(format!("{above}{MAIN_SEPARATOR}")));
     }
 
     #[test]
@@ -254,7 +281,7 @@ mod tests {
         for i in 0..=DIR_LIMIT {
             fs::create_dir(tmp.path().join(format!("d{i:04}"))).unwrap();
         }
-        let top = format!("{}/", tmp.path().display());
+        let top = format!("{}{MAIN_SEPARATOR}", tmp.path().display());
         let (.., dirs, _) = ask(&top, false, None, &WINDOWS);
         assert_eq!(dirs.len(), DIR_LIMIT);
         assert_eq!(dirs[DIR_LIMIT - 1].name, format!("d{:04}", DIR_LIMIT - 1));
@@ -264,7 +291,7 @@ mod tests {
     fn empty_is_the_home_folder_and_the_root_has_no_parent() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir(tmp.path().join("p")).unwrap();
-        let home = format!("{}/", tmp.path().display());
+        let home = format!("{}{MAIN_SEPARATOR}", tmp.path().display());
         let (path, linux, _, dirs, _) = ask("", false, Some(tmp.path()), &WINDOWS);
         assert_eq!((path, linux), (home.clone(), Some(home.clone())));
         assert_eq!(dirs, [dir("p", false)]);
@@ -272,15 +299,40 @@ mod tests {
         let (path, ..) = ask("", false, Some(Path::new(&home)), &WINDOWS);
         assert_eq!(path, home);
         let (.., error) = ask("", false, None, &WINDOWS);
-        assert_eq!(error.as_deref(), Some("HOME is not set"));
+        assert_eq!(error, Some(format!("{HOME} is not set")));
 
-        let (path, _, parent, dirs, error) = ask("/", false, None, &WINDOWS);
-        assert_eq!((path.as_str(), parent, error), ("/", None, None));
-        assert!(dirs.iter().any(|d| d.name == "tmp"), "{dirs:?}");
-        let (.., parent, _, _) = ask("/tm", false, None, &WINDOWS);
+        let (root, sub) = ROOT;
+        let (path, _, parent, dirs, error) = ask(root, false, None, &WINDOWS);
+        assert_eq!((path.as_str(), parent, error), (root, None, None));
+        assert!(dirs.iter().any(|d| d.name == sub), "{dirs:?}");
+        let (.., parent, _, _) = ask(&format!("{root}{}", &sub[..2]), false, None, &WINDOWS);
         assert_eq!(parent, None);
-        let (.., parent, _, _) = ask("/tmp/", false, None, &WINDOWS);
-        assert_eq!(parent.as_deref(), Some("/"));
+        let (.., parent, _, _) = ask(&format!("{root}{sub}/"), false, None, &WINDOWS);
+        assert_eq!(parent.as_deref(), Some(root));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_name_without_a_separator_lists_the_drives() {
+        let (path, linux, parent, dirs, error) = ask("c", false, None, &WINDOWS);
+        assert_eq!(
+            (path.as_str(), linux, parent, error),
+            ("c", None, None, None)
+        );
+        assert_eq!(dirs, crate::windows::drives());
+        assert!(dirs.contains(&dir("C:", false)), "{dirs:?}");
+        // Either separator, whatever the app says the path is.
+        let (_, linux, parent, dirs, _) = ask(r"C:/Users\", false, None, &WINDOWS);
+        assert_eq!(linux.as_deref(), Some(r"C:/Users\"));
+        assert_eq!(parent.as_deref(), Some("C:/"));
+        assert!(!dirs.is_empty());
+        // Never converted, never through `cmd.exe`.
+        let home = tempfile::tempdir().unwrap();
+        let (path, linux, ..) = ask("", true, Some(home.path()), &WINDOWS);
+        let typed = format!(r"{}\", home.path().display());
+        assert_eq!((path, linux), (typed.clone(), Some(typed)));
+        let (.., error) = ask(r"\Users", true, None, &WINDOWS);
+        assert_eq!(error.as_deref(), Some("type a full path"));
     }
 
     #[test]
@@ -290,19 +342,23 @@ mod tests {
             (path.as_str(), linux, parent, dirs, error.as_deref()),
             ("rel/x", None, None, vec![], Some("type a full path"))
         );
-        let (.., error) = ask("/nonexistent-hive/x/", false, None, &WINDOWS);
+        let (root, _) = ROOT;
+        let missing = format!("{root}nonexistent-hive{MAIN_SEPARATOR}x{MAIN_SEPARATOR}");
+        let (.., error) = ask(&missing, false, None, &WINDOWS);
         let error = error.unwrap();
         assert!(
-            error.starts_with("cannot open /nonexistent-hive/x/: "),
+            error.starts_with(&format!("cannot open {missing}: ")),
             "{error}"
         );
-        let longest = format!("/{}/", "a".repeat(PATH_LIMIT - 2));
+        let name = "a".repeat(PATH_LIMIT - root.len() - 1);
+        let longest = format!("{root}{name}{MAIN_SEPARATOR}");
         let (.., error) = ask(&longest, false, None, &WINDOWS);
-        assert!(error.unwrap().starts_with("cannot open /"));
+        assert!(error.unwrap().starts_with(&format!("cannot open {root}")));
         let (.., error) = ask(&format!("{longest}a"), false, None, &WINDOWS);
         assert_eq!(error.as_deref(), Some("paths are at most 4096 bytes"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn windows_paths_are_converted_and_home_is_the_user_folder() {
         let tmp = tempfile::tempdir().unwrap();
@@ -344,6 +400,7 @@ mod tests {
         assert_eq!(error.as_deref(), Some("type a full path"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn failing_windows_programs_are_explained() {
         let bin = tempfile::tempdir().unwrap();

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hive_protocol::{Control, Project, ProjectError, SpaceEnv, Worktree};
 use serde::de::DeserializeOwned;
 
+use crate::paths::canonical;
 use crate::spaces::Spaces;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
@@ -135,7 +136,7 @@ impl Projects {
         // every project (a linked worktree may be anywhere).
         // ponytail: a worktree of one project inside another's folder takes the outer one's space.
         // Resolved first, as `place` does: `..` or a link may lead into another project.
-        let real = Path::new(cwd).canonicalize().unwrap_or_default();
+        let real = canonical(Path::new(cwd)).unwrap_or_default();
         let ids: Vec<String> = self.spaces().projects().cloned().collect();
         let inside: Vec<Project> = (ids.iter())
             .filter(|id| real.starts_with(id))
@@ -356,11 +357,11 @@ pub fn followed(projects: &[Project], path: &str) -> io::Result<(PathBuf, Option
 /// live inside the main one, so the deepest match wins (#19). Both sides are resolved first,
 /// so `..` or a link cannot take a path out of a worktree; one that does not resolve is in none.
 pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
-    let cwd = Path::new(cwd).canonicalize().ok()?;
+    let cwd = canonical(Path::new(cwd)).ok()?;
     projects
         .iter()
         .flat_map(|p| p.worktrees.iter().map(move |w| (p, w)))
-        .filter_map(|(p, w)| Some((p, w, Path::new(&w.path).canonicalize().ok()?)))
+        .filter_map(|(p, w)| Some((p, w, canonical(Path::new(&w.path)).ok()?)))
         .filter(|(_, _, real)| cwd.starts_with(real))
         .max_by_key(|(_, _, real)| real.as_os_str().len())
         .map(|(p, w, _)| (p.id.clone(), w.id.clone()))
@@ -371,7 +372,7 @@ pub fn place(projects: &[Project], cwd: &str) -> Option<(String, String)> {
 /// in. Its path would change under them.
 pub fn held(projects: &[Project], folder: &Path, proc: procs::Source) -> io::Result<()> {
     let holds = |w: &&Worktree| {
-        let real = Path::new(&w.path).canonicalize();
+        let real = canonical(Path::new(&w.path));
         real.is_ok_and(|real| real.starts_with(folder))
     };
     if let Some(w) = projects.iter().flat_map(|p| &p.worktrees).find(holds) {
@@ -846,12 +847,11 @@ mod tests {
         assert!(err.to_string().starts_with("invalid worktree name"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn worktrees_are_listed_again_only_once_forgotten() {
         use crate::health::tests::{commit, run};
         let tmp = tempfile::tempdir().unwrap();
-        let top = tmp.path().canonicalize().unwrap();
+        let top = canonical(tmp.path()).unwrap();
         let [root, other] = ["r", "o"].map(|name| {
             let root = top.join(name);
             std::fs::create_dir(&root).unwrap();

@@ -463,14 +463,14 @@ mod tests {
         assert_eq!(spaces.current().1, account("me"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_file_is_checked_but_its_folders_may_be_gone() {
+        let gone = if cfg!(windows) { r"C:\gone" } else { "/gone" };
         let space = |id: &str, projects: &[&str]| Space {
             id: id.into(),
             name: id.into(),
             projects: projects.iter().map(|p| p.to_string()).collect(),
-            env: env(Some("/gone"), None),
+            env: env(Some(gone), None),
         };
         let spaces = |current: &str, list: Vec<Space>| Spaces {
             current: current.into(),

@@ -879,13 +879,11 @@ mod tests {
         assert_eq!(*state.user_path.borrow(), None);
     }
 
-    // git given a `\\?\` canonical path on Windows (12.5.6b).
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn changed_worktree_statuses_are_sent_on_every_tick() {
         // Through a real daemon this would take the 30 s interval.
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap().join("r");
+        let root = crate::paths::canonical(dir.path()).unwrap().join("r");
         std::fs::create_dir(&root).unwrap();
         let git = |args: &[&str]| {
             let status = std::process::Command::new("git")
@@ -934,7 +932,7 @@ mod tests {
         std::fs::remove_file(root.join("new")).unwrap();
         assert_eq!(next(&mut sent).await, 0);
         // A worktree made behind Hive's back is listed again on a tick (9.14).
-        let added = dir.path().canonicalize().unwrap().join("w");
+        let added = crate::paths::canonical(dir.path()).unwrap().join("w");
         git(&["worktree", "add", "-q", "-b", "w", added.to_str().unwrap()]);
         let frame = tokio::time::timeout(std::time::Duration::from_secs(10), sent.recv());
         let control = frame.await.expect("no status").unwrap().to_control();
