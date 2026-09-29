@@ -117,7 +117,6 @@ impl Sent {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    #[cfg(unix)]
     use std::path::PathBuf;
 
     pub(crate) fn run(dir: &Path, args: &[&str]) {
@@ -140,7 +139,6 @@ pub(crate) mod tests {
         run(dir, &["commit", "-q", "-m", name]);
     }
 
-    #[cfg(unix)]
     pub(crate) fn worktree(path: &Path, branch: Option<&str>, main: bool) -> Worktree {
         let path = path.display().to_string();
         Worktree {
@@ -167,11 +165,10 @@ pub(crate) mod tests {
         })
     }
 
-    #[cfg(unix)]
     #[test]
     fn worktrees_are_counted_against_the_main_branch() {
         let tmp = tempfile::tempdir().unwrap();
-        let root: PathBuf = tmp.path().canonicalize().unwrap().join("r");
+        let root: PathBuf = crate::paths::canonical(tmp.path()).unwrap().join("r");
         std::fs::create_dir(&root).unwrap();
         run(&root, &["init", "-q", "-b", "main"]);
         commit(&root, "a");

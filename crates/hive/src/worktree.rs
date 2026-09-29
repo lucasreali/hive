@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::git;
+use crate::paths::canonical;
 
 /// Largest hook payload accepted on stdin.
 pub const HOOK_INPUT_LIMIT: u64 = 64 * 1024;
@@ -283,9 +284,9 @@ fn existing(dir: &Path, name: &str) -> io::Result<Option<PathBuf>> {
 /// `WorktreeRemove` hook: removes `worktree_path`, which must be a worktree directly under
 /// its repository's `.claude/worktrees/`.
 pub fn hook_remove(payload: &Value) -> io::Result<()> {
-    let path = Path::new(field(payload, "worktree_path")?).canonicalize()?;
+    let path = canonical(Path::new(field(payload, "worktree_path")?))?;
     let root = main_root(&path)?;
-    if path.parent() != Some(root.join(WORKTREES_DIR).canonicalize()?.as_path()) {
+    if path.parent() != Some(canonical(&root.join(WORKTREES_DIR))?.as_path()) {
         return Err(io::Error::other(format!(
             "refusing to remove {}: not under {}",
             path.display(),
@@ -445,10 +446,12 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
                 },
             ]
         );
-        assert_eq!(list[0].to_string(), "/repo\tmain");
+        // Shown with the system's separator.
+        let native = |text: &str| text.replace('/', std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(list[0].to_string(), native("/repo\tmain"));
         assert_eq!(
             list[1].to_string(),
-            "/repo/.claude/worktrees/a b\t(detached)"
+            native("/repo/.claude/worktrees/a b\t(detached)")
         );
     }
 

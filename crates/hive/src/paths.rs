@@ -2,11 +2,10 @@
 
 #[cfg(unix)]
 use std::ffi::OsString;
-#[cfg(unix)]
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use tokio::net::UnixStream;
@@ -158,6 +157,50 @@ fn check_peer(stream: &UnixStream, uid: u32) -> io::Result<()> {
         )));
     }
     Ok(())
+}
+
+/// `path` resolved (links followed, as `canonicalize`), in the form git and other programs
+/// read: Windows puts `\\?\` before a resolved path, which git refuses and which never
+/// equals the same path spelled plainly.
+pub fn canonical(path: &Path) -> io::Result<PathBuf> {
+    path.canonicalize().map(plain)
+}
+
+/// `path` without the `\\?\` before a drive (`\\?\C:\`), with `\\?\UNC\` turned into `\\`;
+/// any other path as it is (`\\?\Volume{…}` has no plain form).
+pub fn plain(path: PathBuf) -> PathBuf {
+    let text = path.to_str().unwrap_or_default();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{share}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.get(1..2) == Some(":") => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_paths_lose_the_verbatim_prefix() {
+        let plain = |path: &str| plain(path.into());
+        assert_eq!(plain(r"\\?\C:\Users\me"), PathBuf::from(r"C:\Users\me"));
+        assert_eq!(
+            plain(r"\\?\UNC\host\share\x"),
+            PathBuf::from(r"\\host\share\x")
+        );
+        for kept in [r"\\?\Volume{1}\x", r"\\?\", r"C:\x", "/tmp/x", ""] {
+            assert_eq!(plain(kept), PathBuf::from(kept), "{kept}");
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let real = canonical(tmp.path()).unwrap();
+        assert!(real.is_absolute() && real.is_dir(), "{real:?}");
+        assert!(!real.to_string_lossy().starts_with(r"\\?\"), "{real:?}");
+        assert_eq!(canonical(&real).unwrap(), real);
+        assert!(canonical(&tmp.path().join("missing")).is_err());
+    }
 }
 
 #[cfg(test)]
