@@ -301,6 +301,7 @@ mod tests {
         assert_eq!(env("/r", "/r", None).len(), 2);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_script_runs_in_its_folder_with_the_environment() {
         let tmp = tempfile::tempdir().unwrap();
@@ -311,6 +312,7 @@ mod tests {
         assert_eq!(out, "20000\n");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_script_reports_the_end_of_its_output() {
         let tmp = tempfile::tempdir().unwrap();

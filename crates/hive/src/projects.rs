@@ -806,6 +806,7 @@ mod tests {
         assert!(err.to_string().starts_with("invalid worktree name"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn worktrees_are_listed_again_only_once_forgotten() {
         use crate::health::tests::{commit, run};

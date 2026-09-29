@@ -440,6 +440,7 @@ esac
         assert_eq!(over.gh.accounts(None), Err(refused.to_owned()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_missing_gh_is_said_plainly() {
         let tmp = tempfile::tempdir().unwrap();

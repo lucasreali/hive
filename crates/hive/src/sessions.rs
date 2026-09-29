@@ -532,6 +532,7 @@ fn found(path: PathBuf) -> Option<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use hive_protocol::Worktree;
 
     fn var<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
@@ -920,6 +921,7 @@ not json
         assert_eq!(normalized("/home/me/my.app_x"), "-home-me-my-app-x");
     }
 
+    #[cfg(unix)]
     fn project(path: &str) -> Project {
         let wt = |path: &str, main: bool| Worktree {
             id: path.into(),
@@ -942,6 +944,7 @@ not json
         }
     }
 
+    #[cfg(unix)]
     fn log(dir: &Path, name: &str, cwd: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         let path = dir.join(name);
@@ -953,6 +956,7 @@ not json
 
     /// Sets `path`'s modification time `secs` seconds after a fixed time: files written one
     /// after the other can share an mtime, so the order under test is set, not raced.
+    #[cfg(unix)]
     fn touched(path: &Path, secs: u64) {
         let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
         File::options()
@@ -963,6 +967,7 @@ not json
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_the_newest_sessions_are_listed() {
         let tmp = tempfile::tempdir().unwrap();

@@ -245,6 +245,7 @@ mod tests {
         format!("{record}\n")
     }
 
+    #[cfg(unix)]
     #[test]
     fn transcript_path_must_be_an_absolute_jsonl_path() {
         let path = |p: &str| transcript_path(&json!({ "transcript_path": p }));

@@ -412,6 +412,7 @@ fn git(dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::health::tests::{commit, run, worktree};
 
     fn file(path: &str, status: FileStatus, counts: (Option<u64>, Option<u64>)) -> ChangedFile {
@@ -654,10 +655,12 @@ garbage\0\
         assert_eq!(entries[6].0, b"odd\xffname");
     }
 
+    #[cfg(unix)]
     fn rev(dir: &Path) -> String {
         lossy(git(dir, &["rev-parse", "HEAD"]).unwrap().trim_ascii())
     }
 
+    #[cfg(unix)]
     fn project(worktrees: Vec<hive_protocol::Worktree>) -> Project {
         Project {
             id: String::new(),
@@ -668,6 +671,7 @@ garbage\0\
         }
     }
 
+    #[cfg(unix)]
     fn changes(
         path: &str,
         base: DiffBase,
@@ -686,6 +690,7 @@ garbage\0\
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_branch_base_keeps_the_branch_commits_in_view() {
         let tmp = tempfile::tempdir().unwrap();

@@ -1338,6 +1338,7 @@ mod tests {
         assert_eq!(notes.map_err(|e| e.to_string()), Err(run));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_worktree_folder_opens_unless_it_is_a_bundle_or_an_odd_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -1756,6 +1757,7 @@ mod tests {
         assert_eq!(move_to(dir.path(), "a", "ab").unwrap(), "ab/a");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_held_folder_is_not_renamed_or_moved() {
         let dir = tempfile::tempdir().unwrap();
