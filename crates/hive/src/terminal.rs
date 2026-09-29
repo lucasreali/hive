@@ -558,10 +558,10 @@ pub mod conpty {
             );
             let (other, git) = (dir.path().join("Other/cmd"), dir.path().join("Git/cmd"));
             let path = std::env::join_paths([&other, &git]).unwrap();
-            let bash = dir.path().join("Git/bin/bash.exe").into_os_string();
+            let bash = dir.path().join("Git").join("bin").join("bash.exe");
             assert_eq!(
                 shell(TerminalShell::GitBash, &path).unwrap(),
-                [bash, "--login".into(), "-i".into()]
+                [bash.into_os_string(), "--login".into(), "-i".into()]
             );
             // Only a git without its bash: none.
             let none = std::env::join_paths([&other]).unwrap();

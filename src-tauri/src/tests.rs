@@ -106,7 +106,7 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
     service.send(0, welcome).await;
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
+        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "windows": false, "channel": 0})
     );
     // The projects are requested right after the handshake.
     assert_eq!(service.control().await, (0, Control::ListProjects));
@@ -863,7 +863,7 @@ async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
     hive.connect(channel);
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
+        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "windows": false, "channel": 0})
     );
     assert_eq!(service.control().await, (1, Control::CloseTerminal));
     // The new UI gets the settings and the projects again.
