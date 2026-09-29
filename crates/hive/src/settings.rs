@@ -220,8 +220,6 @@ fn text(name: &str, value: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use hive_protocol::ProjectSettings;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
 
     fn store() -> (tempfile::TempDir, Store) {
         let tmp = tempfile::tempdir().unwrap();

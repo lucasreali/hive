@@ -983,6 +983,8 @@ mod tests {
     use super::*;
     use crate::health::tests::{commit, run};
     use serde_json::json;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn file(content: Option<&str>, base: Option<&str>) -> Control {
         Control::File {

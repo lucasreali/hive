@@ -131,6 +131,8 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
     let mut child = command
         .spawn()
         .map_err(|err| io::Error::new(err.kind(), format!("cannot run sh: {err}")))?;
+    // Its copy of the output's write end: the output ends only once none is left open.
+    drop(command);
     let group = child.id();
     let (output, tail) = mpsc::channel();
     // Not waited for: a process left in the background may hold the output open.
@@ -185,7 +187,7 @@ fn last_bytes(mut input: impl Read) -> Vec<u8> {
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use nix::unistd::Pid;
     #[cfg(unix)]
     use std::time::Instant;
 

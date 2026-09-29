@@ -227,7 +227,8 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> io::Resul
 }
 
 // The wrapper is a `sh` script until 12.5.5.
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::ffi::OsStr;

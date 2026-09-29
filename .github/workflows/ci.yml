@@ -49,7 +49,7 @@ jobs:
         with:
           tools: cargo-llvm-cov
       # Exclusions: COVERAGE_EXCLUSIONS.md (same regex as scripts/gates.sh).
-      - run: cargo llvm-cov --workspace --locked --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'
+      - run: cargo llvm-cov --workspace --locked --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs|crates/hive/src/windows'
 
   # The diff's mutants, sharded by their number (mutants.yml, TODO 7.1). `mutants-base` re-runs
   # them for another range (e.g. to measure a change to the mutants setup).

@@ -398,11 +398,8 @@ fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
         .open(path)
 }
 
-/// Windows has no FIFOs to wait on.
 #[cfg(windows)]
-fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
-    std::fs::File::open(path)
-}
+use crate::windows::open_nonblocking;
 
 fn lossy(path: &[u8]) -> String {
     String::from_utf8_lossy(path).into_owned()

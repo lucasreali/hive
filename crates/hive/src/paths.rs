@@ -164,7 +164,8 @@ fn check_peer(stream: &UnixStream, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

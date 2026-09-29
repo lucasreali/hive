@@ -3,6 +3,7 @@
 //! [`unsupported`]. Tested on the Windows CI runner (`windows.yml`).
 
 use std::ffi::OsString;
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -81,6 +82,39 @@ pub fn kill_tree(pid: u32) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+}
+
+/// What a program printed (a path, a `PATH`): programs print UTF-8 on Windows.
+pub fn os_string(bytes: &[u8]) -> OsString {
+    String::from_utf8_lossy(bytes).into_owned().into()
+}
+
+/// A plain open: Windows has no FIFO a measured file could turn into.
+pub fn open_nonblocking(path: &Path) -> io::Result<File> {
+    File::open(path)
+}
+
+/// No Unix permission bits: a file gets its folder's ACL (see [`crate::mode`]).
+pub mod mode {
+    use std::fs::{DirBuilder, File, Metadata, OpenOptions};
+    use std::io;
+
+    pub fn create(options: &mut OpenOptions, _mode: u32) -> &mut OpenOptions {
+        options
+    }
+
+    pub fn folder(builder: &mut DirBuilder, _mode: u32) -> &mut DirBuilder {
+        builder
+    }
+
+    pub fn set(_file: &File, _mode: u32) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// None: nothing is executable by its bits.
+    pub fn of(_meta: &Metadata) -> u32 {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +201,35 @@ mod tests {
         });
         assert!(ended, "not killed after {:?}", started.elapsed());
         assert!(!child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn printed_bytes_are_utf8_text() {
+        assert_eq!(os_string("C:\\é".as_bytes()), "C:\\é");
+        assert_eq!(os_string(b"a\xffb"), "a\u{fffd}b");
+    }
+
+    #[test]
+    fn files_keep_their_folders_acl_and_never_run_by_their_bits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f");
+        let file = crate::mode::private(File::options().write(true).create_new(true))
+            .open(&path)
+            .unwrap();
+        crate::mode::set(&file, 0o755).unwrap();
+        let meta = file.metadata().unwrap();
+        assert!(!meta.permissions().readonly());
+        assert!(!crate::mode::executable(&meta));
+        assert_eq!(crate::mode::of(&meta), 0);
+        let folder = tmp.path().join("d");
+        crate::mode::folder(&mut std::fs::DirBuilder::new(), 0o700)
+            .create(&folder)
+            .unwrap();
+        assert!(folder.is_dir());
+        assert_eq!(
+            std::io::read_to_string(open_nonblocking(&path).unwrap()).unwrap(),
+            ""
+        );
+        assert!(open_nonblocking(&folder.join("missing")).is_err());
     }
 }

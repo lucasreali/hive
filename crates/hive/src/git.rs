@@ -1,6 +1,6 @@
 //! Git always runs as the `git` executable with separate arguments, output size-limited.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -177,14 +177,12 @@ pub use crate::windows::kill_tree as kill_group;
 /// What a program printed (a path, a `PATH`) as an OS string: its bytes on Unix; on Windows,
 /// where programs print UTF-8, its text.
 #[cfg(unix)]
-pub fn os_string(bytes: &[u8]) -> OsString {
+pub fn os_string(bytes: &[u8]) -> std::ffi::OsString {
     std::os::unix::ffi::OsStringExt::from_vec(bytes.to_vec())
 }
 
 #[cfg(windows)]
-pub fn os_string(bytes: &[u8]) -> OsString {
-    String::from_utf8_lossy(bytes).into_owned().into()
-}
+pub use crate::windows::os_string;
 
 /// `git <args>` in `dir` with `ok` exit codes and no input; at most [`OUTPUT_LIMIT`] bytes.
 pub fn output(dir: &Path, args: &[&str], ok: &[i32]) -> io::Result<Vec<u8>> {

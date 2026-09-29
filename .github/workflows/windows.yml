@@ -1,0 +1,68 @@
+# The only place the service's native Windows code runs (12.5): clippy and the tests of `hive`
+# and `hive-protocol` on Windows, and the coverage and mutants of `crates/hive/src/windows*`
+# (excluded from the Linux gates, see COVERAGE_EXCLUSIONS.md).
+name: windows
+
+on:
+  push:
+    branches: [main, "task/**"]
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes the running checks (as ci.yml).
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Whether this push can change the service on Windows: the branch's diff since it left
+  # `main` (merge base with origin/main, as ci.yml's `changes`); always on `main` and on a manual
+  # run. A job skipped by its `if` still leaves the run green.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      service: ${{ steps.diff.outputs.service }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          service=true
+          if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+            # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
+            files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
+            grep -qE '^(crates/|Cargo\.(toml|lock)$|\.github/workflows/windows\.yml$)' <<< "$files" ||
+              service=false
+          fi
+          echo "service=$service" | tee -a "$GITHUB_OUTPUT"
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.service == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview, clippy
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-llvm-cov,cargo-mutants
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo clippy -p hive -p hive-protocol --all-targets --locked -- -D warnings
+      # Runs `cargo test` of both crates instrumented; every Windows file needs all its lines.
+      - run: cargo llvm-cov -p hive -p hive-protocol --locked --no-fail-fast --no-report
+      - run: cargo llvm-cov report --show-missing-lines
+      - run: |
+          cargo llvm-cov report --json --summary-only --output-path cov.json
+          jq -e '[.data[0].files[] | select(.filename | test("crates.hive.src.windows"))]
+            | length > 0 and all(.summary.lines.percent == 100)' cov.json
+      # `--no-config`: `.cargo/mutants.toml` excludes these files for Linux (and runs nextest).
+      - run: cargo mutants --no-config -p hive -f 'crates/hive/src/windows*.rs' -j 2 --timeout 120
