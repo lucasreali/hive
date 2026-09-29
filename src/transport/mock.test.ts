@@ -49,7 +49,7 @@ test("welcomes the UI asynchronously", async () => {
   expect(messages).toEqual([]);
   await tick();
   expect(messages).toEqual([
-    { type: "welcome", version: "mock", distro: "Ubuntu" },
+    { type: "welcome", version: "mock", distro: "Ubuntu", windows: false },
     { type: "settings", settings: DEFAULT_SETTINGS },
     { type: "spaces", spaces: [space("default", "Default", [SHOP, API])], current: "default" },
     { type: "projects", projects: MOCK_REPOS.slice(0, 2) },

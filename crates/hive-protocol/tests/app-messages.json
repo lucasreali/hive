@@ -2,7 +2,8 @@
   {
     "type": "welcome",
     "version": "0.4.0",
-    "distro": "Ubuntu"
+    "distro": "Ubuntu",
+    "windows": false
   },
   {
     "type": "version_mismatch",
@@ -506,7 +507,8 @@
         "scrollback": 5000,
         "cursor_style": "block",
         "cursor_blink": false,
-        "copy_on_select": false
+        "copy_on_select": false,
+        "shell": "default"
       },
       "appearance": {
         "theme": "one-dark"

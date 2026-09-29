@@ -66,6 +66,7 @@ where
             Control::Welcome {
                 version: VERSION.to_owned(),
                 distro: std::env::var("WSL_DISTRO_NAME").ok(),
+                windows: cfg!(windows),
             },
             Some(role),
         ),

@@ -263,6 +263,7 @@ async fn invalid_open_requests_are_answered_with_errors() {
         Control::Welcome {
             version: "x".into(),
             distro: None,
+            windows: false,
         },
     )
     .await;

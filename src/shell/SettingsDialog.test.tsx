@@ -24,7 +24,7 @@ afterEach(async () => {
 
 function open() {
   render(<App />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
   act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS }));
   fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
   return screen.getByRole("dialog", { name: "Settings" }) as HTMLDialogElement;
@@ -135,6 +135,18 @@ test("selects save the cursor style and the theme", async () => {
   pick("Theme", "One Light");
   await waitFor(() => expect(settings().appearance.theme).toBe("one-light"));
   expect(document.documentElement.dataset.theme).toBe("one-light");
+});
+
+test("the shell is a setting only when the service runs natively on Windows", async () => {
+  open();
+  expect(screen.queryByRole("combobox", { name: "Shell" })).toBeNull();
+  search("shell");
+  expect(screen.getByText("No setting matches.")).toBeTruthy();
+  search("");
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: true }));
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Shell" }));
+  fireEvent.click(screen.getByRole("option", { name: "Git Bash" }));
+  await waitFor(() => expect(settings().terminal.shell).toBe("git_bash"));
 });
 
 test("the projects section edits each project's scripts", async () => {

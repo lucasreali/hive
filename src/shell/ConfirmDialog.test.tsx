@@ -16,7 +16,7 @@ const button = (name: string) => screen.getByRole("button", { name });
 function asking() {
   const run = mock(() => {});
   render(<App />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
   act(() => askDiscard("TODO.md", run));
   return run;
 }

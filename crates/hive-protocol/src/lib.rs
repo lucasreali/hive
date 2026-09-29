@@ -145,11 +145,14 @@ pub enum Control {
         role: Role,
     },
     /// Handshake accepted. `distro` is the service's WSL distribution (`WSL_DISTRO_NAME`);
-    /// optional, so adding it kept protocol 1 compatible.
+    /// `windows`: the service runs natively on Windows (12.5), where the terminals' shell is a
+    /// setting. Both optional, so adding them kept protocol 1 compatible.
     Welcome {
         version: String,
         #[serde(default)]
         distro: Option<String>,
+        #[serde(default)]
+        windows: bool,
     },
     /// Handshake refused; the connection is closed after this message.
     VersionMismatch {
@@ -931,6 +934,9 @@ pub struct TerminalSettings {
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
     pub copy_on_select: bool,
+    /// The shell of new terminals when the service runs natively on Windows (12.5.3);
+    /// ignored elsewhere.
+    pub shell: TerminalShell,
 }
 
 impl Default for TerminalSettings {
@@ -942,8 +948,21 @@ impl Default for TerminalSettings {
             cursor_style: CursorStyle::Block,
             cursor_blink: false,
             copy_on_select: false,
+            shell: TerminalShell::Default,
         }
     }
+}
+
+/// A native Windows terminal's shell (12.5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalShell {
+    /// PowerShell: `pwsh` when it is on `PATH`, else Windows PowerShell.
+    #[default]
+    Default,
+    Cmd,
+    /// Git for Windows' `bash --login -i`.
+    GitBash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1718,6 +1737,7 @@ mod tests {
         let welcome = Control::Welcome {
             version: "0.1.0".into(),
             distro: None,
+            windows: false,
         };
         assert_eq!(frame.to_control().unwrap(), welcome);
     }
@@ -2430,10 +2450,10 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
         );
         let partial: Control = serde_json::from_str(
-            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,
+            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,
         )
         .unwrap();
         let mut expected = Settings::default();
@@ -2442,6 +2462,7 @@ mod tests {
             config_dir: "/w".into(),
         });
         expected.terminal.cursor_style = CursorStyle::Bar;
+        expected.terminal.shell = TerminalShell::GitBash;
         expected.appearance.theme = Theme::OneLight;
         expected
             .projects

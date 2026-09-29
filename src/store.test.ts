@@ -59,11 +59,12 @@ test("settings replace the defaults; a failure keeps them and says why", () => {
 });
 
 test("welcome and version_mismatch set the connection", () => {
-  apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
+  apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu", windows: true });
   expect(useHive.getState().connection).toEqual({
     status: "connected",
     version: "0.1.0",
     distro: "Ubuntu",
+    windows: true,
   });
   const versions = {
     protocol: 2,

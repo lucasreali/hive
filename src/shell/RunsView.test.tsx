@@ -243,7 +243,7 @@ test("the sidebar shows a worktree's latest run; a click shows it", () => {
   act(() => apply({ type: "projects", projects: [shop] }));
   // Asked for once connected, on every branch, for every project of the sidebar.
   expect(list).not.toHaveBeenCalled();
-  act(() => apply({ type: "welcome", version: "0", distro: null }));
+  act(() => apply({ type: "welcome", version: "0", distro: null, windows: false }));
   expect(list.mock.calls).toEqual([[shop.id, null, false]]);
   act(() => apply({ type: "runs", ...runs(null, all) }));
   const badges = [...document.querySelectorAll(".run-badge")] as HTMLElement[];

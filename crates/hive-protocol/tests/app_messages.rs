@@ -181,6 +181,7 @@ fn samples() -> Vec<Control> {
         Welcome {
             version: s("0.4.0"),
             distro: Some(s("Ubuntu")),
+            windows: false,
         },
         VersionMismatch {
             protocol: 1,

@@ -192,6 +192,8 @@ type Field = {
   label: string;
   help?: string;
   check?: boolean;
+  /** Shown only when the service runs natively on Windows. */
+  windows?: true;
   control: (id: string, label: string) => ReactNode;
 };
 
@@ -199,6 +201,11 @@ const CURSORS = [
   { value: "block", label: "Block" },
   { value: "bar", label: "Bar" },
   { value: "underline", label: "Underline" },
+];
+const SHELLS = [
+  { value: "default", label: "PowerShell" },
+  { value: "cmd", label: "Command Prompt" },
+  { value: "git_bash", label: "Git Bash" },
 ];
 const THEMES = [
   { value: "one-dark", label: "One Dark" },
@@ -278,6 +285,13 @@ const FIELDS: Field[] = [
         }}
       />
     ),
+  },
+  {
+    section: "Terminal",
+    label: "Shell",
+    help: "PowerShell is pwsh when installed, else Windows PowerShell. For new terminals.",
+    windows: true,
+    control: (id) => <Shell id={id} />,
   },
   { section: "Appearance", label: "Theme", control: (id) => <Theme id={id} /> },
   {
@@ -378,6 +392,22 @@ function CursorStyle({ id }: { id: string }) {
       onChange={(v) =>
         saveSettings((s) => {
           s.terminal.cursor_style = v as Settings["terminal"]["cursor_style"];
+        })
+      }
+    />
+  );
+}
+
+function Shell({ id }: { id: string }) {
+  const value = useHive((s) => s.settings.terminal.shell);
+  return (
+    <Select
+      aria-labelledby={`${id}-label`}
+      value={value}
+      options={SHELLS}
+      onChange={(v) =>
+        saveSettings((s) => {
+          s.terminal.shell = v as Settings["terminal"]["shell"];
         })
       }
     />
@@ -759,8 +789,10 @@ function Accounts() {
 }
 
 function Content({ section, query }: { section: Section; query: string }) {
+  const windows = useHive((s) => s.connection.status === "connected" && s.connection.windows);
+  const fields = FIELDS.filter((f) => windows || !f.windows);
   if (query) {
-    const found = FIELDS.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
+    const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
     if (found.length === 0) return <p className="field-help">No setting matches.</p>;
     return <Fields fields={found} />;
   }
@@ -768,7 +800,7 @@ function Content({ section, query }: { section: Section; query: string }) {
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
   if (section === "Accounts") return <Accounts />;
-  return <Fields fields={FIELDS.filter((f) => f.section === section)} />;
+  return <Fields fields={fields.filter((f) => f.section === section)} />;
 }
 
 /**

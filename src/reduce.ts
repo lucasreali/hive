@@ -84,7 +84,14 @@ function removedProject(s: HiveState, id: string): Partial<HiveState> {
 function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
     case "welcome":
-      return { connection: { status: "connected", version: m.version, distro: m.distro } };
+      return {
+        connection: {
+          status: "connected",
+          version: m.version,
+          distro: m.distro,
+          windows: m.windows,
+        },
+      };
     case "settings":
       return { settings: m.settings, settingsError: null, settingsPending: false };
     case "settings_failed":

@@ -38,7 +38,7 @@ const [shop, api] = MOCK_REPOS;
 
 function open(project: string | null = shop.id) {
   render(<App />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
   act(() => apply({ type: "projects", projects: [shop, api] }));
   act(() => openModal("new-worktree", project));
   return screen.getByRole("dialog", { name: "New worktree" }) as HTMLDialogElement;

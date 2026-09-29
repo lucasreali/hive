@@ -20,7 +20,7 @@ const agent = (id: string, state: AgentState = "working") => {
 
 function closeWith(agents: string[]) {
   render(<App />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
   for (const id of agents) act(() => agent(id));
   fireEvent.click(screen.getByTitle("Close"));
 }

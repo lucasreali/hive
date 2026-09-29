@@ -37,7 +37,7 @@ test("the service watches the worktree the open files panel shows, and nothing e
   const stop = followPanel(transport);
   // Not connected yet.
   expect(calls).toEqual([]);
-  apply({ type: "welcome", version: "0.1.0", distro: null });
+  apply({ type: "welcome", version: "0.1.0", distro: null, windows: false });
   expect(calls).toEqual([shop.id]);
   // Other changes do not send it again.
   apply({ type: "files", path: shop.id, files: [], truncated: false });
@@ -48,7 +48,7 @@ test("the service watches the worktree the open files panel shows, and nothing e
   expect(calls).toEqual([shop.id, api.id, null, api.id]);
   // A new connection has no watch: nothing to stop, and it is sent again.
   apply({ type: "disconnected", reason: "gone", bundled: false });
-  apply({ type: "welcome", version: "0.1.0", distro: null });
+  apply({ type: "welcome", version: "0.1.0", distro: null, windows: false });
   expect(calls).toEqual([shop.id, api.id, null, api.id, api.id]);
   stop();
   select(shop.id);
@@ -59,7 +59,7 @@ test("a Claude worktree is watched against its branch, and anew when its base is
   const { calls, transport } = recorder();
   const fix = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).worktrees[1] as { path: string };
   apply({ type: "projects", projects: MOCK_REPOS });
-  apply({ type: "welcome", version: "0.1.0", distro: null });
+  apply({ type: "welcome", version: "0.1.0", distro: null, windows: false });
   setRightPanel("files");
   select(fix.path);
   const stop = followPanel(transport);
@@ -70,7 +70,7 @@ test("a Claude worktree is watched against its branch, and anew when its base is
   stop();
 });
 
-const welcome = () => apply({ type: "welcome", version: "1", distro: null });
+const welcome = () => apply({ type: "welcome", version: "1", distro: null, windows: false });
 const none = { base: "head", branch: null, base_error: null } as const;
 const changes = (path: string) =>
   apply({ type: "changes", path, ...none, files: [], added: 0, removed: 0, error: null });

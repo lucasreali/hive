@@ -7,7 +7,8 @@ import type { JobLog, RunDetail, Runs } from "./runs";
 
 /** Service → app messages the store understands. Mirrors `hive_protocol::Control`. */
 export type ServiceMessage =
-  | { type: "welcome"; version: string; distro: string | null }
+  // `windows`: the service runs natively on Windows (12.5), where the shell is a setting.
+  | { type: "welcome"; version: string; distro: string | null; windows: boolean }
   | { type: "settings"; settings: Settings }
   // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
   // the defaults).
@@ -393,6 +394,8 @@ export type Settings = {
     cursor_style: "block" | "bar" | "underline";
     cursor_blink: boolean;
     copy_on_select: boolean;
+    /** New terminals' shell when the service runs natively on Windows; ignored elsewhere. */
+    shell: "default" | "cmd" | "git_bash";
   };
   appearance: { theme: "one-dark" | "one-light" };
   /** `volume`: the alert tone's, in percent; 0 mutes it. */

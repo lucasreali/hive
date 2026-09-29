@@ -165,7 +165,7 @@ test("the sidebar shows a worktree's pull request; a click shows its details", (
   act(() => apply({ type: "projects", projects: [shop] }));
   // Asked for once connected, for every project of the sidebar.
   expect(list).not.toHaveBeenCalled();
-  act(() => apply({ type: "welcome", version: "0", distro: null }));
+  act(() => apply({ type: "welcome", version: "0", distro: null, windows: false }));
   expect(list.mock.calls).toEqual([[shop.id, false]]);
   act(() => apply({ type: "pulls", ...pulls }));
   const badges = document.querySelectorAll(".pull-badge");

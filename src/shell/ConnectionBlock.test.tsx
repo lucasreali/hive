@@ -18,7 +18,7 @@ const workspace = () => screen.getByRole("main");
 test("no block while connecting or connected", () => {
   render(<App />);
   expect(dialog()).toBeNull();
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
   expect(dialog()).toBeNull();
   expect(workspace().inert).toBe(false);
 });

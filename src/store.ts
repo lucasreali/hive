@@ -58,7 +58,7 @@ import { type EditBuffer, isDirty, isFor } from "./viewer/buffer";
 
 export type Connection =
   | { status: "connecting" }
-  | { status: "connected"; version: string; distro: string | null }
+  | { status: "connected"; version: string; distro: string | null; windows: boolean }
   | {
       status: "version_mismatch";
       protocol: number;
@@ -165,6 +165,7 @@ export const DEFAULT_SETTINGS: Settings = {
     cursor_style: "block",
     cursor_blink: false,
     copy_on_select: false,
+    shell: "default",
   },
   appearance: { theme: "one-dark" },
   notifications: { volume: 100 },
