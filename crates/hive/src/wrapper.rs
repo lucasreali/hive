@@ -428,8 +428,11 @@ mod tests {
                 .stderr(Stdio::piped())
                 .spawn()
         };
-        let busy = |spawned: &io::Result<_>| matches!(spawned, Err(err) if err.kind() == io::ErrorKind::ExecutableFileBusy);
-        let mut child = (0..20).map(spawn).find(|s| !busy(s)).unwrap().unwrap();
+        let busy = Some(io::ErrorKind::ExecutableFileBusy);
+        let spawned = (0..20)
+            .map(spawn)
+            .find(|s| s.as_ref().err().map(io::Error::kind) != busy);
+        let mut child = spawned.unwrap().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
