@@ -696,6 +696,8 @@ mod tests {
         assert_eq!(Store::load(file).get(), (Settings::default(), None));
     }
 
+    // `/a` is no absolute path on Windows.
+    #[cfg(unix)]
     #[test]
     fn account_names_and_folders_are_checked() {
         let refused = |accounts: &[Account]| {
@@ -747,6 +749,8 @@ mod tests {
         assert_eq!(check(&fine), Ok(()));
     }
 
+    // `/a` is no absolute path on Windows.
+    #[cfg(unix)]
     #[test]
     fn the_spaces_claude_folders_become_accounts_once() {
         let (tmp, store) = store();

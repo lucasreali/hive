@@ -622,6 +622,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn every_accounts_sessions_are_listed_with_their_folder() {
         let tmp = tempfile::tempdir().unwrap();
