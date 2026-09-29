@@ -63,22 +63,42 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-mutants
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # `--no-config`: `.cargo/mutants.toml` excludes these files for Linux (and runs nextest).
-      - run: cargo mutants --no-config -p hive -f 'crates/hive/src/windows*.rs' -j 2 --timeout 120
+      # TEMPORARY: the lib tests over and over, two at a time; a run past 75 s gets its
+      # threads' stacks (cdb) and the processes printed.
+      - run: |
+          exe=$(cargo test -p hive --lib --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.kind[0] == "lib") | .executable' | tr -d '\r')
+          echo "exe: $exe"
+          cdb=$(ls "/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe" 2>/dev/null || true)
+          echo "cdb: $cdb"
+          for i in $(seq 1 45); do
+            for k in 1 2; do "$exe" > "out-$k.txt" 2>&1 & done
+            for t in $(seq 1 75); do
+              sleep 1
+              [ -z "$(jobs -r)" ] && break
+            done
+            if [ "$t" = 75 ]; then
+              echo "::group::HANG at run $i"
+              grep -h "running for over\|test result" out-*.txt
+              powershell -NoProfile -Command "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-Table -AutoSize | Out-String -Width 400"
+              for pid in $(powershell -NoProfile -Command "(Get-Process | Where-Object Path -eq '$(cygpath -w "$exe")').Id" | tr -d '\r'); do
+                echo "--- stacks of $pid"
+                [ -n "$cdb" ] && "$cdb" -pv -p "$pid" -y "$(cygpath -w "$(dirname "$exe")")" -c "~*k 40; qd" 2>&1 | grep -v "^\s*$" | head -n 600
+              done
+              echo "::endgroup::"
+              taskkill //F //IM "$(basename "$exe")" || true
+            fi
+            wait
+            echo "run $i: $(grep -h 'test result' out-*.txt | tr '\n' ' ')"
+          done
       # What a timeout or a missed mutant's tests printed, and the slowest test runs, here
       # rather than only in the artifact.
       - if: always() && hashFiles('mutants.out/outcomes.json') != ''
         run: |
           jq -r '.outcomes[] | [.summary, (.phase_results[] | select(.phase == "Test")
             | .duration | floor), (.scenario | .Mutant?.name // .)] | @tsv' \
-            mutants.out/outcomes.json | sort -k2 -n -r | head -n 15
+            mutants.out/outcomes.json | tr -d '\r' | sort -k2 -n -r | head -n 15
           for log in $(jq -r '.outcomes[] | select(.summary == "Timeout" or .summary == "MissedMutant")
-            | .log_path' mutants.out/outcomes.json); do
+            | .log_path' mutants.out/outcomes.json | tr -d '\r'); do
             echo "::group::$log"; cat "mutants.out/$log"; echo "::endgroup::"
           done
-      - if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: mutants-windows-${{ matrix.k }}
-          path: mutants.out
-          retention-days: 7
