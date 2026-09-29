@@ -163,7 +163,7 @@ mod tests {
     /// A repository at `<temp>/repo`, so its worktrees can go next to it (`../wt`).
     fn repo() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap().join("repo");
+        let root = canonical(dir.path()).unwrap().join("repo");
         std::fs::create_dir(&root).unwrap();
         run_git(&root, &["init", "-q"]);
         run_git(&root, &["commit", "-q", "--allow-empty", "-m", "init"]);

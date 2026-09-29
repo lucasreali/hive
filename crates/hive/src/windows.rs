@@ -19,7 +19,8 @@ use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
 use windows_sys::Win32::Foundation::{
-    ERROR_LOCK_VIOLATION, ERROR_PIPE_BUSY, ERROR_SHARING_VIOLATION, HANDLE, LocalFree, WIN32_ERROR,
+    ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_PIPE_BUSY, ERROR_SHARING_VIOLATION, HANDLE,
+    LocalFree, WIN32_ERROR,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
@@ -368,15 +369,23 @@ pub fn native_path(path: &Path, _wslpath: &std::ffi::OsStr) -> io::Result<String
     Ok(path.to_string_lossy().into_owned())
 }
 
-/// `err`, told plainly when another program holds the file `name` open without sharing it:
-/// Windows then refuses to open or replace it, and a save leaves it as it was.
+/// `err`, told plainly when another program may hold the file `name` open without sharing it:
+/// Windows then refuses to open it (a sharing or lock violation) or to replace it (access
+/// denied, also what a file Hive may not write gets), and a save leaves it as it was.
 pub fn in_use(err: io::Error, name: &str) -> io::Error {
-    let held = [ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION].map(|code| Some(code as i32));
-    if !held.contains(&err.raw_os_error()) {
+    let held = [
+        ERROR_SHARING_VIOLATION,
+        ERROR_LOCK_VIOLATION,
+        ERROR_ACCESS_DENIED,
+    ];
+    if !held
+        .map(|code| Some(code as i32))
+        .contains(&err.raw_os_error())
+    {
         return err;
     }
     io::Error::other(format!(
-        "{name} is open in another program that keeps it locked: close it there and save \
+        "{name} is open in another program, or cannot be replaced: close it there and save \
          again ({err})"
     ))
 }
@@ -671,14 +680,19 @@ mod tests {
 
     #[test]
     fn a_locked_file_is_said_to_be_in_use() {
-        for code in [ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION] {
+        for code in [
+            ERROR_SHARING_VIOLATION,
+            ERROR_LOCK_VIOLATION,
+            ERROR_ACCESS_DENIED,
+        ] {
             let err = in_use(io::Error::from_raw_os_error(code as i32), "a.rs").to_string();
-            let said = "a.rs is open in another program that keeps it locked: close it there \
+            let said = "a.rs is open in another program, or cannot be replaced: close it there \
                         and save again (";
             assert!(err.starts_with(said), "{err}");
         }
-        let denied = in_use(io::Error::from_raw_os_error(5), "a.rs");
-        assert_eq!(denied.raw_os_error(), Some(5));
+        // Not found (2) is said as it is.
+        let other = in_use(io::Error::from_raw_os_error(2), "a.rs");
+        assert_eq!(other.raw_os_error(), Some(2));
     }
 
     #[test]

@@ -453,6 +453,27 @@ mod tests {
     const SOON: Duration = Duration::from_secs(5);
     const NEVER: Duration = Duration::from_millis(600);
 
+    // TEMPORARY diagnostic (12.5.6b): what notify reports on Windows for a write two levels
+    // under a folder watched without recursion.
+    #[cfg(windows)]
+    #[test]
+    fn diagnostic_notify_events() {
+        let (_dir, root) = repo();
+        write(&root, "ignored/deep/x.txt");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut w = notify::recommended_watcher(move |e| {
+            let _ = tx.send(e);
+        })
+        .unwrap();
+        w.watch(&root, RecursiveMode::NonRecursive).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let before: Vec<_> = rx.try_iter().collect();
+        write(&root, "ignored/deep/y.txt");
+        std::thread::sleep(Duration::from_millis(500));
+        let after: Vec<_> = rx.try_iter().collect();
+        panic!("root {root:?}\nbefore {before:#?}\nafter {after:#?}");
+    }
+
     #[tokio::test]
     async fn ignored_trees_are_neither_listed_nor_watched() {
         let (_dir, root) = repo();

@@ -446,10 +446,12 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
                 },
             ]
         );
-        assert_eq!(list[0].to_string(), "/repo\tmain");
+        // Shown with the system's separator.
+        let native = |text: &str| text.replace('/', std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(list[0].to_string(), native("/repo\tmain"));
         assert_eq!(
             list[1].to_string(),
-            "/repo/.claude/worktrees/a b\t(detached)"
+            native("/repo/.claude/worktrees/a b\t(detached)")
         );
     }
 
