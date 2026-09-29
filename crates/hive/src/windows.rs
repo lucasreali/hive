@@ -1763,11 +1763,14 @@ pub mod claude {
             let now = names(&bin);
             assert_eq!(now.len(), 3, "{now:?}");
             assert!(now[1].starts_with("claude.exe.") && now[1].ends_with(".old"));
-            // Once it ended, what was moved aside goes.
+            // Once it ended, what was moved aside goes, and only that.
             running.kill().unwrap();
             running.wait().unwrap();
+            std::fs::write(bin.join("hive.exe.txt"), "").unwrap();
+            std::fs::write(bin.join("notes.old"), "").unwrap();
             install_wrapper(&whoami, &bin).unwrap();
-            assert_eq!(names(&bin), ["claude.exe", "hive.exe"]);
+            let kept = ["claude.exe", "hive.exe", "hive.exe.txt", "notes.old"];
+            assert_eq!(names(&bin), kept);
         }
 
         #[test]
