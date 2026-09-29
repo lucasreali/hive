@@ -1267,6 +1267,52 @@ pub mod terminal {
             end_sessions(&[shell.session]).await;
         }
 
+        #[tokio::test]
+        async fn powershells_working_folder_follows_its_location() {
+            let shell = Shell::start(TerminalShell::Default);
+            let elsewhere = tempfile::tempdir().unwrap();
+            let holds = |dir: &Path| {
+                let found = crate::windows::inside(dir);
+                found.iter().any(|p| p.pid == shell.session)
+            };
+            // `cd` alone would leave it in the folder it started in.
+            let at = elsewhere.path().display();
+            shell.type_line(&format!("Set-Location -LiteralPath '{at}'"));
+            let followed = async {
+                while !holds(elsewhere.path()) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(SHOWN, followed).await.unwrap();
+            assert!(!holds(shell.dir.path()));
+            // A location outside the file system keeps the last folder, and the prompt.
+            shell.type_line("Set-Location Env:");
+            shell.shows(r"PS Env:\>").await;
+            assert!(holds(elsewhere.path()));
+            end_sessions(&[shell.session]).await;
+        }
+
+        #[tokio::test]
+        async fn a_program_git_bash_starts_is_found_where_it_runs() {
+            let shell = Shell::start(TerminalShell::GitBash);
+            let sub = shell.dir.path().join("sub");
+            std::fs::create_dir(&sub).unwrap();
+            // Its `cd` moves no working folder of its own, but a program starts in it.
+            let at = sub.display();
+            shell.type_line(&format!("cd '{at}' && ping -n 30 127.0.0.1 > /dev/null"));
+            let ping = async {
+                loop {
+                    let found = crate::windows::inside(&sub);
+                    if found.iter().any(|p| p.comm.eq_ignore_ascii_case("ping")) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(SHOWN, ping).await.unwrap();
+            end_sessions(&[shell.session]).await;
+        }
+
         #[test]
         fn sizes_fit_a_console_and_failed_results_are_errors() {
             let fits = size(80, 24);
@@ -1896,7 +1942,10 @@ mod tests {
         assert_eq!(on_path(cmd, &path), Some(system.join("cmd.exe")));
         assert_eq!(on_path(cmd, tmp.path().as_os_str()), None);
         // A relative folder is never looked in, though it holds the program.
-        let here = tempfile::tempdir_in(".").unwrap();
+        let here = tempfile::Builder::new()
+            .prefix(".hive-test-")
+            .tempdir_in(".")
+            .unwrap();
         assert!(here.path().is_relative(), "{here:?}");
         std::fs::write(here.path().join("gh.exe"), "").unwrap();
         let path = std::env::join_paths([here.path(), &system]).unwrap();

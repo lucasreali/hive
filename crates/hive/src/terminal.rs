@@ -418,9 +418,17 @@ pub mod conpty {
 
     use hive_protocol::TerminalShell;
 
+    /// What PowerShell runs once its profile ran: its prompt (the user's, wrapped) first moves
+    /// the process's working folder to its file-system location. PowerShell's `cd` moves only
+    /// its location, and a worktree is refused removal while some process works in it
+    /// (`windows::inside`). No `"` and no trailing `\`: [`command_line`] quotes it as it is.
+    pub const FOLLOW: &str = "$__hivePrompt = $function:prompt; function global:prompt { try { \
+        [Environment]::CurrentDirectory = (Get-Location -PSProvider FileSystem).ProviderPath \
+        } catch {}; & $__hivePrompt }";
+
     /// The program and arguments of `shell`, programs found in the absolute folders of `path`
     /// (the service's `PATH`), else in `System32` of `root` (`%SystemRoot%`, else
-    /// `C:\Windows`): `pwsh` when there, else Windows PowerShell; `cmd`; Git Bash, the
+    /// `C:\Windows`): `pwsh` when there, else Windows PowerShell, running [`FOLLOW`]; `cmd`; Git Bash, the
     /// `bin\bash.exe` two folders above the first `git.exe` that has one (`<Git>\cmd\git.exe`).
     pub fn shell(
         shell: TerminalShell,
@@ -439,7 +447,9 @@ pub mod conpty {
             TerminalShell::Default => {
                 let found = find("pwsh.exe").or_else(|| find("powershell.exe"));
                 let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
-                Ok(vec![found.unwrap_or_else(|| windows.into())])
+                let program = found.unwrap_or_else(|| windows.into());
+                let args = [program, "-NoExit".into(), "-Command".into(), FOLLOW.into()];
+                Ok(args.to_vec())
             }
             TerminalShell::Cmd => {
                 let found = find("cmd.exe");
@@ -557,11 +567,11 @@ pub mod conpty {
             let empty = dir.path().join("cmd");
             assert_eq!(
                 run(&[&empty, &windows, &pwsh]),
-                [pwsh.join("pwsh.exe").into_os_string()]
+                powershell(pwsh.join("pwsh.exe"))
             );
             assert_eq!(
                 run(&[&empty, &windows]),
-                [windows.join("powershell.exe").into_os_string()]
+                powershell(windows.join("powershell.exe"))
             );
             let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty]), None).unwrap();
             assert_eq!(cmd, [empty.join("cmd.exe").into_os_string()]);
@@ -574,7 +584,7 @@ pub mod conpty {
             let none = OsStr::new("");
             let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
             let default = shell(TerminalShell::Default, none, Some(root.as_os_str())).unwrap();
-            assert_eq!(default, [windows.into_os_string()]);
+            assert_eq!(default, powershell(windows));
             let cmd = shell(TerminalShell::Cmd, none, Some(root.as_os_str())).unwrap();
             assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
             // Without `%SystemRoot%`: Windows' usual folder.
@@ -600,7 +610,13 @@ pub mod conpty {
             assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
             let default = shell(TerminalShell::Default, &path, root).unwrap();
             let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
-            assert_eq!(default, [windows.into_os_string()]);
+            assert_eq!(default, powershell(windows));
+        }
+
+        /// PowerShell `program`, following its location with [`FOLLOW`].
+        fn powershell(program: PathBuf) -> Vec<OsString> {
+            let args = ["-NoExit", "-Command", FOLLOW].map(OsString::from);
+            [program.into_os_string()].into_iter().chain(args).collect()
         }
 
         #[test]
