@@ -418,23 +418,33 @@ pub mod conpty {
 
     use hive_protocol::TerminalShell;
 
-    /// The program and arguments of `shell`, programs found on `path` (the service's `PATH`,
-    /// else left to `CreateProcessW`'s search): `pwsh` when there, else Windows PowerShell;
-    /// `cmd`; Git Bash, the `bin\bash.exe` two folders above the first `git.exe` that has one
-    /// (`<Git>\cmd\git.exe`).
-    pub fn shell(shell: TerminalShell, path: &OsStr) -> Result<Vec<OsString>, String> {
+    /// The program and arguments of `shell`, programs found in the absolute folders of `path`
+    /// (the service's `PATH`), else in `System32` of `root` (`%SystemRoot%`, else
+    /// `C:\Windows`): `pwsh` when there, else Windows PowerShell; `cmd`; Git Bash, the
+    /// `bin\bash.exe` two folders above the first `git.exe` that has one (`<Git>\cmd\git.exe`).
+    pub fn shell(
+        shell: TerminalShell,
+        path: &OsStr,
+        root: Option<&OsStr>,
+    ) -> Result<Vec<OsString>, String> {
         let on_path = |name: &'static str| {
-            let dirs = std::env::split_paths(path);
+            // A relative folder would find a program of whatever folder the service is in.
+            let dirs = std::env::split_paths(path).filter(|dir| dir.is_absolute());
             dirs.map(move |dir| dir.join(name))
                 .filter(|file| file.is_file())
         };
         let find = |name| on_path(name).next().map(PathBuf::into_os_string);
+        let system = Path::new(root.unwrap_or(OsStr::new(r"C:\Windows"))).join("System32");
         match shell {
             TerminalShell::Default => {
                 let found = find("pwsh.exe").or_else(|| find("powershell.exe"));
-                Ok(vec![found.unwrap_or_else(|| "powershell.exe".into())])
+                let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
+                Ok(vec![found.unwrap_or_else(|| windows.into())])
             }
-            TerminalShell::Cmd => Ok(vec![find("cmd.exe").unwrap_or_else(|| "cmd.exe".into())]),
+            TerminalShell::Cmd => {
+                let found = find("cmd.exe");
+                Ok(vec![found.unwrap_or_else(|| system.join("cmd.exe").into())])
+            }
             TerminalShell::GitBash => {
                 let above = |mut git: PathBuf| {
                     git.pop();
@@ -543,7 +553,7 @@ pub mod conpty {
                 &["7/pwsh.exe", "v1.0/powershell.exe", "cmd/cmd.exe"],
             );
             let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
-            let run = |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs)).unwrap();
+            let run = |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs), None).unwrap();
             let empty = dir.path().join("cmd");
             assert_eq!(
                 run(&[&empty, &windows, &pwsh]),
@@ -553,13 +563,44 @@ pub mod conpty {
                 run(&[&empty, &windows]),
                 [windows.join("powershell.exe").into_os_string()]
             );
-            assert_eq!(run(&[&empty]), os(&["powershell.exe"]));
-            let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty])).unwrap();
+            let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty]), None).unwrap();
             assert_eq!(cmd, [empty.join("cmd.exe").into_os_string()]);
-            assert_eq!(
-                shell(TerminalShell::Cmd, OsStr::new("")).unwrap(),
-                os(&["cmd.exe"])
-            );
+        }
+
+        #[test]
+        fn shells_not_on_path_are_the_ones_in_system32() {
+            let root = Path::new(r"D:\Win");
+            let system = root.join("System32");
+            let none = OsStr::new("");
+            let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
+            let default = shell(TerminalShell::Default, none, Some(root.as_os_str())).unwrap();
+            assert_eq!(default, [windows.into_os_string()]);
+            let cmd = shell(TerminalShell::Cmd, none, Some(root.as_os_str())).unwrap();
+            assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
+            // Without `%SystemRoot%`: Windows' usual folder.
+            let usual = Path::new(r"C:\Windows").join("System32").join("cmd.exe");
+            let cmd = shell(TerminalShell::Cmd, none, None).unwrap();
+            assert_eq!(cmd, [usual.into_os_string()]);
+        }
+
+        #[test]
+        fn relative_folders_of_path_are_skipped() {
+            // A folder under the current one (the crate's), named relatively.
+            let here = tempfile::Builder::new()
+                .prefix(".hive-test-")
+                .tempdir_in(".")
+                .unwrap();
+            let relative = Path::new(here.path().file_name().unwrap());
+            assert!(relative.is_relative());
+            files(relative, &["cmd.exe", "pwsh.exe"]);
+            let path = std::env::join_paths([relative]).unwrap();
+            let root = Some(OsStr::new("R"));
+            let system = Path::new("R").join("System32");
+            let cmd = shell(TerminalShell::Cmd, &path, root).unwrap();
+            assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
+            let default = shell(TerminalShell::Default, &path, root).unwrap();
+            let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
+            assert_eq!(default, [windows.into_os_string()]);
         }
 
         #[test]
@@ -573,13 +614,13 @@ pub mod conpty {
             let path = std::env::join_paths([&other, &git]).unwrap();
             let bash = dir.path().join("Git").join("bin").join("bash.exe");
             assert_eq!(
-                shell(TerminalShell::GitBash, &path).unwrap(),
+                shell(TerminalShell::GitBash, &path, None).unwrap(),
                 [bash.into_os_string(), "--login".into(), "-i".into()]
             );
             // Only a git without its bash: none.
             let none = std::env::join_paths([&other]).unwrap();
             assert_eq!(
-                shell(TerminalShell::GitBash, &none).unwrap_err(),
+                shell(TerminalShell::GitBash, &none, None).unwrap_err(),
                 "Git Bash was not found: no git.exe on PATH"
             );
         }

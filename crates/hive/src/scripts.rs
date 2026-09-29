@@ -163,8 +163,9 @@ pub fn run(
     #[cfg(windows)]
     let group = crate::windows::Job::of(&child)?;
     let (output, tail) = mpsc::channel();
-    // Not waited for: a process left in the background may hold the output open.
-    std::thread::spawn(move || output.send(last_bytes(reader)));
+    // Not waited for: a process left in the background may hold the output open. Without a
+    // thread (not a panic: it would end the service) the output is closed and not shown.
+    let _ = std::thread::Builder::new().spawn(move || output.send(last_bytes(reader)));
     // Checked once per poll until `time` is spent: bounded by a count, not a clock.
     let polls = time.as_millis().div_ceil(POLL.as_millis());
     let mut waited = Ok(None);
