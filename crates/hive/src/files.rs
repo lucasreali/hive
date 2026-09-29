@@ -483,15 +483,17 @@ mod tests {
         // Nor does the git dir, apart from HEAD and the index.
         write(&root, ".git/other");
         assert!(!changes(&mut watcher, NEVER).await);
-        // Nor a folder's own change (its mode here; Windows reports one for the write in the
-        // ignored tree above). Not on macOS: FSEvents still flags `src` as just created.
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::Permissions::from_mode(0o700);
-            std::fs::set_permissions(root.join("src"), mode).unwrap();
-        }
-        assert!(!changes(&mut watcher, NEVER).await);
+        // Nor a folder's own change (Windows reports one for the write in the ignored tree
+        // above; Unix one for its mode), as told, since FSEvents coalesces it with the folder's
+        // creation; a file's is.
+        let modified = |kind, path: &str| {
+            let event = Event::new(EventKind::Modify(kind)).add_path(root.join(path));
+            Ok(event)
+        };
+        let metadata = ModifyKind::Metadata(notify::event::MetadataKind::Any);
+        assert!(!watcher.saw(modified(ModifyKind::Any, "src")));
+        assert!(!watcher.saw(modified(metadata, "src")));
+        assert!(watcher.saw(modified(ModifyKind::Any, "src/a.rs")));
         // A new folder is.
         std::fs::create_dir(root.join("fresh")).unwrap();
         assert!(changes(&mut watcher, SOON).await);
