@@ -1,7 +1,10 @@
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::process::Command;
 use std::time::Duration;
 
+#[cfg(unix)]
 use hive_protocol::SpaceEnv;
 use serde_json::json;
 
@@ -275,6 +278,7 @@ fn the_rate_limit_holds_runs_as_pull_requests() {
 /// A followed repository with a GitHub remote and a fake `gh` in the same temporary folder:
 /// it records every call's arguments and folder in `gh.log`, answers with the recordings,
 /// and refuses run 13.
+#[cfg(unix)]
 struct Setup {
     tmp: tempfile::TempDir,
     projects: Projects,
@@ -283,6 +287,7 @@ struct Setup {
     cache: Mutex<Cache>,
 }
 
+#[cfg(unix)]
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .arg("-C")
@@ -295,6 +300,7 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}");
 }
 
+#[cfg(unix)]
 fn setup() -> Setup {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("repo");
@@ -340,6 +346,7 @@ esac
     }
 }
 
+#[cfg(unix)]
 impl Setup {
     fn answer(&self, request: Control) -> Vec<Control> {
         answer(&self.gh, &self.projects, &self.cache, request)
@@ -372,6 +379,7 @@ impl Setup {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn the_list_is_asked_per_branch_once_per_interval() {
     let setup = setup();
@@ -433,6 +441,7 @@ fn the_list_is_asked_per_branch_once_per_interval() {
     assert_eq!(setup.calls().len(), 3);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_run_and_its_failed_job_log_are_asked_for() {
     let setup = setup();
@@ -526,6 +535,7 @@ fn a_run_and_its_failed_job_log_are_asked_for() {
     assert_eq!(gone, [expected]);
 }
 
+#[cfg(unix)]
 #[test]
 fn re_run_and_cancel_send_the_right_arguments() {
     let setup = setup();
@@ -578,6 +588,7 @@ fn re_run_and_cancel_send_the_right_arguments() {
     assert_eq!(setup.calls().len(), calls + 1);
 }
 
+#[cfg(unix)]
 #[test]
 fn only_followed_projects_with_a_github_remote_are_asked_about() {
     let setup = setup();

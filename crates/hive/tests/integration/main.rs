@@ -1,4 +1,5 @@
-//! Integration tests: run the real `hive` binary.
+//! Integration tests: run the real `hive` binary. The service runs on Unix only until 12.5.2.
+#![cfg(unix)]
 
 #[cfg(test)]
 mod agents;

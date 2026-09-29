@@ -485,8 +485,12 @@ impl Sessions {
 
     /// The summary of the log at `path`, read as far as it grew since the last time.
     fn summary(&self, path: &Path, meta: &Metadata) -> Option<Summary> {
-        use std::os::unix::fs::MetadataExt;
-        let seen = (meta.ino(), meta.len(), meta.modified().ok()?);
+        #[cfg(unix)]
+        let file = std::os::unix::fs::MetadataExt::ino(meta);
+        // Windows: no stable file id in std; the size and time tell a new log.
+        #[cfg(windows)]
+        let file = 0;
+        let seen = (file, meta.len(), meta.modified().ok()?);
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         let entry = cache.entry(path.to_owned()).or_default();
         if entry.seen != Some(seen) {
@@ -800,6 +804,7 @@ not json
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_running_sessions_name_is_read_from_its_log() {
         let tmp = tempfile::tempdir().unwrap();
@@ -855,6 +860,7 @@ not json
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn open_sessions_are_kept_once() {
         let tmp = tempfile::tempdir().unwrap();
@@ -983,6 +989,7 @@ not json
         assert_eq!((list.len(), truncated), (LIST_LIMIT, false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn sessions_of_followed_projects_are_listed_newest_first_and_deleted() {
         let tmp = tempfile::tempdir().unwrap();

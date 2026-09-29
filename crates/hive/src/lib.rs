@@ -2,9 +2,11 @@
 
 pub mod actions;
 pub mod adapter;
+#[cfg(unix)]
 pub mod bridge;
 pub mod changes;
 pub mod cli;
+#[cfg(unix)]
 pub mod daemon;
 pub mod dirs;
 pub mod file;
@@ -15,6 +17,7 @@ pub mod health;
 pub mod hook;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod mode;
 pub mod paths;
 pub mod procs;
 pub mod projects;
@@ -26,9 +29,12 @@ pub mod sessions;
 pub mod settings;
 pub mod spaces;
 pub mod states;
+#[cfg(unix)]
 pub mod terminal;
 pub mod transcript;
 pub mod watch;
+#[cfg(windows)]
+pub mod windows;
 pub mod worktree;
 pub mod wrapper;
 

@@ -148,6 +148,7 @@ fn run(program: &str, args: &[&str]) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     use super::*;
@@ -199,6 +200,7 @@ mod tests {
         path.display().to_string()
     }
 
+    #[cfg(unix)]
     #[test]
     fn subfolders_are_listed_sorted_without_hidden_ones_and_files() {
         let tmp = tempfile::tempdir().unwrap();

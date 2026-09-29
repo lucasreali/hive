@@ -272,7 +272,9 @@ pub fn check_account(account: &GhAccount) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::path::PathBuf;
 
     use super::*;
@@ -298,12 +300,15 @@ mod tests {
 
     /// A fake `gh` in a temporary folder, logging each call's arguments and `gh` environment
     /// to `log`; `auth status` prints `status` (on stderr with exit 1 when it is [`NONE`]).
+    #[cfg(unix)]
     struct Fake {
         dir: tempfile::TempDir,
         gh: Gh,
     }
 
+    #[cfg(unix)]
     impl Fake {
+        #[cfg(unix)]
         fn new(status: &str) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let file = dir.path().join("status.txt");
@@ -410,6 +415,7 @@ esac
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn accounts_are_listed_from_gh_auth_status_in_the_config_folder() {
         let fake = Fake::new(STATUS);
@@ -444,6 +450,7 @@ esac
         assert_eq!(answer, (vec![], Some(NOT_INSTALLED.to_owned())));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_token_is_given_only_when_usable_and_never_shown() {
         let fake = Fake::new(STATUS);
@@ -483,6 +490,7 @@ esac
         assert_eq!(fake.log().lines().count(), 6);
     }
 
+    #[cfg(unix)]
     #[test]
     fn switching_runs_gh_auth_switch_and_lists_again() {
         let fake = Fake::new(STATUS);
@@ -515,6 +523,7 @@ esac
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_space_account_gives_its_token_and_host_only() {
         let fake = Fake::new(STATUS);
@@ -537,6 +546,7 @@ esac
         assert_eq!(ghe("ghe.com"), "GH_ENTERPRISE_TOKEN");
     }
 
+    #[cfg(unix)]
     #[test]
     fn gh_runs_as_the_space_in_the_folder_with_its_output_limited() {
         let fake = Fake::new(STATUS);

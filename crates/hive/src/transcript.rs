@@ -337,6 +337,7 @@ mod tests {
         assert!(text.ends_with(&said("after")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_a_file_inside_the_root_is_read() {
         let f = fixture();

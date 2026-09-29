@@ -1,14 +1,17 @@
 //! Git always runs as the `git` executable with separate arguments, output size-limited.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
+#[cfg(unix)]
 use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
 use nix::unistd::Pid;
 
 /// Most bytes [`output`] reads, e.g. from `git status` or `git diff`.
@@ -96,6 +99,7 @@ pub fn limited(
 ) -> io::Result<Vec<u8>> {
     if time.is_some() {
         // Its own process group, so the limit ends its children too.
+        #[cfg(unix)]
         command.process_group(0);
     }
     let mut child = command
@@ -105,7 +109,7 @@ pub fn limited(
         .spawn()
         .map_err(|err| io::Error::new(err.kind(), format!("cannot run {program}: {err}")))?;
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
-    let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
+    let group = child.id();
     let (finished, done) = mpsc::channel::<()>();
     // Feed stdin and drain stderr from other threads, so no pipe can deadlock another.
     let (out, err, expired) = std::thread::scope(|scope| {
@@ -120,7 +124,7 @@ pub fn limited(
             scope.spawn(move || {
                 let expired = done.recv_timeout(time) == Err(RecvTimeoutError::Timeout);
                 if expired {
-                    let _ = killpg(group, Signal::SIGKILL);
+                    kill_group(group);
                 }
                 expired
             })
@@ -157,6 +161,29 @@ pub fn limited(
         "{program} {command} failed: {}",
         String::from_utf8_lossy(&err).trim()
     )))
+}
+
+/// Kills the process group `leader` leads, everything in it.
+#[cfg(unix)]
+pub fn kill_group(leader: u32) {
+    let group = Pid::from_raw(i32::try_from(leader).unwrap_or(i32::MAX));
+    let _ = killpg(group, Signal::SIGKILL);
+}
+
+/// Windows has no process groups: `leader` and what it started.
+#[cfg(windows)]
+pub use crate::windows::kill_tree as kill_group;
+
+/// What a program printed (a path, a `PATH`) as an OS string: its bytes on Unix; on Windows,
+/// where programs print UTF-8, its text.
+#[cfg(unix)]
+pub fn os_string(bytes: &[u8]) -> OsString {
+    std::os::unix::ffi::OsStringExt::from_vec(bytes.to_vec())
+}
+
+#[cfg(windows)]
+pub fn os_string(bytes: &[u8]) -> OsString {
+    String::from_utf8_lossy(bytes).into_owned().into()
 }
 
 /// `git <args>` in `dir` with `ok` exit codes and no input; at most [`OUTPUT_LIMIT`] bytes.
@@ -255,6 +282,7 @@ mod tests {
         assert_eq!(args[2..], flags.map(std::ffi::OsString::from));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_repository_gpg_program_never_runs_for_a_signed_head() {
         let tmp = tempfile::tempdir().unwrap();

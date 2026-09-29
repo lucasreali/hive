@@ -35,6 +35,8 @@ impl Source<'_> {
             Source::System => read_dir(Path::new("/proc")),
             #[cfg(target_os = "macos")]
             Source::System => crate::macos::list(),
+            #[cfg(windows)]
+            Source::System => crate::windows::list(),
         }
     }
 
@@ -45,6 +47,8 @@ impl Source<'_> {
             Source::System => Source::Dir(Path::new("/proc")).cwd(pid),
             #[cfg(target_os = "macos")]
             Source::System => crate::macos::cwd(pid),
+            #[cfg(windows)]
+            Source::System => crate::windows::cwd(pid),
         }
     }
 
@@ -64,7 +68,7 @@ impl Source<'_> {
             #[cfg(target_os = "linux")]
             Source::System => Source::Dir(Path::new("/proc")).args(pid),
             // macOS: only Claude's record tells (arguments would need `KERN_PROCARGS2`).
-            #[cfg(target_os = "macos")]
+            #[cfg(not(target_os = "linux"))]
             Source::System => None,
         }
     }
@@ -80,7 +84,7 @@ impl Source<'_> {
                 .collect(),
             #[cfg(target_os = "linux")]
             Source::System => Source::Dir(Path::new("/proc")).open_files(pid),
-            #[cfg(target_os = "macos")]
+            #[cfg(not(target_os = "linux"))]
             Source::System => Vec::new(),
         }
     }
@@ -266,6 +270,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn processes_are_found_by_working_directory() {
         let root = fake_proc(&[
@@ -293,10 +298,12 @@ mod tests {
     }
 
     /// A session id ending in `n`.
+    #[cfg(unix)]
     fn id(n: u32) -> String {
         format!("00000000-0000-0000-0000-{n:012x}")
     }
 
+    #[cfg(unix)]
     #[test]
     fn claude_processes_tell_their_session_or_mark_nothing() {
         let pids = 20..=33;
@@ -407,6 +414,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_system_lists_this_process_and_its_folder() {
         let me = std::process::id() as i32;
@@ -421,6 +429,7 @@ mod tests {
         assert!(found.iter().any(|p| p.pid == me), "{found:?}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_system_tells_this_process_arguments_and_open_files() {
         let me = std::process::id() as i32;

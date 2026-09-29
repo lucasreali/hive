@@ -1,10 +1,13 @@
 //! Where the service keeps its socket, lockfile and installed files.
 
+#[cfg(unix)]
 use std::ffi::OsString;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::PathBuf;
 
+#[cfg(unix)]
 use tokio::net::UnixStream;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,10 +21,18 @@ pub struct Paths {
 }
 
 impl Paths {
+    #[cfg(unix)]
     pub fn from_env() -> Self {
         Self::resolve(|key| std::env::var_os(key), nix::unistd::getuid().as_raw())
     }
 
+    /// [`crate::windows::paths`].
+    #[cfg(windows)]
+    pub fn from_env() -> Self {
+        crate::windows::paths(|key| std::env::var_os(key))
+    }
+
+    #[cfg(unix)]
     fn resolve(var: impl Fn(&str) -> Option<OsString>, uid: u32) -> Self {
         let var = |key| {
             var(key)
@@ -94,6 +105,7 @@ impl Paths {
 
     /// Creates the runtime directory with mode `0700` and refuses one that
     /// another user owns or that others can access (e.g. a planted `/tmp/hive-<uid>`).
+    #[cfg(unix)]
     pub fn prepare_runtime(&self) -> io::Result<()> {
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -105,10 +117,12 @@ impl Paths {
     /// Refuses a runtime directory another user owns or others can access: the socket in it
     /// could be someone else's. Checked before the bridge and `hive hook` connect (a planted
     /// `/tmp/hive-<uid>` with a listening socket would get every keystroke and saved file).
+    #[cfg(unix)]
     pub fn check_runtime(&self) -> io::Result<()> {
         self.check_runtime_as(nix::unistd::getuid().as_raw())
     }
 
+    #[cfg(unix)]
     fn check_runtime_as(&self, uid: u32) -> io::Result<()> {
         // lstat: a symlink reports mode 0777 and fails the mode check.
         let meta = std::fs::symlink_metadata(&self.runtime)?;
@@ -124,14 +138,22 @@ impl Paths {
     /// Connects to the service socket, only in a runtime directory of ours and only to a
     /// service run by us: the peer check also covers a directory swapped after the check
     /// (e.g. an `XDG_RUNTIME_DIR` in a shared folder).
+    #[cfg(unix)]
     pub async fn connect(&self) -> io::Result<UnixStream> {
         self.check_runtime()?;
         let stream = UnixStream::connect(self.socket()).await?;
         check_peer(&stream, nix::unistd::getuid().as_raw())?;
         Ok(stream)
     }
+
+    /// The service's pipe ([`crate::windows::connect`]).
+    #[cfg(windows)]
+    pub async fn connect(&self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
+        crate::windows::connect().await
+    }
 }
 
+#[cfg(unix)]
 fn check_peer(stream: &UnixStream, uid: u32) -> io::Result<()> {
     let peer = stream.peer_cred()?.uid();
     if peer != uid {
@@ -142,7 +164,7 @@ fn check_peer(stream: &UnixStream, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

@@ -5,10 +5,7 @@
 //! agent's commits stay in view. Git runs as the executable with separate arguments.
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::fs::OpenOptions;
 use std::io;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Project};
@@ -304,7 +301,7 @@ fn lines(
 ) -> (Option<u64>, Option<u64>) {
     match status {
         FileStatus::Untracked => {
-            let lines = count_lines(&dir.join(os(path)), budget);
+            let lines = count_lines(&dir.join(git::os_string(path)), budget);
             (lines, lines.map(|_| 0))
         }
         _ => counts.get(path).copied().unwrap_or((None, None)),
@@ -390,7 +387,10 @@ pub fn count_lines(path: &Path, budget: &mut u64) -> Option<u64> {
 
 /// Opens `path` for reading without ever waiting: a FIFO swapped in for a measured file opens
 /// at once and reads as empty or fails, where a blocking open would wait for a writer forever.
+#[cfg(unix)]
 fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
     let nonblocking = nix::fcntl::OFlag::O_NONBLOCK.bits();
     OpenOptions::new()
         .read(true)
@@ -398,8 +398,10 @@ fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
         .open(path)
 }
 
-fn os(path: &[u8]) -> &OsStr {
-    std::os::unix::ffi::OsStrExt::from_bytes(path)
+/// Windows has no FIFOs to wait on.
+#[cfg(windows)]
+fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 fn lossy(path: &[u8]) -> String {
@@ -475,6 +477,7 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         assert_eq!(number(b"\xff"), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn untracked_lines_are_counted_like_git() {
         let dir = tempfile::tempdir().unwrap();
@@ -512,6 +515,7 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         assert_eq!(budget, 10);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_fifo_opens_and_reads_without_waiting_for_a_writer() {
         let dir = tempfile::tempdir().unwrap();

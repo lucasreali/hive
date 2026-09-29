@@ -1,7 +1,6 @@
 //! Command-line entry point.
 
 use std::io::{self, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -74,10 +73,14 @@ pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let paths = Paths::from_env();
     let result = match cli.command {
+        #[cfg(unix)]
         Command::Daemon => block_on(crate::daemon::run(&paths)),
+        #[cfg(unix)]
         Command::Bridge => {
             std::env::current_exe().and_then(|hive| block_on(crate::bridge::run(&paths, &hive)))
         }
+        #[cfg(windows)]
+        Command::Daemon | Command::Bridge => Err(crate::windows::unsupported("the Hive service")),
         Command::Hook { event, record } => {
             // Whatever happens, the agent must not see a failing hook.
             let stdin = tokio::io::stdin();
@@ -158,7 +161,7 @@ fn report(created: worktree::Created) -> io::Result<()> {
     for note in &created.notes {
         eprintln!("hive: {note}");
     }
-    let mut line = created.path.as_os_str().as_bytes().to_vec();
+    let mut line = created.path.as_os_str().as_encoded_bytes().to_vec();
     line.push(b'\n');
     io::stdout().write_all(&line)
 }

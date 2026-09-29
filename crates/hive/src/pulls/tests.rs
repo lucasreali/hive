@@ -1,5 +1,8 @@
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 use hive_protocol::GhAccount;
@@ -515,6 +518,7 @@ fn the_rate_limit_makes_the_next_fetch_wait_longer() {
 /// A followed repository with a GitHub remote (`remote`), and a fake `gh` in the same
 /// temporary folder: it records every call's arguments and folder in `gh.log`, answers the
 /// list and the details with the recordings, and refuses pull request 13.
+#[cfg(unix)]
 struct Setup {
     tmp: tempfile::TempDir,
     projects: Projects,
@@ -523,6 +527,7 @@ struct Setup {
     cache: Mutex<Cache>,
 }
 
+#[cfg(unix)]
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .arg("-C")
@@ -540,6 +545,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+#[cfg(unix)]
 fn setup(remote: &str) -> Setup {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("repo");
@@ -601,6 +607,7 @@ esac
     }
 }
 
+#[cfg(unix)]
 impl Setup {
     fn answer(&self, request: Control) -> Vec<Control> {
         answer(&self.gh, &self.projects, &self.cache, request)
@@ -635,6 +642,7 @@ impl Setup {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn the_list_is_one_graphql_request_as_the_space_account() {
     let setup = setup("git@github.com:o/r.git");
@@ -706,6 +714,7 @@ fn the_list_is_one_graphql_request_as_the_space_account() {
     assert_eq!(setup.calls().len(), 2);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_space_account_on_another_host_needs_a_remote_there() {
     let setup = setup("https://github.com/o/r");
@@ -730,6 +739,7 @@ fn a_space_account_on_another_host_needs_a_remote_there() {
     assert_eq!(setup.calls().len(), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn only_followed_projects_are_asked_about() {
     let setup = setup("https://github.com/o/r");
@@ -807,6 +817,7 @@ fn only_followed_projects_are_asked_about() {
     assert_eq!(setup.calls().len(), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn details_and_actions_send_the_right_arguments() {
     let setup = setup("https://github.com/o/r");
@@ -965,6 +976,7 @@ fn details_and_actions_send_the_right_arguments() {
     assert_eq!(setup.calls().len(), calls + 1);
 }
 
+#[cfg(unix)]
 #[test]
 fn checkout_makes_a_worktree_on_the_pull_request_branch() {
     let setup = setup("https://github.com/o/r");
@@ -1040,6 +1052,7 @@ fn checkout_makes_a_worktree_on_the_pull_request_branch() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_pull_request_opens_from_the_worktree_branch() {
     let setup = setup("https://github.com/o/r");
