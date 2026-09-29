@@ -11,6 +11,12 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use tokio::net::UnixStream;
 
+/// A connection to the service ([`Paths::connect`]).
+#[cfg(unix)]
+pub type Stream = UnixStream;
+#[cfg(windows)]
+pub type Stream = tokio::net::windows::named_pipe::NamedPipeClient;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
     /// `$XDG_RUNTIME_DIR/hive`, or `/tmp/hive-<uid>` when it is unset.
@@ -21,7 +27,7 @@ pub struct Paths {
     pub config: PathBuf,
 }
 
-// Windows: `from_env` and `connect` are in `crate::windows`.
+// Windows: `from_env`, `prepare_runtime` and `connect` are in `crate::windows`.
 impl Paths {
     #[cfg(unix)]
     pub fn from_env() -> Self {

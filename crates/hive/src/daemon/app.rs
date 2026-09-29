@@ -14,7 +14,6 @@ use hive_protocol::{
     SessionTarget,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
@@ -27,8 +26,12 @@ use crate::{changes, dirs, file, procs, worktree};
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
 
-pub(super) async fn connection(stream: UnixStream, state: Arc<State>, app_gone: mpsc::Sender<()>) {
-    let (read, write) = stream.into_split();
+/// Serves one connection: a Unix socket's, or a named pipe instance's on Windows.
+pub(super) async fn connection<S>(stream: S, state: Arc<State>, app_gone: mpsc::Sender<()>)
+where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
+    let (read, write) = tokio::io::split(stream);
     let mut reader = FramedRead::new(read, FrameCodec);
     let mut writer = FramedWrite::new(write, FrameCodec);
     let Some(role) = handshake(&mut reader, &mut writer).await else {
@@ -715,9 +718,13 @@ mod tests {
         let state = test_state(dir.path());
         *state.agents.lock().await =
             HashMap::from([("s".to_owned(), named), ("u".to_owned(), owning)]);
-        // The same stream types as the daemon, so no second instantiation skews line coverage.
-        let (client, server) = UnixStream::pair().unwrap();
-        let (read, write) = server.into_split();
+        // The same stream types as the daemon, so no second instantiation skews line coverage
+        // (measured on Linux only).
+        #[cfg(unix)]
+        let (client, server) = tokio::net::UnixStream::pair().unwrap();
+        #[cfg(windows)]
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(server);
         let serving = tokio::spawn({
             let state = state.clone();
             async move {

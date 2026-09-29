@@ -83,14 +83,10 @@ pub fn run() -> ExitCode {
     #[cfg(windows)]
     let code = 0;
     let result = match cli.command {
-        #[cfg(unix)]
         Command::Daemon => block_on(crate::daemon::run(&paths)),
-        #[cfg(unix)]
         Command::Bridge => {
             std::env::current_exe().and_then(|hive| block_on(crate::bridge::run(&paths, &hive)))
         }
-        #[cfg(windows)]
-        Command::Daemon | Command::Bridge => Err(crate::windows::unsupported("the Hive service")),
         Command::Hook { event, record } => {
             // Whatever happens, the agent must not see a failing hook.
             let stdin = tokio::io::stdin();

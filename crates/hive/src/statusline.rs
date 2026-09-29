@@ -2,9 +2,8 @@
 //! `--settings` the `claude` wrapper injects). It reports the 5-hour usage window of its input
 //! to the service, then runs the user's own statusline with the same input and prints what that
 //! prints, so what the user sees does not change. The service keeps the latest window per
-//! Claude config folder ([`Usage`]).
+//! Claude config folder (`daemon::usage`).
 
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -28,10 +27,6 @@ pub const TIME_LIMIT: Duration = Duration::from_secs(10);
 const OUTPUT_LIMIT: usize = 64 * 1024;
 /// Largest settings file read for the user's `statusLine`.
 const SETTINGS_LIMIT: u64 = 1024 * 1024;
-/// Most Claude config folders the service keeps a window for; a new one past it is ignored.
-const FOLDERS: usize = 64;
-/// Longest Claude config folder the service keeps, in bytes.
-const FOLDER_LIMIT: usize = 4096;
 
 /// What `hive statusline` prints and its exit code: the user's statusline's, or nothing and 0.
 pub type Output = (Vec<u8>, u8);
@@ -189,42 +184,6 @@ impl Drop for Group {
         if let Some(pid) = self.0.and_then(|pid| i32::try_from(pid).ok()) {
             let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
         }
-    }
-}
-
-/// The service's side: the latest 5-hour window of each Claude config folder (in memory only),
-/// and the one the app has.
-#[derive(Debug, Default)]
-pub struct Usage {
-    windows: HashMap<String, SessionWindow>,
-    sent: Option<SessionWindow>,
-}
-
-impl Usage {
-    /// Keeps `usage` as the latest window of `claude_dir` (from a hook connection: untrusted).
-    pub fn report(&mut self, claude_dir: String, mut usage: SessionWindow) {
-        let room = self.windows.len() < FOLDERS || self.windows.contains_key(&claude_dir);
-        if room && claude_dir.len() <= FOLDER_LIMIT {
-            usage.used_percentage = usage.used_percentage.min(100);
-            self.windows.insert(claude_dir, usage);
-        }
-    }
-
-    /// A new app has none.
-    pub fn unsent(&mut self) {
-        self.sent = None;
-    }
-
-    /// `session_usage` with the window of `account` (none once `now`, in Unix seconds, reached
-    /// its reset), when it is not the one the app has.
-    pub fn changed(&mut self, account: Option<&Path>, now: u64) -> Option<Control> {
-        let window = account.and_then(|dir| self.windows.get(dir.to_str()?));
-        let usage = window.filter(|w| w.resets_at > now).copied();
-        if usage == self.sent {
-            return None;
-        }
-        self.sent = usage;
-        Some(Control::SessionUsage { usage })
     }
 }
 
@@ -466,49 +425,5 @@ mod tests {
         assert_eq!(out, (vec![], 0));
         let took = start.elapsed();
         assert!(took < Duration::from_secs(2), "{took:?}");
-    }
-
-    #[test]
-    fn the_service_keeps_each_folders_latest_window_and_sends_the_accounts_until_it_resets() {
-        let mut usage = Usage::default();
-        let a = Some(Path::new("/a"));
-        assert!(usage.changed(a, 0).is_none());
-        usage.report("/a".into(), window(150, 100));
-        usage.report("/b".into(), window(7, 100));
-        let sent = |usage: Option<SessionWindow>| Some(Control::SessionUsage { usage });
-        assert_eq!(usage.changed(a, 99), sent(Some(window(100, 100))));
-        // Only what changed.
-        assert_eq!(usage.changed(a, 99), None);
-        usage.report("/a".into(), window(12, 100));
-        assert_eq!(usage.changed(a, 99), sent(Some(window(12, 100))));
-        // Past its reset, none; another account's.
-        assert_eq!(usage.changed(a, 100), sent(None));
-        assert_eq!(
-            usage.changed(Some(Path::new("/b")), 1),
-            sent(Some(window(7, 100)))
-        );
-        assert_eq!(usage.changed(None, 1), sent(None));
-        // A new app gets it again.
-        assert_eq!(usage.changed(a, 1), sent(Some(window(12, 100))));
-        usage.unsent();
-        assert_eq!(usage.changed(a, 1), sent(Some(window(12, 100))));
-    }
-
-    #[test]
-    fn the_service_keeps_a_bounded_number_of_folders_of_a_bounded_length() {
-        let mut usage = Usage::default();
-        let long = "/".repeat(FOLDER_LIMIT);
-        usage.report(long.clone(), window(1, 9));
-        usage.report(format!("{long}x"), window(1, 9));
-        assert_eq!(usage.windows.len(), 1);
-        for n in 1..FOLDERS {
-            usage.report(format!("/{n}"), window(1, 9));
-        }
-        usage.report("/new".into(), window(1, 9));
-        assert_eq!(usage.windows.len(), FOLDERS);
-        assert!(!usage.windows.contains_key("/new"));
-        // A known one is still updated.
-        usage.report("/1".into(), window(2, 9));
-        assert_eq!(usage.windows["/1"], window(2, 9));
     }
 }

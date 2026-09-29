@@ -8,21 +8,28 @@
 mod agents;
 mod app;
 mod terminals;
+mod usage;
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
-use std::fs::{File, Permissions, TryLockError};
+use std::fs::{File, TryLockError};
 use std::io;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use hive_protocol::{Control, DiffBase, Frame, GhAccount, OpenSession, Project, Worktree};
-use tokio::net::UnixListener;
-use tokio::signal::unix::{Signal, SignalKind, signal};
+#[cfg(unix)]
+use tokio::net::{UnixListener as Listener, UnixStream};
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
+
+#[cfg(windows)]
+use crate::windows::{Listener, accept};
 
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
@@ -34,7 +41,7 @@ use crate::settings;
 use crate::spaces::Spaces;
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{bridge, changes, health, hook, procs, statusline, wrapper};
+use crate::{bridge, changes, health, hook, procs, wrapper};
 use app::connection;
 use terminals::watch_terminals;
 
@@ -44,17 +51,35 @@ const LOCK_RETRY: Duration = Duration::from_millis(20);
 pub async fn run(paths: &Paths) -> io::Result<()> {
     // Started by `hive bridge`: leave its session, so the service outlives nothing but the
     // app connection. Fails harmlessly for a group leader (e.g. started from a shell).
+    // (On Windows the bridge starts it detached.)
+    #[cfg(unix)]
     let _ = nix::unistd::setsid();
     paths.prepare_runtime()?;
     let _lock = lock(paths).await?;
     wrapper::install(paths, &std::env::current_exe()?)?;
     // Handle SIGTERM before anyone can connect, so an early one still cleans up.
-    let terminate = signal(SignalKind::terminate())?;
+    #[cfg(unix)]
+    let mut terminate = signal(SignalKind::terminate())?;
+    #[cfg(unix)]
+    let terminated = async move {
+        terminate.recv().await;
+    };
+    // Nothing signals a service started detached: it ends with the app connection.
+    #[cfg(windows)]
+    let terminated = std::future::pending();
+    // No socket file on Windows: removing it is a no-op there.
     let socket = paths.socket();
-    // A socket left by a crashed daemon; the lock proves nobody is serving it.
-    let _ = std::fs::remove_file(&socket);
-    let listener = UnixListener::bind(&socket)?;
-    std::fs::set_permissions(&socket, Permissions::from_mode(0o600))?;
+    #[cfg(unix)]
+    let listener = {
+        // A socket left by a crashed daemon; the lock proves nobody is serving it.
+        let _ = std::fs::remove_file(&socket);
+        let listener = Listener::bind(&socket)?;
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+        listener
+    };
+    // Refused while another service's pipe is still there.
+    #[cfg(windows)]
+    let listener = Listener::bind(paths)?;
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
@@ -72,7 +97,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         restore,
     );
     let state = Arc::new(state);
-    let result = serve(listener, &socket, terminate, state).await;
+    let result = serve(listener, &socket, terminated, state).await;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -81,11 +106,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
 /// is still ending holds it for up to its grace period, so the lock is tried again for as long
 /// as the bridge waits for a new service.
 async fn lock(paths: &Paths) -> io::Result<File> {
-    let file = File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
+    let file = crate::mode::private(File::options().create(true).truncate(false).write(true))
         .open(paths.lock())?;
     let retry = async {
         loop {
@@ -107,24 +128,30 @@ async fn lock(paths: &Paths) -> io::Result<File> {
     Ok(file)
 }
 
+/// The next connection to the service.
+#[cfg(unix)]
+async fn accept(listener: &mut Listener) -> io::Result<UnixStream> {
+    listener.accept().await.map(|(stream, _)| stream)
+}
+
 async fn serve(
-    listener: UnixListener,
+    mut listener: Listener,
     socket: &Path,
-    mut terminate: Signal,
+    terminated: impl Future<Output = ()>,
     state: Arc<State>,
 ) -> io::Result<()> {
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
+    tokio::pin!(terminated);
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, _) = accepted?;
-                tokio::spawn(connection(stream, state.clone(), app_gone.clone()));
+            accepted = accept(&mut listener) => {
+                tokio::spawn(connection(accepted?, state.clone(), app_gone.clone()));
             }
             _ = app_gone_rx.recv() => break,
-            _ = terminate.recv() => break,
+            () = &mut terminated => break,
         }
     }
     // Released before the terminals end: an app started again meanwhile gets a new service
@@ -208,7 +235,7 @@ struct State {
     /// The Actions runs lists fetched (9.32).
     runs: std::sync::Mutex<crate::pulls::Cache>,
     /// The 5-hour usage windows `hive statusline` reported (12.1), and the one the app has.
-    usage: Mutex<statusline::Usage>,
+    usage: Mutex<usage::Usage>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.

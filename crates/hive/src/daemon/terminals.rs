@@ -6,7 +6,7 @@ use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use hive_protocol::{Control, Frame};
-use pty_process::OwnedReadPty;
+
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::sync::mpsc;
@@ -164,7 +164,7 @@ async fn pump(
     state: Arc<State>,
     channel: u32,
     session: i32,
-    mut pty: OwnedReadPty,
+    mut pty: terminal::Pty,
     mut child: Child,
     output: terminal::Output,
     last_output: terminal::LastOutput,
@@ -204,7 +204,7 @@ async fn pump(
 /// Copies PTY output to the app until the PTY closes or the app is gone. While the app is
 /// behind, the PTY is not read, so the program in it waits (9.19).
 async fn copy(
-    pty: &mut OwnedReadPty,
+    pty: &mut terminal::Pty,
     output: &terminal::Output,
     last_output: &terminal::LastOutput,
 ) {

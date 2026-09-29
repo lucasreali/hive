@@ -152,6 +152,8 @@ pub fn path_shell() -> (OsString, Vec<OsString>) {
 
 #[cfg(target_os = "macos")]
 pub use crate::macos::path_shell;
+#[cfg(windows)]
+pub use crate::windows::path_shell;
 
 /// The `PATH` the user's terminals get, for finding the real `claude`: the
 /// one `shell` (see [`path_shell`]) prints, else the service's `path` (started through

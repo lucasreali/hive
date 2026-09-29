@@ -1,17 +1,43 @@
-//! What only native Windows needs, kept apart from the portable code (12.5). A skeleton for
-//! now (12.5.1): the service does not run on Windows yet, so what needs it answers
-//! [`unsupported`]. Tested on the Windows CI runner (`windows.yml`).
+//! What only native Windows needs, kept apart from the portable code (12.5): the service's
+//! named pipe and its checks, how the bridge starts the service, the clock, and what is not
+//! supported yet ([`unsupported`]). Tested on the Windows CI runner (`windows.yml`).
 
 use std::ffi::OsString;
 use std::fs::File;
 use std::io;
+use std::ops::BitOr;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::Duration;
 
-use tokio::net::windows::named_pipe::NamedPipeClient;
+use tokio::net::windows::named_pipe::{
+    ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+};
+use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, HANDLE, LocalFree};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{
+    GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+};
+use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+use windows_sys::Win32::System::Threading::{
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, OpenProcess,
+    OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows_sys::core::BOOL;
 
 use crate::paths::Paths;
 use crate::procs::Proc;
+
+/// How long a client waits for a free instance of the service's pipe (an instance serves one
+/// connection, and the service makes the next one right after).
+const BUSY_TIME: Duration = Duration::from_secs(2);
+/// How often a client tries a busy pipe again.
+const BUSY_RETRY: Duration = Duration::from_millis(10);
 
 /// The error of what Hive cannot do on Windows yet.
 pub fn unsupported(what: &str) -> io::Error {
@@ -22,7 +48,7 @@ pub fn unsupported(what: &str) -> io::Error {
 }
 
 /// Data in `%LOCALAPPDATA%\hive`, settings in `%APPDATA%\hive` (under `%USERPROFILE%` when
-/// unset, else the temporary folder). The lock and the service's log go with the data.
+/// unset, else the temporary folder). The lock and the service's log go in the data's `run`.
 pub fn paths(var: impl Fn(&str) -> Option<OsString>) -> Paths {
     let var = |key| {
         var(key)
@@ -36,7 +62,7 @@ pub fn paths(var: impl Fn(&str) -> Option<OsString>) -> Paths {
         .or_else(|| profile(r"AppData\Roaming"))
         .map_or_else(|| data.join("config"), |dir| dir.join("hive"));
     Paths {
-        runtime: data.clone(),
+        runtime: data.join("run"),
         data,
         config,
     }
@@ -48,15 +74,218 @@ impl Paths {
         paths(|key| std::env::var_os(key))
     }
 
-    /// The service's pipe (12.5.2).
+    /// Creates the folder of the lock and the log. It gets the ACL of the user's local app
+    /// data, which only the user (and administrators) can open.
+    pub fn prepare_runtime(&self) -> io::Result<()> {
+        std::fs::create_dir_all(&self.runtime)
+    }
+
+    /// Connects to the service's pipe, only to a service run by this user: anyone may create
+    /// a pipe of this name first, so the serving process's user is checked (as the socket's
+    /// peer on Unix).
     pub async fn connect(&self) -> io::Result<NamedPipeClient> {
-        Err(unsupported("the Hive service"))
+        let user = process_user(std::process::id())?;
+        let name = pipe_name(&user, &self.runtime);
+        let open = async {
+            loop {
+                match ClientOptions::new().open(&name) {
+                    Err(err) if err.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {
+                        tokio::time::sleep(BUSY_RETRY).await;
+                    }
+                    opened => return opened,
+                }
+            }
+        };
+        let busy = |_| io::Error::new(io::ErrorKind::TimedOut, "the hive pipe stayed busy");
+        let pipe = tokio::time::timeout(BUSY_TIME, open)
+            .await
+            .map_err(busy)??;
+        let mut server = 0;
+        check(unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut server) })?;
+        check_server(&process_user(server)?, &user)?;
+        Ok(pipe)
     }
 }
 
-/// The machine-wide monotonic clock in ns; 0 (cannot be read) until 12.5.2 reads QPC.
+/// The service's pipe for `user` (a SID) and its data's `runtime` folder: one service per
+/// user and data folder, as one socket per runtime folder on Unix (a test's service never
+/// meets the real one).
+fn pipe_name(user: &str, runtime: &Path) -> String {
+    // FNV-1a: short, and the same in every build.
+    let bytes = runtime.as_os_str().as_encoded_bytes().iter();
+    let hash = bytes.fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!(r"\\.\pipe\hive-{user}-{hash:016x}")
+}
+
+/// Refuses a pipe served by a process of another user than `user`.
+fn check_server(server: &str, user: &str) -> io::Result<()> {
+    if server != user {
+        return Err(io::Error::other(format!(
+            "refusing a hive pipe run by another user ({server})"
+        )));
+    }
+    Ok(())
+}
+
+/// The error of a failed Windows call (its result is 0).
+fn check(ok: BOOL) -> io::Result<()> {
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// A handle a Windows call opened, closed when dropped; null when the call failed.
+fn owned(handle: HANDLE) -> io::Result<OwnedHandle> {
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
+
+/// The SID (`S-1-5-21-…`) of the user process `pid` runs as.
+fn process_user(pid: u32) -> io::Result<String> {
+    let process = owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })?;
+    let mut token = std::ptr::null_mut();
+    check(unsafe { OpenProcessToken(process.as_raw_handle(), TOKEN_QUERY, &mut token) })?;
+    let token = owned(token)?;
+    // A `TOKEN_USER` and the SID it points to (a SID takes at most 68 bytes), aligned.
+    let mut buffer = [0_u64; 32];
+    let (size, mut used) = (size_of_val(&buffer) as u32, 0);
+    let info = buffer.as_mut_ptr().cast();
+    check(unsafe { GetTokenInformation(token.as_raw_handle(), TokenUser, info, size, &mut used) })?;
+    let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+    let mut text = std::ptr::null_mut();
+    check(unsafe { ConvertSidToStringSidW(user.User.Sid, &mut text) })?;
+    // A SID's text is short: the bound only keeps a bad string from running on.
+    let len = (0..256)
+        .take_while(|&i| unsafe { *text.add(i) } != 0)
+        .count();
+    let sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) });
+    unsafe { LocalFree(text.cast()) };
+    Ok(sid)
+}
+
+/// The service's end of its pipe: an instance waiting for the next client.
+pub struct Listener {
+    name: String,
+    user: String,
+    next: NamedPipeServer,
+}
+
+impl Listener {
+    /// Creates the pipe of this user and `paths`. Refused when a pipe of that name exists
+    /// (another service, or someone squatting the name).
+    pub fn bind(paths: &Paths) -> io::Result<Self> {
+        let user = process_user(std::process::id())?;
+        let name = pipe_name(&user, &paths.runtime);
+        let next = instance(&name, &user, true)?;
+        Ok(Self { name, user, next })
+    }
+}
+
+/// The next client of `listener`; a new instance then waits for the one after.
+pub async fn accept(listener: &mut Listener) -> io::Result<NamedPipeServer> {
+    listener.next.connect().await?;
+    let next = instance(&listener.name, &listener.user, false)?;
+    Ok(std::mem::replace(&mut listener.next, next))
+}
+
+/// A new instance of the pipe `name` that only `user` can open, and only from this machine.
+fn instance(name: &str, user: &str, first: bool) -> io::Result<NamedPipeServer> {
+    // Protected (nothing inherited): all access for the user alone.
+    let sddl: Vec<u16> = format!("D:P(A;;GA;;;{user})\0").encode_utf16().collect();
+    let (mut descriptor, size) = (std::ptr::null_mut(), std::ptr::null_mut());
+    check(unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            size,
+        )
+    })?;
+    let mut attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    let created = unsafe {
+        ServerOptions::new()
+            .first_pipe_instance(first)
+            .reject_remote_clients(true)
+            .create_with_security_attributes_raw(name, (&raw mut attributes).cast())
+    };
+    unsafe { LocalFree(descriptor) };
+    created
+}
+
+/// Starts the service out of this console and process group, so it outlives the bridge and
+/// ends with the app connection only; also out of this process's job (the app's), unless the
+/// job forbids it (e.g. cargo's).
+pub fn spawn_detached(command: &mut Command) -> io::Result<Child> {
+    // `bitor`, not `|`: or-ing and xor-ing flags that share no bit are the same.
+    let detached = DETACHED_PROCESS.bitor(CREATE_NEW_PROCESS_GROUP);
+    let breakaway = detached.bitor(CREATE_BREAKAWAY_FROM_JOB);
+    command
+        .creation_flags(breakaway)
+        .spawn()
+        .or_else(|_| command.creation_flags(detached).spawn())
+}
+
+/// The machine-wide monotonic clock in ns, from the performance counter: one clock for every
+/// process, so it orders hook calls made by different `hive hook` processes.
 pub fn monotonic_ns() -> u64 {
-    0
+    let (mut count, mut frequency) = (0, 0);
+    // Neither fails since Windows XP.
+    unsafe {
+        QueryPerformanceCounter(&mut count);
+        QueryPerformanceFrequency(&mut frequency);
+    }
+    ns(count, frequency)
+}
+
+/// `count` ticks of `frequency` a second, in ns (0 for a negative count).
+fn ns(count: i64, frequency: i64) -> u64 {
+    let ns = i128::from(count) * 1_000_000_000 / i128::from(frequency.max(1));
+    u64::try_from(ns).unwrap_or(0)
+}
+
+/// Terminals, until ConPTY (12.5.3): none starts, so none has processes to end.
+pub mod terminal {
+    use std::path::Path;
+
+    use tokio::process::Child;
+    use tokio::sync::mpsc::UnboundedSender;
+
+    use crate::terminal::{Input, Terminal};
+
+    /// What a terminal's output is read from.
+    pub type Pty = tokio::io::Empty;
+
+    pub fn spawn(
+        _id: u32,
+        cwd: &str,
+        _cols: u16,
+        _rows: u16,
+        _bin_dir: &Path,
+        _env: &[(&'static str, String)],
+    ) -> Result<(Terminal, UnboundedSender<Input>, Pty, Child), String> {
+        let why = super::unsupported("a terminal");
+        Err(format!("cannot start a terminal in {cwd}: {why}"))
+    }
+
+    pub async fn end_sessions(_sessions: &[i32]) {}
+}
+
+/// Windows PowerShell asked for its `PATH`: the one the service inherited from the app,
+/// which on Windows is the user's (a shell's config does not change it). Printed with a
+/// bare `\n`, as [`crate::wrapper::user_path`] reads it.
+pub fn path_shell() -> (OsString, Vec<OsString>) {
+    let print = "[Console]::Out.Write($env:Path + [char]10)";
+    let args = ["-NoProfile", "-NonInteractive", "-Command", print];
+    ("powershell".into(), args.map(OsString::from).to_vec())
 }
 
 /// No process table until 12.5.6a.
@@ -127,7 +356,8 @@ pub mod mode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn unsupported_names_what() {
@@ -151,7 +381,8 @@ mod tests {
             ("USERPROFILE", r"C:\U"),
         ]);
         assert_eq!(paths.data, PathBuf::from(r"C:\L\hive"));
-        assert_eq!(paths.runtime, paths.data);
+        assert_eq!(paths.runtime, PathBuf::from(r"C:\L\hive\run"));
+        assert_eq!(paths.lock(), PathBuf::from(r"C:\L\hive\run\hive.lock"));
         assert_eq!(paths.settings(), PathBuf::from(r"C:\R\hive\settings.json"));
     }
 
@@ -169,15 +400,145 @@ mod tests {
         assert_eq!(paths.config, paths.data.join("config"));
     }
 
+    /// Paths in a temporary folder: a pipe of their own.
+    fn paths_in(dir: &Path) -> Paths {
+        Paths {
+            runtime: dir.join("run"),
+            data: dir.join("data"),
+            config: dir.join("config"),
+        }
+    }
+
+    #[test]
+    fn the_runtime_folder_is_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths_in(&tmp.path().join("a"));
+        paths.prepare_runtime().unwrap();
+        assert!(paths.runtime.is_dir());
+    }
+
+    #[test]
+    fn the_pipe_is_the_users_and_the_data_folders() {
+        assert_eq!(
+            pipe_name("S-1-5-21-1", Path::new(r"C:\L\hive\run")),
+            r"\\.\pipe\hive-S-1-5-21-1-bb7225ed63f8b90b"
+        );
+    }
+
+    #[test]
+    fn this_process_runs_as_a_user_sid() {
+        let me = process_user(std::process::id()).unwrap();
+        assert!(me.starts_with("S-1-5-"), "{me}");
+        // No such process.
+        assert!(process_user(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn a_pipe_of_another_user_is_refused() {
+        check_server("S-1-5-21-1", "S-1-5-21-1").unwrap();
+        let err = check_server("S-1-5-21-2", "S-1-5-21-1").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "refusing a hive pipe run by another user (S-1-5-21-2)"
+        );
+    }
+
+    #[test]
+    fn failed_windows_calls_are_errors() {
+        check(1).unwrap();
+        assert!(check(0).is_err());
+        assert!(owned(std::ptr::null_mut()).is_err());
+    }
+
     #[tokio::test]
-    async fn the_service_is_unsupported() {
-        let err = Paths::from_env().connect().await.unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    async fn clients_reach_the_service_one_instance_each() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths_in(tmp.path());
+        let mut listener = Listener::bind(&paths).unwrap();
+        // One service per pipe.
+        assert!(Listener::bind(&paths).is_err());
+        for n in [1_u8, 2] {
+            let (client, server) = tokio::join!(paths.connect(), accept(&mut listener));
+            let (mut client, mut server) = (client.unwrap(), server.unwrap());
+            client.write_all(&[n]).await.unwrap();
+            assert_eq!(server.read_u8().await.unwrap(), n);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_client_waits_for_a_free_instance_for_a_while() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths_in(tmp.path());
+        let mut listener = Listener::bind(&paths).unwrap();
+        // The only instance, taken and not accepted yet: the next client waits.
+        let _first = paths.connect().await.unwrap();
+        let accept = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            accept(&mut listener).await
+        };
+        let (second, _) = tokio::join!(paths.connect(), accept);
+        second.unwrap();
+        // Now nothing accepts: it gives up.
+        let started = Instant::now();
+        let err = paths.connect().await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() >= BUSY_TIME);
+    }
+
+    #[tokio::test]
+    async fn without_a_service_connecting_fails_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        let err = paths_in(tmp.path()).connect().await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(started.elapsed() < BUSY_TIME);
+    }
+
+    #[test]
+    fn a_detached_program_runs() {
+        let mut exit = Command::new("cmd");
+        exit.args(["/c", "exit 7"]);
+        let status = spawn_detached(&mut exit).unwrap().wait().unwrap();
+        assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn the_monotonic_clock_moves_forward_in_ns() {
+        let before = monotonic_ns();
+        std::thread::sleep(Duration::from_millis(20));
+        let after = monotonic_ns();
+        assert!(before > 0);
+        assert!(after >= before + 20_000_000, "{before} {after}");
+        assert!(after < before + 10_000_000_000, "{before} {after}");
+        assert_eq!(ns(30_000_000, 10_000_000), 3_000_000_000);
+        assert_eq!(ns(7, 0), 7_000_000_000);
+        assert_eq!(ns(-1, 1), 0);
+    }
+
+    #[tokio::test]
+    async fn no_terminal_starts_yet() {
+        let started = terminal::spawn(1, r"C:\w", 80, 24, Path::new("."), &[]).map(drop);
+        assert_eq!(
+            started.unwrap_err(),
+            r"cannot start a terminal in C:\w: a terminal is not supported on Windows yet"
+        );
+        terminal::end_sessions(&[1]).await;
+    }
+
+    #[tokio::test]
+    async fn the_users_path_is_the_one_powershell_prints() {
+        // Neither the service's `PATH` nor a home to fall back to: only what it printed.
+        let path = crate::wrapper::user_path(path_shell(), None, None, BUSY_TIME * 15).await;
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        let mut dirs = std::env::split_paths(&path);
+        assert!(
+            dirs.any(|dir| dir.as_os_str().eq_ignore_ascii_case(&system)),
+            "{path:?}"
+        );
     }
 
     #[test]
     fn stubs_answer_nothing_or_unsupported() {
-        assert_eq!(monotonic_ns(), 0);
         assert_eq!(list(), vec![]);
         assert_eq!(cwd(4), None);
         let here = Path::new(".");

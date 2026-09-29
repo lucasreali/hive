@@ -7,17 +7,29 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use hive_protocol::Frame;
+#[cfg(unix)]
 use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
 use nix::unistd::Pid;
-use pty_process::{OwnedReadPty, OwnedWritePty, Size};
+/// What a terminal's output is read from.
+#[cfg(unix)]
+pub use pty_process::OwnedReadPty as Pty;
+#[cfg(unix)]
+use pty_process::{OwnedWritePty, Size};
+#[cfg(unix)]
 use tokio::io::AsyncWriteExt;
+#[cfg(unix)]
 use tokio::process::Child;
 use tokio::sync::{mpsc, watch};
 
+#[cfg(unix)]
 use crate::procs;
 use crate::watch::Watch;
+#[cfg(windows)]
+pub use crate::windows::terminal::{Pty, end_sessions, spawn};
 
 /// Time a terminal's processes get to exit after SIGHUP before SIGKILL.
+#[cfg(unix)]
 const GRACE: Duration = Duration::from_secs(2);
 
 /// A running terminal, as kept in the service registry.
@@ -48,6 +60,7 @@ pub struct LastOutput {
 }
 
 impl LastOutput {
+    #[cfg(unix)]
     fn new() -> Self {
         Self {
             start: Instant::now(),
@@ -118,6 +131,7 @@ impl Output {
 /// and `HIVE_TERMINAL_ID` set, plus `env` (its space's, 6.14, and its worktree's `HIVE_*`,
 /// 6.8). Returns the registry entry, its input queue (typing and resizes; it ends once
 /// every sender is dropped), the output side and the child.
+#[cfg(unix)]
 pub fn spawn(
     id: u32,
     cwd: &str,
@@ -125,7 +139,7 @@ pub fn spawn(
     rows: u16,
     bin_dir: &Path,
     env: &[(&'static str, String)],
-) -> Result<(Terminal, mpsc::UnboundedSender<Input>, OwnedReadPty, Child), String> {
+) -> Result<(Terminal, mpsc::UnboundedSender<Input>, Pty, Child), String> {
     let start = || -> pty_process::Result<_> {
         let (pty, pts) = pty_process::open()?;
         pty.resize(Size::new(rows, cols))?;
@@ -392,6 +406,7 @@ pub mod login {
     }
 }
 
+#[cfg(unix)]
 async fn feed(mut pty: OwnedWritePty, mut input: mpsc::UnboundedReceiver<Input>) {
     while let Some(input) = input.recv().await {
         // A dead PTY fails every write; the loop ends when the terminal is dropped.
@@ -404,6 +419,7 @@ async fn feed(mut pty: OwnedWritePty, mut input: mpsc::UnboundedReceiver<Input>)
 
 /// Ends every process group in the given sessions: SIGHUP, then SIGKILL for
 /// whatever is still alive after [`GRACE`].
+#[cfg(unix)]
 pub async fn end_sessions(sessions: &[i32]) {
     signal(&in_sessions(sessions).await, Signal::SIGHUP);
     let _ = tokio::time::timeout(GRACE, async {
@@ -416,12 +432,14 @@ pub async fn end_sessions(sessions: &[i32]) {
 }
 
 /// The processes in `sessions`, read from `/proc` on a blocking thread (9.13).
+#[cfg(unix)]
 async fn in_sessions(sessions: &[i32]) -> Vec<procs::Proc> {
     let all = tokio::task::spawn_blocking(|| procs::list(procs::Source::System)).await;
     let all = all.unwrap_or_default().into_iter();
     all.filter(|p| sessions.contains(&p.session)).collect()
 }
 
+#[cfg(unix)]
 fn signal(procs: &[procs::Proc], signal: Signal) {
     for proc in procs {
         let _ = killpg(Pid::from_raw(proc.pgrp), signal);
@@ -432,6 +450,8 @@ fn signal(procs: &[procs::Proc], signal: Signal) {
 mod tests {
     use super::*;
 
+    // Only a terminal's spawn makes one (12.5.3 on Windows).
+    #[cfg(unix)]
     #[test]
     fn last_output_is_shared_by_its_clones() {
         let last = LastOutput::new();

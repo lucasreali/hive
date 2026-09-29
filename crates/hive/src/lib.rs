@@ -2,11 +2,9 @@
 
 pub mod actions;
 pub mod adapter;
-#[cfg(unix)]
 pub mod bridge;
 pub mod changes;
 pub mod cli;
-#[cfg(unix)]
 pub mod daemon;
 pub mod dirs;
 pub mod file;
@@ -31,7 +29,6 @@ pub mod spaces;
 pub mod states;
 #[cfg(unix)]
 pub mod statusline;
-#[cfg(unix)]
 pub mod terminal;
 pub mod transcript;
 pub mod watch;
