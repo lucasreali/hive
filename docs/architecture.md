@@ -76,7 +76,7 @@ Every message is a frame, big-endian: `[type: u8][channel: u32][length: u32][pay
 ### Handshake
 
 The first frame from every client is `Hello { protocol, version, role }`, where `role` is `app` or `hook`.
-- If both `protocol` (`PROTOCOL_VERSION`) and `version` (the `hive` binary version) match, the service answers `Welcome { version, distro, windows }`. `distro` is the service's `WSL_DISTRO_NAME` (null when unset), shown in the app's status bar: the service knows its distribution, so Windows never has to guess it from `wsl.exe`. It was added as an optional field (`#[serde(default)]`), which old decoders ignore and new decoders default, so `PROTOCOL_VERSION` stayed 1. `windows` (12.5.3, optional too) is true when the service runs natively on Windows: the settings dialog then shows the Shell setting.
+- If both `protocol` (`PROTOCOL_VERSION`) and `version` (the `hive` binary version) match, the service answers `Welcome { version, distro }`. `distro` is the service's `WSL_DISTRO_NAME` (null when unset), shown in the app's status bar: the service knows its distribution, so Windows never has to guess it from `wsl.exe`. It was added as an optional field (`#[serde(default)]`), which old decoders ignore and new decoders default, so `PROTOCOL_VERSION` stayed 1.
 - Otherwise it answers `VersionMismatch { protocol, version }` with its own values and closes the connection. This is a hard error: the app must block and tell the user.
 - Any other first message gets `Error` and the connection is closed.
 
@@ -85,7 +85,7 @@ The first frame from every client is `Hello { protocol, version, role }`, where 
 | Message | Direction | Channel | Meaning |
 |---|---|---|---|
 | `hello` | client → service | 0 | Starts the handshake. |
-| `welcome {version, distro, windows}` | service → client | 0 | Handshake accepted. |
+| `welcome {version, distro}` | service → client | 0 | Handshake accepted. |
 | `version_mismatch {protocol, version}` | service → client | 0 | Handshake refused (the service's own values); the connection is closed. |
 | `open_terminal {cwd, cols, rows, account}` | app → service | n ≥ 1 | Start a terminal on channel n. `account` (optional, 12.2): `{config_dir}`, the Claude account it gets, one of the settings' accounts (`config_dir` null: the default one); absent, the current account. An unknown folder is refused with `error` ("No Claude account has the folder …"). |
 | `terminal_opened {worktree}` | service → app | n | The terminal is running. `worktree` is the id of the followed worktree holding its cwd (`projects::place`: resolved, so a subfolder or a link counts; the deepest wins), null outside every followed project: the tab shows under that worktree, and under its project once a `projects` list no longer has it (`tabWorktree` in `src/tabs.ts`). |

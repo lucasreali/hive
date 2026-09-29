@@ -7,8 +7,7 @@ import type { JobLog, RunDetail, Runs } from "./runs";
 
 /** Service → app messages the store understands. Mirrors `hive_protocol::Control`. */
 export type ServiceMessage =
-  // `windows`: the service runs natively on Windows (12.5), where the shell is a setting.
-  | { type: "welcome"; version: string; distro: string | null; windows: boolean }
+  | { type: "welcome"; version: string; distro: string | null }
   | { type: "settings"; settings: Settings }
   // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
   // the defaults).

@@ -27,7 +27,7 @@ const site = MOCK_REPOS[3] as (typeof MOCK_REPOS)[number];
 /** Opens the dialog; `distro` is null when the service does not run in WSL (macOS). */
 function open(distro: string | null = null) {
   render(<App />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro, windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro }));
   act(() => apply({ type: "projects", projects: [] }));
   fireEvent.click(screen.getByRole("button", { name: "Add project Ctrl+Shift+O" }));
   return screen.getByRole("dialog", { name: "Add project" }) as HTMLDialogElement;

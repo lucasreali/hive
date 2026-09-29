@@ -145,14 +145,11 @@ pub enum Control {
         role: Role,
     },
     /// Handshake accepted. `distro` is the service's WSL distribution (`WSL_DISTRO_NAME`);
-    /// `windows`: the service runs natively on Windows (12.5), where the terminals' shell is a
-    /// setting. Both optional, so adding them kept protocol 1 compatible.
+    /// optional, so adding it kept protocol 1 compatible.
     Welcome {
         version: String,
         #[serde(default)]
         distro: Option<String>,
-        #[serde(default)]
-        windows: bool,
     },
     /// Handshake refused; the connection is closed after this message.
     VersionMismatch {
@@ -1737,7 +1734,6 @@ mod tests {
         let welcome = Control::Welcome {
             version: "0.1.0".into(),
             distro: None,
-            windows: false,
         };
         assert_eq!(frame.to_control().unwrap(), welcome);
     }

@@ -24,7 +24,7 @@ afterEach(async () => {
 
 function open() {
   render(<App />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS }));
   fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
   return screen.getByRole("dialog", { name: "Settings" }) as HTMLDialogElement;

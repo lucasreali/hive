@@ -18,7 +18,7 @@ const button = () => screen.queryByTitle("Restart Hive to finish the update");
 function offered(agents: string[] = []) {
   const install = spyOn(transport, "installUpdate").mockResolvedValue();
   render(<App />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   for (const id of agents) {
     act(() => {
       apply({ type: "agent_detected", channel: 1, id, project: null, worktree: null, cwd: null });
@@ -80,7 +80,7 @@ test("the bell's inbox: pending agents, then the alerts; going to an agent", () 
   const dot = () => bell().querySelector(".pending-count");
   const items = () => screen.getAllByRole("menuitem");
   act(() => {
-    apply({ type: "welcome", version: "0.1.0", distro: null, windows: false });
+    apply({ type: "welcome", version: "0.1.0", distro: null });
     for (const [channel, id] of [
       [1, "a"],
       [2, "b"],
@@ -160,7 +160,7 @@ test("the badge counts pending agents not seen yet; opening the bell clears it (
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   };
   act(() => {
-    apply({ type: "welcome", version: "0.1.0", distro: null, windows: false });
+    apply({ type: "welcome", version: "0.1.0", distro: null });
     for (const [channel, id] of [
       [1, "a"],
       [2, "b"],

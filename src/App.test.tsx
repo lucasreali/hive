@@ -26,10 +26,10 @@ test("status bar follows the connection status", () => {
   render(<App />);
   const status = screen.getByTitle("WSL connection");
   expect(status.dataset.status).toBe("connecting");
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu", windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" }));
   expect(status.dataset.status).toBe("connected");
   expect(status.textContent).toBe("WSL: Ubuntuconnected");
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(status.textContent).toBe("WSLconnected");
   act(() =>
     apply({
@@ -54,7 +54,7 @@ test("on macOS the shell leaves room for the traffic lights and speaks macOS", (
   expect(screen.queryByTitle("Minimize")).toBeNull();
   expect(screen.queryByTitle("Close")).toBeNull();
   const status = screen.getByTitle("Service connection");
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(status.textContent).toBe("macOSconnected");
   for (const title of ["Add project (⇧⌘O)", "Files, diff and sessions (⇧⌘B)", "Collapse (⇧⌘B)"]) {
     expect(screen.getByTitle(title)).toBeDefined();

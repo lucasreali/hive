@@ -47,12 +47,7 @@ export const MOCK_DIAGNOSTICS = {
   claude: "/home/mock/.local/bin/claude",
 };
 
-const WELCOME: ServiceMessage = {
-  type: "welcome",
-  version: "mock",
-  distro: "Ubuntu",
-  windows: false,
-};
+const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
 
 const sub = (
   id: string,

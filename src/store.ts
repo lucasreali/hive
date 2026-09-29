@@ -58,7 +58,7 @@ import { type EditBuffer, isDirty, isFor } from "./viewer/buffer";
 
 export type Connection =
   | { status: "connecting" }
-  | { status: "connected"; version: string; distro: string | null; windows: boolean }
+  | { status: "connected"; version: string; distro: string | null }
   | {
       status: "version_mismatch";
       protocol: number;

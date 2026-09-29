@@ -159,11 +159,7 @@ test("an agent finishing already seen (not pending) gets its tone but no notific
 });
 
 test("other messages are ignored", () => {
-  notify(
-    { type: "welcome", version: "1", distro: null, windows: false },
-    useHive.getState() as HiveState,
-    clock,
-  );
+  notify({ type: "welcome", version: "1", distro: null }, useHive.getState() as HiveState, clock);
   expect(tones).toBe(0);
 });
 

@@ -22,12 +22,7 @@ afterEach(clearMocks);
 test("connect hands a channel to Rust and delivers its messages", async () => {
   const calls = record();
   const received: ServiceMessage[] = [];
-  const welcome: ServiceMessage = {
-    type: "welcome",
-    version: "0.1.0",
-    distro: "Ubuntu",
-    windows: false,
-  };
+  const welcome: ServiceMessage = { type: "welcome", version: "0.1.0", distro: "Ubuntu" };
   await tauriTransport.connect((m) => received.push(m));
   const [[cmd, args]] = calls;
   expect(cmd).toBe("connect");

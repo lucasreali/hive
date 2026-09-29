@@ -193,7 +193,6 @@ impl Env {
                 Control::Welcome {
                     version: hive::VERSION.into(),
                     distro: Some(DISTRO.into()),
-                    windows: false,
                 }
             )
         );

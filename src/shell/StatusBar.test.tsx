@@ -14,7 +14,7 @@ afterEach(() => {
 
 test("shows the app version at the right end of the status line", () => {
   render(<StatusBar />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu", windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" }));
   const bar = screen.getByRole("contentinfo");
   expect(bar.lastElementChild?.textContent).toBe(`v${version}`);
   expect(bar.textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
@@ -23,7 +23,7 @@ test("shows the app version at the right end of the status line", () => {
 test("shows the version on macOS without the WSL part", () => {
   asMac();
   render(<StatusBar />);
-  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, windows: false }));
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(screen.getByRole("contentinfo").textContent).toBe(`macOSconnectedv${version}`);
 });
 
@@ -31,7 +31,7 @@ test("shows the current account's session usage with its reset in local time (12
   render(<StatusBar />);
   const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;
   act(() => {
-    apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu", windows: false });
+    apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
     apply({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
   });
   const usage = screen.getByTitle("Current session (5-hour limit): 42% used, resets at 14:30");
@@ -52,7 +52,7 @@ test("shows the current account's session usage with its reset in local time (12
 test("holds no message:a failure or a confirmation shows elsewhere, as a toast (10.3)", () => {
   render(<StatusBar />);
   act(() => {
-    apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu", windows: false });
+    apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
     apply({ type: "notice", message: "No GitHub token for me" });
     showNotice("info", "Copied /w");
   });
