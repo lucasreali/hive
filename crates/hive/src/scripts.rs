@@ -7,11 +7,12 @@ use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use hive_protocol::TerminalShell;
 #[cfg(unix)]
 use nix::sys::signal::{Signal, killpg};
 #[cfg(unix)]
@@ -116,15 +117,32 @@ pub fn env(root: &str, worktree: &str, port: Option<u16>) -> Vec<(&'static str, 
     env
 }
 
-/// Runs the user's `script` with `sh -c` in `dir` with `env` added, within `time`. Once it
-/// ended or its time is up, everything left in its process group is killed. A failure (an exit code
-/// other than 0, a signal, the time limit) is an error ending with the end of its output.
-pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> io::Result<()> {
+/// How the user's `script` runs: `sh -c` (`shell`, the terminals' shell, only matters on
+/// native Windows).
+#[cfg(unix)]
+fn command(script: &str, _shell: TerminalShell) -> io::Result<std::process::Command> {
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(script);
+    Ok(command)
+}
+
+#[cfg(windows)]
+use crate::windows::script as command;
+
+/// Runs the user's `script` ([`command`]: `sh -c`, on native Windows the terminals' `shell`)
+/// in `dir` with `env` added, within `time`. Once it ended or its time is up, everything left
+/// in its process group (its job on Windows) is killed. A failure (an exit code other than 0,
+/// a signal, the time limit) is an error ending with the end of its output.
+pub fn run(
+    script: &str,
+    dir: &Path,
+    env: &[(&str, String)],
+    time: Duration,
+    shell: TerminalShell,
+) -> io::Result<()> {
     let (reader, writer) = io::pipe()?;
-    let mut command = Command::new("sh");
+    let mut command = command(script, shell)?;
     command
-        .arg("-c")
-        .arg(script)
         .current_dir(dir)
         .envs(env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
@@ -133,15 +151,17 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
     // Its own process group, so the limit ends what it started too.
     #[cfg(unix)]
     command.process_group(0);
+    let program = command.get_program().display().to_string();
     let mut child = command
         .spawn()
-        .map_err(|err| io::Error::new(err.kind(), format!("cannot run sh: {err}")))?;
+        .map_err(|err| io::Error::new(err.kind(), format!("cannot run {program}: {err}")))?;
     // Its copy of the output's write end: the output ends only once none is left open.
     drop(command);
     #[cfg(unix)]
     let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
+    // Windows has no process groups: a job holds the script and what it starts.
     #[cfg(windows)]
-    let group = child.id();
+    let group = crate::windows::Job::of(&child)?;
     let (output, tail) = mpsc::channel();
     // Not waited for: a process left in the background may hold the output open. Without a
     // thread (not a panic: it would end the service) the output is closed and not shown.
@@ -163,7 +183,7 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
     #[cfg(unix)]
     let _ = killpg(group, Signal::SIGKILL);
     #[cfg(windows)]
-    crate::windows::kill_tree(group);
+    group.kill();
     // Reaps it when it was killed (an exited script keeps its status).
     let _ = child.wait();
     let status = waited?;
@@ -198,7 +218,6 @@ fn last_bytes(mut input: impl Read) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use std::time::Instant;
 
     #[test]
@@ -311,66 +330,72 @@ mod tests {
         assert_eq!(env("/r", "/r", None).len(), 2);
     }
 
-    #[cfg(unix)]
+    // The same `sh` scripts run on Windows in the Bash of Git for Windows (on the runner).
+    const SH: TerminalShell = TerminalShell::GitBash;
+    /// How an exit code reads.
+    const EXIT: &str = if cfg!(windows) {
+        "exit code"
+    } else {
+        "exit status"
+    };
+    /// Prints the process id of the last command started in the background (the Bash of Git
+    /// for Windows has ids of its own).
+    const LAST_PID: &str = if cfg!(windows) {
+        "cat /proc/$!/winpid"
+    } else {
+        "echo $!"
+    };
+    /// How much longer than `sh` the Bash of Git for Windows may take to start.
+    const SLACK: Duration = Duration::from_secs(if cfg!(windows) { 5 } else { 0 });
+
     #[test]
     fn a_script_runs_in_its_folder_with_the_environment() {
         let tmp = tempfile::tempdir().unwrap();
         let env = [("HIVE_PORT", "20000".to_owned())];
         let script = "echo \"$HIVE_PORT\" > \"$(pwd)/out\"";
-        run(script, tmp.path(), &env, ARCHIVE_TIME).unwrap();
+        run(script, tmp.path(), &env, ARCHIVE_TIME, SH).unwrap();
         let out = std::fs::read_to_string(tmp.path().join("out")).unwrap();
         assert_eq!(out, "20000\n");
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_failed_script_reports_the_end_of_its_output() {
         let tmp = tempfile::tempdir().unwrap();
-        let err = run(
-            "echo out; echo err >&2; exit 3",
-            tmp.path(),
-            &[],
-            ARCHIVE_TIME,
-        )
-        .unwrap_err()
-        .to_string();
-        assert_eq!(err, "the archive script failed (exit status: 3):\nout\nerr");
-        let err = run("exit 1", tmp.path(), &[], ARCHIVE_TIME).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "the archive script failed (exit status: 1)"
-        );
+        let run = |script: &str| run(script, tmp.path(), &[], ARCHIVE_TIME, SH);
+        let err = run("echo out; echo err >&2; exit 3").unwrap_err();
+        let failed = format!("the archive script failed ({EXIT}: 3):\nout\nerr");
+        assert_eq!(err.to_string(), failed);
+        let err = run("exit 1").unwrap_err();
+        let failed = format!("the archive script failed ({EXIT}: 1)");
+        assert_eq!(err.to_string(), failed);
         let long = format!("head -c {} /dev/zero | tr '\\0' a; exit 1", OUTPUT_TAIL * 3);
-        let err = run(&long, tmp.path(), &[], ARCHIVE_TIME).unwrap_err();
-        let prefix = "the archive script failed (exit status: 1):\n";
+        let err = run(&long).unwrap_err();
+        let prefix = format!("the archive script failed ({EXIT}: 1):\n");
         assert_eq!(
             err.to_string(),
             format!("{prefix}{}", "a".repeat(OUTPUT_TAIL))
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_script_past_its_time_is_killed_with_what_it_started() {
         let tmp = tempfile::tempdir().unwrap();
-        let pid_file = tmp.path().join("pid");
-        let script = format!(
-            "echo started; sleep 30 & echo $! > {}; wait",
-            pid_file.display()
-        );
+        let limit = Duration::from_millis(300) + SLACK;
+        let script = format!("echo started; sleep 30 & {LAST_PID} > pid; wait");
         let start = Instant::now();
-        let err = run(&script, tmp.path(), &[], Duration::from_millis(300)).unwrap_err();
-        assert!(start.elapsed() >= Duration::from_millis(300));
-        assert!(start.elapsed() < Duration::from_secs(10));
-        assert_eq!(
-            err.to_string(),
-            "the archive script took longer than 0.3 s:\nstarted"
+        let err = run(&script, tmp.path(), &[], limit, SH).unwrap_err();
+        assert!(start.elapsed() >= limit);
+        assert!(start.elapsed() < Duration::from_secs(10) + SLACK);
+        let took = format!(
+            "the archive script took longer than {} s:\nstarted",
+            limit.as_secs_f32()
         );
-        assert!(gone(&pid_file));
+        assert_eq!(err.to_string(), took);
+        assert!(gone(&tmp.path().join("pid")));
     }
 
-    #[cfg(unix)]
     /// Whether the process whose pid is in `file` ended (killed, then reaped by init).
+    #[cfg(unix)]
     fn gone(file: &Path) -> bool {
         let pid: i32 = std::fs::read_to_string(file)
             .unwrap()
@@ -383,27 +408,54 @@ mod tests {
         })
     }
 
-    #[test]
-    fn a_script_that_cannot_start_is_an_error() {
-        let err = run("true", Path::new("/nonexistent/dir"), &[], ARCHIVE_TIME).unwrap_err();
-        assert!(err.to_string().starts_with("cannot run sh: "), "{err}");
+    /// Whether the process whose pid is in `file` ended (or ends within 5 s).
+    #[cfg(windows)]
+    fn gone(file: &Path) -> bool {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        };
+        let pid: u32 = std::fs::read_to_string(file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        // No such process any more.
+        if process.is_null() {
+            return true;
+        }
+        let process = unsafe { OwnedHandle::from_raw_handle(process) };
+        unsafe { WaitForSingleObject(process.as_raw_handle(), 5000) == WAIT_OBJECT_0 }
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn a_script_that_cannot_start_is_an_error() {
+        let missing = Path::new("/nonexistent/dir");
+        let err = run("true", missing, &[], ARCHIVE_TIME, SH).unwrap_err();
+        let err = err.to_string();
+        #[cfg(unix)]
+        assert!(err.starts_with("cannot run sh: "), "{err}");
+        #[cfg(windows)]
+        assert!(
+            err.starts_with("cannot run ") && err.contains(r"\bin\bash.exe: "),
+            "{err}"
+        );
+    }
+
     #[test]
     fn what_a_script_leaves_running_is_killed_when_it_ends() {
         let tmp = tempfile::tempdir().unwrap();
         let start = Instant::now();
         // The sleep holds the output open: it ends with the script, not 30 s later.
-        let script = "sleep 30 & echo $! > pid";
-        run(script, tmp.path(), &[], ARCHIVE_TIME).unwrap();
-        assert!(start.elapsed() < Duration::from_secs(2));
+        let script = format!("sleep 30 & {LAST_PID} > pid");
+        run(&script, tmp.path(), &[], ARCHIVE_TIME, SH).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(2) + SLACK);
         assert!(gone(&tmp.path().join("pid")));
-        let err = run("sleep 30 & exit 2", tmp.path(), &[], ARCHIVE_TIME).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "the archive script failed (exit status: 2)"
-        );
-        assert!(start.elapsed() < Duration::from_secs(4));
+        let err = run("sleep 30 & exit 2", tmp.path(), &[], ARCHIVE_TIME, SH).unwrap_err();
+        let failed = format!("the archive script failed ({EXIT}: 2)");
+        assert_eq!(err.to_string(), failed);
+        assert!(start.elapsed() < Duration::from_secs(4) + SLACK * 2);
     }
 }

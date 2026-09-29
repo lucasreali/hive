@@ -10,7 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::{SinkExt, StreamExt};
 use hive::paths::Paths;
 use hive_protocol::{
-    AgentState, Control, Frame, FrameCodec, FrameType, Role, SessionWindow, Settings, TerminalShell,
+    AgentState, Control, Frame, FrameCodec, FrameType, ProjectScripts, ProjectSettings, Role,
+    SessionWindow, Settings, TerminalShell,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -20,16 +21,25 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 /// cargo-mutants' 120 s instead of timing out.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// A throwaway profile: app data, settings, home and Claude folder in a temporary folder.
+/// A throwaway profile: app data, settings, home and Claude folder in a temporary folder, and
+/// a fake `claude.exe` first on `PATH` (`tests/fixtures/fake_claude.rs`: never the real one).
 struct Env {
     dir: tempfile::TempDir,
 }
 
 impl Env {
     fn new() -> Self {
-        Self {
-            dir: tempfile::tempdir().unwrap(),
-        }
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("fake");
+        std::fs::create_dir(&fake).unwrap();
+        let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_claude.rs");
+        let built = std::process::Command::new("rustc")
+            .args(["--edition", "2021", "-o"])
+            .arg(fake.join("claude.exe"))
+            .arg(source)
+            .status();
+        assert!(built.unwrap().success());
+        Self { dir }
     }
 
     fn path(&self, sub: &str) -> PathBuf {
@@ -37,12 +47,16 @@ impl Env {
     }
 
     fn vars(&self) -> Vec<(&'static str, PathBuf)> {
+        let path = std::env::var_os("PATH").unwrap();
+        let path = std::env::split_paths(&path);
+        let path = std::env::join_paths([self.path("fake")].into_iter().chain(path));
         vec![
             ("LOCALAPPDATA", self.path("local")),
             ("APPDATA", self.path("roaming")),
             ("USERPROFILE", self.path("home")),
             ("HOME", self.path("home")),
             ("CLAUDE_CONFIG_DIR", self.path("claude")),
+            ("PATH", path.unwrap().into()),
         ]
     }
 
@@ -229,10 +243,19 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         .await;
     close(&mut app, 1).await;
 
-    // The shell setting: new terminals run the chosen one.
+    // The shell setting: new terminals run the chosen one. Git Bash's login files put its own
+    // folders first on `PATH` (the user's may too): Hive's bin folder goes before them after.
+    std::fs::write(home.join(".bash_profile"), "export PATH=/usr/bin:$PATH\n").unwrap();
+    let bin = hive::terminal::conpty::msys_path(&paths.bin_dir());
+    let first = format!("sh=42 first={bin}.");
     let chosen = [
         (TerminalShell::Cmd, "echo cmd=%OS%", "cmd=Windows_NT"),
-        (TerminalShell::GitBash, "echo sh=$((6*7))", "sh=42"),
+        (
+            TerminalShell::GitBash,
+            r#"echo "sh=$((6*7)) first=${PATH%%:*}.""#,
+            first.as_str(),
+        ),
+        (TerminalShell::Default, "echo back", "back"),
     ];
     for (channel, (shell, line, shown)) in (2..).zip(chosen) {
         let mut settings = Settings::default();
@@ -248,7 +271,54 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         close(&mut app, channel).await;
     }
 
-    // A hook connection of this user reaches the app through the pipe.
+    // The service and the hooks run a copy in the bin folder, beside the `claude` wrapper.
+    let (hive_copy, wrapper) = (
+        paths.bin_dir().join("hive.exe"),
+        paths.bin_dir().join("claude.exe"),
+    );
+    assert!(hive_copy.is_file() && wrapper.is_file());
+    let hooks = std::fs::read_to_string(paths.hooks_settings()).unwrap();
+    let hooks: serde_json::Value = serde_json::from_str(&hooks).unwrap();
+    let command = &hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"];
+    assert_eq!(command.as_str(), hive_copy.to_str());
+
+    // `claude` in a terminal is the wrapper: the fake `claude` gets Hive's hooks, and its
+    // hooks reach the app (an agent) and make a worktree.
+    let repo = home.join("repo");
+    let git = |args: &[&str]| {
+        let mut git = std::process::Command::new("git");
+        git.args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+            .arg(&repo);
+        assert!(git.args(args).status().unwrap().success());
+    };
+    std::fs::create_dir(&repo).unwrap();
+    git(&["init", "-q"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+    let repo_cwd = repo.to_string_lossy().into_owned();
+    open(&mut app, 5, &repo_cwd).await;
+    app.type_line(5, "claude SessionStart s2 WorktreeCreate w1")
+        .await;
+    let detected = |message: Option<&Control>, _: &str| matches!(message, Some(Control::AgentDetected { id, .. }) if id == "s2");
+    app.until(5, "the wrapped agent", detected).await;
+    app.shows(5, "WorktreeCreate=0:w1").await;
+    let worktree = repo.join(".claude").join("worktrees").join("w1");
+    assert!(worktree.is_dir());
+    let output = &app.output[&5];
+    assert!(output.contains("settings"), "{output:?}");
+    assert!(output.contains("SessionStart=0:"), "{output:?}");
+    let remove = format!("claude WorktreeRemove {}", worktree.display());
+    app.type_line(5, &remove).await;
+    app.shows(5, "WorktreeRemove=0:").await;
+    assert!(!worktree.exists());
+    close(&mut app, 5).await;
+
+    // The statusline command parses in both shells Claude Code may run it with: it reports the
+    // 5-hour window, through the pipe, and prints the user's own statusline.
+    let claude_dir = env.path("claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    let user = r#"{"statusLine": {"type": "command", "command": "echo mine"}}"#;
+    std::fs::write(claude_dir.join("settings.json"), user).unwrap();
+    let statusline = hooks["statusLine"]["command"].as_str().unwrap();
     let resets_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -258,15 +328,34 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         used_percentage: 42,
         resets_at,
     };
-    let mut hook = FramedWrite::new(paths.connect().await.unwrap(), FrameCodec);
-    let hello = Control::hello(Role::Hook, hive::VERSION);
-    hook.send(Frame::control(0, &hello)).await.unwrap();
-    let claude_dir = env.path("claude").to_string_lossy().into_owned();
-    let report = Control::StatuslineUsage { claude_dir, usage };
-    hook.send(Frame::control(0, &report)).await.unwrap();
+    let window = serde_json::json!({ "rate_limits": { "five_hour": usage } });
+    let path = std::env::var_os("PATH").unwrap();
+    let bash = hive::terminal::conpty::git_bash(&path).unwrap();
+    let powershell = ["-NoProfile", "-NonInteractive", "-Command", statusline];
+    let shells: [(PathBuf, Vec<&str>, String); 2] = [
+        ("powershell".into(), powershell.to_vec(), window.to_string()),
+        (bash, vec!["-c", statusline], "{}".into()),
+    ];
+    for (shell, args, input) in shells {
+        let mut call = Command::new(&shell);
+        call.args(&args)
+            .envs(env.vars())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut call = call.spawn().unwrap();
+        let mut stdin = call.stdin.take().unwrap();
+        stdin.write_all(input.as_bytes()).await.unwrap();
+        drop(stdin);
+        let out = tokio::time::timeout(TIMEOUT, call.wait_with_output()).await;
+        let out = out.unwrap().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(stdout.trim(), "mine", "{shell:?}: {out:?}");
+        assert!(out.status.success(), "{shell:?}: {out:?}");
+    }
     let usage = Some(usage);
     app.wait_for(0, Control::SessionUsage { usage }).await;
-    drop(hook);
     // `hive hook` as Claude Code runs it: quiet, and it always succeeds.
     let mut call = env.hive();
     let mut call = call
@@ -296,4 +385,107 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         assert!(started.elapsed() < TIMEOUT, "the service is still running");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_shell() {
+    let env = Env::new();
+    let root = env.path("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    let who = ["-c", "user.name=a", "-c", "user.email=a@b"];
+    git(&[&who[..], &["commit", "-q", "--allow-empty", "-m", "m"]].concat());
+    let (mut bridge, mut app) = bridge(&env);
+    app.send(0, Control::hello(Role::App, hive::VERSION)).await;
+    let path = root.to_string_lossy().into_owned();
+    app.send(0, Control::AddProject { path }).await;
+    let added =
+        |message: Option<&Control>, _: &str| matches!(message, Some(Control::ProjectAdded { .. }));
+    let Some(Control::ProjectAdded { project }) = app.until(0, "the project", added).await else {
+        unreachable!()
+    };
+    // The archive script, in Command Prompt: it notes the worktree it ran in.
+    let archived = root.join("archived");
+    let script = format!(r#"echo %HIVE_WORKTREE_PATH%> "{}""#, archived.display());
+    let mut settings = Settings::default();
+    settings.terminal.shell = TerminalShell::Cmd;
+    let scripts = ProjectScripts {
+        archive: Some(script),
+        ..Default::default()
+    };
+    let project_settings = ProjectSettings { scripts };
+    settings
+        .projects
+        .insert(project.id.clone(), project_settings);
+    let set = Control::SetSettings {
+        settings: settings.clone(),
+    };
+    app.send(0, set).await;
+    app.wait_for(0, Control::Settings { settings }).await;
+    let create = Control::CreateWorktree {
+        project: project.id,
+        name: "a".into(),
+        base: None,
+    };
+    app.send(0, create).await;
+    let created = |message: Option<&Control>, _: &str| {
+        matches!(message, Some(Control::WorktreeCreated { .. }))
+    };
+    let Some(Control::WorktreeCreated { path, .. }) = app.until(0, "the worktree", created).await
+    else {
+        unreachable!()
+    };
+
+    // A process working in it (not in a terminal of Hive) keeps it, before its script runs.
+    let mut ping = std::process::Command::new("ping")
+        .args(["-n", "30", "127.0.0.1"])
+        .current_dir(&path)
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let remove = Control::RemoveWorktree {
+        path: path.clone(),
+        force: false,
+    };
+    app.send(0, remove.clone()).await;
+    let answered = |message: Option<&Control>, _: &str| {
+        matches!(
+            message,
+            Some(Control::RemoveWorktreeFailed { .. } | Control::WorktreeRemoved { .. })
+        )
+    };
+    let failed = app.until(0, "the refusal", answered).await;
+    let Some(Control::RemoveWorktreeFailed { message, .. }) = failed else {
+        panic!("{failed:?}")
+    };
+    let held = format!("in use by ping ({}): close its terminals first", ping.id());
+    assert_eq!(message.to_lowercase(), held);
+    assert!(std::path::Path::new(&path).is_dir());
+    assert!(!archived.exists());
+
+    // Once it is gone: the script runs in the worktree, then the worktree goes.
+    ping.kill().unwrap();
+    ping.wait().unwrap();
+    app.send(0, remove).await;
+    let removed = app.until(0, "the removal", answered).await;
+    assert!(
+        matches!(removed, Some(Control::WorktreeRemoved { .. })),
+        "{removed:?}"
+    );
+    assert!(!std::path::Path::new(&path).exists());
+    let noted = std::fs::read_to_string(&archived).unwrap();
+    assert_eq!(noted.trim_end(), path);
+
+    drop(app);
+    let ended = tokio::time::timeout(TIMEOUT, bridge.wait()).await;
+    assert!(ended.unwrap().unwrap().success());
 }

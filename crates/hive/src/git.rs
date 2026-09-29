@@ -111,9 +111,12 @@ pub fn limited(
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
     #[cfg(unix)]
     let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
-    // Windows has no process groups: git and what it started.
+    // Windows has no process groups: a job holds git and what it starts. It lives until git
+    // was waited for, then kills what git left running.
     #[cfg(windows)]
-    let group = child.id();
+    let job = crate::windows::Job::of(&child)?;
+    #[cfg(windows)]
+    let group = &job;
     let (finished, done) = mpsc::channel::<()>();
     // Feed stdin and drain stderr from other threads, so no pipe can deadlock another.
     let (out, err, expired) = std::thread::scope(|scope| {
@@ -131,7 +134,7 @@ pub fn limited(
                     #[cfg(unix)]
                     let _ = killpg(group, Signal::SIGKILL);
                     #[cfg(windows)]
-                    crate::windows::kill_tree(group);
+                    group.kill();
                 }
                 expired
             })

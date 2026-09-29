@@ -14,11 +14,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::event::ModifyKind;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{Event, EventKind, PathOp, RecommendedWatcher, Watcher as _};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use crate::files::Debounce;
+use crate::files::{self, Debounce};
 use crate::git;
 use crate::paths::canonical;
 
@@ -72,24 +72,20 @@ impl Registry {
             }
             wanted.insert(common);
         }
-        let mut paths = self.watcher.paths_mut();
-        self.watched.retain(|dir| {
-            let keep = wanted.contains(dir);
-            if !keep {
-                // Fails when the directory is gone, which removed its watch already.
-                let _ = paths.remove(dir);
-            }
-            keep
-        });
-        for dir in wanted {
-            if !self.watched.contains(&dir) && paths.add(&dir, RecursiveMode::NonRecursive).is_ok()
-            {
-                self.watched.insert(dir);
-            }
-        }
-        // ponytail: a failed commit (FSEvents only; inotify watches at `add`) leaves the
-        // registry unwatched until the next follow; report it if that ever shows.
-        let _ = paths.commit();
+        let gone = self.watched.iter().filter(|dir| !wanted.contains(*dir));
+        // Unwatching fails when the directory is gone, which removed its watch already.
+        let unwatch = gone.map(PathOp::unwatch);
+        let added: Vec<PathBuf> = wanted.difference(&self.watched).cloned().collect();
+        let watch = added.iter().map(PathOp::watch_non_recursive);
+        // ponytail: a watcher that fails (FSEvents only: its stream does not restart) leaves
+        // the registry unwatched until the next follow; report it if that ever shows.
+        let watcher = &mut self.watcher;
+        let ops = unwatch.chain(watch).collect();
+        let failed = files::update(|ops| watcher.update_paths(ops).map_err(Box::new), ops);
+        let failed = failed.unwrap_or_default();
+        self.watched.retain(|dir| wanted.contains(dir));
+        let watched = added.into_iter().filter(|dir| !failed.contains(dir));
+        self.watched.extend(watched);
     }
 
     /// Waits until a registry changed and the burst of events is over. Once the watcher is

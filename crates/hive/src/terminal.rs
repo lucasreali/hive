@@ -418,45 +418,104 @@ pub mod conpty {
 
     use hive_protocol::TerminalShell;
 
+    /// What PowerShell runs once its profile ran: its prompt (the user's, wrapped) first moves
+    /// the process's working folder to its file-system location. PowerShell's `cd` moves only
+    /// its location, and a worktree is refused removal while some process works in it
+    /// (`windows::inside`). No `"` and no trailing `\`: [`command_line`] quotes it as it is.
+    pub const FOLLOW: &str = "$__hivePrompt = $function:prompt; function global:prompt { try { \
+        [Environment]::CurrentDirectory = (Get-Location -PSProvider FileSystem).ProviderPath \
+        } catch {}; & $__hivePrompt }";
+
     /// The program and arguments of `shell`, programs found in the absolute folders of `path`
     /// (the service's `PATH`), else in `System32` of `root` (`%SystemRoot%`, else
-    /// `C:\Windows`): `pwsh` when there, else Windows PowerShell; `cmd`; Git Bash, the
-    /// `bin\bash.exe` two folders above the first `git.exe` that has one (`<Git>\cmd\git.exe`).
+    /// `C:\Windows`): PowerShell (see [`powershell`]) running [`FOLLOW`]; `cmd`; Git Bash
+    /// (see [`git_bash`]) reading Hive's rc file beside `bin_dir`, which runs what a login
+    /// bash runs and then puts `bin_dir` first on `PATH` (a login bash's profile puts Git's
+    /// own folders first), as on macOS ([`super::login`]).
     pub fn shell(
         shell: TerminalShell,
         path: &OsStr,
         root: Option<&OsStr>,
+        bin_dir: &Path,
     ) -> Result<Vec<OsString>, String> {
-        let on_path = |name: &'static str| {
-            // A relative folder would find a program of whatever folder the service is in.
-            let dirs = std::env::split_paths(path).filter(|dir| dir.is_absolute());
-            dirs.map(move |dir| dir.join(name))
-                .filter(|file| file.is_file())
-        };
-        let find = |name| on_path(name).next().map(PathBuf::into_os_string);
-        let system = Path::new(root.unwrap_or(OsStr::new(r"C:\Windows"))).join("System32");
         match shell {
             TerminalShell::Default => {
-                let found = find("pwsh.exe").or_else(|| find("powershell.exe"));
-                let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
-                Ok(vec![found.unwrap_or_else(|| windows.into())])
-            }
-            TerminalShell::Cmd => {
-                let found = find("cmd.exe");
-                Ok(vec![found.unwrap_or_else(|| system.join("cmd.exe").into())])
-            }
-            TerminalShell::GitBash => {
-                let above = |mut git: PathBuf| {
-                    git.pop();
-                    git.pop();
-                    git.extend(["bin", "bash.exe"]);
-                    git
-                };
-                let bash = on_path("git.exe").map(above).find(|bash| bash.is_file());
-                let bash = bash.ok_or("Git Bash was not found: no git.exe on PATH")?;
-                let args = [bash.into_os_string(), "--login".into(), "-i".into()];
+                let program = powershell(path, root);
+                let args = [program, "-NoExit".into(), "-Command".into(), FOLLOW.into()];
                 Ok(args.to_vec())
             }
+            TerminalShell::Cmd => {
+                let found = find(path, "cmd.exe");
+                Ok(vec![
+                    found.unwrap_or_else(|| system(root).join("cmd.exe").into()),
+                ])
+            }
+            TerminalShell::GitBash => {
+                let bash = git_bash(path).ok_or("Git Bash was not found: no git.exe on PATH")?;
+                let rc = msys_path(&super::login::startup_dir(bin_dir).join("bashrc"));
+                let args = [
+                    bash.into_os_string(),
+                    "--rcfile".into(),
+                    rc.into(),
+                    "-i".into(),
+                ];
+                Ok(args.to_vec())
+            }
+        }
+    }
+
+    /// `System32` of `root` (`%SystemRoot%`, else `C:\Windows`).
+    fn system(root: Option<&OsStr>) -> PathBuf {
+        Path::new(root.unwrap_or(OsStr::new(r"C:\Windows"))).join("System32")
+    }
+
+    /// The files `name` in the absolute folders of `path` (a relative folder would find a
+    /// program of whatever folder the service is in).
+    fn on_path<'a>(path: &'a OsStr, name: &'a str) -> impl Iterator<Item = PathBuf> + 'a {
+        let dirs = std::env::split_paths(path).filter(|dir| dir.is_absolute());
+        dirs.map(move |dir| dir.join(name))
+            .filter(|file| file.is_file())
+    }
+
+    /// The first file `name` in the absolute folders of `path`.
+    fn find(path: &OsStr, name: &str) -> Option<OsString> {
+        on_path(path, name).next().map(PathBuf::into_os_string)
+    }
+
+    /// PowerShell: `pwsh` when on `path`, else Windows PowerShell (on `path`, else in
+    /// `System32` of `root`).
+    pub fn powershell(path: &OsStr, root: Option<&OsStr>) -> OsString {
+        let found = find(path, "pwsh.exe").or_else(|| find(path, "powershell.exe"));
+        let windows = || {
+            system(root)
+                .join(r"WindowsPowerShell\v1.0\powershell.exe")
+                .into()
+        };
+        found.unwrap_or_else(windows)
+    }
+
+    /// Git Bash: the `bin\bash.exe` two folders above the first `git.exe` on `path` that has
+    /// one (`<Git>\cmd\git.exe`).
+    pub fn git_bash(path: &OsStr) -> Option<PathBuf> {
+        let above = |mut git: PathBuf| {
+            git.pop();
+            git.pop();
+            git.extend(["bin", "bash.exe"]);
+            git
+        };
+        on_path(path, "git.exe")
+            .map(above)
+            .find(|bash| bash.is_file())
+    }
+
+    /// `path` as Git Bash writes it: `/` between names, and a drive `C:` as `/c`.
+    pub fn msys_path(path: &Path) -> String {
+        let text = path.to_string_lossy().replace('\\', "/");
+        match text.as_bytes() {
+            [drive, b':', ..] if drive.is_ascii_alphabetic() => {
+                format!("/{}{}", char::from(drive.to_ascii_lowercase()), &text[2..])
+            }
+            _ => text,
         }
     }
 
@@ -482,7 +541,8 @@ pub mod conpty {
     }
 
     /// A terminal's environment: `base` (the service's) with `set` over it, names compared
-    /// ignoring case as Windows does, then `bin_dir` first on `PATH`; sorted by name, as
+    /// ignoring case as Windows does, then `bin_dir` first on `PATH`, and as `HIVE_BIN_DIR`
+    /// in Git Bash's form (for Hive's bash rc file, which unsets it); sorted by name, as
     /// `CreateProcessW` wants it.
     pub fn environment(
         base: impl IntoIterator<Item = (OsString, OsString)>,
@@ -490,7 +550,8 @@ pub mod conpty {
         bin_dir: &Path,
     ) -> Vec<(OsString, OsString)> {
         let mut vars = BTreeMap::new();
-        for (name, value) in base.into_iter().chain(set) {
+        let bash_bin = ("HIVE_BIN_DIR".into(), msys_path(bin_dir).into());
+        for (name, value) in base.into_iter().chain(set).chain([bash_bin]) {
             vars.insert(name.to_string_lossy().to_uppercase(), (name, value));
         }
         let (name, old) = vars
@@ -505,13 +566,26 @@ pub mod conpty {
         vars.into_values().collect()
     }
 
-    /// A process's name as the unhooked-`claude` watcher compares it: its file's, without
-    /// `.exe`.
-    pub fn comm(exe: &str) -> &str {
-        match exe.split_at_checked(exe.len().saturating_sub(4)) {
+    /// A process's name as the unhooked-`claude` watcher compares it: its file's (`exe`),
+    /// without `.exe`; `claude` for a `node` whose command line (`args`, the program first)
+    /// runs Claude Code's CLI, as npm's `claude` does
+    /// (`…\node_modules\@anthropic-ai\claude-code\cli.js`).
+    pub fn comm<'a>(exe: &'a str, args: &[OsString]) -> &'a str {
+        let name = match exe.split_at_checked(exe.len().saturating_sub(4)) {
             Some((name, ext)) if ext.eq_ignore_ascii_case(".exe") => name,
             _ => exe,
+        };
+        let cli = |arg: &OsString| {
+            let arg = arg
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .replace('\\', "/");
+            arg.ends_with("/@anthropic-ai/claude-code/cli.js")
+        };
+        if name.eq_ignore_ascii_case("node") && args.iter().skip(1).any(cli) {
+            return "claude";
         }
+        name
     }
 
     #[cfg(test)]
@@ -540,17 +614,19 @@ pub mod conpty {
                 &["7/pwsh.exe", "v1.0/powershell.exe", "cmd/cmd.exe"],
             );
             let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
-            let run = |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs), None).unwrap();
+            let bin = Path::new("");
+            let run = |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs), None, bin);
+            let run = |dirs: &[&Path]| run(dirs).unwrap();
             let empty = dir.path().join("cmd");
             assert_eq!(
                 run(&[&empty, &windows, &pwsh]),
-                [pwsh.join("pwsh.exe").into_os_string()]
+                followed(pwsh.join("pwsh.exe"))
             );
             assert_eq!(
                 run(&[&empty, &windows]),
-                [windows.join("powershell.exe").into_os_string()]
+                followed(windows.join("powershell.exe"))
             );
-            let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty]), None).unwrap();
+            let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty]), None, bin).unwrap();
             assert_eq!(cmd, [empty.join("cmd.exe").into_os_string()]);
         }
 
@@ -560,13 +636,14 @@ pub mod conpty {
             let system = root.join("System32");
             let none = OsStr::new("");
             let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
-            let default = shell(TerminalShell::Default, none, Some(root.as_os_str())).unwrap();
-            assert_eq!(default, [windows.into_os_string()]);
-            let cmd = shell(TerminalShell::Cmd, none, Some(root.as_os_str())).unwrap();
+            let bin = Path::new("");
+            let default = shell(TerminalShell::Default, none, Some(root.as_os_str()), bin);
+            assert_eq!(default.unwrap(), followed(windows));
+            let cmd = shell(TerminalShell::Cmd, none, Some(root.as_os_str()), bin).unwrap();
             assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
             // Without `%SystemRoot%`: Windows' usual folder.
             let usual = Path::new(r"C:\Windows").join("System32").join("cmd.exe");
-            let cmd = shell(TerminalShell::Cmd, none, None).unwrap();
+            let cmd = shell(TerminalShell::Cmd, none, None, bin).unwrap();
             assert_eq!(cmd, [usual.into_os_string()]);
         }
 
@@ -583,11 +660,18 @@ pub mod conpty {
             let path = std::env::join_paths([relative]).unwrap();
             let root = Some(OsStr::new("R"));
             let system = Path::new("R").join("System32");
-            let cmd = shell(TerminalShell::Cmd, &path, root).unwrap();
+            let bin = Path::new("");
+            let cmd = shell(TerminalShell::Cmd, &path, root, bin).unwrap();
             assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
-            let default = shell(TerminalShell::Default, &path, root).unwrap();
+            let default = shell(TerminalShell::Default, &path, root, bin).unwrap();
             let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
-            assert_eq!(default, [windows.into_os_string()]);
+            assert_eq!(default, followed(windows));
+        }
+
+        /// PowerShell `program`, following its location with [`FOLLOW`].
+        fn followed(program: PathBuf) -> Vec<OsString> {
+            let args = ["-NoExit", "-Command", FOLLOW].map(OsString::from);
+            [program.into_os_string()].into_iter().chain(args).collect()
         }
 
         #[test]
@@ -600,16 +684,37 @@ pub mod conpty {
             let (other, git) = (dir.path().join("Other/cmd"), dir.path().join("Git/cmd"));
             let path = std::env::join_paths([&other, &git]).unwrap();
             let bash = dir.path().join("Git").join("bin").join("bash.exe");
+            assert_eq!(git_bash(&path), Some(bash.clone()));
+            // It reads Hive's rc file, beside the bin folder.
+            let bin = dir.path().join("hive").join("bin");
+            let rc = dir.path().join("hive").join("shell").join("bashrc");
             assert_eq!(
-                shell(TerminalShell::GitBash, &path, None).unwrap(),
-                [bash.into_os_string(), "--login".into(), "-i".into()]
+                shell(TerminalShell::GitBash, &path, None, &bin).unwrap(),
+                [
+                    bash.into_os_string(),
+                    "--rcfile".into(),
+                    msys_path(&rc).into(),
+                    "-i".into()
+                ]
             );
             // Only a git without its bash: none.
             let none = std::env::join_paths([&other]).unwrap();
+            assert_eq!(git_bash(&none), None);
             assert_eq!(
-                shell(TerminalShell::GitBash, &none, None).unwrap_err(),
+                shell(TerminalShell::GitBash, &none, None, &bin).unwrap_err(),
                 "Git Bash was not found: no git.exe on PATH"
             );
+        }
+
+        #[test]
+        fn git_bash_writes_a_drive_as_a_folder_and_slashes_between_names() {
+            let msys = |path: &str| msys_path(Path::new(path));
+            assert_eq!(msys(r"C:\Users\me\a b\bin"), "/c/Users/me/a b/bin");
+            assert_eq!(msys(r"d:\x"), "/d/x");
+            assert_eq!(msys("C:"), "/c");
+            assert_eq!(msys(r"\\server\share\x"), "//server/share/x");
+            assert_eq!(msys(r"1:\x"), "1:/x");
+            assert_eq!(msys("/already/msys"), "/already/msys");
         }
 
         #[test]
@@ -639,21 +744,24 @@ pub mod conpty {
             let want = pairs(&[
                 ("A", "0"),
                 ("b", "1"),
+                ("HIVE_BIN_DIR", "/c/hive/bin"),
                 ("HIVE_TERMINAL_ID", "3"),
                 ("Path", r"C:\hive\bin;C:\W"),
                 ("term", "xterm-256color"),
             ]);
             assert_eq!(env, want);
             // No `PATH`, or an empty one: only the bin dir.
-            let bin = pairs(&[("Path", r"C:\hive\bin")]);
+            let bin = pairs(&[("HIVE_BIN_DIR", "/c/hive/bin"), ("Path", r"C:\hive\bin")]);
             assert_eq!(environment([], [], Path::new(r"C:\hive\bin")), bin);
             let empty = pairs(&[("PATH", "")]);
             let env = environment(empty, [], Path::new(r"C:\hive\bin"));
-            assert_eq!(env, pairs(&[("PATH", r"C:\hive\bin")]));
+            let bin = pairs(&[("HIVE_BIN_DIR", "/c/hive/bin"), ("PATH", r"C:\hive\bin")]);
+            assert_eq!(env, bin);
         }
 
         #[test]
         fn a_process_name_drops_its_exe() {
+            let comm = |exe| comm(exe, &[]);
             assert_eq!(comm("claude.exe"), "claude");
             assert_eq!(comm("PING.EXE"), "PING");
             assert_eq!(comm("claude"), "claude");
@@ -661,6 +769,30 @@ pub mod conpty {
             assert_eq!(comm(".exe"), "");
             // Not cut inside a character.
             assert_eq!(comm("aé.ex"), "aé.ex");
+        }
+
+        #[test]
+        fn a_node_running_claude_codes_cli_is_claude() {
+            let npm =
+                r"C:\Users\me\AppData\Roaming\npm\node_modules\@Anthropic-AI\claude-code\cli.js";
+            let node = os(&[r"C:\Program Files\nodejs\node.exe", npm, "--resume"]);
+            assert_eq!(comm("node.exe", &node), "claude");
+            assert_eq!(comm("NODE.EXE", &node), "claude");
+            // Given with either separator, after node's own options.
+            let options = os(&[
+                "node",
+                "--no-warnings",
+                "/n/@anthropic-ai/claude-code/CLI.js",
+            ]);
+            assert_eq!(comm("node", &options), "claude");
+            // Another script, another package, or the CLI given only as node's program.
+            let other = os(&["node", r"C:\n\@anthropic-ai\claude-code\other.js"]);
+            assert_eq!(comm("node.exe", &other), "node");
+            let package = os(&["node", r"C:\n\@acme\claude-code\cli.js"]);
+            assert_eq!(comm("node.exe", &package), "node");
+            assert_eq!(comm("node.exe", &os(&[npm])), "node");
+            // Only a node.
+            assert_eq!(comm("deno.exe", &node), "deno");
         }
     }
 }

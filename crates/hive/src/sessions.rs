@@ -59,17 +59,18 @@ pub fn take_open(file: &Path) -> Vec<OpenSession> {
 const ID_LIMIT: usize = 64;
 
 /// Where Claude Code keeps its session logs: `$CLAUDE_CONFIG_DIR/projects`, else
-/// `$HOME/.claude/projects`; `None` without either.
+/// `$HOME/.claude/projects` (`%USERPROFILE%` on Windows); `None` without either.
 pub fn root(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     claude_dir(var).map(|dir| dir.join("projects"))
 }
 
-/// Claude Code's config folder: `$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`; `None` without
-/// either. Also what an account's usage is kept by (12.1), so it is written one way only
-/// (`/a//b/` is `/a/b`).
+/// Claude Code's config folder: `$CLAUDE_CONFIG_DIR`, else `$HOME/.claude` (on Windows
+/// `%USERPROFILE%\.claude`); `None` without either. Also what an account's usage is kept by
+/// (12.1), so it is written one way only (`/a//b/` is `/a/b`).
 pub fn claude_dir(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     let var = |key| var(key).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let dir = var("CLAUDE_CONFIG_DIR").or_else(|| var("HOME").map(|home| home.join(".claude")))?;
+    let home = || var(crate::dirs::HOME).map(|home| home.join(".claude"));
+    let dir = var("CLAUDE_CONFIG_DIR").or_else(home)?;
     Some(dir.components().collect())
 }
 
@@ -593,11 +594,11 @@ mod tests {
         let (c, h, doubled) = ("/c", "/h", "//h/.claude/");
         let root = |vars: &[(&str, &str)]| super::root(var(vars));
         assert_eq!(
-            root(&[("CLAUDE_CONFIG_DIR", c), ("HOME", h)]),
+            root(&[("CLAUDE_CONFIG_DIR", c), (crate::dirs::HOME, h)]),
             Some(Path::new(c).join("projects"))
         );
         assert_eq!(
-            root(&[("CLAUDE_CONFIG_DIR", ""), ("HOME", h)]),
+            root(&[("CLAUDE_CONFIG_DIR", ""), (crate::dirs::HOME, h)]),
             Some(Path::new(h).join(".claude").join("projects"))
         );
         assert_eq!(root(&[]), None);
@@ -605,9 +606,15 @@ mod tests {
         let dir = |vars: &[(&str, &str)]| super::claude_dir(var(vars));
         let default = Some(Path::new(h).join(".claude"));
         let slashed = format!("{h}{}", std::path::MAIN_SEPARATOR);
-        assert_eq!(dir(&[("HOME", &slashed)]), default);
-        assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", ""), ("HOME", h)]), default);
+        assert_eq!(dir(&[(crate::dirs::HOME, &slashed)]), default);
+        assert_eq!(
+            dir(&[("CLAUDE_CONFIG_DIR", ""), (crate::dirs::HOME, h)]),
+            default
+        );
         assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", doubled)]), default);
+        // On Windows the home is the profile, not a `HOME` (Git Bash sets one of its own).
+        #[cfg(windows)]
+        assert_eq!(dir(&[("HOME", h)]), None);
     }
 
     #[test]

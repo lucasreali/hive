@@ -75,13 +75,15 @@ enum WorktreeCommand {
 }
 
 pub fn run() -> ExitCode {
+    // `claude.exe` in Hive's bin folder is a copy of `hive`: the `claude` wrapper.
+    #[cfg(windows)]
+    if let Some(code) = crate::windows::claude_wrapper() {
+        return code;
+    }
     let cli = Cli::parse();
     let paths = Paths::from_env();
     // `hive statusline` exits with the user's statusline's code.
-    #[cfg(unix)]
     let mut code = 0;
-    #[cfg(windows)]
-    let code = 0;
     let result = match cli.command {
         Command::Daemon => block_on(crate::daemon::run(&paths)),
         Command::Bridge => {
@@ -104,14 +106,10 @@ pub fn run() -> ExitCode {
             // `--clear` leaves `text` empty, which clears the badge.
             block_on(crate::hook::badge(&paths, terminal, text.join(" ")))
         }
-        #[cfg(unix)]
         Command::Statusline => block_on(statusline(&paths)).and_then(|(out, status)| {
             code = status;
             io::stdout().write_all(&out)
         }),
-        // It runs the user's statusline with `sh` (12.5.5).
-        #[cfg(windows)]
-        Command::Statusline => Err(crate::windows::unsupported("the statusline")),
         Command::Worktree { command } => run_worktree(command, &paths),
     };
     match result {
@@ -181,13 +179,16 @@ fn report(created: worktree::Created) -> io::Result<()> {
 }
 
 /// `hive statusline` (see [`crate::statusline::run`]), cancelled by a SIGTERM: Claude Code
-/// cancels a run when a newer one starts.
-#[cfg(unix)]
+/// cancels a run when a newer one starts (on Windows it kills the run: nothing to wait for).
 async fn statusline(paths: &Paths) -> io::Result<crate::statusline::Output> {
+    #[cfg(unix)]
     let mut terminate = signal(SignalKind::terminate())?;
+    #[cfg(unix)]
     let cancel = async move {
         terminate.recv().await;
     };
+    #[cfg(windows)]
+    let cancel = std::future::pending();
     let (env, cwd) = (crate::statusline::env, std::env::current_dir().ok());
     let stdin = tokio::io::stdin();
     Ok(crate::statusline::run(paths, stdin, env, cwd, cancel).await)

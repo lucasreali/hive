@@ -1,20 +1,22 @@
 //! What only native Windows needs, kept apart from the portable code (12.5): the service's
 //! named pipe and its checks, how the bridge starts the service, the clock, files (a rename
-//! that never replaces, a file another program holds, the drives), and what is not supported
-//! yet ([`unsupported`]). Tested on the Windows CI runner (`windows.yml`).
+//! that never replaces, a file another program holds, the drives), terminals, and the `claude`
+//! wrapper with the shells Claude Code runs a statusline with ([`claude`]). Tested on the
+//! Windows CI runner (`windows.yml`).
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::ops::BitOr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::{Component, Path, PathBuf};
+use std::process::{Child, Command};
 use std::time::Duration;
 
-use hive_protocol::Dir;
+use hive_protocol::{Dir, TerminalShell};
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
@@ -39,20 +41,14 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::core::BOOL;
 
 use crate::paths::Paths;
+use crate::procs::Proc;
+use crate::terminal::conpty;
 
 /// How long a client waits for a free instance of the service's pipe (an instance serves one
 /// connection, and the service makes the next one right after).
 const BUSY_TIME: Duration = Duration::from_secs(2);
 /// How often a client tries a busy pipe again.
 const BUSY_RETRY: Duration = Duration::from_millis(10);
-
-/// The error of what Hive cannot do on Windows yet.
-pub fn unsupported(what: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Unsupported,
-        format!("{what} is not supported on Windows yet"),
-    )
-}
 
 /// Data in `%LOCALAPPDATA%\hive`, settings in `%APPDATA%\hive` (under `%USERPROFILE%` when
 /// unset, else the temporary folder). The lock and the service's log go in the data's `run`.
@@ -308,7 +304,7 @@ pub mod terminal {
     use std::io;
     use std::ops::BitOr;
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::{AsRawHandle, HandleOrInvalid, OwnedHandle, RawHandle};
+    use std::os::windows::io::{AsRawHandle, OwnedHandle, RawHandle};
     use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::process::ExitStatus;
@@ -324,10 +320,6 @@ pub mod terminal {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::{
         COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
-    };
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-        TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -345,7 +337,6 @@ pub mod terminal {
     use windows_sys::core::HRESULT;
 
     use super::{check, instance, owned, process_user};
-    use crate::procs::Proc;
     use crate::terminal::{GRACE, Input, LastOutput, Terminal, conpty};
     use crate::watch::Watch;
 
@@ -499,7 +490,8 @@ pub mod terminal {
     ) -> io::Result<(i32, Weak<Console>, Pty, NamedPipeServer, Child)> {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let root = std::env::var_os("SystemRoot");
-        let args = conpty::shell(shell, &path, root.as_deref()).map_err(io::Error::other)?;
+        let args = conpty::shell(shell, &path, root.as_deref(), bin_dir);
+        let args = args.map_err(io::Error::other)?;
         let mut line = wide(&conpty::command_line(&args));
         let mut env = Vec::new();
         for (name, value) in conpty::environment(std::env::vars_os(), set, bin_dir) {
@@ -741,48 +733,56 @@ pub mod terminal {
         listed.iter().map(|&id| id as u32).collect()
     }
 
-    /// The processes of Hive's terminals, each in its terminal's session.
-    pub fn list() -> Vec<Proc> {
-        let names = names().unwrap_or_default();
+    /// The processes of Hive's terminals: each one's terminal (its session id), by process id.
+    pub fn jobs() -> HashMap<u32, i32> {
         let sessions = sessions();
         let pids = sessions.iter().flat_map(|(&session, running)| {
             pids(&running.job)
                 .into_iter()
-                .map(move |pid| (session, pid))
+                .map(move |pid| (pid, session))
         });
-        let named = pids.filter_map(|(session, pid)| Some((session, pid, names.get(&pid)?)));
-        let procs = named.map(|(session, pid, name)| Proc {
-            pid: pid as i32,
-            pgrp: pid as i32,
-            session,
-            comm: conpty::comm(name).to_owned(),
-        });
-        procs.collect()
+        pids.collect()
     }
 
-    /// Every process's executable file name, by process id.
-    fn names() -> io::Result<HashMap<u32, String>> {
-        names_in(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) })
-    }
+    /// A job of a program run with a time limit (git, `gh`, a project script), as a process
+    /// group on Unix: it holds the program and whatever it starts, killed by [`Job::kill`] or
+    /// once the job is dropped.
+    pub struct Job(OwnedHandle);
 
-    /// The executable file names in the process `snapshot` (invalid when it failed).
-    fn names_in(snapshot: RawHandle) -> io::Result<HashMap<u32, String>> {
-        let snapshot = unsafe { HandleOrInvalid::from_raw_handle(snapshot) };
-        let snapshot = OwnedHandle::try_from(snapshot).map_err(io::Error::other)?;
-        let mut entry = PROCESSENTRY32W {
-            dwSize: size_of::<PROCESSENTRY32W>() as u32,
-            ..Default::default()
-        };
-        let mut names = HashMap::new();
-        let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &mut entry) };
-        while more != 0 {
-            let file = &entry.szExeFile;
-            let len = file.iter().position(|&c| c == 0).unwrap_or(file.len());
-            let name = String::from_utf16_lossy(&file[..len]);
-            names.insert(entry.th32ProcessID, name);
-            more = unsafe { Process32NextW(snapshot.as_raw_handle(), &mut entry) };
+    /// Puts a process in a job ([`assign`], or a test's that fails).
+    type Assign = fn(&OwnedHandle, RawHandle) -> io::Result<()>;
+
+    impl Job {
+        /// A new job holding `process`, which should have started nothing yet. A process that
+        /// cannot join one is killed: it would run without a limit.
+        // ponytail: joined right after its start, not started suspended in it (as a terminal's
+        // shell): `std::process::Command` cannot resume a process. A program starts nothing in
+        // the microseconds between.
+        pub fn of(process: &impl AsRawHandle) -> io::Result<Self> {
+            Self::joined(job(), process.as_raw_handle(), assign)
         }
-        Ok(names)
+
+        /// `process` in `job` (a new one, or why there is none), joined through `assign`; killed
+        /// on a failure. Both are given by tests to fail.
+        fn joined(
+            job: io::Result<OwnedHandle>,
+            process: RawHandle,
+            assign: Assign,
+        ) -> io::Result<Self> {
+            let joined = job.and_then(|job| {
+                assign(&job, process)?;
+                Ok(Self(job))
+            });
+            if joined.is_err() {
+                kill(process);
+            }
+            joined
+        }
+
+        /// Kills every process in the job, with [`KILLED`] as their exit code.
+        pub fn kill(&self) {
+            unsafe { TerminateJobObject(self.0.as_raw_handle(), KILLED) };
+        }
     }
 
     /// Ends the terminals of `ended` (session ids): closes their consoles, waits up to
@@ -818,6 +818,8 @@ pub mod terminal {
         };
 
         use super::*;
+        use crate::procs::Proc;
+        use crate::windows::list;
 
         thread_local! {
             /// The console and the shell the last start on this thread made.
@@ -1014,12 +1016,6 @@ pub mod terminal {
             tokio::time::timeout(SHOWN, fed).await.unwrap().unwrap();
         }
 
-        #[test]
-        fn a_failed_process_snapshot_is_an_error() {
-            assert!(names_in(INVALID_HANDLE_VALUE).is_err());
-            assert!(!names().unwrap().is_empty());
-        }
-
         /// How long a shell gets to show something (a mutant that breaks it fails within 120 s).
         const SHOWN: Duration = Duration::from_secs(20);
 
@@ -1203,6 +1199,114 @@ pub mod terminal {
             assert_eq!(ping.wait().unwrap().code(), Some(KILLED as i32));
         }
 
+        #[tokio::test]
+        async fn a_job_kills_what_joined_it_and_a_process_that_cannot_join_is_killed() {
+            // `cmd` waits for the `ping` it starts (about 30 s): both are in the job.
+            let mut cmd = std::process::Command::new("cmd")
+                .args(["/c", "ping -n 30 127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let job = Job::of(&cmd).unwrap();
+            let both = async {
+                loop {
+                    let listed = pids(&job.0);
+                    if let Some(&ping) = listed.iter().find(|&&pid| pid != cmd.id()) {
+                        return ping;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            let ping = tokio::time::timeout(SHOWN, both).await.unwrap();
+            let ping = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, ping) }).unwrap();
+            job.kill();
+            assert_eq!(cmd.wait().unwrap().code(), Some(KILLED as i32));
+            assert!(ends(&ping));
+            // Left out of a job (none made, or not joined), it would run without a limit.
+            let failures: [(_, Assign); 2] = [
+                (Err(io::Error::other("no job")), assign),
+                (super::job(), |_, _| denied()),
+            ];
+            for (job, assign) in failures {
+                let mut lone = std::process::Command::new("ping")
+                    .args(["-n", "30", "127.0.0.1"])
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap();
+                assert!(Job::joined(job, lone.as_raw_handle(), assign).is_err());
+                assert_eq!(lone.wait().unwrap().code(), Some(KILLED as i32));
+            }
+        }
+
+        #[tokio::test]
+        async fn npms_claude_is_a_claude_in_its_terminal() {
+            let shell = Shell::start(TerminalShell::Cmd);
+            // A stand-in for the CLI npm installs, run by the runner's `node`.
+            let package = shell.dir.path().join(r"npm\@anthropic-ai\claude-code");
+            std::fs::create_dir_all(&package).unwrap();
+            let cli = package.join("cli.js");
+            std::fs::write(&cli, "setTimeout(() => {}, 30000);").unwrap();
+            shell.type_line(&format!("node \"{}\"", cli.display()));
+            let claude = async {
+                loop {
+                    let procs = list().into_iter();
+                    let mut mine = procs.filter(|p| p.session == shell.session);
+                    if mine.any(|p| p.comm == "claude") {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(SHOWN, claude).await.unwrap();
+            end_sessions(&[shell.session]).await;
+        }
+
+        #[tokio::test]
+        async fn powershells_working_folder_follows_its_location() {
+            let shell = Shell::start(TerminalShell::Default);
+            let elsewhere = tempfile::tempdir().unwrap();
+            let holds = |dir: &Path| {
+                let found = crate::windows::inside(dir);
+                found.iter().any(|p| p.pid == shell.session)
+            };
+            // `cd` alone would leave it in the folder it started in.
+            let at = elsewhere.path().display();
+            shell.type_line(&format!("Set-Location -LiteralPath '{at}'"));
+            let followed = async {
+                while !holds(elsewhere.path()) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(SHOWN, followed).await.unwrap();
+            assert!(!holds(shell.dir.path()));
+            // A location outside the file system keeps the last folder, and the prompt.
+            shell.type_line("Set-Location Env:");
+            shell.shows(r"PS Env:\>").await;
+            assert!(holds(elsewhere.path()));
+            end_sessions(&[shell.session]).await;
+        }
+
+        #[tokio::test]
+        async fn a_program_git_bash_starts_is_found_where_it_runs() {
+            let shell = Shell::start(TerminalShell::GitBash);
+            let sub = shell.dir.path().join("sub");
+            std::fs::create_dir(&sub).unwrap();
+            // Its `cd` moves no working folder of its own, but a program starts in it.
+            let at = sub.display();
+            shell.type_line(&format!("cd '{at}' && ping -n 30 127.0.0.1 > /dev/null"));
+            let ping = async {
+                loop {
+                    let found = crate::windows::inside(&sub);
+                    if found.iter().any(|p| p.comm.eq_ignore_ascii_case("ping")) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(SHOWN, ping).await.unwrap();
+            end_sessions(&[shell.session]).await;
+        }
+
         #[test]
         fn sizes_fit_a_console_and_failed_results_are_errors() {
             let fits = size(80, 24);
@@ -1217,21 +1321,103 @@ pub mod terminal {
     }
 }
 
-/// Windows PowerShell asked for its `PATH`: the one the service inherited from the app,
-/// which on Windows is the user's (a shell's config does not change it). Printed with a
-/// bare `\n`, as [`crate::wrapper::user_path`] reads it.
-pub fn path_shell() -> (OsString, Vec<OsString>) {
-    let print = "[Console]::Out.Write($env:Path + [char]10)";
-    let args = ["-NoProfile", "-NonInteractive", "-Command", print];
-    ("powershell".into(), args.map(OsString::from).to_vec())
+pub use terminal::Job;
+
+/// The process table (`sysinfo`): every process, named by its file (see
+/// [`conpty::comm`]), in its terminal's session (0 outside Hive's terminals).
+pub fn list() -> Vec<Proc> {
+    table(ProcessRefreshKind::nothing(), |_| true)
 }
 
-/// The process table: until 12.5.6a, only the processes of Hive's terminals.
-pub use terminal::list;
+/// The processes whose working folder is `dir` or inside it: every process's is read at once.
+/// Both are [`resolved`] first: a process may name its folder by an 8.3 short name, through a
+/// junction, a link or a `subst` drive.
+pub fn inside(dir: &Path) -> Vec<Proc> {
+    let dir = resolved(dir);
+    let kind = ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always);
+    table(kind, |process| {
+        process.cwd().is_some_and(|cwd| under(&resolved(cwd), &dir))
+    })
+}
 
-/// No process working folders until 12.5.6a.
-pub fn cwd(_pid: i32) -> Option<PathBuf> {
-    None
+/// `path` as [`crate::paths::canonical`] resolves it (long names, links followed, no `\\?\`),
+/// or as it is when it cannot be (e.g. it is gone).
+fn resolved(path: &Path) -> PathBuf {
+    crate::paths::canonical(path).unwrap_or_else(|_| path.to_owned())
+}
+
+/// The processes `keep` keeps, read as `kind` says. Only the terminals' processes get their
+/// command line read (one read of the process's memory each), which names npm's `claude`, a
+/// `node`.
+fn table(kind: ProcessRefreshKind, keep: impl Fn(&Process) -> bool) -> Vec<Proc> {
+    let sessions = terminal::jobs();
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+    let terminals: Vec<Pid> = sessions.keys().map(|&pid| Pid::from_u32(pid)).collect();
+    let args = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&terminals), false, args);
+    let kept = system.processes().values().filter(|process| keep(process));
+    kept.map(|process| {
+        let pid = process.pid().as_u32();
+        let name = process.name().to_string_lossy();
+        Proc {
+            pid: pid as i32,
+            pgrp: pid as i32,
+            session: sessions.get(&pid).copied().unwrap_or_default(),
+            comm: conpty::comm(&name, process.cmd()).to_owned(),
+        }
+    })
+    .collect()
+}
+
+/// Whether `path` is `dir` or inside it, names compared ignoring (ASCII) case as Windows does
+/// (a resolved path has its names' own case, one that could not be resolved may not).
+fn under(path: &Path, dir: &Path) -> bool {
+    let mut names = path.components();
+    dir.components().all(|name| {
+        let same = |of: Component| of.as_os_str().eq_ignore_ascii_case(name.as_os_str());
+        names.next().is_some_and(same)
+    })
+}
+
+/// How the user's archive `script` runs: in the terminals' shell (`terminal.shell`, found on
+/// the service's `PATH` as for a terminal), PowerShell with `-NoProfile -Command`, Command
+/// Prompt with `/D /S /C` (the script passed as it is: `cmd` has quoting rules of its own),
+/// Git Bash with `-c`.
+pub fn script(script: &str, shell: TerminalShell) -> io::Result<Command> {
+    // `cmd /C` runs the first line alone: the others would be skipped without a word.
+    if shell == TerminalShell::Cmd && script.contains(['\n', '\r']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Command Prompt runs only the first line of a script: put the archive script on one \
+             line (commands joined with &&), or choose another shell",
+        ));
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let root = std::env::var_os("SystemRoot");
+    // Only the program: no bin folder for an rc file (a script is no interactive shell).
+    let program = conpty::shell(shell, &path, root.as_deref(), Path::new(""));
+    let program = program.map_err(io::Error::other)?;
+    let mut command = Command::new(program.into_iter().next().unwrap_or_default());
+    match shell {
+        TerminalShell::Default => command.args(["-NoProfile", "-Command", script]),
+        TerminalShell::Cmd => command
+            .args(["/D", "/S", "/C"])
+            .raw_arg(format!("\"{script}\"")),
+        TerminalShell::GitBash => command.args(["-c", script]),
+    };
+    Ok(command)
+}
+
+/// Where the program `name` (`gh`) is on `path` alone: the first `<name>.exe` in its folders.
+/// (Given `name`, Windows would also look beside Hive, in its system folders and on the
+/// service's own `PATH`.)
+pub fn on_path(name: &OsStr, path: &OsStr) -> Option<PathBuf> {
+    let exe = Path::new(name).with_extension("exe");
+    // A relative folder would be looked in from the service's own folder.
+    let dirs = std::env::split_paths(path).filter(|dir| dir.is_absolute());
+    let mut found = dirs.map(|dir| dir.join(&exe));
+    found.find(|file| file.is_file())
 }
 
 /// Renames `from` to `to` in one step, failing (`AlreadyExists`) when `to` exists, as
@@ -1300,18 +1486,6 @@ fn drive_dirs(mask: u32) -> Vec<Dir> {
         .collect()
 }
 
-/// Kills process `pid` and every process it started.
-// ponytail: `taskkill` by pid, which a pid reused meanwhile could misdirect; a job object
-// (12.5.6a) ends exactly the tree.
-pub fn kill_tree(pid: u32) {
-    let _ = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
 /// What a program printed (a path, a `PATH`): programs print UTF-8 on Windows, and git
 /// separates a path's names with `/`, here `\` as every other path (no name holds a `/`).
 pub fn os_string(bytes: &[u8]) -> OsString {
@@ -1321,6 +1495,490 @@ pub fn os_string(bytes: &[u8]) -> OsString {
 /// A plain open: Windows has no FIFO a measured file could turn into.
 pub fn open_nonblocking(path: &Path) -> io::Result<File> {
     File::open(path)
+}
+
+pub use claude::{
+    claude_names, claude_wrapper, install_hive, install_wrapper, statusline_command,
+    statusline_job, statusline_shell,
+};
+
+/// Claude Code on Windows (12.5.5): the `claude` wrapper, a copy of `hive.exe` named
+/// `claude.exe` in Hive's bin folder, and the `hive.exe` copy there that the service and the
+/// hooks run; the `statusLine` command and the shell Claude Code runs a statusline with.
+pub mod claude {
+    use std::ffi::{OsStr, OsString};
+    use std::io;
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::BorrowedHandle;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, ExitCode};
+
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+    use windows_sys::core::BOOL;
+
+    use super::{Job, monotonic_ns, wide};
+    use crate::paths::canonical;
+    use crate::terminal::conpty;
+
+    /// The extensions a shell tries when `PATHEXT` is unset.
+    const PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+    /// `claude` with each extension of `pathext` (`PATHEXT`), in its order and lowercase: the
+    /// files a shell runs for `claude`.
+    pub fn claude_names(pathext: Option<&OsStr>) -> Vec<String> {
+        let pathext = pathext.map(OsStr::to_string_lossy);
+        let pathext = pathext
+            .filter(|ext| !ext.is_empty())
+            .unwrap_or(PATHEXT.into());
+        let exts = pathext.split(';').filter(|ext| !ext.is_empty());
+        exts.map(|ext| format!("claude{}", ext.to_lowercase()))
+            .collect()
+    }
+
+    /// Copies `hive` to `hive.exe` in `bin`, unless it is that file already, and returns that
+    /// copy: what the service and the hooks run, so that none of them keeps the installed
+    /// `hive.exe` from being replaced by the app's installer.
+    pub fn install_hive(hive: &Path, bin: &Path) -> io::Result<PathBuf> {
+        std::fs::create_dir_all(bin)?;
+        let copy = bin.join("hive.exe");
+        if Some(canonical(hive)?) != canonical(&copy).ok() {
+            replace(hive, bin, "hive.exe")?;
+        }
+        Ok(copy)
+    }
+
+    /// [`install_hive`], then `claude.exe` beside it: the `claude` wrapper (see
+    /// [`claude_wrapper`]). Returns the `hive.exe` the hooks run.
+    pub fn install_wrapper(hive: &Path, bin: &Path) -> io::Result<PathBuf> {
+        let copy = install_hive(hive, bin)?;
+        replace(&copy, bin, "claude.exe")?;
+        Ok(copy)
+    }
+
+    /// Puts a copy of `from` at `name` in `bin`, through a temporary file. A program running
+    /// from there cannot be replaced, but it can be renamed: it is moved aside (to
+    /// `<name>.<n>.old`) first. What was moved aside earlier goes once nothing runs it.
+    fn replace(from: &Path, bin: &Path, name: &str) -> io::Result<()> {
+        let old = std::fs::read_dir(bin)?.flatten().map(|entry| entry.path());
+        let prefix = format!("{name}.");
+        for old in old.filter(|path| {
+            let file = path.file_name().unwrap_or_default().to_string_lossy();
+            file.starts_with(&prefix) && file.ends_with(".old")
+        }) {
+            // Still running: kept for the next time.
+            let _ = std::fs::remove_file(old);
+        }
+        let unique = format!("{}-{}", std::process::id(), monotonic_ns());
+        let (to, copy) = (bin.join(name), bin.join(format!("{name}.{unique}.tmp")));
+        std::fs::copy(from, &copy)?;
+        if std::fs::rename(&copy, &to).is_err() {
+            std::fs::rename(&to, bin.join(format!("{name}.{unique}.old")))?;
+            std::fs::rename(&copy, &to)?;
+        }
+        Ok(())
+    }
+
+    /// The `statusLine` command that runs `hive statusline` from `hive`, for the shell Claude
+    /// Code will run it with (see [`statusline_line`]).
+    pub fn statusline_command(hive: &Path) -> String {
+        let bash = claude_bash(&|key| std::env::var_os(key)).is_some();
+        statusline_line(hive, short_name(hive).as_deref(), bash)
+    }
+
+    /// `<hive> statusline` as Git Bash and PowerShell both read it: the path with `/` between
+    /// names, bare when nothing in it needs quoting, else its 8.3 short name `short` when that
+    /// needs none; else quoted for the shell Claude Code picks: sh's quotes with Git Bash
+    /// (`bash`), PowerShell's `& '…'` without.
+    fn statusline_line(hive: &Path, short: Option<&Path>, bash: bool) -> String {
+        let slashed = |path: &Path| path.to_string_lossy().replace('\\', "/");
+        let bare = |path: &String| {
+            let plain = |c: char| c.is_alphanumeric() || "/._:-~".contains(c);
+            path.chars().all(plain)
+        };
+        let long = slashed(hive);
+        let paths = [Some(long.clone()), short.map(slashed)];
+        match paths.into_iter().flatten().find(bare) {
+            Some(path) => format!("{path} statusline"),
+            None if bash => format!("'{}' statusline", long.replace('\'', r"'\''")),
+            None => format!("& '{}' statusline", long.replace('\'', "''")),
+        }
+    }
+
+    /// The 8.3 short name of `path`, when it exists (on a volume without short names, its
+    /// long one).
+    fn short_name(path: &Path) -> Option<PathBuf> {
+        let long = wide(path).ok()?;
+        let get = |short: &mut [u16]| unsafe {
+            GetShortPathNameW(long.as_ptr(), short.as_mut_ptr(), short.len() as u32)
+        };
+        // Asked with no room, it tells the room it needs.
+        let mut short = vec![0; get(&mut []) as usize];
+        let len = get(&mut short) as usize;
+        // 0: it failed (e.g. no such file).
+        if len == 0 {
+            return None;
+        }
+        // More room than it had: the file changed meanwhile.
+        let short = short.get(..len)?;
+        Some(PathBuf::from(OsString::from_wide(short)))
+    }
+
+    /// The Git Bash Claude Code runs shell commands with: `CLAUDE_CODE_GIT_BASH_PATH`, else
+    /// the one of the first `git` on `PATH` (see [`conpty::git_bash`]). `None`: PowerShell.
+    fn claude_bash(var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        let set = var("CLAUDE_CODE_GIT_BASH_PATH").filter(|path| !path.is_empty());
+        let found = || conpty::git_bash(&var("PATH").unwrap_or_default());
+        set.map(PathBuf::from).or_else(found)
+    }
+
+    /// How Claude Code runs a statusline on Windows, its program and the arguments before the
+    /// command: Git Bash's `-c` (see [`claude_bash`]), else PowerShell's `-Command` (`pwsh`
+    /// when on `PATH`), without the user's profile and the execution policy.
+    pub fn statusline_shell(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<OsString> {
+        if let Some(bash) = claude_bash(var) {
+            return vec![bash.into(), "-c".into()];
+        }
+        let root = var("SystemRoot");
+        let powershell = conpty::powershell(&var("PATH").unwrap_or_default(), root.as_deref());
+        let args = [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+        ];
+        [powershell]
+            .into_iter()
+            .chain(args.map(OsString::from))
+            .collect()
+    }
+
+    /// A [`Job`] holding the user's statusline `child`: it and whatever it starts are killed
+    /// once the job is dropped (the job ends with `hive statusline`, whose run it bounds).
+    pub fn statusline_job(child: &tokio::process::Child) -> io::Result<Job> {
+        let process = child.raw_handle().ok_or(io::ErrorKind::NotFound)?;
+        Job::of(&unsafe { BorrowedHandle::borrow_raw(process) })
+    }
+
+    /// Run as `claude.exe` (Hive's copy in its bin folder, first on the terminals' `PATH`):
+    /// the `claude` wrapper's exit code (see [`wrap`]). `None` under any other name.
+    pub fn claude_wrapper() -> Option<ExitCode> {
+        let exe = std::env::current_exe().ok()?;
+        if !exe.file_stem()?.eq_ignore_ascii_case("claude") {
+            return None;
+        }
+        let args = std::env::args_os().skip(1).collect();
+        let var = |key: &str| std::env::var_os(key);
+        Some(exit_code(wrap(&exe, args, &var)))
+    }
+
+    /// `code` as `hive`'s exit code, returned from `main` (`process::exit` would skip what
+    /// runs at exit): 0–255 as it is, any other code (an `NTSTATUS`, such as a program ended
+    /// by Ctrl+C) 1, so that a failure never reads as a success.
+    fn exit_code(code: i32) -> ExitCode {
+        ExitCode::from(u8::try_from(code).unwrap_or(1))
+    }
+
+    /// The wrapper at `exe`, as the Unix script: runs the first `claude` on `PATH` outside its
+    /// folder (see [`crate::wrapper::real_claude`]) with `--settings <hooks>` before `args`
+    /// and `HIVE_WRAPPED` set, or as it is when `HIVE_WRAPPED` is 1 (a `claude` started from
+    /// inside a hooked one: its hooks are in place already). Its streams are the wrapper's;
+    /// its exit code is the wrapper's (127: none found, 126: it cannot start).
+    fn wrap(exe: &Path, args: Vec<OsString>, var: &dyn Fn(&str) -> Option<OsString>) -> i32 {
+        // Ctrl+C and Ctrl+Break reach every program of the console: `claude` decides what
+        // they do, while the wrapper waits for it.
+        unsafe { SetConsoleCtrlHandler(Some(ignore), 1) };
+        let bin = exe.parent().unwrap_or(exe);
+        let Some(real) = crate::wrapper::real_claude(var("PATH").as_deref(), bin) else {
+            eprintln!("hive: no claude found in PATH");
+            return 127;
+        };
+        let mut claude = Command::new(&real);
+        if var("HIVE_WRAPPED").is_none_or(|wrapped| wrapped != "1") {
+            let hooks = bin.with_file_name("hive-hooks.json");
+            claude.env("HIVE_WRAPPED", "1").arg("--settings").arg(hooks);
+        }
+        match claude.args(args).status() {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(err) => {
+                eprintln!("hive: cannot run {}: {err}", real.display());
+                126
+            }
+        }
+    }
+
+    /// The wrapper's console control handler: every event is handled, by doing nothing.
+    unsafe extern "system" fn ignore(_event: u32) -> BOOL {
+        1
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn claude_is_looked_for_with_each_extension_of_pathext() {
+            let names = |pathext: &str| claude_names(Some(OsStr::new(pathext)));
+            assert_eq!(names(".EXE;;.Cmd"), ["claude.exe", "claude.cmd"]);
+            let default = ["claude.com", "claude.exe", "claude.bat", "claude.cmd"];
+            assert_eq!(names(""), default);
+            assert_eq!(claude_names(None), default);
+        }
+
+        /// The size of the file at `path`.
+        fn size(path: &Path) -> u64 {
+            std::fs::metadata(path).unwrap().len()
+        }
+
+        /// The names in `dir`, sorted.
+        fn names(dir: &Path) -> Vec<String> {
+            let entries = std::fs::read_dir(dir).unwrap();
+            let mut names: Vec<_> = entries
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+
+        #[test]
+        fn a_running_copy_is_moved_aside_and_removed_once_it_ended() {
+            let tmp = tempfile::tempdir().unwrap();
+            let bin = tmp.path().join("bin");
+            let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+            let (ping, whoami) = (system.join("PING.EXE"), system.join("whoami.exe"));
+            assert_eq!(install_wrapper(&ping, &bin).unwrap(), bin.join("hive.exe"));
+            assert_eq!(names(&bin), ["claude.exe", "hive.exe"]);
+            assert_eq!(size(&bin.join("claude.exe")), size(&ping));
+            // `ping` waits a second between tries: it runs its copy for about 30 s.
+            let mut running = Command::new(bin.join("claude.exe"))
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            install_wrapper(&whoami, &bin).unwrap();
+            assert!(running.try_wait().unwrap().is_none(), "ping ended early");
+            assert_eq!(size(&bin.join("claude.exe")), size(&whoami));
+            assert_eq!(size(&bin.join("hive.exe")), size(&whoami));
+            let now = names(&bin);
+            assert_eq!(now.len(), 3, "{now:?}");
+            assert!(now[1].starts_with("claude.exe.") && now[1].ends_with(".old"));
+            // Once it ended, what was moved aside goes, and only that.
+            running.kill().unwrap();
+            running.wait().unwrap();
+            std::fs::write(bin.join("hive.exe.txt"), "").unwrap();
+            std::fs::write(bin.join("notes.old"), "").unwrap();
+            install_wrapper(&whoami, &bin).unwrap();
+            let kept = ["claude.exe", "hive.exe", "hive.exe.txt", "notes.old"];
+            assert_eq!(names(&bin), kept);
+        }
+
+        #[test]
+        fn the_copy_itself_is_not_copied_again() {
+            let tmp = tempfile::tempdir().unwrap();
+            let bin = tmp.path().join("bin");
+            let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+            let hive = install_hive(&system.join("PING.EXE"), &bin).unwrap();
+            let mut running = Command::new(&hive)
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            // Running from it: copied, it would be moved aside.
+            assert_eq!(install_hive(&hive, &bin).unwrap(), hive);
+            assert!(running.try_wait().unwrap().is_none(), "ping ended early");
+            assert_eq!(names(&bin), ["hive.exe"]);
+            running.kill().unwrap();
+            running.wait().unwrap();
+            // Nothing to copy, or nowhere to put it.
+            assert!(install_hive(&tmp.path().join("missing.exe"), &bin).is_err());
+            let file = tmp.path().join("file");
+            std::fs::write(&file, "").unwrap();
+            assert!(install_hive(&hive, &file).is_err());
+            assert!(install_wrapper(&hive, &file).is_err());
+        }
+
+        #[test]
+        fn the_statusline_command_needs_no_quotes_when_it_can() {
+            let line = |long: &str, short: Option<&str>, bash| {
+                statusline_line(Path::new(long), short.map(Path::new), bash)
+            };
+            let plain = r"C:\Users\me\AppData\Local\hive\bin\hive.exe";
+            let bare = "C:/Users/me/AppData/Local/hive/bin/hive.exe statusline";
+            assert_eq!(line(plain, None, true), bare);
+            assert_eq!(line(plain, None, false), bare);
+            let accented = r"C:\Users\José_1-2\RUNNER~1\hive.exe";
+            let bare = "C:/Users/José_1-2/RUNNER~1/hive.exe statusline";
+            assert_eq!(line(accented, None, false), bare);
+            // A space: the short name, when it has none.
+            let spaced = r"C:\Users\Jo Doe\hive.exe";
+            let short = Some(r"C:\Users\JODOE~1\hive.exe");
+            let bare = "C:/Users/JODOE~1/hive.exe statusline";
+            assert_eq!(line(spaced, short, false), bare);
+            // Else quoted for the shell.
+            let quoted = "'C:/Users/Jo Doe/hive.exe' statusline";
+            assert_eq!(line(spaced, Some(spaced), true), quoted);
+            let called = "& 'C:/Users/Jo Doe/hive.exe' statusline";
+            assert_eq!(line(spaced, None, false), called);
+            let quote = r"C:\Users\O'Hara (x)\hive.exe";
+            let quoted = r"'C:/Users/O'\''Hara (x)/hive.exe' statusline";
+            assert_eq!(line(quote, None, true), quoted);
+            let called = "& 'C:/Users/O''Hara (x)/hive.exe' statusline";
+            assert_eq!(line(quote, None, false), called);
+            // What the service writes: this machine's shell, its real file.
+            let tmp = tempfile::tempdir().unwrap();
+            let hive = tmp.path().join("hive.exe");
+            std::fs::write(&hive, "").unwrap();
+            let bash = claude_bash(&|key| std::env::var_os(key)).is_some();
+            let short = short_name(&hive);
+            let want = statusline_line(&hive, short.as_deref(), bash);
+            assert_eq!(statusline_command(&hive), want);
+        }
+
+        #[test]
+        fn a_short_name_is_of_an_existing_file() {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join("a long name");
+            std::fs::create_dir(&dir).unwrap();
+            let file = dir.join("hive.exe");
+            std::fs::write(&file, "x").unwrap();
+            let short = short_name(&file).unwrap();
+            assert_eq!(canonical(&short).unwrap(), canonical(&file).unwrap());
+            assert_eq!(short.file_name().unwrap(), "hive.exe");
+            assert_eq!(short_name(&dir.join("missing")), None);
+            assert_eq!(short_name(Path::new("a\0b")), None);
+        }
+
+        /// Empty files at `names` under `root`.
+        fn files(root: &Path, names: &[&str]) {
+            for name in names {
+                let file = root.join(name);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(file, "").unwrap();
+            }
+        }
+
+        #[test]
+        fn a_statusline_runs_with_git_bash_else_powershell() {
+            let tmp = tempfile::tempdir().unwrap();
+            files(
+                tmp.path(),
+                &["Git/cmd/git.exe", "Git/bin/bash.exe", "7/pwsh.exe"],
+            );
+            let (git, pwsh) = (tmp.path().join("Git/cmd"), tmp.path().join("7"));
+            let path = std::env::join_paths([&pwsh, &git]).unwrap();
+            // (`PATH`, else `CLAUDE_CODE_GIT_BASH_PATH`: the only names asked for.)
+            let chosen = |bash: Option<&str>| {
+                let var = |key: &str| match key {
+                    "PATH" => Some(path.clone()),
+                    _ => bash.map(OsString::from),
+                };
+                statusline_shell(&var)
+            };
+            let bash = tmp.path().join("Git").join("bin").join("bash.exe");
+            assert_eq!(chosen(None), [bash.into_os_string(), "-c".into()]);
+            assert_eq!(chosen(Some("")), chosen(None));
+            let set = [OsString::from(r"C:\B\sh.exe"), "-c".into()];
+            assert_eq!(chosen(Some(r"C:\B\sh.exe")), set);
+            let none = |key: &str| (key == "PATH").then(|| pwsh.clone().into_os_string());
+            let args = [
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+            ];
+            let powershell = [pwsh.join("pwsh.exe").into_os_string()];
+            let want: Vec<OsString> = powershell.into_iter().chain(args.map(Into::into)).collect();
+            assert_eq!(statusline_shell(&none), want);
+        }
+
+        #[tokio::test]
+        async fn a_statusline_and_what_it_started_end_with_its_job() {
+            // `ping` waits a second between tries: about 30 s unless killed.
+            let mut ping = tokio::process::Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let held = statusline_job(&ping).unwrap();
+            drop(held);
+            // Killed (a closed job's processes end with code 0): well before its 30 s.
+            let ended = tokio::time::timeout(std::time::Duration::from_secs(20), ping.wait());
+            assert!(ended.await.is_ok(), "ping outlived its job");
+            // Waited for, it has no handle to join.
+            assert!(statusline_job(&ping).is_err());
+        }
+
+        /// A `claude.cmd` in `dir` that writes `HIVE_WRAPPED` and its arguments to `out.txt`
+        /// beside it and exits 7.
+        fn fake_claude(dir: &Path) {
+            let script =
+                "@echo off\r\n> \"%~dp0out.txt\" echo wrapped=%HIVE_WRAPPED% %*\r\nexit /b 7\r\n";
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("claude.cmd"), script).unwrap();
+        }
+
+        #[test]
+        fn the_wrapper_runs_the_real_claude_with_hives_hooks() {
+            let tmp = tempfile::tempdir().unwrap();
+            let (bin, real) = (
+                tmp.path().join("my data").join("bin"),
+                tmp.path().join("real"),
+            );
+            // A `claude` in the bin folder too, which is never run.
+            fake_claude(&bin);
+            fake_claude(&real);
+            let exe = bin.join("claude.exe");
+            let path = std::env::join_paths([&bin, &real]).unwrap();
+            let args = ["x", "y"].map(OsString::from);
+            // (`PATH`, else `HIVE_WRAPPED`: the only names asked for.)
+            let run = |wrapped: Option<&str>| {
+                let var = |key: &str| match key {
+                    "PATH" => Some(path.clone()),
+                    _ => wrapped.map(OsString::from),
+                };
+                let code = wrap(&exe, args.to_vec(), &var);
+                let out = std::fs::read_to_string(real.join("out.txt")).unwrap();
+                (code, out.trim_end().to_owned())
+            };
+            let hooks = tmp.path().join("my data").join("hive-hooks.json");
+            // A path with a space is quoted for `cmd`.
+            let settings = format!("wrapped=1 --settings \"{}\" x y", hooks.display());
+            assert_eq!(run(None), (7, settings.clone()));
+            assert_eq!(run(Some("0")), (7, settings));
+            // Started from inside a hooked `claude`: as it is.
+            assert_eq!(run(Some("1")), (7, "wrapped= x y".to_owned()));
+            assert!(!bin.join("out.txt").exists());
+        }
+
+        #[test]
+        fn without_a_claude_to_run_the_wrapper_fails() {
+            let tmp = tempfile::tempdir().unwrap();
+            let bin = tmp.path().join("bin");
+            let exe = bin.join("claude.exe");
+            let path = |dirs: &[&Path]| Some(std::env::join_paths(dirs).unwrap());
+            let only_bin = path(&[&bin]);
+            let none = |key: &str| (key == "PATH").then(|| only_bin.clone()).flatten();
+            assert_eq!(wrap(&exe, vec![], &none), 127);
+            // A `claude.exe` that is no program.
+            let broken = tmp.path().join("broken");
+            std::fs::create_dir(&broken).unwrap();
+            std::fs::write(broken.join("claude.exe"), "").unwrap();
+            let broken = path(&[&broken]);
+            let var = |key: &str| (key == "PATH").then(|| broken.clone()).flatten();
+            assert_eq!(wrap(&exe, vec![], &var), 126);
+            // Not run as `claude`: not the wrapper.
+            assert_eq!(claude_wrapper(), None);
+            // Its code as `hive`'s: a byte, else a failure.
+            assert_eq!(exit_code(0), ExitCode::SUCCESS);
+            assert_eq!(exit_code(255), ExitCode::from(255));
+            assert_eq!(exit_code(256), ExitCode::FAILURE);
+            assert_eq!(exit_code(0xC000_013A_u32 as i32), ExitCode::FAILURE);
+            // Ctrl+C and Ctrl+Break do nothing to it.
+            assert_eq!(unsafe { ignore(0) }, 1);
+        }
+    }
 }
 
 /// No Unix permission bits: a file gets its folder's ACL (see [`crate::mode`]).
@@ -1351,16 +2009,6 @@ mod tests {
     use super::*;
     use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[test]
-    fn unsupported_names_what() {
-        let err = unsupported("the Hive service");
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-        assert_eq!(
-            err.to_string(),
-            "the Hive service is not supported on Windows yet"
-        );
-    }
 
     fn resolve(vars: &[(&str, &str)]) -> Paths {
         paths(|key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into()))
@@ -1507,23 +2155,6 @@ mod tests {
         assert_eq!(ns(-1, 1), 0);
     }
 
-    #[tokio::test]
-    async fn the_users_path_is_the_one_powershell_prints() {
-        // Neither the service's `PATH` nor a home to fall back to: only what it printed.
-        let path = crate::wrapper::user_path(path_shell(), None, None, BUSY_TIME * 15).await;
-        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
-        let mut dirs = std::env::split_paths(&path);
-        assert!(
-            dirs.any(|dir| dir.as_os_str().eq_ignore_ascii_case(&system)),
-            "{path:?}"
-        );
-    }
-
-    #[test]
-    fn stubs_answer_nothing() {
-        assert_eq!(cwd(4), None);
-    }
-
     #[test]
     fn a_rename_never_replaces_a_file_or_a_folder() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1633,21 +2264,159 @@ mod tests {
     }
 
     #[test]
-    fn a_killed_tree_ends() {
+    fn every_process_is_listed_and_found_by_its_folder_in_any_case() {
+        let me = std::process::id() as i32;
+        let listed = list();
+        let found = listed.iter().find(|p| p.pid == me).unwrap();
+        // Outside Hive's terminals, under its file's name.
+        assert_eq!((found.pgrp, found.session), (me, 0));
+        assert!(found.comm.starts_with("hive"), "{found:?}");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Work");
+        std::fs::create_dir(&dir).unwrap();
         // `ping` waits a second between tries: about 30 s unless killed.
-        let mut child = Command::new("ping")
+        let mut ping = Command::new("ping")
             .args(["-n", "30", "127.0.0.1"])
-            .stdout(Stdio::null())
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        kill_tree(child.id());
-        let started = Instant::now();
-        let ended = (0..100).any(|_| {
-            std::thread::sleep(Duration::from_millis(100));
-            child.try_wait().unwrap().is_some()
-        });
-        assert!(ended, "not killed after {:?}", started.elapsed());
-        assert!(!child.wait().unwrap().success());
+        let pid = ping.id() as i32;
+        let upper = PathBuf::from(dir.to_string_lossy().to_uppercase());
+        for dir in [dir.as_path(), upper.as_path(), tmp.path()] {
+            let found = inside(dir);
+            let ping = found.iter().find(|p| p.pid == pid);
+            assert!(
+                ping.is_some_and(|p| p.comm.eq_ignore_ascii_case("ping")),
+                "{dir:?}: {found:?}"
+            );
+        }
+        // A folder beside it, whose name starts the same, holds nothing.
+        let other = tmp.path().join("Workshop");
+        std::fs::create_dir(&other).unwrap();
+        assert_eq!(inside(&other), []);
+        ping.kill().unwrap();
+        ping.wait().unwrap();
+    }
+
+    #[test]
+    fn a_process_is_found_by_its_folders_real_path() {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let tmp = tempfile::tempdir().unwrap();
+        // The runner's temporary folder is itself an 8.3 short name (`RUNNER~1`).
+        let real = resolved(tmp.path()).join("A long folder name");
+        std::fs::create_dir(&real).unwrap();
+        let long = wide(&real).unwrap();
+        let mut buf = vec![0_u16; 1024];
+        let n = unsafe { GetShortPathNameW(long.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        let short = PathBuf::from(OsString::from_wide(&buf[..n as usize]));
+        assert_ne!(short, real);
+        let link = tmp.path().join("link");
+        let made = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .args([&link, &real])
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        // Started in the short name, or through the junction; asked by either name.
+        for cwd in [&short, &link] {
+            let mut ping = Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .current_dir(cwd)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            for dir in [&real, &short] {
+                let found = inside(dir);
+                let pid = ping.id() as i32;
+                assert!(
+                    found.iter().any(|p| p.pid == pid),
+                    "{cwd:?} {dir:?}: {found:?}"
+                );
+            }
+            ping.kill().unwrap();
+            ping.wait().unwrap();
+        }
+        // What cannot be resolved is compared as it is.
+        let gone = tmp.path().join("gone");
+        assert_eq!(resolved(&gone), gone);
+    }
+
+    #[test]
+    fn a_folder_holds_what_is_under_it_named_in_any_case() {
+        let under = |path: &str, dir: &str| under(Path::new(path), Path::new(dir));
+        assert!(under(r"C:\r\wt\", r"C:\r\wt"));
+        assert!(under(r"c:\R\WT\src", r"C:\r\wt"));
+        assert!(!under(r"C:\r\wt2", r"C:\r\wt"));
+        assert!(!under(r"C:\r", r"C:\r\wt"));
+        assert!(!under(r"D:\r\wt", r"C:\r\wt"));
+    }
+
+    #[test]
+    fn archive_scripts_run_in_the_chosen_shell() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = [("HIVE_PORT", "20000".to_owned())];
+        let pwsh = r#"Set-Content -Path out -Value ("p=" + $env:HIVE_PORT + " " + $PSVersionTable.PSEdition)"#;
+        let shells = [
+            // The runner has PowerShell 7 on its `PATH`.
+            (TerminalShell::Default, pwsh, "p=20000 Core"),
+            // Its own quoting: the line as it is.
+            (
+                TerminalShell::Cmd,
+                r#"echo "p=%HIVE_PORT%"> out"#,
+                r#""p=20000""#,
+            ),
+            (
+                TerminalShell::GitBash,
+                r#"echo "p=$HIVE_PORT" > out"#,
+                "p=20000",
+            ),
+        ];
+        let time = Duration::from_secs(20);
+        for (shell, script, written) in shells {
+            crate::scripts::run(script, tmp.path(), &env, time, shell).unwrap();
+            let out = std::fs::read_to_string(tmp.path().join("out")).unwrap();
+            assert_eq!(out.trim_end(), written, "{shell:?}");
+        }
+    }
+
+    #[test]
+    fn a_program_is_found_on_the_path_it_is_given_only() {
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([tmp.path(), &system]).unwrap();
+        let cmd = OsStr::new("cmd");
+        assert_eq!(on_path(cmd, &path), Some(system.join("cmd.exe")));
+        assert_eq!(on_path(cmd, tmp.path().as_os_str()), None);
+        // A relative folder is never looked in, though it holds the program.
+        let here = tempfile::Builder::new()
+            .prefix(".hive-test-")
+            .tempdir_in(".")
+            .unwrap();
+        // Named from the current folder (the crate's).
+        let relative = Path::new(here.path().file_name().unwrap());
+        std::fs::write(relative.join("gh.exe"), "").unwrap();
+        assert!(relative.join("gh.exe").is_file());
+        let path = std::env::join_paths([relative, &system]).unwrap();
+        assert_eq!(on_path(OsStr::new("gh"), &path), None);
+    }
+
+    #[test]
+    fn command_prompt_refuses_a_script_of_more_than_one_line() {
+        for script in ["echo a\necho b", "echo a\r\necho b", "echo a\r"] {
+            let err = super::script(script, TerminalShell::Cmd).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+            assert!(
+                err.to_string().starts_with("Command Prompt runs only"),
+                "{err}"
+            );
+        }
+        // The other shells run every line.
+        for shell in [TerminalShell::Default, TerminalShell::GitBash] {
+            super::script("echo a\necho b", shell).unwrap();
+        }
     }
 
     #[test]
