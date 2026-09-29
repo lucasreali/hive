@@ -1267,6 +1267,47 @@ pub mod terminal {
             end_sessions(&[shell.session]).await;
         }
 
+        #[tokio::test]
+        async fn zz_probe_cd() {
+            use std::os::windows::process::CommandExt;
+            let mut report = String::new();
+            report += &format!("temp={:?} canon={:?}\n", std::env::temp_dir(), crate::paths::canonical(&std::env::temp_dir()));
+            for (shell, cd) in [
+                (TerminalShell::Default, "Set-Location -LiteralPath '{}'; 'moved'"),
+                (TerminalShell::Default, "cd '{}'; [Environment]::CurrentDirectory; 'moved'"),
+                (TerminalShell::Cmd, "cd /d \"{}\" && echo moved"),
+                (TerminalShell::GitBash, "cd '{}' && echo moved"),
+            ] {
+                let sh = Shell::start(shell);
+                let sub = sh.dir.path().join("sub");
+                std::fs::create_dir(&sub).unwrap();
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                sh.type_line(&cd.replace("{}", sub.to_str().unwrap()));
+                sh.shows("moved").await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let found = crate::windows::inside(&sub);
+                let inside_start = crate::windows::inside(sh.dir.path());
+                report += &format!(
+                    "{shell:?} `{cd}`: inside(sub)={found:?} inside(start)={inside_start:?}\n  output tail={:?}\n",
+                    sh.output.lock().unwrap().chars().rev().take(300).collect::<String>().chars().rev().collect::<String>()
+                );
+                end_sessions(&[sh.session]).await;
+            }
+            let out = std::process::Command::new("cmd")
+                .args(["/D", "/S", "/C"])
+                .raw_arg("\"echo one\necho two\"")
+                .output()
+                .unwrap();
+            report += &format!("cmd multi-line: status={:?} out={:?} err={:?}\n", out.status, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            let out = std::process::Command::new("cmd")
+                .args(["/D", "/S", "/C"])
+                .raw_arg("\"echo one\r\necho two\"")
+                .output()
+                .unwrap();
+            report += &format!("cmd CRLF: status={:?} out={:?} err={:?}\n", out.status, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            panic!("PROBE REPORT\n{report}");
+        }
+
         #[test]
         fn sizes_fit_a_console_and_failed_results_are_errors() {
             let fits = size(80, 24);
