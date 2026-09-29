@@ -54,7 +54,7 @@ pub fn monotonic_ns() -> u64 {
 
 /// No process table until 12.5.6a.
 pub fn list() -> Vec<Proc> {
-    Vec::new()
+    vec![]
 }
 
 /// No process working folders until 12.5.6a.
