@@ -4,7 +4,6 @@
 use std::ffi::OsStr;
 use std::fmt;
 use std::io::{self, Read};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -146,7 +145,7 @@ pub fn parse_porcelain(out: &[u8]) -> Vec<Worktree> {
     for field in out.split(|&b| b == 0) {
         if let Some(path) = field.strip_prefix(b"worktree ") {
             list.push(Worktree {
-                path: PathBuf::from(OsStr::from_bytes(path)),
+                path: git::os_string(path).into(),
                 branch: None,
                 bare: false,
                 prunable: false,
@@ -371,14 +370,14 @@ fn copy_included(root: &Path, worktree: &Path, included: &[u8]) -> io::Result<us
     let mut copied = 0;
     for rel in included
         .split(|&b| b == 0)
-        .map(|p| Path::new(OsStr::from_bytes(p)))
+        .map(|p| PathBuf::from(git::os_string(p)))
     {
-        let src = root.join(rel);
+        let src = root.join(&rel);
         let is_file = src.symlink_metadata().is_ok_and(|m| m.is_file());
-        if !is_file || unsafe_target(worktree, rel) {
+        if !is_file || unsafe_target(worktree, &rel) {
             continue;
         }
-        let dst = worktree.join(rel);
+        let dst = worktree.join(&rel);
         std::fs::create_dir_all(dst.parent().unwrap_or(worktree))?;
         std::fs::copy(src, dst)?;
         copied += 1;

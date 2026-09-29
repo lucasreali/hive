@@ -463,6 +463,7 @@ mod tests {
         assert_eq!(spaces.current().1, account("me"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_is_checked_but_its_folders_may_be_gone() {
         let space = |id: &str, projects: &[&str]| Space {

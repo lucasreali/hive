@@ -330,7 +330,6 @@ fn text(name: &str, value: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use hive_protocol::ProjectSettings;
-    use std::os::unix::fs::PermissionsExt;
 
     fn store() -> (tempfile::TempDir, Store) {
         let tmp = tempfile::tempdir().unwrap();
@@ -355,8 +354,11 @@ mod tests {
         assert_eq!(store.get(), (settings.clone(), None));
         assert_eq!(store.silence(), Duration::from_secs(12));
         let file = tmp.path().join("hive/settings.json");
-        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        assert_eq!(
+            crate::mode::of(&std::fs::metadata(&file).unwrap()) & 0o777,
+            0o600
+        );
         assert_eq!(Store::load(file).get(), (settings, None));
     }
 

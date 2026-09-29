@@ -5,7 +5,6 @@
 //! command always exits 0.
 
 use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -71,6 +70,7 @@ async fn read_payload(input: impl AsyncRead + Unpin) -> Value {
 
 /// `CLOCK_MONOTONIC` in ns: one clock for every process on the machine, so it orders hook
 /// calls made by different `hive hook` processes (0 if it cannot be read).
+#[cfg(unix)]
 pub fn monotonic_ns() -> u64 {
     nix::time::clock_gettime(nix::time::ClockId::CLOCK_MONOTONIC).map_or(0, |t| {
         (t.tv_sec() as u64)
@@ -78,6 +78,9 @@ pub fn monotonic_ns() -> u64 {
             .saturating_add(t.tv_nsec() as u64)
     })
 }
+
+#[cfg(windows)]
+pub use crate::windows::monotonic_ns;
 
 /// The wall clock, in ms since the Unix epoch (0 before it).
 pub fn now_ms() -> u64 {
@@ -94,11 +97,8 @@ fn append_record(
     payload: &Value,
 ) -> io::Result<()> {
     let line = json!({ "ts_ms": now_ms(), "event": event, "terminal_id": terminal_id, "payload": payload });
-    let mut out = std::fs::File::options()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(file)?;
+    let mut out =
+        crate::mode::private(std::fs::File::options().create(true).append(true)).open(file)?;
     // One write per line keeps concurrent hook calls from interleaving.
     out.write_all(format!("{line}\n").as_bytes())
 }
@@ -159,6 +159,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_monotonic_clock_moves_forward() {
         let before = monotonic_ns();
@@ -190,9 +191,9 @@ mod tests {
         assert_eq!(lines[0]["payload"], json!({"k": "v"}));
         assert_eq!(lines[1]["terminal_id"], Value::Null);
         assert_eq!(lines[1]["payload"], "raw");
-        use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
         assert_eq!(
-            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            crate::mode::of(&std::fs::metadata(&file).unwrap()) & 0o777,
             0o600
         );
     }

@@ -1,10 +1,10 @@
 //! Command-line entry point.
 
 use std::io::{self, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+#[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 
 use crate::paths::Paths;
@@ -78,12 +78,19 @@ pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let paths = Paths::from_env();
     // `hive statusline` exits with the user's statusline's code.
+    #[cfg(unix)]
     let mut code = 0;
+    #[cfg(windows)]
+    let code = 0;
     let result = match cli.command {
+        #[cfg(unix)]
         Command::Daemon => block_on(crate::daemon::run(&paths)),
+        #[cfg(unix)]
         Command::Bridge => {
             std::env::current_exe().and_then(|hive| block_on(crate::bridge::run(&paths, &hive)))
         }
+        #[cfg(windows)]
+        Command::Daemon | Command::Bridge => Err(crate::windows::unsupported("the Hive service")),
         Command::Hook { event, record } => {
             // Whatever happens, the agent must not see a failing hook.
             let stdin = tokio::io::stdin();
@@ -101,10 +108,14 @@ pub fn run() -> ExitCode {
             // `--clear` leaves `text` empty, which clears the badge.
             block_on(crate::hook::badge(&paths, terminal, text.join(" ")))
         }
+        #[cfg(unix)]
         Command::Statusline => block_on(statusline(&paths)).and_then(|(out, status)| {
             code = status;
             io::stdout().write_all(&out)
         }),
+        // It runs the user's statusline with `sh` (12.5.5).
+        #[cfg(windows)]
+        Command::Statusline => Err(crate::windows::unsupported("the statusline")),
         Command::Worktree { command } => run_worktree(command, &paths),
     };
     match result {
@@ -168,13 +179,14 @@ fn report(created: worktree::Created) -> io::Result<()> {
     for note in &created.notes {
         eprintln!("hive: {note}");
     }
-    let mut line = created.path.as_os_str().as_bytes().to_vec();
+    let mut line = created.path.as_os_str().as_encoded_bytes().to_vec();
     line.push(b'\n');
     io::stdout().write_all(&line)
 }
 
 /// `hive statusline` (see [`crate::statusline::run`]), cancelled by a SIGTERM: Claude Code
 /// cancels a run when a newer one starts.
+#[cfg(unix)]
 async fn statusline(paths: &Paths) -> io::Result<crate::statusline::Output> {
     let mut terminate = signal(SignalKind::terminate())?;
     let cancel = async move {

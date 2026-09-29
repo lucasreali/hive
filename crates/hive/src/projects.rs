@@ -530,6 +530,7 @@ fn file_name(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn wt(path: &str, branch: Option<&str>, bare: bool) -> worktree::Worktree {
@@ -541,6 +542,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_worktree_in_use_names_its_processes() {
         let busy = |count: i32| {
@@ -568,6 +570,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_project_is_removed_only_when_no_terminal_of_hive_works_in_it() {
         let tmp = tempfile::tempdir().unwrap();
@@ -609,6 +612,7 @@ mod tests {
         assert_eq!(err.to_string(), format!("{id} is not a followed project"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_holding_a_worktree_or_a_process_is_held() {
         let tmp = tempfile::tempdir().unwrap();
@@ -719,6 +723,7 @@ mod tests {
         assert_eq!(got, ["/r", "/r/x"]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_agent_is_placed_in_the_deepest_worktree_containing_its_cwd() {
         // The projects are added through a link to their real folder: both sides resolve.
@@ -841,6 +846,7 @@ mod tests {
         assert!(err.to_string().starts_with("invalid worktree name"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn worktrees_are_listed_again_only_once_forgotten() {
         use crate::health::tests::{commit, run};
@@ -874,6 +880,7 @@ mod tests {
         assert_eq!(count(), 3);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_hung_git_is_an_error_of_its_project_only() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1038,8 +1045,11 @@ mod tests {
         paths.push("/b c".to_owned());
         let spaces = Spaces::with(paths);
         save(&dir.join("spaces.json"), &spaces).unwrap();
-        let meta = std::fs::metadata(dir.join("spaces.json")).unwrap();
-        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            let meta = std::fs::metadata(dir.join("spaces.json")).unwrap();
+            assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        }
         assert_eq!(*load(&dir).spaces(), spaces);
     }
 

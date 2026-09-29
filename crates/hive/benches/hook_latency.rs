@@ -3,20 +3,32 @@
 //! Target: p99 < 20 ms.
 //! Run with `cargo bench -p hive --bench hook_latency`; exits non-zero above the target.
 
+#[cfg(unix)]
 use std::error::Error;
+#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::process::{Command, ExitCode, Stdio};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use futures_util::{SinkExt, StreamExt};
+#[cfg(unix)]
 use hive_protocol::{Control, Frame, FrameCodec, Role};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(unix)]
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+#[cfg(unix)]
 const RUNS: usize = 300;
+#[cfg(unix)]
 const TARGET_P99: Duration = Duration::from_millis(20);
 
+#[cfg(unix)]
 fn hive(dir: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_hive"));
     for (var, sub) in [
@@ -29,6 +41,7 @@ fn hive(dir: &Path) -> Command {
     cmd
 }
 
+#[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
@@ -102,3 +115,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ExitCode::FAILURE
     })
 }
+
+/// The service does not run on Windows yet (12.5.2).
+#[cfg(windows)]
+fn main() {}

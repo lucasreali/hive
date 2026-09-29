@@ -1,5 +1,5 @@
 # Files excluded from mutation testing; each one is listed with its reason in COVERAGE_EXCLUSIONS.md.
-exclude_globs = ["src-tauri/src/main.rs", "crates/hive/src/macos.rs"]
+exclude_globs = ["src-tauri/src/main.rs", "crates/hive/src/macos.rs", "crates/hive/src/windows*.rs"]
 # Build with `[profile.mutants]` (Cargo.toml: no debug info) and test with nextest, which fails
 # fast by default: no test starts after the first failure, the one a mutant needs to be caught.
 # The tests already running finish, so `common::Env`'s drop still stops their daemons. Nextest

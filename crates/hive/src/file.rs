@@ -6,15 +6,13 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hasher};
 use std::io::{self, Read, Write};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, SaveError};
 
 use crate::changes::{self, BINARY_PROBE};
-use crate::git;
+use crate::{git, mode};
 
 /// Most bytes of each side (on disk, at the base) sent to the app.
 pub const TEXT_LIMIT: u64 = 1_048_576; // 1 MiB
@@ -230,7 +228,7 @@ fn target(dir: &Path, rel: &Path) -> io::Result<(PathBuf, Option<u32>)> {
     let root = dir.canonicalize()?;
     if let Some(real) = resolve(dir, rel)? {
         let real = not_git(&root, real)?;
-        let mode = real.metadata()?.permissions().mode();
+        let mode = mode::of(&real.metadata()?);
         return Ok((real, Some(mode)));
     }
     // `rel` has only normal components, so it has a parent (maybe `dir`) and a name.
@@ -274,10 +272,7 @@ pub fn save_with(
     let n = SAVES.fetch_add(1, Ordering::Relaxed);
     let temp = target.with_file_name(format!(".{name}.hive-{}-{n}.tmp", std::process::id()));
     let io = |err: io::Error| (SaveError::Io, err.to_string());
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
+    let file = mode::private(OpenOptions::new().write(true).create_new(true))
         .open(&temp)
         .map_err(io)?;
     let saved = (|| {
@@ -309,7 +304,7 @@ pub fn save_with(
 
 fn write_temp(mut file: File, content: &str, mode: u32) -> io::Result<()> {
     file.write_all(content.as_bytes())?;
-    file.set_permissions(fs::Permissions::from_mode(mode & 0o7777))?;
+    mode::set(&file, mode & 0o7777)?;
     file.sync_all()
 }
 
@@ -356,7 +351,11 @@ fn folder_in(dir: &Path, root: &Path, folder: &str) -> io::Result<PathBuf> {
 /// case-insensitive file system (macOS, `/mnt/c`) `.GIT` is `.git`.
 fn not_git(root: &Path, folder: PathBuf) -> io::Result<PathBuf> {
     let rel = folder.strip_prefix(root).unwrap_or(&folder);
-    let git = |c: Component| c.as_os_str().as_bytes().eq_ignore_ascii_case(b".git");
+    let git = |c: Component| {
+        c.as_os_str()
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(b".git")
+    };
     if rel.components().any(git) {
         return Err(io::Error::other("Hive does not change what is inside .git"));
     }
@@ -388,8 +387,7 @@ pub fn create_folder(dir: &Path, folder: &str, name: &str) -> io::Result<String>
     let root = dir.canonicalize()?;
     let parent = folder_in(dir, &root, folder)?;
     let path = parent.join(name);
-    fs::DirBuilder::new()
-        .mode(0o755)
+    mode::folder(&mut fs::DirBuilder::new(), 0o755)
         .create(&path)
         .map_err(taken(name))?;
     let _ = File::open(&parent).and_then(|folder| folder.sync_all());
@@ -604,12 +602,16 @@ fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
 
 #[cfg(target_os = "macos")]
 use crate::macos::rename_new;
+#[cfg(windows)]
+use crate::windows::rename_new;
 
 /// The system that opens files for the app: Windows through WSL, or macOS itself.
 #[cfg(target_os = "linux")]
 const SYSTEM: &str = "Windows";
 #[cfg(target_os = "macos")]
 const SYSTEM: &str = "macOS";
+#[cfg(windows)]
+const SYSTEM: &str = "Windows";
 
 /// Extensions of text and source files that open in an editor on Windows and macOS: no usual
 /// app runs, installs or follows one. Every other extension is refused (9.8), among them
@@ -802,7 +804,7 @@ pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<Strin
         )));
     }
     // macOS runs an executable file without an extension in the Terminal.
-    if named && real.metadata()?.permissions().mode() & 0o111 != 0 {
+    if named && mode::executable(&real.metadata()?) {
         return Err(io::Error::other(format!(
             "{name} is executable: {SYSTEM} might run it instead of opening it in an editor"
         )));
@@ -829,6 +831,8 @@ pub fn windows(path: &Path, wslpath: &OsStr) -> io::Result<String> {
 
 #[cfg(target_os = "macos")]
 pub use crate::macos::native_path as windows;
+#[cfg(windows)]
+pub use crate::windows::native_path as windows;
 
 /// At most [`TEXT_LIMIT`] bytes, else [`Side::TooLarge`].
 pub fn limited(input: &mut dyn Read) -> io::Result<Side> {
@@ -979,6 +983,8 @@ mod tests {
     use super::*;
     use crate::health::tests::{commit, run};
     use serde_json::json;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn file(content: Option<&str>, base: Option<&str>) -> Control {
         Control::File {
@@ -1011,14 +1017,17 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     fn rename(dir: &Path, path: &str, name: &str) -> io::Result<String> {
         super::rename(dir, path, name, &free)
     }
 
+    #[cfg(unix)]
     fn move_to(dir: &Path, path: &str, folder: &str) -> io::Result<String> {
         super::move_to(dir, path, folder, &free)
     }
 
+    #[cfg(unix)]
     #[test]
     fn paths_must_stay_inside_the_worktree() {
         let dir = tempfile::tempdir().unwrap();
@@ -1072,10 +1081,12 @@ mod tests {
         names
     }
 
+    #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         path.metadata().unwrap().permissions().mode() & 0o7777
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_save_replaces_the_file_keeping_its_mode() {
         let dir = tempfile::tempdir().unwrap();
@@ -1110,6 +1121,7 @@ mod tests {
         let gone = Err((SaveError::Conflict, "n changed on disk".to_owned()));
         assert_eq!(save(dir.path(), "n", "x", Some(&version(b"x"))), gone);
         assert_eq!(save(dir.path(), "n", "x", None), Ok(version(b"x")));
+        #[cfg(unix)]
         assert_eq!(mode(&dir.path().join("n")), 0o644);
 
         // A file over the limit on disk has no version the app could hold.
@@ -1121,6 +1133,7 @@ mod tests {
         assert_eq!(names(dir.path()), ["f", "n"]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_save_is_refused_outside_the_worktree_or_over_the_limit() {
         let dir = tempfile::tempdir().unwrap();
@@ -1151,6 +1164,7 @@ mod tests {
         assert_eq!(saved, Err(too_large));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_save_leaves_the_file_and_no_temporary_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -1215,6 +1229,7 @@ mod tests {
         assert_eq!(at("nope"), Err("nope does not exist".to_owned()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_text_and_source_files_open_in_an_editor() {
         let dir = tempfile::tempdir().unwrap();
@@ -1323,6 +1338,7 @@ mod tests {
         assert_eq!(notes.map_err(|e| e.to_string()), Err(run));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_worktree_folder_opens_unless_it_is_a_bundle_or_an_odd_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -1374,6 +1390,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_is_created_empty_and_never_over_another() {
         let dir = tempfile::tempdir().unwrap();
@@ -1403,6 +1420,7 @@ mod tests {
         assert_ne!(err.kind(), io::ErrorKind::AlreadyExists);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_is_not_created_through_a_symlink_outside() {
         let outside = tempfile::tempdir().unwrap();
@@ -1417,6 +1435,7 @@ mod tests {
         assert_eq!(create(dir.path(), "alias", "y").unwrap(), "real/y");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_is_renamed_in_its_folder_never_over_another() {
         let dir = tempfile::tempdir().unwrap();
@@ -1456,6 +1475,7 @@ mod tests {
         assert_ne!(err.kind(), io::ErrorKind::AlreadyExists);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_is_not_renamed_through_a_symlink_outside() {
         let outside = tempfile::tempdir().unwrap();
@@ -1485,6 +1505,7 @@ mod tests {
         assert!(dir.path().join("b").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_is_created_0755_and_never_over_an_entry() {
         let dir = tempfile::tempdir().unwrap();
@@ -1527,6 +1548,7 @@ mod tests {
         assert_ne!(err.kind(), io::ErrorKind::AlreadyExists);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_is_not_created_through_a_symlink_outside() {
         let outside = tempfile::tempdir().unwrap();
@@ -1542,6 +1564,7 @@ mod tests {
         assert_eq!(create_folder(dir.path(), "alias", "y").unwrap(), "real/y");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_is_moved_into_a_folder_never_over_another() {
         let dir = tempfile::tempdir().unwrap();
@@ -1590,6 +1613,7 @@ mod tests {
         assert!(dir.path().join("a.ts").exists() && dir.path().join("src/a.ts").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_is_not_moved_through_a_symlink_outside() {
         let outside = tempfile::tempdir().unwrap();
@@ -1611,6 +1635,7 @@ mod tests {
         assert_eq!(move_to(dir.path(), "alias/a", "real").unwrap(), "real/a");
     }
 
+    #[cfg(unix)]
     #[test]
     fn nothing_is_created_or_moved_inside_git() {
         let dir = tempfile::tempdir().unwrap();
@@ -1668,6 +1693,7 @@ mod tests {
         assert!(!dir.path().join("d/a").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_is_renamed_and_moved_with_what_it_holds_never_over_an_entry() {
         let dir = tempfile::tempdir().unwrap();
@@ -1710,6 +1736,7 @@ mod tests {
         assert!(at("core/a.ts").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_never_goes_into_itself() {
         let dir = tempfile::tempdir().unwrap();
@@ -1730,6 +1757,7 @@ mod tests {
         assert_eq!(move_to(dir.path(), "a", "ab").unwrap(), "ab/a");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_held_folder_is_not_renamed_or_moved() {
         let dir = tempfile::tempdir().unwrap();
@@ -1763,6 +1791,7 @@ mod tests {
         assert_eq!(asked.borrow().len(), 2);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_is_not_moved_out_of_the_worktree_or_in_or_out_of_git() {
         let outside = tempfile::tempdir().unwrap();
@@ -1797,6 +1826,7 @@ mod tests {
         super::delete(dir, path, &free)
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_or_a_folder_is_deleted_with_what_it_holds() {
         let dir = tempfile::tempdir().unwrap();
@@ -1821,6 +1851,7 @@ mod tests {
         assert!(delete(&dir.path().join("gone"), "a").is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlink_is_deleted_itself_never_what_it_points_to() {
         let outside = tempfile::tempdir().unwrap();
@@ -1844,6 +1875,7 @@ mod tests {
         assert_eq!(names(outside.path()), ["secret"]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn neither_the_root_nor_git_nor_outside_is_deleted() {
         let dir = tempfile::tempdir().unwrap();
@@ -1895,6 +1927,7 @@ mod tests {
         assert_eq!(*asked.borrow(), [src]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_turned_into_a_symlink_meanwhile_is_not_followed() {
         let outside = tempfile::tempdir().unwrap();

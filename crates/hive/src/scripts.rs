@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{self, Read};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -11,7 +12,9 @@ use std::sync::mpsc;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+#[cfg(unix)]
 use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
 use nix::unistd::Pid;
 
 use crate::git::read_limited;
@@ -118,19 +121,27 @@ pub fn env(root: &str, worktree: &str, port: Option<u16>) -> Vec<(&'static str, 
 /// other than 0, a signal, the time limit) is an error ending with the end of its output.
 pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> io::Result<()> {
     let (reader, writer) = io::pipe()?;
-    let mut child = Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
         .arg(script)
         .current_dir(dir)
         .envs(env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
         .stdout(writer.try_clone()?)
-        .stderr(writer)
-        // Its own process group, so the limit ends what it started too.
-        .process_group(0)
+        .stderr(writer);
+    // Its own process group, so the limit ends what it started too.
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
         .spawn()
         .map_err(|err| io::Error::new(err.kind(), format!("cannot run sh: {err}")))?;
+    // Its copy of the output's write end: the output ends only once none is left open.
+    drop(command);
+    #[cfg(unix)]
     let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
+    #[cfg(windows)]
+    let group = child.id();
     let (output, tail) = mpsc::channel();
     // Not waited for: a process left in the background may hold the output open.
     std::thread::spawn(move || output.send(last_bytes(reader)));
@@ -148,7 +159,10 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
     // go. A group with members keeps its id, so this cannot reach another process's group;
     // an empty one (everything already ended) has no one to reach but for a pid reused in the
     // moment since, as a group leader.
+    #[cfg(unix)]
     let _ = killpg(group, Signal::SIGKILL);
+    #[cfg(windows)]
+    crate::windows::kill_tree(group);
     // Reaps it when it was killed (an exited script keeps its status).
     let _ = child.wait();
     let status = waited?;
@@ -183,7 +197,7 @@ fn last_bytes(mut input: impl Read) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::time::Instant;
 
     #[test]
@@ -200,8 +214,11 @@ mod tests {
         assert_eq!(ports.port(a).unwrap(), 20_000);
         // Kept across restarts, private.
         assert_eq!(Ports::new(file.clone()).port(b).unwrap(), 20_010);
-        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        assert_eq!(
+            crate::mode::of(&std::fs::metadata(&file).unwrap()) & 0o777,
+            0o600
+        );
         // A removed worktree's block goes to the next one that needs a block.
         std::fs::remove_dir(a).unwrap();
         assert_eq!(ports.port(b).unwrap(), 20_010);
@@ -293,6 +310,7 @@ mod tests {
         assert_eq!(env("/r", "/r", None).len(), 2);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_script_runs_in_its_folder_with_the_environment() {
         let tmp = tempfile::tempdir().unwrap();
@@ -303,6 +321,7 @@ mod tests {
         assert_eq!(out, "20000\n");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_script_reports_the_end_of_its_output() {
         let tmp = tempfile::tempdir().unwrap();
@@ -329,6 +348,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_script_past_its_time_is_killed_with_what_it_started() {
         let tmp = tempfile::tempdir().unwrap();
@@ -348,6 +368,7 @@ mod tests {
         assert!(gone(&pid_file));
     }
 
+    #[cfg(unix)]
     /// Whether the process whose pid is in `file` ended (killed, then reaped by init).
     fn gone(file: &Path) -> bool {
         let pid: i32 = std::fs::read_to_string(file)
@@ -367,6 +388,7 @@ mod tests {
         assert!(err.to_string().starts_with("cannot run sh: "), "{err}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn what_a_script_leaves_running_is_killed_when_it_ends() {
         let tmp = tempfile::tempdir().unwrap();

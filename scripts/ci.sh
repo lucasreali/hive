@@ -3,7 +3,7 @@
 # rule 4): the active gh account is the work one and is never switched. Push and watch only
 # on task/* branches.
 #   scripts/ci.sh push          push the branch (sets upstream)
-#   scripts/ci.sh watch         wait for every run of HEAD (ci, macos); exit 1 if one failed
+#   scripts/ci.sh watch         wait for every run of HEAD (ci, macos, windows); exit 1 if one failed
 #   scripts/ci.sh green [<rev>] print the green `ci` run of a commit (default HEAD, any branch:
 #                               /release checks main's HEAD); exit 1 if there is none
 #   scripts/ci.sh runs [<rev>]  every run of a commit (default HEAD, any branch)
@@ -29,9 +29,9 @@ runs() {
 case "${1:-}" in
   push) git push -u origin "$branch" ;;
   watch)
-    # Runs show up a few seconds after the push; ci and macos both run on task/*.
+    # Runs show up a few seconds after the push; ci, macos and windows all run on task/*.
     tries=0
-    while [ "$(runs | wc -l)" -lt 2 ] && [ "$tries" -lt 30 ]; do
+    while [ "$(runs | wc -l)" -lt 3 ] && [ "$tries" -lt 30 ]; do
       tries=$((tries + 1))
       sleep 20
     done

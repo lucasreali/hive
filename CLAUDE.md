@@ -49,7 +49,7 @@ cargo test --workspace
 cargo check --workspace --locked
 cargo deny check
 cargo machete
-cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'   # exclusions: COVERAGE_EXCLUSIONS.md
+cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs|crates/hive/src/windows'   # exclusions: COVERAGE_EXCLUSIONS.md
 cargo mutants --in-diff <(git diff main -- '*.rs')     # no "missed" or "timeout" mutants (CI: sharded)
 ```
 

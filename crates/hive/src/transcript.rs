@@ -247,6 +247,7 @@ mod tests {
         format!("{record}\n")
     }
 
+    #[cfg(unix)]
     #[test]
     fn transcript_path_must_be_an_absolute_jsonl_path() {
         let path = |p: &str| transcript_path(&json!({ "transcript_path": p }));
@@ -339,6 +340,7 @@ mod tests {
         assert!(text.ends_with(&said("after")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_a_file_inside_the_root_is_read() {
         let f = fixture();

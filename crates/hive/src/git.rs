@@ -2,13 +2,16 @@
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
+#[cfg(unix)]
 use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
 use nix::unistd::Pid;
 
 /// Most bytes [`output`] reads, e.g. from `git status` or `git diff`.
@@ -96,6 +99,7 @@ pub fn limited(
 ) -> io::Result<Vec<u8>> {
     if time.is_some() {
         // Its own process group, so the limit ends its children too.
+        #[cfg(unix)]
         command.process_group(0);
     }
     let mut child = command
@@ -105,7 +109,11 @@ pub fn limited(
         .spawn()
         .map_err(|err| io::Error::new(err.kind(), format!("cannot run {program}: {err}")))?;
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    #[cfg(unix)]
     let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
+    // Windows has no process groups: git and what it started.
+    #[cfg(windows)]
+    let group = child.id();
     let (finished, done) = mpsc::channel::<()>();
     // Feed stdin and drain stderr from other threads, so no pipe can deadlock another.
     let (out, err, expired) = std::thread::scope(|scope| {
@@ -120,7 +128,10 @@ pub fn limited(
             scope.spawn(move || {
                 let expired = done.recv_timeout(time) == Err(RecvTimeoutError::Timeout);
                 if expired {
+                    #[cfg(unix)]
                     let _ = killpg(group, Signal::SIGKILL);
+                    #[cfg(windows)]
+                    crate::windows::kill_tree(group);
                 }
                 expired
             })
@@ -158,6 +169,16 @@ pub fn limited(
         String::from_utf8_lossy(&err).trim()
     )))
 }
+
+/// What a program printed (a path, a `PATH`) as an OS string: its bytes on Unix; on Windows,
+/// where programs print UTF-8, its text.
+#[cfg(unix)]
+pub fn os_string(bytes: &[u8]) -> std::ffi::OsString {
+    std::os::unix::ffi::OsStringExt::from_vec(bytes.to_vec())
+}
+
+#[cfg(windows)]
+pub use crate::windows::os_string;
 
 /// `git <args>` in `dir` with `ok` exit codes and no input; at most [`OUTPUT_LIMIT`] bytes.
 pub fn output(dir: &Path, args: &[&str], ok: &[i32]) -> io::Result<Vec<u8>> {
@@ -255,6 +276,7 @@ mod tests {
         assert_eq!(args[2..], flags.map(std::ffi::OsString::from));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_repository_gpg_program_never_runs_for_a_signed_head() {
         let tmp = tempfile::tempdir().unwrap();

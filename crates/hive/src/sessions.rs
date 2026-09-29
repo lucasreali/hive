@@ -504,8 +504,12 @@ impl Sessions {
 
     /// The summary of the log at `path`, read as far as it grew since the last time.
     fn summary(&self, path: &Path, meta: &Metadata) -> Option<Summary> {
-        use std::os::unix::fs::MetadataExt;
-        let seen = (meta.ino(), meta.len(), meta.modified().ok()?);
+        #[cfg(unix)]
+        let file = std::os::unix::fs::MetadataExt::ino(meta);
+        // Windows: no stable file id in std; the size and time tell a new log.
+        #[cfg(windows)]
+        let file = 0;
+        let seen = (file, meta.len(), meta.modified().ok()?);
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         let entry = cache.entry(path.to_owned()).or_default();
         if entry.seen != Some(seen) {
@@ -569,12 +573,15 @@ fn found(path: PathBuf, config_dir: &Option<String>) -> Option<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use hive_protocol::Worktree;
 
+    #[cfg(unix)]
     fn var<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into())
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_root_follows_claude_config_dir_then_home() {
         let root = |vars: &[(&str, &str)]| super::root(var(vars));
@@ -888,6 +895,7 @@ not json
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_running_sessions_name_is_read_from_its_log() {
         let tmp = tempfile::tempdir().unwrap();
@@ -943,6 +951,7 @@ not json
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn open_sessions_are_kept_once() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1008,6 +1017,7 @@ not json
         assert_eq!(normalized("/home/me/my.app_x"), "-home-me-my-app-x");
     }
 
+    #[cfg(unix)]
     fn project(path: &str) -> Project {
         let wt = |path: &str, main: bool| Worktree {
             id: path.into(),
@@ -1030,6 +1040,7 @@ not json
         }
     }
 
+    #[cfg(unix)]
     fn log(dir: &Path, name: &str, cwd: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         let path = dir.join(name);
@@ -1041,6 +1052,7 @@ not json
 
     /// Sets `path`'s modification time `secs` seconds after a fixed time: files written one
     /// after the other can share an mtime, so the order under test is set, not raced.
+    #[cfg(unix)]
     fn touched(path: &Path, secs: u64) {
         let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
         File::options()
@@ -1051,6 +1063,7 @@ not json
             .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_the_newest_sessions_are_listed() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1077,6 +1090,7 @@ not json
         assert_eq!((list.len(), truncated), (LIST_LIMIT, false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn sessions_of_followed_projects_are_listed_newest_first_and_deleted() {
         let tmp = tempfile::tempdir().unwrap();

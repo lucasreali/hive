@@ -453,6 +453,7 @@ mod tests {
     const SOON: Duration = Duration::from_secs(5);
     const NEVER: Duration = Duration::from_millis(600);
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn ignored_trees_are_neither_listed_nor_watched() {
         let (_dir, root) = repo();

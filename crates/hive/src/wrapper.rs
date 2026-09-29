@@ -1,10 +1,7 @@
 //! The `claude` wrapper put first on `PATH` in Hive terminals, and the hooks settings it injects.
 
 use std::ffi::{OsStr, OsString};
-use std::fs::Permissions;
 use std::io::{self, Write};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -133,7 +130,7 @@ pub fn real_claude(path: Option<&OsStr>, bin: &Path) -> Option<PathBuf> {
         .find(|claude| {
             claude
                 .metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .is_ok_and(|m| m.is_file() && crate::mode::executable(&m))
         })
 }
 
@@ -143,6 +140,7 @@ pub const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 const SHELL_OUTPUT: u64 = 64 * 1024;
 /// Run by the user's shell: prints its `PATH` on the last line (fish joins a quoted `PATH`
 /// with `:` too). A fixed string: nothing from input goes into it.
+#[cfg(unix)]
 pub(crate) const PRINT_PATH: &str = r#"printf '%s\n' "$PATH""#;
 
 /// The user's shell as terminals start it (fish, after its config, on WSL), asked for its
@@ -203,13 +201,13 @@ async fn shell_path(program: &OsStr, args: &[OsString], timeout: Duration) -> Op
         .strip_suffix(b"\n")?
         .rsplit(|&byte| byte == b'\n')
         .next()?;
-    (!line.is_empty()).then(|| OsString::from_vec(line.to_vec()))
+    (!line.is_empty()).then(|| crate::git::os_string(line))
 }
 
 /// Single-quotes `path` for `sh`.
 fn sh_quote(path: &Path) -> Vec<u8> {
     let mut out = vec![b'\''];
-    for &byte in path.as_os_str().as_bytes() {
+    for &byte in path.as_os_str().as_encoded_bytes() {
         match byte {
             b'\'' => out.extend(b"'\\''"),
             _ => out.push(byte),
@@ -225,20 +223,22 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> io::Resul
     let tmp = path.with_extension("tmp");
     // A leftover could have looser permissions; a new file never shows the contents to others.
     let _ = std::fs::remove_file(&tmp);
-    let mut file = std::fs::File::options()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
+    let mut file = crate::mode::create(std::fs::File::options().write(true).create_new(true), mode)
         .open(&tmp)?;
     file.write_all(contents)?;
-    std::fs::set_permissions(&tmp, Permissions::from_mode(mode))?;
+    crate::mode::set(&file, mode)?;
     std::fs::rename(&tmp, path)
 }
 
+// The wrapper is a `sh` script until 12.5.5.
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::fs::Permissions;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
 
