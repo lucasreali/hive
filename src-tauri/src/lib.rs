@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -63,6 +63,10 @@ const NOT_CONNECTED: &str = "not connected to the hive service";
 /// How many paths the service sent (`editor_target`, `session_located`) wait for `open_path`.
 const APPROVED_LIMIT: usize = 16;
 
+/// Program and arguments that start `hive bridge`, and whether that runs the `hive` the installer
+/// bundles (an installed app) rather than a development one, for the connection dialog (12.4).
+pub type Bridge = (OsString, Vec<OsString>, bool);
+
 /// Program and arguments that start `hive bridge`: from Windows through WSL (#14, 4.18), or
 /// natively when `macos` (5.2). `HIVE_WSL_DISTRO` picks the WSL distribution (Windows only)
 /// and `HIVE_BRIDGE` the `hive` binary (an absolute path, for development). `bundled` is where
@@ -73,7 +77,7 @@ pub fn bridge_command(
     macos: bool,
     var: &dyn Fn(&str) -> Option<OsString>,
     bundled: Option<PathBuf>,
-) -> (OsString, Vec<OsString>, bool) {
+) -> Bridge {
     let var = |key| var(key).filter(|value| !value.is_empty());
     let mut args = Vec::new();
     if !macos {
@@ -92,6 +96,95 @@ pub fn bridge_command(
     (program.into(), args, runs_bundled)
 }
 
+/// `hive.exe bridge` run directly, for the service on Windows itself (12.5.4): the `hive.exe`
+/// the installer bundles next to the app when that file exists, else `HIVE_BRIDGE` (a Windows
+/// path, development), else the one on `PATH` (`cargo install`'s).
+pub fn native_bridge(var: &dyn Fn(&str) -> Option<OsString>, bundled: Option<PathBuf>) -> Bridge {
+    let bundled = bundled.filter(|path| path.is_file());
+    let runs_bundled = bundled.is_some();
+    let program = bundled
+        .map(PathBuf::into_os_string)
+        .or_else(|| var("HIVE_BRIDGE").filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| "hive.exe".into());
+    (program, vec!["bridge".into()], runs_bundled)
+}
+
+/// Where the service runs on Windows (12.5.4): inside WSL, or on Windows itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Wsl,
+    Native,
+}
+
+impl Mode {
+    /// Its name in the mode file and to the UI.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Wsl => "wsl",
+            Self::Native => "native",
+        }
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        [Self::Wsl, Self::Native]
+            .into_iter()
+            .find(|mode| mode.name() == name)
+    }
+}
+
+/// The choice between the service in WSL and on Windows itself (12.5.4). The app keeps it, since
+/// it is needed before any service starts. Each mode has a service of its own, so its own
+/// projects, spaces and settings.
+pub struct Modes {
+    /// The file the chosen mode is kept in (`mode` in the app's config folder).
+    file: PathBuf,
+    /// Whether WSL has a distribution. Without one the service runs on Windows, never asking.
+    wsl: bool,
+    /// The bridge on Windows itself (`native_bridge`).
+    native: Bridge,
+}
+
+impl Modes {
+    /// The choice, offered only with `HIVE_MODE=native` until 12.5.7; otherwise `None`, and the
+    /// service runs in WSL as before. `list` runs `wsl.exe -l -q`, only then.
+    pub fn new(
+        var: &dyn Fn(&str) -> Option<OsString>,
+        file: PathBuf,
+        list: impl FnOnce() -> std::io::Result<Output>,
+        native: Bridge,
+    ) -> Option<Self> {
+        let offered = var("HIVE_MODE").is_some_and(|mode| mode == "native");
+        offered.then(|| Self {
+            file,
+            wsl: has_wsl(list()),
+            native,
+        })
+    }
+
+    /// The mode to start in: the saved one, or `None` to ask first; without WSL always Windows.
+    fn start(&self) -> Option<Mode> {
+        if !self.wsl {
+            return Some(Mode::Native);
+        }
+        let saved = std::fs::read_to_string(&self.file).ok()?;
+        Mode::parse(saved.trim())
+    }
+
+    fn save(&self, mode: Mode) -> std::io::Result<()> {
+        if let Some(folder) = self.file.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        std::fs::write(&self.file, mode.name())
+    }
+}
+
+/// Whether `wsl.exe -l -q` listed a distribution. It prints their names in UTF-16 (UTF-8 with
+/// `WSL_UTF8=1`), one per line, and fails or prints nothing when WSL or every distribution is
+/// missing. A name always holds a letter or digit, an ASCII byte in either encoding.
+fn has_wsl(list: std::io::Result<Output>) -> bool {
+    list.is_ok_and(|out| out.status.success() && out.stdout.iter().any(u8::is_ascii_alphanumeric))
+}
+
 /// Whether the webview may load `url` (open point #15): only the app itself, from the one origin
 /// Tauri serves it from (`tauri://localhost` when `macos`, `http://tauri.localhost` on Windows)
 /// or, in a development build, from the dev server `dev`. Links open outside, through the
@@ -108,8 +201,10 @@ pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool 
 
 /// Tauri state: the bridge command and the live link to the service.
 pub struct Hive {
-    program: OsString,
-    args: Vec<OsString>,
+    /// `hive bridge` through WSL, or natively on macOS (`bridge_command`).
+    bridge: Bridge,
+    /// The choice of WSL or Windows (12.5.4); none on macOS, or while it is not offered.
+    modes: Option<Modes>,
     link: Arc<Mutex<Link>>,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
     restart: Option<Box<dyn Fn() + Send + Sync>>,
@@ -142,10 +237,12 @@ struct Link {
     update: Option<(Update, Vec<u8>)>,
     /// The paths the service sent for the app to open, oldest first, each for one `open_path`.
     approved: VecDeque<String>,
-    /// Whether the bridge runs the installer's `hive` (`bridge_command`); sent with
+    /// Whether the bridge runs the installer's `hive` (`Bridge`); sent with
     /// `version_mismatch` and `disconnected`, so the UI shows only fixes an installed app's
     /// user can apply (12.4).
     bundled: bool,
+    /// The mode chosen (`Modes`), `None` until the user chooses one.
+    mode: Option<Mode>,
 }
 
 impl Link {
@@ -207,8 +304,8 @@ enum End {
 impl Hive {
     pub fn new(program: OsString, args: Vec<OsString>) -> Self {
         Self {
-            program,
-            args,
+            bridge: (program, args, false),
+            modes: None,
             link: Arc::default(),
             restart: None,
             install: None,
@@ -246,9 +343,40 @@ impl Hive {
     }
 
     /// Tells the UI the bridge runs the installer's `hive` (see `bridge_command`).
-    pub fn with_bundled(self, bundled: bool) -> Self {
-        self.link().bundled = bundled;
+    pub fn with_bundled(mut self, bundled: bool) -> Self {
+        self.bridge.2 = bundled;
         self
+    }
+
+    /// Offers the choice of WSL or Windows (12.5.4), starting in the mode saved.
+    pub fn with_modes(mut self, modes: Option<Modes>) -> Self {
+        self.link().mode = modes.as_ref().and_then(Modes::start);
+        self.modes = modes;
+        self
+    }
+
+    /// Keeps the mode the user chose, the first run's or the settings' (12.5.4); `reconnect`
+    /// then starts its service.
+    pub fn choose_mode(&self, mode: &str) -> Result<(), String> {
+        let modes = self
+            .modes
+            .as_ref()
+            .ok_or("Hive offers no choice of service here")?;
+        let mode = Mode::parse(mode).ok_or_else(|| format!("unknown service mode: {mode}"))?;
+        let saved = modes.save(mode);
+        saved.map_err(|error| format!("cannot save the service mode: {error}"))?;
+        self.link().mode = Some(mode);
+        Ok(())
+    }
+
+    /// Ends the connection, if any, then connects the same UI again, to the service of the mode
+    /// chosen now. Must run inside the Tokio runtime.
+    pub async fn reconnect(&self) {
+        self.shutdown(EXIT_WAIT).await;
+        let ui = self.link().ui.clone();
+        if let Some(ui) = ui {
+            self.connect(ui);
+        }
     }
 
     pub fn with_restart(mut self, restart: impl Fn() + Send + Sync + 'static) -> Self {
@@ -270,13 +398,26 @@ impl Hive {
 
     /// Sends every service message to `ui`, starting the bridge unless a connection is up.
     /// A reloaded UI calls this again: its old terminals are closed and `welcome` is replayed.
-    /// Must run inside the Tokio runtime.
+    /// With the choice of WSL or Windows, the UI first gets `app_mode`, and nothing starts
+    /// until a mode is chosen. Must run inside the Tokio runtime.
     pub fn connect(&self, ui: Channel<Value>) {
         let mut link = self.link();
         link.ui = Some(ui);
         for id in std::mem::take(&mut link.terminals).into_keys() {
             let _ = link.send(id, &Control::CloseTerminal);
         }
+        let bridge = match &self.modes {
+            None => &self.bridge,
+            Some(modes) => {
+                let mode = link.mode.map(Mode::name);
+                link.to_ui(json!({"type": "app_mode", "mode": mode, "wsl": modes.wsl}));
+                match link.mode {
+                    None => return,
+                    Some(Mode::Wsl) => &self.bridge,
+                    Some(Mode::Native) => &modes.native,
+                }
+            }
+        };
         if link.frames.is_some() {
             if let Some(welcome) = link.welcome.clone() {
                 link.to_ui(welcome);
@@ -285,8 +426,9 @@ impl Hive {
             }
             return;
         }
+        link.bundled = bridge.2;
         drop(link);
-        if let Err(error) = self.spawn() {
+        if let Err(error) = self.spawn(bridge) {
             disconnected(
                 &mut self.link(),
                 format!("cannot start the hive bridge: {error}"),
@@ -294,10 +436,10 @@ impl Hive {
         }
     }
 
-    fn spawn(&self) -> std::io::Result<()> {
-        let mut command = tokio::process::Command::new(&self.program);
+    fn spawn(&self, (program, args, _): &Bridge) -> std::io::Result<()> {
+        let mut command = tokio::process::Command::new(program);
         command
-            .args(&self.args)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -893,6 +1035,16 @@ pub mod commands {
         let runtime = tauri::async_runtime::handle();
         let _context = runtime.inner().enter();
         hive.connect(on_message);
+    }
+
+    /// Keeps the mode chosen (12.5.4), then reconnects on Tauri's runtime, like `check_update`.
+    #[tauri::command]
+    pub fn set_mode<R: Runtime>(app: AppHandle<R>, mode: String) -> Result<(), String> {
+        app.state::<Hive>().choose_mode(&mode)?;
+        tauri::async_runtime::spawn(async move {
+            app.state::<Hive>().reconnect().await;
+        });
+        Ok(())
     }
 
     /// Sync like `connect`: the check runs on Tauri's runtime and answers on the UI channel.

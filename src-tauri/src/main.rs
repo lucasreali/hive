@@ -13,10 +13,10 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let bundled = app.path().resolve("hive", BaseDirectory::Resource).ok();
+            let resource = |name: &str| app.path().resolve(name, BaseDirectory::Resource).ok();
+            let var = |key: &str| std::env::var_os(key);
             let macos = cfg!(target_os = "macos");
-            let (program, args, bundled) =
-                hive_lib::bridge_command(macos, &|key| std::env::var_os(key), bundled);
+            let (program, args, bundled) = hive_lib::bridge_command(macos, &var, resource("hive"));
             // Restarting runs the exit events, so the connection ends first (`on_run_event`).
             let handle = app.handle().clone();
             let hive = hive_lib::Hive::new(program, args)
@@ -27,6 +27,14 @@ fn main() {
                     |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
                     |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
                 );
+            // WSL or Windows (12.5.4), offered only on Windows.
+            #[cfg(windows)]
+            let hive = hive.with_modes(hive_lib::Modes::new(
+                &var,
+                app.path().app_config_dir()?.join("mode"),
+                list_wsl,
+                hive_lib::native_bridge(&var, resource("hive.exe")),
+            ));
             app.manage(hive);
             // The window (`"create": false` in the config) with its guards (open point #15): the
             // webview never leaves the app and never opens another window.
@@ -45,6 +53,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::connect,
+            commands::set_mode,
             commands::check_update,
             commands::install_update,
             commands::open_terminal,
@@ -105,6 +114,16 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// `wsl.exe -l -q`: the WSL distributions, if any (`hive_lib::Modes`), without a console window.
+#[cfg(windows)]
+fn list_wsl() -> std::io::Result<std::process::Output> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("wsl.exe")
+        .args(["-l", "-q"])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
 }
 
 /// Turns off WebView2's browser keys (Ctrl+P print, F5/Ctrl+R reload, Ctrl+F find, F12, Alt+←/→…).
