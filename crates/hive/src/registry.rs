@@ -81,7 +81,7 @@ impl Registry {
         // the registry unwatched until the next follow; report it if that ever shows.
         let watcher = &mut self.watcher;
         let ops = unwatch.chain(watch).collect();
-        let failed = files::update(|ops| watcher.update_paths(ops), ops);
+        let failed = files::update(|ops| watcher.update_paths(ops).map_err(Box::new), ops);
         let failed = failed.unwrap_or_default();
         self.watched.retain(|dir| wanted.contains(dir));
         let watched = added.into_iter().filter(|dir| !failed.contains(dir));
