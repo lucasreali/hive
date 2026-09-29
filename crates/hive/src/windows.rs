@@ -1496,8 +1496,10 @@ mod tests {
                 "{dir:?}: {found:?}"
             );
         }
-        let found = inside(&tmp.path().join("Other"));
-        assert!(found.iter().all(|p| p.pid != pid), "{found:?}");
+        // A folder beside it, whose name starts the same, holds nothing.
+        let other = tmp.path().join("Workshop");
+        std::fs::create_dir(&other).unwrap();
+        assert_eq!(inside(&other), []);
         ping.kill().unwrap();
         ping.wait().unwrap();
     }
