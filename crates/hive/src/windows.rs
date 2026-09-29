@@ -468,7 +468,9 @@ pub mod terminal {
             ("TERM", "xterm-256color".into()),
         ];
         let set = own.into_iter().chain(env.iter().cloned());
-        let set = set.map(|(name, value)| (name.into(), value.into()));
+        let set = set
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect();
         let started = start(WINDOWS, cwd, size(cols, rows), bin_dir, set, shell);
         let (session, console, output, pipe, child) =
             started.map_err(|err| format!("cannot start a terminal in {cwd}: {err}"))?;
@@ -485,13 +487,14 @@ pub mod terminal {
 
     /// Starts the shell with `calls` and keeps its session; returns its session id, its
     /// console (for resizing), its output and input pipes and the shell. On a failure nothing
-    /// is left: the shell killed, its console closed, its job ended.
+    /// is left: the shell killed, its console closed, its job ended. (Not generic: coverage
+    /// counts each instance of a generic function apart, and only tests make `start` fail.)
     fn start(
         calls: Calls,
         cwd: &str,
         size: COORD,
         bin_dir: &Path,
-        set: impl IntoIterator<Item = (OsString, OsString)>,
+        set: Vec<(OsString, OsString)>,
         shell: TerminalShell,
     ) -> io::Result<(i32, Weak<Console>, Pty, NamedPipeServer, Child)> {
         let path = std::env::var_os("PATH").unwrap_or_default();
