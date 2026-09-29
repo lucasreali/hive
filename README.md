@@ -169,7 +169,7 @@ cargo test --workspace
 cargo check --workspace --locked
 cargo deny check
 cargo machete
-cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs'
+cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs|crates/hive/src/windows[^/]*\.rs'
 cargo mutants --in-diff <(git diff main -- '*.rs')    # no missed mutants
 
 # Frontend
