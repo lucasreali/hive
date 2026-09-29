@@ -32,3 +32,6 @@ libproc = "0.14.11"
 [target."cfg(unix)".dependencies]
 nix = { version = "0.31.3", features = ["signal", "user", "process", "fs", "time"] }
 pty-process = { version = "0.5.3", features = ["async"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_Performance", "Win32_System_Threading"] }
