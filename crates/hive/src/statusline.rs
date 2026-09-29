@@ -133,7 +133,7 @@ fn command_in(file: &Path) -> Option<String> {
 /// The shell Claude Code runs a statusline with, its program and the arguments before the
 /// command: `sh -c` on Unix.
 #[cfg(unix)]
-fn shell(_var: &impl Fn(&str) -> Option<OsString>) -> Vec<OsString> {
+fn shell(_var: &dyn Fn(&str) -> Option<OsString>) -> Vec<OsString> {
     vec!["sh".into(), "-c".into()]
 }
 

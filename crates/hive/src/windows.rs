@@ -1096,7 +1096,7 @@ pub mod claude {
     /// The `statusLine` command that runs `hive statusline` from `hive`, for the shell Claude
     /// Code will run it with (see [`statusline_line`]).
     pub fn statusline_command(hive: &Path) -> String {
-        let bash = claude_bash(|key| std::env::var_os(key)).is_some();
+        let bash = claude_bash(&|key| std::env::var_os(key)).is_some();
         statusline_line(hive, short_name(hive).as_deref(), bash)
     }
 
@@ -1140,7 +1140,7 @@ pub mod claude {
 
     /// The Git Bash Claude Code runs shell commands with: `CLAUDE_CODE_GIT_BASH_PATH`, else
     /// the one of the first `git` on `PATH` (see [`conpty::git_bash`]). `None`: PowerShell.
-    fn claude_bash(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    fn claude_bash(var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         let set = var("CLAUDE_CODE_GIT_BASH_PATH").filter(|path| !path.is_empty());
         let found = || conpty::git_bash(&var("PATH").unwrap_or_default());
         set.map(PathBuf::from).or_else(found)
@@ -1149,7 +1149,7 @@ pub mod claude {
     /// How Claude Code runs a statusline on Windows, its program and the arguments before the
     /// command: Git Bash's `-c` (see [`claude_bash`]), else PowerShell's `-Command` (`pwsh`
     /// when on `PATH`), without the user's profile and the execution policy.
-    pub fn statusline_shell(var: &impl Fn(&str) -> Option<OsString>) -> Vec<OsString> {
+    pub fn statusline_shell(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<OsString> {
         if let Some(bash) = claude_bash(var) {
             return vec![bash.into(), "-c".into()];
         }
@@ -1174,8 +1174,9 @@ pub mod claude {
         if !exe.file_stem()?.eq_ignore_ascii_case("claude") {
             return None;
         }
-        let args = std::env::args_os().skip(1);
-        Some(exit_code(wrap(&exe, args, |key| std::env::var_os(key))))
+        let args = std::env::args_os().skip(1).collect();
+        let var = |key: &str| std::env::var_os(key);
+        Some(exit_code(wrap(&exe, args, &var)))
     }
 
     /// `code` as `hive`'s exit code, returned from `main` (`process::exit` would skip what
@@ -1190,11 +1191,7 @@ pub mod claude {
     /// and `HIVE_WRAPPED` set, or as it is when `HIVE_WRAPPED` is 1 (a `claude` started from
     /// inside a hooked one: its hooks are in place already). Its streams are the wrapper's;
     /// its exit code is the wrapper's (127: none found, 126: it cannot start).
-    fn wrap(
-        exe: &Path,
-        args: impl IntoIterator<Item = OsString>,
-        var: impl Fn(&str) -> Option<OsString>,
-    ) -> i32 {
+    fn wrap(exe: &Path, args: Vec<OsString>, var: &dyn Fn(&str) -> Option<OsString>) -> i32 {
         // Ctrl+C and Ctrl+Break reach every program of the console: `claude` decides what
         // they do, while the wrapper waits for it.
         unsafe { SetConsoleCtrlHandler(Some(ignore), 1) };
@@ -1335,7 +1332,7 @@ pub mod claude {
             let tmp = tempfile::tempdir().unwrap();
             let hive = tmp.path().join("hive.exe");
             std::fs::write(&hive, "").unwrap();
-            let bash = claude_bash(|key| std::env::var_os(key)).is_some();
+            let bash = claude_bash(&|key| std::env::var_os(key)).is_some();
             let short = short_name(&hive);
             let want = statusline_line(&hive, short.as_deref(), bash);
             assert_eq!(statusline_command(&hive), want);
@@ -1427,7 +1424,7 @@ pub mod claude {
                     "PATH" => Some(path.clone()),
                     _ => wrapped.map(OsString::from),
                 };
-                let code = wrap(&exe, args.clone(), var);
+                let code = wrap(&exe, args.to_vec(), &var);
                 let out = std::fs::read_to_string(real.join("out.txt")).unwrap();
                 (code, out.trim_end().to_owned())
             };
@@ -1449,14 +1446,14 @@ pub mod claude {
             let path = |dirs: &[&Path]| Some(std::env::join_paths(dirs).unwrap());
             let only_bin = path(&[&bin]);
             let none = |key: &str| (key == "PATH").then(|| only_bin.clone()).flatten();
-            assert_eq!(wrap(&exe, [], none), 127);
+            assert_eq!(wrap(&exe, vec![], &none), 127);
             // A `claude.exe` that is no program.
             let broken = tmp.path().join("broken");
             std::fs::create_dir(&broken).unwrap();
             std::fs::write(broken.join("claude.exe"), "").unwrap();
             let broken = path(&[&broken]);
             let var = |key: &str| (key == "PATH").then(|| broken.clone()).flatten();
-            assert_eq!(wrap(&exe, [], var), 126);
+            assert_eq!(wrap(&exe, vec![], &var), 126);
             // Not run as `claude`: not the wrapper.
             assert_eq!(claude_wrapper(), None);
             // Its code as `hive`'s: a byte, else a failure.
