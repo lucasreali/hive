@@ -404,11 +404,8 @@ mod tests {
             statusline(&claude, input, false).await,
             (b"mine".to_vec(), 0)
         );
-        assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "{:?}",
-            start.elapsed()
-        );
+        let took = start.elapsed();
+        assert!(took < Duration::from_secs(1), "{took:?}");
     }
 
     #[tokio::test]
@@ -467,11 +464,8 @@ mod tests {
         let start = std::time::Instant::now();
         let out = cancelled(&claude, b"{}", false, Duration::ZERO).await;
         assert_eq!(out, (vec![], 0));
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "{:?}",
-            start.elapsed()
-        );
+        let took = start.elapsed();
+        assert!(took < Duration::from_secs(2), "{took:?}");
     }
 
     #[test]
