@@ -451,7 +451,9 @@ mod tests {
         let path = |name: &str| dir.path().join(name);
         std::fs::create_dir(path("a")).unwrap();
         std::fs::create_dir(path("b")).unwrap();
-        let mut watcher = notify::recommended_watcher(|_| {}).unwrap();
+        // A channel, not a closure: no event comes, and coverage counts a closure never run.
+        let (events, _) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(events).unwrap();
         let names = ["x", "a", "y", "b"];
         let ops = names.map(|name| PathOp::watch_non_recursive(path(name)));
         let failed = update(
