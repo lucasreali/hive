@@ -116,14 +116,14 @@ fn main() {
     }
 }
 
-/// `wsl.exe -l -q`: the WSL distributions, if any (`hive_lib::Modes`), without a console window.
+/// `wsl.exe -l -q`: the WSL distributions, if any (`hive_lib::Modes` runs it, time-limited),
+/// without a console window.
 #[cfg(windows)]
-fn list_wsl() -> std::io::Result<std::process::Output> {
+fn list_wsl() -> std::process::Command {
     use std::os::windows::process::CommandExt;
-    std::process::Command::new("wsl.exe")
-        .args(["-l", "-q"])
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-        .output()
+    let mut command = std::process::Command::new("wsl.exe");
+    command.args(["-l", "-q"]).creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    command
 }
 
 /// Turns off WebView2's browser keys (Ctrl+P print, F5/Ctrl+R reload, Ctrl+F find, F12, Alt+←/→…).
