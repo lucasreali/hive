@@ -571,7 +571,7 @@ pub mod terminal {
         unsafe { ClosePseudoConsole(console) };
     }
 
-    fn assign(job: &OwnedHandle, process: RawHandle) -> io::Result<()> {
+    pub(super) fn assign(job: &OwnedHandle, process: RawHandle) -> io::Result<()> {
         check(unsafe { AssignProcessToJobObject(job.as_raw_handle(), process) })
     }
 
@@ -618,7 +618,7 @@ pub mod terminal {
     }
 
     /// A job that kills its processes once its last handle is closed.
-    fn job() -> io::Result<OwnedHandle> {
+    pub(super) fn job() -> io::Result<OwnedHandle> {
         let job = owned(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) })?;
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -1310,7 +1310,7 @@ pub fn open_nonblocking(path: &Path) -> io::Result<File> {
 
 pub use claude::{
     claude_names, claude_wrapper, install_hive, install_wrapper, statusline_command,
-    statusline_shell,
+    statusline_job, statusline_shell,
 };
 
 /// Claude Code on Windows (12.5.5): the `claude` wrapper, a copy of `hive.exe` named
@@ -1320,6 +1320,7 @@ pub mod claude {
     use std::ffi::{OsStr, OsString};
     use std::io;
     use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::{OwnedHandle, RawHandle};
     use std::path::{Path, PathBuf};
     use std::process::{Command, ExitCode};
 
@@ -1327,6 +1328,7 @@ pub mod claude {
     use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
     use windows_sys::core::BOOL;
 
+    use super::terminal::{assign, job};
     use super::{monotonic_ns, wide};
     use crate::paths::canonical;
     use crate::terminal::conpty;
@@ -1462,6 +1464,27 @@ pub mod claude {
             .into_iter()
             .chain(args.map(OsString::from))
             .collect()
+    }
+
+    /// A job holding the user's statusline `child`: it and whatever it starts are killed once
+    /// the job is dropped (the job ends with `hive statusline`, whose run it bounds).
+    // ponytail: joined right after its start (`tokio::process` cannot start it suspended); a
+    // statusline starts nothing in the microseconds between. 12.5.6a's `Job` may replace this.
+    pub fn statusline_job(child: &tokio::process::Child) -> io::Result<OwnedHandle> {
+        let process = child.raw_handle().ok_or(io::ErrorKind::NotFound)?;
+        joined(job(), process, assign)
+    }
+
+    /// `process` in `job` (a new one, or why there is none), joined through `assign`. Both are
+    /// given by tests to fail.
+    fn joined(
+        job: io::Result<OwnedHandle>,
+        process: RawHandle,
+        assign: fn(&OwnedHandle, RawHandle) -> io::Result<()>,
+    ) -> io::Result<OwnedHandle> {
+        let job = job?;
+        assign(&job, process)?;
+        Ok(job)
     }
 
     /// Run as `claude.exe` (Hive's copy in its bin folder, first on the terminals' `PATH`):
@@ -1691,6 +1714,29 @@ pub mod claude {
             let powershell = [pwsh.join("pwsh.exe").into_os_string()];
             let want: Vec<OsString> = powershell.into_iter().chain(args.map(Into::into)).collect();
             assert_eq!(statusline_shell(&none), want);
+        }
+
+        #[tokio::test]
+        async fn a_statusline_and_what_it_started_end_with_its_job() {
+            // `ping` waits a second between tries: about 30 s unless killed.
+            let mut ping = tokio::process::Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let held = statusline_job(&ping).unwrap();
+            drop(held);
+            let ended = tokio::time::timeout(std::time::Duration::from_secs(20), ping.wait());
+            assert!(!ended.await.unwrap().unwrap().success());
+            // Waited for, it has no handle to join.
+            assert!(statusline_job(&ping).is_err());
+            // No job, or one it cannot join: an error.
+            fn denied<T>() -> io::Result<T> {
+                Err(io::ErrorKind::PermissionDenied.into())
+            }
+            let process = std::ptr::null_mut();
+            assert!(joined(denied(), process, assign).is_err());
+            assert!(joined(job(), process, |_, _| denied()).is_err());
         }
 
         /// A `claude.cmd` in `dir` that writes `HIVE_WRAPPED` and its arguments to `out.txt`

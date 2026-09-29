@@ -164,7 +164,12 @@ async fn user(
     #[cfg(unix)]
     spawn.process_group(0);
     let mut child = spawn.spawn().ok()?;
+    #[cfg(unix)]
     let mut group = Group(child.id());
+    // Windows has no process groups: a job holds it and what it starts, killed once the job
+    // is dropped (as this returns, in time or not). One it cannot join is killed as dropped.
+    #[cfg(windows)]
+    let _job = crate::windows::statusline_job(&child).ok()?;
     let mut stdin = child.stdin.take()?;
     let stdout = child.stdout.take()?;
     let feed = async move {
@@ -186,26 +191,23 @@ async fn user(
     };
     let output = tokio::time::timeout(time, run).await.ok().flatten();
     // Ended in time: what it left running in the background (e.g. a cache refresh) stays.
+    #[cfg(unix)]
     if output.is_some() {
         group.0 = None;
     }
     output
 }
 
-/// Kills the process group led by its pid (on Windows the process tree), when dropped with one.
+/// Kills the process group led by its pid, when dropped with one.
+#[cfg(unix)]
 struct Group(Option<u32>);
 
+#[cfg(unix)]
 impl Drop for Group {
     fn drop(&mut self) {
         // A group with members keeps its id, so this cannot reach another process's group.
-        #[cfg(unix)]
         if let Some(pid) = self.0.and_then(|pid| i32::try_from(pid).ok()) {
             let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
-        }
-        // ponytail: `taskkill /T` by pid; 12.5.6a's job helper ends exactly the tree.
-        #[cfg(windows)]
-        if let Some(pid) = self.0 {
-            crate::windows::kill_tree(pid);
         }
     }
 }
@@ -428,7 +430,8 @@ mod tests {
         let over = "head -c 65537 /dev/zero";
         assert_eq!(run(over, 5000).await, None);
         assert_eq!(run("sleep 5", 100).await, None);
-        // Late, what it started ends too; in time, what it left in the background stays.
+        // Late, what it started ends too; in time, what it left in the background stays (on
+        // Windows it ends with the statusline's job).
         let tmp = tempfile::tempdir().unwrap();
         let (late, kept) = (tmp.path().join("late"), tmp.path().join("kept"));
         // (A second: Windows starts processes slowly.)
@@ -439,7 +442,10 @@ mod tests {
         assert_eq!(done, Some((b"ok".to_vec(), 0)));
         tokio::time::sleep(Duration::from_millis(2000)).await;
         assert!(!late.exists());
+        #[cfg(unix)]
         assert!(kept.exists());
+        #[cfg(windows)]
+        assert!(!kept.exists());
         // Killed: printed, and 1 after a signal (Windows has none: Git Bash's own code).
         let killed = run("printf x; kill -9 $$", 5000).await.unwrap();
         assert_eq!(killed.0, b"x");
