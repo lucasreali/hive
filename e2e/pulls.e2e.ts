@@ -81,3 +81,49 @@ for (const panelWidth of [280, 640]) {
     await expect(back).toHaveText("Pull requests");
   });
 }
+
+// 12.3: "Create pull request from <branch>" keeps to one line in the bar's font at every panel
+// width; only a long branch is cut, with an ellipsis, and the tooltip has the whole label.
+for (const panelWidth of [280, 640]) {
+  test(`pull requests: the create button fits its panel at ${panelWidth} px`, async ({ page }) => {
+    await page.addInitScript(
+      (w) => localStorage.setItem("hive.widths", JSON.stringify({ panelWidth: w })),
+      panelWidth,
+    );
+    await page.goto("/");
+    const tree = page.getByRole("navigation", { name: "Projects" });
+    await tree.getByRole("button", { name: "shop", exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: /^New worktree…/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New worktree" });
+    const name = "linkedin-profile-sync-for-the-new-onboarding";
+    await dialog.getByLabel("Worktree name").fill(name);
+    await dialog.getByRole("button", { name: "Create worktree" }).click();
+    await expect(tree.getByRole("button", { name, exact: true })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+
+    const side = page.getByRole("complementary", { name: "Side panel" });
+    await side.getByRole("tab", { name: "PRs" }).click();
+    const panel = page.getByRole("region", { name: "PRs" });
+    const label = `Create pull request from worktree-${name}`;
+    const create = panel.getByRole("button", { name: label });
+    await expect(create).toBeVisible();
+    await page.screenshot({ path: `target/e2e/pulls-create-${panelWidth}.png` });
+    await expect(create).toHaveAttribute("title", label);
+    const fit = await create.evaluate((button) => {
+      const pulls = button.closest(".pulls") as HTMLElement;
+      const box = pulls.getBoundingClientRect();
+      const self = button.getBoundingClientRect();
+      const branch = button.querySelector(".pulls-create-branch") as HTMLElement;
+      const bar = pulls.querySelector(".pulls-bar") as HTMLElement;
+      return {
+        inside: self.left >= box.left + 12 && self.right <= box.right - 12,
+        oneLine: self.height === 28,
+        font: getComputedStyle(button).fontSize === getComputedStyle(bar).fontSize,
+        cut: branch.scrollWidth > branch.clientWidth,
+      };
+    });
+    expect(fit).toEqual({ inside: true, oneLine: true, font: true, cut: panelWidth === 280 });
+  });
+}
