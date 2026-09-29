@@ -28,7 +28,7 @@ Before: Git for Windows (Git Bash) and Claude Code for Windows installed and log
 - [ ] In a terminal, run the real `claude`: the agent appears under its worktree, idle, then working on a prompt, waiting for you at the end of the turn; a permission prompt turns it yellow and rings; the bell counts it, F8 jumps to it.
 - [ ] A subagent (Task tool) shows as a line under its agent.
 - [ ] The status bar shows the session usage ("Session N% · resets …") once Claude's statusline has run; your own statusline, if any, still prints in Claude.
-- [ ] Settings → Accounts: add a second Claude config folder, pick it in a new terminal's account select: `claude` runs as that account (its sessions in that folder).
+- [ ] Settings → Accounts: add a second Claude config folder ("Log in…" logs it in), pick it in the status bar's account select: `claude` in a new terminal runs as that account (its sessions in that folder), and the session usage follows it.
 - [ ] An npm-installed `claude` (if you have one) is detected too.
 - [ ] Sessions tab: the sessions of the worktree list; Resume, Fork, Open log and Reveal folder work (Explorer opens).
 - [ ] Closing Hive with sessions open, then reopening: they come back with `claude --resume`.
