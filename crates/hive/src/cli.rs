@@ -78,7 +78,7 @@ pub fn run() -> ExitCode {
     // `claude.exe` in Hive's bin folder is a copy of `hive`: the `claude` wrapper.
     #[cfg(windows)]
     if let Some(code) = crate::windows::claude_wrapper() {
-        std::process::exit(code);
+        return code;
     }
     let cli = Cli::parse();
     let paths = Paths::from_env();

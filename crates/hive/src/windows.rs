@@ -1025,7 +1025,7 @@ pub mod claude {
     use std::io;
     use std::os::windows::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
+    use std::process::{Command, ExitCode};
 
     use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
     use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
@@ -1169,13 +1169,20 @@ pub mod claude {
 
     /// Run as `claude.exe` (Hive's copy in its bin folder, first on the terminals' `PATH`):
     /// the `claude` wrapper's exit code (see [`wrap`]). `None` under any other name.
-    pub fn claude_wrapper() -> Option<i32> {
+    pub fn claude_wrapper() -> Option<ExitCode> {
         let exe = std::env::current_exe().ok()?;
         if !exe.file_stem()?.eq_ignore_ascii_case("claude") {
             return None;
         }
         let args = std::env::args_os().skip(1);
-        Some(wrap(&exe, args, |key| std::env::var_os(key)))
+        Some(exit_code(wrap(&exe, args, |key| std::env::var_os(key))))
+    }
+
+    /// `code` as `hive`'s exit code, returned from `main` (`process::exit` would skip what
+    /// runs at exit): 0–255 as it is, any other code (an `NTSTATUS`, such as a program ended
+    /// by Ctrl+C) 1, so that a failure never reads as a success.
+    fn exit_code(code: i32) -> ExitCode {
+        ExitCode::from(u8::try_from(code).unwrap_or(1))
     }
 
     /// The wrapper at `exe`, as the Unix script: runs the first `claude` on `PATH` outside its
@@ -1452,6 +1459,11 @@ pub mod claude {
             assert_eq!(wrap(&exe, [], var), 126);
             // Not run as `claude`: not the wrapper.
             assert_eq!(claude_wrapper(), None);
+            // Its code as `hive`'s: a byte, else a failure.
+            assert_eq!(exit_code(0), ExitCode::SUCCESS);
+            assert_eq!(exit_code(255), ExitCode::from(255));
+            assert_eq!(exit_code(256), ExitCode::FAILURE);
+            assert_eq!(exit_code(0xC000_013A_u32 as i32), ExitCode::FAILURE);
             // Ctrl+C and Ctrl+Break do nothing to it.
             assert_eq!(unsafe { ignore(0) }, 1);
         }
