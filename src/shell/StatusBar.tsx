@@ -1,6 +1,8 @@
 import { version } from "../../package.json";
 import { type Connection, useHive } from "../store";
+import { Select } from "../ui/Select";
 import { isMac } from "../window";
+import { DEFAULT_ACCOUNT, saveSettings } from "./SettingsDialog";
 
 const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
@@ -9,8 +11,34 @@ const LABEL: Record<Connection["status"], string> = {
   disconnected: "disconnected",
 };
 
-// The place and connection state (#141), the current account's session usage (12.1) and the
-// app version; never a message (10.3: `Toasts`).
+/**
+ * The current Claude account (12.2): new terminals get it, open ones keep theirs. Only shown when
+ * there is an account besides the default one. The value "" is the default account.
+ */
+function AccountSelect() {
+  const { accounts, account } = useHive((s) => s.settings.claude);
+  if (accounts.length === 0) return null;
+  const options = [
+    { value: "", label: DEFAULT_ACCOUNT },
+    ...accounts.map((a) => ({ value: a.config_dir, label: a.name })),
+  ];
+  return (
+    <Select
+      className="account-select"
+      aria-label="Claude account"
+      value={account ?? ""}
+      options={options}
+      onChange={(value) =>
+        saveSettings((s) => {
+          s.claude.account = value || null;
+        })
+      }
+    />
+  );
+}
+
+// The place and connection state (#141), the Claude account (12.2) with its session usage
+// (12.1), and the app version; never a message (10.3: `Toasts`).
 export function StatusBar() {
   const connection = useHive((s) => s.connection);
   // The service reports its distribution in `welcome`; until then only "WSL" is known. On
@@ -28,7 +56,10 @@ export function StatusBar() {
         <span>{place}</span>
         <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
-      <SessionUsage />
+      <div className="statusbar-account">
+        <AccountSelect />
+        <SessionUsage />
+      </div>
       <span className="app-version">v{version}</span>
     </footer>
   );

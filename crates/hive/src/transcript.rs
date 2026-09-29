@@ -25,10 +25,12 @@ pub fn transcript_path(raw: &Value) -> Option<PathBuf> {
     .then(|| path.to_owned())
 }
 
-/// Opens `path` only when, links resolved, it is a regular file inside `root`.
-fn open_inside(root: &Path, path: &Path) -> io::Result<File> {
+/// Opens `path` only when, links resolved, it is a regular file inside one of `roots` (every
+/// Claude account's projects folder, 12.2).
+fn open_inside(roots: &[PathBuf], path: &Path) -> io::Result<File> {
     let real = path.canonicalize()?;
-    if !real.starts_with(root.canonicalize()?) {
+    let inside = |root: &PathBuf| root.canonicalize().is_ok_and(|root| real.starts_with(root));
+    if !roots.iter().any(inside) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "the transcript is outside Claude's projects folder",
@@ -43,12 +45,12 @@ fn open_inside(root: &Path, path: &Path) -> io::Result<File> {
     File::open(&real)
 }
 
-/// The whole lines of the transcript at `path` (inside `root`) written since `offset`, at most
+/// The whole lines of the transcript at `path` (inside `roots`) written since `offset`, at most
 /// its last [`READ_LIMIT`] bytes, and whether it was read again from its start because it
 /// shrank. `offset` moves to the end of what was read. A transcript not written yet has no
 /// lines.
-fn read_lines(root: &Path, path: &Path, offset: &mut u64) -> io::Result<(Vec<u8>, bool)> {
-    let mut file = match open_inside(root, path) {
+fn read_lines(roots: &[PathBuf], path: &Path, offset: &mut u64) -> io::Result<(Vec<u8>, bool)> {
+    let mut file = match open_inside(roots, path) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             return Ok((Vec::new(), false));
         }
@@ -189,12 +191,12 @@ pub struct Usage {
 }
 
 impl Usage {
-    /// Reads what the transcript at `path` (inside `root`) gained and returns the agent's new
+    /// Reads what the transcript at `path` (inside `roots`) gained and returns the agent's new
     /// `agent_usage` when it changed. At first only the last [`READ_LIMIT`] bytes are read,
     /// so the output of a longer transcript's start is not counted.
-    pub fn read(&mut self, id: &str, root: &Path, path: &Path) -> Option<Control> {
+    pub fn read(&mut self, id: &str, roots: &[PathBuf], path: &Path) -> Option<Control> {
         self.due = false;
-        let (bytes, restarted) = read_lines(root, path, &mut self.offset).ok()?;
+        let (bytes, restarted) = read_lines(roots, path, &mut self.offset).ok()?;
         if restarted {
             self.tokens = Tokens::default();
         }
@@ -292,7 +294,7 @@ mod tests {
 
     /// What [`read_lines`] returns, with its bytes as text.
     fn lines(f: &Fixture, offset: &mut u64) -> io::Result<(String, bool)> {
-        let (bytes, restarted) = read_lines(&f.root, &f.log, offset)?;
+        let (bytes, restarted) = read_lines(std::slice::from_ref(&f.root), &f.log, offset)?;
         Ok((String::from_utf8(bytes).unwrap(), restarted))
     }
 
@@ -360,10 +362,16 @@ mod tests {
         assert!(made.unwrap().success());
         assert_eq!(error(&mut 0), "the transcript is not a file");
         std::fs::remove_file(&f.log).unwrap();
-        // Without the root, nothing is inside it: nothing is read.
+        // A root that is gone holds nothing; any other root holding it will do (12.2).
         append(&f.log, &said("x"));
-        let rootless = read_lines(Path::new("/nope"), &f.log, &mut 0).unwrap();
-        assert_eq!(rootless, (Vec::new(), false));
+        let gone = PathBuf::from("/nope");
+        let rootless = read_lines(std::slice::from_ref(&gone), &f.log, &mut 0);
+        assert_eq!(
+            rootless.unwrap_err().to_string(),
+            "the transcript is outside Claude's projects folder"
+        );
+        let both = read_lines(&[gone, f.root.clone()], &f.log, &mut 0).unwrap();
+        assert_eq!(both, (said("x").into_bytes(), false));
         assert_eq!(lines(&f, &mut 0).unwrap(), (said("x"), false));
     }
 
@@ -503,7 +511,7 @@ mod tests {
             due: true,
             ..Usage::default()
         };
-        let read = |agent: &mut Usage| agent.read("s", &f.root, &f.log);
+        let read = |agent: &mut Usage| agent.read("s", std::slice::from_ref(&f.root), &f.log);
         // Not written yet, then no usage yet: nothing to send.
         assert_eq!(read(&mut agent), None);
         assert!(!agent.due);
@@ -528,7 +536,7 @@ mod tests {
         assert_eq!(read(&mut agent), None);
         // Outside the root, nothing is read.
         let mut outside = Usage::default();
-        assert_eq!(outside.read("s", Path::new("/nope"), &f.log), None);
+        assert_eq!(outside.read("s", &["/nope".into()], &f.log), None);
     }
 
     #[test]
@@ -537,7 +545,7 @@ mod tests {
         let f = fixture();
         append(&f.log, &line(by("claude-opus-5-5", 52_900)));
         let mut usage = Usage::default();
-        let message = usage.read("s", &f.root, &f.log);
+        let message = usage.read("s", std::slice::from_ref(&f.root), &f.log);
         let expected = Control::AgentUsage {
             id: "s".into(),
             context_tokens: 52_900,
@@ -555,7 +563,7 @@ mod tests {
         append(&f.log, &esc);
         let mut usage = Usage::default();
         let read = |usage: &mut Usage| {
-            usage.read("s", &f.root, &f.log);
+            usage.read("s", std::slice::from_ref(&f.root), &f.log);
             usage.interrupted()
         };
         assert!(!read(&mut usage));

@@ -27,6 +27,9 @@ pub struct Projects {
     /// Each project with its worktrees as git last listed them (9.14), until [`Projects::forget`].
     /// One lock per project, held while git lists it (9.20).
     listed: Mutex<HashMap<String, Arc<Mutex<Option<Project>>>>>,
+    /// The Claude config folders the file's spaces had before accounts (12.2), with their
+    /// space's name, until they are accounts ([`Projects::migrate_accounts`]).
+    legacy: Mutex<Vec<(String, String)>>,
 }
 
 impl Projects {
@@ -35,7 +38,11 @@ impl Projects {
     /// unreadable or invalid one is moved aside to `<file>.corrupt` with a warning, and the
     /// list starts empty.
     pub fn load(file: PathBuf, legacy: &Path) -> Self {
-        let loaded = read(&file).and_then(|s: Spaces| s.check().map_err(io::Error::other));
+        let value: io::Result<serde_json::Value> = read(&file);
+        let accounts = value.as_ref().map_or_else(|_| Vec::new(), legacy_accounts);
+        let loaded = value
+            .and_then(|value| serde_json::from_value(value).map_err(io::Error::other))
+            .and_then(|s: Spaces| s.check().map_err(io::Error::other));
         let spaces = match loaded {
             Ok(spaces) => spaces,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -51,6 +58,29 @@ impl Projects {
             file,
             spaces: Mutex::new(spaces),
             listed: Mutex::default(),
+            legacy: Mutex::new(accounts),
+        }
+    }
+
+    /// Hands the Claude config folders spaces had (see `legacy`) to `make`, which makes them
+    /// accounts, then saves the spaces without them. Nothing changes when `make` fails (the
+    /// warning is logged): the next start tries again, so nothing is lost. (Not generic: every
+    /// caller shares one copy of it, whose coverage the tests give.)
+    pub fn migrate_accounts(
+        &self,
+        make: &mut dyn FnMut(Vec<(String, String)>) -> Result<(), String>,
+    ) {
+        let mut legacy = self.legacy.lock().unwrap_or_else(PoisonError::into_inner);
+        if legacy.is_empty() {
+            return;
+        }
+        let saved = make(legacy.clone())
+            .and_then(|()| save(&self.file, &self.spaces()).map_err(|err| err.to_string()));
+        match saved {
+            Ok(()) => legacy.clear(),
+            Err(err) => {
+                eprintln!("hive: warning: the spaces' Claude folders are not accounts yet: {err}")
+            }
         }
     }
 
@@ -87,16 +117,10 @@ impl Projects {
         }
     }
 
-    /// The current space's projects and Claude config folder (where its sessions are).
-    pub fn current(&self) -> (Vec<Project>, Option<String>) {
-        let (paths, env) = self.spaces().current();
-        let projects = paths.iter().map(|path| self.project(path)).collect();
-        (projects, env.claude_config_dir)
-    }
-
-    /// The current space's Claude config folder, when it has one.
-    pub fn claude_config_dir(&self) -> Option<String> {
-        self.spaces().current().1.claude_config_dir
+    /// The current space's projects.
+    pub fn current(&self) -> Vec<Project> {
+        let (paths, _) = self.spaces().current();
+        paths.iter().map(|path| self.project(path)).collect()
     }
 
     /// The current space's project folders, without asking git.
@@ -382,6 +406,17 @@ fn refuse(mut busy: Vec<procs::Proc>) -> io::Result<()> {
         "in use by {}: close its terminals first",
         names.join(", ")
     )))
+}
+
+/// Each space's Claude config folder in a spaces file written before accounts (12.2), with
+/// the space's name.
+fn legacy_accounts(value: &serde_json::Value) -> Vec<(String, String)> {
+    let spaces = value["spaces"].as_array().map_or(&[][..], Vec::as_slice);
+    let account = |space: &serde_json::Value| {
+        let dir = space["env"]["claude_config_dir"].as_str()?;
+        Some((space["name"].as_str()?.to_owned(), dir.to_owned()))
+    };
+    spaces.iter().filter_map(account).collect()
 }
 
 fn read<T: DeserializeOwned>(file: &Path) -> io::Result<T> {
@@ -900,7 +935,7 @@ mod tests {
         let projects = load(tmp.path());
         assert!(projects.list().is_empty());
         assert_eq!(*projects.spaces(), Spaces::with(vec![]));
-        assert_eq!(projects.current(), (vec![], None));
+        assert_eq!(projects.current(), vec![]);
         assert_eq!(
             projects.spaces_message(),
             Control::Spaces {
@@ -926,7 +961,62 @@ mod tests {
         let again = load(tmp.path());
         assert_eq!(*again.spaces(), *projects.spaces());
         assert_eq!(again.spaces().current, "space-1");
-        assert_eq!(again.current(), (vec![], None));
+        assert_eq!(again.current(), vec![]);
+    }
+
+    #[test]
+    fn the_spaces_claude_folders_leave_them_once_they_are_accounts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("spaces.json");
+        let old = r#"{"current":"space-1","spaces":[
+            {"id":"default","name":"Default","projects":["/a"],"env":{"claude_config_dir":"/d","git_name":"Me"}},
+            {"id":"space-1","name":"Work","env":{"claude_config_dir":"/w"}},
+            {"id":"space-2","name":"Plain","env":{"claude_config_dir":null}},
+            {"id":"space-3","name":"Bare"}]}"#;
+        std::fs::write(&file, old).unwrap();
+        let projects = load(tmp.path());
+        assert_eq!(projects.spaces().current, "space-1");
+        assert_eq!(
+            projects.spaces().spaces[0].env.git_name.as_deref(),
+            Some("Me")
+        );
+        let expected = vec![
+            ("Default".into(), "/d".into()),
+            ("Work".into(), "/w".into()),
+        ];
+        // What was handed over, each time; the next one fails while `fail` is set.
+        let handed = std::cell::RefCell::new(Vec::new());
+        let fail = std::cell::Cell::new(true);
+        let mut make = |legacy| {
+            handed.borrow_mut().push(legacy);
+            if fail.get() {
+                Err("no".to_owned())
+            } else {
+                Ok(())
+            }
+        };
+        // A failure changes nothing: they are handed over again.
+        projects.migrate_accounts(&mut make);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), old);
+        fail.set(false);
+        projects.migrate_accounts(&mut make);
+        assert_eq!(*handed.borrow(), [expected.clone(), expected]);
+        // Saved without them, projects and git identity kept; never handed over again.
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(!saved.contains("claude_config_dir"), "{saved}");
+        projects.migrate_accounts(&mut make);
+        let again = load(tmp.path());
+        assert_eq!(*again.spaces(), *projects.spaces());
+        again.migrate_accounts(&mut make);
+        assert_eq!(handed.borrow().len(), 2);
+        // A space file that cannot be written keeps them for the next start.
+        std::fs::write(&file, old).unwrap();
+        let blocked = load(tmp.path());
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        blocked.migrate_accounts(&mut make);
+        blocked.migrate_accounts(&mut make);
+        assert_eq!(handed.borrow().len(), 4);
     }
 
     #[test]

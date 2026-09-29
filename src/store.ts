@@ -171,6 +171,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agents: { silence_secs: 5, confirm_close: true },
   worktrees: { default_base: null },
   projects: {},
+  claude: { accounts: [], account: null },
 };
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */

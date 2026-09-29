@@ -3,6 +3,9 @@
 
 #[cfg(unix)]
 #[cfg(test)]
+mod accounts;
+#[cfg(unix)]
+#[cfg(test)]
 mod agents;
 #[cfg(unix)]
 #[cfg(test)]

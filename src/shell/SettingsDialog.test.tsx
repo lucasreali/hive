@@ -174,6 +174,49 @@ test("the projects section edits each project's scripts", async () => {
   expect(input("Archive script").value).toBe("");
 });
 
+test("the accounts section adds, renames, logs in to and removes Claude accounts (12.2)", async () => {
+  open();
+  section("Accounts");
+  const accounts = () => settings().claude.accounts;
+  expect(input("Folder of the default account").value).toBe("~/.claude");
+  // No worktree to open a terminal in: "Log in…" waits for one.
+  const logIns = () => screen.getAllByRole("button", { name: "Log in…" }) as HTMLButtonElement[];
+  expect(logIns()[0]?.disabled).toBe(true);
+  const add = screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
+  expect(add.disabled).toBe(true);
+  fireEvent.change(input("New account name"), { target: { value: " Work " } });
+  fireEvent.change(input("New account folder"), { target: { value: " /w " } });
+  fireEvent.click(add);
+  await waitFor(() => expect(accounts()).toEqual([{ name: "Work", config_dir: "/w" }]));
+  expect(input("New account name").value).toBe("");
+  expect(input("Folder of Work").value).toBe("/w");
+  fireEvent.change(input("Name of /w"), { target: { value: "Job " } });
+  await waitFor(() => expect(accounts()[0]?.name).toBe("Job"));
+
+  // With a worktree selected, "Log in…" runs claude there as the account and closes the settings.
+  const [shop] = MOCK_REPOS;
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    useHive.setState({ selection: shop.id });
+  });
+  const opened = spyOn(transport, "openTerminal").mockResolvedValue(9);
+  const typed = spyOn(transport, "writeTerminal").mockResolvedValue();
+  expect(logIns()[1]?.title).toBe("A terminal running claude as Job: type /login there");
+  fireEvent.click(logIns()[1] as HTMLButtonElement);
+  await waitFor(() => expect(typed).toHaveBeenCalledWith(9, "claude\r"));
+  expect(opened.mock.calls[0]?.[0]).toBe(shop.path);
+  expect(opened.mock.calls[0]?.[4]).toEqual({ config_dir: "/w" });
+  expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+  opened.mockRestore();
+  typed.mockRestore();
+
+  // Removed, its folder stays on disk.
+  fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
+  section("Accounts");
+  fireEvent.click(screen.getByTitle("Remove Job"));
+  await waitFor(() => expect(accounts()).toEqual([]));
+});
+
 test("a run script keeps its fields and the focus while renamed; a late edit finds its row", async () => {
   open();
   section("Projects");

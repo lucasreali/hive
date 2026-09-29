@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{Control, SessionWindow, SpaceEnv};
+use hive_protocol::{Account, Control, SessionWindow, Settings};
 use serde_json::{Value, json};
 
 use crate::common::{Env, wait_until};
@@ -77,26 +77,40 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
         (0, Control::SessionUsage { usage: None })
     );
 
-    // Another account's window is kept, not shown, until its space is the current one.
+    // Another account's window is kept, not shown, until it is the selected account (12.2).
     let work = env.path("work");
     user_statusline(&work, "printf work");
     let out = statusline(&env, &hive, Some(&work), &input(7.0, now + 3600));
     assert_eq!(out.stdout, b"work");
-    let env_work = SpaceEnv {
-        claude_config_dir: Some(work.to_string_lossy().into_owned()),
-        ..SpaceEnv::default()
-    };
-    let create = Control::CreateSpace {
+    let config_dir = work.to_string_lossy().into_owned();
+    let mut settings = Settings::default();
+    settings.claude.accounts.push(Account {
         name: "Work".into(),
-        env: env_work,
+        config_dir: config_dir.clone(),
+    });
+    settings.claude.account = Some(config_dir);
+    let select = Control::SetSettings {
+        settings: settings.clone(),
     };
-    app.send(0, create).await;
+    app.send(0, select).await;
+    let answer = (
+        0,
+        Control::Settings {
+            settings: settings.clone(),
+        },
+    );
+    assert_eq!(app.control().await, answer);
     assert_eq!(app.control().await, usage(7, now + 3600));
     // Kept in memory only: a new service has none until a statusline runs.
     drop(app);
     assert!(daemon.wait_exit().success());
+    // The selected account is kept in the settings.
     let mut daemon = env.daemon();
-    let mut app = env.app().await;
+    let mut app = env.handshake(hive_protocol::Role::App).await;
+    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    app.send(0, Control::ListProjects).await;
+    let projects = Control::Projects { projects: vec![] };
+    assert_eq!(app.control().await, (0, projects));
     let out = statusline(&env, &hive, Some(&work), &input(9.0, now + 3600));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(app.control().await, usage(9, now + 3600));

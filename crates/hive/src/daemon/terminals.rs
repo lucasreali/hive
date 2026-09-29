@@ -5,8 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{Control, Frame};
-
+use hive_protocol::{AccountDir, Control, Frame};
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::sync::mpsc;
@@ -31,18 +30,28 @@ impl State {
         }
     }
 
+    /// Opens a terminal of `(cols, rows)` in `cwd`, as the `account` asked for (12.2; the
+    /// current one when `None`).
     pub(super) async fn open(
         self: &Arc<Self>,
         channel: u32,
         cwd: &str,
-        cols: u16,
-        rows: u16,
+        (cols, rows): (u16, u16),
+        account: Option<AccountDir>,
         frames: mpsc::UnboundedSender<Frame>,
     ) {
-        // Its space's environment (6.14) with its GitHub account's token (9.30), and its
-        // worktree's `HIVE_*` (6.8), placed before the lock since placing lists worktrees.
+        let claude_dir = match self.settings.claude_dir(account) {
+            Ok(dir) => dir,
+            Err(message) => return self.to_app(channel, &Control::Error { message }).await,
+        };
+        // Its Claude account, its space's environment (6.14) with its GitHub account's token
+        // (9.30), and its worktree's `HIVE_*` (6.8), placed before the lock since placing
+        // lists worktrees.
         let space = tokio::task::block_in_place(|| self.projects.space_env(cwd));
-        let mut env = crate::spaces::vars(&space);
+        let claude = claude_dir
+            .iter()
+            .map(|dir| ("CLAUDE_CONFIG_DIR", dir.clone()));
+        let mut env: Vec<_> = claude.chain(crate::spaces::vars(&space)).collect();
         if space.gh_account.is_some() {
             let gh = self.gh().await;
             match tokio::task::block_in_place(|| gh.vars(&space)) {
@@ -57,7 +66,6 @@ impl State {
         let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), cwd));
         let worktree = place.as_ref().map(|(_, worktree)| worktree.clone());
         env.extend(tokio::task::block_in_place(|| self.hive_env(place)));
-        let claude_dir = space.claude_config_dir;
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {

@@ -131,7 +131,7 @@ impl State {
     /// Reads the agent's session name from its log and sends it when it changed.
     async fn retitle(&self, id: &str, agent: &mut Agent) {
         let Some(cwd) = agent.cwd.clone() else { return };
-        let sessions = self.sessions.at(agent.claude_dir.as_deref());
+        let sessions = self.sessions.at(&[agent.claude_dir.as_deref()]);
         let title = tokio::task::block_in_place(|| sessions.title(id, &cwd));
         let Some(title) = title.filter(|t| agent.title.as_ref() != Some(t)) else {
             return;
@@ -153,7 +153,15 @@ impl State {
             .filter_map(|(id, agent)| {
                 let cwd = agent.cwd.clone()?;
                 let id = id.clone();
-                Some((agent.channel, OpenSession { id, cwd }))
+                let config_dir = agent.claude_dir.clone();
+                Some((
+                    agent.channel,
+                    OpenSession {
+                        id,
+                        cwd,
+                        config_dir,
+                    },
+                ))
             })
             .collect();
         open.sort_by_key(|(channel, _)| *channel);
@@ -202,16 +210,15 @@ impl State {
             if agent.busy() {
                 agent.usage.due = true;
             }
-            // Its space's Claude projects folder, which its transcript must stay inside.
-            let sessions = self.sessions.at(agent.claude_dir.as_deref());
-            let (Some(path), Some(root), true) =
-                (&agent.transcript, sessions.root(), agent.usage.due)
-            else {
+            let (Some(path), true) = (&agent.transcript, agent.usage.due) else {
                 continue;
             };
+            // Claude's projects folders (its terminal's, then every account's, 12.2), which its
+            // transcript must stay inside.
+            let roots = self.accounts_sessions(agent.claude_dir.as_deref()).roots();
             // A bounded read (see `transcript::Usage`), off the other tasks' threads.
             let usage = &mut agent.usage;
-            let read = || usage.read(id, root, path);
+            let read = || usage.read(id, &roots, path);
             if let Some(message) = tokio::task::block_in_place(read) {
                 self.to_app(agent.channel, &message).await;
             }

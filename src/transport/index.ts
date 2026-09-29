@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type {
+  AccountDir,
   DiffBase,
   GhAccount,
   ServiceMessage,
@@ -18,12 +19,16 @@ import { tauriTransport } from "./tauri";
 export interface Transport {
   /** Starts (or, after a reload, re-attaches to) the service. Resolves once requested. */
   connect(onMessage: (message: ServiceMessage) => void): Promise<void>;
-  /** Opens a terminal in `cwd` and resolves with its id (the frame channel). */
+  /**
+   * Opens a terminal in `cwd` and resolves with its id (the frame channel). It gets the Claude
+   * `account` (12.2), which must be one of the settings' accounts; without one, the current one.
+   */
   openTerminal(
     cwd: string,
     cols: number,
     rows: number,
     onData: (bytes: Uint8Array) => void,
+    account?: AccountDir,
   ): Promise<number>;
   writeTerminal(id: number, data: string): Promise<void>;
   resizeTerminal(id: number, cols: number, rows: number): Promise<void>;

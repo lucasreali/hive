@@ -2,7 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
-import type { Settings } from "./protocol";
+import type { AccountDir, Settings } from "./protocol";
 import { openLink, safeUrl } from "./shell/Markdown";
 import { addTab, focusPane, removeTab, setSplit, showFailure, useHive } from "./store";
 import { inBarOrder, shownSplit, tabWorktree } from "./tabs";
@@ -171,9 +171,10 @@ const LINKS = {
 
 /**
  * Opens a terminal in `cwd` (a worktree path) and adds its tab, shown. The Terminal exists
- * before the service is asked, so no output is lost before the tab appears.
+ * before the service is asked, so no output is lost before the tab appears. It gets the Claude
+ * `account` when given (12.2), else the current one.
  */
-export async function openTerminal(cwd: string): Promise<number> {
+export async function openTerminal(cwd: string, account?: AccountDir): Promise<number> {
   const term = new Terminal({
     lineHeight: 1.2,
     allowProposedApi: true, // registerCharacterJoiner
@@ -191,8 +192,12 @@ export async function openTerminal(cwd: string): Promise<number> {
     unacked = 0;
   };
   try {
-    id = await transport.openTerminal(cwd, term.cols, term.rows, (bytes) =>
-      term.write(bytes, () => written(bytes.length)),
+    id = await transport.openTerminal(
+      cwd,
+      term.cols,
+      term.rows,
+      (bytes) => term.write(bytes, () => written(bytes.length)),
+      account,
     );
   } catch (error) {
     term.dispose();
@@ -220,10 +225,11 @@ export async function openTerminal(cwd: string): Promise<number> {
 
 /**
  * A new "chat": a terminal in `cwd` with `claude` (and `args`, e.g. `--resume <id>`) typed
- * into it as the user would; from then on Hive only observes it.
+ * into it as the user would, as the Claude `account` when given; from then on Hive only
+ * observes it.
  */
-export const openClaude = (cwd: string, args = ""): Promise<number> =>
-  openWith(cwd, `claude${args && ` ${args}`}`);
+export const openClaude = (cwd: string, args = "", account?: AccountDir): Promise<number> =>
+  openWith(cwd, `claude${args && ` ${args}`}`, account);
 
 /**
  * For a click or key that opens a terminal (`openTerminal`, `openClaude`, `openWith`,
@@ -233,8 +239,12 @@ export const showOpenFailure = (open: Promise<unknown>) =>
   void showFailure(open, "Cannot open a terminal");
 
 /** A terminal in `cwd` with `command` typed into it and Enter pressed, as the user would. */
-export async function openWith(cwd: string, command: string): Promise<number> {
-  const id = await openTerminal(cwd);
+export async function openWith(
+  cwd: string,
+  command: string,
+  account?: AccountDir,
+): Promise<number> {
+  const id = await openTerminal(cwd, account);
   await transport.writeTerminal(id, `${command}\r`);
   return id;
 }

@@ -67,6 +67,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         cwd: dir.path().join("home").display().to_string(),
         cols: 80,
         rows: 24,
+        account: None,
     };
     to_daemon.send(Frame::control(1, &open)).await?;
     loop {

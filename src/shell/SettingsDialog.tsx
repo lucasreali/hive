@@ -8,12 +8,14 @@ import {
   PaletteIcon,
   RobotIcon,
   TerminalWindowIcon,
+  UserCircleIcon,
 } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
 import type { ProjectScripts, Settings } from "../protocol";
 import { COMMANDS } from "../shortcuts";
-import { openModal, scriptsOf, useHive } from "../store";
+import { openModal, panelWorktree, scriptsOf, useHive } from "../store";
+import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
@@ -31,6 +33,7 @@ export const SECTIONS = [
   "Appearance",
   "Notifications",
   "Agents",
+  "Accounts",
   "Worktrees",
   "Projects",
   "Shortcuts",
@@ -43,6 +46,7 @@ const SECTION_ICON: Record<Section, Icon> = {
   Appearance: PaletteIcon,
   Notifications: BellIcon,
   Agents: RobotIcon,
+  Accounts: UserCircleIcon,
   Worktrees: GitBranchIcon,
   Projects: FolderSimpleIcon,
   Shortcuts: KeyboardIcon,
@@ -57,7 +61,7 @@ let queued: ((next: Settings) => void)[] = [];
  * save at a time (9.24): the next one waits for the answer and builds on it, so a quick second
  * save cannot undo the first.
  */
-function save(change: (next: Settings) => void): void {
+export function saveSettings(change: (next: Settings) => void): void {
   queued.push(change);
   if (!useHive.getState().settingsPending) send();
 }
@@ -161,7 +165,7 @@ function NumberSetting(props: {
       value={String(value)}
       onSave={(text) => {
         const n = Number(text);
-        if (text.trim() !== "" && Number.isInteger(n)) save((s) => set(s, n));
+        if (text.trim() !== "" && Number.isInteger(n)) saveSettings((s) => set(s, n));
       }}
     />
   );
@@ -176,7 +180,7 @@ function Toggle(props: {
   const { set } = props;
   return (
     <label className="checkbox">
-      <input type="checkbox" checked={on} onChange={() => save((s) => set(s, !on))} />
+      <input type="checkbox" checked={on} onChange={() => saveSettings((s) => set(s, !on))} />
       {props.label}
     </label>
   );
@@ -340,7 +344,7 @@ function FontFamily({ id }: { id: string }) {
       id={id}
       value={value}
       onSave={(text) =>
-        save((s) => {
+        saveSettings((s) => {
           s.terminal.font_family = text;
         })
       }
@@ -356,7 +360,7 @@ function DefaultBase({ id }: { id: string }) {
       value={value ?? ""}
       placeholder="Current branch"
       onSave={(text) =>
-        save((s) => {
+        saveSettings((s) => {
           s.worktrees.default_base = text.trim() === "" ? null : text;
         })
       }
@@ -372,7 +376,7 @@ function CursorStyle({ id }: { id: string }) {
       value={value}
       options={CURSORS}
       onChange={(v) =>
-        save((s) => {
+        saveSettings((s) => {
           s.terminal.cursor_style = v as Settings["terminal"]["cursor_style"];
         })
       }
@@ -388,7 +392,7 @@ function Theme({ id }: { id: string }) {
       value={value}
       options={THEMES}
       onChange={(v) =>
-        save((s) => {
+        saveSettings((s) => {
           s.appearance.theme = v as Settings["appearance"]["theme"];
         })
       }
@@ -463,7 +467,7 @@ function About() {
 
 /** Saves `change` made to the scripts of the project `id`. */
 function saveScripts(id: string, change: (scripts: ProjectScripts) => void): void {
-  save((s) => {
+  saveSettings((s) => {
     const scripts = structuredClone(scriptsOf(s, id));
     change(scripts);
     s.projects[id] = { ...s.projects[id], scripts };
@@ -635,6 +639,125 @@ function ScriptFields({ id }: { id: string }) {
   );
 }
 
+/** The default Claude account's name (12.2): no `CLAUDE_CONFIG_DIR`, so `~/.claude`. */
+export const DEFAULT_ACCOUNT = "Default";
+
+/**
+ * "Log in…" for the account whose folder is `dir` (null: the default one): a new terminal where
+ * a new terminal would open (the files panel's worktree) running `claude` as that account, where
+ * the user types `/login`. Hive never reads or writes credentials (#45).
+ */
+function LogIn({ dir, name }: { dir: string | null; name: string }) {
+  const where = useHive((s) => panelWorktree(s)?.worktree.path ?? null);
+  return (
+    <button
+      type="button"
+      className="secondary"
+      disabled={where === null}
+      title={
+        where === null
+          ? "Select a worktree to open the terminal in"
+          : `A terminal running claude as ${name}: type /login there`
+      }
+      onClick={() => {
+        close();
+        showOpenFailure(openClaude(where as string, "", { config_dir: dir }));
+      }}
+    >
+      Log in…
+    </button>
+  );
+}
+
+/**
+ * The Claude accounts (12.2): the default one (`~/.claude`, fixed) and the user's, each a name
+ * and a `CLAUDE_CONFIG_DIR`, renamed, removed or added here and picked in the status bar. The
+ * service checks them.
+ */
+function Accounts() {
+  const accounts = useHive((s) => s.settings.claude.accounts);
+  const [name, setName] = useState("");
+  const [dir, setDir] = useState("");
+  const add = () => {
+    const account = { name: name.trim(), config_dir: dir.trim() };
+    saveSettings((s) => {
+      s.claude.accounts.push(account);
+    });
+    setName("");
+    setDir("");
+  };
+  return (
+    <div className="field">
+      <span>Claude accounts</span>
+      <div className="script-run">
+        <input aria-label="Name of the default account" value={DEFAULT_ACCOUNT} readOnly />
+        <input aria-label="Folder of the default account" value="~/.claude" readOnly />
+        <LogIn dir={null} name={DEFAULT_ACCOUNT} />
+      </div>
+      {accounts.map((a) => (
+        <div className="script-run" key={a.config_dir}>
+          <Typed
+            id={`setting-account-${a.config_dir}`}
+            aria-label={`Name of ${a.config_dir}`}
+            value={a.name}
+            onSave={(text) =>
+              saveSettings((s) => {
+                const renamed = s.claude.accounts.find((b) => b.config_dir === a.config_dir);
+                if (renamed) renamed.name = text.trim();
+              })
+            }
+          />
+          <input aria-label={`Folder of ${a.name}`} value={a.config_dir} readOnly />
+          <LogIn dir={a.config_dir} name={a.name} />
+          <button
+            type="button"
+            className="ghost"
+            title={`Remove ${a.name}`}
+            onClick={() =>
+              saveSettings((s) => {
+                s.claude.accounts = s.claude.accounts.filter((b) => b.config_dir !== a.config_dir);
+              })
+            }
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      ))}
+      <form
+        className="script-run"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <input
+          aria-label="New account name"
+          placeholder="Work"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <input
+          aria-label="New account folder"
+          placeholder="/home/you/.claude-work"
+          spellCheck={false}
+          value={dir}
+          onChange={(e) => setDir(e.target.value)}
+        />
+        <button type="submit" className="secondary" disabled={!name.trim() || !dir.trim()}>
+          Add
+        </button>
+      </form>
+      <p className="field-help">
+        Each account is a <code>CLAUDE_CONFIG_DIR</code> (an existing folder): its own login,
+        settings and sessions. The status bar picks the one new terminals get; open ones keep
+        theirs. "Log in…" opens a terminal running <code>claude</code> as the account: type{" "}
+        <code>/login</code> there. Hive never reads or writes credentials. Removing an account
+        leaves its folder on disk.
+      </p>
+    </div>
+  );
+}
+
 function Content({ section, query }: { section: Section; query: string }) {
   if (query) {
     const found = FIELDS.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
@@ -644,6 +767,7 @@ function Content({ section, query }: { section: Section; query: string }) {
   if (section === "Shortcuts") return <Shortcuts />;
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
+  if (section === "Accounts") return <Accounts />;
   return <Fields fields={FIELDS.filter((f) => f.section === section)} />;
 }
 

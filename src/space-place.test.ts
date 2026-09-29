@@ -11,7 +11,6 @@ import { MOCK_REPOS } from "./transport/mock";
 
 const [shop, api, dotfiles] = MOCK_REPOS;
 const NO_ENV = {
-  claude_config_dir: null,
   git_name: null,
   git_email: null,
   gh_config_dir: null,

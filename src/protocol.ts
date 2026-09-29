@@ -152,9 +152,11 @@ export type ProjectError =
   | "in_other_space"
   | "storage";
 
-/** Mirrors `hive_protocol::SpaceEnv`: what a space's terminals get; null leaves the user's own. */
+/**
+ * Mirrors `hive_protocol::SpaceEnv`: what a space's terminals get; null leaves the user's own. The
+ * Claude account is not the space's (12.2): see `Settings["claude"]`.
+ */
 export type SpaceEnv = {
-  claude_config_dir: string | null;
   git_name: string | null;
   git_email: string | null;
   gh_config_dir: string | null;
@@ -234,8 +236,11 @@ export type Changes = {
   error: string | null;
 };
 
-/** Mirrors `hive_protocol::OpenSession`: a session that ran in a Hive terminal. */
-export type OpenSession = { id: string; cwd: string };
+/**
+ * Mirrors `hive_protocol::OpenSession`: a session that ran in a Hive terminal, with its terminal's
+ * Claude config folder (null: the default account).
+ */
+export type OpenSession = { id: string; cwd: string; config_dir: string | null };
 
 /** A Claude Code session of a followed project, as the service read it from its log. */
 export type Session = {
@@ -258,6 +263,8 @@ export type Session = {
   state: AgentState;
   /** A `claude` is known to run it: in a Hive terminal (see `agents`), or outside Hive. */
   running: boolean;
+  /** The Claude config folder of the account it ran as (12.2); null: the default account's. */
+  config_dir: string | null;
 };
 export type SessionTarget = "log" | "folder";
 
@@ -394,7 +401,21 @@ export type Settings = {
   worktrees: { default_base: string | null };
   /** By project id. */
   projects: Record<string, { scripts: ProjectScripts }>;
+  /**
+   * The Claude accounts (12.2) besides the default one (`~/.claude`, always there), and the
+   * current one's folder (null: the default one): new terminals get it as `CLAUDE_CONFIG_DIR`.
+   */
+  claude: { accounts: Account[]; account: string | null };
 };
+
+/** Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`. */
+export type Account = { name: string; config_dir: string };
+
+/**
+ * Mirrors `hive_protocol::AccountDir`: the Claude account a terminal is opened with (12.2),
+ * `config_dir` null for the default one. A terminal opened without one gets the current account.
+ */
+export type AccountDir = { config_dir: string | null };
 
 /** A project's scripts (6.8): the user's own, kept only in the settings. */
 export type ProjectScripts = {

@@ -130,6 +130,7 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         cwd: cwd.clone(),
         cols: 80,
         rows: 24,
+        account: None,
     };
     app.send(1, open).await;
     let message =

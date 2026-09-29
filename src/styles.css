@@ -1067,10 +1067,13 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
-/* Right-aligned, before the version (12.1) */
-.session-usage {
-  margin-left: auto;
-  margin-right: 16px;
+/* Right-aligned, before the version: the Claude account select (12.2), quiet like the space
+   select, and its session usage (12.1). */
+.statusbar-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 0 auto;
 }
 
 /* Connection block (#29): covers the workspace while the service is unusable */
@@ -2023,7 +2026,8 @@ button.chevron:hover {
 }
 
 .space-select .select-trigger,
-.pulls-bar .select-trigger {
+.pulls-bar .select-trigger,
+.account-select .select-trigger {
   height: 24px;
   cursor: pointer;
   background: transparent;
@@ -2033,8 +2037,14 @@ button.chevron:hover {
 }
 
 .space-select .select-trigger:hover,
-.pulls-bar .select-trigger:hover {
+.pulls-bar .select-trigger:hover,
+.account-select .select-trigger:hover {
   background: var(--hover);
+}
+
+/* In the 24 px status bar. */
+.account-select .select-trigger {
+  height: 20px;
 }
 
 .dialog footer .space-delete {
