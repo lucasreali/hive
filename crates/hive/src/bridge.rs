@@ -39,6 +39,10 @@ fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
     paths.prepare_runtime()?;
     let log = crate::mode::private(File::options().create(true).write(true).truncate(true))
         .open(paths.daemon_log())?;
+    // The service runs a copy in the bin folder, so that it never keeps the app's installer
+    // from replacing the installed `hive.exe`.
+    #[cfg(windows)]
+    let hive = &crate::windows::install_hive(hive, &paths.bin_dir())?;
     let mut daemon = Command::new(hive);
     daemon
         .arg("daemon")

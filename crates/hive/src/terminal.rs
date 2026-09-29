@@ -419,34 +419,74 @@ pub mod conpty {
     use hive_protocol::TerminalShell;
 
     /// The program and arguments of `shell`, programs found on `path` (the service's `PATH`,
-    /// else left to `CreateProcessW`'s search): `pwsh` when there, else Windows PowerShell;
-    /// `cmd`; Git Bash, the `bin\bash.exe` two folders above the first `git.exe` that has one
-    /// (`<Git>\cmd\git.exe`).
-    pub fn shell(shell: TerminalShell, path: &OsStr) -> Result<Vec<OsString>, String> {
-        let on_path = |name: &'static str| {
-            let dirs = std::env::split_paths(path);
-            dirs.map(move |dir| dir.join(name))
-                .filter(|file| file.is_file())
-        };
-        let find = |name| on_path(name).next().map(PathBuf::into_os_string);
+    /// else left to `CreateProcessW`'s search): PowerShell (see [`powershell`]); `cmd`; Git
+    /// Bash (see [`git_bash`]) reading Hive's rc file beside `bin_dir`, which runs what a
+    /// login bash runs and then puts `bin_dir` first on `PATH` (a login bash's profile puts
+    /// Git's own folders first), as on macOS ([`super::login`]).
+    pub fn shell(
+        shell: TerminalShell,
+        path: &OsStr,
+        bin_dir: &Path,
+    ) -> Result<Vec<OsString>, String> {
         match shell {
-            TerminalShell::Default => {
-                let found = find("pwsh.exe").or_else(|| find("powershell.exe"));
-                Ok(vec![found.unwrap_or_else(|| "powershell.exe".into())])
-            }
-            TerminalShell::Cmd => Ok(vec![find("cmd.exe").unwrap_or_else(|| "cmd.exe".into())]),
+            TerminalShell::Default => Ok(vec![powershell(path)]),
+            TerminalShell::Cmd => Ok(vec![
+                find(path, "cmd.exe").unwrap_or_else(|| "cmd.exe".into()),
+            ]),
             TerminalShell::GitBash => {
-                let above = |mut git: PathBuf| {
-                    git.pop();
-                    git.pop();
-                    git.extend(["bin", "bash.exe"]);
-                    git
-                };
-                let bash = on_path("git.exe").map(above).find(|bash| bash.is_file());
-                let bash = bash.ok_or("Git Bash was not found: no git.exe on PATH")?;
-                let args = [bash.into_os_string(), "--login".into(), "-i".into()];
+                let bash = git_bash(path).ok_or("Git Bash was not found: no git.exe on PATH")?;
+                let rc = msys_path(&super::login::startup_dir(bin_dir).join("bashrc"));
+                let args = [
+                    bash.into_os_string(),
+                    "--rcfile".into(),
+                    rc.into(),
+                    "-i".into(),
+                ];
                 Ok(args.to_vec())
             }
+        }
+    }
+
+    /// The files `name` in the folders of `path`.
+    fn on_path<'a>(path: &'a OsStr, name: &'a str) -> impl Iterator<Item = PathBuf> + 'a {
+        let dirs = std::env::split_paths(path);
+        dirs.map(move |dir| dir.join(name))
+            .filter(|file| file.is_file())
+    }
+
+    /// The first file `name` in the folders of `path`.
+    fn find(path: &OsStr, name: &str) -> Option<OsString> {
+        on_path(path, name).next().map(PathBuf::into_os_string)
+    }
+
+    /// PowerShell on `path`: `pwsh` when there, else Windows PowerShell.
+    pub fn powershell(path: &OsStr) -> OsString {
+        let found = find(path, "pwsh.exe").or_else(|| find(path, "powershell.exe"));
+        found.unwrap_or_else(|| "powershell.exe".into())
+    }
+
+    /// Git Bash: the `bin\bash.exe` two folders above the first `git.exe` on `path` that has
+    /// one (`<Git>\cmd\git.exe`).
+    pub fn git_bash(path: &OsStr) -> Option<PathBuf> {
+        let above = |mut git: PathBuf| {
+            git.pop();
+            git.pop();
+            git.extend(["bin", "bash.exe"]);
+            git
+        };
+        on_path(path, "git.exe")
+            .map(above)
+            .find(|bash| bash.is_file())
+    }
+
+    /// `path` as Git Bash writes it: `/` between names, and a drive `C:` as `/c`.
+    pub fn msys_path(path: &Path) -> String {
+        let text = path.to_string_lossy().replace('\\', "/");
+        match text.as_bytes() {
+            [drive, b':', ..] if drive.is_ascii_alphabetic() => {
+                format!("/{}{}", char::from(drive.to_ascii_lowercase()), &text[2..])
+            }
+            _ => text,
         }
     }
 
@@ -472,7 +512,8 @@ pub mod conpty {
     }
 
     /// A terminal's environment: `base` (the service's) with `set` over it, names compared
-    /// ignoring case as Windows does, then `bin_dir` first on `PATH`; sorted by name, as
+    /// ignoring case as Windows does, then `bin_dir` first on `PATH`, and as `HIVE_BIN_DIR`
+    /// in Git Bash's form (for Hive's bash rc file, which unsets it); sorted by name, as
     /// `CreateProcessW` wants it.
     pub fn environment(
         base: impl IntoIterator<Item = (OsString, OsString)>,
@@ -480,7 +521,8 @@ pub mod conpty {
         bin_dir: &Path,
     ) -> Vec<(OsString, OsString)> {
         let mut vars = BTreeMap::new();
-        for (name, value) in base.into_iter().chain(set) {
+        let bash_bin = ("HIVE_BIN_DIR".into(), msys_path(bin_dir).into());
+        for (name, value) in base.into_iter().chain(set).chain([bash_bin]) {
             vars.insert(name.to_string_lossy().to_uppercase(), (name, value));
         }
         let (name, old) = vars
@@ -530,7 +572,8 @@ pub mod conpty {
                 &["7/pwsh.exe", "v1.0/powershell.exe", "cmd/cmd.exe"],
             );
             let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
-            let run = |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs)).unwrap();
+            let run =
+                |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs), Path::new("")).unwrap();
             let empty = dir.path().join("cmd");
             assert_eq!(
                 run(&[&empty, &windows, &pwsh]),
@@ -541,10 +584,15 @@ pub mod conpty {
                 [windows.join("powershell.exe").into_os_string()]
             );
             assert_eq!(run(&[&empty]), os(&["powershell.exe"]));
-            let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty])).unwrap();
+            let cmd = shell(
+                TerminalShell::Cmd,
+                &path(&[&windows, &empty]),
+                Path::new(""),
+            )
+            .unwrap();
             assert_eq!(cmd, [empty.join("cmd.exe").into_os_string()]);
             assert_eq!(
-                shell(TerminalShell::Cmd, OsStr::new("")).unwrap(),
+                shell(TerminalShell::Cmd, OsStr::new(""), Path::new("")).unwrap(),
                 os(&["cmd.exe"])
             );
         }
@@ -559,16 +607,37 @@ pub mod conpty {
             let (other, git) = (dir.path().join("Other/cmd"), dir.path().join("Git/cmd"));
             let path = std::env::join_paths([&other, &git]).unwrap();
             let bash = dir.path().join("Git").join("bin").join("bash.exe");
+            assert_eq!(git_bash(&path), Some(bash.clone()));
+            // It reads Hive's rc file, beside the bin folder.
+            let bin = dir.path().join("hive").join("bin");
+            let rc = dir.path().join("hive").join("shell").join("bashrc");
             assert_eq!(
-                shell(TerminalShell::GitBash, &path).unwrap(),
-                [bash.into_os_string(), "--login".into(), "-i".into()]
+                shell(TerminalShell::GitBash, &path, &bin).unwrap(),
+                [
+                    bash.into_os_string(),
+                    "--rcfile".into(),
+                    msys_path(&rc).into(),
+                    "-i".into()
+                ]
             );
             // Only a git without its bash: none.
             let none = std::env::join_paths([&other]).unwrap();
+            assert_eq!(git_bash(&none), None);
             assert_eq!(
-                shell(TerminalShell::GitBash, &none).unwrap_err(),
+                shell(TerminalShell::GitBash, &none, &bin).unwrap_err(),
                 "Git Bash was not found: no git.exe on PATH"
             );
+        }
+
+        #[test]
+        fn git_bash_writes_a_drive_as_a_folder_and_slashes_between_names() {
+            let msys = |path: &str| msys_path(Path::new(path));
+            assert_eq!(msys(r"C:\Users\me\a b\bin"), "/c/Users/me/a b/bin");
+            assert_eq!(msys(r"d:\x"), "/d/x");
+            assert_eq!(msys("C:"), "/c");
+            assert_eq!(msys(r"\\server\share\x"), "//server/share/x");
+            assert_eq!(msys(r"1:\x"), "1:/x");
+            assert_eq!(msys("/already/msys"), "/already/msys");
         }
 
         #[test]
@@ -598,17 +667,19 @@ pub mod conpty {
             let want = pairs(&[
                 ("A", "0"),
                 ("b", "1"),
+                ("HIVE_BIN_DIR", "/c/hive/bin"),
                 ("HIVE_TERMINAL_ID", "3"),
                 ("Path", r"C:\hive\bin;C:\W"),
                 ("term", "xterm-256color"),
             ]);
             assert_eq!(env, want);
             // No `PATH`, or an empty one: only the bin dir.
-            let bin = pairs(&[("Path", r"C:\hive\bin")]);
+            let bin = pairs(&[("HIVE_BIN_DIR", "/c/hive/bin"), ("Path", r"C:\hive\bin")]);
             assert_eq!(environment([], [], Path::new(r"C:\hive\bin")), bin);
             let empty = pairs(&[("PATH", "")]);
             let env = environment(empty, [], Path::new(r"C:\hive\bin"));
-            assert_eq!(env, pairs(&[("PATH", r"C:\hive\bin")]));
+            let bin = pairs(&[("HIVE_BIN_DIR", "/c/hive/bin"), ("PATH", r"C:\hive\bin")]);
+            assert_eq!(env, bin);
         }
 
         #[test]

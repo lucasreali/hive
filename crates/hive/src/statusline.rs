@@ -10,7 +10,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use hive_protocol::{Control, SessionWindow};
+#[cfg(unix)]
 use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
 use nix::unistd::Pid;
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -63,10 +65,11 @@ pub async fn run(
     };
     let project = parsed.as_ref().and_then(project_dir).or(cwd);
     let command = user_command(claude_dir.as_deref(), project.as_deref());
+    let shell = shell(&var);
     let user = async {
         let command = command?;
         tokio::select! {
-            output = user(&command, head, input, TIME_LIMIT) => output,
+            output = user(&shell, &command, head, input, TIME_LIMIT) => output,
             () = cancel => None,
         }
     };
@@ -127,26 +130,40 @@ fn command_in(file: &Path) -> Option<String> {
     Some(line.get("command")?.as_str()?.to_owned())
 }
 
-/// Runs the user's statusline `command` with `sh -c`, as Claude Code does, in this process's
-/// folder and environment, its input being `head` then whatever is left of `rest`. Its stdout
-/// and exit code, when it printed at most [`OUTPUT_LIMIT`] bytes and ended within `time`.
+/// The shell Claude Code runs a statusline with, its program and the arguments before the
+/// command: `sh -c` on Unix.
+#[cfg(unix)]
+fn shell(_var: &impl Fn(&str) -> Option<OsString>) -> Vec<OsString> {
+    vec!["sh".into(), "-c".into()]
+}
+
+#[cfg(windows)]
+use crate::windows::statusline_shell as shell;
+
+/// Runs the user's statusline `command` with `shell` (see [`shell`]), as Claude Code does, in
+/// this process's folder and environment, its input being `head` then whatever is left of
+/// `rest`. Its stdout and exit code, when it printed at most [`OUTPUT_LIMIT`] bytes and ended
+/// within `time`.
 async fn user(
+    shell: &[OsString],
     command: &str,
     head: Vec<u8>,
     mut rest: impl AsyncRead + Unpin,
     time: Duration,
 ) -> Option<Output> {
-    let mut child = tokio::process::Command::new("sh")
-        .arg("-c")
+    let (program, args) = shell.split_first()?;
+    let mut spawn = tokio::process::Command::new(program);
+    spawn
+        .args(args)
         .arg(command)
         .env(GUARD, "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        // Its own process group: cancelled or late, what it started ends with it.
-        .process_group(0)
-        .kill_on_drop(true)
-        .spawn()
-        .ok()?;
+        .kill_on_drop(true);
+    // Its own process group: cancelled or late, what it started ends with it.
+    #[cfg(unix)]
+    spawn.process_group(0);
+    let mut child = spawn.spawn().ok()?;
     let mut group = Group(child.id());
     let mut stdin = child.stdin.take()?;
     let stdout = child.stdout.take()?;
@@ -175,14 +192,20 @@ async fn user(
     output
 }
 
-/// Kills the process group led by its pid, when dropped with one.
+/// Kills the process group led by its pid (on Windows the process tree), when dropped with one.
 struct Group(Option<u32>);
 
 impl Drop for Group {
     fn drop(&mut self) {
         // A group with members keeps its id, so this cannot reach another process's group.
+        #[cfg(unix)]
         if let Some(pid) = self.0.and_then(|pid| i32::try_from(pid).ok()) {
             let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+        }
+        // ponytail: `taskkill /T` by pid; 12.5.6a's job helper ends exactly the tree.
+        #[cfg(windows)]
+        if let Some(pid) = self.0 {
+            crate::windows::kill_tree(pid);
         }
     }
 }
@@ -270,12 +293,15 @@ mod tests {
             std::fs::write(project.join(".claude/settings.local.json"), text).unwrap();
             assert_eq!(pick().as_deref(), Some("shared"), "{text}");
         }
-        // Nor a FIFO, which is not opened.
         let local = project.join(".claude/settings.local.json");
-        std::fs::remove_file(&local).unwrap();
-        let made = std::process::Command::new("mkfifo").arg(&local).status();
-        assert!(made.unwrap().success());
-        assert_eq!(pick().as_deref(), Some("shared"));
+        // Nor a FIFO, which is not opened.
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&local).unwrap();
+            let made = std::process::Command::new("mkfifo").arg(&local).status();
+            assert!(made.unwrap().success());
+            assert_eq!(pick().as_deref(), Some("shared"));
+        }
         std::fs::remove_file(&local).unwrap();
         // Up to 1 MiB is read, no more.
         let sized = |size: usize| {
@@ -308,6 +334,9 @@ mod tests {
         let var = |key: &str| match key {
             "CLAUDE_CONFIG_DIR" => Some(dir.clone()),
             GUARD if guard => Some("1".into()),
+            // Where Windows finds the shell a statusline runs with.
+            #[cfg(windows)]
+            "PATH" | "CLAUDE_CODE_GIT_BASH_PATH" => env(key),
             _ => None,
         };
         let cwd = Some(tmp.path().to_owned());
@@ -382,9 +411,17 @@ mod tests {
 
     #[tokio::test]
     async fn the_users_statusline_is_bounded_in_output_and_time() {
-        async fn run(command: &str, time: u64) -> Option<Output> {
-            user(command, vec![], &b""[..], Duration::from_millis(time)).await
-        }
+        let shell = shell(&env);
+        let run = async |command: &str, time: u64| {
+            user(
+                &shell,
+                command,
+                vec![],
+                &b""[..],
+                Duration::from_millis(time),
+            )
+            .await
+        };
         // 64 KiB at most.
         let out = run("head -c 65536 /dev/zero", 5000).await.unwrap();
         assert_eq!((out.0.len(), out.1), (65536, 0));
@@ -394,23 +431,26 @@ mod tests {
         // Late, what it started ends too; in time, what it left in the background stays.
         let tmp = tempfile::tempdir().unwrap();
         let (late, kept) = (tmp.path().join("late"), tmp.path().join("kept"));
+        // (A second: Windows starts processes slowly.)
         let background =
-            |file: &Path| format!("(sleep 0.3; touch '{}') >/dev/null &", file.display());
+            |file: &Path| format!("(sleep 1; touch '{}') >/dev/null &", file.display());
         assert_eq!(run(&format!("{} wait", background(&late)), 100).await, None);
         let done = run(&format!("{} printf ok", background(&kept)), 5000).await;
         assert_eq!(done, Some((b"ok".to_vec(), 0)));
-        tokio::time::sleep(Duration::from_millis(800)).await;
+        tokio::time::sleep(Duration::from_millis(2000)).await;
         assert!(!late.exists());
         assert!(kept.exists());
-        // Killed by a signal: printed, exit 1.
-        assert_eq!(
-            run("printf x; kill -9 $$", 5000).await,
-            Some((b"x".to_vec(), 1))
-        );
+        // Killed: printed, and a failure (1 after a signal on Unix).
+        let killed = run("printf x; kill -9 $$", 5000).await.unwrap();
+        assert_eq!(killed.0, b"x");
+        #[cfg(unix)]
+        assert_eq!(killed.1, 1);
+        #[cfg(windows)]
+        assert_ne!(killed.1, 0);
         // A statusline that does not read a large input.
         let big = vec![b'x'; 1 << 20];
         assert_eq!(
-            user("printf ok", big, &b""[..], Duration::from_secs(5)).await,
+            user(&shell, "printf ok", big, &b""[..], Duration::from_secs(5)).await,
             Some((b"ok".to_vec(), 0))
         );
     }
