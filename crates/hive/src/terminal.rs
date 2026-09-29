@@ -418,12 +418,20 @@ pub mod conpty {
 
     use hive_protocol::TerminalShell;
 
+    /// What PowerShell runs once its profile ran: its prompt (the user's, wrapped) first moves
+    /// the process's working folder to its file-system location. PowerShell's `cd` moves only
+    /// its location, and a worktree is refused removal while some process works in it
+    /// (`windows::inside`). No `"` and no trailing `\`: [`command_line`] quotes it as it is.
+    pub const FOLLOW: &str = "$__hivePrompt = $function:prompt; function global:prompt { try { \
+        [Environment]::CurrentDirectory = (Get-Location -PSProvider FileSystem).ProviderPath \
+        } catch {}; & $__hivePrompt }";
+
     /// The program and arguments of `shell`, programs found in the absolute folders of `path`
     /// (the service's `PATH`), else in `System32` of `root` (`%SystemRoot%`, else
-    /// `C:\Windows`): PowerShell (see [`powershell`]); `cmd`; Git Bash (see [`git_bash`])
-    /// reading Hive's rc file beside `bin_dir`, which runs what a login bash runs and then puts
-    /// `bin_dir` first on `PATH` (a login bash's profile puts Git's own folders first), as on
-    /// macOS ([`super::login`]).
+    /// `C:\Windows`): PowerShell (see [`powershell`]) running [`FOLLOW`]; `cmd`; Git Bash
+    /// (see [`git_bash`]) reading Hive's rc file beside `bin_dir`, which runs what a login
+    /// bash runs and then puts `bin_dir` first on `PATH` (a login bash's profile puts Git's
+    /// own folders first), as on macOS ([`super::login`]).
     pub fn shell(
         shell: TerminalShell,
         path: &OsStr,
@@ -431,7 +439,11 @@ pub mod conpty {
         bin_dir: &Path,
     ) -> Result<Vec<OsString>, String> {
         match shell {
-            TerminalShell::Default => Ok(vec![powershell(path, root)]),
+            TerminalShell::Default => {
+                let program = powershell(path, root);
+                let args = [program, "-NoExit".into(), "-Command".into(), FOLLOW.into()];
+                Ok(args.to_vec())
+            }
             TerminalShell::Cmd => {
                 let found = find(path, "cmd.exe");
                 Ok(vec![
@@ -608,11 +620,11 @@ pub mod conpty {
             let empty = dir.path().join("cmd");
             assert_eq!(
                 run(&[&empty, &windows, &pwsh]),
-                [pwsh.join("pwsh.exe").into_os_string()]
+                followed(pwsh.join("pwsh.exe"))
             );
             assert_eq!(
                 run(&[&empty, &windows]),
-                [windows.join("powershell.exe").into_os_string()]
+                followed(windows.join("powershell.exe"))
             );
             let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty]), None, bin).unwrap();
             assert_eq!(cmd, [empty.join("cmd.exe").into_os_string()]);
@@ -626,7 +638,7 @@ pub mod conpty {
             let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
             let bin = Path::new("");
             let default = shell(TerminalShell::Default, none, Some(root.as_os_str()), bin);
-            assert_eq!(default.unwrap(), [windows.into_os_string()]);
+            assert_eq!(default.unwrap(), followed(windows));
             let cmd = shell(TerminalShell::Cmd, none, Some(root.as_os_str()), bin).unwrap();
             assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
             // Without `%SystemRoot%`: Windows' usual folder.
@@ -653,7 +665,13 @@ pub mod conpty {
             assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
             let default = shell(TerminalShell::Default, &path, root, bin).unwrap();
             let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
-            assert_eq!(default, [windows.into_os_string()]);
+            assert_eq!(default, followed(windows));
+        }
+
+        /// PowerShell `program`, following its location with [`FOLLOW`].
+        fn followed(program: PathBuf) -> Vec<OsString> {
+            let args = ["-NoExit", "-Command", FOLLOW].map(OsString::from);
+            [program.into_os_string()].into_iter().chain(args).collect()
         }
 
         #[test]

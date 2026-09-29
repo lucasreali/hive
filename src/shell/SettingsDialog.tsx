@@ -584,6 +584,12 @@ const sameRuns = (a: RunScript[], b: RunScript[]) =>
 
 function ScriptFields({ id }: { id: string }) {
   const scripts = useHive((s) => scriptsOf(s.settings, id));
+  // On native Windows the archive script runs in the terminals' shell (12.5.6a).
+  const shell = useHive((s) =>
+    s.appMode?.mode === "native"
+      ? SHELLS.find((o) => o.value === s.settings.terminal.shell)?.label
+      : undefined,
+  );
   // The run scripts as shown, each row with a key of its own (9.24): renaming one keeps its
   // fields (and the focus), and an edit names its row, never a position a removal shifted.
   const [rows, setRows] = useState(() => keyed(scripts.run));
@@ -696,9 +702,16 @@ function ScriptFields({ id }: { id: string }) {
           }
         />
         <p className="field-help">
-          Run by the service with <code>sh -c</code> in the worktree before removing it, for at most
-          60 s. If it fails, the worktree stays (unless the removal is forced) and its output is
-          shown.
+          Run by the service{" "}
+          {shell === undefined ? (
+            <>
+              with <code>sh -c</code>
+            </>
+          ) : (
+            `in ${shell} (the Shell setting; Command Prompt takes one line only)`
+          )}{" "}
+          in the worktree before removing it, for at most 60 s. If it fails, the worktree stays
+          (unless the removal is forced) and its output is shown.
         </p>
       </div>
     </>
