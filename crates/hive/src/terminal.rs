@@ -418,21 +418,26 @@ pub mod conpty {
 
     use hive_protocol::TerminalShell;
 
-    /// The program and arguments of `shell`, programs found on `path` (the service's `PATH`,
-    /// else left to `CreateProcessW`'s search): PowerShell (see [`powershell`]); `cmd`; Git
-    /// Bash (see [`git_bash`]) reading Hive's rc file beside `bin_dir`, which runs what a
-    /// login bash runs and then puts `bin_dir` first on `PATH` (a login bash's profile puts
-    /// Git's own folders first), as on macOS ([`super::login`]).
+    /// The program and arguments of `shell`, programs found in the absolute folders of `path`
+    /// (the service's `PATH`), else in `System32` of `root` (`%SystemRoot%`, else
+    /// `C:\Windows`): PowerShell (see [`powershell`]); `cmd`; Git Bash (see [`git_bash`])
+    /// reading Hive's rc file beside `bin_dir`, which runs what a login bash runs and then puts
+    /// `bin_dir` first on `PATH` (a login bash's profile puts Git's own folders first), as on
+    /// macOS ([`super::login`]).
     pub fn shell(
         shell: TerminalShell,
         path: &OsStr,
+        root: Option<&OsStr>,
         bin_dir: &Path,
     ) -> Result<Vec<OsString>, String> {
         match shell {
-            TerminalShell::Default => Ok(vec![powershell(path)]),
-            TerminalShell::Cmd => Ok(vec![
-                find(path, "cmd.exe").unwrap_or_else(|| "cmd.exe".into()),
-            ]),
+            TerminalShell::Default => Ok(vec![powershell(path, root)]),
+            TerminalShell::Cmd => {
+                let found = find(path, "cmd.exe");
+                Ok(vec![
+                    found.unwrap_or_else(|| system(root).join("cmd.exe").into()),
+                ])
+            }
             TerminalShell::GitBash => {
                 let bash = git_bash(path).ok_or("Git Bash was not found: no git.exe on PATH")?;
                 let rc = msys_path(&super::login::startup_dir(bin_dir).join("bashrc"));
@@ -447,22 +452,34 @@ pub mod conpty {
         }
     }
 
-    /// The files `name` in the folders of `path`.
+    /// `System32` of `root` (`%SystemRoot%`, else `C:\Windows`).
+    fn system(root: Option<&OsStr>) -> PathBuf {
+        Path::new(root.unwrap_or(OsStr::new(r"C:\Windows"))).join("System32")
+    }
+
+    /// The files `name` in the absolute folders of `path` (a relative folder would find a
+    /// program of whatever folder the service is in).
     fn on_path<'a>(path: &'a OsStr, name: &'a str) -> impl Iterator<Item = PathBuf> + 'a {
-        let dirs = std::env::split_paths(path);
+        let dirs = std::env::split_paths(path).filter(|dir| dir.is_absolute());
         dirs.map(move |dir| dir.join(name))
             .filter(|file| file.is_file())
     }
 
-    /// The first file `name` in the folders of `path`.
+    /// The first file `name` in the absolute folders of `path`.
     fn find(path: &OsStr, name: &str) -> Option<OsString> {
         on_path(path, name).next().map(PathBuf::into_os_string)
     }
 
-    /// PowerShell on `path`: `pwsh` when there, else Windows PowerShell.
-    pub fn powershell(path: &OsStr) -> OsString {
+    /// PowerShell: `pwsh` when on `path`, else Windows PowerShell (on `path`, else in
+    /// `System32` of `root`).
+    pub fn powershell(path: &OsStr, root: Option<&OsStr>) -> OsString {
         let found = find(path, "pwsh.exe").or_else(|| find(path, "powershell.exe"));
-        found.unwrap_or_else(|| "powershell.exe".into())
+        let windows = || {
+            system(root)
+                .join(r"WindowsPowerShell\v1.0\powershell.exe")
+                .into()
+        };
+        found.unwrap_or_else(windows)
     }
 
     /// Git Bash: the `bin\bash.exe` two folders above the first `git.exe` on `path` that has
@@ -572,8 +589,9 @@ pub mod conpty {
                 &["7/pwsh.exe", "v1.0/powershell.exe", "cmd/cmd.exe"],
             );
             let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
-            let run =
-                |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs), Path::new("")).unwrap();
+            let bin = Path::new("");
+            let run = |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs), None, bin);
+            let run = |dirs: &[&Path]| run(dirs).unwrap();
             let empty = dir.path().join("cmd");
             assert_eq!(
                 run(&[&empty, &windows, &pwsh]),
@@ -583,18 +601,46 @@ pub mod conpty {
                 run(&[&empty, &windows]),
                 [windows.join("powershell.exe").into_os_string()]
             );
-            assert_eq!(run(&[&empty]), os(&["powershell.exe"]));
-            let cmd = shell(
-                TerminalShell::Cmd,
-                &path(&[&windows, &empty]),
-                Path::new(""),
-            )
-            .unwrap();
+            let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty]), None, bin).unwrap();
             assert_eq!(cmd, [empty.join("cmd.exe").into_os_string()]);
-            assert_eq!(
-                shell(TerminalShell::Cmd, OsStr::new(""), Path::new("")).unwrap(),
-                os(&["cmd.exe"])
-            );
+        }
+
+        #[test]
+        fn shells_not_on_path_are_the_ones_in_system32() {
+            let root = Path::new(r"D:\Win");
+            let system = root.join("System32");
+            let none = OsStr::new("");
+            let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
+            let bin = Path::new("");
+            let default = shell(TerminalShell::Default, none, Some(root.as_os_str()), bin);
+            assert_eq!(default.unwrap(), [windows.into_os_string()]);
+            let cmd = shell(TerminalShell::Cmd, none, Some(root.as_os_str()), bin).unwrap();
+            assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
+            // Without `%SystemRoot%`: Windows' usual folder.
+            let usual = Path::new(r"C:\Windows").join("System32").join("cmd.exe");
+            let cmd = shell(TerminalShell::Cmd, none, None, bin).unwrap();
+            assert_eq!(cmd, [usual.into_os_string()]);
+        }
+
+        #[test]
+        fn relative_folders_of_path_are_skipped() {
+            // A folder under the current one (the crate's), named relatively.
+            let here = tempfile::Builder::new()
+                .prefix(".hive-test-")
+                .tempdir_in(".")
+                .unwrap();
+            let relative = Path::new(here.path().file_name().unwrap());
+            assert!(relative.is_relative());
+            files(relative, &["cmd.exe", "pwsh.exe"]);
+            let path = std::env::join_paths([relative]).unwrap();
+            let root = Some(OsStr::new("R"));
+            let system = Path::new("R").join("System32");
+            let bin = Path::new("");
+            let cmd = shell(TerminalShell::Cmd, &path, root, bin).unwrap();
+            assert_eq!(cmd, [system.join("cmd.exe").into_os_string()]);
+            let default = shell(TerminalShell::Default, &path, root, bin).unwrap();
+            let windows = system.join(r"WindowsPowerShell\v1.0\powershell.exe");
+            assert_eq!(default, [windows.into_os_string()]);
         }
 
         #[test]
@@ -612,7 +658,7 @@ pub mod conpty {
             let bin = dir.path().join("hive").join("bin");
             let rc = dir.path().join("hive").join("shell").join("bashrc");
             assert_eq!(
-                shell(TerminalShell::GitBash, &path, &bin).unwrap(),
+                shell(TerminalShell::GitBash, &path, None, &bin).unwrap(),
                 [
                     bash.into_os_string(),
                     "--rcfile".into(),
@@ -624,7 +670,7 @@ pub mod conpty {
             let none = std::env::join_paths([&other]).unwrap();
             assert_eq!(git_bash(&none), None);
             assert_eq!(
-                shell(TerminalShell::GitBash, &none, &bin).unwrap_err(),
+                shell(TerminalShell::GitBash, &none, None, &bin).unwrap_err(),
                 "Git Bash was not found: no git.exe on PATH"
             );
         }
