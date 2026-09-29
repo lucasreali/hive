@@ -53,6 +53,7 @@ test("welcomes the UI asynchronously", async () => {
     { type: "settings", settings: DEFAULT_SETTINGS },
     { type: "spaces", spaces: [space("default", "Default", [SHOP, API])], current: "default" },
     { type: "projects", projects: MOCK_REPOS.slice(0, 2) },
+    { type: "session_usage", usage: { used_percentage: 42, resets_at: expect.any(Number) } },
   ]);
 });
 
@@ -120,7 +121,7 @@ test("a scenario fails the connection instead", async () => {
   for (const [scenario, types] of [
     ["mismatch", ["version_mismatch"]],
     ["disconnected", ["disconnected"]],
-    ["", ["welcome", "settings", "spaces", "projects"]],
+    ["", ["welcome", "settings", "spaces", "projects", "session_usage"]],
     [
       "states",
       [
@@ -130,6 +131,7 @@ test("a scenario fails the connection instead", async () => {
         "projects",
         ...MOCK_STATES.flatMap(() => ["agent_detected", "agent_state", "agent_usage"]),
         "subagent_worktrees",
+        "session_usage",
       ],
     ],
   ] as const) {
@@ -151,7 +153,7 @@ test("states: shop also lists the worktree a subagent owns", async () => {
   expect(owners.map((s) => [s.id, s.worktree])).toEqual([["a3", MOCK_OWN_WORKTREE]]);
   // No agent runs there, so it shows under its subagent only.
   const owned = { type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] };
-  expect(messages.at(-1)).toEqual(owned as ServiceMessage);
+  expect(messages.at(-2)).toEqual(owned as ServiceMessage);
   // Other scenarios keep the fake repositories as they are.
   expect(MOCK_REPOS[0].worktrees.map((w) => w.id)).not.toContain(MOCK_OWN_WORKTREE);
 });
@@ -161,7 +163,7 @@ test("projects are added from the fake repositories only", async () => {
   const messages: ServiceMessage[] = [];
   await transport.connect((m) => messages.push(m));
   await tick();
-  expect(messages.at(-1)).toEqual({ type: "projects", projects: [] });
+  expect(messages.at(-2)).toEqual({ type: "projects", projects: [] });
 
   const [shop] = MOCK_REPOS;
   await transport.addProject(shop.path);
@@ -174,7 +176,7 @@ test("projects are added from the fake repositories only", async () => {
     spaces: [space("default", "Default", [SHOP])],
     current: "default",
   };
-  expect(messages.slice(4)).toEqual([
+  expect(messages.slice(5)).toEqual([
     spaces,
     { type: "project_added", project: shop },
     spaces,

@@ -29,6 +29,7 @@ import type {
   ProjectScripts,
   SearchResults,
   Session,
+  SessionWindow,
   Settings,
   Space,
   Worktree,
@@ -64,8 +65,9 @@ export type Connection =
       version: string;
       app_protocol: number;
       app_version: string;
+      bundled: boolean;
     }
-  | { status: "disconnected"; reason: string };
+  | { status: "disconnected"; reason: string; bundled: boolean };
 
 export type Terminal = {
   id: number;
@@ -306,6 +308,8 @@ export type HiveState = {
   focused: boolean;
   // Service data
   connection: Connection;
+  /** The current account's 5-hour window, as the service decides it (12.1). */
+  sessionUsage: SessionWindow | null;
   /** The service's settings (the defaults until they arrive). */
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
@@ -420,6 +424,7 @@ export const initialState: HiveState = {
   pendingSeen: {},
   focused: false,
   connection: { status: "connecting" },
+  sessionUsage: null,
   settings: DEFAULT_SETTINGS,
   settingsError: null,
   settingsPending: false,

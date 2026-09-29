@@ -275,7 +275,8 @@ fn the_built_config_has_the_csp_and_builds_its_own_window() {
 
 #[test]
 fn bridge_runs_a_constant_script_without_a_shell_config() {
-    let (program, args) = bridge_command(false, &|_| None, None);
+    let (program, args, bundled) = bridge_command(false, &|_| None, None);
+    assert!(!bundled);
     assert_eq!(program, "wsl.exe");
     assert_eq!(
         args,
@@ -286,7 +287,7 @@ fn bridge_runs_a_constant_script_without_a_shell_config() {
 #[test]
 fn bridge_overrides_are_separate_arguments() {
     let bundled = std::env::current_exe().unwrap();
-    let (_, args) = bridge_command(
+    let (_, args, runs_bundled) = bridge_command(
         false,
         &|key| match key {
             "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
@@ -307,12 +308,14 @@ fn bridge_overrides_are_separate_arguments() {
         bundled.into_os_string(),
     ];
     assert_eq!(args, expected);
+    // `HIVE_BRIDGE` wins over the bundled `hive`: a development build.
+    assert!(!runs_bundled);
 }
 
 #[test]
 fn on_macos_the_same_script_runs_in_sh_without_wsl() {
     let bundled = std::env::current_exe().unwrap();
-    let (program, args) = bridge_command(
+    let (program, args, _) = bridge_command(
         true,
         &|key| match key {
             "HIVE_WSL_DISTRO" => Some("Ubuntu".into()),
@@ -339,6 +342,16 @@ fn empty_overrides_and_a_missing_bundle_are_ignored() {
         bridge_command(false, &|_| Some("".into()), Some(missing)),
         bridge_command(false, &|_| None, None)
     );
+}
+
+#[test]
+fn an_installed_app_runs_its_bundled_hive() {
+    let bundled = std::env::current_exe().unwrap();
+    for macos in [false, true] {
+        let (_, args, runs_bundled) = bridge_command(macos, &|_| None, Some(bundled.clone()));
+        assert!(runs_bundled);
+        assert_eq!(args.last(), Some(&bundled.clone().into_os_string()));
+    }
 }
 
 /// A temporary `HOME` with a fake `wslpath` (prints its path argument) and a bundled `hive`
@@ -931,7 +944,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "disconnected", "reason": "bridge gone"})
+        json!({"type": "disconnected", "reason": "bridge gone", "bundled": false})
     );
     let hive = hive.with_open(|_| Ok::<_, String>(()), |_| Ok(()));
     let unasked = "Hive opens only a path the service sent: C:\\s.jsonl";
@@ -1045,7 +1058,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
 
 #[tokio::test]
 async fn version_mismatch_is_final_and_not_a_disconnect() {
-    let hive = hive();
+    let hive = hive().with_bundled(true);
     let (channel, mut rx) = ui();
     hive.link().ui = Some(channel);
     let mut service = attach(&hive, "bridge gone");
@@ -1063,6 +1076,7 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
             "version": "9.9.9",
             "app_version": VERSION,
             "app_protocol": PROTOCOL_VERSION,
+            "bundled": true,
             "channel": 0
         })
     );
@@ -1084,7 +1098,7 @@ async fn a_malformed_stream_disconnects_with_the_protocol_error() {
         .unwrap();
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "disconnected", "reason": "unknown frame type 9"})
+        json!({"type": "disconnected", "reason": "unknown frame type 9", "bundled": false})
     );
 }
 
@@ -1453,7 +1467,7 @@ async fn shutdown_closes_the_bridge_stdin_and_waits_for_the_bridge_to_end() {
     // The connection had fully ended before `shutdown` returned.
     assert_eq!(
         rx.try_recv().unwrap(),
-        json!({"type": "disconnected", "reason": "bridge gone"})
+        json!({"type": "disconnected", "reason": "bridge gone", "bundled": false})
     );
     assert_eq!(hive.list_projects(), Err(NOT_CONNECTED.to_owned()));
     // Nothing is left to end.

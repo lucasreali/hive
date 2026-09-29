@@ -34,8 +34,9 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
     version: "0.0.0-mock",
     app_protocol: 1,
     app_version: "mock",
+    bundled: true,
   },
-  disconnected: { type: "disconnected", reason: "mock: the hive bridge exited" },
+  disconnected: { type: "disconnected", reason: "mock: the hive bridge exited", bundled: true },
 };
 /** `?mock=load`: when the first terminal's replay starts, and how much later each next one does. */
 export const LOAD_START_MS = 500;
@@ -753,6 +754,9 @@ export function createMockTransport(
         for (const m of mockStates()) later(m);
         later({ type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] });
       }
+      // The current account's session window (12.1), resetting in 2 hours.
+      const resets_at = Math.floor(Date.now() / 1000) + 2 * 3600;
+      later({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
     },
     async listProjects() {
       sendSpaces();

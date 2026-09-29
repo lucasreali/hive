@@ -222,6 +222,6 @@ test("close, cancel and Esc close the dialog", () => {
 
 test("the dialog stays closed while the connection is blocked", () => {
   open();
-  act(() => apply({ type: "disconnected", reason: "gone" }));
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });

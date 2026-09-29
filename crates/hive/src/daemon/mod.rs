@@ -34,7 +34,7 @@ use crate::settings;
 use crate::spaces::Spaces;
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{bridge, changes, health, procs, wrapper};
+use crate::{bridge, changes, health, hook, procs, statusline, wrapper};
 use app::connection;
 use terminals::watch_terminals;
 
@@ -158,7 +158,7 @@ async fn stop(task: tokio::task::JoinHandle<()>) {
 }
 
 /// The service's state. Lock order, when one task holds several: `terminals` → `agents` →
-/// `app`. `agents` is held across slow work (placing an agent runs git, reading a session
+/// `app`, and `usage` → `app`. `agents` is held across slow work (placing an agent runs git, reading a session
 /// log or a transcript), so a terminal's input and output never take an async lock (9.13):
 /// they go through `inputs` and [`terminal::LastOutput`]. The std locks (`inputs`, `sent`)
 /// are never held across an await.
@@ -208,6 +208,8 @@ struct State {
     pulls: std::sync::Mutex<crate::pulls::Cache>,
     /// The Actions runs lists fetched (9.32).
     runs: std::sync::Mutex<crate::pulls::Cache>,
+    /// The 5-hour usage windows `hive statusline` reported (12.1), and the one the app has.
+    usage: Mutex<statusline::Usage>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -251,6 +253,7 @@ impl State {
             asking_path: Default::default(),
             pulls: Default::default(),
             runs: Default::default(),
+            usage: Default::default(),
         }
     }
 
@@ -524,6 +527,27 @@ impl State {
             Err(message) => Control::SpaceFailed { message },
         };
         self.to_app(0, &reply).await;
+    }
+
+    /// The Claude config folder whose usage the status bar shows (12.1): the selected
+    /// account's (12.2), else the one the service's terminals get (the default account).
+    fn account(&self) -> Option<PathBuf> {
+        let selected = self.settings.account().map(OsString::from);
+        sessions::claude_dir(|key| match key {
+            "CLAUDE_CONFIG_DIR" => selected.clone().or_else(|| std::env::var_os(key)),
+            _ => std::env::var_os(key),
+        })
+    }
+
+    /// Sends the current account's 5-hour window when it is not the one the app has: after a
+    /// report, and every second for its reset and an account switch.
+    async fn send_usage(&self) {
+        let account = self.account();
+        let mut usage = self.usage.lock().await;
+        let now = hook::now_ms() / 1000;
+        if let Some(message) = usage.changed(account.as_deref(), now) {
+            self.to_app(0, &message).await;
+        }
     }
 
     /// `gh` on the user's `PATH` (waits only for the first answer).

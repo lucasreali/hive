@@ -237,13 +237,14 @@ test("nothing runs under the connection block or while a dialog is open", () => 
   expect(press(ctrlShift("B"))).toBe(false);
   act(() => openModal(null));
   for (const block of [
-    { type: "disconnected", reason: "gone" } as const,
+    { type: "disconnected", reason: "gone", bundled: false } as const,
     {
       type: "version_mismatch",
       protocol: 2,
       version: "0.2.0",
       app_protocol: 1,
       app_version: "0.1.0",
+      bundled: false,
     } as const,
   ]) {
     act(() => apply(block));

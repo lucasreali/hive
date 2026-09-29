@@ -1067,9 +1067,13 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
-/* The Claude account select (12.2), right before the version, quiet like the space select. */
-.account-select {
-  margin: 0 8px 0 auto;
+/* Right-aligned, before the version: the Claude account select (12.2), quiet like the space
+   select, and its session usage (12.1). */
+.statusbar-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 0 auto;
 }
 
 /* Connection block (#29): covers the workspace while the service is unusable */
@@ -3138,9 +3142,22 @@ body[data-resizing] {
   overflow-wrap: anywhere;
 }
 
+/* One line at every width, in the bar's font (12.3): a long branch is cut, whole in the tooltip. */
 .pulls-create {
+  flex: none;
   align-self: flex-start;
+  max-width: calc(100% - 24px);
   margin: 8px 12px 0;
+  gap: 4px;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+
+.pulls-create-branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pulls-head {

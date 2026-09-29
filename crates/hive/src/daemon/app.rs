@@ -104,6 +104,10 @@ async fn hook_connection<R: AsyncRead + Unpin>(
                 state.to_app(channel, &Control::Badge { text }).await;
             }
         }
+        Ok(Control::StatuslineUsage { claude_dir, usage }) => {
+            state.usage.lock().await.report(claude_dir, usage);
+            state.send_usage().await;
+        }
         Ok(Control::Hook {
             event,
             terminal_id,
@@ -154,6 +158,8 @@ where
     *state.listed() = None;
     state.send_settings().await;
     state.snapshot().await;
+    state.usage.lock().await.unsent();
+    state.send_usage().await;
     // Only the first app after a restart resumes the sessions the last one left.
     let restore = std::mem::take(&mut *state.restore.pending.lock().await);
     if !restore.is_empty() {

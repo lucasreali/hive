@@ -61,10 +61,16 @@ const ID_LIMIT: usize = 64;
 /// Where Claude Code keeps its session logs: `$CLAUDE_CONFIG_DIR/projects`, else
 /// `$HOME/.claude/projects`; `None` without either.
 pub fn root(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    claude_dir(var).map(|dir| dir.join("projects"))
+}
+
+/// Claude Code's config folder: `$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`; `None` without
+/// either. Also what an account's usage is kept by (12.1), so it is written one way only
+/// (`/a//b/` is `/a/b`).
+pub fn claude_dir(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     let var = |key| var(key).filter(|v| !v.is_empty()).map(PathBuf::from);
-    var("CLAUDE_CONFIG_DIR")
-        .or_else(|| var("HOME").map(|home| home.join(".claude")))
-        .map(|dir| dir.join("projects"))
+    let dir = var("CLAUDE_CONFIG_DIR").or_else(|| var("HOME").map(|home| home.join(".claude")))?;
+    Some(dir.components().collect())
 }
 
 /// What a log says about its session, read as the file grows.
@@ -581,6 +587,12 @@ mod tests {
             Some("/h/.claude/projects".into())
         );
         assert_eq!(root(&[]), None);
+        // One key per folder, however it is written: unset, empty or explicit.
+        let dir = |vars: &[(&str, &str)]| super::claude_dir(var(vars));
+        let default = Some(PathBuf::from("/h/.claude"));
+        assert_eq!(dir(&[("HOME", "/h/")]), default);
+        assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", ""), ("HOME", "/h")]), default);
+        assert_eq!(dir(&[("CLAUDE_CONFIG_DIR", "//h/.claude/")]), default);
     }
 
     #[test]

@@ -124,7 +124,8 @@ impl State {
 }
 
 /// Warns the app about terminals running a `claude` that sends no hook events, and applies
-/// the silence rule to agents whose terminal went quiet.
+/// the silence rule to agents whose terminal went quiet; sends the session usage when it changed
+/// (12.1: its reset, a space switch).
 pub(super) async fn watch_terminals(state: Arc<State>) {
     let mut ticks = tokio::time::interval(watch::INTERVAL);
     loop {
@@ -156,6 +157,7 @@ pub(super) async fn watch_terminals(state: Arc<State>) {
         }
         // Not under the terminals lock: placing a new agent holds the agents lock while git runs.
         state.tick_agents(&last_output, now).await;
+        state.send_usage().await;
     }
 }
 

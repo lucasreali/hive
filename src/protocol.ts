@@ -16,13 +16,15 @@ export type ServiceMessage =
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
-  // `protocol`/`version` are the service's; `app_*` are added by the app side (Rust).
+  // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
+  // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
       type: "version_mismatch";
       protocol: number;
       version: string;
       app_protocol: number;
       app_version: string;
+      bundled: boolean;
     }
   // `worktree`: the followed worktree the service placed the terminal's cwd in, null outside.
   | { type: "terminal_opened"; channel: number; worktree: string | null }
@@ -35,6 +37,8 @@ export type ServiceMessage =
   | { type: "agent_title"; channel: number; id: string; title: string }
   | ({ type: "agent_state"; id: string } & AgentStatus)
   | ({ type: "agent_usage"; id: string } & AgentUsage)
+  // The current account's 5-hour window (12.1); null when none came yet or it reset.
+  | { type: "session_usage"; usage: SessionWindow | null }
   | { type: "subagent_worktrees"; worktrees: string[] }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
@@ -101,7 +105,7 @@ export type ServiceMessage =
       error: string | null;
     }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
-  | { type: "disconnected"; reason: string };
+  | { type: "disconnected"; reason: string; bundled: boolean };
 
 /** Mirrors `hive_protocol::Worktree`: every field comes from the service. */
 export type Worktree = {
@@ -372,6 +376,9 @@ export type AgentStatus = {
  * What `agent_usage` says: the last turn's context, the window the service assumes, and the
  * session's output tokens.
  */
+/** A Claude account's 5-hour usage window: the percentage used and when it resets (Unix s). */
+export type SessionWindow = { used_percentage: number; resets_at: number };
+
 export type AgentUsage = { context_tokens: number; context_limit: number; output_tokens: number };
 
 /**

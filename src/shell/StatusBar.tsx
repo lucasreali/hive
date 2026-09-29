@@ -37,8 +37,8 @@ function AccountSelect() {
   );
 }
 
-// The place and connection state (#141), the Claude account and the app version; never a
-// message (10.3: `Toasts`).
+// The place and connection state (#141), the Claude account (12.2) with its session usage
+// (12.1), and the app version; never a message (10.3: `Toasts`).
 export function StatusBar() {
   const connection = useHive((s) => s.connection);
   // The service reports its distribution in `welcome`; until then only "WSL" is known. On
@@ -56,8 +56,28 @@ export function StatusBar() {
         <span>{place}</span>
         <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
-      <AccountSelect />
+      <div className="statusbar-account">
+        <AccountSelect />
+        <SessionUsage />
+      </div>
       <span className="app-version">v{version}</span>
     </footer>
+  );
+}
+
+/** "Session 42% · resets 14:30": the service sends none once it reset. */
+function SessionUsage() {
+  const usage = useHive((s) => s.sessionUsage);
+  if (!usage) return null;
+  const resets = new Date(usage.resets_at * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const title = `Current session (5-hour limit): ${usage.used_percentage}% used, resets at ${resets}`;
+  return (
+    <span className="session-usage" title={title}>
+      Session {usage.used_percentage}% · resets {resets}
+    </span>
   );
 }
