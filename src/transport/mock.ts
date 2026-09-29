@@ -752,6 +752,9 @@ export function createMockTransport(
         for (const m of mockStates()) later(m);
         later({ type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] });
       }
+      // The current account's session window (12.1), resetting in 2 hours.
+      const resets_at = Math.floor(Date.now() / 1000) + 2 * 3600;
+      later({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
     },
     async listProjects() {
       sendSpaces();

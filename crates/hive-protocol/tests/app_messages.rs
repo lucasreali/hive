@@ -34,6 +34,7 @@ sort! {
         | CloseTerminal
         | Ack
         | Hook
+        | StatuslineUsage
         | ListProjects
         | AddProject
         | RemoveProject
@@ -89,6 +90,7 @@ sort! {
         | SubagentWorktrees
         | AgentTitle
         | AgentUsage
+        | SessionUsage
         | AgentRemoved
         | Projects
         | ProjectAdded
@@ -226,6 +228,12 @@ fn samples() -> Vec<Control> {
             context_tokens: 1,
             context_limit: 200_000,
             output_tokens: 2,
+        },
+        SessionUsage {
+            usage: Some(SessionWindow {
+                used_percentage: 42,
+                resets_at: 1_738_425_600,
+            }),
         },
         AgentRemoved { id: s("s") },
         Projects {

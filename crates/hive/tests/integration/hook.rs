@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::common::Env;
 
 /// Runs `hive <args>` with `stdin` as input, like Claude Code runs a hook.
-fn run(mut cmd: Command, stdin: &[u8]) -> Output {
+pub fn run(mut cmd: Command, stdin: &[u8]) -> Output {
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

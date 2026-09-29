@@ -30,6 +30,8 @@ pub mod settings;
 pub mod spaces;
 pub mod states;
 #[cfg(unix)]
+pub mod statusline;
+#[cfg(unix)]
 pub mod terminal;
 pub mod transcript;
 pub mod watch;

@@ -26,7 +26,29 @@ test("shows the version on macOS without the WSL part", () => {
   expect(screen.getByRole("contentinfo").textContent).toBe(`macOSconnectedv${version}`);
 });
 
-test("holds no message: a failure or a confirmation shows elsewhere, as a toast (10.3)", () => {
+test("shows the current account's session usage with its reset in local time (12.1)", () => {
+  render(<StatusBar />);
+  const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
+    apply({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
+  });
+  const usage = screen.getByTitle("Current session (5-hour limit): 42% used, resets at 14:30");
+  expect(usage.textContent).toBe("Session 42% · resets 14:30");
+  expect(screen.getByRole("contentinfo").textContent).toBe(
+    `WSL: UbuntuconnectedSession 42% · resets 14:30v${version}`,
+  );
+  // None once it reset, and none from a service that is gone.
+  act(() => apply({ type: "session_usage", usage: null }));
+  expect(screen.getByRole("contentinfo").textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
+  act(() => {
+    apply({ type: "session_usage", usage: { used_percentage: 7, resets_at } });
+    apply({ type: "disconnected", reason: "gone", bundled: false });
+  });
+  expect(screen.getByRole("contentinfo").textContent).toBe(`WSLdisconnectedv${version}`);
+});
+
+test("holds no message:a failure or a confirmation shows elsewhere, as a toast (10.3)", () => {
   render(<StatusBar />);
   act(() => {
     apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
