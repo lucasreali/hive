@@ -109,6 +109,10 @@ pub fn limited(
         .spawn()
         .map_err(|err| io::Error::new(err.kind(), format!("cannot run {program}: {err}")))?;
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    #[cfg(unix)]
+    let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
+    // Windows has no process groups: git and what it started.
+    #[cfg(windows)]
     let group = child.id();
     let (finished, done) = mpsc::channel::<()>();
     // Feed stdin and drain stderr from other threads, so no pipe can deadlock another.
@@ -124,7 +128,10 @@ pub fn limited(
             scope.spawn(move || {
                 let expired = done.recv_timeout(time) == Err(RecvTimeoutError::Timeout);
                 if expired {
-                    kill_group(group);
+                    #[cfg(unix)]
+                    let _ = killpg(group, Signal::SIGKILL);
+                    #[cfg(windows)]
+                    crate::windows::kill_tree(group);
                 }
                 expired
             })
@@ -162,17 +169,6 @@ pub fn limited(
         String::from_utf8_lossy(&err).trim()
     )))
 }
-
-/// Kills the process group `leader` leads, everything in it.
-#[cfg(unix)]
-pub fn kill_group(leader: u32) {
-    let group = Pid::from_raw(i32::try_from(leader).unwrap_or(i32::MAX));
-    let _ = killpg(group, Signal::SIGKILL);
-}
-
-/// Windows has no process groups: `leader` and what it started.
-#[cfg(windows)]
-pub use crate::windows::kill_tree as kill_group;
 
 /// What a program printed (a path, a `PATH`) as an OS string: its bytes on Unix; on Windows,
 /// where programs print UTF-8, its text.

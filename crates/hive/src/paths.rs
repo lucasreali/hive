@@ -2,6 +2,7 @@
 
 #[cfg(unix)]
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -20,16 +21,11 @@ pub struct Paths {
     pub config: PathBuf,
 }
 
+// Windows: `from_env` and `connect` are in `crate::windows`.
 impl Paths {
     #[cfg(unix)]
     pub fn from_env() -> Self {
         Self::resolve(|key| std::env::var_os(key), nix::unistd::getuid().as_raw())
-    }
-
-    /// [`crate::windows::paths`].
-    #[cfg(windows)]
-    pub fn from_env() -> Self {
-        crate::windows::paths(|key| std::env::var_os(key))
     }
 
     #[cfg(unix)]
@@ -144,12 +140,6 @@ impl Paths {
         let stream = UnixStream::connect(self.socket()).await?;
         check_peer(&stream, nix::unistd::getuid().as_raw())?;
         Ok(stream)
-    }
-
-    /// The service's pipe ([`crate::windows::connect`]).
-    #[cfg(windows)]
-    pub async fn connect(&self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
-        crate::windows::connect().await
     }
 }
 

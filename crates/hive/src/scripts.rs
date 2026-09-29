@@ -12,7 +12,12 @@ use std::sync::mpsc;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use crate::git::{kill_group, read_limited};
+#[cfg(unix)]
+use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
+use nix::unistd::Pid;
+
+use crate::git::read_limited;
 use crate::wrapper::write_atomic;
 
 /// Ports each worktree gets, from `HIVE_PORT` on.
@@ -133,6 +138,9 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
         .map_err(|err| io::Error::new(err.kind(), format!("cannot run sh: {err}")))?;
     // Its copy of the output's write end: the output ends only once none is left open.
     drop(command);
+    #[cfg(unix)]
+    let group = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
+    #[cfg(windows)]
     let group = child.id();
     let (output, tail) = mpsc::channel();
     // Not waited for: a process left in the background may hold the output open.
@@ -151,7 +159,10 @@ pub fn run(script: &str, dir: &Path, env: &[(&str, String)], time: Duration) -> 
     // go. A group with members keeps its id, so this cannot reach another process's group;
     // an empty one (everything already ended) has no one to reach but for a pid reused in the
     // moment since, as a group leader.
-    kill_group(group);
+    #[cfg(unix)]
+    let _ = killpg(group, Signal::SIGKILL);
+    #[cfg(windows)]
+    crate::windows::kill_tree(group);
     // Reaps it when it was killed (an exited script keeps its status).
     let _ = child.wait();
     let status = waited?;
@@ -186,8 +197,6 @@ fn last_bytes(mut input: impl Read) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use nix::unistd::Pid;
     #[cfg(unix)]
     use std::time::Instant;
 

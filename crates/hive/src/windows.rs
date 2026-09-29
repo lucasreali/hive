@@ -42,9 +42,16 @@ pub fn paths(var: impl Fn(&str) -> Option<OsString>) -> Paths {
     }
 }
 
-/// The service's pipe (12.5.2).
-pub async fn connect() -> io::Result<NamedPipeClient> {
-    Err(unsupported("the Hive service"))
+impl Paths {
+    /// [`paths`] from this process's environment.
+    pub fn from_env() -> Self {
+        paths(|key| std::env::var_os(key))
+    }
+
+    /// The service's pipe (12.5.2).
+    pub async fn connect(&self) -> io::Result<NamedPipeClient> {
+        Err(unsupported("the Hive service"))
+    }
 }
 
 /// The machine-wide monotonic clock in ns; 0 (cannot be read) until 12.5.2 reads QPC.
@@ -164,8 +171,6 @@ mod tests {
 
     #[tokio::test]
     async fn the_service_is_unsupported() {
-        let err = connect().await.unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
         let err = Paths::from_env().connect().await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
