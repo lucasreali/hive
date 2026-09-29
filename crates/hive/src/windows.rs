@@ -1726,8 +1726,9 @@ pub mod claude {
                 .unwrap();
             let held = statusline_job(&ping).unwrap();
             drop(held);
+            // Killed (a closed job's processes end with code 0): well before its 30 s.
             let ended = tokio::time::timeout(std::time::Duration::from_secs(20), ping.wait());
-            assert!(!ended.await.unwrap().unwrap().success());
+            assert!(ended.await.is_ok(), "ping outlived its job");
             // Waited for, it has no handle to join.
             assert!(statusline_job(&ping).is_err());
             // No job, or one it cannot join: an error.
