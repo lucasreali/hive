@@ -879,6 +879,8 @@ mod tests {
         assert_eq!(*state.user_path.borrow(), None);
     }
 
+    // git given a `\\?\` canonical path on Windows (12.5.6b).
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn changed_worktree_statuses_are_sent_on_every_tick() {
         // Through a real daemon this would take the 30 s interval.

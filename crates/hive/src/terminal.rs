@@ -314,6 +314,8 @@ pub mod login {
         Ok(())
     }
 
+    // Unix shells and paths: macOS's login shells.
+    #[cfg(unix)]
     #[cfg(test)]
     mod tests {
         use super::*;

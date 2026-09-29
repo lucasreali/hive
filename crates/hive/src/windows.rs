@@ -15,15 +15,16 @@ use std::time::Duration;
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
-use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, HANDLE, LocalFree, WIN32_ERROR};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
+    SDDL_REVISION_1, SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    GetTokenInformation, OWNER_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+    TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
-use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, OpenProcess,
     OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -100,9 +101,7 @@ impl Paths {
         let pipe = tokio::time::timeout(BUSY_TIME, open)
             .await
             .map_err(busy)??;
-        let mut server = 0;
-        check(unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut server) })?;
-        check_server(&process_user(server)?, &user)?;
+        check_owner(&pipe, &user)?;
         Ok(pipe)
     }
 }
@@ -119,11 +118,31 @@ fn pipe_name(user: &str, runtime: &Path) -> String {
     format!(r"\\.\pipe\hive-{user}-{hash:016x}")
 }
 
-/// Refuses a pipe served by a process of another user than `user`.
-fn check_server(server: &str, user: &str) -> io::Result<()> {
-    if server != user {
+/// Refuses a pipe `user` (a SID) does not own. The service gives its pipe the user as owner,
+/// which another user cannot give an object without a privilege. (The serving process's id
+/// is not enough: a pipe handed to another process keeps its creator's id, which a process of
+/// the user could get again.)
+fn check_owner(pipe: &impl AsRawHandle, user: &str) -> io::Result<()> {
+    let (mut owner, mut descriptor) = (std::ptr::null_mut(), std::ptr::null_mut());
+    win32(unsafe {
+        GetSecurityInfo(
+            pipe.as_raw_handle(),
+            SE_KERNEL_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    })?;
+    // The owner lives in the descriptor.
+    let owner = sid_text(owner);
+    unsafe { LocalFree(descriptor) };
+    let owner = owner?;
+    if owner != user {
         return Err(io::Error::other(format!(
-            "refusing a hive pipe run by another user ({server})"
+            "refusing a hive pipe of another user ({owner})"
         )));
     }
     Ok(())
@@ -133,6 +152,14 @@ fn check_server(server: &str, user: &str) -> io::Result<()> {
 fn check(ok: BOOL) -> io::Result<()> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The error of a Windows call that returns its error code (0 for none).
+fn win32(code: WIN32_ERROR) -> io::Result<()> {
+    if code != 0 {
+        return Err(io::Error::from_raw_os_error(code as i32));
     }
     Ok(())
 }
@@ -157,8 +184,13 @@ fn process_user(pid: u32) -> io::Result<String> {
     let info = buffer.as_mut_ptr().cast();
     check(unsafe { GetTokenInformation(token.as_raw_handle(), TokenUser, info, size, &mut used) })?;
     let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+    sid_text(user.User.Sid)
+}
+
+/// The text of `sid` (`S-1-5-21-…`).
+fn sid_text(sid: PSID) -> io::Result<String> {
     let mut text = std::ptr::null_mut();
-    check(unsafe { ConvertSidToStringSidW(user.User.Sid, &mut text) })?;
+    check(unsafe { ConvertSidToStringSidW(sid, &mut text) })?;
     // A SID's text is short: the bound only keeps a bad string from running on.
     let len = (0..256)
         .take_while(|&i| unsafe { *text.add(i) } != 0)
@@ -193,10 +225,13 @@ pub async fn accept(listener: &mut Listener) -> io::Result<NamedPipeServer> {
     Ok(std::mem::replace(&mut listener.next, next))
 }
 
-/// A new instance of the pipe `name` that only `user` can open, and only from this machine.
+/// A new instance of the pipe `name`, owned by `user` (what clients check), that only `user`
+/// can open, and only from this machine.
 fn instance(name: &str, user: &str, first: bool) -> io::Result<NamedPipeServer> {
-    // Protected (nothing inherited): all access for the user alone.
-    let sddl: Vec<u16> = format!("D:P(A;;GA;;;{user})\0").encode_utf16().collect();
+    // Owned by the user (an elevated process would make it the administrators'); protected
+    // (nothing inherited): all access for the user alone.
+    let sddl = format!("O:{user}D:P(A;;GA;;;{user})\0");
+    let sddl: Vec<u16> = sddl.encode_utf16().collect();
     let (mut descriptor, size) = (std::ptr::null_mut(), std::ptr::null_mut());
     check(unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -434,19 +469,12 @@ mod tests {
     }
 
     #[test]
-    fn a_pipe_of_another_user_is_refused() {
-        check_server("S-1-5-21-1", "S-1-5-21-1").unwrap();
-        let err = check_server("S-1-5-21-2", "S-1-5-21-1").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "refusing a hive pipe run by another user (S-1-5-21-2)"
-        );
-    }
-
-    #[test]
     fn failed_windows_calls_are_errors() {
         check(1).unwrap();
         assert!(check(0).is_err());
+        win32(0).unwrap();
+        let denied = win32(5).unwrap_err();
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
         assert!(owned(std::ptr::null_mut()).is_err());
     }
 
@@ -462,6 +490,12 @@ mod tests {
             let (mut client, mut server) = (client.unwrap(), server.unwrap());
             client.write_all(&[n]).await.unwrap();
             assert_eq!(server.read_u8().await.unwrap(), n);
+            // The pipe is this user's: another user's is refused.
+            let me = process_user(std::process::id()).unwrap();
+            check_owner(&client, &me).unwrap();
+            let err = check_owner(&client, "S-1-5-18").unwrap_err();
+            let owner = format!("refusing a hive pipe of another user ({me})");
+            assert_eq!(err.to_string(), owner);
         }
     }
 
