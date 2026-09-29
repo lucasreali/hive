@@ -145,20 +145,18 @@ pub struct Modes {
 }
 
 impl Modes {
-    /// The choice, offered only with `HIVE_MODE=native` until 12.5.7; otherwise `None`, and the
-    /// service runs in WSL as before. `list` runs `wsl.exe -l -q`, only then.
+    /// The choice on Windows, kept in `file`; `list` runs `wsl.exe -l -q` to see whether WSL is
+    /// there (without it the service runs on Windows, never asking).
     pub fn new(
-        var: &dyn Fn(&str) -> Option<OsString>,
         file: PathBuf,
         list: impl FnOnce() -> std::io::Result<Output>,
         native: Bridge,
-    ) -> Option<Self> {
-        let offered = var("HIVE_MODE").is_some_and(|mode| mode == "native");
-        offered.then(|| Self {
+    ) -> Self {
+        Self {
             file,
             wsl: has_wsl(list()),
             native,
-        })
+        }
     }
 
     /// The mode to start in: the saved one, or `None` to ask first; without WSL always Windows.
@@ -203,7 +201,7 @@ pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool 
 pub struct Hive {
     /// `hive bridge` through WSL, or natively on macOS (`bridge_command`).
     bridge: Bridge,
-    /// The choice of WSL or Windows (12.5.4); none on macOS, or while it is not offered.
+    /// The choice of WSL or Windows (12.5.4); none on macOS.
     modes: Option<Modes>,
     link: Arc<Mutex<Link>>,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
@@ -349,9 +347,9 @@ impl Hive {
     }
 
     /// Offers the choice of WSL or Windows (12.5.4), starting in the mode saved.
-    pub fn with_modes(mut self, modes: Option<Modes>) -> Self {
-        self.link().mode = modes.as_ref().and_then(Modes::start);
-        self.modes = modes;
+    pub fn with_modes(mut self, modes: Modes) -> Self {
+        self.link().mode = modes.start();
+        self.modes = Some(modes);
         self
     }
 

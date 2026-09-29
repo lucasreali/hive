@@ -406,31 +406,15 @@ fn wsl_counts_only_when_it_lists_a_distribution() {
 }
 
 #[test]
-fn the_choice_is_offered_only_with_hive_mode_native() {
+fn the_modes_know_whether_wsl_is_there() {
     let native = native_bridge(&|_| None, None);
     let file = std::path::PathBuf::from("/nonexistent/mode");
-    for value in [None, Some(""), Some("wsl")] {
-        let var = |key: &str| {
-            (key == "HIVE_MODE")
-                .then_some(value)
-                .flatten()
-                .map(OsString::from)
-        };
-        let modes = Modes::new(
-            &var,
-            file.clone(),
-            || panic!("wsl.exe runs only when the choice is offered"),
-            native.clone(),
-        );
-        assert!(modes.is_none());
-    }
-    let var = |key: &str| (key == "HIVE_MODE").then(|| OsString::from("native"));
     let listing = || listed(true, utf16("Ubuntu\r\n"));
-    let modes = Modes::new(&var, file.clone(), listing, native.clone()).unwrap();
+    let modes = Modes::new(file.clone(), listing, native.clone());
     assert!(modes.wsl);
     assert_eq!(modes.file, file);
     assert_eq!(modes.native, native);
-    let modes = Modes::new(&var, file, || listed(false, Vec::new()), native).unwrap();
+    let modes = Modes::new(file, || listed(false, Vec::new()), native);
     assert!(!modes.wsl);
 }
 
@@ -493,7 +477,7 @@ fn choosing(dir: &Temp, wsl: &str, native: &str) -> Hive {
         wsl: true,
         native,
     };
-    sh(wsl).with_modes(Some(modes))
+    sh(wsl).with_modes(modes)
 }
 
 fn app_mode(mode: Option<&str>) -> Value {
@@ -519,6 +503,26 @@ async fn the_first_run_asks_for_a_mode_before_starting_a_service() {
     assert_eq!(std::fs::read_to_string(dir.mode()).unwrap(), "native");
     hive.reconnect().await;
     assert_eq!(next(&mut rx).await, app_mode(Some("native")));
+    assert_eq!(next(&mut rx).await, disconnected_by("native", true));
+}
+
+#[tokio::test]
+async fn without_wsl_the_service_runs_on_windows_without_asking() {
+    let dir = Temp::new("no-wsl");
+    std::fs::create_dir_all(dir.mode().parent().unwrap()).unwrap();
+    // A saved WSL mode, WSL since removed.
+    std::fs::write(dir.mode(), "wsl").unwrap();
+    let native = (
+        "sh".into(),
+        ["-c", "echo native >&2"].map(OsString::from).into(),
+        true,
+    );
+    let modes = Modes::new(dir.mode(), || listed(false, Vec::new()), native);
+    let hive = sh("echo wsl >&2").with_modes(modes);
+    let (channel, mut rx) = ui();
+    hive.connect(channel);
+    let mode = json!({"type": "app_mode", "mode": "native", "wsl": false});
+    assert_eq!(next(&mut rx).await, mode);
     assert_eq!(next(&mut rx).await, disconnected_by("native", true));
 }
 

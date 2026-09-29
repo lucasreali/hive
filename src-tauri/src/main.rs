@@ -27,10 +27,9 @@ fn main() {
                     |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
                     |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
                 );
-            // WSL or Windows (12.5.4), offered only on Windows.
+            // WSL or Windows (12.5.4), only on Windows.
             #[cfg(windows)]
             let hive = hive.with_modes(hive_lib::Modes::new(
-                &var,
                 app.path().app_config_dir()?.join("mode"),
                 list_wsl,
                 hive_lib::native_bridge(&var, resource("hive.exe")),
