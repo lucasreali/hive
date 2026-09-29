@@ -18,19 +18,20 @@ pub use pty_process::OwnedReadPty as Pty;
 use pty_process::{OwnedWritePty, Size};
 #[cfg(unix)]
 use tokio::io::AsyncWriteExt;
+/// A terminal's shell, waited for by its pump.
 #[cfg(unix)]
-use tokio::process::Child;
+pub use tokio::process::Child;
 use tokio::sync::{mpsc, watch};
 
 #[cfg(unix)]
 use crate::procs;
 use crate::watch::Watch;
 #[cfg(windows)]
-pub use crate::windows::terminal::{Pty, end_sessions, spawn};
+pub use crate::windows::terminal::{Child, Pty, end_sessions, spawn};
 
-/// Time a terminal's processes get to exit after SIGHUP before SIGKILL.
-#[cfg(unix)]
-const GRACE: Duration = Duration::from_secs(2);
+/// Time a terminal's processes get to exit after SIGHUP (Windows: its console closed) before
+/// they are killed.
+pub(crate) const GRACE: Duration = Duration::from_secs(2);
 
 /// A running terminal, as kept in the service registry.
 pub struct Terminal {
@@ -60,8 +61,7 @@ pub struct LastOutput {
 }
 
 impl LastOutput {
-    #[cfg(unix)]
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             start: Instant::now(),
             since: Arc::default(),
@@ -130,15 +130,16 @@ impl Output {
 /// Starts the shell (see [`shell`]) on a new PTY in `cwd`, with `bin_dir` first on `PATH`
 /// and `HIVE_TERMINAL_ID` set, plus `env` (its space's, 6.14, and its worktree's `HIVE_*`,
 /// 6.8). Returns the registry entry, its input queue (typing and resizes; it ends once
-/// every sender is dropped), the output side and the child.
+/// every sender is dropped), the output side and the child. `_shell` is the native Windows
+/// setting (12.5.3): Unix terminals always run the shell above.
 #[cfg(unix)]
 pub fn spawn(
     id: u32,
     cwd: &str,
-    cols: u16,
-    rows: u16,
+    (cols, rows): (u16, u16),
     bin_dir: &Path,
     env: &[(&'static str, String)],
+    _shell: hive_protocol::TerminalShell,
 ) -> Result<(Terminal, mpsc::UnboundedSender<Input>, Pty, Child), String> {
     let start = || -> pty_process::Result<_> {
         let (pty, pts) = pty_process::open()?;
@@ -404,6 +405,221 @@ pub mod login {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let want = format!("rc=read first={} left=.", bin.display());
             assert!(stdout.contains(&want), "{out:?}");
+        }
+    }
+}
+
+/// How a terminal starts on native Windows (12.5.3): its shell, command line and environment.
+/// Portable, so tested everywhere; `crate::windows::terminal` starts it on a ConPTY.
+pub mod conpty {
+    use std::collections::BTreeMap;
+    use std::ffi::{OsStr, OsString};
+    use std::path::{Path, PathBuf};
+
+    use hive_protocol::TerminalShell;
+
+    /// The program and arguments of `shell`, programs found on `path` (the service's `PATH`,
+    /// else left to `CreateProcessW`'s search): `pwsh` when there, else Windows PowerShell;
+    /// `cmd`; Git Bash, the `bin\bash.exe` two folders above the first `git.exe` that has one
+    /// (`<Git>\cmd\git.exe`).
+    pub fn shell(shell: TerminalShell, path: &OsStr) -> Result<Vec<OsString>, String> {
+        let on_path = |name: &'static str| {
+            let dirs = std::env::split_paths(path);
+            dirs.map(move |dir| dir.join(name))
+                .filter(|file| file.is_file())
+        };
+        let find = |name| on_path(name).next().map(PathBuf::into_os_string);
+        match shell {
+            TerminalShell::Default => {
+                let found = find("pwsh.exe").or_else(|| find("powershell.exe"));
+                Ok(vec![found.unwrap_or_else(|| "powershell.exe".into())])
+            }
+            TerminalShell::Cmd => Ok(vec![find("cmd.exe").unwrap_or_else(|| "cmd.exe".into())]),
+            TerminalShell::GitBash => {
+                let above = |mut git: PathBuf| {
+                    git.pop();
+                    git.pop();
+                    git.extend(["bin", "bash.exe"]);
+                    git
+                };
+                let bash = on_path("git.exe").map(above).find(|bash| bash.is_file());
+                let bash = bash.ok_or("Git Bash was not found: no git.exe on PATH")?;
+                let args = [bash.into_os_string(), "--login".into(), "-i".into()];
+                Ok(args.to_vec())
+            }
+        }
+    }
+
+    /// The command line of `args` as `CreateProcessW` takes it: an argument holding a space
+    /// or a tab is quoted.
+    // ponytail: no escaping of `"` or a trailing `\`: the arguments are a program's path (no
+    // `"` in a Windows path, and it ends in `.exe`) and fixed words.
+    pub fn command_line(args: &[OsString]) -> OsString {
+        let mut line = OsString::new();
+        for (n, arg) in args.iter().enumerate() {
+            let bytes = arg.as_encoded_bytes();
+            let quote = if bytes.contains(&b' ') || bytes.contains(&b'\t') {
+                "\""
+            } else {
+                ""
+            };
+            line.push(if n == 0 { "" } else { " " });
+            line.push(quote);
+            line.push(arg);
+            line.push(quote);
+        }
+        line
+    }
+
+    /// A terminal's environment: `base` (the service's) with `set` over it, names compared
+    /// ignoring case as Windows does, then `bin_dir` first on `PATH`; sorted by name, as
+    /// `CreateProcessW` wants it.
+    pub fn environment(
+        base: impl IntoIterator<Item = (OsString, OsString)>,
+        set: impl IntoIterator<Item = (OsString, OsString)>,
+        bin_dir: &Path,
+    ) -> Vec<(OsString, OsString)> {
+        let mut vars = BTreeMap::new();
+        for (name, value) in base.into_iter().chain(set) {
+            vars.insert(name.to_string_lossy().to_uppercase(), (name, value));
+        }
+        let (name, old) = vars
+            .remove("PATH")
+            .unwrap_or_else(|| ("Path".into(), OsString::new()));
+        let mut path = OsString::from(bin_dir);
+        if !old.is_empty() {
+            path.push(";");
+            path.push(old);
+        }
+        vars.insert("PATH".into(), (name, path));
+        vars.into_values().collect()
+    }
+
+    /// A process's name as the unhooked-`claude` watcher compares it: its file's, without
+    /// `.exe`.
+    pub fn comm(exe: &str) -> &str {
+        match exe.split_at_checked(exe.len().saturating_sub(4)) {
+            Some((name, ext)) if ext.eq_ignore_ascii_case(".exe") => name,
+            _ => exe,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn os(values: &[&str]) -> Vec<OsString> {
+            values.iter().map(OsString::from).collect()
+        }
+
+        /// Empty files at `names` under `root`.
+        fn files(root: &Path, names: &[&str]) {
+            for name in names {
+                let file = root.join(name);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(file, "").unwrap();
+            }
+        }
+
+        #[test]
+        fn powershell_is_pwsh_when_on_path_else_windows_powershell() {
+            let dir = tempfile::tempdir().unwrap();
+            let (pwsh, windows) = (dir.path().join("7"), dir.path().join("v1.0"));
+            files(
+                dir.path(),
+                &["7/pwsh.exe", "v1.0/powershell.exe", "cmd/cmd.exe"],
+            );
+            let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
+            let run = |dirs: &[&Path]| shell(TerminalShell::Default, &path(dirs)).unwrap();
+            let empty = dir.path().join("cmd");
+            assert_eq!(
+                run(&[&empty, &windows, &pwsh]),
+                [pwsh.join("pwsh.exe").into_os_string()]
+            );
+            assert_eq!(
+                run(&[&empty, &windows]),
+                [windows.join("powershell.exe").into_os_string()]
+            );
+            assert_eq!(run(&[&empty]), os(&["powershell.exe"]));
+            let cmd = shell(TerminalShell::Cmd, &path(&[&windows, &empty])).unwrap();
+            assert_eq!(cmd, [empty.join("cmd.exe").into_os_string()]);
+            assert_eq!(
+                shell(TerminalShell::Cmd, OsStr::new("")).unwrap(),
+                os(&["cmd.exe"])
+            );
+        }
+
+        #[test]
+        fn git_bash_is_the_bash_two_folders_above_a_git_on_path() {
+            let dir = tempfile::tempdir().unwrap();
+            files(
+                dir.path(),
+                &["Other/cmd/git.exe", "Git/cmd/git.exe", "Git/bin/bash.exe"],
+            );
+            let (other, git) = (dir.path().join("Other/cmd"), dir.path().join("Git/cmd"));
+            let path = std::env::join_paths([&other, &git]).unwrap();
+            let bash = dir.path().join("Git/bin/bash.exe").into_os_string();
+            assert_eq!(
+                shell(TerminalShell::GitBash, &path).unwrap(),
+                [bash, "--login".into(), "-i".into()]
+            );
+            // Only a git without its bash: none.
+            let none = std::env::join_paths([&other]).unwrap();
+            assert_eq!(
+                shell(TerminalShell::GitBash, &none).unwrap_err(),
+                "Git Bash was not found: no git.exe on PATH"
+            );
+        }
+
+        #[test]
+        fn arguments_with_blanks_are_quoted() {
+            let args = os(&[
+                r"C:\Program Files\Git\bin\bash.exe",
+                "--login",
+                "a\tb",
+                "-i",
+            ]);
+            assert_eq!(
+                command_line(&args),
+                "\"C:\\Program Files\\Git\\bin\\bash.exe\" --login \"a\tb\" -i"
+            );
+            assert_eq!(command_line(&os(&["cmd.exe"])), "cmd.exe");
+            assert_eq!(command_line(&[]), "");
+        }
+
+        #[test]
+        fn the_environment_is_the_services_with_the_terminals_over_it_and_the_bin_dir_first() {
+            let pairs = |vars: &[(&str, &str)]| -> Vec<(OsString, OsString)> {
+                vars.iter().map(|(k, v)| (k.into(), v.into())).collect()
+            };
+            let base = pairs(&[("Path", r"C:\W"), ("b", "1"), ("A", "0"), ("TERM", "x")]);
+            let set = pairs(&[("term", "xterm-256color"), ("HIVE_TERMINAL_ID", "3")]);
+            let env = environment(base, set, Path::new(r"C:\hive\bin"));
+            let want = pairs(&[
+                ("A", "0"),
+                ("b", "1"),
+                ("HIVE_TERMINAL_ID", "3"),
+                ("Path", r"C:\hive\bin;C:\W"),
+                ("term", "xterm-256color"),
+            ]);
+            assert_eq!(env, want);
+            // No `PATH`, or an empty one: only the bin dir.
+            let bin = pairs(&[("Path", r"C:\hive\bin")]);
+            assert_eq!(environment([], [], Path::new(r"C:\hive\bin")), bin);
+            let empty = pairs(&[("PATH", "")]);
+            let env = environment(empty, [], Path::new(r"C:\hive\bin"));
+            assert_eq!(env, pairs(&[("PATH", r"C:\hive\bin")]));
+        }
+
+        #[test]
+        fn a_process_name_drops_its_exe() {
+            assert_eq!(comm("claude.exe"), "claude");
+            assert_eq!(comm("PING.EXE"), "PING");
+            assert_eq!(comm("claude"), "claude");
+            assert_eq!(comm("exe"), "exe");
+            assert_eq!(comm(".exe"), "");
+            // Not cut inside a character.
+            assert_eq!(comm("aé.ex"), "aé.ex");
         }
     }
 }

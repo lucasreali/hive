@@ -32,7 +32,6 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::core::BOOL;
 
 use crate::paths::Paths;
-use crate::procs::Proc;
 
 /// How long a client waits for a free instance of the service's pipe (an instance serves one
 /// connection, and the service makes the next one right after).
@@ -289,31 +288,609 @@ fn ns(count: i64, frequency: i64) -> u64 {
     u64::try_from(ns).unwrap_or(0)
 }
 
-/// Terminals, until ConPTY (12.5.3): none starts, so none has processes to end.
+/// Terminals on a pseudoconsole (ConPTY, 12.5.3). The shell starts suspended, joins a job
+/// that kills what is left once the service lets go of it, and only then runs; its session
+/// id is its process id. Ending a terminal closes its console (a console program's SIGHUP),
+/// gives its processes [`GRACE`](crate::terminal::GRACE) and ends the job. Its shell, command line and environment
+/// come from [`crate::terminal::conpty`].
 pub mod terminal {
+    use std::collections::{BTreeMap, HashMap};
+    use std::ffi::{OsStr, OsString};
+    use std::io;
+    use std::ops::BitOr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, HandleOrInvalid, OwnedHandle};
+    use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
+    use std::process::ExitStatus;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+    use std::time::Duration;
 
-    use tokio::process::Child;
-    use tokio::sync::mpsc::UnboundedSender;
+    use futures_util::FutureExt;
+    use hive_protocol::TerminalShell;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::windows::named_pipe::NamedPipeServer;
+    use tokio::sync::{mpsc, watch};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
+    };
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicProcessIdList,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        TerminateJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE,
+        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+        PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+        UpdateProcThreadAttribute, WaitForSingleObject,
+    };
+    use windows_sys::core::HRESULT;
 
-    use crate::terminal::{Input, Terminal};
+    use super::{check, instance, owned, process_user};
+    use crate::procs::Proc;
+    use crate::terminal::{GRACE, Input, LastOutput, Terminal, conpty};
+    use crate::watch::Watch;
 
-    /// What a terminal's output is read from.
-    pub type Pty = tokio::io::Empty;
+    /// The exit code of the processes still running once their terminal's grace is over.
+    pub const KILLED: u32 = 9;
+    /// Most processes of one terminal listed (for the unhooked-`claude` watcher and ending).
+    const JOB_LIMIT: usize = 1024;
 
-    pub fn spawn(
-        _id: u32,
-        cwd: &str,
-        _cols: u16,
-        _rows: u16,
-        _bin_dir: &Path,
-        _env: &[(&'static str, String)],
-    ) -> Result<(Terminal, UnboundedSender<Input>, Pty, Child), String> {
-        let why = super::unsupported("a terminal");
-        Err(format!("cannot start a terminal in {cwd}: {why}"))
+    /// What a terminal's output is read from: its console's output pipe.
+    pub type Pty = NamedPipeServer;
+
+    /// A pseudoconsole, closed once its last owner lets go of it: its session ended, or its
+    /// start failed.
+    struct Console(HPCON);
+
+    impl Drop for Console {
+        fn drop(&mut self) {
+            let console = self.0;
+            // Closing waits for the console host to exit, which may wait for its last output
+            // to be read: never on the runtime.
+            std::thread::spawn(move || unsafe { ClosePseudoConsole(console) });
+        }
     }
 
-    pub async fn end_sessions(_sessions: &[i32]) {}
+    /// A running terminal: its console (held to keep it open) and its processes' job.
+    struct Session {
+        _console: Arc<Console>,
+        job: OwnedHandle,
+    }
+
+    /// The running terminals, by session id.
+    static SESSIONS: Mutex<BTreeMap<i32, Session>> = Mutex::new(BTreeMap::new());
+
+    fn sessions() -> MutexGuard<'static, BTreeMap<i32, Session>> {
+        SESSIONS.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A terminal's shell, waited for by its pump.
+    pub struct Child {
+        exit: watch::Receiver<Option<u32>>,
+    }
+
+    impl Child {
+        /// Waits for the shell to exit; again and again gives the same status.
+        pub async fn wait(&mut self) -> io::Result<ExitStatus> {
+            let exit = self.exit.wait_for(Option::is_some).await;
+            let code = *exit.map_err(io::Error::other)?;
+            Ok(ExitStatus::from_raw(code.unwrap_or_default()))
+        }
+    }
+
+    /// A [`Child`] of `process`, told of its exit by a thread that waits for it.
+    fn waited(process: OwnedHandle) -> Child {
+        let (exited, exit) = watch::channel(None);
+        std::thread::spawn(move || {
+            let mut code = 0;
+            unsafe {
+                WaitForSingleObject(process.as_raw_handle(), INFINITE);
+                GetExitCodeProcess(process.as_raw_handle(), &mut code);
+            }
+            exited.send_replace(Some(code));
+        });
+        Child { exit }
+    }
+
+    /// Starts the terminal's shell (the `shell` setting) on a pseudoconsole of `cols` ×
+    /// `rows` in `cwd`, with the service's environment, `HIVE_TERMINAL_ID`, `TERM` and `env`
+    /// over it and `bin_dir` first on `PATH`. As [`crate::terminal::spawn`] on Unix.
+    pub fn spawn(
+        id: u32,
+        cwd: &str,
+        (cols, rows): (u16, u16),
+        bin_dir: &Path,
+        env: &[(&'static str, String)],
+        shell: TerminalShell,
+    ) -> Result<(Terminal, mpsc::UnboundedSender<Input>, Pty, Child), String> {
+        let own = [
+            ("HIVE_TERMINAL_ID", id.to_string()),
+            ("TERM", "xterm-256color".into()),
+        ];
+        let set = own.into_iter().chain(env.iter().cloned());
+        let set = set.map(|(name, value)| (name.into(), value.into()));
+        let started = start(cwd, size(cols, rows), bin_dir, set, shell);
+        let (session, console, output, pipe, child) =
+            started.map_err(|err| format!("cannot start a terminal in {cwd}: {err}"))?;
+        let (input, input_rx) = mpsc::unbounded_channel();
+        tokio::spawn(feed(pipe, console, input_rx));
+        let terminal = Terminal {
+            session,
+            watch: Watch::default(),
+            last_output: LastOutput::new(),
+            claude_dir: None,
+        };
+        Ok((terminal, input, output, child))
+    }
+
+    /// Starts the shell and keeps its session; returns its session id, its console (for
+    /// resizing), its output and input pipes and the shell.
+    fn start(
+        cwd: &str,
+        size: COORD,
+        bin_dir: &Path,
+        set: impl IntoIterator<Item = (OsString, OsString)>,
+        shell: TerminalShell,
+    ) -> io::Result<(i32, Weak<Console>, Pty, NamedPipeServer, Child)> {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let args = conpty::shell(shell, &path).map_err(io::Error::other)?;
+        let mut line = wide(&conpty::command_line(&args));
+        let mut env = Vec::new();
+        for (name, value) in conpty::environment(std::env::vars_os(), set, bin_dir) {
+            env.extend(name.encode_wide().chain([u16::from(b'=')]));
+            env.extend(value.encode_wide().chain([0]));
+        }
+        env.push(0);
+        let user = process_user(std::process::id())?;
+        let (output, host_output) = pipe(&user, false)?;
+        let (input, host_input) = pipe(&user, true)?;
+        let (host_in, host_out) = (host_input.as_raw_handle(), host_output.as_raw_handle());
+        let mut hpc = 0;
+        let created = unsafe { CreatePseudoConsole(size, host_in, host_out, 0, &mut hpc) };
+        hresult(created)?;
+        let console = Arc::new(Console(hpc));
+        // The console host has its own handles of its ends: the output ends when it does.
+        drop((host_input, host_output));
+        let job = job()?;
+        let started = create(&mut line, &env, &wide(OsStr::new(cwd)), hpc)?;
+        let (process, thread) = (owned(started.hProcess)?, owned(started.hThread)?);
+        let raw = process.as_raw_handle();
+        let assigned = unsafe { AssignProcessToJobObject(job.as_raw_handle(), raw) };
+        // A shell left suspended outside its job would never end.
+        check(assigned).inspect_err(|_| _ = unsafe { TerminateProcess(raw, KILLED) })?;
+        // Left in the job, a shell that cannot resume is killed with it.
+        let resumed = unsafe { ResumeThread(thread.as_raw_handle()) };
+        check((resumed != u32::MAX).into())?;
+        let session = started.dwProcessId as i32;
+        let resize = Arc::downgrade(&console);
+        let kept = Session {
+            _console: console,
+            job,
+        };
+        sessions().insert(session, kept);
+        Ok((session, resize, output, input, waited(process)))
+    }
+
+    /// `text` for a Windows call: UTF-16 and nul-terminated.
+    fn wide(text: &OsStr) -> Vec<u16> {
+        text.encode_wide().chain([0]).collect()
+    }
+
+    /// A console of `cols` × `rows` (at most `i16::MAX` each).
+    fn size(cols: u16, rows: u16) -> COORD {
+        let cells = |n: u16| i16::try_from(n).unwrap_or(i16::MAX);
+        COORD {
+            X: cells(cols),
+            Y: cells(rows),
+        }
+    }
+
+    /// The error of a failed `HRESULT` (negative).
+    fn hresult(code: HRESULT) -> io::Result<()> {
+        if code < 0 {
+            return Err(io::Error::from_raw_os_error(code));
+        }
+        Ok(())
+    }
+
+    /// A new pipe for a console: the service's end, and the console host's (which reads
+    /// from it when `host_reads`, else writes to it). Only this user can open it.
+    fn pipe(user: &str, host_reads: bool) -> io::Result<(NamedPipeServer, std::fs::File)> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let name = format!(r"\\.\pipe\hive-console-{}-{n}", std::process::id());
+        let ours = instance(&name, user, true)?;
+        let mut host = std::fs::File::options();
+        let host = host.read(host_reads).write(!host_reads).open(&name)?;
+        // Connected already: this only tells tokio, so that it reads and writes it.
+        let connected = ours.connect().now_or_never();
+        connected.unwrap_or_else(|| Err(io::ErrorKind::NotConnected.into()))?;
+        Ok((ours, host))
+    }
+
+    /// A job that kills its processes once its last handle is closed.
+    fn job() -> io::Result<OwnedHandle> {
+        let job = owned(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) })?;
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let (info, size) = ((&raw const limits).cast(), size_of_val(&limits) as u32);
+        let class = JobObjectExtendedLimitInformation;
+        let set = unsafe { SetInformationJobObject(job.as_raw_handle(), class, info, size) };
+        check(set)?;
+        Ok(job)
+    }
+
+    /// Starts the command `line` suspended on the console `hpc`, in `cwd` with the
+    /// environment block `env`.
+    fn create(
+        line: &mut [u16],
+        env: &[u16],
+        cwd: &[u16],
+        hpc: HPCON,
+    ) -> io::Result<PROCESS_INFORMATION> {
+        let mut size = 0;
+        // Only asks for the size (and fails for want of room).
+        unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
+        let mut list = vec![0_u64; size.div_ceil(8)];
+        let attributes = list.as_mut_ptr().cast();
+        check(unsafe { InitializeProcThreadAttributeList(attributes, 1, 0, &mut size) })?;
+        let (attribute, value) = (
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+            hpc as *const _,
+        );
+        let (none, empty) = (std::ptr::null_mut(), std::ptr::null());
+        let set = unsafe {
+            UpdateProcThreadAttribute(
+                attributes,
+                0,
+                attribute,
+                value,
+                size_of::<HPCON>(),
+                none,
+                empty,
+            )
+        };
+        check(set)?;
+        let mut info = STARTUPINFOEXW::default();
+        info.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        // Not the service's own standard handles (its log): the console's.
+        info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        info.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+        info.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+        info.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+        info.lpAttributeList = attributes;
+        // `bitor`, not `|`: or-ing and xor-ing flags that share no bit are the same.
+        let flags = EXTENDED_STARTUPINFO_PRESENT
+            .bitor(CREATE_UNICODE_ENVIRONMENT)
+            .bitor(CREATE_SUSPENDED);
+        let mut started = PROCESS_INFORMATION::default();
+        let created = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                flags,
+                env.as_ptr().cast(),
+                cwd.as_ptr(),
+                &info.StartupInfo,
+                &mut started,
+            )
+        };
+        unsafe { DeleteProcThreadAttributeList(attributes) };
+        check(created)?;
+        Ok(started)
+    }
+
+    /// Writes typing to the console and resizes it, until the terminal is dropped.
+    async fn feed(
+        mut pipe: NamedPipeServer,
+        console: Weak<Console>,
+        mut input: mpsc::UnboundedReceiver<Input>,
+    ) {
+        while let Some(input) = input.recv().await {
+            match input {
+                // A closed console fails every write.
+                Input::Data(bytes) => _ = pipe.write_all(&bytes).await,
+                // Only while the terminal runs: an ended one's console is closed.
+                Input::Resize { cols, rows } => {
+                    let resize = |console: Arc<Console>| unsafe {
+                        ResizePseudoConsole(console.0, size(cols, rows))
+                    };
+                    _ = console.upgrade().map(resize);
+                }
+            }
+        }
+    }
+
+    /// The processes in `job`, at most [`JOB_LIMIT`].
+    fn pids(job: &OwnedHandle) -> Vec<u32> {
+        #[repr(C)]
+        struct List {
+            _assigned: u32,
+            listed: u32,
+            ids: [usize; JOB_LIMIT],
+        }
+        let mut list = List {
+            _assigned: 0,
+            listed: 0,
+            ids: [0; JOB_LIMIT],
+        };
+        let (info, size) = ((&raw mut list).cast(), size_of::<List>() as u32);
+        let class = JobObjectBasicProcessIdList;
+        // With more processes (`ERROR_MORE_DATA`) the first ones are still listed.
+        unsafe {
+            QueryInformationJobObject(job.as_raw_handle(), class, info, size, std::ptr::null_mut())
+        };
+        let listed = &list.ids[..(list.listed as usize).min(JOB_LIMIT)];
+        listed.iter().map(|&id| id as u32).collect()
+    }
+
+    /// The processes of Hive's terminals, each in its terminal's session.
+    pub fn list() -> Vec<Proc> {
+        let names = names().unwrap_or_default();
+        let sessions = sessions();
+        let pids = sessions.iter().flat_map(|(&session, running)| {
+            pids(&running.job)
+                .into_iter()
+                .map(move |pid| (session, pid))
+        });
+        let named = pids.filter_map(|(session, pid)| Some((session, pid, names.get(&pid)?)));
+        let procs = named.map(|(session, pid, name)| Proc {
+            pid: pid as i32,
+            pgrp: pid as i32,
+            session,
+            comm: conpty::comm(name).to_owned(),
+        });
+        procs.collect()
+    }
+
+    /// Every process's executable file name, by process id.
+    fn names() -> io::Result<HashMap<u32, String>> {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        let snapshot = unsafe { HandleOrInvalid::from_raw_handle(snapshot) };
+        let snapshot = OwnedHandle::try_from(snapshot).map_err(io::Error::other)?;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut names = HashMap::new();
+        let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &mut entry) };
+        while more != 0 {
+            let file = &entry.szExeFile;
+            let len = file.iter().position(|&c| c == 0).unwrap_or(file.len());
+            let name = String::from_utf16_lossy(&file[..len]);
+            names.insert(entry.th32ProcessID, name);
+            more = unsafe { Process32NextW(snapshot.as_raw_handle(), &mut entry) };
+        }
+        Ok(names)
+    }
+
+    /// Ends the terminals of `ended` (session ids): closes their consoles, waits up to
+    /// [`GRACE`] for their processes to exit, then kills what is left.
+    pub async fn end_sessions(ended: &[i32]) {
+        let jobs: Vec<OwnedHandle> = {
+            let mut sessions = sessions();
+            let ended = ended.iter().filter_map(|session| sessions.remove(session));
+            // Each console closes as its session is dropped (once no resize holds it).
+            ended.map(|session| session.job).collect()
+        };
+        let _ = tokio::time::timeout(GRACE, async {
+            while jobs.iter().any(|job| !pids(job).is_empty()) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        for job in &jobs {
+            unsafe { TerminateJobObject(job.as_raw_handle(), KILLED) };
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::time::Instant;
+
+        use bytes::Bytes;
+        use tokio::io::AsyncReadExt;
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+
+        use super::*;
+
+        /// How long a shell gets to show something (PowerShell starts slowly on a busy runner).
+        const SHOWN: Duration = Duration::from_secs(60);
+
+        /// A terminal of a shell in a temporary folder, its output gathered as it comes (the
+        /// console host waits for its output to be read).
+        struct Shell {
+            dir: tempfile::TempDir,
+            session: i32,
+            input: mpsc::UnboundedSender<Input>,
+            child: Child,
+            output: Arc<Mutex<String>>,
+        }
+
+        impl Shell {
+            fn start(shell: TerminalShell) -> Self {
+                let dir = tempfile::tempdir().unwrap();
+                let (cwd, bin) = (dir.path().to_str().unwrap(), dir.path().join("bin"));
+                let env = [("HIVE_TEST", "x".to_owned())];
+                let started = spawn(3, cwd, (200, 30), &bin, &env, shell).unwrap();
+                let (terminal, input, mut pty, child) = started;
+                let output = Arc::<Mutex<String>>::default();
+                let gathered = output.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0; 4096];
+                    while let Ok(n @ 1..) = pty.read(&mut buf).await {
+                        let text = String::from_utf8_lossy(&buf[..n]);
+                        gathered.lock().unwrap().push_str(&text);
+                    }
+                });
+                let session = terminal.session;
+                Self {
+                    dir,
+                    session,
+                    input,
+                    child,
+                    output,
+                }
+            }
+
+            fn type_line(&self, line: &str) {
+                let typed = Bytes::from(format!("{line}\r"));
+                self.input.send(Input::Data(typed)).unwrap();
+            }
+
+            fn has(&self, text: &str) -> bool {
+                self.output.lock().unwrap().contains(text)
+            }
+
+            /// Waits until the output shows `text`.
+            async fn shows(&self, text: &str) {
+                let shown = async {
+                    while !self.has(text) {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                };
+                let waited = tokio::time::timeout(SHOWN, shown).await;
+                let output = self.output.lock().unwrap().clone();
+                assert!(waited.is_ok(), "no {text:?} in {output:?}");
+            }
+
+            /// The shell's exit code, once it exited.
+            async fn exit_code(&mut self) -> Option<i32> {
+                let exited = tokio::time::timeout(SHOWN, self.child.wait()).await;
+                exited.unwrap().unwrap().code()
+            }
+        }
+
+        /// Whether process `pid` ends within a few seconds (or is gone already).
+        fn ends(pid: i32) -> bool {
+            let process = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid as u32) });
+            process.map_or(true, |process| {
+                let waited = unsafe { WaitForSingleObject(process.as_raw_handle(), 5000) };
+                waited == WAIT_OBJECT_0
+            })
+        }
+
+        #[tokio::test]
+        async fn a_terminal_runs_its_shell_in_its_folder_with_its_environment() {
+            let mut shell = Shell::start(TerminalShell::Cmd);
+            // The prompt names the folder.
+            shell
+                .shows(&format!("{}>", shell.dir.path().display()))
+                .await;
+            shell.type_line("echo t=%HIVE_TERMINAL_ID%/%HIVE_TEST%/%TERM%");
+            shell.shows("t=3/x/xterm-256color").await;
+            shell.type_line("echo p=%PATH%");
+            let bin = shell.dir.path().join("bin");
+            shell.shows(&format!("p={};", bin.display())).await;
+            // Its processes are listed, in its session.
+            let me = Proc {
+                pid: shell.session,
+                pgrp: shell.session,
+                session: shell.session,
+                comm: "cmd".into(),
+            };
+            assert!(list().contains(&me), "{:?}", list());
+            // It exits with its own code, told as often as asked.
+            shell.type_line("exit 7");
+            assert_eq!(shell.exit_code().await, Some(7));
+            assert_eq!(shell.exit_code().await, Some(7));
+            // Nothing is left to end: at once.
+            let started = Instant::now();
+            end_sessions(&[shell.session]).await;
+            assert!(started.elapsed() < GRACE, "{:?}", started.elapsed());
+            assert!(list().iter().all(|p| p.session != shell.session));
+        }
+
+        #[tokio::test]
+        async fn powershell_by_default_and_the_console_follows_its_terminals_size() {
+            // The runner has PowerShell 7 on its `PATH`.
+            let shell = Shell::start(TerminalShell::Default);
+            shell.type_line(r#""ed=" + $PSVersionTable.PSEdition"#);
+            shell.shows("ed=Core").await;
+            let resize = Input::Resize {
+                cols: 132,
+                rows: 40,
+            };
+            shell.input.send(resize).unwrap();
+            let window = "$Host.UI.RawUI.WindowSize";
+            shell.type_line(&format!(
+                r#""size=" + {window}.Width + "x" + {window}.Height"#
+            ));
+            shell.shows("size=132x40").await;
+            end_sessions(&[shell.session]).await;
+        }
+
+        #[tokio::test]
+        async fn ending_closes_the_console_and_its_shell_exits_by_itself() {
+            let mut shell = Shell::start(TerminalShell::Cmd);
+            shell.shows(">").await;
+            let started = Instant::now();
+            end_sessions(&[shell.session]).await;
+            assert!(started.elapsed() < GRACE, "{:?}", started.elapsed());
+            assert_ne!(shell.exit_code().await, Some(KILLED as i32));
+            // Ended once: again, nothing happens.
+            end_sessions(&[shell.session]).await;
+        }
+
+        #[tokio::test]
+        async fn what_outlives_its_console_is_killed_after_the_grace() {
+            let shell = Shell::start(TerminalShell::Cmd);
+            // `start` gives ping a console of its own, which closing the terminal's leaves.
+            shell.type_line("start \"\" /min ping -n 60 127.0.0.1");
+            let ping = async {
+                loop {
+                    let procs = list().into_iter();
+                    let mut mine = procs.filter(|p| p.session == shell.session);
+                    if let Some(ping) = mine.find(|p| p.comm.eq_ignore_ascii_case("ping")) {
+                        return ping.pid;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            let ping = tokio::time::timeout(SHOWN, ping).await.unwrap();
+            let started = Instant::now();
+            end_sessions(&[shell.session]).await;
+            assert!(started.elapsed() >= GRACE, "{:?}", started.elapsed());
+            assert!(ends(ping));
+        }
+
+        #[tokio::test]
+        async fn a_terminal_in_a_missing_folder_does_not_start() {
+            let dir = tempfile::tempdir().unwrap();
+            let missing = dir.path().join("missing");
+            let missing = missing.to_str().unwrap();
+            let started = spawn(1, missing, (80, 24), dir.path(), &[], TerminalShell::Cmd);
+            let err = started.map(drop).unwrap_err();
+            let why = format!("cannot start a terminal in {missing}: ");
+            assert!(err.starts_with(&why), "{err}");
+        }
+
+        #[test]
+        fn sizes_fit_a_console_and_failed_results_are_errors() {
+            let fits = size(80, 24);
+            assert_eq!((fits.X, fits.Y), (80, 24));
+            let most = size(u16::MAX, 40_000);
+            assert_eq!((most.X, most.Y), (i16::MAX, i16::MAX));
+            hresult(0).unwrap();
+            hresult(1).unwrap();
+            // E_FAIL.
+            assert!(hresult(0x8000_4005_u32 as i32).is_err());
+        }
+    }
 }
 
 /// Windows PowerShell asked for its `PATH`: the one the service inherited from the app,
@@ -325,10 +902,8 @@ pub fn path_shell() -> (OsString, Vec<OsString>) {
     ("powershell".into(), args.map(OsString::from).to_vec())
 }
 
-/// No process table until 12.5.6a.
-pub fn list() -> Vec<Proc> {
-    vec![]
-}
+/// The process table: until 12.5.6a, only the processes of Hive's terminals.
+pub use terminal::list;
 
 /// No process working folders until 12.5.6a.
 pub fn cwd(_pid: i32) -> Option<PathBuf> {
@@ -552,16 +1127,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_terminal_starts_yet() {
-        let started = terminal::spawn(1, r"C:\w", 80, 24, Path::new("."), &[]).map(drop);
-        assert_eq!(
-            started.unwrap_err(),
-            r"cannot start a terminal in C:\w: a terminal is not supported on Windows yet"
-        );
-        terminal::end_sessions(&[1]).await;
-    }
-
-    #[tokio::test]
     async fn the_users_path_is_the_one_powershell_prints() {
         // Neither the service's `PATH` nor a home to fall back to: only what it printed.
         let path = crate::wrapper::user_path(path_shell(), None, None, BUSY_TIME * 15).await;
@@ -575,7 +1140,6 @@ mod tests {
 
     #[test]
     fn stubs_answer_nothing_or_unsupported() {
-        assert_eq!(list(), vec![]);
         assert_eq!(cwd(4), None);
         let here = Path::new(".");
         let unsupported = |result: io::Result<_>| result.unwrap_err().kind();
