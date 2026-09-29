@@ -146,9 +146,12 @@ test("a worktree without a pull request offers to create one from its branch", (
   show(checkout.id);
   act(() => apply({ type: "pulls", ...pulls }));
   useHive.setState({ pullError: { project: shop.id, number: null, message: "old" } });
-  fireEvent.click(
-    within(view()).getByRole("button", { name: `Create pull request from ${checkout.branch}` }),
-  );
+  const label = `Create pull request from ${checkout.branch}`;
+  const create = within(view()).getByRole("button", { name: label });
+  // 12.3: only the branch is cut with an ellipsis; the tooltip keeps the whole label.
+  expect(create.title).toBe(label);
+  expect(create.querySelector(".pulls-create-branch")?.textContent).toBe(`${checkout.branch}`);
+  fireEvent.click(create);
   const s = useHive.getState();
   expect([s.modal, s.modalWorktree, s.pullError]).toEqual(["new-pull", checkout.id, null]);
   expect(screen.getByRole("dialog", { name: "Create pull request" })).toBeTruthy();
