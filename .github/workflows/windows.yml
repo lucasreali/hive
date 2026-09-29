@@ -68,3 +68,20 @@ jobs:
             | length > 0 and all(.summary.lines.percent == 100)' cov.json
       # `--no-config`: `.cargo/mutants.toml` excludes these files for Linux (and runs nextest).
       - run: cargo mutants --no-config -p hive -f 'crates/hive/src/windows*.rs' -j 2 --timeout 120
+      # What a timed-out or missed mutant's tests printed (libtest names a test running over
+      # 60 s), and the slowest test runs, in this log; everything in the artifact.
+      - if: always() && hashFiles('mutants.out/outcomes.json') != ''
+        run: |
+          jq -r '.outcomes[] | [.summary, (.phase_results[] | select(.phase == "Test")
+            | .duration | floor), (.scenario | .Mutant?.name // .)] | @tsv' \
+            mutants.out/outcomes.json | tr -d '\r' | sort -t $'\t' -k2 -n -r | head -n 10
+          jq -r '.outcomes[] | select(.summary == "Timeout" or .summary == "MissedMutant")
+            | .log_path' mutants.out/outcomes.json | tr -d '\r' | while read -r log; do
+            echo "::group::$log"; tail -n 150 "mutants.out/$log"; echo "::endgroup::"
+          done
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutants-windows
+          path: mutants.out
+          retention-days: 7
