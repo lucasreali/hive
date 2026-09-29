@@ -21,7 +21,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A throwaway profile: app data, settings, home and Claude folder in a temporary folder, and
-/// a fake `claude` first on `PATH` (the `fake_claude` example: never the real one).
+/// a fake `claude.exe` first on `PATH` (`tests/fixtures/fake_claude.rs`: never the real one).
 struct Env {
     dir: tempfile::TempDir,
 }
@@ -29,12 +29,15 @@ struct Env {
 impl Env {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        // Built beside the tests: `target/<profile>/deps/<test>.exe` and `…/examples`.
-        let tests = std::env::current_exe().unwrap();
-        let examples = tests.parent().unwrap().with_file_name("examples");
         let fake = dir.path().join("fake");
         std::fs::create_dir(&fake).unwrap();
-        std::fs::copy(examples.join("fake_claude.exe"), fake.join("claude.exe")).unwrap();
+        let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_claude.rs");
+        let built = std::process::Command::new("rustc")
+            .args(["--edition", "2021", "-o"])
+            .arg(fake.join("claude.exe"))
+            .arg(source)
+            .status();
+        assert!(built.unwrap().success());
         Self { dir }
     }
 

@@ -1404,7 +1404,10 @@ pub mod claude {
         #[test]
         fn the_wrapper_runs_the_real_claude_with_hives_hooks() {
             let tmp = tempfile::tempdir().unwrap();
-            let (bin, real) = (tmp.path().join("data").join("bin"), tmp.path().join("real"));
+            let (bin, real) = (
+                tmp.path().join("my data").join("bin"),
+                tmp.path().join("real"),
+            );
             // A `claude` in the bin folder too, which is never run.
             fake_claude(&bin);
             fake_claude(&real);
@@ -1421,8 +1424,9 @@ pub mod claude {
                 let out = std::fs::read_to_string(real.join("out.txt")).unwrap();
                 (code, out.trim_end().to_owned())
             };
-            let hooks = tmp.path().join("data").join("hive-hooks.json");
-            let settings = format!("wrapped=1 --settings {} x y", hooks.display());
+            let hooks = tmp.path().join("my data").join("hive-hooks.json");
+            // A path with a space is quoted for `cmd`.
+            let settings = format!("wrapped=1 --settings \"{}\" x y", hooks.display());
             assert_eq!(run(None), (7, settings.clone()));
             assert_eq!(run(Some("0")), (7, settings));
             // Started from inside a hooked `claude`: as it is.

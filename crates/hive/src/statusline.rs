@@ -440,13 +440,11 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(2000)).await;
         assert!(!late.exists());
         assert!(kept.exists());
-        // Killed: printed, and a failure (1 after a signal on Unix).
+        // Killed: printed, and 1 after a signal (Windows has none: Git Bash's own code).
         let killed = run("printf x; kill -9 $$", 5000).await.unwrap();
         assert_eq!(killed.0, b"x");
         #[cfg(unix)]
         assert_eq!(killed.1, 1);
-        #[cfg(windows)]
-        assert_ne!(killed.1, 0);
         // A statusline that does not read a large input.
         let big = vec![b'x'; 1 << 20];
         assert_eq!(
