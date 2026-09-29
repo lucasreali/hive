@@ -415,15 +415,21 @@ mod tests {
     /// Runs `program` with only `PATH` (and `extra`) set; the real `claude` is never on it.
     /// Killed after 10 s, so a wrapper that execs itself fails instead of hanging.
     fn run(program: &Path, path: &OsStr, extra: &[(&str, &str)], args: &[&str]) -> Output {
-        let mut child = Command::new(program)
-            .args(args)
-            .env_clear()
-            .env("PATH", path)
-            .envs(extra.iter().copied())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // A script this process just wrote can be held open by a child another test thread
+        // forks meanwhile: "Text file busy" until that child execs, so it is tried again.
+        let spawn = |attempt: u64| {
+            std::thread::sleep(std::time::Duration::from_millis(10 * attempt));
+            Command::new(program)
+                .args(args)
+                .env_clear()
+                .env("PATH", path)
+                .envs(extra.iter().copied())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        };
+        let busy = |spawned: &io::Result<_>| matches!(spawned, Err(err) if err.kind() == io::ErrorKind::ExecutableFileBusy);
+        let mut child = (0..20).map(spawn).find(|s| !busy(s)).unwrap().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
