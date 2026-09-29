@@ -382,19 +382,25 @@ impl Sessions {
     }
 
     /// Every session whose `cwd` lies in a followed worktree, the most recent first, at most
-    /// [`LIST_LIMIT`] of them, and whether older ones were left out (they are not read).
+    /// [`LIST_LIMIT`] of them, whether older ones were left out (they are not read), and why
+    /// the first projects folder that could not be read was skipped (the others are listed).
     /// `running` holds the ids of the sessions a `claude` is known to run.
     pub fn list(
         &self,
         projects: &[Project],
         running: &HashSet<String>,
-    ) -> io::Result<(Vec<Session>, bool)> {
+    ) -> (Vec<Session>, bool, Option<String>) {
         let prefixes: Vec<String> = projects.iter().map(|p| normalized(&p.path)).collect();
         let mut logs = Vec::new();
+        let mut error = None;
         for (config_dir, root) in &self.roots {
             let dirs = match std::fs::read_dir(root) {
+                Ok(dirs) => dirs,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-                dirs => dirs?,
+                Err(err) => {
+                    error.get_or_insert_with(|| format!("Cannot read {}: {err}", root.display()));
+                    continue;
+                }
             };
             for dir in dirs.flatten() {
                 let name = normalized(&dir.file_name().to_string_lossy());
@@ -423,7 +429,7 @@ impl Sessions {
             session.state = state(*end, session.running);
         }
         let sessions = sessions.into_iter().map(|(session, _)| session).collect();
-        Ok((sessions, truncated))
+        (sessions, truncated, error)
     }
 
     /// The name of the session `id` that runs in `cwd` (the user's, else Claude's, else its
@@ -449,7 +455,7 @@ impl Sessions {
         if !valid_id(id) {
             return Err(io::Error::other(format!("invalid session id {id:?}")));
         }
-        self.list(projects, &HashSet::new())?
+        self.list(projects, &HashSet::new())
             .0
             .into_iter()
             .find(|s| s.id == id)
@@ -635,21 +641,32 @@ mod tests {
         touched(&log(&folder(&home), "a.jsonl", repo), 0);
         touched(&log(&folder(&work.join("projects")), "b.jsonl", repo), 1);
         let work = work.to_str().unwrap();
-        // An account without a projects folder yet lists nothing and fails nothing.
+        // An account without a projects folder yet lists nothing and fails nothing; one whose
+        // projects folder cannot be read is skipped, and the others are still listed.
         let gone = tmp.path().join("gone");
-        let dirs = [None, Some(work), gone.to_str()];
+        let stray = tmp.path().join("stray");
+        std::fs::create_dir(&stray).unwrap();
+        std::fs::write(stray.join("projects"), "").unwrap();
+        let dirs = [None, stray.to_str(), Some(work), gone.to_str()];
         let sessions = Sessions::new(Some(home.clone())).at(&dirs);
-        let list = sessions.list(&[project(repo)], &HashSet::new()).unwrap().0;
+        let (list, truncated, error) = sessions.list(&[project(repo)], &HashSet::new());
         let got: Vec<_> = (list.iter())
             .map(|s| (s.id.as_str(), s.config_dir.as_deref()))
             .collect();
         assert_eq!(got, [("b", Some(work)), ("a", None)]);
+        assert!(!truncated);
+        let stray = stray.join("projects");
+        let expected = format!(
+            "Cannot read {}: Not a directory (os error 20)",
+            stray.display()
+        );
+        assert_eq!(error, Some(expected));
         // A session's name is read from the first folder holding its log.
         assert_eq!(sessions.title("b", repo), Some("hi b.jsonl".into()));
         assert_eq!(sessions.title("a", repo), Some("hi a.jsonl".into()));
         // One of them deleted, the other stays.
         sessions.delete(&[project(repo)], "b").unwrap();
-        let list = sessions.list(&[project(repo)], &HashSet::new()).unwrap().0;
+        let list = sessions.list(&[project(repo)], &HashSet::new()).0;
         assert_eq!(list.len(), 1);
     }
 
@@ -1077,7 +1094,7 @@ not json
             touched(&log(&folder, &format!("s{i:03}.jsonl"), repo), i);
         }
         let sessions = Sessions::new(Some(root));
-        let (list, truncated) = sessions.list(&[project(repo)], &HashSet::new()).unwrap();
+        let (list, truncated, _) = sessions.list(&[project(repo)], &HashSet::new());
         let ids: Vec<String> = list.into_iter().map(|s| s.id).collect();
         let newest: Vec<String> = (100..600).rev().map(|i| format!("s{i:03}")).collect();
         assert_eq!((ids, truncated), (newest, true));
@@ -1087,7 +1104,7 @@ not json
         for i in 0..100 {
             std::fs::remove_file(folder.join(format!("s{i:03}.jsonl"))).unwrap();
         }
-        let (list, truncated) = sessions.list(&[project(repo)], &HashSet::new()).unwrap();
+        let (list, truncated, _) = sessions.list(&[project(repo)], &HashSet::new());
         assert_eq!((list.len(), truncated), (LIST_LIMIT, false));
     }
 
@@ -1124,7 +1141,7 @@ not json
 
         let sessions = Sessions::new(Some(root.clone()));
         let followed = [project(repo), project("/other-not-followed")];
-        let list = sessions.list(&followed, &HashSet::new()).unwrap().0;
+        let list = sessions.list(&followed, &HashSet::new()).0;
         let got: Vec<_> = list
             .iter()
             .map(|s| (s.id.as_str(), s.worktree.as_str(), s.title.as_deref()))
@@ -1151,7 +1168,7 @@ not json
         let second = log(&folder, "h.jsonl", repo);
         touched(&second, 2);
         let running = HashSet::from(["a".to_owned(), "gone".to_owned()]);
-        let list = sessions.list(&followed, &running).unwrap().0;
+        let list = sessions.list(&followed, &running).0;
         let got: Vec<_> = list
             .iter()
             .map(|s| (s.id.as_str(), s.running, s.state))
@@ -1199,8 +1216,8 @@ not json
             "no session zz in the followed projects"
         );
         sessions.delete(&followed, "b").unwrap();
-        let none = (vec![], false);
-        assert_eq!(sessions.list(&followed, &HashSet::new()).unwrap(), none);
+        let none = (vec![], false, None);
+        assert_eq!(sessions.list(&followed, &HashSet::new()), none);
         assert!(sessions.delete(&followed, "b").is_err());
 
         log(&folder, "a.jsonl", repo);
@@ -1214,11 +1231,13 @@ not json
         assert!(folder.join("g").symlink_metadata().is_ok());
 
         // No Claude directory, or none yet: no sessions.
-        let listed = |sessions: Sessions| sessions.list(&followed, &HashSet::new()).unwrap();
+        let listed = |sessions: Sessions| sessions.list(&followed, &HashSet::new());
         assert_eq!(listed(Sessions::new(None)), none);
         assert_eq!(listed(Sessions::new(Some(tmp.path().join("none")))), none);
-        // A root that is a file cannot be listed.
-        let file = Sessions::new(Some(tmp.path().join("projects/stray-file")));
-        assert!(file.list(&followed, &HashSet::new()).is_err());
+        // A root that is a file cannot be listed: nothing, and why.
+        let stray = tmp.path().join("projects/stray-file");
+        let (list, _, error) = Sessions::new(Some(stray)).list(&followed, &HashSet::new());
+        assert!(list.is_empty());
+        assert!(error.unwrap().starts_with("Cannot read "));
     }
 }
