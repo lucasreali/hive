@@ -299,7 +299,7 @@ pub mod terminal {
     use std::io;
     use std::ops::BitOr;
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::{AsRawHandle, HandleOrInvalid, OwnedHandle};
+    use std::os::windows::io::{AsRawHandle, HandleOrInvalid, OwnedHandle, RawHandle};
     use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::process::ExitStatus;
@@ -468,8 +468,10 @@ pub mod terminal {
         let (process, thread) = (owned(started.hProcess)?, owned(started.hThread)?);
         let raw = process.as_raw_handle();
         let assigned = unsafe { AssignProcessToJobObject(job.as_raw_handle(), raw) };
-        // A shell left suspended outside its job would never end.
-        check(assigned).inspect_err(|_| _ = unsafe { TerminateProcess(raw, KILLED) })?;
+        // A shell left suspended outside its job would never end. (No closure: one that never
+        // runs would be a line without coverage.)
+        _ = (assigned == 0).then_some(raw).map(kill);
+        check(assigned)?;
         // Left in the job, a shell that cannot resume is killed with it.
         let resumed = unsafe { ResumeThread(thread.as_raw_handle()) };
         check((resumed != u32::MAX).into())?;
@@ -482,6 +484,11 @@ pub mod terminal {
         };
         sessions().insert(session, kept);
         Ok((session, resize, output, input, waited(process)))
+    }
+
+    /// Kills `process`, with [`KILLED`] as its exit code.
+    fn kill(process: RawHandle) {
+        unsafe { TerminateProcess(process, KILLED) };
     }
 
     /// `text` for a Windows call: UTF-16 and nul-terminated.
@@ -517,7 +524,7 @@ pub mod terminal {
         let host = host.read(host_reads).write(!host_reads).open(&name)?;
         // Connected already: this only tells tokio, so that it reads and writes it.
         let connected = ours.connect().now_or_never();
-        connected.unwrap_or_else(|| Err(io::ErrorKind::NotConnected.into()))?;
+        connected.unwrap_or(Err(io::ErrorKind::NotConnected.into()))?;
         Ok((ours, host))
     }
 
@@ -880,6 +887,18 @@ pub mod terminal {
             let err = started.map(drop).unwrap_err();
             let why = format!("cannot start a terminal in {missing}: ");
             assert!(err.starts_with(&why), "{err}");
+        }
+
+        #[test]
+        fn a_killed_process_exits_with_the_killed_code() {
+            // `ping` waits a second between tries: about 30 s unless killed.
+            let mut ping = std::process::Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            kill(ping.as_raw_handle());
+            assert_eq!(ping.wait().unwrap().code(), Some(KILLED as i32));
         }
 
         #[test]
