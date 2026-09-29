@@ -1003,6 +1003,23 @@ test("folders are browsed on both sides of the fake machine", async () => {
     dirs: [],
     error: "cannot open /nowhere/: No such file or directory (os error 2)",
   });
+  // The service on Windows itself: Windows paths as they are, the drives for a bare name.
+  const native = mockDirs("", false, true);
+  expect([native.path, native.windows, native.linux_path]).toEqual([
+    "C:\\Users\\user\\",
+    false,
+    "C:\\Users\\user\\",
+  ]);
+  expect(native.dirs.map((d) => d.name)).toEqual(["Documents", "source"]);
+  expect(mockDirs("c", false, true)).toEqual({
+    path: "c",
+    windows: false,
+    linux_path: null,
+    parent: null,
+    dirs: [{ name: "C:", git: false }],
+    error: null,
+  });
+  expect(mockDirs("C:\\", false, true).parent).toBeNull();
 });
 
 const SHOP = "/home/user/projects/shop";

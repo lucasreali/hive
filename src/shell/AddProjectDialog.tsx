@@ -40,13 +40,16 @@ const saveWindows = (windows: boolean) => {
  * (listed by the service once typing pauses) filtered by the text after its last separator:
  * a click enters one, ↑ goes up. With the service in WSL, a select picks WSL or Windows paths;
  * the service converts them. It answers the add with the project (the dialog closes) or the
- * reason it was refused (shown under the field).
+ * reason it was refused (shown under the field). With the service on Windows itself, every path
+ * is a Windows one (`\` or `/`, drive letters), listed by the service as typed.
  */
 export function AddProjectDialog() {
   const error = useHive((s) => s.addProjectError);
   const wsl = useHive((s) => s.connection.status === "connected" && s.connection.distro !== null);
   const [side, setSide] = useState(() => savedWindows());
   const windows = wsl && side;
+  // Windows paths: the WSL service's Windows side, or every path of the service on Windows.
+  const backslash = useHive((s) => windows || s.appMode?.mode === "native");
   const [path, setPath] = useState("");
   // The field shows the home folder once it is listed, until the user types.
   const [fill, setFill] = useState(true);
@@ -66,7 +69,7 @@ export function AddProjectDialog() {
   }, [fill, listing, path]);
 
   const typed = path || listing?.path || "";
-  const cut = Math.max(typed.lastIndexOf("/"), windows ? typed.lastIndexOf("\\") : -1) + 1;
+  const cut = Math.max(typed.lastIndexOf("/"), backslash ? typed.lastIndexOf("\\") : -1) + 1;
   const filter = typed.slice(cut).toLowerCase();
   const shown = listing?.dirs.filter((d) => d.name.toLowerCase().includes(filter)) ?? [];
   const target = listing?.path === typed ? listing.linux_path : null;
@@ -132,7 +135,7 @@ export function AddProjectDialog() {
                     clearAddProjectError();
                   }}
                   placeholder={
-                    windows ? "C:\\Users\\you\\projects\\shop" : "/home/you/projects/shop"
+                    backslash ? "C:\\Users\\you\\projects\\shop" : "/home/you/projects/shop"
                   }
                   spellCheck={false}
                   autoComplete="off"
@@ -160,7 +163,7 @@ export function AddProjectDialog() {
                       type="button"
                       tabIndex={-1}
                       className="folder-row"
-                      onClick={() => go(`${typed.slice(0, cut)}${d.name}${windows ? "\\" : "/"}`)}
+                      onClick={() => go(`${typed.slice(0, cut)}${d.name}${backslash ? "\\" : "/"}`)}
                     >
                       {d.git ? <GitBranchIcon size={14} aria-label="Repository" /> : <FolderIcon />}
                       <span className="folder-name">{d.name}</span>
