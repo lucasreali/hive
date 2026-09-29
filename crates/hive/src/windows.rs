@@ -1299,11 +1299,20 @@ pub fn list() -> Vec<Proc> {
 }
 
 /// The processes whose working folder is `dir` or inside it: every process's is read at once.
+/// Both are [`resolved`] first: a process may name its folder by an 8.3 short name, through a
+/// junction, a link or a `subst` drive.
 pub fn inside(dir: &Path) -> Vec<Proc> {
+    let dir = resolved(dir);
     let kind = ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always);
     table(kind, |process| {
-        process.cwd().is_some_and(|cwd| under(cwd, dir))
+        process.cwd().is_some_and(|cwd| under(&resolved(cwd), &dir))
     })
+}
+
+/// `path` as [`crate::paths::canonical`] resolves it (long names, links followed, no `\\?\`),
+/// or as it is when it cannot be (e.g. it is gone).
+fn resolved(path: &Path) -> PathBuf {
+    crate::paths::canonical(path).unwrap_or_else(|_| path.to_owned())
 }
 
 /// The processes `keep` keeps, read as `kind` says. Only the terminals' processes get their
@@ -1330,8 +1339,8 @@ fn table(kind: ProcessRefreshKind, keep: impl Fn(&Process) -> bool) -> Vec<Proc>
     .collect()
 }
 
-/// Whether `path` is `dir` or inside it, names compared ignoring (ASCII) case as Windows does:
-/// a process may have typed its folder in any case.
+/// Whether `path` is `dir` or inside it, names compared ignoring (ASCII) case as Windows does
+/// (a resolved path has its names' own case, one that could not be resolved may not).
 fn under(path: &Path, dir: &Path) -> bool {
     let mut names = path.components();
     dir.components().all(|name| {
@@ -1345,6 +1354,14 @@ fn under(path: &Path, dir: &Path) -> bool {
 /// Prompt with `/D /S /C` (the script passed as it is: `cmd` has quoting rules of its own),
 /// Git Bash with `-c`.
 pub fn script(script: &str, shell: TerminalShell) -> io::Result<Command> {
+    // `cmd /C` runs the first line alone: the others would be skipped without a word.
+    if shell == TerminalShell::Cmd && script.contains(['\n', '\r']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Command Prompt runs only the first line of a script: put the archive script on one \
+             line (commands joined with &&), or choose another shell",
+        ));
+    }
     let path = std::env::var_os("PATH").unwrap_or_default();
     let root = std::env::var_os("SystemRoot");
     let program = conpty::shell(shell, &path, root.as_deref()).map_err(io::Error::other)?;
@@ -1364,7 +1381,9 @@ pub fn script(script: &str, shell: TerminalShell) -> io::Result<Command> {
 /// service's own `PATH`.)
 pub fn on_path(name: &OsStr, path: &OsStr) -> Option<PathBuf> {
     let exe = Path::new(name).with_extension("exe");
-    let mut found = std::env::split_paths(path).map(|dir| dir.join(&exe));
+    // A relative folder would be looked in from the service's own folder.
+    let dirs = std::env::split_paths(path).filter(|dir| dir.is_absolute());
+    let mut found = dirs.map(|dir| dir.join(&exe));
     found.find(|file| file.is_file())
 }
 
@@ -1786,6 +1805,51 @@ mod tests {
     }
 
     #[test]
+    fn a_process_is_found_by_its_folders_real_path() {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let tmp = tempfile::tempdir().unwrap();
+        // The runner's temporary folder is itself an 8.3 short name (`RUNNER~1`).
+        let real = resolved(tmp.path()).join("A long folder name");
+        std::fs::create_dir(&real).unwrap();
+        let long = wide(&real).unwrap();
+        let mut buf = vec![0_u16; 1024];
+        let n = unsafe { GetShortPathNameW(long.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        let short = PathBuf::from(OsString::from_wide(&buf[..n as usize]));
+        assert_ne!(short, real);
+        let link = tmp.path().join("link");
+        let made = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .args([&link, &real])
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        // Started in the short name, or through the junction; asked by either name.
+        for cwd in [&short, &link] {
+            let mut ping = Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .current_dir(cwd)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            for dir in [&real, &short] {
+                let found = inside(dir);
+                let pid = ping.id() as i32;
+                assert!(
+                    found.iter().any(|p| p.pid == pid),
+                    "{cwd:?} {dir:?}: {found:?}"
+                );
+            }
+            ping.kill().unwrap();
+            ping.wait().unwrap();
+        }
+        // What cannot be resolved is compared as it is.
+        let gone = tmp.path().join("gone");
+        assert_eq!(resolved(&gone), gone);
+    }
+
+    #[test]
     fn a_folder_holds_what_is_under_it_named_in_any_case() {
         let under = |path: &str, dir: &str| under(Path::new(path), Path::new(dir));
         assert!(under(r"C:\r\wt\", r"C:\r\wt"));
@@ -1831,6 +1895,28 @@ mod tests {
         let cmd = OsStr::new("cmd");
         assert_eq!(on_path(cmd, &path), Some(system.join("cmd.exe")));
         assert_eq!(on_path(cmd, tmp.path().as_os_str()), None);
+        // A relative folder is never looked in, though it holds the program.
+        let here = tempfile::tempdir_in(".").unwrap();
+        assert!(here.path().is_relative(), "{here:?}");
+        std::fs::write(here.path().join("gh.exe"), "").unwrap();
+        let path = std::env::join_paths([here.path(), &system]).unwrap();
+        assert_eq!(on_path(OsStr::new("gh"), &path), None);
+    }
+
+    #[test]
+    fn command_prompt_refuses_a_script_of_more_than_one_line() {
+        for script in ["echo a\necho b", "echo a\r\necho b", "echo a\r"] {
+            let err = super::script(script, TerminalShell::Cmd).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+            assert!(
+                err.to_string().starts_with("Command Prompt runs only"),
+                "{err}"
+            );
+        }
+        // The other shells run every line.
+        for shell in [TerminalShell::Default, TerminalShell::GitBash] {
+            super::script("echo a\necho b", shell).unwrap();
+        }
     }
 
     #[test]

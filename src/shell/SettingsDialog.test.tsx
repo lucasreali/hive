@@ -181,6 +181,22 @@ test("the shell is a setting only when the service runs natively on Windows", as
   expect(screen.queryByRole("combobox", { name: "Shell" })).toBeNull();
 });
 
+test("the archive script's help names the shell it runs in", () => {
+  open();
+  section("Projects");
+  act(() => apply({ type: "projects", projects: [MOCK_REPOS[0]] }));
+  const help = () => input("Archive script").closest(".field")?.textContent;
+  expect(help()).toContain("Run by the service with sh -c in the worktree");
+  act(() => apply({ type: "app_mode", mode: "native", wsl: false }));
+  act(() =>
+    apply({
+      type: "settings",
+      settings: { ...DEFAULT_SETTINGS, terminal: { ...DEFAULT_SETTINGS.terminal, shell: "cmd" } },
+    }),
+  );
+  expect(help()).toContain("Run by the service in Command Prompt (the Shell setting;");
+});
+
 test("the projects section edits each project's scripts", async () => {
   open();
   section("Projects");
