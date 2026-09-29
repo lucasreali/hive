@@ -171,9 +171,9 @@ impl Modes {
     }
 
     fn save(&self, mode: Mode) -> std::io::Result<()> {
-        if let Some(folder) = self.file.parent() {
-            std::fs::create_dir_all(folder)?;
-        }
+        // Always a folder (the app's config folder): `create_dir_all("")` does nothing.
+        let folder = self.file.parent().unwrap_or(std::path::Path::new(""));
+        std::fs::create_dir_all(folder)?;
         std::fs::write(&self.file, mode.name())
     }
 }
