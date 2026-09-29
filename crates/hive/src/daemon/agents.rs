@@ -131,7 +131,7 @@ impl State {
     /// Reads the agent's session name from its log and sends it when it changed.
     async fn retitle(&self, id: &str, agent: &mut Agent) {
         let Some(cwd) = agent.cwd.clone() else { return };
-        let sessions = self.sessions.at([agent.claude_dir.as_deref()]);
+        let sessions = self.sessions.at(&[agent.claude_dir.as_deref()]);
         let title = tokio::task::block_in_place(|| sessions.title(id, &cwd));
         let Some(title) = title.filter(|t| agent.title.as_ref() != Some(t)) else {
             return;

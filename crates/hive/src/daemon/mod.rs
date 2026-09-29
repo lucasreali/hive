@@ -58,7 +58,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
-    projects.migrate_accounts(|legacy| settings.migrate(legacy));
+    projects.migrate_accounts(&mut |legacy| settings.migrate(legacy));
     let ports = Ports::new(paths.ports());
     let restore = Restore {
         file: paths.open_sessions(),
@@ -508,8 +508,8 @@ impl State {
     fn accounts_sessions(&self, first: Option<&str>) -> Sessions {
         let dirs = self.settings.account_dirs();
         let others = dirs.iter().map(|dir| Some(dir.as_str()));
-        let dirs = [first, None].into_iter().chain(others);
-        self.sessions.at(dirs)
+        let dirs: Vec<Option<&str>> = [first, None].into_iter().chain(others).collect();
+        self.sessions.at(&dirs)
     }
 
     /// Applies a space request (6.14): answers the spaces, or why nothing changed.

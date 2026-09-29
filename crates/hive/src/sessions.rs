@@ -349,9 +349,9 @@ impl Sessions {
 
     /// The logs of the accounts whose Claude config folders are `dirs` (their `projects`
     /// folders; `None`: the default account's), each folder once; the summaries are shared.
-    pub fn at<'a>(&self, dirs: impl IntoIterator<Item = Option<&'a str>>) -> Self {
+    pub fn at(&self, dirs: &[Option<&str>]) -> Self {
         let mut roots: Vec<(Option<String>, PathBuf)> = Vec::new();
-        for dir in dirs {
+        for &dir in dirs {
             let root = match dir {
                 Some(dir) => Path::new(dir).join("projects"),
                 None => match &self.default {
@@ -588,17 +588,17 @@ mod tests {
         let sessions = Sessions::new(Some("/h/.claude/projects".into()));
         assert_eq!(sessions.roots(), [PathBuf::from("/h/.claude/projects")]);
         let dirs = [Some("/w"), None, Some("/w"), Some("/h/.claude"), Some("/p")];
-        let accounts = sessions.at(dirs);
+        let accounts = sessions.at(&dirs);
         let roots = ["/w/projects", "/h/.claude/projects", "/p/projects"].map(PathBuf::from);
         assert_eq!(accounts.roots(), roots);
         assert!(Arc::ptr_eq(&accounts.cache, &sessions.cache));
         // Derived again, the default account's folder is still known.
-        assert_eq!(accounts.at([None]).roots(), sessions.roots());
+        assert_eq!(accounts.at(&[None]).roots(), sessions.roots());
         // Without a default one, only the accounts' folders.
         let rootless = Sessions::new(None);
         assert_eq!(rootless.roots(), [] as [PathBuf; 0]);
         assert_eq!(
-            rootless.at([None, Some("/w")]).roots(),
+            rootless.at(&[None, Some("/w")]).roots(),
             [PathBuf::from("/w/projects")]
         );
     }
@@ -618,7 +618,7 @@ mod tests {
         // An account without a projects folder yet lists nothing and fails nothing.
         let gone = tmp.path().join("gone");
         let dirs = [None, Some(work), gone.to_str()];
-        let sessions = Sessions::new(Some(home.clone())).at(dirs);
+        let sessions = Sessions::new(Some(home.clone())).at(&dirs);
         let list = sessions.list(&[project(repo)], &HashSet::new()).unwrap().0;
         let got: Vec<_> = (list.iter())
             .map(|s| (s.id.as_str(), s.config_dir.as_deref()))

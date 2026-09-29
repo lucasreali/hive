@@ -64,8 +64,12 @@ impl Projects {
 
     /// Hands the Claude config folders spaces had (see `legacy`) to `make`, which makes them
     /// accounts, then saves the spaces without them. Nothing changes when `make` fails (the
-    /// warning is logged): the next start tries again, so nothing is lost.
-    pub fn migrate_accounts(&self, make: impl FnOnce(Vec<(String, String)>) -> Result<(), String>) {
+    /// warning is logged): the next start tries again, so nothing is lost. (Not generic: every
+    /// caller shares one copy of it, whose coverage the tests give.)
+    pub fn migrate_accounts(
+        &self,
+        make: &mut dyn FnMut(Vec<(String, String)>) -> Result<(), String>,
+    ) {
         let mut legacy = self.legacy.lock().unwrap_or_else(PoisonError::into_inner);
         if legacy.is_empty() {
             return;
@@ -973,40 +977,39 @@ mod tests {
             ("Default".into(), "/d".into()),
             ("Work".into(), "/w".into()),
         ];
+        // What was handed over, each time; the next one fails while `fail` is set.
+        let handed = std::cell::RefCell::new(Vec::new());
+        let fail = std::cell::Cell::new(true);
+        let mut make = |legacy| {
+            handed.borrow_mut().push(legacy);
+            if fail.get() {
+                Err("no".to_owned())
+            } else {
+                Ok(())
+            }
+        };
         // A failure changes nothing: they are handed over again.
-        let mut handed = Vec::new();
-        projects.migrate_accounts(|legacy| {
-            handed.push(legacy);
-            Err("no".into())
-        });
+        projects.migrate_accounts(&mut make);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), old);
-        projects.migrate_accounts(|legacy| {
-            handed.push(legacy);
-            Ok(())
-        });
-        assert_eq!(handed, [expected.clone(), expected]);
+        fail.set(false);
+        projects.migrate_accounts(&mut make);
+        assert_eq!(*handed.borrow(), [expected.clone(), expected]);
         // Saved without them, projects and git identity kept; never handed over again.
         let saved = std::fs::read_to_string(&file).unwrap();
         assert!(!saved.contains("claude_config_dir"), "{saved}");
-        projects.migrate_accounts(|_| panic!("handed over twice"));
+        projects.migrate_accounts(&mut make);
         let again = load(tmp.path());
         assert_eq!(*again.spaces(), *projects.spaces());
-        again.migrate_accounts(|_| panic!("the file still has them"));
+        again.migrate_accounts(&mut make);
+        assert_eq!(handed.borrow().len(), 2);
         // A space file that cannot be written keeps them for the next start.
         std::fs::write(&file, old).unwrap();
         let blocked = load(tmp.path());
         std::fs::remove_file(&file).unwrap();
         std::fs::create_dir(&file).unwrap();
-        let mut handed = 0;
-        blocked.migrate_accounts(|_| {
-            handed += 1;
-            Ok(())
-        });
-        blocked.migrate_accounts(|_| {
-            handed += 1;
-            Ok(())
-        });
-        assert_eq!(handed, 2);
+        blocked.migrate_accounts(&mut make);
+        blocked.migrate_accounts(&mut make);
+        assert_eq!(handed.borrow().len(), 4);
     }
 
     #[test]
