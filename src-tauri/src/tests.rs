@@ -354,6 +354,260 @@ fn an_installed_app_runs_its_bundled_hive() {
     }
 }
 
+#[test]
+fn natively_the_bundled_hive_exe_runs_else_the_override_else_the_one_on_path() {
+    let bundled = std::env::current_exe().unwrap();
+    let over = |key: &str| (key == "HIVE_BRIDGE").then(|| OsString::from(r"C:\dev\hive.exe"));
+    let bridge = || vec![OsString::from("bridge")];
+    assert_eq!(
+        native_bridge(&over, Some(bundled.clone())),
+        (bundled.into_os_string(), bridge(), true)
+    );
+    let missing = std::env::temp_dir().join("hive-no-such-bundle.exe");
+    assert_eq!(
+        native_bridge(&over, Some(missing)),
+        (r"C:\dev\hive.exe".into(), bridge(), false)
+    );
+    assert_eq!(
+        native_bridge(&|_| Some("".into()), None),
+        ("hive.exe".into(), bridge(), false)
+    );
+}
+
+/// `wsl.exe -l -q`'s output: `stdout`, exiting 0 when `success`, else 1.
+fn listed(success: bool, stdout: Vec<u8>) -> std::io::Result<Output> {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    let status = std::process::ExitStatus::from_raw(if success { 0 } else { 256 });
+    Ok(Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
+}
+
+fn utf16(text: &str) -> Vec<u8> {
+    text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+#[test]
+fn wsl_counts_only_when_it_lists_a_distribution() {
+    assert!(has_wsl(listed(true, utf16("Ubuntu\r\ndocker-desktop\r\n"))));
+    // `WSL_UTF8=1` makes it print UTF-8.
+    assert!(has_wsl(listed(true, b"Ubuntu\n".to_vec())));
+    assert!(!has_wsl(listed(true, utf16("\r\n"))));
+    assert!(!has_wsl(listed(true, Vec::new())));
+    // WSL without a distribution, or not installed: a message and a failure.
+    let none = utf16("Windows Subsystem for Linux has no installed distributions.");
+    assert!(!has_wsl(listed(false, none)));
+    assert!(!has_wsl(Err(std::io::ErrorKind::NotFound.into())));
+}
+
+#[test]
+fn the_choice_is_offered_only_with_hive_mode_native() {
+    let native = native_bridge(&|_| None, None);
+    let file = std::path::PathBuf::from("/nonexistent/mode");
+    for value in [None, Some(""), Some("wsl")] {
+        let var = |key: &str| {
+            (key == "HIVE_MODE")
+                .then_some(value)
+                .flatten()
+                .map(OsString::from)
+        };
+        let modes = Modes::new(
+            &var,
+            file.clone(),
+            || panic!("wsl.exe runs only when the choice is offered"),
+            native.clone(),
+        );
+        assert!(modes.is_none());
+    }
+    let var = |key: &str| (key == "HIVE_MODE").then(|| OsString::from("native"));
+    let listing = || listed(true, utf16("Ubuntu\r\n"));
+    let modes = Modes::new(&var, file.clone(), listing, native.clone()).unwrap();
+    assert!(modes.wsl);
+    assert_eq!(modes.file, file);
+    assert_eq!(modes.native, native);
+    let modes = Modes::new(&var, file, || listed(false, Vec::new()), native).unwrap();
+    assert!(!modes.wsl);
+}
+
+/// A temporary folder, removed on drop.
+struct Temp(std::path::PathBuf);
+
+impl Temp {
+    fn new(name: &str) -> Self {
+        let root = std::env::temp_dir().join(format!("hive-mode-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        Self(root)
+    }
+
+    /// Where `choosing` keeps the mode.
+    fn mode(&self) -> std::path::PathBuf {
+        self.0.join("config/mode")
+    }
+}
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn the_mode_is_asked_for_until_one_is_saved() {
+    let dir = Temp::new("store");
+    let modes = Modes {
+        file: dir.mode(),
+        wsl: true,
+        native: native_bridge(&|_| None, None),
+    };
+    assert_eq!(modes.start(), None);
+    modes.save(Mode::Native).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.mode()).unwrap(), "native");
+    assert_eq!(modes.start(), Some(Mode::Native));
+    modes.save(Mode::Wsl).unwrap();
+    assert_eq!(modes.start(), Some(Mode::Wsl));
+    std::fs::write(dir.mode(), "native\r\n").unwrap();
+    assert_eq!(modes.start(), Some(Mode::Native));
+    std::fs::write(dir.mode(), "linux").unwrap();
+    assert_eq!(modes.start(), None);
+    // Without WSL, always Windows, whatever was saved.
+    std::fs::write(dir.mode(), "wsl").unwrap();
+    let modes = Modes {
+        wsl: false,
+        ..modes
+    };
+    assert_eq!(modes.start(), Some(Mode::Native));
+}
+
+/// A `Hive` offering the choice, with WSL present and its mode file in `dir`: the WSL bridge is
+/// `sh -c <wsl>`, the Windows one `sh -c <native>` (the bundled `hive.exe`).
+fn choosing(dir: &Temp, wsl: &str, native: &str) -> Hive {
+    let native = ("sh".into(), ["-c", native].map(OsString::from).into(), true);
+    let modes = Modes {
+        file: dir.mode(),
+        wsl: true,
+        native,
+    };
+    sh(wsl).with_modes(Some(modes))
+}
+
+fn app_mode(mode: Option<&str>) -> Value {
+    json!({"type": "app_mode", "mode": mode, "wsl": true})
+}
+
+fn disconnected_by(reason: &str, bundled: bool) -> Value {
+    json!({"type": "disconnected", "reason": reason, "bundled": bundled})
+}
+
+#[tokio::test]
+async fn the_first_run_asks_for_a_mode_before_starting_a_service() {
+    let dir = Temp::new("first-run");
+    let hive = choosing(&dir, "echo wsl >&2", "echo native >&2");
+    let (channel, mut rx) = ui();
+    hive.connect(channel.clone());
+    assert_eq!(next(&mut rx).await, app_mode(None));
+    assert!(hive.link().reader.is_none(), "no bridge started");
+    // A reloaded UI is asked again.
+    hive.connect(channel);
+    assert_eq!(next(&mut rx).await, app_mode(None));
+    hive.choose_mode("native").unwrap();
+    assert_eq!(std::fs::read_to_string(dir.mode()).unwrap(), "native");
+    hive.reconnect().await;
+    assert_eq!(next(&mut rx).await, app_mode(Some("native")));
+    assert_eq!(next(&mut rx).await, disconnected_by("native", true));
+}
+
+#[tokio::test]
+async fn switching_modes_ends_one_service_and_starts_the_other() {
+    let dir = Temp::new("switch");
+    std::fs::create_dir_all(dir.mode().parent().unwrap()).unwrap();
+    std::fs::write(dir.mode(), "wsl").unwrap();
+    // Each bridge stays until its stdin closes.
+    let hive = choosing(
+        &dir,
+        "cat >/dev/null; echo wsl ended >&2",
+        "cat >/dev/null; echo native ended >&2",
+    );
+    let (channel, mut rx) = ui();
+    hive.connect(channel);
+    assert_eq!(next(&mut rx).await, app_mode(Some("wsl")));
+    hive.choose_mode("native").unwrap();
+    hive.reconnect().await;
+    assert_eq!(next(&mut rx).await, disconnected_by("wsl ended", false));
+    assert_eq!(next(&mut rx).await, app_mode(Some("native")));
+    hive.choose_mode("wsl").unwrap();
+    hive.reconnect().await;
+    assert_eq!(next(&mut rx).await, disconnected_by("native ended", true));
+    assert_eq!(next(&mut rx).await, app_mode(Some("wsl")));
+    hive.shutdown(WAIT).await;
+    assert_eq!(next(&mut rx).await, disconnected_by("wsl ended", false));
+}
+
+#[tokio::test]
+async fn without_a_ui_reconnecting_only_ends_the_service() {
+    let dir = Temp::new("no-ui");
+    let hive = choosing(&dir, "", "");
+    hive.reconnect().await;
+    assert!(hive.link().reader.is_none());
+}
+
+#[test]
+fn a_mode_is_chosen_only_where_offered_and_once_saved() {
+    let error = "Hive offers no choice of service here".to_owned();
+    assert_eq!(hive().choose_mode("wsl"), Err(error));
+    let dir = Temp::new("choose");
+    let hive = choosing(&dir, "", "");
+    let error = "unknown service mode: linux".to_owned();
+    assert_eq!(hive.choose_mode("linux"), Err(error));
+    assert_eq!(hive.link().mode, None);
+    // A folder where the file goes: the mode cannot be saved, so it is not chosen.
+    std::fs::create_dir_all(dir.mode()).unwrap();
+    let error = hive.choose_mode("wsl").unwrap_err();
+    assert!(
+        error.starts_with("cannot save the service mode: "),
+        "{error}"
+    );
+    assert_eq!(hive.link().mode, None);
+}
+
+#[tokio::test]
+async fn set_mode_saves_the_mode_then_reconnects() {
+    let dir = Temp::new("command");
+    let hive = choosing(&dir, "", "echo native >&2");
+    let (channel, mut rx) = ui();
+    hive.link().ui = Some(channel);
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![set_mode])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let unknown = invoke(&webview, "set_mode", json!({"mode": "linux"}));
+    assert_eq!(unknown, Err(json!("unknown service mode: linux")));
+    let chosen = invoke(&webview, "set_mode", json!({"mode": "native"}));
+    assert_eq!(chosen, Ok(Value::Null));
+    assert_eq!(std::fs::read_to_string(dir.mode()).unwrap(), "native");
+    assert_eq!(next(&mut rx).await, app_mode(Some("native")));
+    assert_eq!(next(&mut rx).await, disconnected_by("native", true));
+}
+
+#[tokio::test]
+async fn the_bridge_tells_whether_it_runs_the_bundled_hive() {
+    for bundled in [false, true] {
+        let (channel, mut rx) = ui();
+        sh("exit 3").with_bundled(bundled).connect(channel);
+        let reason = "the hive bridge exited";
+        assert_eq!(next(&mut rx).await, disconnected_by(reason, bundled));
+    }
+}
+
 /// A temporary `HOME` with a fake `wslpath` (prints its path argument) and a bundled `hive`
 /// that prints what ran it. Removed on drop.
 struct ScriptHome(std::path::PathBuf);
@@ -1058,8 +1312,10 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
 
 #[tokio::test]
 async fn version_mismatch_is_final_and_not_a_disconnect() {
-    let hive = hive().with_bundled(true);
+    let hive = hive();
     let (channel, mut rx) = ui();
+    // As `connect` sets it for a bundled bridge (`the_bridge_tells_whether_it_runs_...`).
+    hive.link().bundled = true;
     hive.link().ui = Some(channel);
     let mut service = attach(&hive, "bridge gone");
     service.control().await;

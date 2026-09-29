@@ -92,6 +92,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.getDiagnostics();
   await tauriTransport.checkUpdate();
   await tauriTransport.installUpdate();
+  await tauriTransport.setMode("native");
   expect(calls).toEqual([
     ["write_terminal", { id: 7, data: "ls\r" }],
     ["resize_terminal", { id: 7, cols: 100, rows: 30 }],
@@ -134,6 +135,7 @@ test("terminal and project actions call their commands", async () => {
     ["get_diagnostics", {}],
     ["check_update", {}],
     ["install_update", {}],
+    ["set_mode", { mode: "native" }],
   ]);
 });
 

@@ -85,6 +85,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
   switch (m.type) {
     case "welcome":
       return { connection: { status: "connected", version: m.version, distro: m.distro } };
+    case "app_mode":
+      // First on every connect (12.5.4): a new connection is on its way, once there is a mode.
+      return { appMode: { mode: m.mode, wsl: m.wsl }, connection: { status: "connecting" } };
     case "settings":
       return { settings: m.settings, settingsError: null, settingsPending: false };
     case "settings_failed":

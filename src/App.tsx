@@ -44,7 +44,9 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
-  const blocked = status === "version_mismatch" || status === "disconnected";
+  // The first run on Windows with WSL asks where the service runs before any starts (12.5.4).
+  const asking = useHive((s) => s.appMode?.mode === null);
+  const blocked = status === "version_mismatch" || status === "disconnected" || asking;
   return (
     <div className="app">
       <TitleBar />

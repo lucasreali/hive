@@ -12,9 +12,9 @@ import {
 } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
-import type { ProjectScripts, Settings } from "../protocol";
+import type { AppMode, ProjectScripts, Settings } from "../protocol";
 import { COMMANDS } from "../shortcuts";
-import { openModal, panelWorktree, scriptsOf, useHive } from "../store";
+import { ask, openModal, panelWorktree, scriptsOf, useHive } from "../store";
 import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
@@ -192,8 +192,10 @@ type Field = {
   label: string;
   help?: string;
   check?: boolean;
-  /** Shown only when the service runs natively on Windows. */
-  windows?: true;
+  /** Shown only where the app offers WSL or Windows (12.5.4). */
+  modes?: boolean;
+  /** Shown only while the service runs natively on Windows (the app's mode, 12.5.4). */
+  windows?: boolean;
   control: (id: string, label: string) => ReactNode;
 };
 
@@ -214,6 +216,13 @@ const THEMES = [
 
 /** Every setting, in section order; the search box filters them by label. */
 const FIELDS: Field[] = [
+  {
+    section: "Terminal",
+    label: "Service",
+    help: "Where Hive's service runs your terminals and agents. WSL and Windows each keep their own projects, spaces and settings.",
+    modes: true,
+    control: (id) => <ServiceMode id={id} />,
+  },
   {
     section: "Terminal",
     label: "Font family",
@@ -350,6 +359,33 @@ const FIELDS: Field[] = [
     control: (id) => <DefaultBase id={id} />,
   },
 ];
+
+const MODES: { value: AppMode; label: string }[] = [
+  { value: "wsl", label: "WSL" },
+  { value: "native", label: "Windows" },
+];
+
+/** Not a service setting: the app keeps it, and switching reconnects (12.5.4). Asked first. */
+function ServiceMode({ id }: { id: string }) {
+  const value = useHive((s) => s.appMode?.mode ?? "wsl");
+  return (
+    <Select
+      aria-labelledby={`${id}-label`}
+      value={value}
+      options={MODES}
+      onChange={(v) => {
+        const mode = MODES.find((m) => m.value === v) as (typeof MODES)[number];
+        ask({
+          title: `Run Hive on ${mode.label}?`,
+          text: `Hive reconnects to its service on ${mode.label}. Every open terminal ends, and the projects, spaces and settings become that service's own.`,
+          action: "Switch",
+          back: "settings",
+          run: () => void transport.setMode(mode.value),
+        });
+      }}
+    />
+  );
+}
 
 function FontFamily({ id }: { id: string }) {
   const value = useHive((s) => s.settings.terminal.font_family);
@@ -789,8 +825,9 @@ function Accounts() {
 }
 
 function Content({ section, query }: { section: Section; query: string }) {
-  const windows = useHive((s) => s.connection.status === "connected" && s.connection.windows);
-  const fields = FIELDS.filter((f) => windows || !f.windows);
+  const modes = useHive((s) => s.appMode?.wsl === true);
+  const windows = useHive((s) => s.appMode?.mode === "native");
+  const fields = FIELDS.filter((f) => (modes || !f.modes) && (windows || !f.windows));
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
     if (found.length === 0) return <p className="field-help">No setting matches.</p>;

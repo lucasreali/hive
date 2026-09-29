@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { connect } from "../connect";
 import { useHive } from "../store";
+import { transport } from "../transport";
 import { isMac } from "../window";
 
 // The installed app brings its own service (4.18), so a mismatch is an old service still
@@ -8,6 +9,8 @@ import { isMac } from "../window";
 // false, decided by the app's Rust side) use `cargo install`; installed users never need it (12.4).
 const INSTALL = "cargo install --path crates/hive";
 const STOP = "pkill -f 'hive daemon'";
+/** The same on Windows itself (12.5.4): every `hive.exe`, the bridge and the old service. */
+const STOP_WINDOWS = "taskkill /F /IM hive.exe";
 
 function reconnect() {
   useHive.setState({ connection: { status: "connecting" } });
@@ -36,11 +39,49 @@ function Dialog({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+/**
+ * The first run on Windows with WSL (12.5.4): where the service runs. Nothing starts until the
+ * user picks; the settings switch it later.
+ */
+function ModeChoice() {
+  return (
+    <div className="connection-block">
+      <div role="alertdialog" aria-modal="true" aria-labelledby="connection-title">
+        <h2 id="connection-title">Where should Hive run?</h2>
+        <p>
+          Hive's service runs your terminals and agents, in WSL or on Windows itself. Each keeps its
+          own projects, spaces and settings. You can switch later in Settings.
+        </p>
+        <div className="actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void transport.setMode("native")}
+          >
+            Windows
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => void transport.setMode("wsl")}
+            ref={(button) => button?.focus()}
+          >
+            WSL
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Covers the workspace while there is no usable service connection (#29). */
 export function ConnectionBlock() {
   const c = useHive((s) => s.connection);
-  // On macOS the service runs natively, not in WSL.
-  const where = isMac() ? "" : " in WSL";
+  const mode = useHive((s) => s.appMode?.mode);
+  if (mode === null) return <ModeChoice />;
+  // On macOS, or in native mode on Windows (12.5.4), the service does not run in WSL.
+  const where = isMac() || mode === "native" ? "" : " in WSL";
+  const stop = mode === "native" ? STOP_WINDOWS : STOP;
   if (c.status === "version_mismatch") {
     return (
       <Dialog title="The app and the hive service versions differ">
@@ -55,7 +96,7 @@ export function ConnectionBlock() {
           </dd>
         </dl>
         <p>Hive brings its own service. Stop the old one{where}:</p>
-        <pre>{STOP}</pre>
+        <pre>{stop}</pre>
         <p>Then reconnect, or restart Hive.</p>
         {c.bundled ? (
           <p>If it keeps happening, reinstall Hive.</p>

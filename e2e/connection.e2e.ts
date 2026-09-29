@@ -27,3 +27,15 @@ test("a disconnect shows the reason and can reconnect", async ({ page }) => {
   // The mock keeps failing the same way, so the block comes back.
   await expect(block).toContainText("mock: the hive bridge exited");
 });
+
+test("the first run on Windows with WSL asks where the service runs (12.5.4)", async ({ page }) => {
+  await page.goto("/?mock=choose");
+  const choice = page.getByRole("alertdialog");
+  await expect(choice).toContainText("Where should Hive run?");
+  await expect(choice.getByRole("button", { name: "WSL" })).toBeFocused();
+  await page.screenshot({ path: "target/e2e/mode-choice.png" });
+  await choice.getByRole("button", { name: "Windows" }).click();
+  await expect(choice).toBeHidden();
+  await expect(page.getByTitle("Service connection")).toHaveText("Windowsconnected");
+  await expect(page.getByRole("main")).not.toHaveAttribute("inert");
+});

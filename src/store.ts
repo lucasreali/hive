@@ -16,6 +16,7 @@ import type {
   AgentState,
   AgentStatus,
   AgentUsage,
+  AppMode,
   Branches,
   Changes,
   CreateFailure,
@@ -309,6 +310,11 @@ export type HiveState = {
   focused: boolean;
   // Service data
   connection: Connection;
+  /**
+   * Where the service runs, WSL or Windows (12.5.4; `mode` null until chosen), and whether WSL
+   * is there to choose; null where the app offers no choice (macOS, or not offered yet).
+   */
+  appMode: { mode: AppMode | null; wsl: boolean } | null;
   /** The current account's 5-hour window, as the service decides it (12.1). */
   sessionUsage: SessionWindow | null;
   /** The service's settings (the defaults until they arrive). */
@@ -425,6 +431,7 @@ export const initialState: HiveState = {
   pendingSeen: {},
   focused: false,
   connection: { status: "connecting" },
+  appMode: null,
   sessionUsage: null,
   settings: DEFAULT_SETTINGS,
   settingsError: null,

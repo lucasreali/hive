@@ -57,6 +57,28 @@ test("welcomes the UI asynchronously", async () => {
   ]);
 });
 
+test("?mock=choose asks where the service runs and starts it once chosen (12.5.4)", async () => {
+  const transport = createMockTransport("choose");
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  expect(messages).toEqual([{ type: "app_mode", mode: null, wsl: true }]);
+  await transport.setMode("native");
+  await tick();
+  expect(messages.slice(1, 3)).toEqual([
+    { type: "app_mode", mode: "native", wsl: true },
+    { type: "welcome", version: "mock", distro: null },
+  ]);
+  // A reload keeps the mode; back to WSL, its distribution shows again.
+  messages.length = 0;
+  await transport.connect((m) => messages.push(m));
+  await transport.setMode("wsl");
+  await tick();
+  expect(messages.map((m) => m.type).slice(0, 2)).toEqual(["app_mode", "welcome"]);
+  expect(messages).toContainEqual({ type: "app_mode", mode: "wsl", wsl: true });
+  expect(messages).toContainEqual({ type: "welcome", version: "mock", distro: "Ubuntu" });
+});
+
 test("keeps the settings it is given in memory", async () => {
   const transport = createMockTransport();
   const messages: ServiceMessage[] = [];
