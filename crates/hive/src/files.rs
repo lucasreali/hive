@@ -15,7 +15,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use notify::event::ModifyKind;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{Event, EventKind, PathOp, RecommendedWatcher, RecursiveMode, Watcher as _};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -196,26 +196,28 @@ impl Watcher {
             .collect();
         // ponytail: on macOS every re-list restarts the FSEvents stream, even when no watch
         // moves; skip the restart if its cost or its short blind spot shows.
-        let mut paths = self.watcher.paths_mut();
         // Removed first: a renamed directory keeps its watch, which must not be reused.
-        self.dirs.retain(|dir| {
-            let keep = wanted.contains(dir.as_str());
-            if !keep {
-                // Fails when the directory is gone, which removed its watch already.
-                let _ = paths.remove(&self.root.join(dir));
-            }
-            keep
-        });
-        for dir in wanted {
-            if !self.dirs.contains(dir)
-                && paths
-                    .add(&self.root.join(dir), RecursiveMode::NonRecursive)
-                    .is_ok()
-            {
-                self.dirs.insert(dir.to_owned());
-            }
-        }
-        paths.commit().map_err(io::Error::other)?;
+        let gone = self
+            .dirs
+            .iter()
+            .filter(|dir| !wanted.contains(dir.as_str()));
+        // Unwatching fails when the directory is gone, which removed its watch already.
+        let unwatch = gone.map(|dir| PathOp::unwatch(self.root.join(dir)));
+        let added: Vec<&str> = wanted
+            .iter()
+            .copied()
+            .filter(|dir| !self.dirs.contains(*dir))
+            .collect();
+        let watch = added
+            .iter()
+            .map(|dir| PathOp::watch_non_recursive(self.root.join(dir)));
+        let ops = unwatch.chain(watch).collect();
+        let failed = update(&mut self.watcher, ops).map_err(io::Error::other)?;
+        self.dirs.retain(|dir| wanted.contains(dir.as_str()));
+        let watched = added
+            .into_iter()
+            .filter(|dir| !failed.contains(&self.root.join(dir)));
+        self.dirs.extend(watched.map(str::to_owned));
         Ok(listing)
     }
 
@@ -278,6 +280,22 @@ impl Watcher {
             _ => true,
         }
     }
+}
+
+/// Applies `ops` to `watcher` in one batch (FSEvents restarts its stream once a batch), going
+/// on past the ones that fail: the paths of those. An error when the watcher itself failed.
+pub fn update(
+    watcher: &mut impl notify::Watcher,
+    mut ops: Vec<PathOp>,
+) -> notify::Result<Vec<PathBuf>> {
+    let mut failed = Vec::new();
+    // Each round leaves out the op that failed: at most one round per op.
+    while let Err(err) = watcher.update_paths(ops) {
+        let origin = err.origin.ok_or(err.source)?;
+        failed.push(origin.into_path());
+        ops = err.remaining;
+    }
+    Ok(failed)
 }
 
 /// The directories among `--directory` entries (`dir/`), not UTF-8 ones skipped.
@@ -422,6 +440,27 @@ mod tests {
             git(dir.path(), &["--version"], exact).unwrap(),
             (full, false)
         );
+    }
+
+    #[test]
+    fn watches_that_fail_are_named_and_the_others_still_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name);
+        std::fs::create_dir(path("a")).unwrap();
+        std::fs::create_dir(path("b")).unwrap();
+        let mut watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let names = ["x", "a", "y", "b"];
+        let ops = names.map(|name| PathOp::watch_non_recursive(path(name)));
+        let failed = update(&mut watcher, ops.into()).unwrap();
+        assert_eq!(failed, [path("x"), path("y")]);
+        let mut watched: Vec<PathBuf> = watcher
+            .watched_paths()
+            .unwrap()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        watched.sort();
+        assert_eq!(watched, [path("a"), path("b")]);
     }
 
     /// A new repository in a temporary directory; the tests' own git never reads the user's config.
