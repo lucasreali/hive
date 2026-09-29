@@ -3126,9 +3126,22 @@ body[data-resizing] {
   overflow-wrap: anywhere;
 }
 
+/* One line at every width, in the bar's font (12.3): a long branch is cut, whole in the tooltip. */
 .pulls-create {
+  flex: none;
   align-self: flex-start;
+  max-width: calc(100% - 24px);
   margin: 8px 12px 0;
+  gap: 4px;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+
+.pulls-create-branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pulls-head {
