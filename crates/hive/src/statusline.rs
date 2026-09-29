@@ -339,6 +339,11 @@ mod tests {
 
     /// [`run`] with `claude_dir` as `CLAUDE_CONFIG_DIR` (and `guard` set when asked), no service.
     async fn statusline(claude_dir: &Path, input: &[u8], guard: bool) -> Output {
+        cancelled(claude_dir, input, guard, Duration::from_secs(3600)).await
+    }
+
+    /// [`statusline`], cancelled after `after`.
+    async fn cancelled(claude_dir: &Path, input: &[u8], guard: bool, after: Duration) -> Output {
         let tmp = tempfile::tempdir().unwrap();
         let dir = claude_dir.as_os_str().to_owned();
         let var = |key: &str| match key {
@@ -347,7 +352,8 @@ mod tests {
             _ => None,
         };
         let cwd = Some(tmp.path().to_owned());
-        run(&paths(tmp.path()), input, var, cwd, std::future::pending()).await
+        let cancel = tokio::time::sleep(after);
+        run(&paths(tmp.path()), input, var, cwd, cancel).await
     }
 
     #[tokio::test]
@@ -384,6 +390,24 @@ mod tests {
         assert_eq!(
             statusline(&claude, input.as_bytes(), false).await.0,
             b"user"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_with_no_service_to_report_to_still_prints_the_users_statusline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join("claude");
+        settings(&claude.join("settings.json"), "printf mine");
+        let input = br#"{"rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 9}}}"#;
+        let start = std::time::Instant::now();
+        assert_eq!(
+            statusline(&claude, input, false).await,
+            (b"mine".to_vec(), 0)
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
         );
     }
 
@@ -440,9 +464,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let claude = tmp.path().join("claude");
         settings(&claude.join("settings.json"), "sleep 5; echo late");
-        let var = |key: &str| (key == "CLAUDE_CONFIG_DIR").then(|| claude.as_os_str().to_owned());
         let start = std::time::Instant::now();
-        let out = run(&paths(tmp.path()), &b"{}"[..], var, None, async {}).await;
+        let out = cancelled(&claude, b"{}", false, Duration::ZERO).await;
         assert_eq!(out, (vec![], 0));
         assert!(
             start.elapsed() < Duration::from_secs(2),
