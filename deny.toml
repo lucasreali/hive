@@ -30,6 +30,8 @@ allow = [
     "CDLA-Permissive-2.0",
     "Unicode-3.0",
     "MPL-2.0",
+    # xxhash-rust, through notify 9 (12.5: the Windows watcher fix); pending the human's approval.
+    "BSL-1.0",
 ]
 private = { ignore = true }
 
