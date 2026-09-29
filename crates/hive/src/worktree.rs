@@ -17,6 +17,12 @@ pub const HOOK_INPUT_LIMIT: u64 = 64 * 1024;
 const SETTINGS_LIMIT: u64 = 1024 * 1024;
 /// Where Claude Code (and Hive) put worktrees, relative to the main worktree.
 pub const WORKTREES_DIR: &str = ".claude/worktrees";
+
+/// `root`'s [`WORKTREES_DIR`], with the system's separators: on Windows a `/` in it would
+/// make the path differ from the one git lists.
+pub fn worktrees_dir(root: &Path) -> PathBuf {
+    root.join(".claude").join("worktrees")
+}
 const INCLUDE_FILE: &str = ".worktreeinclude";
 /// Most bytes of branch names listed for the app; a repository with more is cut short.
 const BRANCHES_LIMIT: usize = 1024 * 1024;
@@ -79,7 +85,7 @@ pub fn planned(name: &str) -> (String, String) {
 /// worktree). Returns the worktree's path. Git refuses an existing branch later.
 pub fn check_name(root: &Path, name: &str) -> io::Result<PathBuf> {
     validate_name(name)?;
-    let path = root.join(WORKTREES_DIR).join(name);
+    let path = worktrees_dir(root).join(name);
     if path.symlink_metadata().is_ok() {
         return Err(io::Error::other(format!(
             "worktree {name:?} already exists at {}",
@@ -230,7 +236,7 @@ fn copied_note(copied: usize) -> String {
 pub fn remove(dir: &Path, name: &str) -> io::Result<()> {
     validate_name(name)?;
     let root = main_root(dir)?;
-    remove_path(&root, &root.join(WORKTREES_DIR).join(name), false)
+    remove_path(&root, &worktrees_dir(&root).join(name), false)
 }
 
 /// Renames the Claude worktree at `path` to `name`: its folder moves to
@@ -275,7 +281,7 @@ pub fn hook_create(payload: &Value) -> io::Result<Created> {
 /// The worktree `name` if it exists at `.claude/worktrees/<name>` on branch `worktree-<name>`.
 fn existing(dir: &Path, name: &str) -> io::Result<Option<PathBuf>> {
     validate_name(name)?;
-    let path = main_root(dir)?.join(WORKTREES_DIR).join(name);
+    let path = worktrees_dir(&main_root(dir)?).join(name);
     let branch = format!("worktree-{name}");
     let ours = |wt: &Worktree| wt.path == path && wt.branch.as_deref() == Some(branch.as_str());
     Ok(list(dir)?.into_iter().find(ours).map(|wt| wt.path))
@@ -286,11 +292,11 @@ fn existing(dir: &Path, name: &str) -> io::Result<Option<PathBuf>> {
 pub fn hook_remove(payload: &Value) -> io::Result<()> {
     let path = canonical(Path::new(field(payload, "worktree_path")?))?;
     let root = main_root(&path)?;
-    if path.parent() != Some(canonical(&root.join(WORKTREES_DIR))?.as_path()) {
+    if path.parent() != Some(canonical(&worktrees_dir(&root))?.as_path()) {
         return Err(io::Error::other(format!(
             "refusing to remove {}: not under {}",
             path.display(),
-            root.join(WORKTREES_DIR).display()
+            worktrees_dir(&root).display()
         )));
     }
     remove_path(&root, &path, false)

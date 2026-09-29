@@ -498,7 +498,7 @@ fn project(path: &str) -> Project {
 /// Describes `git worktree list` for the sidebar, skipping bare entries and worktrees whose
 /// directory is gone (git lists them as prunable until `git worktree prune`).
 fn worktrees(root: &Path, list: Vec<worktree::Worktree>) -> Vec<Worktree> {
-    let claude_dir = root.join(WORKTREES_DIR);
+    let claude_dir = worktree::worktrees_dir(root);
     list.into_iter()
         .filter(|wt| !wt.bare && !wt.prunable)
         .enumerate()

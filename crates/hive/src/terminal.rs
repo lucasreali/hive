@@ -554,13 +554,26 @@ pub mod conpty {
         vars.into_values().collect()
     }
 
-    /// A process's name as the unhooked-`claude` watcher compares it: its file's, without
-    /// `.exe`.
-    pub fn comm(exe: &str) -> &str {
-        match exe.split_at_checked(exe.len().saturating_sub(4)) {
+    /// A process's name as the unhooked-`claude` watcher compares it: its file's (`exe`),
+    /// without `.exe`; `claude` for a `node` whose command line (`args`, the program first)
+    /// runs Claude Code's CLI, as npm's `claude` does
+    /// (`…\node_modules\@anthropic-ai\claude-code\cli.js`).
+    pub fn comm<'a>(exe: &'a str, args: &[OsString]) -> &'a str {
+        let name = match exe.split_at_checked(exe.len().saturating_sub(4)) {
             Some((name, ext)) if ext.eq_ignore_ascii_case(".exe") => name,
             _ => exe,
+        };
+        let cli = |arg: &OsString| {
+            let arg = arg
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .replace('\\', "/");
+            arg.ends_with("/@anthropic-ai/claude-code/cli.js")
+        };
+        if name.eq_ignore_ascii_case("node") && args.iter().skip(1).any(cli) {
+            return "claude";
         }
+        name
     }
 
     #[cfg(test)]
@@ -730,6 +743,7 @@ pub mod conpty {
 
         #[test]
         fn a_process_name_drops_its_exe() {
+            let comm = |exe| comm(exe, &[]);
             assert_eq!(comm("claude.exe"), "claude");
             assert_eq!(comm("PING.EXE"), "PING");
             assert_eq!(comm("claude"), "claude");
@@ -737,6 +751,30 @@ pub mod conpty {
             assert_eq!(comm(".exe"), "");
             // Not cut inside a character.
             assert_eq!(comm("aé.ex"), "aé.ex");
+        }
+
+        #[test]
+        fn a_node_running_claude_codes_cli_is_claude() {
+            let npm =
+                r"C:\Users\me\AppData\Roaming\npm\node_modules\@Anthropic-AI\claude-code\cli.js";
+            let node = os(&[r"C:\Program Files\nodejs\node.exe", npm, "--resume"]);
+            assert_eq!(comm("node.exe", &node), "claude");
+            assert_eq!(comm("NODE.EXE", &node), "claude");
+            // Given with either separator, after node's own options.
+            let options = os(&[
+                "node",
+                "--no-warnings",
+                "/n/@anthropic-ai/claude-code/CLI.js",
+            ]);
+            assert_eq!(comm("node", &options), "claude");
+            // Another script, another package, or the CLI given only as node's program.
+            let other = os(&["node", r"C:\n\@anthropic-ai\claude-code\other.js"]);
+            assert_eq!(comm("node.exe", &other), "node");
+            let package = os(&["node", r"C:\n\@acme\claude-code\cli.js"]);
+            assert_eq!(comm("node.exe", &package), "node");
+            assert_eq!(comm("node.exe", &os(&[npm])), "node");
+            // Only a node.
+            assert_eq!(comm("deno.exe", &node), "deno");
         }
     }
 }

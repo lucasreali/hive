@@ -470,7 +470,9 @@ impl State {
             return Ok(());
         };
         let env = self.hive_env(projects::place(&self.projects.list(), worktree));
-        scripts::run(&script, Path::new(worktree), &env, scripts::ARCHIVE_TIME)
+        let shell = self.settings.get().0.terminal.shell;
+        let (dir, time) = (Path::new(worktree), scripts::ARCHIVE_TIME);
+        scripts::run(&script, dir, &env, time, shell)
     }
 
     /// Answers a project request off the frame loop, since git can take a while.

@@ -1039,7 +1039,8 @@ pub struct ProjectScripts {
     pub setup: Option<String>,
     /// Typed into a new terminal when the user runs one.
     pub run: Vec<RunScript>,
-    /// Run by the service (`sh -c`, in the worktree) before removing a worktree.
+    /// Run by the service (`sh -c`, on native Windows the terminals' shell; in the worktree)
+    /// before removing a worktree.
     pub archive: Option<String>,
 }
 
