@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [cov, plain]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -27,35 +27,43 @@ jobs:
           tool: cargo-llvm-cov
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: brew install fish
+      - name: dtrace
+        run: |
+          sudo dtrace -q -o /tmp/signals.log \
+            -n 'proc:::signal-send { printf("%d %d %s -> %d sig=%d\n", walltimestamp/1000000, pid, execname, args[1]->pr_pid, args[2]); }' \
+            -n 'syscall::kill:entry { printf("%d %d %s kill(%d, %d)\n", walltimestamp/1000000, pid, execname, (int)arg0, (int)arg1); }' \
+            > /tmp/dtrace.out 2>&1 &
+          sleep 5; cat /tmp/dtrace.out; sh -c 'kill -TERM $$' || true; sleep 2; tail -5 /tmp/signals.log || true
       - name: stress
         run: |
-          if [ "${{ matrix.mode }}" = cov ]; then run() { cargo llvm-cov -p hive --no-report; }; else run() { cargo test -p hive; }; fi
+          run() { cargo llvm-cov -p hive --no-report; }
           run > /dev/null 2>&1 || true
           rm -f /tmp/hive-debug.log
           fails=0
-          for i in $(seq 1 12); do
+          for i in $(seq 1 25); do
             if ! run > out-$i.txt 2>&1; then
               fails=$((fails+1))
               echo "=== run $i failed"
               grep -E "^test .* FAILED|panicked at|left:|right:" out-$i.txt | cut -c1-700
-              grep -oE '\.tmp[A-Za-z0-9]{6}' out-$i.txt | sort -u >> failed-dirs.txt
             fi
           done
-          echo "failed runs: $fails of 12"
+          echo "failed runs: $fails of 25"
       - if: always()
         name: signals
         run: |
-          grep -c . /tmp/hive-debug.log || true
-          echo "##### unexpected exits"
-          grep -n -B1 "SNAPSHOT UNEXPECTED" /tmp/hive-debug.log | cut -c1-400 | head -60 || true
-          for dir in $(sort -u failed-dirs.txt 2>/dev/null | head -6); do
-            echo "===== $dir"
-            grep -F "$dir/" /tmp/hive-debug.log | cut -c1-400 | head -150
-            for pid in $(grep -F "$dir/" /tmp/hive-debug.log | grep -oE 'shell=[0-9]+' | cut -d= -f2 | sort -u); do
-              echo "--- signals to $pid"
-              grep -E "(pid|pgrp|session): $pid[,} ]" /tmp/hive-debug.log | cut -c1-400 | head -20
-            done
+          log=/tmp/hive-debug.log
+          grep -c . $log || true
+          for shell in $(grep "SNAPSHOT UNEXPECTED" $log | grep -oE 'shell=[0-9]+' | cut -d= -f2 | head -8); do
+            echo "################ shell $shell"
+            at=$(grep "SNAPSHOT UNEXPECTED.*shell=$shell\$" $log | head -1 | cut -d' ' -f1)
+            env=$(grep "SNAPSHOT UNEXPECTED.*shell=$shell\$" $log | head -1 | sed -E 's/.* env=([^ ]*) .*/\1/')
+            echo "--- its service's log"
+            grep -E '^[0-9]{13} ' $log | grep -F "env=$env " | cut -c1-300
+            echo "--- every log line within 3 s before"
+            grep -E '^[0-9]{13} ' $log | awk -v at="$at" '$1 >= at - 3000 && $1 <= at' | grep -v "env=$env " | cut -c1-300
+            echo "--- signals to it or its group (dtrace)"
+            grep -E "(-> $shell |kill\(-?$shell, )" /tmp/signals.log | head -20
+            echo "--- terminal processes at its death"
+            awk -v at="$at" 'index($0, at" ") == 1 && /SNAPSHOT UNEXPECTED/ {p=1; next} p && /^[0-9]{13} / {p=0} p' $log | awk '$5 != "??"' | cut -c1-250
           done
-      - if: always()
-        name: snapshots
-        run: grep -A250 "SNAPSHOT UNEXPECTED" /tmp/hive-debug.log | head -1500 || true
+          echo "##### dtrace sample"; head -5 /tmp/signals.log || true; grep -c . /tmp/signals.log || true
