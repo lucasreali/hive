@@ -180,12 +180,9 @@ async fn statusline(paths: &Paths) -> io::Result<crate::statusline::Output> {
     let cancel = async move {
         terminate.recv().await;
     };
-    let (var, cwd) = (
-        |key: &str| std::env::var_os(key),
-        std::env::current_dir().ok(),
-    );
+    let (env, cwd) = (crate::statusline::env, std::env::current_dir().ok());
     let stdin = tokio::io::stdin();
-    Ok(crate::statusline::run(paths, stdin, var, cwd, cancel).await)
+    Ok(crate::statusline::run(paths, stdin, env, cwd, cancel).await)
 }
 
 /// Runs `task` to completion, then drops the runtime without waiting for blocking

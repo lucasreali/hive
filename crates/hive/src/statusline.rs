@@ -77,6 +77,11 @@ pub async fn run(
     output.unwrap_or_default()
 }
 
+/// This process's environment variable `key`, for [`run`].
+pub fn env(key: &str) -> Option<OsString> {
+    std::env::var_os(key)
+}
+
 /// `rate_limits.five_hour` of Claude Code's statusline input, when whole: the percentage
 /// rounded into 0–100.
 fn five_hour(input: &Value) -> Option<SessionWindow> {
@@ -239,6 +244,12 @@ mod tests {
     }
 
     #[test]
+    fn the_environment_is_this_processs() {
+        assert_eq!(env("PATH"), std::env::var_os("PATH"));
+        assert_eq!(env("HIVE_NO_SUCH_VARIABLE"), None);
+    }
+
+    #[test]
     fn the_project_is_where_claude_started_else_its_cwd() {
         let both = json!({ "cwd": "/c", "workspace": { "project_dir": "/p" } });
         assert_eq!(project_dir(&both), Some("/p".into()));
@@ -285,12 +296,14 @@ mod tests {
         assert!(made.unwrap().success());
         assert_eq!(pick().as_deref(), Some("shared"));
         std::fs::remove_file(&local).unwrap();
-        // Too large to be read.
-        let big = format!(
-            "{{\"statusLine\": {{\"type\": \"command\", \"command\": \"big\"}}, \"x\": \"{}\"}}",
-            " ".repeat(SETTINGS_LIMIT as usize)
-        );
-        std::fs::write(project.join(".claude/settings.local.json"), big).unwrap();
+        // Up to 1 MiB is read, no more.
+        let sized = |size: usize| {
+            let text = r#"{"statusLine": {"type": "command", "command": "big"}}"#;
+            text.to_owned() + &" ".repeat(size - text.len())
+        };
+        std::fs::write(&local, sized(1 << 20)).unwrap();
+        assert_eq!(pick().as_deref(), Some("big"));
+        std::fs::write(&local, sized((1 << 20) + 1)).unwrap();
         assert_eq!(pick().as_deref(), Some("shared"));
     }
 
@@ -370,11 +383,11 @@ mod tests {
         async fn run(command: &str, time: u64) -> Option<Output> {
             user(command, vec![], &b""[..], Duration::from_millis(time)).await
         }
-        let exact = format!("head -c {OUTPUT_LIMIT} /dev/zero");
-        let out = run(&exact, 5000).await.unwrap();
-        assert_eq!((out.0.len(), out.1), (OUTPUT_LIMIT, 0));
-        let over = format!("head -c {} /dev/zero", OUTPUT_LIMIT + 1);
-        assert_eq!(run(&over, 5000).await, None);
+        // 64 KiB at most.
+        let out = run("head -c 65536 /dev/zero", 5000).await.unwrap();
+        assert_eq!((out.0.len(), out.1), (65536, 0));
+        let over = "head -c 65537 /dev/zero";
+        assert_eq!(run(over, 5000).await, None);
         assert_eq!(run("sleep 5", 100).await, None);
         // Killed by a signal: printed, exit 1.
         assert_eq!(
