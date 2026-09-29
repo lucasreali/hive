@@ -259,11 +259,10 @@ mod portable_tests {
 
     #[tokio::test]
     async fn without_a_shell_to_ask_the_services_path_is_the_users() {
-        let (a, b, home) = if cfg!(windows) {
-            (r"C:\a", r"C:\b", r"C:\h")
-        } else {
-            ("/a", "/b", "/h")
-        };
+        #[cfg(windows)]
+        let (a, b, home) = (r"C:\a", r"C:\b", r"C:\h");
+        #[cfg(unix)]
+        let (a, b, home) = ("/a", "/b", "/h");
         let path = std::env::join_paths([a, "", b]).unwrap();
         let found = user_path(None, Some(path), Some(home.into()), SHELL_TIMEOUT).await;
         let home = Path::new(home);
