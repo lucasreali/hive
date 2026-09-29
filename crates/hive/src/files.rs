@@ -256,6 +256,15 @@ impl Watcher {
                 }
             }
         }
+        // A folder's own change changes nothing git lists: what it holds has its own watch, or
+        // is ignored. (Windows reports one for a write anywhere under it, Unix for its mode.)
+        let own = matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Any | ModifyKind::Metadata(_))
+        );
+        if own && event.paths.iter().all(|path| path.is_dir()) {
+            return false;
+        }
         // No path: an overflow, which calls for a full re-list.
         event.paths.is_empty() || event.paths.iter().any(|path| self.counts(path))
     }
@@ -453,27 +462,6 @@ mod tests {
     const SOON: Duration = Duration::from_secs(5);
     const NEVER: Duration = Duration::from_millis(600);
 
-    // TEMPORARY diagnostic (12.5.6b): what notify reports on Windows for a write two levels
-    // under a folder watched without recursion.
-    #[cfg(windows)]
-    #[test]
-    fn diagnostic_notify_events() {
-        let (_dir, root) = repo();
-        write(&root, "ignored/deep/x.txt");
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut w = notify::recommended_watcher(move |e| {
-            let _ = tx.send(e);
-        })
-        .unwrap();
-        w.watch(&root, RecursiveMode::NonRecursive).unwrap();
-        std::thread::sleep(Duration::from_millis(500));
-        let before: Vec<_> = rx.try_iter().collect();
-        write(&root, "ignored/deep/y.txt");
-        std::thread::sleep(Duration::from_millis(500));
-        let after: Vec<_> = rx.try_iter().collect();
-        panic!("root {root:?}\nbefore {before:#?}\nafter {after:#?}");
-    }
-
     #[tokio::test]
     async fn ignored_trees_are_neither_listed_nor_watched() {
         let (_dir, root) = repo();
@@ -495,6 +483,18 @@ mod tests {
         // Nor does the git dir, apart from HEAD and the index.
         write(&root, ".git/other");
         assert!(!changes(&mut watcher, NEVER).await);
+        // Nor a folder's own change (its mode here; Windows reports one for the write in the
+        // ignored tree above).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::Permissions::from_mode(0o700);
+            std::fs::set_permissions(root.join("src"), mode).unwrap();
+        }
+        assert!(!changes(&mut watcher, NEVER).await);
+        // A new folder is.
+        std::fs::create_dir(root.join("fresh")).unwrap();
+        assert!(changes(&mut watcher, SOON).await);
         // A file in an empty untracked directory is seen.
         write(&root, "empty/new.txt");
         assert!(changes(&mut watcher, SOON).await);
