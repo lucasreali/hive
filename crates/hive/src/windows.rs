@@ -826,7 +826,7 @@ pub mod terminal {
             let started = Instant::now();
             end_sessions(&[shell.session]).await;
             assert!(started.elapsed() < GRACE, "{:?}", started.elapsed());
-            assert!(list().iter().all(|p| p.session != shell.session));
+            assert!(!list().contains(&me));
         }
 
         #[tokio::test]
