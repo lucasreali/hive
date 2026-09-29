@@ -1,5 +1,5 @@
 # A tag `v*` (made by scripts/release.sh) publishes a GitHub release: the Windows installer
-# with the Linux `hive` inside it, the macOS app (.dmg) with the macOS `hive` inside it, their
+# with the Linux `hive` and `hive.exe` (12.5.4) inside it, the macOS app (.dmg) with the macOS `hive` inside it, their
 # updater signatures and `latest.json`, which the app's updater reads (TODO 4.17–4.19, 5.3).
 # Windows and macOS build in parallel; only `publish` touches the release, so `latest.json` is
 # written once, with every platform, in the shape tauri-action used to produce.
@@ -85,6 +85,11 @@ jobs:
         with:
           name: hive-linux
           path: src-tauri/resources
+      # The service on Windows itself (12.5.4), bundled next to the Linux `hive`.
+      - run: |
+          cargo build --release --locked -p hive
+          cp target/release/hive.exe src-tauri/resources/hive.exe
+        shell: bash
       - run: bun install --frozen-lockfile
       - run: bun tauri build --config src-tauri/tauri.release.conf.json
         env:

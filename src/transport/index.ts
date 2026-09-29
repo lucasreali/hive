@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type {
   AccountDir,
+  AppMode,
   DiffBase,
   GhAccount,
   ServiceMessage,
@@ -19,6 +20,12 @@ import { tauriTransport } from "./tauri";
 export interface Transport {
   /** Starts (or, after a reload, re-attaches to) the service. Resolves once requested. */
   connect(onMessage: (message: ServiceMessage) => void): Promise<void>;
+  /**
+   * Runs the service in WSL or on Windows from now on (12.5.4), the first run's choice or the
+   * settings' switch: the app keeps it and reconnects, answering `app_mode` then the new
+   * connection's messages.
+   */
+  setMode(mode: AppMode): Promise<void>;
   /**
    * Opens a terminal in `cwd` and resolves with its id (the frame channel). It gets the Claude
    * `account` (12.2), which must be one of the settings' accounts; without one, the current one.
@@ -196,7 +203,7 @@ export interface Transport {
 /**
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
- * `?mock=empty` starts it with no projects; `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
+ * `?mock=empty` starts it with no projects; `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
  * every terminal (the load test, 1.11). The fake service is a chunk of its own, loaded only
  * then (9.24): the app's startup bundle does not carry it.

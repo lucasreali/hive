@@ -137,6 +137,35 @@ test("selects save the cursor style and the theme", async () => {
   expect(document.documentElement.dataset.theme).toBe("one-light");
 });
 
+test("the service setting shows only where WSL or Windows is offered, and asks before switching (12.5.4)", () => {
+  open();
+  const service = () => screen.queryByRole("combobox", { name: "Service" });
+  expect(service()).toBeNull();
+  search("service");
+  expect(screen.getByText("No setting matches.")).toBeTruthy();
+  search("");
+  act(() => apply({ type: "app_mode", mode: "wsl", wsl: true }));
+  expect(service()?.textContent).toContain("WSL");
+  const setMode = spyOn(transport, "setMode").mockResolvedValue();
+  const pick = () => {
+    fireEvent.mouseDown(service() as HTMLElement);
+    fireEvent.click(screen.getByRole("option", { name: "Windows" }));
+    return screen.getByRole("dialog", { name: "Run Hive on Windows?" });
+  };
+  fireEvent.click(within(pick()).getByText("Cancel"));
+  expect(setMode).not.toHaveBeenCalled();
+  expect(useHive.getState().modal).toBe("settings");
+  fireEvent.click(within(pick()).getByText("Switch"));
+  expect(setMode).toHaveBeenCalledWith("native");
+  expect(useHive.getState().modal).toBe("settings");
+  act(() => apply({ type: "app_mode", mode: "native", wsl: true }));
+  expect(service()?.textContent).toContain("Windows");
+  // Without WSL there is nothing to choose.
+  act(() => apply({ type: "app_mode", mode: "native", wsl: false }));
+  expect(service()).toBeNull();
+  setMode.mockRestore();
+});
+
 test("the projects section edits each project's scripts", async () => {
   open();
   section("Projects");

@@ -105,7 +105,14 @@ export type ServiceMessage =
       error: string | null;
     }
   // Sent by the app side (Rust) when the bridge exits or its output closes.
-  | { type: "disconnected"; reason: string; bundled: boolean };
+  | { type: "disconnected"; reason: string; bundled: boolean }
+  // Sent by the app side (Rust) on Windows, where the service runs in WSL or on Windows itself
+  // (12.5.4), first on every connect: the mode (null until the user chose one) and whether WSL
+  // has a distribution (else the mode is always "native").
+  | { type: "app_mode"; mode: AppMode | null; wsl: boolean };
+
+/** Where the service runs on Windows (12.5.4). */
+export type AppMode = "wsl" | "native";
 
 /** Mirrors `hive_protocol::Worktree`: every field comes from the service. */
 export type Worktree = {

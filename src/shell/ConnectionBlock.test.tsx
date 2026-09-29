@@ -1,9 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { initialState, setOpenFile, useHive } from "../store";
+import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
 import { openInEditor } from "../viewer/external";
 
@@ -113,6 +114,46 @@ test("on macOS the fixes do not mention WSL", () => {
     }),
   );
   expect(dialog()?.textContent).toContain("Stop the old one:pkill");
+  act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
+  expect(dialog()?.textContent).toContain("check that hive is installed: cargo install");
+  expect(dialog()?.textContent).not.toContain("WSL");
+});
+
+test("the first run with WSL asks where the service runs, and the choice goes to the app (12.5.4)", () => {
+  const setMode = spyOn(transport, "setMode").mockResolvedValue();
+  render(<App />);
+  act(() => apply({ type: "app_mode", mode: null, wsl: true }));
+  const choice = dialog() as HTMLElement;
+  expect(choice.textContent).toContain("Where should Hive run?");
+  expect(workspace().inert).toBe(true);
+  expect(document.activeElement?.textContent).toBe("WSL");
+  fireEvent.click(within(choice).getByText("Windows"));
+  expect(setMode).toHaveBeenCalledWith("native");
+  fireEvent.click(within(choice).getByText("WSL"));
+  expect(setMode).toHaveBeenLastCalledWith("wsl");
+  // The app answers with the mode chosen: the question goes, the connection comes.
+  act(() => apply({ type: "app_mode", mode: "native", wsl: true }));
+  expect(dialog()).toBeNull();
+  expect(workspace().inert).toBe(false);
+  expect(useHive.getState().connection.status).toBe("connecting");
+  setMode.mockRestore();
+});
+
+test("on Windows itself the fixes stop hive.exe and do not mention WSL (12.5.4)", () => {
+  render(<App />);
+  act(() => apply({ type: "app_mode", mode: "native", wsl: false }));
+  act(() =>
+    apply({
+      type: "version_mismatch",
+      protocol: 2,
+      version: "0.2.0",
+      app_protocol: 1,
+      app_version: "0.1.0",
+      bundled: true,
+    }),
+  );
+  expect(dialog()?.querySelector("pre")?.textContent).toBe("taskkill /F /IM hive.exe");
+  expect(dialog()?.textContent).toContain("Stop the old one:taskkill");
   act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   expect(dialog()?.textContent).toContain("check that hive is installed: cargo install");
   expect(dialog()?.textContent).not.toContain("WSL");
