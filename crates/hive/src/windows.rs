@@ -3,18 +3,19 @@
 //! that never replaces, a file another program holds, the drives), and what is not supported
 //! yet ([`unsupported`]). Tested on the Windows CI runner (`windows.yml`).
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::ops::BitOr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::{Component, Path, PathBuf};
+use std::process::{Child, Command};
 use std::time::Duration;
 
-use hive_protocol::Dir;
+use hive_protocol::{Dir, TerminalShell};
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
@@ -39,6 +40,8 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::core::BOOL;
 
 use crate::paths::Paths;
+use crate::procs::Proc;
+use crate::terminal::conpty;
 
 /// How long a client waits for a free instance of the service's pipe (an instance serves one
 /// connection, and the service makes the next one right after).
@@ -308,7 +311,7 @@ pub mod terminal {
     use std::io;
     use std::ops::BitOr;
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::{AsRawHandle, HandleOrInvalid, OwnedHandle, RawHandle};
+    use std::os::windows::io::{AsRawHandle, OwnedHandle, RawHandle};
     use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::process::ExitStatus;
@@ -324,10 +327,6 @@ pub mod terminal {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::{
         COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
-    };
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-        TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -345,7 +344,6 @@ pub mod terminal {
     use windows_sys::core::HRESULT;
 
     use super::{check, instance, owned, process_user};
-    use crate::procs::Proc;
     use crate::terminal::{GRACE, Input, LastOutput, Terminal, conpty};
     use crate::watch::Watch;
 
@@ -741,48 +739,56 @@ pub mod terminal {
         listed.iter().map(|&id| id as u32).collect()
     }
 
-    /// The processes of Hive's terminals, each in its terminal's session.
-    pub fn list() -> Vec<Proc> {
-        let names = names().unwrap_or_default();
+    /// The processes of Hive's terminals: each one's terminal (its session id), by process id.
+    pub fn jobs() -> HashMap<u32, i32> {
         let sessions = sessions();
         let pids = sessions.iter().flat_map(|(&session, running)| {
             pids(&running.job)
                 .into_iter()
-                .map(move |pid| (session, pid))
+                .map(move |pid| (pid, session))
         });
-        let named = pids.filter_map(|(session, pid)| Some((session, pid, names.get(&pid)?)));
-        let procs = named.map(|(session, pid, name)| Proc {
-            pid: pid as i32,
-            pgrp: pid as i32,
-            session,
-            comm: conpty::comm(name).to_owned(),
-        });
-        procs.collect()
+        pids.collect()
     }
 
-    /// Every process's executable file name, by process id.
-    fn names() -> io::Result<HashMap<u32, String>> {
-        names_in(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) })
-    }
+    /// A job of a program run with a time limit (git, `gh`, a project script), as a process
+    /// group on Unix: it holds the program and whatever it starts, killed by [`Job::kill`] or
+    /// once the job is dropped.
+    pub struct Job(OwnedHandle);
 
-    /// The executable file names in the process `snapshot` (invalid when it failed).
-    fn names_in(snapshot: RawHandle) -> io::Result<HashMap<u32, String>> {
-        let snapshot = unsafe { HandleOrInvalid::from_raw_handle(snapshot) };
-        let snapshot = OwnedHandle::try_from(snapshot).map_err(io::Error::other)?;
-        let mut entry = PROCESSENTRY32W {
-            dwSize: size_of::<PROCESSENTRY32W>() as u32,
-            ..Default::default()
-        };
-        let mut names = HashMap::new();
-        let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &mut entry) };
-        while more != 0 {
-            let file = &entry.szExeFile;
-            let len = file.iter().position(|&c| c == 0).unwrap_or(file.len());
-            let name = String::from_utf16_lossy(&file[..len]);
-            names.insert(entry.th32ProcessID, name);
-            more = unsafe { Process32NextW(snapshot.as_raw_handle(), &mut entry) };
+    /// Puts a process in a job ([`assign`], or a test's that fails).
+    type Assign = fn(&OwnedHandle, RawHandle) -> io::Result<()>;
+
+    impl Job {
+        /// A new job holding `process`, which should have started nothing yet. A process that
+        /// cannot join one is killed: it would run without a limit.
+        // ponytail: joined right after its start, not started suspended in it (as a terminal's
+        // shell): `std::process::Command` cannot resume a process. A program starts nothing in
+        // the microseconds between.
+        pub fn of(process: &impl AsRawHandle) -> io::Result<Self> {
+            Self::joined(job(), process.as_raw_handle(), assign)
         }
-        Ok(names)
+
+        /// `process` in `job` (a new one, or why there is none), joined through `assign`; killed
+        /// on a failure. Both are given by tests to fail.
+        fn joined(
+            job: io::Result<OwnedHandle>,
+            process: RawHandle,
+            assign: Assign,
+        ) -> io::Result<Self> {
+            let joined = job.and_then(|job| {
+                assign(&job, process)?;
+                Ok(Self(job))
+            });
+            if joined.is_err() {
+                kill(process);
+            }
+            joined
+        }
+
+        /// Kills every process in the job, with [`KILLED`] as their exit code.
+        pub fn kill(&self) {
+            unsafe { TerminateJobObject(self.0.as_raw_handle(), KILLED) };
+        }
     }
 
     /// Ends the terminals of `ended` (session ids): closes their consoles, waits up to
@@ -818,6 +824,8 @@ pub mod terminal {
         };
 
         use super::*;
+        use crate::procs::Proc;
+        use crate::windows::list;
 
         thread_local! {
             /// The console and the shell the last start on this thread made.
@@ -1014,12 +1022,6 @@ pub mod terminal {
             tokio::time::timeout(SHOWN, fed).await.unwrap().unwrap();
         }
 
-        #[test]
-        fn a_failed_process_snapshot_is_an_error() {
-            assert!(names_in(INVALID_HANDLE_VALUE).is_err());
-            assert!(!names().unwrap().is_empty());
-        }
-
         /// How long a shell gets to show something (a mutant that breaks it fails within 120 s).
         const SHOWN: Duration = Duration::from_secs(20);
 
@@ -1203,6 +1205,68 @@ pub mod terminal {
             assert_eq!(ping.wait().unwrap().code(), Some(KILLED as i32));
         }
 
+        #[tokio::test]
+        async fn a_job_kills_what_joined_it_and_a_process_that_cannot_join_is_killed() {
+            // `cmd` waits for the `ping` it starts (about 30 s): both are in the job.
+            let mut cmd = std::process::Command::new("cmd")
+                .args(["/c", "ping -n 30 127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let job = Job::of(&cmd).unwrap();
+            let both = async {
+                loop {
+                    let listed = pids(&job.0);
+                    if let Some(&ping) = listed.iter().find(|&&pid| pid != cmd.id()) {
+                        return ping;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            let ping = tokio::time::timeout(SHOWN, both).await.unwrap();
+            let ping = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, ping) }).unwrap();
+            job.kill();
+            assert_eq!(cmd.wait().unwrap().code(), Some(KILLED as i32));
+            assert!(ends(&ping));
+            // Left out of a job (none made, or not joined), it would run without a limit.
+            let failures: [(_, Assign); 2] = [
+                (Err(io::Error::other("no job")), assign),
+                (super::job(), |_, _| denied()),
+            ];
+            for (job, assign) in failures {
+                let mut lone = std::process::Command::new("ping")
+                    .args(["-n", "30", "127.0.0.1"])
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap();
+                assert!(Job::joined(job, lone.as_raw_handle(), assign).is_err());
+                assert_eq!(lone.wait().unwrap().code(), Some(KILLED as i32));
+            }
+        }
+
+        #[tokio::test]
+        async fn npms_claude_is_a_claude_in_its_terminal() {
+            let shell = Shell::start(TerminalShell::Cmd);
+            // A stand-in for the CLI npm installs, run by the runner's `node`.
+            let package = shell.dir.path().join(r"npm\@anthropic-ai\claude-code");
+            std::fs::create_dir_all(&package).unwrap();
+            let cli = package.join("cli.js");
+            std::fs::write(&cli, "setTimeout(() => {}, 30000);").unwrap();
+            shell.type_line(&format!("node \"{}\"", cli.display()));
+            let claude = async {
+                loop {
+                    let procs = list().into_iter();
+                    let mut mine = procs.filter(|p| p.session == shell.session);
+                    if mine.any(|p| p.comm == "claude") {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(SHOWN, claude).await.unwrap();
+            end_sessions(&[shell.session]).await;
+        }
+
         #[test]
         fn sizes_fit_a_console_and_failed_results_are_errors() {
             let fits = size(80, 24);
@@ -1226,12 +1290,82 @@ pub fn path_shell() -> (OsString, Vec<OsString>) {
     ("powershell".into(), args.map(OsString::from).to_vec())
 }
 
-/// The process table: until 12.5.6a, only the processes of Hive's terminals.
-pub use terminal::list;
+pub use terminal::Job;
 
-/// No process working folders until 12.5.6a.
-pub fn cwd(_pid: i32) -> Option<PathBuf> {
-    None
+/// The process table (`sysinfo`): every process, named by its file (see
+/// [`conpty::comm`]), in its terminal's session (0 outside Hive's terminals).
+pub fn list() -> Vec<Proc> {
+    table(ProcessRefreshKind::nothing(), |_| true)
+}
+
+/// The processes whose working folder is `dir` or inside it: every process's is read at once.
+pub fn inside(dir: &Path) -> Vec<Proc> {
+    let kind = ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always);
+    table(kind, |process| {
+        process.cwd().is_some_and(|cwd| under(cwd, dir))
+    })
+}
+
+/// The processes `keep` keeps, read as `kind` says. Only the terminals' processes get their
+/// command line read (one read of the process's memory each), which names npm's `claude`, a
+/// `node`.
+fn table(kind: ProcessRefreshKind, keep: impl Fn(&Process) -> bool) -> Vec<Proc> {
+    let sessions = terminal::jobs();
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+    let terminals: Vec<Pid> = sessions.keys().map(|&pid| Pid::from_u32(pid)).collect();
+    let args = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&terminals), false, args);
+    let kept = system.processes().values().filter(|process| keep(process));
+    kept.map(|process| {
+        let pid = process.pid().as_u32();
+        let name = process.name().to_string_lossy();
+        Proc {
+            pid: pid as i32,
+            pgrp: pid as i32,
+            session: sessions.get(&pid).copied().unwrap_or_default(),
+            comm: conpty::comm(&name, process.cmd()).to_owned(),
+        }
+    })
+    .collect()
+}
+
+/// Whether `path` is `dir` or inside it, names compared ignoring (ASCII) case as Windows does:
+/// a process may have typed its folder in any case.
+fn under(path: &Path, dir: &Path) -> bool {
+    let mut names = path.components();
+    dir.components().all(|name| {
+        let same = |of: Component| of.as_os_str().eq_ignore_ascii_case(name.as_os_str());
+        names.next().is_some_and(same)
+    })
+}
+
+/// How the user's archive `script` runs: in the terminals' shell (`terminal.shell`, found on
+/// the service's `PATH` as for a terminal), PowerShell with `-NoProfile -Command`, Command
+/// Prompt with `/D /S /C` (the script passed as it is: `cmd` has quoting rules of its own),
+/// Git Bash with `-c`.
+pub fn script(script: &str, shell: TerminalShell) -> io::Result<Command> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let root = std::env::var_os("SystemRoot");
+    let program = conpty::shell(shell, &path, root.as_deref()).map_err(io::Error::other)?;
+    let mut command = Command::new(program.into_iter().next().unwrap_or_default());
+    match shell {
+        TerminalShell::Default => command.args(["-NoProfile", "-Command", script]),
+        TerminalShell::Cmd => command
+            .args(["/D", "/S", "/C"])
+            .raw_arg(format!("\"{script}\"")),
+        TerminalShell::GitBash => command.args(["-c", script]),
+    };
+    Ok(command)
+}
+
+/// Where the program `name` (`gh`) is on `path` alone: the first `<name>.exe` in its folders.
+/// (Given `name`, Windows would also look beside Hive, in its system folders and on the
+/// service's own `PATH`.)
+pub fn on_path(name: &OsStr, path: &OsStr) -> Option<PathBuf> {
+    let exe = Path::new(name).with_extension("exe");
+    let mut found = std::env::split_paths(path).map(|dir| dir.join(&exe));
+    found.find(|file| file.is_file())
 }
 
 /// Renames `from` to `to` in one step, failing (`AlreadyExists`) when `to` exists, as
@@ -1298,18 +1432,6 @@ fn drive_dirs(mask: u32) -> Vec<Dir> {
             git: false,
         })
         .collect()
-}
-
-/// Kills process `pid` and every process it started.
-// ponytail: `taskkill` by pid, which a pid reused meanwhile could misdirect; a job object
-// (12.5.6a) ends exactly the tree.
-pub fn kill_tree(pid: u32) {
-    let _ = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 /// What a program printed (a path, a `PATH`): programs print UTF-8 on Windows, and git
@@ -1520,11 +1642,6 @@ mod tests {
     }
 
     #[test]
-    fn stubs_answer_nothing() {
-        assert_eq!(cwd(4), None);
-    }
-
-    #[test]
     fn a_rename_never_replaces_a_file_or_a_folder() {
         let tmp = tempfile::tempdir().unwrap();
         let at = |name: &str| tmp.path().join(name);
@@ -1633,21 +1750,87 @@ mod tests {
     }
 
     #[test]
-    fn a_killed_tree_ends() {
+    fn every_process_is_listed_and_found_by_its_folder_in_any_case() {
+        let me = std::process::id() as i32;
+        let listed = list();
+        let found = listed.iter().find(|p| p.pid == me).unwrap();
+        // Outside Hive's terminals, under its file's name.
+        assert_eq!((found.pgrp, found.session), (me, 0));
+        assert!(found.comm.starts_with("hive"), "{found:?}");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Work");
+        std::fs::create_dir(&dir).unwrap();
         // `ping` waits a second between tries: about 30 s unless killed.
-        let mut child = Command::new("ping")
+        let mut ping = Command::new("ping")
             .args(["-n", "30", "127.0.0.1"])
-            .stdout(Stdio::null())
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        kill_tree(child.id());
-        let started = Instant::now();
-        let ended = (0..100).any(|_| {
-            std::thread::sleep(Duration::from_millis(100));
-            child.try_wait().unwrap().is_some()
-        });
-        assert!(ended, "not killed after {:?}", started.elapsed());
-        assert!(!child.wait().unwrap().success());
+        let pid = ping.id() as i32;
+        let upper = PathBuf::from(dir.to_string_lossy().to_uppercase());
+        for dir in [dir.as_path(), upper.as_path(), tmp.path()] {
+            let found = inside(dir);
+            let ping = found.iter().find(|p| p.pid == pid);
+            assert!(
+                ping.is_some_and(|p| p.comm.eq_ignore_ascii_case("ping")),
+                "{dir:?}: {found:?}"
+            );
+        }
+        // A folder beside it, whose name starts the same, holds nothing.
+        let other = tmp.path().join("Workshop");
+        std::fs::create_dir(&other).unwrap();
+        assert_eq!(inside(&other), []);
+        ping.kill().unwrap();
+        ping.wait().unwrap();
+    }
+
+    #[test]
+    fn a_folder_holds_what_is_under_it_named_in_any_case() {
+        let under = |path: &str, dir: &str| under(Path::new(path), Path::new(dir));
+        assert!(under(r"C:\r\wt\", r"C:\r\wt"));
+        assert!(under(r"c:\R\WT\src", r"C:\r\wt"));
+        assert!(!under(r"C:\r\wt2", r"C:\r\wt"));
+        assert!(!under(r"C:\r", r"C:\r\wt"));
+        assert!(!under(r"D:\r\wt", r"C:\r\wt"));
+    }
+
+    #[test]
+    fn archive_scripts_run_in_the_chosen_shell() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = [("HIVE_PORT", "20000".to_owned())];
+        let pwsh = r#"Set-Content -Path out -Value ("p=" + $env:HIVE_PORT + " " + $PSVersionTable.PSEdition)"#;
+        let shells = [
+            // The runner has PowerShell 7 on its `PATH`.
+            (TerminalShell::Default, pwsh, "p=20000 Core"),
+            // Its own quoting: the line as it is.
+            (
+                TerminalShell::Cmd,
+                r#"echo "p=%HIVE_PORT%"> out"#,
+                r#""p=20000""#,
+            ),
+            (
+                TerminalShell::GitBash,
+                r#"echo "p=$HIVE_PORT" > out"#,
+                "p=20000",
+            ),
+        ];
+        let time = Duration::from_secs(20);
+        for (shell, script, written) in shells {
+            crate::scripts::run(script, tmp.path(), &env, time, shell).unwrap();
+            let out = std::fs::read_to_string(tmp.path().join("out")).unwrap();
+            assert_eq!(out.trim_end(), written, "{shell:?}");
+        }
+    }
+
+    #[test]
+    fn a_program_is_found_on_the_path_it_is_given_only() {
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([tmp.path(), &system]).unwrap();
+        let cmd = OsStr::new("cmd");
+        assert_eq!(on_path(cmd, &path), Some(system.join("cmd.exe")));
+        assert_eq!(on_path(cmd, tmp.path().as_os_str()), None);
     }
 
     #[test]

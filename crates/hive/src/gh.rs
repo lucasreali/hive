@@ -72,7 +72,14 @@ impl Gh {
         args: &[&str],
         (ok, keep, time): (&[i32], Stdout, Duration),
     ) -> Result<Vec<u8>, String> {
-        let mut command = Command::new(&self.program);
+        #[cfg(unix)]
+        let program = &self.program;
+        // Windows would also look for it beside Hive, in its system folders and on the
+        // service's own `PATH`.
+        #[cfg(windows)]
+        let program = crate::windows::on_path(&self.program, &self.path)
+            .ok_or_else(|| NOT_INSTALLED.to_owned())?;
+        let mut command = Command::new(program);
         for key in CLEARED {
             command.env_remove(key);
         }
@@ -440,7 +447,6 @@ esac
         assert_eq!(over.gh.accounts(None), Err(refused.to_owned()));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_missing_gh_is_said_plainly() {
         let tmp = tempfile::tempdir().unwrap();

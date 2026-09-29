@@ -10,7 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::{SinkExt, StreamExt};
 use hive::paths::Paths;
 use hive_protocol::{
-    AgentState, Control, Frame, FrameCodec, FrameType, Role, SessionWindow, Settings, TerminalShell,
+    AgentState, Control, Frame, FrameCodec, FrameType, ProjectScripts, ProjectSettings, Role,
+    SessionWindow, Settings, TerminalShell,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -296,4 +297,107 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         assert!(started.elapsed() < TIMEOUT, "the service is still running");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_shell() {
+    let env = Env::new();
+    let root = env.path("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    let who = ["-c", "user.name=a", "-c", "user.email=a@b"];
+    git(&[&who[..], &["commit", "-q", "--allow-empty", "-m", "m"]].concat());
+    let (mut bridge, mut app) = bridge(&env);
+    app.send(0, Control::hello(Role::App, hive::VERSION)).await;
+    let path = root.to_string_lossy().into_owned();
+    app.send(0, Control::AddProject { path }).await;
+    let added =
+        |message: Option<&Control>, _: &str| matches!(message, Some(Control::ProjectAdded { .. }));
+    let Some(Control::ProjectAdded { project }) = app.until(0, "the project", added).await else {
+        unreachable!()
+    };
+    // The archive script, in Command Prompt: it notes the worktree it ran in.
+    let archived = root.join("archived");
+    let script = format!(r#"echo %HIVE_WORKTREE_PATH%> "{}""#, archived.display());
+    let mut settings = Settings::default();
+    settings.terminal.shell = TerminalShell::Cmd;
+    let scripts = ProjectScripts {
+        archive: Some(script),
+        ..Default::default()
+    };
+    let project_settings = ProjectSettings { scripts };
+    settings
+        .projects
+        .insert(project.id.clone(), project_settings);
+    let set = Control::SetSettings {
+        settings: settings.clone(),
+    };
+    app.send(0, set).await;
+    app.wait_for(0, Control::Settings { settings }).await;
+    let create = Control::CreateWorktree {
+        project: project.id,
+        name: "a".into(),
+        base: None,
+    };
+    app.send(0, create).await;
+    let created = |message: Option<&Control>, _: &str| {
+        matches!(message, Some(Control::WorktreeCreated { .. }))
+    };
+    let Some(Control::WorktreeCreated { path, .. }) = app.until(0, "the worktree", created).await
+    else {
+        unreachable!()
+    };
+
+    // A process working in it (not in a terminal of Hive) keeps it, before its script runs.
+    let mut ping = std::process::Command::new("ping")
+        .args(["-n", "30", "127.0.0.1"])
+        .current_dir(&path)
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let remove = Control::RemoveWorktree {
+        path: path.clone(),
+        force: false,
+    };
+    app.send(0, remove.clone()).await;
+    let answered = |message: Option<&Control>, _: &str| {
+        matches!(
+            message,
+            Some(Control::RemoveWorktreeFailed { .. } | Control::WorktreeRemoved { .. })
+        )
+    };
+    let failed = app.until(0, "the refusal", answered).await;
+    let Some(Control::RemoveWorktreeFailed { message, .. }) = failed else {
+        panic!("{failed:?}")
+    };
+    let held = format!("in use by ping ({}): close its terminals first", ping.id());
+    assert_eq!(message.to_lowercase(), held);
+    assert!(std::path::Path::new(&path).is_dir());
+    assert!(!archived.exists());
+
+    // Once it is gone: the script runs in the worktree, then the worktree goes.
+    ping.kill().unwrap();
+    ping.wait().unwrap();
+    app.send(0, remove).await;
+    let removed = app.until(0, "the removal", answered).await;
+    assert!(
+        matches!(removed, Some(Control::WorktreeRemoved { .. })),
+        "{removed:?}"
+    );
+    assert!(!std::path::Path::new(&path).exists());
+    let noted = std::fs::read_to_string(&archived).unwrap();
+    assert_eq!(noted.trim_end(), path);
+
+    drop(app);
+    let ended = tokio::time::timeout(TIMEOUT, bridge.wait()).await;
+    assert!(ended.unwrap().unwrap().success());
 }

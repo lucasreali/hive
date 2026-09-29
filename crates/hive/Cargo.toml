@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 publish = false
 
@@ -34,4 +34,5 @@ nix = { version = "0.31.3", features = ["signal", "user", "process", "fs", "time
 pty-process = { version = "0.5.3", features = ["async"] }
 
 [target."cfg(windows)".dependencies]
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Performance", "Win32_System_Threading"] }

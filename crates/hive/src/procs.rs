@@ -1,5 +1,6 @@
 //! Minimal process listing: enough to find a terminal's processes and the Claude session each
-//! `claude` runs. On Linux it reads `/proc`; on macOS it asks the kernel through `libproc`.
+//! `claude` runs. On Linux it reads `/proc`; on macOS it asks the kernel through `libproc`; on
+//! native Windows `sysinfo` (`hive::windows`).
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -47,8 +48,9 @@ impl Source<'_> {
             Source::System => Source::Dir(Path::new("/proc")).cwd(pid),
             #[cfg(target_os = "macos")]
             Source::System => crate::macos::cwd(pid),
+            // Never asked: [`inside`] has Windows read every process's folder at once.
             #[cfg(windows)]
-            Source::System => crate::windows::cwd(pid),
+            Source::System => None,
         }
     }
 
@@ -97,6 +99,11 @@ pub fn list(source: Source) -> Vec<Proc> {
 
 /// Live processes whose working directory is `dir` or inside it.
 pub fn inside(source: Source, dir: &Path) -> Vec<Proc> {
+    // One process at a time would read the whole table each time.
+    #[cfg(windows)]
+    if let Source::System = source {
+        return crate::windows::inside(dir);
+    }
     list(source)
         .into_iter()
         .filter(|p| source.cwd(p.pid).is_some_and(|cwd| cwd.starts_with(dir)))
