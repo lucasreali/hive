@@ -194,6 +194,8 @@ type Field = {
   check?: boolean;
   /** Shown only where the app offers WSL or Windows (12.5.4). */
   modes?: boolean;
+  /** Shown only while the service runs natively on Windows (the app's mode, 12.5.4). */
+  windows?: boolean;
   control: (id: string, label: string) => ReactNode;
 };
 
@@ -201,6 +203,11 @@ const CURSORS = [
   { value: "block", label: "Block" },
   { value: "bar", label: "Bar" },
   { value: "underline", label: "Underline" },
+];
+const SHELLS = [
+  { value: "default", label: "PowerShell" },
+  { value: "cmd", label: "Command Prompt" },
+  { value: "git_bash", label: "Git Bash" },
 ];
 const THEMES = [
   { value: "one-dark", label: "One Dark" },
@@ -287,6 +294,13 @@ const FIELDS: Field[] = [
         }}
       />
     ),
+  },
+  {
+    section: "Terminal",
+    label: "Shell",
+    help: "PowerShell is pwsh when installed, else Windows PowerShell. For new terminals.",
+    windows: true,
+    control: (id) => <Shell id={id} />,
   },
   { section: "Appearance", label: "Theme", control: (id) => <Theme id={id} /> },
   {
@@ -414,6 +428,22 @@ function CursorStyle({ id }: { id: string }) {
       onChange={(v) =>
         saveSettings((s) => {
           s.terminal.cursor_style = v as Settings["terminal"]["cursor_style"];
+        })
+      }
+    />
+  );
+}
+
+function Shell({ id }: { id: string }) {
+  const value = useHive((s) => s.settings.terminal.shell);
+  return (
+    <Select
+      aria-labelledby={`${id}-label`}
+      value={value}
+      options={SHELLS}
+      onChange={(v) =>
+        saveSettings((s) => {
+          s.terminal.shell = v as Settings["terminal"]["shell"];
         })
       }
     />
@@ -796,7 +826,8 @@ function Accounts() {
 
 function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
-  const fields = FIELDS.filter((f) => modes || !f.modes);
+  const windows = useHive((s) => s.appMode?.mode === "native");
+  const fields = FIELDS.filter((f) => (modes || !f.modes) && (windows || !f.windows));
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
     if (found.length === 0) return <p className="field-help">No setting matches.</p>;

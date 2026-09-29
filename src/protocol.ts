@@ -400,6 +400,8 @@ export type Settings = {
     cursor_style: "block" | "bar" | "underline";
     cursor_blink: boolean;
     copy_on_select: boolean;
+    /** New terminals' shell when the service runs natively on Windows; ignored elsewhere. */
+    shell: "default" | "cmd" | "git_bash";
   };
   appearance: { theme: "one-dark" | "one-light" };
   /** `volume`: the alert tone's, in percent; 0 mutes it. */

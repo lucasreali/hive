@@ -180,6 +180,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
     cursor_style: "bar",
     cursor_blink: true,
     copy_on_select: false,
+    shell: "default",
   };
   settings.appearance.theme = "one-light";
   apply({ type: "settings", settings });

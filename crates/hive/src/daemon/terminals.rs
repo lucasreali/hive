@@ -7,11 +7,10 @@ use std::time::{Duration, Instant};
 
 use hive_protocol::{AccountDir, Control, Frame};
 use tokio::io::AsyncReadExt;
-use tokio::process::Child;
 use tokio::sync::mpsc;
 
 use super::State;
-use crate::terminal::{self, Input};
+use crate::terminal::{self, Child, Input};
 use crate::{procs, projects, watch};
 
 impl State {
@@ -66,13 +65,15 @@ impl State {
         let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), cwd));
         let worktree = place.as_ref().map(|(_, worktree)| worktree.clone());
         env.extend(tokio::task::block_in_place(|| self.hive_env(place)));
+        let shell = self.settings.get().0.terminal.shell;
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {
                 _ if channel == 0 => Err("terminal channels start at 1".to_owned()),
                 Entry::Occupied(_) => Err(format!("terminal {channel} is already open")),
                 Entry::Vacant(slot) => {
-                    terminal::spawn(channel, cwd, cols, rows, &self.bin_dir, &env).map(
+                    let size = (cols, rows);
+                    terminal::spawn(channel, cwd, size, &self.bin_dir, &env, shell).map(
                         |(mut terminal, input, pty, child)| {
                             terminal.claude_dir = claude_dir;
                             let last = terminal.last_output.clone();

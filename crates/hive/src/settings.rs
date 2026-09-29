@@ -435,6 +435,10 @@ mod tests {
                 "terminal.font_size must be between 8 and 32 (got 99)",
             ),
             (
+                r#"{"terminal":{"shell":"zsh"}}"#,
+                "unknown variant `zsh`, expected one of `default`, `cmd`, `git_bash`",
+            ),
+            (
                 &" ".repeat(FILE_LIMIT as usize + 1),
                 "input larger than 262144 bytes",
             ),

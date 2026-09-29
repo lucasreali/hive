@@ -166,6 +166,21 @@ test("the service setting shows only where WSL or Windows is offered, and asks b
   setMode.mockRestore();
 });
 
+test("the shell is a setting only when the service runs natively on Windows", async () => {
+  open();
+  expect(screen.queryByRole("combobox", { name: "Shell" })).toBeNull();
+  search("shell");
+  expect(screen.getByText("No setting matches.")).toBeTruthy();
+  search("");
+  act(() => apply({ type: "app_mode", mode: "native", wsl: false }));
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Shell" }));
+  fireEvent.click(screen.getByRole("option", { name: "Git Bash" }));
+  await waitFor(() => expect(settings().terminal.shell).toBe("git_bash"));
+  // Back on WSL: gone again.
+  act(() => apply({ type: "app_mode", mode: "wsl", wsl: true }));
+  expect(screen.queryByRole("combobox", { name: "Shell" })).toBeNull();
+});
+
 test("the projects section edits each project's scripts", async () => {
   open();
   section("Projects");

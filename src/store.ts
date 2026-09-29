@@ -166,6 +166,7 @@ export const DEFAULT_SETTINGS: Settings = {
     cursor_style: "block",
     cursor_blink: false,
     copy_on_select: false,
+    shell: "default",
   },
   appearance: { theme: "one-dark" },
   notifications: { volume: 100 },
