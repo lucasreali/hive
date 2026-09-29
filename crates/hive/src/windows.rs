@@ -1,21 +1,27 @@
 //! What only native Windows needs, kept apart from the portable code (12.5): the service's
-//! named pipe and its checks, how the bridge starts the service, the clock, and what is not
-//! supported yet ([`unsupported`]). Tested on the Windows CI runner (`windows.yml`).
+//! named pipe and its checks, how the bridge starts the service, the clock, files (a rename
+//! that never replaces, a file another program holds, the drives), and what is not supported
+//! yet ([`unsupported`]). Tested on the Windows CI runner (`windows.yml`).
 
 use std::ffi::OsString;
 use std::fs::File;
 use std::io;
 use std::ops::BitOr;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
+use hive_protocol::Dir;
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
-use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, HANDLE, LocalFree, WIN32_ERROR};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_PIPE_BUSY, ERROR_SHARING_VIOLATION, HANDLE,
+    LocalFree, WIN32_ERROR,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
     SDDL_REVISION_1, SE_KERNEL_OBJECT,
@@ -24,6 +30,7 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, OWNER_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
     TOKEN_USER, TokenUser,
 };
+use windows_sys::Win32::Storage::FileSystem::{GetLogicalDrives, MoveFileExW};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, OpenProcess,
@@ -932,14 +939,70 @@ pub fn cwd(_pid: i32) -> Option<PathBuf> {
     None
 }
 
-/// A folder rename that never replaces (12.5.6b).
-pub fn rename_new(_from: &Path, _to: &Path) -> io::Result<()> {
-    Err(unsupported("moving a folder"))
+/// Renames `from` to `to` in one step, failing (`AlreadyExists`) when `to` exists, as
+/// `renameat2(RENAME_NOREPLACE)`: `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`.
+// ponytail: plain paths, so one over `MAX_PATH` (260) fails unless long paths are enabled;
+// `\\?\` before both if that matters.
+pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    let (from, to) = (wide(from)?, wide(to)?);
+    check(unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) })
 }
 
-/// The app runs beside the service: it opens `path` itself (12.5.6b).
-pub fn native_path(_path: &Path, _wslpath: &std::ffi::OsStr) -> io::Result<String> {
-    Err(unsupported("opening a file with its app"))
+/// `path` as a NUL-terminated wide string for a Windows call; refused when it holds a NUL,
+/// which would cut it short.
+fn wide(path: &Path) -> io::Result<Vec<u16>> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a path holds a NUL",
+        ));
+    }
+    Ok(wide.into_iter().chain([0]).collect())
+}
+
+/// The app runs beside the service: it opens `path` itself.
+pub fn native_path(path: &Path, _wslpath: &std::ffi::OsStr) -> io::Result<String> {
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// `err`, told plainly when another program may hold the file `name` open without sharing it:
+/// Windows then refuses to open it (a sharing or lock violation) or to replace it (access
+/// denied, also what a file Hive may not write gets), and a save leaves it as it was.
+pub fn in_use(err: io::Error, name: &str) -> io::Error {
+    let held = [
+        ERROR_SHARING_VIOLATION,
+        ERROR_LOCK_VIOLATION,
+        ERROR_ACCESS_DENIED,
+    ];
+    if !held
+        .map(|code| Some(code as i32))
+        .contains(&err.raw_os_error())
+    {
+        return err;
+    }
+    io::Error::other(format!(
+        "{name} is open in another program, or cannot be replaced: close it there and save \
+         again ({err})"
+    ))
+}
+
+/// The drives (`C:`, `D:`…), as folders: the folder browser lists them for a typed name
+/// without a separator.
+pub fn drives() -> Vec<Dir> {
+    drive_dirs(unsafe { GetLogicalDrives() })
+}
+
+/// The drives of `mask` (bit 0 `A:`, bit 25 `Z:`), as `GetLogicalDrives` gives them.
+fn drive_dirs(mask: u32) -> Vec<Dir> {
+    (b'A'..=b'Z')
+        .zip(0..)
+        .filter(|&(_, bit)| mask >> bit & 1 == 1)
+        .map(|(letter, _)| Dir {
+            name: format!("{}:", char::from(letter)),
+            git: false,
+        })
+        .collect()
 }
 
 /// Kills process `pid` and every process it started.
@@ -954,9 +1017,10 @@ pub fn kill_tree(pid: u32) {
         .status();
 }
 
-/// What a program printed (a path, a `PATH`): programs print UTF-8 on Windows.
+/// What a program printed (a path, a `PATH`): programs print UTF-8 on Windows, and git
+/// separates a path's names with `/`, here `\` as every other path (no name holds a `/`).
 pub fn os_string(bytes: &[u8]) -> OsString {
-    String::from_utf8_lossy(bytes).into_owned().into()
+    String::from_utf8_lossy(bytes).replace('/', r"\").into()
 }
 
 /// A plain open: Windows has no FIFO a measured file could turn into.
@@ -1161,16 +1225,116 @@ mod tests {
     }
 
     #[test]
-    fn stubs_answer_nothing_or_unsupported() {
+    fn stubs_answer_nothing() {
         assert_eq!(cwd(4), None);
-        let here = Path::new(".");
-        let unsupported = |result: io::Result<_>| result.unwrap_err().kind();
+    }
+
+    #[test]
+    fn a_rename_never_replaces_a_file_or_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let at = |name: &str| tmp.path().join(name);
+        std::fs::write(at("a"), "a").unwrap();
+        std::fs::write(at("f"), "f").unwrap();
+        std::fs::create_dir(at("d")).unwrap();
+        std::fs::create_dir(at("e")).unwrap();
+        for (from, taken) in [("a", "f"), ("a", "d"), ("e", "d"), ("e", "f")] {
+            let err = rename_new(&at(from), &at(taken)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{from} {taken}");
+        }
+        assert_eq!(std::fs::read_to_string(at("f")).unwrap(), "f");
+        rename_new(&at("a"), &at("b")).unwrap();
+        assert_eq!(std::fs::read_to_string(at("b")).unwrap(), "a");
+        rename_new(&at("e"), &at("g")).unwrap();
+        assert!(!at("a").exists() && !at("e").exists() && at("g").is_dir());
+        let err = rename_new(&at("missing"), &at("c")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        // A NUL would cut the path short.
+        let err = rename_new(&at("b\0x"), &at("c")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(rename_new(&at("b"), &at("c\0")).is_err());
+        assert!(at("b").exists() && !at("c").exists());
+    }
+
+    #[test]
+    fn a_path_opens_as_it_is() {
+        let path = Path::new(r"C:\Users\me\a b.rs");
         assert_eq!(
-            unsupported(rename_new(here, here)),
-            io::ErrorKind::Unsupported
+            native_path(path, "wslpath".as_ref()).unwrap(),
+            r"C:\Users\me\a b.rs"
         );
-        let open = native_path(here, "".as_ref()).map(drop);
-        assert_eq!(unsupported(open), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn a_locked_file_is_said_to_be_in_use() {
+        for code in [
+            ERROR_SHARING_VIOLATION,
+            ERROR_LOCK_VIOLATION,
+            ERROR_ACCESS_DENIED,
+        ] {
+            let err = in_use(io::Error::from_raw_os_error(code as i32), "a.rs").to_string();
+            let said = "a.rs is open in another program, or cannot be replaced: close it there \
+                        and save again (";
+            assert!(err.starts_with(said), "{err}");
+        }
+        // Not found (2) is said as it is.
+        let other = in_use(io::Error::from_raw_os_error(2), "a.rs");
+        assert_eq!(other.raw_os_error(), Some(2));
+    }
+
+    #[test]
+    fn a_save_leaves_a_file_another_program_holds_as_it_was() {
+        use hive_protocol::SaveError;
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a.rs");
+        std::fs::write(&path, "old").unwrap();
+        let old = crate::file::version(b"old");
+        // Not shared at all, then shared but not for deleting (as some editors do).
+        for share in [0, FILE_SHARE_READ | FILE_SHARE_WRITE] {
+            let held = File::options()
+                .read(true)
+                .share_mode(share)
+                .open(&path)
+                .unwrap();
+            let saved = crate::file::save(tmp.path(), "a.rs", "new", Some(&old));
+            drop(held);
+            let (error, message) = saved.unwrap_err();
+            assert_eq!(error, SaveError::Io, "{share}: {message}");
+            assert!(
+                message.starts_with("a.rs is open in another program"),
+                "{share}: {message}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+            let names: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().collect();
+            assert_eq!(names.len(), 1, "{names:?}");
+        }
+        // Released: saved.
+        let saved = crate::file::save(tmp.path(), "a.rs", "new", Some(&old));
+        assert_eq!(saved, Ok(crate::file::version(b"new")));
+    }
+
+    #[test]
+    fn the_drives_are_listed_as_folders() {
+        let drives = drives();
+        assert!(drives.iter().any(|d| d.name == "C:"), "{drives:?}");
+        for drive in &drives {
+            assert!(
+                Path::new(&format!(r"{}\", drive.name)).is_dir(),
+                "{drive:?}"
+            );
+            assert!(!drive.git);
+        }
+        let names = |mask| {
+            drive_dirs(mask)
+                .into_iter()
+                .map(|d| d.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(0b101), ["A:", "C:"]);
+        assert_eq!(names(1 << 25), ["Z:"]);
+        assert_eq!(names(0), Vec::<String>::new());
     }
 
     #[test]
@@ -1194,6 +1358,7 @@ mod tests {
     #[test]
     fn printed_bytes_are_utf8_text() {
         assert_eq!(os_string("C:\\é".as_bytes()), "C:\\é");
+        assert_eq!(os_string(b"C:/Users/me/r"), r"C:\Users\me\r");
         assert_eq!(os_string(b"a\xffb"), "a\u{fffd}b");
     }
 

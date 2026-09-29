@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::git;
+use crate::paths::canonical;
 
 /// Most files sent in one list.
 pub const MAX_FILES: usize = 50_000;
@@ -153,12 +154,11 @@ impl Watcher {
         })
         .map_err(io::Error::other)?;
         let git_dir = PathBuf::from(String::from_utf8_lossy(&out).trim_end());
-        let git_dir = git_dir
-            .canonicalize()
+        let git_dir = canonical(&git_dir)
             .ok()
             .filter(|dir| watcher.watch(dir, RecursiveMode::NonRecursive).is_ok());
         Ok(Self {
-            root: root.canonicalize()?,
+            root: canonical(root)?,
             watcher,
             events,
             git_dir,
@@ -249,12 +249,21 @@ impl Watcher {
             event.kind,
             EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
         ) {
-            // A directory gone or moved lost its watch.
+            // A directory gone or moved lost its watch. Kept with git's `/` (Windows: `\`).
             for path in &event.paths {
                 if let Some(dir) = path.strip_prefix(&self.root).ok().and_then(Path::to_str) {
-                    self.dirs.remove(dir);
+                    self.dirs.remove(&dir.replace(MAIN_SEPARATOR, "/"));
                 }
             }
+        }
+        // A folder's own change changes nothing git lists: what it holds has its own watch, or
+        // is ignored. (Windows reports one for a write anywhere under it, Unix for its mode.)
+        let own = matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Any | ModifyKind::Metadata(_))
+        );
+        if own && event.paths.iter().all(|path| path.is_dir()) {
+            return false;
         }
         // No path: an overflow, which calls for a full re-list.
         event.paths.is_empty() || event.paths.iter().any(|path| self.counts(path))
@@ -418,7 +427,7 @@ mod tests {
     /// A new repository in a temporary directory; the tests' own git never reads the user's config.
     fn repo() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = canonical(dir.path()).unwrap();
         run_git(&root, &["init", "-q"]);
         (dir, root)
     }
@@ -453,7 +462,6 @@ mod tests {
     const SOON: Duration = Duration::from_secs(5);
     const NEVER: Duration = Duration::from_millis(600);
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn ignored_trees_are_neither_listed_nor_watched() {
         let (_dir, root) = repo();
@@ -475,6 +483,20 @@ mod tests {
         // Nor does the git dir, apart from HEAD and the index.
         write(&root, ".git/other");
         assert!(!changes(&mut watcher, NEVER).await);
+        // Nor a folder's own change (Windows reports one for the write in the ignored tree
+        // above; Unix one for its mode), as told, since FSEvents coalesces it with the folder's
+        // creation; a file's is.
+        let modified = |kind, path: &str| {
+            let event = Event::new(EventKind::Modify(kind)).add_path(root.join(path));
+            Ok(event)
+        };
+        let metadata = ModifyKind::Metadata(notify::event::MetadataKind::Any);
+        assert!(!watcher.saw(modified(ModifyKind::Any, "src")));
+        assert!(!watcher.saw(modified(metadata, "src")));
+        assert!(watcher.saw(modified(ModifyKind::Any, "src/a.rs")));
+        // A new folder is.
+        std::fs::create_dir(root.join("fresh")).unwrap();
+        assert!(changes(&mut watcher, SOON).await);
         // A file in an empty untracked directory is seen.
         write(&root, "empty/new.txt");
         assert!(changes(&mut watcher, SOON).await);

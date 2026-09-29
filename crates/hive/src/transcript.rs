@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use hive_protocol::Control;
 use serde_json::Value;
 
+use crate::paths::canonical;
+
 /// Most bytes read at once: the tail at the first read, then the new bytes of each read.
 const READ_LIMIT: u64 = 8_388_608; // 8 MiB
 /// Longest `transcript_path` kept from a hook payload.
@@ -28,8 +30,8 @@ pub fn transcript_path(raw: &Value) -> Option<PathBuf> {
 /// Opens `path` only when, links resolved, it is a regular file inside one of `roots` (every
 /// Claude account's projects folder, 12.2).
 fn open_inside(roots: &[PathBuf], path: &Path) -> io::Result<File> {
-    let real = path.canonicalize()?;
-    let inside = |root: &PathBuf| root.canonicalize().is_ok_and(|root| real.starts_with(root));
+    let real = canonical(path)?;
+    let inside = |root: &PathBuf| canonical(root).is_ok_and(|root| real.starts_with(root));
     if !roots.iter().any(inside) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -247,15 +249,25 @@ mod tests {
         format!("{record}\n")
     }
 
-    #[cfg(unix)]
     #[test]
     fn transcript_path_must_be_an_absolute_jsonl_path() {
+        let root = if cfg!(windows) { r"C:\" } else { "/" };
         let path = |p: &str| transcript_path(&json!({ "transcript_path": p }));
-        assert_eq!(path("/c/p/s.jsonl"), Some(PathBuf::from("/c/p/s.jsonl")));
+        let at = |p: &str| format!("{root}{p}");
+        assert_eq!(
+            path(&at("c/p/s.jsonl")),
+            Some(PathBuf::from(at("c/p/s.jsonl")))
+        );
         assert_eq!(path("c/p/s.jsonl"), None);
-        assert_eq!(path("/c/p/s.json"), None);
-        assert_eq!(path(&format!("/{}.jsonl", "a".repeat(PATH_LIMIT))), None);
-        let longest = format!("/{}.jsonl", "a".repeat(PATH_LIMIT - 7));
+        assert_eq!(path(&at("c/p/s.json")), None);
+        assert_eq!(
+            path(&at(&format!("{}.jsonl", "a".repeat(PATH_LIMIT)))),
+            None
+        );
+        let longest = at(&format!(
+            "{}.jsonl",
+            "a".repeat(PATH_LIMIT - 6 - root.len())
+        ));
         assert_eq!(path(&longest), Some(PathBuf::from(&longest)));
         assert_eq!(transcript_path(&json!({ "transcript_path": 1 })), None);
         assert_eq!(transcript_path(&json!({})), None);
