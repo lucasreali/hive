@@ -63,6 +63,9 @@ jobs:
       - run: cargo llvm-cov -p hive -p hive-protocol --locked --no-fail-fast --no-report
       - run: cargo llvm-cov report --show-missing-lines
       - run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          awk '/^SF:/{f=/windows/} f&&/^(SF:|DA:[0-9]+,0$)/' lcov.info
+      - run: |
           cargo llvm-cov report --json --summary-only --output-path cov.json
           jq -e '[.data[0].files[] | select(.filename | test("crates.hive.src.windows"))]
             | length > 0 and all(.summary.lines.percent == 100)' cov.json
