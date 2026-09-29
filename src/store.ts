@@ -64,8 +64,9 @@ export type Connection =
       version: string;
       app_protocol: number;
       app_version: string;
+      bundled: boolean;
     }
-  | { status: "disconnected"; reason: string };
+  | { status: "disconnected"; reason: string; bundled: boolean };
 
 export type Terminal = {
   id: number;

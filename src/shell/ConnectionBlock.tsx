@@ -4,7 +4,8 @@ import { useHive } from "../store";
 import { isMac } from "../window";
 
 // The installed app brings its own service (4.18), so a mismatch is an old service still
-// waiting for an app: a refused handshake does not stop it. Development builds use `cargo install`.
+// waiting for an app: a refused handshake does not stop it. Only development builds (`bundled`
+// false, decided by the app's Rust side) use `cargo install`; installed users never need it (12.4).
 const INSTALL = "cargo install --path crates/hive";
 const STOP = "pkill -f 'hive daemon'";
 
@@ -56,10 +57,14 @@ export function ConnectionBlock() {
         <p>Hive brings its own service. Stop the old one{where}:</p>
         <pre>{STOP}</pre>
         <p>Then reconnect, or restart Hive.</p>
-        <p>
-          A development build runs the service from <code>{INSTALL}</code>: build both from the same
-          commit.
-        </p>
+        {c.bundled ? (
+          <p>If it keeps happening, reinstall Hive.</p>
+        ) : (
+          <p>
+            A development build runs the service from <code>{INSTALL}</code>: build both from the
+            same commit.
+          </p>
+        )}
       </Dialog>
     );
   }
@@ -67,10 +72,14 @@ export function ConnectionBlock() {
     return (
       <Dialog title="Lost the connection to the hive service">
         <pre>{c.reason}</pre>
-        <p>
-          Reconnect, or restart Hive. If it keeps failing, check that <code>hive</code> is installed
-          {where}: <code>{INSTALL}</code>
-        </p>
+        {c.bundled ? (
+          <p>Reconnect, or restart Hive. If it keeps failing, reinstall Hive.</p>
+        ) : (
+          <p>
+            Reconnect, or restart Hive. If it keeps failing, check that <code>hive</code> is
+            installed{where}: <code>{INSTALL}</code>
+          </p>
+        )}
       </Dialog>
     );
   }

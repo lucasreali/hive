@@ -4,7 +4,10 @@ test("a version mismatch blocks the workspace", async ({ page }) => {
   await page.goto("/?mock=mismatch");
   const block = page.getByRole("alertdialog");
   await expect(block).toContainText("The app and the hive service versions differ");
-  await expect(block).toContainText("cargo install --path crates/hive");
+  // The mock runs as an installed app: only fixes its user can apply, never `cargo` (12.4).
+  await expect(block).toContainText("pkill -f 'hive daemon'");
+  await expect(block).toContainText("reinstall Hive");
+  await expect(block).not.toContainText("cargo");
   await expect(page.getByTitle("WSL connection")).toHaveText("WSLversion mismatch");
   await expect(page.getByRole("button", { name: "Reconnect" })).toBeFocused();
   await page.screenshot({ path: "target/e2e/version-mismatch.png" });
@@ -17,6 +20,7 @@ test("a disconnect shows the reason and can reconnect", async ({ page }) => {
   await page.goto("/?mock=disconnected");
   const block = page.getByRole("alertdialog");
   await expect(block).toContainText("mock: the hive bridge exited");
+  await expect(block).not.toContainText("cargo");
   await expect(page.getByTitle("WSL connection")).toHaveText("WSLdisconnected");
   await page.screenshot({ path: "target/e2e/disconnected.png" });
   await page.getByRole("button", { name: "Reconnect" }).click();

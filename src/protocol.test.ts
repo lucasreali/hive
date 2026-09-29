@@ -17,7 +17,13 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   diagnostics: { settings_file: true, wrapper: true, claude: true },
   update_ready: { version: true },
   update_failed: { error: true },
-  version_mismatch: { protocol: true, version: true, app_protocol: true, app_version: true },
+  version_mismatch: {
+    protocol: true,
+    version: true,
+    app_protocol: true,
+    app_version: true,
+    bundled: true,
+  },
   terminal_opened: { channel: true, worktree: true },
   terminal_exited: { channel: true, code: true },
   unhooked_agent: { channel: true },
@@ -103,7 +109,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   file_deleted: { worktree: true, path: true },
   file_op_failed: { worktree: true, message: true },
   editor_target: { worktree: true, path: true, windows_path: true, error: true },
-  disconnected: { reason: true },
+  disconnected: { reason: true, bundled: true },
 };
 
 /** Sent by the app's own Rust side, never by the service. */
@@ -111,7 +117,7 @@ const APP_SIDE = ["update_ready", "update_failed", "disconnected"];
 
 /** A service message as the UI gets it: the Tauri pump (`src-tauri/src/lib.rs`) adds these. */
 function fromPump(sample: { type: string }) {
-  const versions = { app_protocol: 1, app_version: "0.4.0" };
+  const versions = { app_protocol: 1, app_version: "0.4.0", bundled: true };
   return { ...sample, channel: 1, ...(sample.type === "version_mismatch" ? versions : {}) };
 }
 
