@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::event::ModifyKind;
-use notify::{Event, EventKind, PathOp, RecommendedWatcher};
+use notify::{Event, EventKind, PathOp, RecommendedWatcher, Watcher as _};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -79,7 +79,9 @@ impl Registry {
         let watch = added.iter().map(PathOp::watch_non_recursive);
         // ponytail: a watcher that fails (FSEvents only: its stream does not restart) leaves
         // the registry unwatched until the next follow; report it if that ever shows.
-        let failed = files::update(&mut self.watcher, unwatch.chain(watch).collect());
+        let watcher = &mut self.watcher;
+        let ops = unwatch.chain(watch).collect();
+        let failed = files::update(|ops| watcher.update_paths(ops), ops);
         let failed = failed.unwrap_or_default();
         self.watched.retain(|dir| wanted.contains(dir));
         let watched = added.into_iter().filter(|dir| !failed.contains(dir));

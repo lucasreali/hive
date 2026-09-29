@@ -212,7 +212,8 @@ impl Watcher {
             .iter()
             .map(|dir| PathOp::watch_non_recursive(self.root.join(dir)));
         let ops = unwatch.chain(watch).collect();
-        let failed = update(&mut self.watcher, ops).map_err(io::Error::other)?;
+        let watcher = &mut self.watcher;
+        let failed = update(|ops| watcher.update_paths(ops), ops).map_err(io::Error::other)?;
         self.dirs.retain(|dir| wanted.contains(dir.as_str()));
         let watched = added
             .into_iter()
@@ -282,15 +283,16 @@ impl Watcher {
     }
 }
 
-/// Applies `ops` to `watcher` in one batch (FSEvents restarts its stream once a batch), going
-/// on past the ones that fail: the paths of those. An error when the watcher itself failed.
+/// Applies `ops` in one batch with `apply` (a watcher's `update_paths`: FSEvents restarts its
+/// stream once a batch), going on past the ones that fail: the paths of those. An error when
+/// the watcher itself failed.
 pub fn update(
-    watcher: &mut impl notify::Watcher,
+    mut apply: impl FnMut(Vec<PathOp>) -> Result<(), notify::UpdatePathsError>,
     mut ops: Vec<PathOp>,
 ) -> notify::Result<Vec<PathBuf>> {
     let mut failed = Vec::new();
     // Each round leaves out the op that failed: at most one round per op.
-    while let Err(err) = watcher.update_paths(ops) {
+    while let Err(err) = apply(ops) {
         let origin = err.origin.ok_or(err.source)?;
         failed.push(origin.into_path());
         ops = err.remaining;
@@ -451,7 +453,7 @@ mod tests {
         let mut watcher = notify::recommended_watcher(|_| {}).unwrap();
         let names = ["x", "a", "y", "b"];
         let ops = names.map(|name| PathOp::watch_non_recursive(path(name)));
-        let failed = update(&mut watcher, ops.into()).unwrap();
+        let failed = update(|ops| watcher.update_paths(ops), ops.into()).unwrap();
         assert_eq!(failed, [path("x"), path("y")]);
         let mut watched: Vec<PathBuf> = watcher
             .watched_paths()
@@ -461,6 +463,20 @@ mod tests {
             .collect();
         watched.sort();
         assert_eq!(watched, [path("a"), path("b")]);
+    }
+
+    #[test]
+    fn a_watcher_that_fails_itself_is_an_error() {
+        let broken = |_| {
+            Err(notify::UpdatePathsError {
+                source: notify::Error::generic("no stream"),
+                origin: None,
+                remaining: Vec::new(),
+            })
+        };
+        let ops = vec![PathOp::watch_non_recursive("a")];
+        let err = update(broken, ops).unwrap_err();
+        assert!(matches!(err.kind, notify::ErrorKind::Generic(why) if why == "no stream"));
     }
 
     /// A new repository in a temporary directory; the tests' own git never reads the user's config.
