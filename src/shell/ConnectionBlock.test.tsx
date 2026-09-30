@@ -129,13 +129,38 @@ test("the first run with WSL asks where the service runs, and the choice goes to
   expect(document.activeElement?.textContent).toBe("WSL");
   fireEvent.click(within(choice).getByText("Windows"));
   expect(setMode).toHaveBeenCalledWith("native");
+  // One pick only: both buttons are off until the app answers.
+  for (const name of ["Windows", "WSL"]) {
+    expect((within(choice).getByText(name) as HTMLButtonElement).disabled).toBe(true);
+  }
   fireEvent.click(within(choice).getByText("WSL"));
-  expect(setMode).toHaveBeenLastCalledWith("wsl");
+  expect(setMode).toHaveBeenCalledTimes(1);
   // The app answers with the mode chosen: the question goes, the connection comes.
   act(() => apply({ type: "app_mode", mode: "native", wsl: true }));
   expect(dialog()).toBeNull();
   expect(workspace().inert).toBe(false);
   expect(useHive.getState().connection.status).toBe("connecting");
+  setMode.mockRestore();
+});
+
+test("picking WSL on the first run sends it to the app (12.5.4)", () => {
+  const setMode = spyOn(transport, "setMode").mockResolvedValue();
+  render(<App />);
+  act(() => apply({ type: "app_mode", mode: null, wsl: true }));
+  fireEvent.click(within(dialog() as HTMLElement).getByText("WSL"));
+  expect(setMode).toHaveBeenCalledTimes(1);
+  expect(setMode).toHaveBeenCalledWith("wsl");
+  setMode.mockRestore();
+});
+
+test("a choice the app could not save can be made again (12.5.4)", async () => {
+  const setMode = spyOn(transport, "setMode").mockRejectedValue("cannot save the service mode");
+  render(<App />);
+  act(() => apply({ type: "app_mode", mode: null, wsl: true }));
+  const windows = within(dialog() as HTMLElement).getByText("Windows") as HTMLButtonElement;
+  await act(async () => fireEvent.click(windows));
+  expect(windows.disabled).toBe(false);
+  expect(setMode).toHaveBeenCalledTimes(1);
   setMode.mockRestore();
 });
 

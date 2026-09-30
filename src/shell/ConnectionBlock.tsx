@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { connect } from "../connect";
 import { useHive } from "../store";
 import { transport } from "../transport";
@@ -41,9 +41,15 @@ function Dialog({ title, children }: { title: string; children: ReactNode }) {
 
 /**
  * The first run on Windows with WSL (12.5.4): where the service runs. Nothing starts until the
- * user picks; the settings switch it later.
+ * user picks; the settings switch it later. One pick only: a second would switch twice.
  */
 function ModeChoice() {
+  const [chosen, setChosen] = useState(false);
+  const choose = (mode: "wsl" | "native") => {
+    setChosen(true);
+    // Not saved (the app's error): the user picks again.
+    transport.setMode(mode).catch(() => setChosen(false));
+  };
   return (
     <div className="connection-block">
       <div role="alertdialog" aria-modal="true" aria-labelledby="connection-title">
@@ -56,14 +62,16 @@ function ModeChoice() {
           <button
             type="button"
             className="secondary"
-            onClick={() => void transport.setMode("native")}
+            disabled={chosen}
+            onClick={() => choose("native")}
           >
             Windows
           </button>
           <button
             type="button"
             className="primary"
-            onClick={() => void transport.setMode("wsl")}
+            disabled={chosen}
+            onClick={() => choose("wsl")}
             ref={(button) => button?.focus()}
           >
             WSL

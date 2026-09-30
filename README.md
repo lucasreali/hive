@@ -44,20 +44,24 @@ The most urgent state wins: a subagent waiting for permission puts its agent in 
 
 **Sessions restored.** Terminals and agents end when Hive closes (it asks first if an agent is busy). The Claude sessions that were open come back with `claude --resume` the next time Hive starts.
 
-**Add project with a folder browser.** On Windows you can pick a WSL folder or a Windows one (under `/mnt/c`; slower, and without live file updates).
+**Add project with a folder browser.** With the service in WSL you can pick a WSL folder or a Windows one (under `/mnt/c`; slower, and without live file updates); with it on Windows, any Windows folder (`C:\...`).
 
 **Auto-update.** On start Hive checks GitHub for a newer release and shows **Update to vX** in the title bar.
 
 ## Platforms and requirements
 
-| | Windows | macOS |
-|---|---|---|
-| OS | Windows with WSL2 | macOS 12 or later, Apple Silicon only |
-| Where the service runs | inside the **default** WSL distribution | natively |
-| Terminal shell | **fish**, installed in WSL | your login shell (`$SHELL`, zsh by default) |
-| Also needed | `git` and Claude Code installed in WSL | `git` and Claude Code |
+| | Windows, service in WSL | Windows, service on Windows | macOS |
+|---|---|---|---|
+| OS | Windows 10/11 with WSL2 | Windows 10/11, WSL not needed | macOS 12 or later, Apple Silicon only |
+| Where the service runs | inside the **default** WSL distribution | natively | natively |
+| Terminal shell | **fish**, installed in WSL | PowerShell (`pwsh` when installed), Command Prompt or Git Bash, chosen in the settings | your login shell (`$SHELL`, zsh by default) |
+| Also needed | `git` and Claude Code installed in WSL | Git for Windows and Claude Code for Windows | `git` and Claude Code |
 
-Your projects should live in the WSL file system for the best performance (Windows folders work, but are slower and not watched live).
+On Windows, Hive runs its service on Windows when WSL is not installed, without asking. With WSL it asks on the first run where the service should run; **Settings → Terminal → Service** switches later (every open terminal ends). Each place keeps its own projects, spaces and settings.
+
+With the service in WSL, your projects should live in the WSL file system for the best performance (Windows folders work, but are slower and not watched live).
+
+Nothing else is needed: the service ships inside the app, so there is no `cargo`, Rust or Node to install.
 
 ## Installation
 
@@ -67,12 +71,18 @@ Download the latest release from [GitHub Releases](https://github.com/lucasreali
 
 1. Run `Hive_<version>_x64-setup.exe` (releases before 0.1.2 name it `hive_<version>_x64-setup.exe`).
 2. The installer is not signed, so SmartScreen may block it: click **More info → Run anyway**.
-3. On first launch Hive copies its service into WSL at `~/.local/share/hive/bin/hive` and starts it. There is nothing to install by hand.
+3. On first launch Hive asks where its service runs if WSL is installed (see above), then starts it: in WSL it copies it to `~/.local/share/hive/bin/hive`, on Windows to `%LOCALAPPDATA%\hive\bin\hive.exe`. There is nothing to install by hand.
 
-If Hive shows **"The app and the hive service versions differ"**, an old service is still running. Stop it in WSL, then click **Reconnect**:
+If Hive shows **"The app and the hive service versions differ"**, an old service is still running. Stop it, then click **Reconnect**. In WSL:
 
 ```sh
 pkill -f 'hive daemon'
+```
+
+With the service on Windows, in PowerShell or Command Prompt:
+
+```
+taskkill /F /IM hive.exe
 ```
 
 ### macOS
@@ -86,7 +96,7 @@ When a newer release exists, click **Update to vX** in the title bar. Hive asks 
 
 ## Quick start
 
-1. **Add a project**: **Ctrl+Shift+O**, then pick the repository folder (on Windows, choose `WSL` or `Windows` in the selector first).
+1. **Add a project**: **Ctrl+Shift+O**, then pick the repository folder (with the service in WSL, choose `WSL` or `Windows` in the selector first).
 2. **Create a worktree**: **Ctrl+Shift+N**, give it a name (`^[a-z0-9][a-z0-9._-]*$`), pick the base branch and keep "Start claude in the terminal" ticked.
 3. **Work in the terminal** as usual. The agent appears in the sidebar under its worktree, with its state.
 4. **Press F8** whenever the bell shows something pending.
@@ -110,7 +120,7 @@ Every other key goes to the terminal untouched.
 ## How it works
 
 ```
-Windows                         WSL (or natively on macOS)
+Windows                         WSL (or natively on Windows and macOS)
 ┌────────────┐  wsl.exe   ┌──────────────┐  Unix socket  ┌──────────────────────────────┐
 │ Tauri app  │◄──stdio───►│ hive bridge  │◄─────────────►│ hive daemon                  │
 │ React UI   │  (frames)  └──────────────┘               │  terminals (PTYs)            │
@@ -121,7 +131,7 @@ Windows                         WSL (or natively on macOS)
 ```
 
 - One Rust binary, `hive`, is the service (`hive daemon`), the stdio relay the app runs (`hive bridge`), the hook receiver (`hive hook <event>`) and a worktree CLI (`hive worktree create | list | remove`).
-- The app starts `hive bridge` (through `wsl.exe` on Windows, `/bin/sh` on macOS). The bridge starts the daemon if needed; a version handshake refuses a mismatched pair. The daemon lives as long as the app connection: when the app closes, every terminal ends.
+- The app starts `hive bridge` (through `wsl.exe` with the service in WSL, `hive.exe` directly with it on Windows, where a named pipe replaces the Unix socket and terminals are Windows pseudoconsoles, `/bin/sh` on macOS). The bridge starts the daemon if needed; a version handshake refuses a mismatched pair. The daemon lives as long as the app connection: when the app closes, every terminal ends.
 - Hive's terminals put a small `claude` wrapper first on `PATH`. It runs the real `claude` with `--settings <hive-hooks.json>`, which merges Hive's hooks with yours. Your global Claude Code settings are never touched, and `claude` outside Hive is unaffected.
 - All domain logic is in Rust; the React frontend only renders what the service sends.
 

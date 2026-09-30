@@ -159,6 +159,43 @@ test("in WSL, Windows folders are browsed as Windows paths and the choice is rem
   await waitFor(() => expect(field().value).toBe("/home/user/"));
 });
 
+test("with the service on Windows, every path is a Windows one, drives included", async () => {
+  const add = spyOn(transport, "addProject");
+  // The mock service runs natively too, so it answers Windows paths.
+  await transport.setMode("native");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    open();
+    act(() => apply({ type: "app_mode", mode: "native", wsl: false }));
+    act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+    // No WSL side to pick: the service's own paths are Windows ones.
+    expect(kind()).toBeNull();
+    expect(field().placeholder).toBe("C:\\Users\\you\\projects\\shop");
+    await waitFor(() => expect(field().value).toBe("C:\\Users\\user\\"));
+    expect(folders()).toEqual(["C:\\Users\\", "Documents", "source"]);
+    fireEvent.click(screen.getByRole("button", { name: "source" }));
+    expect(field().value).toBe("C:\\Users\\user\\source\\");
+    // The text after the last `\` filters.
+    type("C:\\Users\\user\\D");
+    await waitFor(() => expect(folders()).toEqual(["C:\\Users\\", "Documents"]));
+    // A name without a separator lists the drives; `C:\` has no parent.
+    type("c");
+    await waitFor(() => expect(folders()).toEqual(["C:"]));
+    fireEvent.click(screen.getByRole("button", { name: "C:" }));
+    expect(field().value).toBe("C:\\");
+    await waitFor(() => expect(folders()).toEqual(["Users"]));
+    type("C:\\Users\\user\\source\\site");
+    await waitFor(() => expect(submit().disabled).toBe(false));
+    fireEvent.click(submit());
+    expect(add).toHaveBeenCalledWith("C:\\Users\\user\\source\\site");
+  } finally {
+    add.mockRestore();
+    cleanup();
+    await transport.setMode("wsl");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+});
+
 test("a blocked storage only loses the remembered choice", async () => {
   const fail = () => {
     throw new Error("blocked");

@@ -96,3 +96,33 @@ test("the folder kind select opens the app's own list over the dialog", async ({
   await expect(list).toHaveCount(0);
   await expect(dialog).toBeVisible();
 });
+
+test("with the service on Windows, the folder browser takes Windows paths", async ({ page }) => {
+  await page.goto("/?mock=choose");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Windows" }).click();
+  await expect(page.getByTitle("Service connection")).toHaveText("Windowsconnected");
+  await page.getByTitle("Add project (Ctrl+Shift+O)").click();
+  const dialog = page.getByRole("dialog", { name: "Add project" });
+  const field = dialog.getByLabel("Folder", { exact: true });
+  const folders = dialog.getByRole("list", { name: "Folders" });
+  // No WSL side to pick: the service's own paths are Windows ones.
+  await expect(dialog.getByRole("combobox", { name: "Folder kind" })).toHaveCount(0);
+  await expect(field).toHaveValue("C:\\Users\\user\\");
+  await folders.getByText("source", { exact: true }).click();
+  await expect(field).toHaveValue("C:\\Users\\user\\source\\");
+  await expect(folders.getByTitle("Up a level")).toContainText("C:\\Users\\user\\");
+  // A drive letter lists the drives; a click enters one, which has no parent.
+  await field.fill("C");
+  await folders.getByText("C:", { exact: true }).click();
+  await expect(field).toHaveValue("C:\\");
+  await expect(folders.getByText("Users", { exact: true })).toBeVisible();
+  await expect(folders.getByTitle("Up a level")).toHaveCount(0);
+  // The path goes to the service as typed.
+  await field.fill("C:\\Users\\user\\source\\site");
+  await expect(dialog.getByRole("button", { name: /^Add project/ })).toBeEnabled();
+  await field.press("Enter");
+  await expect(dialog.getByRole("alert")).toContainText(
+    "cannot open C:\\Users\\user\\source\\site",
+  );
+  await page.screenshot({ path: "target/e2e/add-project-native.png" });
+});

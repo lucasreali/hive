@@ -403,35 +403,85 @@ fn wsl_counts_only_when_it_lists_a_distribution() {
     let none = utf16("Windows Subsystem for Linux has no installed distributions.");
     assert!(!has_wsl(listed(false, none)));
     assert!(!has_wsl(Err(std::io::ErrorKind::NotFound.into())));
+    // No answer in time: WSL may be there.
+    assert!(has_wsl(Err(std::io::ErrorKind::TimedOut.into())));
 }
 
 #[test]
-fn the_choice_is_offered_only_with_hive_mode_native() {
+fn a_wsl_that_never_answers_keeps_the_saved_mode_or_asks() {
+    let dir = Temp::new("wedged");
+    let native = native_bridge(&|_| None, None);
+    let wedged = || shell("exec sleep 30");
+    // Nothing saved: the first run asks.
+    let modes = Modes::new(dir.mode(), wedged, native.clone());
+    assert!(modes.wsl);
+    assert_eq!(modes.start(), None);
+    // WSL saved: it stays WSL, never moved to Windows.
+    modes.save(Mode::Wsl).unwrap();
+    let modes = Modes::new(dir.mode(), wedged, native);
+    assert_eq!(modes.start(), Some(Mode::Wsl));
+}
+
+#[test]
+fn the_modes_know_whether_wsl_is_there() {
     let native = native_bridge(&|_| None, None);
     let file = std::path::PathBuf::from("/nonexistent/mode");
-    for value in [None, Some(""), Some("wsl")] {
-        let var = |key: &str| {
-            (key == "HIVE_MODE")
-                .then_some(value)
-                .flatten()
-                .map(OsString::from)
-        };
-        let modes = Modes::new(
-            &var,
-            file.clone(),
-            || panic!("wsl.exe runs only when the choice is offered"),
-            native.clone(),
-        );
-        assert!(modes.is_none());
-    }
-    let var = |key: &str| (key == "HIVE_MODE").then(|| OsString::from("native"));
-    let listing = || listed(true, utf16("Ubuntu\r\n"));
-    let modes = Modes::new(&var, file.clone(), listing, native.clone()).unwrap();
+    let modes = Modes::new(file.clone(), || shell("echo Ubuntu"), native.clone());
     assert!(modes.wsl);
     assert_eq!(modes.file, file);
     assert_eq!(modes.native, native);
-    let modes = Modes::new(&var, file, || listed(false, Vec::new()), native).unwrap();
+    let modes = Modes::new(file.clone(), || shell("exit 1"), native.clone());
     assert!(!modes.wsl);
+    // Windows saved: WSL is not asked, so a wedged one cannot hold up the start.
+    let dir = Temp::new("saved-native");
+    let modes = Modes {
+        file: dir.mode(),
+        wsl: true,
+        native: native.clone(),
+    };
+    modes.save(Mode::Native).unwrap();
+    let wedged = || panic!("wsl.exe is not listed with Windows saved");
+    let modes = Modes::new(dir.mode(), wedged, native.clone());
+    assert!(modes.wsl);
+    assert_eq!(modes.start(), Some(Mode::Native));
+    // WSL saved: it is listed.
+    modes.save(Mode::Wsl).unwrap();
+    let modes = Modes::new(dir.mode(), || shell("exit 1"), native);
+    assert!(!modes.wsl);
+}
+
+fn shell(script: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", script]);
+    command
+}
+
+#[test]
+fn a_listing_that_hangs_is_killed_after_its_time_limit() {
+    let listed = output_within(&mut shell("echo Ubuntu"), Duration::from_secs(10), reader).unwrap();
+    assert!(listed.status.success());
+    assert_eq!(listed.stdout, b"Ubuntu\n");
+    let started = std::time::Instant::now();
+    let mut sleep = std::process::Command::new("sleep");
+    sleep.arg("30");
+    let error = output_within(&mut sleep, Duration::from_millis(100), reader).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    let waited = started.elapsed();
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    // It exits at once, but what it left running keeps its output open.
+    let started = std::time::Instant::now();
+    let mut held = shell("echo Ubuntu; sleep 30 &");
+    let error = output_within(&mut held, Duration::from_millis(300), reader).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    let waited = started.elapsed();
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    let mut missing = std::process::Command::new("/nonexistent/wsl.exe");
+    let error = output_within(&mut missing, Duration::from_secs(1), reader).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    // No thread for the reader: the error as it is, before anything runs.
+    let no_thread: Start = |_| Err(std::io::ErrorKind::WouldBlock.into());
+    let error = output_within(&mut missing, Duration::from_secs(1), no_thread).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
 }
 
 /// A temporary folder, removed on drop.
@@ -475,6 +525,13 @@ fn the_mode_is_asked_for_until_one_is_saved() {
     assert_eq!(modes.start(), Some(Mode::Native));
     std::fs::write(dir.mode(), "linux").unwrap();
     assert_eq!(modes.start(), None);
+    // At most 16 bytes are read: a longer file holds no mode.
+    std::fs::write(dir.mode(), format!("native{}", " ".repeat(10))).unwrap();
+    assert_eq!(modes.start(), Some(Mode::Native));
+    std::fs::write(dir.mode(), format!("native{}", " ".repeat(11))).unwrap();
+    assert_eq!(modes.start(), None);
+    std::fs::write(dir.mode(), format!("native{}", " ".repeat(1 << 20))).unwrap();
+    assert_eq!(modes.start(), None);
     // Without WSL, always Windows, whatever was saved.
     std::fs::write(dir.mode(), "wsl").unwrap();
     let modes = Modes {
@@ -493,7 +550,7 @@ fn choosing(dir: &Temp, wsl: &str, native: &str) -> Hive {
         wsl: true,
         native,
     };
-    sh(wsl).with_modes(Some(modes))
+    sh(wsl).with_modes(modes)
 }
 
 fn app_mode(mode: Option<&str>) -> Value {
@@ -519,6 +576,26 @@ async fn the_first_run_asks_for_a_mode_before_starting_a_service() {
     assert_eq!(std::fs::read_to_string(dir.mode()).unwrap(), "native");
     hive.reconnect().await;
     assert_eq!(next(&mut rx).await, app_mode(Some("native")));
+    assert_eq!(next(&mut rx).await, disconnected_by("native", true));
+}
+
+#[tokio::test]
+async fn without_wsl_the_service_runs_on_windows_without_asking() {
+    let dir = Temp::new("no-wsl");
+    std::fs::create_dir_all(dir.mode().parent().unwrap()).unwrap();
+    // A saved WSL mode, WSL since removed.
+    std::fs::write(dir.mode(), "wsl").unwrap();
+    let native = (
+        "sh".into(),
+        ["-c", "echo native >&2"].map(OsString::from).into(),
+        true,
+    );
+    let modes = Modes::new(dir.mode(), || shell("exit 1"), native);
+    let hive = sh("echo wsl >&2").with_modes(modes);
+    let (channel, mut rx) = ui();
+    hive.connect(channel);
+    let mode = json!({"type": "app_mode", "mode": "native", "wsl": false});
+    assert_eq!(next(&mut rx).await, mode);
     assert_eq!(next(&mut rx).await, disconnected_by("native", true));
 }
 
@@ -549,6 +626,32 @@ async fn switching_modes_ends_one_service_and_starts_the_other() {
 }
 
 #[tokio::test]
+async fn two_mode_switches_at_once_run_one_after_the_other() {
+    let dir = Temp::new("twice");
+    std::fs::create_dir_all(dir.mode().parent().unwrap()).unwrap();
+    std::fs::write(dir.mode(), "wsl").unwrap();
+    let hive = choosing(
+        &dir,
+        "cat >/dev/null; echo wsl ended >&2",
+        "cat >/dev/null; echo native ended >&2",
+    );
+    let (channel, mut rx) = ui();
+    hive.connect(channel);
+    assert_eq!(next(&mut rx).await, app_mode(Some("wsl")));
+    // A double click: the second switch waits for the first, so it ends the bridge the first
+    // started, and only its own stays.
+    hive.choose_mode("native").unwrap();
+    tokio::join!(hive.reconnect(), hive.reconnect());
+    assert_eq!(next(&mut rx).await, disconnected_by("wsl ended", false));
+    assert_eq!(next(&mut rx).await, app_mode(Some("native")));
+    assert_eq!(next(&mut rx).await, disconnected_by("native ended", true));
+    assert_eq!(next(&mut rx).await, app_mode(Some("native")));
+    assert!(hive.link().frames.is_some(), "the last connection is live");
+    hive.shutdown(WAIT).await;
+    assert_eq!(next(&mut rx).await, disconnected_by("native ended", true));
+}
+
+#[tokio::test]
 async fn without_a_ui_reconnecting_only_ends_the_service() {
     let dir = Temp::new("no-ui");
     let hive = choosing(&dir, "", "");
@@ -573,6 +676,18 @@ fn a_mode_is_chosen_only_where_offered_and_once_saved() {
         "{error}"
     );
     assert_eq!(hive.link().mode, None);
+}
+
+#[test]
+fn without_wsl_the_wsl_mode_is_refused() {
+    let dir = Temp::new("refuse-wsl");
+    let native = ("sh".into(), vec![], true);
+    let modes = Modes::new(dir.mode(), || shell("exit 1"), native);
+    let hive = sh("").with_modes(modes);
+    let error = "WSL has no distribution: Hive runs on Windows".to_owned();
+    assert_eq!(hive.choose_mode("wsl"), Err(error));
+    assert!(!dir.mode().exists(), "no mode saved");
+    assert_eq!(hive.link().mode, Some(Mode::Native));
 }
 
 #[tokio::test]

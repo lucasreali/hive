@@ -264,10 +264,19 @@ export const MOCK_FOLDERS = [
 const folderPart = (path: string, windows: boolean) =>
   path.slice(0, Math.max(path.lastIndexOf("/"), windows ? path.lastIndexOf("\\") : -1) + 1);
 
-/** A stand-in for `hive::dirs::answer` over `MOCK_FOLDERS`. */
-export function mockDirs(asked: string, windows: boolean): Dirs {
-  const path = asked || (windows ? "C:\\Users\\user\\" : "/home/user/");
-  const unix = windows
+/**
+ * A stand-in for `hive::dirs::answer` over `MOCK_FOLDERS`. The service on Windows itself
+ * (`native`) takes every path as a Windows one, answers it as it is, and lists the drives for a
+ * name without a separator.
+ */
+export function mockDirs(asked: string, windows: boolean, native = false): Dirs {
+  const win = windows || native;
+  const path = asked || (win ? "C:\\Users\\user\\" : "/home/user/");
+  if (native && !/[\\/]/.test(path)) {
+    const dirs = [{ name: "C:", git: false }];
+    return { path, windows, linux_path: null, parent: null, dirs, error: null };
+  }
+  const unix = win
     ? path
         .replace(/^([A-Za-z]):/, (_, drive: string) => `/mnt/${drive.toLowerCase()}`)
         .replaceAll("\\", "/")
@@ -284,9 +293,9 @@ export function mockDirs(asked: string, windows: boolean): Dirs {
   const dirs = [...names]
     .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
     .map((name) => ({ name, git: MOCK_REPOS.some((p) => p.path === folder + name) }));
-  const above = folderPart(path, windows).replace(windows ? /[\\/]+$/ : /\/+$/, "");
-  const parent = folderPart(above, windows) || null;
-  return { ...answer, linux_path: unix, parent, dirs, error: null };
+  const above = folderPart(path, win).replace(win ? /[\\/]+$/ : /\/+$/, "");
+  const parent = folderPart(above, win) || null;
+  return { ...answer, linux_path: native ? path : unix, parent, dirs, error: null };
 }
 
 const MINUTE = 60_000;
@@ -891,7 +900,7 @@ export function createMockTransport(
       later({ type: "project_removed", id });
     },
     async listDirs(path, windows) {
-      later({ type: "dirs", ...mockDirs(path, windows) });
+      later({ type: "dirs", ...mockDirs(path, windows, mode === "native") });
     },
     async listBranches(project) {
       const branches = MOCK_BRANCHES[project];
