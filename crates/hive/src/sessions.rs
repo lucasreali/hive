@@ -357,8 +357,8 @@ pub fn resume_command(session: &Session, shell: Option<TerminalShell>) -> Option
 }
 
 /// `text` in PowerShell's single quotes, where each of its quote marks (`'` and the typographic
-/// `‘’‚‛`) is doubled.
-fn powershell(text: &str) -> String {
+/// `‘’‚‛`) is doubled. (Also the statusline command's quoting on Windows.)
+pub fn powershell(text: &str) -> String {
     let mut quoted = String::from("'");
     for c in text.chars() {
         if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
