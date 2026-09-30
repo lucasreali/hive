@@ -195,7 +195,11 @@ fn state_of(id: &str, state: AgentState) -> impl FnMut(Option<&Control>, &str) -
 async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
     let env = Env::new();
     let paths = env.paths();
-    // No service yet: the bridge starts one, detached.
+    // No service yet, only the pipe name one left that did not end well: the bridge starts
+    // one, detached, which names its own pipe.
+    std::fs::create_dir_all(&paths.runtime).unwrap();
+    let stale = r"\\.\pipe\hive-S-1-5-21-1-0000000000000000";
+    std::fs::write(paths.socket(), stale).unwrap();
     let (mut bridge, mut app) = bridge(&env);
     app.send(0, Control::hello(Role::App, hive::VERSION)).await;
     let welcome = Control::Welcome {
@@ -210,6 +214,27 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
     app.send(0, Control::ListProjects).await;
     app.wait_for(0, Control::Projects { projects: vec![] })
         .await;
+    let named = std::fs::read_to_string(paths.socket()).unwrap();
+    assert!(
+        named.starts_with(r"\\.\pipe\hive-S-1-5-") && named != stale,
+        "{named}"
+    );
+
+    // Never a terminal in a network folder: it would send the user's credentials.
+    let share = r"\\hive-test.invalid\share";
+    let refused = Control::Error {
+        message: format!(
+            r"{share}: network and device paths are not supported: use a drive path such as C:\…"
+        ),
+    };
+    let unc = Control::OpenTerminal {
+        cwd: share.into(),
+        cols: 80,
+        rows: 24,
+        account: None,
+    };
+    app.send(9, unc).await;
+    app.wait_for(9, refused).await;
 
     // A terminal: PowerShell (7 on the runner) by default, typed into and resized.
     let home = env.path("home");
@@ -385,6 +410,8 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         assert!(started.elapsed() < TIMEOUT, "the service is still running");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // Its pipe's name went with it.
+    assert!(!paths.socket().exists());
 }
 
 #[tokio::test]
