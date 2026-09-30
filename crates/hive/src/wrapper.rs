@@ -240,6 +240,12 @@ fn sh_quote(path: &Path) -> Vec<u8> {
     out
 }
 
+/// A program's exit `code` as `hive`'s: 0–255 as it is, any other code (on Windows an
+/// `NTSTATUS`, such as a program ended by Ctrl+C) 1, so that a failure never reads as a success.
+pub fn exit_byte(code: i32) -> u8 {
+    u8::try_from(code).unwrap_or(1)
+}
+
 /// Replaces `path` in one step, so a terminal never runs a half-written file.
 /// Writes `path` through a temporary file created with `mode` and renamed over it.
 pub(crate) fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
@@ -409,15 +415,24 @@ mod tests {
     /// Runs `program` with only `PATH` (and `extra`) set; the real `claude` is never on it.
     /// Killed after 10 s, so a wrapper that execs itself fails instead of hanging.
     fn run(program: &Path, path: &OsStr, extra: &[(&str, &str)], args: &[&str]) -> Output {
-        let mut child = Command::new(program)
-            .args(args)
-            .env_clear()
-            .env("PATH", path)
-            .envs(extra.iter().copied())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // A script this process just wrote can be held open by a child another test thread
+        // forks meanwhile: "Text file busy" until that child execs, so it is tried again.
+        let spawn = |attempt: u64| {
+            std::thread::sleep(std::time::Duration::from_millis(10 * attempt));
+            Command::new(program)
+                .args(args)
+                .env_clear()
+                .env("PATH", path)
+                .envs(extra.iter().copied())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        };
+        let busy = Some(io::ErrorKind::ExecutableFileBusy);
+        let spawned = (0..20)
+            .map(spawn)
+            .find(|s| s.as_ref().err().map(io::Error::kind) != busy);
+        let mut child = spawned.unwrap().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
