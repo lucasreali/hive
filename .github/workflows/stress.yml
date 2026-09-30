@@ -67,3 +67,13 @@ jobs:
             awk -v at="$at" 'index($0, at" ") == 1 && /SNAPSHOT UNEXPECTED/ {p=1; next} p && /^[0-9]{13} / {p=0} p' $log | awk '$5 != "??"' | cut -c1-250
           done
           echo "##### dtrace sample"; head -5 /tmp/signals.log || true; grep -c . /tmp/signals.log || true
+      - if: always()
+        name: crash reports
+        run: |
+          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
+            echo "##### $dir"; ls -la $dir 2>/dev/null | head -50 || true
+          done
+          for f in $(ls -t ~/Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -4); do
+            echo "################ $f"
+            head -c 60000 "$f"; echo
+          done
