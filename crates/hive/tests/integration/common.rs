@@ -88,6 +88,10 @@ impl Env {
         for sub in ["home", "run", "data", "config"] {
             std::fs::create_dir(env.path(sub)).unwrap();
         }
+        // fish's first start in a cache without them runs Python in the background to generate
+        // completions from every man page, seconds of a full core per terminal (much more on
+        // macOS) that a user pays once: here they count as generated.
+        std::fs::create_dir_all(env.path("cache/fish/generated_completions")).unwrap();
         env
     }
 
@@ -105,6 +109,7 @@ impl Env {
             .env("XDG_RUNTIME_DIR", self.path("run"))
             .env("XDG_DATA_HOME", self.path("data"))
             .env("XDG_CONFIG_HOME", self.path("config"))
+            .env("XDG_CACHE_HOME", self.path("cache"))
             .env("WSL_DISTRO_NAME", DISTRO)
             // git run by the service sees neither the real config nor an enclosing repository.
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

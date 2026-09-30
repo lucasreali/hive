@@ -85,7 +85,19 @@ pub fn run() -> ExitCode {
     // `hive statusline` exits with the user's statusline's code.
     let mut code = 0;
     let result = match cli.command {
-        Command::Daemon => block_on(crate::daemon::run(&paths)),
+        Command::Daemon => {
+            // A terminal's shell is forked (`setsid` and its PTY before `exec`). macOS's fork
+            // runs libnotify's child handler, which aborts the child (SIGTRAP, "os_once_t is
+            // corrupt") when another thread was setting libnotify up at that moment: set it up
+            // now, while the service still has one thread.
+            #[cfg(target_os = "macos")]
+            // SAFETY: a lookup in libnotify's (still empty) table of registrations: it only
+            // sets libnotify up.
+            unsafe {
+                notify_is_valid_token(0);
+            }
+            block_on(crate::daemon::run(&paths))
+        }
         Command::Bridge => {
             std::env::current_exe().and_then(|hive| block_on(crate::bridge::run(&paths, &hive)))
         }
@@ -119,6 +131,12 @@ pub fn run() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+// libnotify, part of libSystem.
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn notify_is_valid_token(val: std::ffi::c_int) -> bool;
 }
 
 /// A Hive terminal's id: its channel number, from 1.
