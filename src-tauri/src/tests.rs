@@ -458,26 +458,30 @@ fn shell(script: &str) -> std::process::Command {
 
 #[test]
 fn a_listing_that_hangs_is_killed_after_its_time_limit() {
-    let listed = output_within(&mut shell("echo Ubuntu"), Duration::from_secs(10)).unwrap();
+    let listed = output_within(&mut shell("echo Ubuntu"), Duration::from_secs(10), reader).unwrap();
     assert!(listed.status.success());
     assert_eq!(listed.stdout, b"Ubuntu\n");
     let started = std::time::Instant::now();
     let mut sleep = std::process::Command::new("sleep");
     sleep.arg("30");
-    let error = output_within(&mut sleep, Duration::from_millis(100)).unwrap_err();
+    let error = output_within(&mut sleep, Duration::from_millis(100), reader).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     let waited = started.elapsed();
     assert!(waited < Duration::from_secs(5), "{waited:?}");
     // It exits at once, but what it left running keeps its output open.
     let started = std::time::Instant::now();
     let mut held = shell("echo Ubuntu; sleep 30 &");
-    let error = output_within(&mut held, Duration::from_millis(300)).unwrap_err();
+    let error = output_within(&mut held, Duration::from_millis(300), reader).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     let waited = started.elapsed();
     assert!(waited < Duration::from_secs(5), "{waited:?}");
     let mut missing = std::process::Command::new("/nonexistent/wsl.exe");
-    let error = output_within(&mut missing, Duration::from_secs(1)).unwrap_err();
+    let error = output_within(&mut missing, Duration::from_secs(1), reader).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    // No thread for the reader: the error as it is, before anything runs.
+    let no_thread: Start = |_| Err(std::io::ErrorKind::WouldBlock.into());
+    let error = output_within(&mut missing, Duration::from_secs(1), no_thread).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
 }
 
 /// A temporary folder, removed on drop.

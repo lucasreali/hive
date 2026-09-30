@@ -164,7 +164,7 @@ impl Modes {
     ) -> Self {
         let native_saved = saved(&file) == Some(Mode::Native);
         Self {
-            wsl: native_saved || has_wsl(output_within(&mut list(), LIST_WAIT)),
+            wsl: native_saved || has_wsl(output_within(&mut list(), LIST_WAIT, reader)),
             file,
             native,
         }
@@ -198,22 +198,24 @@ fn saved(file: &std::path::Path) -> Option<Mode> {
 /// Runs `command` for its stdout, killing it after about `limit` (then `TimedOut`): both its exit
 /// and the end of its output must come by then, so a program it left holding the output open
 /// cannot hold up the start either. Counted in polls rather than read off a clock, so nothing
-/// can make the wait endless.
-fn output_within(command: &mut std::process::Command, limit: Duration) -> std::io::Result<Output> {
+/// can make the wait endless. `start` runs the output's reader on a thread ([`reader`]).
+fn output_within(
+    command: &mut std::process::Command,
+    limit: Duration,
+    start: Start,
+) -> std::io::Result<Output> {
     // The output is read on a thread of its own, started first so that nothing needs undoing
     // when it cannot start. It ends once every holder of the output closed it (ponytail: left
     // blocked until then after a time-out, one idle thread).
     let (give, pipe) = std::sync::mpsc::channel::<Option<std::process::ChildStdout>>();
     let (send, read) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("wsl-list".into())
-        .spawn(move || {
-            let mut out = Vec::new();
-            if let Ok(Some(mut stdout)) = pipe.recv() {
-                let _ = stdout.read_to_end(&mut out);
-            }
-            let _ = send.send(out);
-        })?;
+    start(Box::new(move || {
+        let mut out = Vec::new();
+        if let Ok(Some(mut stdout)) = pipe.recv() {
+            let _ = stdout.read_to_end(&mut out);
+        }
+        let _ = send.send(out);
+    }))?;
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -236,6 +238,15 @@ fn output_within(command: &mut std::process::Command, limit: Duration) -> std::i
     let _ = child.kill();
     let _ = child.wait();
     Err(std::io::ErrorKind::TimedOut.into())
+}
+
+/// Runs work on a thread of its own ([`reader`]; a failing one in the tests).
+type Start = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+/// Starts `output_within`'s reader on a new thread.
+fn reader(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    let thread = std::thread::Builder::new().name("wsl-list".into());
+    thread.spawn(work).map(drop)
 }
 
 /// Whether `wsl.exe -l -q` listed a distribution. It prints their names in UTF-16 (UTF-8 with
