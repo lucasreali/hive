@@ -91,9 +91,10 @@ pub fn run() -> ExitCode {
             // corrupt") when another thread was setting libnotify up at that moment: set it up
             // now, while the service still has one thread.
             #[cfg(target_os = "macos")]
-            // SAFETY: a lookup of a token no registration has; it only sets libnotify up.
+            // SAFETY: a lookup in libnotify's (still empty) table of registrations: it only
+            // sets libnotify up.
             unsafe {
-                notify_is_valid_token(-1);
+                notify_is_valid_token(0);
             }
             block_on(crate::daemon::run(&paths))
         }
