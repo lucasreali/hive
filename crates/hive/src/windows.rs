@@ -2303,10 +2303,12 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(started.elapsed() < BUSY_TIME);
         // A new service names its own pipe there.
+        // (Connected before accepting: a client that fails must not leave `accept` waiting.)
         let mut listener = Listener::bind(&paths).unwrap();
-        let (client, server) = tokio::join!(paths.connect(), accept(&mut listener));
-        client.unwrap();
-        server.unwrap();
+        let mut client = paths.connect().await.unwrap();
+        let mut server = accept(&mut listener).await.unwrap();
+        client.write_all(&[7]).await.unwrap();
+        assert_eq!(server.read_u8().await.unwrap(), 7);
     }
 
     #[test]
