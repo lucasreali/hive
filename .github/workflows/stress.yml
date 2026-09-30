@@ -1,5 +1,5 @@
-# TEMPORARY (12 macOS flakes): runs the hive tests many times on macOS and prints what
-# ended terminals. Removed before the task is reported.
+# TEMPORARY (12 macOS flakes): runs the hive tests many times on macOS, as the macos job
+# does, and prints every failure and crash report. Removed before the task is reported.
 name: stress
 
 on:
@@ -27,53 +27,24 @@ jobs:
           tool: cargo-llvm-cov
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: brew install fish
-      - name: dtrace
-        run: |
-          sudo dtrace -q -o /tmp/signals.log \
-            -n 'proc:::signal-send { printf("%d %d %s -> %d sig=%d\n", walltimestamp/1000000, pid, execname, args[1]->pr_pid, args[2]); }' \
-            -n 'syscall::kill:entry { printf("%d %d %s kill(%d, %d)\n", walltimestamp/1000000, pid, execname, (int)arg0, (int)arg1); }' \
-            > /tmp/dtrace.out 2>&1 &
-          sleep 5; cat /tmp/dtrace.out; sh -c 'kill -TERM $$' || true; sleep 2; tail -5 /tmp/signals.log || true
       - name: stress
         run: |
           run() { cargo llvm-cov -p hive --no-report; }
           run > /dev/null 2>&1 || true
-          rm -f /tmp/hive-debug.log
           fails=0
           for i in $(seq 1 25); do
             if ! run > out-$i.txt 2>&1; then
               fails=$((fails+1))
               echo "=== run $i failed"
-              grep -E "^test .* FAILED|panicked at|left:|right:" out-$i.txt | cut -c1-700
+              grep -E -A3 "^test .* FAILED|panicked at" out-$i.txt | cut -c1-900
             fi
           done
           echo "failed runs: $fails of 25"
       - if: always()
-        name: signals
-        run: |
-          log=/tmp/hive-debug.log
-          grep -c . $log || true
-          for shell in $(grep "SNAPSHOT UNEXPECTED" $log | grep -oE 'shell=[0-9]+' | cut -d= -f2 | head -8); do
-            echo "################ shell $shell"
-            at=$(grep "SNAPSHOT UNEXPECTED.*shell=$shell\$" $log | head -1 | cut -d' ' -f1)
-            env=$(grep "SNAPSHOT UNEXPECTED.*shell=$shell\$" $log | head -1 | sed -E 's/.* env=([^ ]*) .*/\1/')
-            echo "--- its service's log"
-            grep -E '^[0-9]{13} ' $log | grep -F "env=$env " | cut -c1-300
-            echo "--- every log line within 3 s before"
-            grep -E '^[0-9]{13} ' $log | awk -v at="$at" '$1 >= at - 3000 && $1 <= at' | grep -v "env=$env " | cut -c1-300
-            echo "--- signals to it or its group (dtrace)"
-            grep -E "(-> $shell |kill\(-?$shell, )" /tmp/signals.log | head -20
-            echo "--- terminal processes at its death"
-            awk -v at="$at" 'index($0, at" ") == 1 && /SNAPSHOT UNEXPECTED/ {p=1; next} p && /^[0-9]{13} / {p=0} p' $log | awk '$5 != "??"' | cut -c1-250
-          done
-          echo "##### dtrace sample"; head -5 /tmp/signals.log || true; grep -c . /tmp/signals.log || true
-      - if: always()
         name: crash reports
         run: |
-          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
-            echo "##### $dir"; ls -la $dir 2>/dev/null | head -50 || true
-          done
-          for f in $(ls -t ~/Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -4); do
+          ls -la ~/Library/Logs/DiagnosticReports 2>/dev/null || true
+          for f in $(ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -4); do
             echo "################ $f"
-            head -c 60000 "$f"; echo
+            head -c 20000 "$f"; echo
           done
