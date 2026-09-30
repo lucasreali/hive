@@ -464,6 +464,8 @@ fn validate(path: &str) -> Result<PathBuf, (ProjectError, String)> {
         let message = format!("{shown} is not an absolute path");
         return Err((ProjectError::NotAbsolute, message));
     }
+    #[cfg(windows)]
+    crate::windows::local(path).map_err(|err| (ProjectError::NotFound, err.to_string()))?;
     match std::fs::metadata(path) {
         Err(err) => Err((
             ProjectError::NotFound,
@@ -818,6 +820,20 @@ mod tests {
             let (got, text) = projects.add(&path).unwrap_err();
             assert_eq!(got, error, "{path}");
             assert!(text.contains(message), "{text}");
+        }
+        // On Windows, never a network or device path: opening one would send the user's
+        // credentials.
+        #[cfg(windows)]
+        for path in [
+            r"\\host\share\repo",
+            r"\\?\UNC\host\share\repo",
+            r"\\.\C:\repo",
+            r"\\?\GLOBALROOT\Device\repo",
+        ] {
+            let said = format!(
+                r"{path}: network and device paths are not supported: use a drive path such as C:\…"
+            );
+            assert_eq!(projects.add(path), Err((ProjectError::NotFound, said)));
         }
         assert!(projects.list().is_empty());
         assert!(!tmp.path().join("spaces.json").exists());

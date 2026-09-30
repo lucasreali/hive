@@ -214,6 +214,8 @@ fn dir(field: &str, value: Option<String>, on_disk: bool) -> Result<Option<Strin
         if !Path::new(dir).is_absolute() {
             return Err(format!("{field} must be an absolute path"));
         }
+        #[cfg(windows)]
+        crate::windows::local(Path::new(dir)).map_err(|err| format!("{field}: {err}"))?;
         if on_disk && !Path::new(dir).is_dir() {
             return Err(format!("{field}: {dir} is not a folder"));
         }
@@ -461,6 +463,30 @@ mod tests {
         );
         spaces.create("gh", account("me")).unwrap();
         assert_eq!(spaces.current().1, account("me"));
+    }
+
+    /// Opening one would send the user's credentials to its host.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_config_folders_are_never_network_or_device_paths() {
+        let said = |field: &str, dir: &str| {
+            Err(format!(
+                r"{field}: {dir}: network and device paths are not supported: use a drive path such as C:\…"
+            ))
+        };
+        for dir in [r"\\host\share\gh", r"\\?\UNC\host\share\gh", r"\\.\pipe\gh"] {
+            let (gh, claude) = (Some(dir.to_owned()), Some(dir.to_owned()));
+            assert_eq!(
+                gh_config_dir(gh, false),
+                said("The GitHub CLI config folder", dir)
+            );
+            assert_eq!(
+                claude_config_dir(claude, false),
+                said("The Claude config folder", dir)
+            );
+        }
+        let drive = Some(r"C:\gh".to_owned());
+        assert_eq!(gh_config_dir(drive.clone(), false), Ok(drive));
     }
 
     #[test]

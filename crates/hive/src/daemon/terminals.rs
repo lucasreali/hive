@@ -39,6 +39,12 @@ impl State {
         account: Option<AccountDir>,
         frames: mpsc::UnboundedSender<Frame>,
     ) {
+        // Never in a network or device folder: placing it would open it.
+        #[cfg(windows)]
+        if let Err(err) = crate::windows::local(std::path::Path::new(cwd)) {
+            let message = err.to_string();
+            return self.to_app(channel, &Control::Error { message }).await;
+        }
         let claude_dir = match self.settings.claude_dir(account) {
             Ok(dir) => dir,
             Err(message) => return self.to_app(channel, &Control::Error { message }).await,

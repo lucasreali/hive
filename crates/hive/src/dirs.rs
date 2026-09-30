@@ -92,6 +92,8 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     if !Path::new(&linux).is_absolute() {
         return Err(io::Error::other("type a full path"));
     }
+    #[cfg(windows)]
+    crate::windows::local(Path::new(&linux))?;
     let typed = Path::new(&linux);
     let folder = if path.ends_with(separators) {
         typed
@@ -333,6 +335,24 @@ mod tests {
         assert_eq!((path, linux), (typed.clone(), Some(typed)));
         let (.., error) = ask(r"\Users", true, None, &WINDOWS);
         assert_eq!(error.as_deref(), Some("type a full path"));
+        // Never a network or device path: listing one would send the user's credentials.
+        for path in [
+            r"\\host\share\",
+            "//host/share/x",
+            r"\\?\UNC\host\share\",
+            r"\\.\pipe\",
+            r"\\?\GLOBALROOT\Device\",
+        ] {
+            let (.., dirs, error) = ask(path, false, None, &WINDOWS);
+            let said = format!(
+                r"{path}: network and device paths are not supported: use a drive path such as C:\…"
+            );
+            assert_eq!((dirs, error), (vec![], Some(said)));
+        }
+        // A drive's own verbatim form is listed.
+        let (.., dirs, error) = ask(r"\\?\C:\", false, None, &WINDOWS);
+        assert_eq!(error, None);
+        assert!(dirs.iter().any(|d| d.name == "Users"), "{dirs:?}");
     }
 
     #[test]

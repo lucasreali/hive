@@ -56,6 +56,7 @@ impl Paths {
         }
     }
 
+    /// The service's socket; on Windows, the file naming its pipe (`windows::Listener::bind`).
     pub fn socket(&self) -> PathBuf {
         self.runtime.join("hive.sock")
     }

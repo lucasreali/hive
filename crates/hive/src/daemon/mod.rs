@@ -67,7 +67,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // Nothing signals a service started detached: it ends with the app connection.
     #[cfg(windows)]
     let terminated = std::future::pending();
-    // No socket file on Windows: removing it is a no-op there.
+    // On Windows this file names the service's pipe: removed too, once the service ends.
     let socket = paths.socket();
     #[cfg(unix)]
     let listener = {
@@ -77,7 +77,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
         listener
     };
-    // Refused while another service's pipe is still there.
+    // A new pipe, named in the runtime folder.
     #[cfg(windows)]
     let listener = Listener::bind(paths)?;
     let projects = Projects::load(paths.spaces(), &paths.projects());
@@ -946,5 +946,24 @@ mod tests {
         let json = serde_json::to_value(control.unwrap()).unwrap();
         assert_eq!(json["path"], added.display().to_string());
         ticking.abort();
+    }
+
+    /// Placing it would open it, which sends the user's credentials to its host.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn on_windows_no_terminal_opens_in_a_network_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let (app, mut sent) = mpsc::unbounded_channel();
+        *state.app.lock().await = Some(app);
+        let (frames, _) = mpsc::unbounded_channel();
+        state.open(1, r"\\host\share", (80, 24), None, frames).await;
+        let frame = sent.try_recv().unwrap();
+        let message = r"\\host\share: network and device paths are not supported: use a drive path such as C:\…";
+        let error = Control::Error {
+            message: message.into(),
+        };
+        assert_eq!((frame.channel, frame.to_control().unwrap()), (1, error));
+        assert!(state.terminals.lock().await.is_empty());
     }
 }

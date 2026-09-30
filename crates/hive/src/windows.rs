@@ -6,12 +6,13 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io;
+use std::hash::{BuildHasher, RandomState};
+use std::io::{self, Read};
 use std::ops::BitOr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::process::{Child, Command};
 use std::time::Duration;
 
@@ -49,6 +50,10 @@ use crate::terminal::conpty;
 const BUSY_TIME: Duration = Duration::from_secs(2);
 /// How often a client tries a busy pipe again.
 const BUSY_RETRY: Duration = Duration::from_millis(10);
+/// What every name of the service's pipe starts with.
+const PIPE_PREFIX: &str = r"\\.\pipe\hive-";
+/// Longest pipe name a client reads: the service's take about 70 bytes.
+const NAME_LIMIT: u64 = 256;
 
 /// Data in `%LOCALAPPDATA%\hive`, settings in `%APPDATA%\hive` (under `%USERPROFILE%` when
 /// unset, else the temporary folder). The lock and the service's log go in the data's `run`.
@@ -83,12 +88,11 @@ impl Paths {
         std::fs::create_dir_all(&self.runtime)
     }
 
-    /// Connects to the service's pipe, only to a service run by this user: anyone may create
-    /// a pipe of this name first, so the serving process's user is checked (as the socket's
-    /// peer on Unix).
+    /// Connects to the service's pipe, named in the runtime folder ([`read_pipe_name`]), only
+    /// to a service run by this user: its owner is checked too (as the socket's peer on Unix).
     pub async fn connect(&self) -> io::Result<NamedPipeClient> {
         let user = process_user(std::process::id())?;
-        let name = pipe_name(&user, &self.runtime);
+        let name = read_pipe_name(&self.socket())?;
         let open = async {
             loop {
                 match ClientOptions::new().open(&name) {
@@ -108,16 +112,34 @@ impl Paths {
     }
 }
 
-/// The service's pipe for `user` (a SID) and its data's `runtime` folder: one service per
-/// user and data folder, as one socket per runtime folder on Unix (a test's service never
-/// meets the real one).
-fn pipe_name(user: &str, runtime: &Path) -> String {
-    // FNV-1a: short, and the same in every build.
-    let bytes = runtime.as_os_str().as_encoded_bytes().iter();
-    let hash = bytes.fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    });
-    format!(r"\\.\pipe\hive-{user}-{hash:016x}")
+/// A new name for the service's pipe of `user` (a SID): unguessable, so that another local
+/// user cannot create it first and so keep Hive from starting. The service writes it in its
+/// runtime folder ([`Listener::bind`]), where clients read it ([`read_pipe_name`]): one service
+/// per runtime folder, as one socket per runtime folder on Unix (a test's never meets the
+/// real one).
+fn pipe_name(user: &str) -> String {
+    // Keys from the system's random source.
+    let random = RandomState::new().hash_one(user);
+    format!("{PIPE_PREFIX}{user}-{random:016x}")
+}
+
+/// The service's pipe name, from `file` (the runtime folder's `hive.sock`). Missing (no service
+/// yet: `NotFound`, and the bridge starts one), over [`NAME_LIMIT`] bytes or not a hive pipe's
+/// name: refused, so a client never opens anything else (a network path, say).
+fn read_pipe_name(file: &Path) -> io::Result<String> {
+    let mut name = String::new();
+    File::open(file)?
+        .take(NAME_LIMIT + 1)
+        .read_to_string(&mut name)?;
+    let rest = name.strip_prefix(PIPE_PREFIX).unwrap_or_default();
+    let named = rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if name.len() as u64 > NAME_LIMIT || rest.is_empty() || !named {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} does not name a hive pipe", file.display()),
+        ));
+    }
+    Ok(name)
 }
 
 /// Refuses a pipe `user` (a SID) does not own. The service gives its pipe the user as owner,
@@ -211,12 +233,16 @@ pub struct Listener {
 }
 
 impl Listener {
-    /// Creates the pipe of this user and `paths`. Refused when a pipe of that name exists
-    /// (another service, or someone squatting the name).
+    /// Creates a pipe of this user under a new name (refused if a pipe of that name exists),
+    /// then writes the name for clients in `paths`' runtime folder (`hive.sock`, which the
+    /// service removes when it ends). One left by a service that did not end well names a
+    /// pipe that is gone: clients fail at once, and the bridge starts a new service, which
+    /// writes it again. Only the service holding the lock binds.
     pub fn bind(paths: &Paths) -> io::Result<Self> {
         let user = process_user(std::process::id())?;
-        let name = pipe_name(&user, &paths.runtime);
+        let name = pipe_name(&user);
         let next = instance(&name, &user, true)?;
+        std::fs::write(paths.socket(), &name)?;
         Ok(Self { name, user, next })
     }
 }
@@ -1442,6 +1468,26 @@ fn wide(path: &Path) -> io::Result<Vec<u16>> {
     Ok(wide.into_iter().chain([0]).collect())
 }
 
+/// Refuses `path` from the app unless it starts with a drive (`C:`, `\\?\C:`), before anything
+/// opens it: a network path (`\\host\share`, `\\?\UNC\…`) makes Windows send the user's
+/// credentials to that host, and a device path (`\\.\…`, `\\?\…`) is no folder of theirs.
+pub fn local(path: &Path) -> io::Result<()> {
+    match path.components().next() {
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) =>
+        {
+            Ok(())
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                r"{}: network and device paths are not supported: use a drive path such as C:\…",
+                path.display()
+            ),
+        )),
+    }
+}
+
 /// The app runs beside the service: it opens `path` itself.
 pub fn native_path(path: &Path, _wslpath: &std::ffi::OsStr) -> io::Result<String> {
     Ok(path.to_string_lossy().into_owned())
@@ -2059,11 +2105,74 @@ mod tests {
     }
 
     #[test]
-    fn the_pipe_is_the_users_and_the_data_folders() {
-        assert_eq!(
-            pipe_name("S-1-5-21-1", Path::new(r"C:\L\hive\run")),
-            r"\\.\pipe\hive-S-1-5-21-1-bb7225ed63f8b90b"
-        );
+    fn the_pipe_is_the_users_under_a_new_random_name() {
+        let (a, b) = (pipe_name("S-1-5-21-1"), pipe_name("S-1-5-21-1"));
+        assert_ne!(a, b);
+        for name in [a, b] {
+            let random = name.strip_prefix(r"\\.\pipe\hive-S-1-5-21-1-").unwrap();
+            assert_eq!(random.len(), 16, "{name}");
+            assert!(random.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_client_reads_only_a_hive_pipes_name_of_a_bounded_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("hive.sock");
+        // No file: no service yet.
+        let err = read_pipe_name(&file).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        let longest = format!(r"\\.\pipe\hive-{}", "a-".repeat(121));
+        assert_eq!(longest.len() as u64, NAME_LIMIT);
+        for good in [r"\\.\pipe\hive-S-1-5-21-1-00ff", &longest] {
+            std::fs::write(&file, good).unwrap();
+            assert_eq!(read_pipe_name(&file).unwrap(), good);
+        }
+        let refused = format!("{} does not name a hive pipe", file.display());
+        for bad in [
+            format!("{longest}a"),
+            r"\\.\pipe\hive-".to_owned(),
+            r"\\.\pipe\hive-a.b".to_owned(),
+            r"\\.\pipe\hive-a\b".to_owned(),
+            r"\\host\pipe\hive-a".to_owned(),
+            r"\\.\pipe\other-a".to_owned(),
+            String::new(),
+        ] {
+            std::fs::write(&file, &bad).unwrap();
+            let err = read_pipe_name(&file).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad}");
+            assert_eq!(err.to_string(), refused, "{bad}");
+        }
+        // Not text.
+        std::fs::write(&file, b"\\\\.\\pipe\\hive-\xff").unwrap();
+        let err = read_pipe_name(&file).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn network_and_device_paths_are_refused() {
+        for good in [r"C:\Users\me", r"c:/x", r"\\?\C:\Users\me", "D:"] {
+            local(Path::new(good)).unwrap();
+        }
+        for bad in [
+            r"\\host\share\x",
+            "//host/share/x",
+            r"\\?\UNC\host\share\x",
+            r"\\.\pipe\x",
+            r"\\.\C:\x",
+            r"\\?\GLOBALROOT\Device\x",
+            r"\??\UNC\host\share",
+            r"\Users",
+            "rel",
+            "",
+        ] {
+            let err = local(Path::new(bad)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad}");
+            let said = format!(
+                r"{bad}: network and device paths are not supported: use a drive path such as C:\…"
+            );
+            assert_eq!(err.to_string(), said);
+        }
     }
 
     #[test]
@@ -2088,9 +2197,12 @@ mod tests {
     async fn clients_reach_the_service_one_instance_each() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths_in(tmp.path());
+        paths.prepare_runtime().unwrap();
         let mut listener = Listener::bind(&paths).unwrap();
-        // One service per pipe.
-        assert!(Listener::bind(&paths).is_err());
+        // Its name, for clients; a second pipe of that name is refused.
+        let name = read_pipe_name(&paths.socket()).unwrap();
+        assert_eq!(name, listener.name);
+        assert!(instance(&name, &listener.user, true).is_err());
         for n in [1_u8, 2] {
             let (client, server) = tokio::join!(paths.connect(), accept(&mut listener));
             let (mut client, mut server) = (client.unwrap(), server.unwrap());
@@ -2109,6 +2221,7 @@ mod tests {
     async fn a_client_waits_for_a_free_instance_for_a_while() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths_in(tmp.path());
+        paths.prepare_runtime().unwrap();
         let mut listener = Listener::bind(&paths).unwrap();
         // The only instance, taken and not accepted yet: the next client waits.
         let _first = paths.connect().await.unwrap();
@@ -2128,10 +2241,21 @@ mod tests {
     #[tokio::test]
     async fn without_a_service_connecting_fails_at_once() {
         let tmp = tempfile::tempdir().unwrap();
+        let paths = paths_in(tmp.path());
         let started = Instant::now();
-        let err = paths_in(tmp.path()).connect().await.unwrap_err();
+        let err = paths.connect().await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        // A name left by a service that did not end well: its pipe is gone.
+        paths.prepare_runtime().unwrap();
+        std::fs::write(paths.socket(), pipe_name("S-1-5-21-1")).unwrap();
+        let err = paths.connect().await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(started.elapsed() < BUSY_TIME);
+        // A new service names its own pipe there.
+        let mut listener = Listener::bind(&paths).unwrap();
+        let (client, server) = tokio::join!(paths.connect(), accept(&mut listener));
+        client.unwrap();
+        server.unwrap();
     }
 
     #[test]
