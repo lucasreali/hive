@@ -1488,6 +1488,82 @@ pub fn local(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Most links [`local_links`] follows, as Windows (63): more means a loop of links.
+const LINK_LIMIT: usize = 63;
+
+/// Refuses `path` when a link on the way to it (a symbolic link or a junction, which a cloned
+/// repository can hold) points to a network or device path: following it would make Windows
+/// send the user's credentials to that host. Each name is read without following it
+/// (`symlink_metadata`), and a link's target (`read_link`) replaces the path up to it, `.` and
+/// `..` taken off by name as Windows does, so nothing remote is contacted; `canonicalize` then
+/// follows only local links.
+// ponytail: a link swapped between this walk and the caller's own open is followed; a cloned
+// repository cannot do that, only a program of the user's.
+pub fn local_links(path: &Path) -> io::Result<()> {
+    let mut path = collapse(&std::path::absolute(path)?);
+    'links: for _ in 0..=LINK_LIMIT {
+        let mut at = PathBuf::new();
+        let mut parts = path.components();
+        while let Some(part) = parts.next() {
+            at.push(part);
+            // A drive or a root is no link.
+            if !matches!(part, Component::Normal(_)) {
+                continue;
+            }
+            // Missing (or unreadable): nothing further is followed, and `canonicalize` says why.
+            let Ok(meta) = at.symlink_metadata() else {
+                return Ok(());
+            };
+            if !meta.is_symlink() {
+                continue;
+            }
+            let target = std::fs::read_link(&at)?;
+            if !stays_local(&target) {
+                return Err(io::Error::other(format!(
+                    "{} points to a network or device path, which Hive does not open",
+                    at.display()
+                )));
+            }
+            // A relative target is read from the link's folder.
+            at.pop();
+            path = collapse(&at.join(target).join(parts.as_path()));
+            continue 'links;
+        }
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "{}: too many links",
+        path.display()
+    )))
+}
+
+/// `path` with `.` and `..` taken off by name, as Windows reads a link's target.
+fn collapse(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            part => out.push(part),
+        }
+    }
+    out
+}
+
+/// Whether a link's `target` stays on this machine: relative, rooted (on the link's drive), on
+/// a drive ([`local`]) or a volume (a folder a volume is mounted on: `\\?\Volume{…}\`).
+fn stays_local(target: &Path) -> bool {
+    match target.components().next() {
+        Some(Component::Prefix(prefix)) => {
+            let volume = |name: &OsStr| name.to_string_lossy().starts_with("Volume{");
+            local(target).is_ok() || matches!(prefix.kind(), Prefix::Verbatim(name) if volume(name))
+        }
+        _ => true,
+    }
+}
+
 /// The app runs beside the service: it opens `path` itself.
 pub fn native_path(path: &Path, _wslpath: &std::ffi::OsStr) -> io::Result<String> {
     Ok(path.to_string_lossy().into_owned())
@@ -1647,17 +1723,7 @@ pub mod claude {
         match paths.into_iter().flatten().find(bare) {
             Some(path) => format!("{path} statusline"),
             None if bash => format!("'{}' statusline", long.replace('\'', r"'\''")),
-            None => {
-                // PowerShell's single quotes are `'` and `‘`, `’`, `‚`, `‛`: each one doubled.
-                let mut quoted = String::new();
-                for c in long.chars() {
-                    if "'\u{2018}\u{2019}\u{201A}\u{201B}".contains(c) {
-                        quoted.push(c);
-                    }
-                    quoted.push(c);
-                }
-                format!("& '{quoted}' statusline")
-            }
+            None => format!("& {} statusline", crate::sessions::powershell(&long)),
         }
     }
 
@@ -2224,6 +2290,105 @@ mod tests {
             );
             assert_eq!(err.to_string(), said);
         }
+    }
+
+    #[test]
+    fn a_links_target_stays_local_unless_it_names_a_network_or_device_path() {
+        for good in [
+            "rel",
+            r"..\x",
+            r"\x",
+            r"C:\x",
+            r"\\?\C:\x",
+            r"\\?\Volume{0a1b}\x",
+        ] {
+            assert!(stays_local(Path::new(good)), "{good}");
+        }
+        for bad in [
+            r"\\host\share\x",
+            r"\\?\UNC\host\share\x",
+            r"\\.\UNC\host\share\x",
+            r"\\?\GLOBALROOT\Device\Mup\host\share",
+            r"\\.\pipe\x",
+        ] {
+            assert!(!stays_local(Path::new(bad)), "{bad}");
+        }
+        let collapsed = |path: &str| collapse(Path::new(path));
+        assert_eq!(collapsed(r"C:\a\..\..\b\.\c"), PathBuf::from(r"C:\b\c"));
+        // A verbatim path keeps `.` as a name (`CurDir`), which is taken off too.
+        assert_eq!(
+            collapsed(r"\\?\C:\a\.\b\..\c")
+                .components()
+                .collect::<Vec<_>>(),
+            Path::new(r"\\?\C:\a\c").components().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_network_path_is_never_followed() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let at = |name: &str| root.join(name);
+        let refused = |link: &str| {
+            format!(
+                "{} points to a network or device path, which Hive does not open",
+                at(link).display()
+            )
+        };
+        std::fs::create_dir_all(at(r"deep\dir")).unwrap();
+        std::fs::write(at("a.txt"), "a").unwrap();
+        std::fs::write(at(r"deep\y"), "harmless").unwrap();
+        symlink_file("a.txt", at("local")).unwrap();
+        symlink_dir(root, at("self")).unwrap();
+        symlink_dir(r"\\localhost\c$\Windows", at("remote")).unwrap();
+        symlink_file(r"\\localhost\c$\Windows\win.ini", at("remote-file")).unwrap();
+        symlink_dir("remote", at("chain")).unwrap();
+        // Windows takes `sub\..` off by name: `l` is `y`, not `deep\y`.
+        symlink_dir(r"deep\dir", at("sub")).unwrap();
+        symlink_file(r"sub\..\y", at("l")).unwrap();
+        symlink_file(r"\\localhost\c$\Windows\win.ini", at("y")).unwrap();
+        symlink_file("loop-b", at("loop-a")).unwrap();
+        symlink_file("loop-a", at("loop-b")).unwrap();
+
+        // Local links are followed.
+        let real = crate::paths::canonical(&at("a.txt")).unwrap();
+        assert_eq!(crate::paths::canonical(&at("local")).unwrap(), real);
+        assert_eq!(crate::paths::canonical(&at(r"self\local")).unwrap(), real);
+        // Something missing is left to `canonicalize`.
+        local_links(&at(r"missing\x")).unwrap();
+        let err = crate::paths::canonical(&at(r"missing\x")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+        for (path, link) in [
+            ("remote", "remote"),
+            (r"remote\win.ini", "remote"),
+            ("remote-file", "remote-file"),
+            (r"chain\win.ini", "remote"),
+            ("l", "y"),
+        ] {
+            let err = crate::paths::canonical(&at(path)).unwrap_err();
+            assert_eq!(err.to_string(), refused(link), "{path}");
+        }
+        // Through a link to an absolute path (which Windows may spell `\\?\C:\…`).
+        let err = crate::paths::canonical(&at(r"self\remote-file")).unwrap_err();
+        let said = r"\remote-file points to a network or device path, which Hive does not open";
+        assert!(err.to_string().ends_with(said), "{err}");
+        let err = local_links(&at("loop-a")).unwrap_err();
+        assert!(err.to_string().ends_with(": too many links"), "{err}");
+
+        // The file a worktree's link points to is neither opened nor listed as a folder.
+        let err = crate::file::read(root, "remote-file", None).unwrap_err();
+        assert_eq!(err.to_string(), refused("remote-file"));
+        let top = format!(r"{}\", root.display());
+        let hive_protocol::Control::Dirs { dirs, error, .. } =
+            crate::dirs::answer(top, false, None, &crate::dirs::WINDOWS)
+        else {
+            panic!("not a listing");
+        };
+        assert_eq!(error, None);
+        let names: Vec<_> = dirs.iter().map(|dir| dir.name.as_str()).collect();
+        assert_eq!(names, ["deep", "self", "sub"]);
     }
 
     #[test]

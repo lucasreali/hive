@@ -266,7 +266,9 @@ impl Watcher {
             event.kind,
             EventKind::Modify(ModifyKind::Any | ModifyKind::Metadata(_))
         );
-        if own && event.paths.iter().all(|path| path.is_dir()) {
+        // Never through a link: one to a network path would reach its host.
+        let folder = |path: &PathBuf| path.symlink_metadata().is_ok_and(|meta| meta.is_dir());
+        if own && event.paths.iter().all(folder) {
             return false;
         }
         // No path: an overflow, which calls for a full re-list.

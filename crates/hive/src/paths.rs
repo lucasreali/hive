@@ -162,8 +162,11 @@ fn check_peer(stream: &UnixStream, uid: u32) -> io::Result<()> {
 
 /// `path` resolved (links followed, as `canonicalize`), in the form git and other programs
 /// read: Windows puts `\\?\` before a resolved path, which git refuses and which never
-/// equals the same path spelled plainly.
+/// equals the same path spelled plainly. On Windows a link to a network or device path is
+/// refused before anything follows it ([`crate::windows::local_links`]).
 pub fn canonical(path: &Path) -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    crate::windows::local_links(path)?;
     path.canonicalize().map(plain)
 }
 

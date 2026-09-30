@@ -138,11 +138,13 @@ fn subfolders(folder: &Path) -> io::Result<Vec<Dir>> {
         .collect())
 }
 
-/// Reads the entry's type first: a stat per file is slow on the Windows side (drvfs).
+/// Reads the entry's type first: a stat per file is slow on the Windows side (drvfs). A link
+/// is resolved as [`crate::paths::canonical`] does: on Windows, never to a network path.
 fn is_dir(entry: &fs::DirEntry) -> bool {
+    let linked = || crate::paths::canonical(&entry.path()).is_ok_and(|real| real.is_dir());
     entry
         .file_type()
-        .is_ok_and(|kind| kind.is_dir() || kind.is_symlink() && entry.path().is_dir())
+        .is_ok_and(|kind| kind.is_dir() || kind.is_symlink() && linked())
 }
 
 /// `program`'s first line of output.
