@@ -8,6 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
+use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -62,6 +63,13 @@ const EXIT_WAIT: Duration = Duration::from_secs(2);
 const NOT_CONNECTED: &str = "not connected to the hive service";
 /// How many paths the service sent (`editor_target`, `session_located`) wait for `open_path`.
 const APPROVED_LIMIT: usize = 16;
+/// How long `wsl.exe -l -q` may take (12.5.4): it runs before the window shows, and a wedged WSL
+/// service would otherwise keep the app from starting.
+const LIST_WAIT: Duration = Duration::from_secs(3);
+/// How often the listing is checked for its end.
+const LIST_POLL: Duration = Duration::from_millis(10);
+/// The most bytes read from the `mode` file; a longer file holds no mode.
+const MODE_LIMIT: u64 = 16;
 
 /// Program and arguments that start `hive bridge`, and whether that runs the `hive` the installer
 /// bundles (an installed app) rather than a development one, for the connection dialog (12.4).
@@ -145,16 +153,19 @@ pub struct Modes {
 }
 
 impl Modes {
-    /// The choice on Windows, kept in `file`; `list` runs `wsl.exe -l -q` to see whether WSL is
-    /// there (without it the service runs on Windows, never asking).
+    /// The choice on Windows, kept in `file`. `list` gives the `wsl.exe -l -q` command, which
+    /// tells whether WSL is there (without it the service runs on Windows, never asking); it is
+    /// not run with Windows saved: WSL was there when it was chosen, and a wedged WSL must not
+    /// hold up a start that does not need it. The listing gets [`LIST_WAIT`].
     pub fn new(
         file: PathBuf,
-        list: impl FnOnce() -> std::io::Result<Output>,
+        list: impl FnOnce() -> std::process::Command,
         native: Bridge,
     ) -> Self {
+        let native_saved = saved(&file) == Some(Mode::Native);
         Self {
+            wsl: native_saved || has_wsl(output_within(&mut list(), LIST_WAIT)),
             file,
-            wsl: has_wsl(list()),
             native,
         }
     }
@@ -164,8 +175,7 @@ impl Modes {
         if !self.wsl {
             return Some(Mode::Native);
         }
-        let saved = std::fs::read_to_string(&self.file).ok()?;
-        Mode::parse(saved.trim())
+        saved(&self.file)
     }
 
     fn save(&self, mode: Mode) -> std::io::Result<()> {
@@ -176,11 +186,44 @@ impl Modes {
     }
 }
 
+/// The mode saved in `file`, if any. At most [`MODE_LIMIT`] bytes are read.
+fn saved(file: &std::path::Path) -> Option<Mode> {
+    let file = std::fs::File::open(file).ok()?;
+    let mut text = String::new();
+    file.take(MODE_LIMIT + 1).read_to_string(&mut text).ok()?;
+    let fits = text.len() as u64 <= MODE_LIMIT;
+    fits.then(|| Mode::parse(text.trim())).flatten()
+}
+
+/// Runs `command` for its stdout, killing it after about `limit` (then `TimedOut`). Counted in
+/// polls rather than read off a clock, so nothing can make the wait endless.
+fn output_within(command: &mut std::process::Command, limit: Duration) -> std::io::Result<Output> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    for _ in 0..limit.as_millis() / LIST_POLL.as_millis() {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        std::thread::sleep(LIST_POLL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(std::io::ErrorKind::TimedOut.into())
+}
+
 /// Whether `wsl.exe -l -q` listed a distribution. It prints their names in UTF-16 (UTF-8 with
 /// `WSL_UTF8=1`), one per line, and fails or prints nothing when WSL or every distribution is
-/// missing. A name always holds a letter or digit, an ASCII byte in either encoding.
+/// missing. A name always holds a letter or digit, an ASCII byte in either encoding. A listing
+/// killed at its time limit leaves WSL unknown, counted as there: the saved mode starts, else
+/// the first run asks, so a slow WSL never moves a WSL user to Windows.
 fn has_wsl(list: std::io::Result<Output>) -> bool {
-    list.is_ok_and(|out| out.status.success() && out.stdout.iter().any(u8::is_ascii_alphanumeric))
+    match list {
+        Ok(out) => out.status.success() && out.stdout.iter().any(u8::is_ascii_alphanumeric),
+        Err(error) => error.kind() == std::io::ErrorKind::TimedOut,
+    }
 }
 
 /// Whether the webview may load `url` (open point #15): only the app itself, from the one origin
@@ -204,6 +247,9 @@ pub struct Hive {
     /// The choice of WSL or Windows (12.5.4); none on macOS.
     modes: Option<Modes>,
     link: Arc<Mutex<Link>>,
+    /// Held through a whole `reconnect`, so two mode switches never overlap: one would start its
+    /// bridge while the other still ends the old one, whose end then cuts the new connection.
+    reconnecting: tokio::sync::Mutex<()>,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
     restart: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs a downloaded update's installer; given by `main.rs` (`with_install`).
@@ -305,6 +351,7 @@ impl Hive {
             bridge: (program, args, false),
             modes: None,
             link: Arc::default(),
+            reconnecting: tokio::sync::Mutex::default(),
             restart: None,
             install: None,
             open: None,
@@ -361,6 +408,10 @@ impl Hive {
             .as_ref()
             .ok_or("Hive offers no choice of service here")?;
         let mode = Mode::parse(mode).ok_or_else(|| format!("unknown service mode: {mode}"))?;
+        // Without WSL no mode is saved: installing WSL later asks.
+        if mode == Mode::Wsl && !modes.wsl {
+            return Err("WSL has no distribution: Hive runs on Windows".into());
+        }
         let saved = modes.save(mode);
         saved.map_err(|error| format!("cannot save the service mode: {error}"))?;
         self.link().mode = Some(mode);
@@ -370,6 +421,7 @@ impl Hive {
     /// Ends the connection, if any, then connects the same UI again, to the service of the mode
     /// chosen now. Must run inside the Tokio runtime.
     pub async fn reconnect(&self) {
+        let _one_at_a_time = self.reconnecting.lock().await;
         self.shutdown(EXIT_WAIT).await;
         let ui = self.link().ui.clone();
         if let Some(ui) = ui {
