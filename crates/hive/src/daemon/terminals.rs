@@ -187,20 +187,6 @@ async fn pump(
             status
         }
     };
-    {
-        use std::os::unix::process::ExitStatusExt;
-        let raw = status.as_ref().ok().map(|s| (s.code(), s.signal()));
-        terminal::debug(&format!(
-            "exited ch={channel} shell={session} status={raw:?}"
-        ));
-        let asked = terminal::ENDING
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(&session);
-        if !asked && !matches!(raw, Some((Some(_), None))) {
-            terminal::snapshot(&format!("UNEXPECTED ch={channel} shell={session}"));
-        }
-    }
     // Whether or not they still hold the PTY (macOS revokes it when the shell exits).
     terminal::end_sessions(&[session]).await;
     let code = status.ok().and_then(|status| status.code());
