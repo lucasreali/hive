@@ -11,7 +11,6 @@ import {
   restore,
   resume,
   resumeArgs,
-  resumeCommand,
   sessionName,
   sessionTokens,
   tokens,
@@ -29,16 +28,9 @@ afterEach(() => {
 
 const [session, stopped] = MOCK_SESSIONS;
 
-test("resume commands go on with the session, or fork it", () => {
+test("resume arguments go on with the session, or fork it", () => {
   expect(resumeArgs(session)).toBe(`--resume ${session.id}`);
   expect(resumeArgs(session, true)).toBe(`--resume ${session.id} --fork-session`);
-  const odd = { ...session, cwd: "/home/me/it's here" };
-  expect(resumeCommand(odd)).toBe(`cd '/home/me/it'\\''s here' && claude --resume ${session.id}`);
-  // Another account's session names its folder (12.2).
-  const work = { ...session, config_dir: "/home/me/.claude work" };
-  expect(resumeCommand(work)).toBe(
-    `cd '${session.cwd}' && CLAUDE_CONFIG_DIR='/home/me/.claude work' claude --resume ${session.id}`,
-  );
   expect(sessionName(session)).toBe("Fix the login redirect");
   expect(sessionName({ ...session, title: null })).toBe(session.id);
 });

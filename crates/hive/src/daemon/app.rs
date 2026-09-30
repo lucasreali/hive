@@ -382,6 +382,11 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
         }
         Ok(Control::ListSessions) => {
+            // Resume commands for the terminals' shell: native Windows' own, else POSIX.
+            #[cfg(windows)]
+            let shell = Some(state.settings.get().0.terminal.shell);
+            #[cfg(not(windows))]
+            let shell = None;
             // Hive's terminals: their hooks name their sessions.
             state.sessions(move |projects, sessions, mut running| {
                 // Claude keeps a record of each running `claude` beside its projects folder.
@@ -389,7 +394,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 let parents = roots.iter().filter_map(|root| root.parent());
                 let records: Vec<PathBuf> = parents.map(|d| d.join("sessions")).collect();
                 running.extend(procs::claude_sessions(procs::Source::System, &records));
-                let (sessions, truncated, error) = sessions.list(projects, &running);
+                let (mut sessions, truncated, error) = sessions.list(projects, &running);
+                for session in &mut sessions {
+                    session.resume_command = crate::sessions::resume_command(session, shell);
+                }
                 Control::Sessions {
                     sessions,
                     error,

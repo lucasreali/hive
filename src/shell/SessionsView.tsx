@@ -13,16 +13,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import type { Session } from "../protocol";
-import {
-  ago,
-  copy,
-  locate,
-  remove,
-  resume,
-  resumeCommand,
-  sessionName,
-  sessionTokens,
-} from "../sessions";
+import { ago, copy, locate, remove, resume, sessionName, sessionTokens } from "../sessions";
 import { openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
@@ -218,7 +209,14 @@ export function SessionMenu() {
         { disabled: outside },
       )}
       {item(ArrowBendUpRightIcon, "Continue in New Session", () => void resume(x, true))}
-      {item(CopyIcon, "Copy Resume Command", () => void copy(resumeCommand(x), "resume command"))}
+      {item(
+        CopyIcon,
+        "Copy Resume Command",
+        () => void copy(x.resume_command ?? "", "resume command"),
+        x.resume_command === null
+          ? { disabled: true, title: "Command Prompt cannot quote this session's folders" }
+          : {},
+      )}
       <hr />
       {item(FileTextIcon, "Open Log", () => locate(x, "log", "open"))}
       {item(FolderOpenIcon, "Reveal Log", () => locate(x, "log", "reveal"))}

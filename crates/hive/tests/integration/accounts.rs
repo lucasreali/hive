@@ -102,6 +102,18 @@ async fn new_terminals_get_the_current_account_and_every_accounts_sessions_are_l
         .collect();
     listed.sort_unstable();
     assert_eq!(listed, [("a", None), ("b", Some(work.as_str()))]);
+    // Each with the line resuming it from any shell of this system, as its account.
+    let mut lines: Vec<_> = (sessions.iter())
+        .map(|s| s.resume_command.clone().unwrap())
+        .collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines,
+        [
+            format!("cd '{root}' && CLAUDE_CONFIG_DIR='{work}' claude --resume b"),
+            format!("cd '{root}' && claude --resume a"),
+        ]
+    );
 
     // An agent's transcript in any account's folder is read, whatever its terminal's account.
     let start = json!({"session_id": "b", "cwd": root, "transcript_path": work_log});

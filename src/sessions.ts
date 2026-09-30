@@ -18,16 +18,6 @@ const pending = new Map<string, Handing>();
 export const resumeArgs = (session: Session, fork = false) =>
   `--resume ${session.id}${fork ? " --fork-session" : ""}`;
 
-/** A shell word for `text`, single-quoted (fish and POSIX shells read it the same). */
-const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
-
-/** What to type in any terminal to go on with the session, as the account it ran as (12.2). */
-export const resumeCommand = (session: Session) => {
-  const dir = session.config_dir;
-  const env = dir === null ? "" : `CLAUDE_CONFIG_DIR=${quoted(dir)} `;
-  return `cd ${quoted(session.cwd)} && ${env}claude ${resumeArgs(session)}`;
-};
-
 /**
  * Goes on with the session: shows its terminal when it runs in one, else runs
  * `claude --resume` in a new terminal in its folder, as the Claude account it ran as (its log is

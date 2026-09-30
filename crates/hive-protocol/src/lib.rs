@@ -1392,6 +1392,11 @@ pub struct Session {
     /// The Claude config folder its log is in (the account it ran as, 12.2); `None`: the
     /// default account's.
     pub config_dir: Option<String>,
+    /// What to type in a terminal to go on with it, in its folder and as its account, for the
+    /// shell Hive's terminals run; `None` when that shell (Command Prompt) cannot quote its
+    /// folders.
+    #[serde(default)]
+    pub resume_command: Option<String>,
 }
 
 /// A Claude account's 5-hour usage window (`rate_limits.five_hour` of Claude Code's statusline
@@ -2085,6 +2090,7 @@ mod tests {
             state: AgentState::Ended,
             running: false,
             config_dir: Some("/c".into()),
+            resume_command: Some("cd '/r/src' && claude --resume s".into()),
         };
         let sessions = Control::Sessions {
             sessions: vec![session],
@@ -2093,7 +2099,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &sessions).payload[..],
-            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false,"config_dir":"/c"}],"error":null,"truncated":true}"#
+            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false,"config_dir":"/c","resume_command":"cd '/r/src' && claude --resume s"}],"error":null,"truncated":true}"#
         );
         let usage = Control::AgentUsage {
             id: "s".into(),

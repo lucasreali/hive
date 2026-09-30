@@ -209,6 +209,17 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   expect(writeText).toHaveBeenLastCalledWith(
     `cd '${checkout.cwd}' && claude --resume ${checkout.id}`,
   );
+  // None when Command Prompt cannot quote its folders.
+  const unquotable = MOCK_SESSIONS.map((s) =>
+    s === checkout ? { ...s, resume_command: null } : s,
+  );
+  act(() => apply({ type: "sessions", sessions: unquotable, error: null, truncated: false }));
+  actions(name);
+  const copyItem = screen.getByRole("menuitem", { name: "Copy Resume Command" });
+  expect(copyItem.hasAttribute("disabled")).toBe(true);
+  expect(copyItem.getAttribute("title")).toBe("Command Prompt cannot quote this session's folders");
+  fireEvent.keyDown(menu() as HTMLElement, { key: "Escape" });
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
   pick("Copy Session ID", name);
   expect(writeText).toHaveBeenLastCalledWith(checkout.id);
   pick("Copy Log Path", name);

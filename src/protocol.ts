@@ -272,6 +272,11 @@ export type Session = {
   running: boolean;
   /** The Claude config folder of the account it ran as (12.2); null: the default account's. */
   config_dir: string | null;
+  /**
+   * What to type in a terminal to go on with it, in its folder and as its account, for the
+   * shell Hive's terminals run; null when that shell (Command Prompt) cannot quote its folders.
+   */
+  resume_command: string | null;
 };
 export type SessionTarget = "log" | "folder";
 

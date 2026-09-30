@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hive_protocol::{AgentState, OpenSession, Project, Session, SessionRole};
+use hive_protocol::{AgentState, OpenSession, Project, Session, SessionRole, TerminalShell};
 use serde_json::Value;
 
 use crate::projects;
@@ -322,6 +322,54 @@ fn normalized(path: &str) -> String {
         .collect()
 }
 
+/// What to type in a terminal to go on with `session` in its folder, as the account it ran as
+/// (12.2): for a POSIX shell or fish (WSL, Linux and macOS, `shell` `None`), else for the
+/// native Windows terminal `shell` (Git Bash as POSIX). `None` when Command Prompt cannot
+/// quote a folder: a `"`, `%`, `!` or control character. Its id needs no quotes ([`valid_id`]).
+pub fn resume_command(session: &Session, shell: Option<TerminalShell>) -> Option<String> {
+    let (cwd, dir) = (session.cwd.as_str(), session.config_dir.as_deref());
+    let claude = format!("claude --resume {}", session.id);
+    let command = match shell {
+        None | Some(TerminalShell::GitBash) => {
+            let posix = |text: &str| format!("'{}'", text.replace('\'', r"'\''"));
+            let env = dir.map(|dir| format!("CLAUDE_CONFIG_DIR={} ", posix(dir)));
+            format!("cd {} && {}{claude}", posix(cwd), env.unwrap_or_default())
+        }
+        Some(TerminalShell::Default) => {
+            let env = dir.map(|dir| format!("$env:CLAUDE_CONFIG_DIR={}; ", powershell(dir)));
+            let cd = powershell(cwd);
+            format!(
+                "Set-Location -LiteralPath {cd}; {}{claude}",
+                env.unwrap_or_default()
+            )
+        }
+        Some(TerminalShell::Cmd) => {
+            let odd =
+                |text: &str| text.contains(['"', '%', '!']) || text.contains(char::is_control);
+            if odd(cwd) || dir.is_some_and(odd) {
+                return None;
+            }
+            let env = dir.map(|dir| format!("set \"CLAUDE_CONFIG_DIR={dir}\" && "));
+            format!("cd /d \"{cwd}\" && {}{claude}", env.unwrap_or_default())
+        }
+    };
+    Some(command)
+}
+
+/// `text` in PowerShell's single quotes, where each of its quote marks (`'` and the typographic
+/// `‘’‚‛`) is doubled.
+fn powershell(text: &str) -> String {
+    let mut quoted = String::from("'");
+    for c in text.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            quoted.push(c);
+        }
+        quoted.push(c);
+    }
+    quoted.push('\'');
+    quoted
+}
+
 /// A session id as Claude writes them: letters, digits and `-`, not too long.
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -505,6 +553,7 @@ impl Sessions {
             state: state(end, false),
             running: false,
             config_dir: log.config_dir,
+            resume_command: None,
         };
         Some((session, end))
     }
@@ -1044,6 +1093,76 @@ not json
         }
         assert!(valid_id(&"a".repeat(ID_LIMIT)));
         assert_eq!(normalized("/home/me/my.app_x"), "-home-me-my-app-x");
+    }
+
+    #[test]
+    fn a_resume_command_is_written_for_the_terminals_shell() {
+        let at = |cwd: &str, dir: Option<&str>| Session {
+            id: "s-1".into(),
+            project: String::new(),
+            worktree: String::new(),
+            cwd: cwd.into(),
+            title: None,
+            last_role: None,
+            last_text: None,
+            messages: 0,
+            model: None,
+            branch: None,
+            context_tokens: 0,
+            output_tokens: 0,
+            updated_ms: 0,
+            log: String::new(),
+            state: AgentState::Ended,
+            running: false,
+            config_dir: dir.map(Into::into),
+            resume_command: None,
+        };
+        let line = |session: &Session, shell| resume_command(session, shell);
+        // POSIX shells and fish (WSL, Linux, macOS), and Git Bash.
+        let odd = at("/home/me/it's here", None);
+        let posix = r"cd '/home/me/it'\''s here' && claude --resume s-1";
+        let work = at("/r", Some("/home/me/.claude 'work'"));
+        let posix_work =
+            r"cd '/r' && CLAUDE_CONFIG_DIR='/home/me/.claude '\''work'\''' claude --resume s-1";
+        for shell in [None, Some(TerminalShell::GitBash)] {
+            assert_eq!(line(&odd, shell).as_deref(), Some(posix));
+            assert_eq!(line(&work, shell).as_deref(), Some(posix_work));
+        }
+        // PowerShell doubles every quote mark it reads as one.
+        let ps = Some(TerminalShell::Default);
+        let odd = at(r"C:\it's ‘a’ ‚b‛ $x", Some(r"C:\Users\me\.claude-work"));
+        assert_eq!(
+            line(&odd, ps).as_deref(),
+            Some(
+                r"Set-Location -LiteralPath 'C:\it''s ‘‘a’’ ‚‚b‛‛ $x'; $env:CLAUDE_CONFIG_DIR='C:\Users\me\.claude-work'; claude --resume s-1"
+            )
+        );
+        assert_eq!(
+            line(&at(r"C:\r", None), ps).as_deref(),
+            Some(r"Set-Location -LiteralPath 'C:\r'; claude --resume s-1")
+        );
+        // Command Prompt: double quotes, and nothing it cannot quote.
+        let cmd = Some(TerminalShell::Cmd);
+        assert_eq!(
+            line(&at(r"C:\a & b's ^(c)", Some(r"C:\w x")), cmd).as_deref(),
+            Some(
+                r#"cd /d "C:\a & b's ^(c)" && set "CLAUDE_CONFIG_DIR=C:\w x" && claude --resume s-1"#
+            )
+        );
+        assert_eq!(
+            line(&at(r"C:\r", None), cmd).as_deref(),
+            Some(r#"cd /d "C:\r" && claude --resume s-1"#)
+        );
+        for odd in [
+            r#"C:\a"b"#,
+            r"C:\100%",
+            r"C:\%USERNAME%",
+            r"C:\hi!",
+            "C:\\a\nb",
+        ] {
+            assert_eq!(line(&at(odd, None), cmd), None, "{odd:?}");
+            assert_eq!(line(&at(r"C:\r", Some(odd)), cmd), None, "{odd:?}");
+        }
     }
 
     fn project(path: &str) -> Project {

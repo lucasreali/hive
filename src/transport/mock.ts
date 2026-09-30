@@ -324,6 +324,7 @@ const session = (
     state,
     running,
     config_dir: null,
+    resume_command: `cd '${cwd}' && claude --resume ${id}`,
     log: `/home/user/.claude/projects/${cwd.replaceAll(/[^A-Za-z0-9]/g, "-")}/${id}.jsonl`,
   };
 };
