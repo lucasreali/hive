@@ -195,17 +195,41 @@ fn saved(file: &std::path::Path) -> Option<Mode> {
     fits.then(|| Mode::parse(text.trim())).flatten()
 }
 
-/// Runs `command` for its stdout, killing it after about `limit` (then `TimedOut`). Counted in
-/// polls rather than read off a clock, so nothing can make the wait endless.
+/// Runs `command` for its stdout, killing it after about `limit` (then `TimedOut`): both its exit
+/// and the end of its output must come by then, so a program it left holding the output open
+/// cannot hold up the start either. Counted in polls rather than read off a clock, so nothing
+/// can make the wait endless.
 fn output_within(command: &mut std::process::Command, limit: Duration) -> std::io::Result<Output> {
+    // The output is read on a thread of its own, started first so that nothing needs undoing
+    // when it cannot start. It ends once every holder of the output closed it (ponytail: left
+    // blocked until then after a time-out, one idle thread).
+    let (give, pipe) = std::sync::mpsc::channel::<Option<std::process::ChildStdout>>();
+    let (send, read) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("wsl-list".into())
+        .spawn(move || {
+            let mut out = Vec::new();
+            if let Ok(Some(mut stdout)) = pipe.recv() {
+                let _ = stdout.read_to_end(&mut out);
+            }
+            let _ = send.send(out);
+        })?;
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
+    let _ = give.send(child.stdout.take());
+    let mut stdout = None;
     for _ in 0..limit.as_millis() / LIST_POLL.as_millis() {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+        stdout = stdout.or_else(|| read.try_recv().ok());
+        if let (Some(stdout), Some(status)) = (&stdout, child.try_wait()?) {
+            let stdout = stdout.clone();
+            return Ok(Output {
+                status,
+                stdout,
+                stderr: Vec::new(),
+            });
         }
         std::thread::sleep(LIST_POLL);
     }

@@ -468,6 +468,13 @@ fn a_listing_that_hangs_is_killed_after_its_time_limit() {
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     let waited = started.elapsed();
     assert!(waited < Duration::from_secs(5), "{waited:?}");
+    // It exits at once, but what it left running keeps its output open.
+    let started = std::time::Instant::now();
+    let mut held = shell("echo Ubuntu; sleep 30 &");
+    let error = output_within(&mut held, Duration::from_millis(300)).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    let waited = started.elapsed();
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
     let mut missing = std::process::Command::new("/nonexistent/wsl.exe");
     let error = output_within(&mut missing, Duration::from_secs(1)).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
