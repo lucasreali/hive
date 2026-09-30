@@ -2381,13 +2381,20 @@ mod tests {
         let err = crate::file::read(root, "remote-file", None).unwrap_err();
         assert_eq!(err.to_string(), refused("remote-file"));
         let top = format!(r"{}\", root.display());
-        let hive_protocol::Control::Dirs { dirs, error, .. } =
-            crate::dirs::answer(top, false, None, &crate::dirs::WINDOWS)
-        else {
-            panic!("not a listing");
-        };
-        assert_eq!(error, None);
-        let names: Vec<_> = dirs.iter().map(|dir| dir.name.as_str()).collect();
+        // Read as JSON: a `let … else` would leave a never-run line.
+        let got =
+            serde_json::to_value(crate::dirs::answer(top, false, None, &crate::dirs::WINDOWS))
+                .unwrap();
+        assert_eq!(
+            (&got["type"], &got["error"]),
+            (&"dirs".into(), &serde_json::Value::Null)
+        );
+        let names: Vec<_> = got["dirs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|dir| dir["name"].as_str().unwrap())
+            .collect();
         assert_eq!(names, ["deep", "self", "sub"]);
     }
 
