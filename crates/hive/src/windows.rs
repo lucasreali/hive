@@ -1601,7 +1601,17 @@ pub mod claude {
         match paths.into_iter().flatten().find(bare) {
             Some(path) => format!("{path} statusline"),
             None if bash => format!("'{}' statusline", long.replace('\'', r"'\''")),
-            None => format!("& '{}' statusline", long.replace('\'', "''")),
+            None => {
+                // PowerShell's single quotes are `'` and `‘`, `’`, `‚`, `‛`: each one doubled.
+                let mut quoted = String::new();
+                for c in long.chars() {
+                    if "'\u{2018}\u{2019}\u{201A}\u{201B}".contains(c) {
+                        quoted.push(c);
+                    }
+                    quoted.push(c);
+                }
+                format!("& '{quoted}' statusline")
+            }
         }
     }
 
@@ -1673,11 +1683,10 @@ pub mod claude {
         Some(exit_code(wrap(&exe, args, &var)))
     }
 
-    /// `code` as `hive`'s exit code, returned from `main` (`process::exit` would skip what
-    /// runs at exit): 0–255 as it is, any other code (an `NTSTATUS`, such as a program ended
-    /// by Ctrl+C) 1, so that a failure never reads as a success.
+    /// `code` as `hive`'s exit code (see [`crate::wrapper::exit_byte`]), returned from `main`
+    /// (`process::exit` would skip what runs at exit).
     fn exit_code(code: i32) -> ExitCode {
-        ExitCode::from(u8::try_from(code).unwrap_or(1))
+        ExitCode::from(crate::wrapper::exit_byte(code))
     }
 
     /// The wrapper at `exe`, as the Unix script: runs the first `claude` on `PATH` outside its
@@ -1825,6 +1834,12 @@ pub mod claude {
             assert_eq!(line(quote, None, true), quoted);
             let called = "& 'C:/Users/O''Hara (x)/hive.exe' statusline";
             assert_eq!(line(quote, None, false), called);
+            // PowerShell's typographic single quotes too; sh's only quote is `'`.
+            let typographic = "C:\\Users\\a\u{2018}\u{2019}\u{201A}\u{201B}b c\\hive.exe";
+            let called = "& 'C:/Users/a\u{2018}\u{2018}\u{2019}\u{2019}\u{201A}\u{201A}\u{201B}\u{201B}b c/hive.exe' statusline";
+            assert_eq!(line(typographic, None, false), called);
+            let quoted = "'C:/Users/a\u{2018}\u{2019}\u{201A}\u{201B}b c/hive.exe' statusline";
+            assert_eq!(line(typographic, None, true), quoted);
             // What the service writes: this machine's shell, its real file.
             let tmp = tempfile::tempdir().unwrap();
             let hive = tmp.path().join("hive.exe");
@@ -1833,6 +1848,42 @@ pub mod claude {
             let short = short_name(&hive);
             let want = statusline_line(&hive, short.as_deref(), bash);
             assert_eq!(statusline_command(&hive), want);
+        }
+
+        #[test]
+        fn powershell_runs_the_statusline_command_and_nothing_else() {
+            use std::io::Write as _;
+            // A path that, with only `'` doubled, ends the string at `’`, creates `pwned` and
+            // comments out the rest.
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join("x\u{2019};New-Item pwned;#");
+            std::fs::create_dir(&dir).unwrap();
+            // `findstr statusline` prints the input lines holding `statusline`.
+            let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+            let hive = dir.join("hive.exe");
+            std::fs::copy(system.join("findstr.exe"), &hive).unwrap();
+            let pwned = tmp.path().join("pwned");
+            let run = |line: &str| {
+                let mut powershell = Command::new("powershell")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", line])
+                    .current_dir(tmp.path())
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let mut stdin = powershell.stdin.take().unwrap();
+                stdin.write_all(b"a statusline\r\nb\r\n").unwrap();
+                drop(stdin);
+                let out = powershell.wait_with_output().unwrap();
+                let printed = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+                (printed, pwned.exists())
+            };
+            let long = hive.to_string_lossy().replace('\\', "/");
+            let naive = format!("& '{}' statusline", long.replace('\'', "''"));
+            assert!(run(&naive).1, "the path does not break naive quoting");
+            std::fs::remove_file(&pwned).unwrap();
+            let line = statusline_line(&hive, None, false);
+            assert_eq!(run(&line), ("a statusline".to_owned(), false));
         }
 
         #[test]
