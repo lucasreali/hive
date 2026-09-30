@@ -83,6 +83,28 @@ impl Env {
     }
 }
 
+/// Kills every process still running with this environment: a service the test left (a broken
+/// one, say) never ends by itself, and it holds the test run's output open (it inherited the
+/// bridge's), so the run would never end either.
+impl Drop for Env {
+    fn drop(&mut self) {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        let mine = format!("LOCALAPPDATA={}", self.path("local").display());
+        let mut system = System::new();
+        let environ = ProcessRefreshKind::nothing().with_environ(UpdateKind::Always);
+        system.refresh_processes_specifics(ProcessesToUpdate::All, true, environ);
+        for process in system.processes().values() {
+            if process
+                .environ()
+                .iter()
+                .any(|var| var.as_os_str() == mine.as_str())
+            {
+                process.kill();
+            }
+        }
+    }
+}
+
 /// The app's end of the bridge, with each terminal's output so far.
 struct App {
     reader: FramedRead<ChildStdout, FrameCodec>,
