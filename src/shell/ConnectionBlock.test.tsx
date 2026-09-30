@@ -143,6 +143,16 @@ test("the first run with WSL asks where the service runs, and the choice goes to
   setMode.mockRestore();
 });
 
+test("picking WSL on the first run sends it to the app (12.5.4)", () => {
+  const setMode = spyOn(transport, "setMode").mockResolvedValue();
+  render(<App />);
+  act(() => apply({ type: "app_mode", mode: null, wsl: true }));
+  fireEvent.click(within(dialog() as HTMLElement).getByText("WSL"));
+  expect(setMode).toHaveBeenCalledTimes(1);
+  expect(setMode).toHaveBeenCalledWith("wsl");
+  setMode.mockRestore();
+});
+
 test("a choice the app could not save can be made again (12.5.4)", async () => {
   const setMode = spyOn(transport, "setMode").mockRejectedValue("cannot save the service mode");
   render(<App />);
