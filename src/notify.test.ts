@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { notify, TONE_GAP_MS } from "./notify";
+import { alertText, notify, TONE_GAP_MS } from "./notify";
 import type { AgentState, Alert } from "./protocol";
 import { apply } from "./reduce";
 import {
@@ -89,7 +89,8 @@ test("a tone for each alert; a message without one raises nothing", async () => 
   const interrupted = { ...state("a", "waiting_you"), pending: false, interrupted: true };
   notify(interrupted, useHive.getState(), clock + 30 * TONE_GAP_MS);
   await settle();
-  expect([tones, useHive.getState().inbox.length, shown]).toEqual([4, 4, []]);
+  // Only the four alerts notify.
+  expect([tones, useHive.getState().inbox.length, shown.length]).toEqual([4, 4, 4]);
 });
 
 test("the tone follows the volume setting; 0 plays none", () => {
@@ -113,7 +114,7 @@ test("several agents changing at once play one tone", () => {
   expect(tones).toBe(2);
 });
 
-test("finishing notifies with the place", async () => {
+test("every alert the service marks notifies with the agent's name, what happened and where", async () => {
   useHive.setState({
     projects: {
       p: {
@@ -137,25 +138,38 @@ test("finishing notifies with the place", async () => {
   });
   apply({ type: "agent_detected", channel: 1, id: "a", project: "p", worktree: "w", cwd: null });
   apply({ type: "agent_detected", channel: 2, id: "b", project: "p", worktree: null, cwd: null });
+  apply({ type: "agent_title", channel: 1, id: "a", title: "fix login" });
   feed("a", "waiting_you", "finished");
-  feed("b", "waiting_you", "finished");
-  feed("c", "waiting_you", "finished");
-  // Waiting for you without having finished (e.g. from idle), or any other alert.
-  feed("a", "waiting_you", "waiting");
-  feed("b", "waiting_permission", "waiting");
+  feed("a", "waiting_permission", "waiting");
+  feed("b", "waiting_plan", "waiting");
+  feed("b", "waiting_answer", "waiting");
+  feed("c", "error", "waiting");
+  // Waiting for you without having finished (e.g. from idle).
+  feed("c", "waiting_you", "waiting");
   await settle();
   expect(shown).toEqual([
-    { title: "Agent finished", body: "shop · feat: waiting for you" },
-    { title: "Agent finished", body: "shop: waiting for you" },
-    { title: "Agent finished", body: "Waiting for you" },
+    { title: "fix login finished", body: "shop · feat" },
+    { title: "fix login is waiting for permission", body: "shop · feat" },
+    { title: "Claude is waiting for plan approval", body: "shop" },
+    { title: "Claude is waiting for your answer", body: "shop" },
+    { title: "Claude failed", body: "" },
+    { title: "Claude is waiting for you", body: "" },
   ]);
+  const message = state("a", "waiting_you", "finished");
+  expect(alertText(useHive.getState(), message)).toEqual({
+    agent: "a",
+    title: "fix login finished",
+    body: "shop · feat",
+  });
 });
 
-test("an agent finishing already seen (not pending) gets its tone but no notification", async () => {
-  const seen = { ...state("a", "waiting_you", "finished"), pending: false };
-  notify(seen, useHive.getState(), clock);
+test("an alert the service does not mark (in view of the focused window) is not notified", async () => {
+  for (const s of ["waiting_you", "waiting_permission"] as const) {
+    const watched = { ...state("a", s, "waiting"), notify: false };
+    notify(watched, useHive.getState(), clock + tones * 2 * TONE_GAP_MS);
+  }
   await settle();
-  expect([tones, shown]).toEqual([1, []]);
+  expect([tones, useHive.getState().inbox.length, shown]).toEqual([2, 2, []]);
 });
 
 test("other messages are ignored", () => {

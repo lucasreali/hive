@@ -161,6 +161,7 @@ test("a click resumes a session; a running one shows its state and its terminal"
       pending: false,
       interrupted: false,
       alert: null,
+      notify: false,
       writing: true,
       subagents: [],
       activity: null,
