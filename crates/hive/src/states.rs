@@ -370,6 +370,8 @@ impl Agent {
             pending: state.pending() && !self.seen,
             interrupted: self.interrupted,
             alert,
+            // Out of view only: an agent in the focused window's view is seen as it changes.
+            notify: alert.is_some() && !self.watched,
             writing: state.writes(),
             subagents: subagents.collect(),
             activity: self.activity.clone(),
@@ -910,6 +912,7 @@ mod tests {
                 pending: false,
                 interrupted: false,
                 alert: None,
+                notify: false,
                 writing: true,
                 subagents: vec![],
                 activity: None,
@@ -1138,6 +1141,7 @@ mod tests {
                 pending: false,
                 interrupted: false,
                 alert: None,
+                notify: false,
                 writing: true,
                 subagents: vec![SubagentState {
                     id: "a".into(),
@@ -1322,6 +1326,65 @@ mod tests {
         agent.feed("s", &hook("PreToolUse", None, json!({})), now);
         agent.feed("s", &hook("Stop", None, json!({})), now);
         assert_eq!((shown(&agent).0, pending(&agent)), (WaitingYou, true));
+    }
+
+    /// The alert and `notify` of a message `apply` sent.
+    fn notifies(sent: Option<Control>) -> Option<(Option<Alert>, bool)> {
+        let Some(Control::AgentState { alert, notify, .. }) = sent else {
+            return None;
+        };
+        Some((alert, notify))
+    }
+
+    #[test]
+    fn every_alert_notifies_unless_the_agent_is_watched() {
+        use Alert::*;
+        let now = Instant::now();
+        let none = json!({});
+        let tool = |name: &str| json!({ "tool_name": name });
+        let idle = json!({"notification_type": "idle_prompt"});
+        let changes = [
+            ("PreToolUse", none.clone(), Working, None),
+            ("Stop", none.clone(), WaitingYou, Some(Finished)),
+            (
+                "PermissionRequest",
+                none.clone(),
+                WaitingPermission,
+                Some(Waiting),
+            ),
+            (
+                "PreToolUse",
+                tool("ExitPlanMode"),
+                WaitingPlan,
+                Some(Waiting),
+            ),
+            (
+                "PreToolUse",
+                tool("AskUserQuestion"),
+                WaitingAnswer,
+                Some(Waiting),
+            ),
+            ("StopFailure", none.clone(), Error, Some(Waiting)),
+            ("SessionStart", none, Idle, None),
+            ("Notification", idle, WaitingYou, Some(Waiting)),
+        ];
+        // Watched: its terminal is in view and the window has the focus (the daemon's `view`).
+        for watched in [false, true] {
+            let mut agent = Agent::new(1, now, 0);
+            agent.watched = watched;
+            for (name, extra, state, alert) in changes.clone() {
+                let sent = notifies(agent.feed("s", &hook(name, None, extra), now));
+                let notify = alert.is_some() && !watched;
+                assert_eq!(shown(&agent).0, state, "{name}");
+                assert_eq!(sent, Some((alert, notify)), "{name}, watched: {watched}");
+            }
+            // The snapshot after `Welcome` never notifies.
+            assert_eq!(notifies(Some(agent.message("s"))), Some((None, false)));
+        }
+        // An interrupt alerts nothing, so it notifies nothing.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &hook("PermissionRequest", None, json!({})), now);
+        assert_eq!(notifies(agent.interrupt("s", now)), Some((None, false)));
     }
 
     #[test]

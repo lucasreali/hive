@@ -39,6 +39,7 @@
     "pending": false,
     "interrupted": false,
     "alert": null,
+    "notify": false,
     "writing": true,
     "subagents": [
       {

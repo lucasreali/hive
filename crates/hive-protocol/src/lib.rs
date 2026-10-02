@@ -241,6 +241,9 @@ pub enum Control {
         /// Set only on the message whose displayed `state` changed (hive.md item 5, 2.4): see
         /// [`Alert`]. `None` for an agent's first state and the snapshot after `Welcome`.
         alert: Option<Alert>,
+        /// Show an OS notification for this `alert` (hive.md item 5, 13.4): it has one and the
+        /// agent's terminal is not the one in view of the focused window (see `View`).
+        notify: bool,
         /// `state` may be writing files ([`AgentState::writes`]): the file view's "Agent
         /// working here" in the agent's worktree.
         writing: bool,
@@ -1654,8 +1657,8 @@ impl AgentState {
     }
 }
 
-/// Why an agent's new state alerts (a tone and an inbox item): it `Finished` (working or
-/// with subagents, then waiting for you: also an OS notification while pending), or entered
+/// Why an agent's new state alerts (a tone, an inbox item and, out of view, an OS
+/// notification): it `Finished` (working or with subagents, then waiting for you), or entered
 /// another state that is `Waiting` for the user (`AgentState::pending`). An interrupt never
 /// alerts: the user caused it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1769,6 +1772,7 @@ mod tests {
             pending: true,
             interrupted: false,
             alert: Some(Alert::Waiting),
+            notify: true,
             writing: true,
             subagents: vec![SubagentState {
                 id: "a".into(),
@@ -1784,7 +1788,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"waiting","writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"waiting","notify":true,"writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
         let finished = serde_json::to_string(&[Some(Alert::Finished), None]).unwrap();
