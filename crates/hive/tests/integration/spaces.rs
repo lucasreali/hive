@@ -436,7 +436,7 @@ async fn a_remote_base_is_fetched_as_the_space_and_never_prompts() {
     let log = repo.env.path("ssh.log");
     let ssh = repo.env.path("ssh");
     let script = format!(
-        "#!/bin/sh\nprintf '%s|%s\\n' \"$GH_TOKEN\" \"$GIT_TERMINAL_PROMPT\" >> '{}'\necho 'ssh: no network here' >&2\nexit 255\n",
+        "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$GH_TOKEN\" \"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\" \"$WSLENV\" >> '{}'\necho 'ssh: no network here' >&2\nexit 255\n",
         log.display()
     );
     std::fs::write(&ssh, script).unwrap();
@@ -445,7 +445,10 @@ async fn a_remote_base_is_fetched_as_the_space_and_never_prompts() {
     repo.git(&["remote", "add", "origin", "ssh://example.invalid/x.git"]);
     repo.git(&["config", "core.sshCommand", ssh.to_str().unwrap()]);
     repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    let mut daemon = repo.env.daemon();
+    // Under WSL a Windows credential helper sees only what `WSLENV` lists.
+    let mut hive = repo.env.hive();
+    hive.env("WSLENV", "WT_SESSION");
+    let mut daemon = repo.env.daemon_with(&mut hive);
     let mut app = repo.env.connect(Role::App).await;
     let work = Control::UpdateSpace {
         id: "default".into(),
@@ -475,7 +478,8 @@ async fn a_remote_base_is_fetched_as_the_space_and_never_prompts() {
         ["could not fetch origin/main: ssh: no network here; created from the last fetched copy"]
     );
     let log = std::fs::read_to_string(log).unwrap();
-    assert_eq!(log, "tok-octo-work|0\n");
+    let quiet = "GIT_TERMINAL_PROMPT:GCM_INTERACTIVE";
+    assert_eq!(log, format!("tok-octo-work|0|never|WT_SESSION:{quiet}\n"));
     drop(app);
     assert!(daemon.wait_exit().success());
 }

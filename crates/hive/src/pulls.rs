@@ -281,7 +281,7 @@ fn checkout(
     number: u64,
 ) -> Result<Control, String> {
     let name = format!("pr-{number}");
-    let created = projects.create_worktree(&project.id, &name, None, &[]);
+    let created = projects.create_worktree(&project.id, &name, None);
     let (made, created) = created.map_err(|err| err.to_string())?;
     let root = Path::new(&project.path);
     let args = ["pr", "checkout", &number.to_string(), "--repo", &repo.arg()];

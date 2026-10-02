@@ -1,7 +1,7 @@
 //! Git worktrees following Claude Code's convention: `<repo>/.claude/worktrees/<name>`
 //! on branch `worktree-<name>`. Git always runs as the `git` executable with separate arguments.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -183,14 +183,9 @@ pub fn list(dir: &Path) -> io::Result<Vec<Worktree>> {
 }
 
 /// Creates the worktree `name` for the repository containing `dir` (even from inside a
-/// linked worktree). The CLI and the app's dialog both come here (#33). A remote base is
-/// fetched first ([`fetch_base`]), with `env` added to git's environment.
-pub fn create(
-    dir: &Path,
-    name: &str,
-    base: Option<&str>,
-    env: &[(&str, String)],
-) -> io::Result<Created> {
+/// linked worktree). The CLI and the app's dialog both come here (#33), each after
+/// [`fetch_base`].
+pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created> {
     validate_name(name)?;
     if let Some(base) = base.filter(|base| base.starts_with('-')) {
         return Err(io::Error::other(format!("invalid base branch {base:?}")));
@@ -216,7 +211,6 @@ pub fn create(
         path.as_os_str(),
     ];
     args.extend(base.map(OsStr::new));
-    notes.extend(base.and_then(|base| fetch_base(&root, base, env)));
     git::run(&root, &args, &[], &[0], OUTPUT_LIMIT)?;
     match copy_included(&root, &path, &included) {
         Ok(0) => {}
@@ -248,22 +242,37 @@ fn remote_branch<'a>(remotes: &'a str, base: &'a str) -> Option<(&'a str, &'a st
         .max_by_key(|(remote, _)| remote.len())
 }
 
-/// When `base` is a remote-tracking branch, fetches it first so the worktree starts from its
-/// latest commit: `git fetch --no-tags` of that one branch, with `env` (a space's identity
-/// and GitHub token, 9.30), never prompting, within [`FETCH_TIME`]. A failure does not stop
-/// the creation: it is a note, and the worktree starts from the last fetched copy.
-fn fetch_base(root: &Path, base: &str, env: &[(&str, String)]) -> Option<String> {
-    let remotes = git(root, &["remote"]).ok()?;
+/// `WSLENV` (the service's `current` one) plus what keeps a Windows credential helper from
+/// asking: under WSL, Git Credential Manager is a Windows program and sees only the
+/// variables `WSLENV` lists.
+fn wslenv(current: Option<OsString>) -> OsString {
+    let mut list = current.unwrap_or_default();
+    if !list.is_empty() {
+        list.push(":");
+    }
+    list.push("GIT_TERMINAL_PROMPT:GCM_INTERACTIVE");
+    list
+}
+
+/// When `base` is a remote-tracking branch of the repository holding `dir`, fetches it so a
+/// worktree made next starts from its latest commit: `git fetch --no-tags` of that one
+/// branch, with `env` (a space's identity and GitHub token, 9.30), never prompting, within
+/// [`FETCH_TIME`]. A failure does not stop the creation: it is a note, and the worktree
+/// starts from the last fetched copy. Run before [`create`], outside any lock.
+pub fn fetch_base(dir: &Path, base: &str, env: &[(&str, String)]) -> Option<String> {
+    let remotes = git(dir, &["remote"]).ok()?;
     let remotes = String::from_utf8_lossy(&remotes);
     let (remote, branch) = remote_branch(&remotes, base)?;
     // Fully named, so the branch is never read as an option, `+` (force) or `^` (negative).
     let refspec = format!("refs/heads/{branch}");
     let args = ["fetch", "--no-tags", "--", remote, &refspec].map(OsStr::new);
-    let mut command = git::command(root);
+    let mut command = git::command(dir);
     command
         .args(args)
         .envs(env.iter().cloned())
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("WSLENV", wslenv(std::env::var_os("WSLENV")));
     let keep = Stdout::Max(OUTPUT_LIMIT);
     let fetched = git::limited(command, "git", &args, &[], &[0], keep, Some(FETCH_TIME));
     let err = fetched.err()?.to_string();
@@ -326,7 +335,7 @@ pub fn hook_create(payload: &Value) -> io::Result<Created> {
             notes: Vec::new(),
         }),
         // Never with a base: `claude -w` never waits for a fetch.
-        None => create(cwd, name, None, &[]),
+        None => create(cwd, name, None),
     }
 }
 
@@ -626,6 +635,17 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
         // A refspec with a destination would write a local branch.
         assert_eq!(split("origin/main:refs/heads/x"), None);
         assert_eq!(remote_branch("", "origin/main"), None);
+    }
+
+    #[test]
+    fn the_quiet_variables_reach_windows_helpers() {
+        let quiet = "GIT_TERMINAL_PROMPT:GCM_INTERACTIVE";
+        assert_eq!(wslenv(None), quiet);
+        assert_eq!(wslenv(Some("".into())), quiet);
+        assert_eq!(
+            wslenv(Some("WT_SESSION/u".into())),
+            *format!("WT_SESSION/u:{quiet}")
+        );
     }
 
     #[test]
