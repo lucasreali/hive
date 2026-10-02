@@ -235,15 +235,16 @@ impl Projects {
         worktree::check_name(&self.root(id)?, name).map(drop)
     }
 
-    /// `hive worktree create` in the followed project `id`; answers the project with its
-    /// updated worktrees.
+    /// `hive worktree create` in the followed project `id`, a remote base fetched with `env`
+    /// (its space's); answers the project with its updated worktrees.
     pub fn create_worktree(
         &self,
         id: &str,
         name: &str,
         base: Option<&str>,
+        env: &[(&str, String)],
     ) -> io::Result<(Project, worktree::Created)> {
-        let created = worktree::create(&self.root(id)?, name, base);
+        let created = worktree::create(&self.root(id)?, name, base, env);
         self.forget();
         Ok((self.project(id), created?))
     }
@@ -853,7 +854,7 @@ mod tests {
         assert_eq!(projects.branches(&id).unwrap_err().to_string(), refused);
         let err = projects.validate_worktree_name(&id, "x").unwrap_err();
         assert_eq!(err.to_string(), refused);
-        let err = projects.create_worktree(&id, "x", None).unwrap_err();
+        let err = projects.create_worktree(&id, "x", None, &[]).unwrap_err();
         assert_eq!(err.to_string(), refused);
         assert!(!tmp.path().join(WORKTREES_DIR).exists());
         // A followed one gets the same checks as the CLI, without git for the name.

@@ -5,10 +5,11 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::git;
+use crate::git::{self, Stdout};
 use crate::paths::canonical;
 
 /// Largest hook payload accepted on stdin.
@@ -28,6 +29,9 @@ const INCLUDE_FILE: &str = ".worktreeinclude";
 const BRANCHES_LIMIT: usize = 1024 * 1024;
 /// Most bytes read from one git command's stdout.
 const OUTPUT_LIMIT: u64 = 67_108_864; // 64 MiB
+/// The longest `git fetch` of a remote base may take before the worktree starts from the
+/// last fetched copy (13.2).
+const FETCH_TIME: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
@@ -179,8 +183,14 @@ pub fn list(dir: &Path) -> io::Result<Vec<Worktree>> {
 }
 
 /// Creates the worktree `name` for the repository containing `dir` (even from inside a
-/// linked worktree). The CLI and the app's dialog both come here (#33).
-pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created> {
+/// linked worktree). The CLI and the app's dialog both come here (#33). A remote base is
+/// fetched first ([`fetch_base`]), with `env` added to git's environment.
+pub fn create(
+    dir: &Path,
+    name: &str,
+    base: Option<&str>,
+    env: &[(&str, String)],
+) -> io::Result<Created> {
     validate_name(name)?;
     if let Some(base) = base.filter(|base| base.starts_with('-')) {
         return Err(io::Error::other(format!("invalid base branch {base:?}")));
@@ -206,6 +216,7 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
         path.as_os_str(),
     ];
     args.extend(base.map(OsStr::new));
+    notes.extend(base.and_then(|base| fetch_base(&root, base, env)));
     git::run(&root, &args, &[], &[0], OUTPUT_LIMIT)?;
     match copy_included(&root, &path, &included) {
         Ok(0) => {}
@@ -224,6 +235,46 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
         }
     }
     Ok(Created { path, notes })
+}
+
+/// The remote and branch of `base` when it is `<remote>/<branch>` for one of `remotes` (as
+/// `git remote` prints them; the longest one when several fit, a remote name may hold a
+/// `/`). Never a branch with a `:`, which would make the refspec write a local ref.
+fn remote_branch<'a>(remotes: &'a str, base: &'a str) -> Option<(&'a str, &'a str)> {
+    remotes
+        .lines()
+        .filter_map(|remote| Some((remote, base.strip_prefix(remote)?.strip_prefix('/')?)))
+        .filter(|(_, branch)| !branch.is_empty() && !branch.contains(':'))
+        .max_by_key(|(remote, _)| remote.len())
+}
+
+/// When `base` is a remote-tracking branch, fetches it first so the worktree starts from its
+/// latest commit: `git fetch --no-tags` of that one branch, with `env` (a space's identity
+/// and GitHub token, 9.30), never prompting, within [`FETCH_TIME`]. A failure does not stop
+/// the creation: it is a note, and the worktree starts from the last fetched copy.
+fn fetch_base(root: &Path, base: &str, env: &[(&str, String)]) -> Option<String> {
+    let remotes = git(root, &["remote"]).ok()?;
+    let remotes = String::from_utf8_lossy(&remotes);
+    let (remote, branch) = remote_branch(&remotes, base)?;
+    // Fully named, so the branch is never read as an option, `+` (force) or `^` (negative).
+    let refspec = format!("refs/heads/{branch}");
+    let args = ["fetch", "--no-tags", "--", remote, &refspec].map(OsStr::new);
+    let mut command = git::command(root);
+    command
+        .args(args)
+        .envs(env.iter().cloned())
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let keep = Stdout::Max(OUTPUT_LIMIT);
+    let fetched = git::limited(command, "git", &args, &[], &[0], keep, Some(FETCH_TIME));
+    let err = fetched.err()?.to_string();
+    // Git's own first line, without the command (no name holds a space).
+    let why = err
+        .split_once(" failed: ")
+        .map_or(err.as_str(), |(_, why)| why);
+    let why = why.lines().next().unwrap_or_default();
+    Some(format!(
+        "could not fetch {base}: {why}; created from the last fetched copy"
+    ))
 }
 
 fn copied_note(copied: usize) -> String {
@@ -274,7 +325,8 @@ pub fn hook_create(payload: &Value) -> io::Result<Created> {
             path,
             notes: Vec::new(),
         }),
-        None => create(cwd, name, None),
+        // Never with a base: `claude -w` never waits for a fetch.
+        None => create(cwd, name, None, &[]),
     }
 }
 
@@ -550,6 +602,30 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
             tmp.path().join(".claude/worktrees/free")
         );
         assert!(check_name(tmp.path(), "Bad").is_err());
+    }
+
+    #[test]
+    fn remote_bases_are_split_by_the_listed_remotes() {
+        let remotes = "origin\nup\nup/stream\n";
+        let split = |base| remote_branch(remotes, base);
+        assert_eq!(split("origin/main"), Some(("origin", "main")));
+        assert_eq!(split("origin/feature/x"), Some(("origin", "feature/x")));
+        assert_eq!(split("up/stream/main"), Some(("up/stream", "main")));
+        assert_eq!(split("up/main"), Some(("up", "main")));
+        assert_eq!(split("origin/-x"), Some(("origin", "-x")));
+        for local in [
+            "main",
+            "feature/x",
+            "origin",
+            "origin/",
+            "originx/main",
+            "other/main",
+        ] {
+            assert_eq!(split(local), None, "{local}");
+        }
+        // A refspec with a destination would write a local branch.
+        assert_eq!(split("origin/main:refs/heads/x"), None);
+        assert_eq!(remote_branch("", "origin/main"), None);
     }
 
     #[test]

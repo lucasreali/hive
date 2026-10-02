@@ -148,7 +148,7 @@ fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
     let cwd = std::env::current_dir()?;
     match command {
         WorktreeCommand::Create { name, base } => {
-            report(worktree::create(&cwd, &name, base.as_deref())?)
+            report(worktree::create(&cwd, &name, base.as_deref(), &[])?)
         }
         WorktreeCommand::List => worktree::list(&cwd)?
             .iter()
