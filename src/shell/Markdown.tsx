@@ -54,7 +54,7 @@ const COMPONENTS: Components = {
     ),
   // Never load an image (untrusted text, no network): its alt text stands in.
   img: ({ alt }) => (alt ? <span className="md-img">{alt}</span> : null),
-  // Wide tables scroll sideways inside the message.
+  // A table's cells wrap: it is never wider than the message (13.1).
   table: ({ children }) => (
     <div className="md-table">
       <table>{children}</table>

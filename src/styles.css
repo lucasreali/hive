@@ -2971,9 +2971,10 @@ body[data-resizing] {
   opacity: 0.5;
 }
 
-/* Claude's messages as Markdown (8.6). */
+/* Claude's messages as Markdown (8.6). Never wider than its space: long lines wrap (13.1). */
 .markdown {
   white-space: normal;
+  overflow-wrap: anywhere;
   line-height: 18px;
 }
 
@@ -3021,15 +3022,13 @@ body[data-resizing] {
 
 .markdown pre {
   padding: 6px 8px;
-  overflow-x: auto;
   border-radius: var(--radius);
   background: var(--panel);
 }
 
 .markdown pre code {
   padding: 0;
-  white-space: pre;
-  overflow-wrap: normal;
+  white-space: pre-wrap;
 }
 
 .markdown blockquote {
@@ -3043,19 +3042,14 @@ body[data-resizing] {
   border-top: 1px solid var(--border-subtle);
 }
 
-.md-table {
-  overflow-x: auto;
-}
-
 .markdown table {
+  max-width: 100%;
   border-collapse: collapse;
 }
 
 .markdown :is(th, td) {
   padding: 3px 8px;
   border: 1px solid var(--border);
-  overflow-wrap: normal;
-  white-space: nowrap;
 }
 
 .markdown th {

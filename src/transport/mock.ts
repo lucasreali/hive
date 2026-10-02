@@ -496,6 +496,23 @@ export const MOCK_TEXTS: Record<string, [string, string]> = {
     ).replace("import { SESSION_TTL }", "import { REMEMBER_ME_TTL, SESSION_TTL }"),
     SESSION_BASE,
   ],
+  // Wider than any panel: a table, an inline path and a code line that must wrap (13.1).
+  "docs/api.md": Array(2).fill(
+    [
+      "# API",
+      "",
+      "| Endpoint | Method | Handler | Description |",
+      "|---|---|---|---|",
+      `| /api/v2/orders/{orderId}/shipments/{shipmentId}/tracking | GET | src/routes/orders/shipments/tracking/handler.ts | ${"Returns the tracking events of one shipment of an order, newest first. ".repeat(3)}|`,
+      "",
+      `Handlers live under \`/home/user/projects/api/src/routes/orders/shipments/tracking/events/${"nested/".repeat(8)}handler.ts\`.`,
+      "",
+      "```ts",
+      `export const TRACKING_URL = "https://tracking.example.com/v2/shipments/${"0123456789".repeat(12)}";`,
+      "```",
+      "",
+    ].join("\n"),
+  ) as [string, string],
 };
 
 /**
