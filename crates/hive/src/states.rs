@@ -1378,6 +1378,9 @@ mod tests {
                 assert_eq!(shown(&agent).0, state, "{name}");
                 assert_eq!(sent, Some((alert, notify)), "{name}, watched: {watched}");
             }
+            // Staying there sends nothing, so nothing notifies again.
+            let again = notification("idle_prompt");
+            assert_eq!(notifies(agent.feed("s", &again, now)), None);
             // The snapshot after `Welcome` never notifies.
             assert_eq!(notifies(Some(agent.message("s"))), Some((None, false)));
         }
