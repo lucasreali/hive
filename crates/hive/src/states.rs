@@ -59,7 +59,8 @@ pub struct Agent {
     /// Whether its terminal is the one in view in the focused app window (the app's `view`);
     /// the daemon keeps it current.
     pub watched: bool,
-    /// It finished while watched: already seen, so not pending until its state changes.
+    /// It finished while watched, or its turn ended with subagents still at work (13.3): not
+    /// pending until its state changes.
     seen: bool,
     /// It waits for you because the user interrupted it, until its state changes.
     interrupted: bool,
@@ -384,6 +385,13 @@ impl Agent {
         self.subagents.iter().filter_map(|s| s.worktree.as_ref())
     }
 
+    /// A subagent is still in its turn (13.3), so a turn of the agent that ends now has not
+    /// finished: Claude Code wakes it when they end. One that only waits on its own background
+    /// launch does not count, as a background shell task of the agent's does not.
+    fn delegating(&self) -> bool {
+        self.subagents.iter().any(|s| !self.waiting.contains(&s.id))
+    }
+
     fn displayed(&self) -> AgentState {
         let with = (!self.subagents.is_empty()).then_some(AgentState::WithSubagents);
         self.subagents
@@ -395,8 +403,10 @@ impl Agent {
 
     /// Applies `update`; when the displayed state changed, the agent is seen only if it just
     /// finished (working or with subagents → waiting for you) while watched (hive.md item 5),
-    /// or was made to wait for you `quiet`ly (an interrupt). That change alerts (2.4): it
-    /// finished, or it waits for the user (a pending state); an interrupt never does.
+    /// or was made to wait for you `quiet`ly (an interrupt), or waits for you while a
+    /// subagent is still in its turn (13.3: it has not finished; Claude Code wakes it when
+    /// they end). That change alerts (2.4): it finished, or it waits for the user (a pending
+    /// state); an interrupt or a turn ended with subagents still at work never does.
     /// A state that changed (the displayed one, or a subagent's) begins at `now`.
     fn changed(
         &mut self,
@@ -420,7 +430,8 @@ impl Agent {
             let busy = matches!(was, AgentState::Working | AgentState::WithSubagents);
             let finished = busy && shown == AgentState::WaitingYou;
             self.interrupted = quiet && shown == AgentState::WaitingYou;
-            self.seen = self.interrupted || self.watched && finished;
+            let early = shown == AgentState::WaitingYou && self.delegating();
+            self.seen = self.interrupted || early || self.watched && finished;
             self.since_ms = wall;
             // One expression: every instantiation of `changed` runs each of its lines.
             alert = if finished {
@@ -428,7 +439,7 @@ impl Agent {
             } else {
                 shown.pending().then_some(Alert::Waiting)
             }
-            .filter(|_| !self.interrupted);
+            .filter(|_| !self.interrupted && !early);
         }
         for sub in &mut self.subagents {
             if subagents.get(&sub.id) != Some(&sub.state) {
@@ -957,18 +968,61 @@ mod tests {
         // The snapshot after `Welcome` never alerts.
         assert_eq!(alerts(Some(agent.message("s"))), Some((None, false)));
 
-        // With subagents, then waiting for you: it finished too.
+        // With subagents, then waiting for you: it finished too, when the only one left just
+        // waits on its own background task (13.3).
         let mut agent = Agent::new(1, now, 0);
         let start = hook("SubagentStart", Some("a"), json!({}));
         assert_eq!(alerts(agent.feed("s", &start, now)), Some((None, true)));
-        let stop = hook("Stop", Some("a"), json!({}));
-        let sent = alerts(agent.feed("s", &stop, now));
+        agent.feed("s", &launched("a", "backgroundTaskId", "b1"), now);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &["b1"]), now);
+        let sent = alerts(agent.feed("s", &stop_with("Stop", None, &["b1"]), now));
         assert_eq!(sent, Some((Some(Finished), false)));
+        assert_eq!(shown(&agent), (WaitingYou, vec![("a".into(), Working)]));
 
         // An interrupt: the user did it, so nothing alerts.
         let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("PermissionRequest", None, json!({})), now);
         assert_eq!(alerts(agent.interrupt("s", now)), Some((None, false)));
+    }
+
+    #[test]
+    fn a_turn_that_ends_with_subagents_still_at_work_has_not_finished() {
+        use Alert::*;
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        let mut feed = |event: AgentEvent| {
+            let sent = alerts(agent.feed("s", &event, now));
+            (sent.map(|(alert, _)| alert), pending(&agent))
+        };
+        let wake = || hook("PreToolUse", None, json!({"tool_name": "Read"}));
+        let quiet = (Some(None), false);
+        // Two background subagents, and the agent ends its turn while both work.
+        feed(hook("UserPromptSubmit", None, json!({})));
+        feed(hook("SubagentStart", Some("a"), json!({})));
+        feed(hook("SubagentStart", Some("b"), json!({})));
+        assert_eq!(feed(stop_with("Stop", None, &["a", "b"])), quiet);
+        // The first one ends and wakes it; its turn ends with the other still at work.
+        assert_eq!(feed(stop_with("SubagentStop", Some("a"), &["b"])), quiet);
+        assert_eq!(feed(wake()), quiet);
+        assert_eq!(feed(stop_with("Stop", None, &["b"])), quiet);
+        // A question of the one at work still alerts; its answer does not.
+        let asks = hook("PermissionRequest", Some("b"), json!({"tool_name": "Bash"}));
+        assert_eq!(feed(asks), (Some(Some(Waiting)), true));
+        assert_eq!(feed(hook("PostToolUse", Some("b"), json!({}))), quiet);
+        // The last one ends: the turn it wakes finishes.
+        assert_eq!(feed(stop_with("SubagentStop", Some("b"), &[])), quiet);
+        assert_eq!(feed(wake()), (Some(None), false));
+        let done = (Some(Some(Finished)), true);
+        assert_eq!(feed(stop_with("Stop", None, &[])), done);
+
+        // A background shell task does not hold it back.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &tool("PreToolUse", None, "Run server"), now);
+        let sent = alerts(agent.feed("s", &stop_with("Stop", None, &["b1"]), now));
+        assert_eq!(
+            (sent, pending(&agent)),
+            (Some((Some(Finished), false)), true)
+        );
     }
 
     #[test]
@@ -1388,6 +1442,17 @@ mod tests {
         let mut agent = Agent::new(1, now, 0);
         agent.feed("s", &hook("PermissionRequest", None, json!({})), now);
         assert_eq!(notifies(agent.interrupt("s", now)), Some((None, false)));
+        // Nor does a turn that ends while a subagent is still at work (13.3), out of view too;
+        // the turn that ends with none left finishes and notifies.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        let quiet = notifies(agent.feed("s", &stop_with("Stop", None, &["a"]), now));
+        assert_eq!(quiet, Some((None, false)));
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &[]), now);
+        agent.feed("s", &hook("PreToolUse", None, json!({})), now);
+        let done = notifies(agent.feed("s", &stop_with("Stop", None, &[]), now));
+        assert_eq!(done, Some((Some(Finished), true)));
     }
 
     #[test]

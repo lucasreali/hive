@@ -1052,8 +1052,20 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
     );
     let again = main(json!({"transcript_path": log, "source": "compact"}));
     assert_eq!(hook(&repo, &mut app, "1", "SessionStart", again).await, []);
+    // Its turn ends with the subagent still at work: not finished, nothing alerts or notifies
+    // (13.3, 13.4).
     let seen = hook(&repo, &mut app, "1", "Stop", main(json!({}))).await;
-    assert_eq!(seen, [(1, finished("s", vec![sub("a", Working)]))]);
+    let mut quiet = state("s", WaitingYou, vec![sub("a", Working)]);
+    if let Control::AgentState {
+        pending,
+        alert,
+        notify,
+        ..
+    } = &mut quiet
+    {
+        (*pending, *alert, *notify) = (false, None, false);
+    }
+    assert_eq!(seen, [(1, quiet)]);
     drop(app);
     assert!(daemon.wait_exit().success());
 }
