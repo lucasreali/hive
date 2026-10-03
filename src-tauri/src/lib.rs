@@ -291,12 +291,29 @@ pub struct Hive {
     install: Option<Box<Installer>>,
     /// Opens a path, or shows it in the file manager; given by `main.rs` (`with_open`).
     open: Option<Box<Opener>>,
+    /// Shows an OS notification; given by `main.rs` (`with_notify`).
+    notify: Option<Box<Notifier>>,
 }
 
 /// Runs the installer of a downloaded update.
 type Installer = dyn Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync;
 /// Opens `path` with the system's default app, or shows it in the file manager when `reveal`.
 type Opener = dyn Fn(&str, bool) -> Result<(), String> + Send + Sync;
+/// What a click on an OS notification does (13.5).
+pub type Click = Box<dyn Fn() + Send + Sync>;
+/// Shows an OS notification with a title and a body; a click on it runs the [`Click`].
+type Notifier = dyn Fn(&str, &str, Click) -> Result<(), String> + Send + Sync;
+
+/// The app the OS shows a notification as (13.5): the installed app's `identifier`, which the
+/// Windows installer gives its shortcut as the AppUserModelID and macOS reads from the bundle.
+/// A development build has none registered, so it borrows `stand_in` (PowerShell's, Terminal's).
+pub fn notifier<'a>(dev: bool, identifier: &'a str, stand_in: &'a str) -> &'a str {
+    if dev {
+        stand_in
+    } else {
+        identifier
+    }
+}
 
 #[derive(Default)]
 struct Link {
@@ -390,7 +407,43 @@ impl Hive {
             restart: None,
             install: None,
             open: None,
+            notify: None,
         }
+    }
+
+    /// Shows OS notifications with `notify`, the platform's own (13.5).
+    pub fn with_notify(
+        mut self,
+        notify: impl Fn(&str, &str, Click) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.notify = Some(Box::new(notify));
+        self
+    }
+
+    /// Shows an OS notification about `agent` (13.5). A click on it brings the window to the
+    /// front, restored and focused, and sends `notification_clicked {agent}` to the UI, which
+    /// goes to the agent if it is still there (`goToAgent`).
+    pub fn show_notification<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        title: &str,
+        body: &str,
+        agent: String,
+    ) -> Result<(), String> {
+        let notify = self
+            .notify
+            .as_ref()
+            .ok_or("this app cannot show notifications")?;
+        let (app, link) = (app.clone(), Arc::clone(&self.link));
+        let click = move || {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
+        };
+        notify(title, body, Box::new(click))
     }
 
     /// Opens paths with `open` (the system's default app), or `reveal` (the file manager).
@@ -1509,6 +1562,17 @@ pub mod commands {
     #[tauri::command]
     pub fn get_diagnostics(hive: State<'_, Hive>) -> Result<(), String> {
         hive.get_diagnostics()
+    }
+
+    #[tauri::command]
+    pub fn show_notification<R: Runtime>(
+        app: AppHandle<R>,
+        hive: State<'_, Hive>,
+        title: String,
+        body: String,
+        agent: String,
+    ) -> Result<(), String> {
+        hive.show_notification(&app, &title, &body, agent)
     }
 }
 

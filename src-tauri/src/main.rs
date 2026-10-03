@@ -26,7 +26,8 @@ fn main() {
                 .with_open(
                     |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
                     |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
-                );
+                )
+                .with_notify(notifier(app));
             // WSL or Windows (12.5.4), only on Windows.
             #[cfg(windows)]
             let hive = hive.with_modes(hive_lib::Modes::new(
@@ -104,6 +105,7 @@ fn main() {
             commands::act_on_run,
             commands::open_settings_file,
             commands::get_diagnostics,
+            commands::show_notification,
         ])
         .build(tauri::generate_context!());
     match result {
@@ -153,5 +155,72 @@ fn disable_browser_keys(app: &tauri::App) {
     });
     if let Err(error) = result {
         eprintln!("hive-app: could not turn browser keys off: {error}");
+    }
+}
+
+/// Windows toasts as the installed app (13.5); a click runs `click` on the toast's thread. Silent:
+/// Hive plays its own tone.
+#[cfg(windows)]
+fn notifier(
+    app: &tauri::App,
+) -> impl Fn(&str, &str, hive_lib::Click) -> Result<(), String> + Send + Sync + 'static {
+    use tauri_winrt_notification::Toast;
+    let identifier = &app.config().identifier;
+    let id = hive_lib::notifier(tauri::is_dev(), identifier, Toast::POWERSHELL_APP_ID).to_owned();
+    move |title: &str, body: &str, click: hive_lib::Click| {
+        Toast::new(&id)
+            .title(title)
+            .text1(body)
+            .sound(None)
+            .on_activated(move |_| {
+                click();
+                Ok(())
+            })
+            .show()
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// macOS notifications as the app's bundle (13.5); `send` waits for the click or the dismissal,
+/// so each runs on a thread of its own. Silent: Hive plays its own tone.
+#[cfg(target_os = "macos")]
+fn notifier(
+    app: &tauri::App,
+) -> impl Fn(&str, &str, hive_lib::Click) -> Result<(), String> + Send + Sync + 'static {
+    use mac_notification_sys::{Notification, NotificationResponse};
+    let identifier = &app.config().identifier;
+    let id = hive_lib::notifier(tauri::is_dev(), identifier, "com.apple.Terminal");
+    if let Err(error) = mac_notification_sys::set_application(id) {
+        eprintln!("hive-app: notifications cannot show as {id}: {error}");
+    }
+    |title: &str, body: &str, click: hive_lib::Click| {
+        let (title, body) = (title.to_owned(), body.to_owned());
+        // ponytail: one blocked thread per notification until it is clicked or dismissed.
+        std::thread::spawn(move || {
+            let sent = Notification::new()
+                .title(&title)
+                .message(&body)
+                .wait_for_click(true)
+                .send();
+            match sent {
+                Ok(NotificationResponse::Click) => click(),
+                Ok(_) => {}
+                Err(error) => eprintln!("hive-app: notification failed: {error}"),
+            }
+        });
+        Ok(())
+    }
+}
+
+/// Linux (development only): the notification plugin's, which reports no click.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn notifier(
+    app: &tauri::App,
+) -> impl Fn(&str, &str, hive_lib::Click) -> Result<(), String> + Send + Sync + 'static {
+    use tauri_plugin_notification::NotificationExt;
+    let app = app.handle().clone();
+    move |title: &str, body: &str, _: hive_lib::Click| {
+        let builder = app.notification().builder().title(title).body(body);
+        builder.show().map_err(|error| error.to_string())
     }
 }

@@ -2124,3 +2124,60 @@ fn an_installed_update_restarts_the_app() {
     assert_eq!(restarted.try_recv(), Ok(()));
     assert!(rx.try_recv().is_err());
 }
+
+#[test]
+fn a_notification_shows_as_the_installed_app_or_borrows_one_in_development() {
+    assert_eq!(
+        notifier(false, "com.lucas.hive", "Terminal"),
+        "com.lucas.hive"
+    );
+    assert_eq!(notifier(true, "com.lucas.hive", "Terminal"), "Terminal");
+}
+
+#[test]
+fn a_notification_click_brings_the_window_up_and_names_its_agent() {
+    let (tx, shown) = std::sync::mpsc::channel::<(String, String, Click)>();
+    let (channel, mut rx) = ui();
+    let hive = hive().with_notify(move |title, body, click| {
+        tx.send((title.into(), body.into(), click)).unwrap();
+        Ok(())
+    });
+    hive.link().ui = Some(channel);
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![show_notification])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let args = json!({"title": "fix login finished", "body": "shop · main", "agent": "a1"});
+    assert_eq!(invoke(&webview, "show_notification", args), Ok(Value::Null));
+    let (title, body, click) = shown.try_recv().unwrap();
+    assert_eq!(
+        (title.as_str(), body.as_str()),
+        ("fix login finished", "shop · main")
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "nothing goes to the UI before the click"
+    );
+    webview.minimize().unwrap();
+    click();
+    let clicked = json!({"type": "notification_clicked", "agent": "a1"});
+    assert_eq!(rx.try_recv().unwrap(), clicked);
+    // With the window gone, a click still reaches the UI (a reload brings it back).
+    webview.destroy().unwrap();
+    click();
+    assert_eq!(rx.try_recv().unwrap(), clicked);
+}
+
+#[test]
+fn a_notification_fails_without_a_notifier_or_when_the_os_refuses_it() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let none = hive().show_notification(app.handle(), "t", "b", "a1".into());
+    assert_eq!(none, Err("this app cannot show notifications".into()));
+    let refused = hive().with_notify(|_, _, _| Err("toasts are off".into()));
+    let shown = refused.show_notification(app.handle(), "t", "b", "a1".into());
+    assert_eq!(shown, Err("toasts are off".into()));
+}
