@@ -2200,13 +2200,10 @@ fn at_most_click_waits_notifications_wait_for_their_click() {
     let (asked_tx, asked) = std::sync::mpsc::channel::<bool>();
     let (answer, answers) = std::sync::mpsc::channel::<bool>();
     let answers = Mutex::new(answers);
-    let notify = waits(
-        move |_, _, wait| {
-            asked_tx.send(wait).unwrap();
-            Ok(wait && answers.lock().unwrap().recv().unwrap())
-        },
-        notification_thread,
-    );
+    let notify = waiting_notifier(move |_, _, wait| {
+        asked_tx.send(wait).unwrap();
+        Ok(wait && answers.lock().unwrap().recv().unwrap())
+    });
     let (clicked_tx, clicked) = std::sync::mpsc::channel::<usize>();
     let click = |i: usize| -> Click {
         let tx = clicked_tx.clone();
@@ -2232,7 +2229,9 @@ fn at_most_click_waits_notifications_wait_for_their_click() {
     }
 }
 
-static NO_THREADS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+static NO_THREADS: AtomicBool = AtomicBool::new(true);
 
 /// [`notification_thread`], failing while [`NO_THREADS`] holds.
 fn flaky(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {

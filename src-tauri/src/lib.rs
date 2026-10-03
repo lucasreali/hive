@@ -11,7 +11,6 @@ use std::future::Future;
 use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -336,14 +335,19 @@ fn waits(
     start: Start,
 ) -> impl Fn(&str, &str, Click) -> Result<(), String> + Send + Sync + 'static {
     let send = Arc::new(send);
-    let waiting = Arc::new(AtomicUsize::new(0));
+    // How many wait for their click.
+    let waiting = Arc::new(Mutex::new(0_usize));
     move |title: &str, body: &str, click: Click| {
-        let below = |n: usize| (n < CLICK_WAITS).then_some(n + 1);
-        let wait = waiting.fetch_update(SeqCst, SeqCst, below).is_ok();
+        let wait = {
+            let mut waiting = waiting.lock().unwrap_or_else(PoisonError::into_inner);
+            let wait = *waiting < CLICK_WAITS;
+            *waiting += usize::from(wait);
+            wait
+        };
         let done = Arc::clone(&waiting);
         let release = move || {
             if wait {
-                done.fetch_sub(1, SeqCst);
+                *done.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
             }
         };
         let (send, title, body) = (Arc::clone(&send), title.to_owned(), body.to_owned());
