@@ -205,6 +205,7 @@ fn samples() -> Vec<Control> {
             pending: false,
             interrupted: false,
             alert: None,
+            notify: false,
             writing: true,
             subagents: vec![SubagentState {
                 id: s("a"),

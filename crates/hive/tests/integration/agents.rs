@@ -72,6 +72,7 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         pending: state.pending(),
         interrupted: false,
         alert: state.pending().then_some(Alert::Waiting),
+        notify: state.pending(),
         writing: state.writes(),
         subagents,
         activity: None,
@@ -495,6 +496,7 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
         hook(&repo, app, "1", "UserPromptSubmit", s()).await;
         hook(&repo, app, "1", "Stop", s()).await
     };
+    // Seen as it finished: neither pending nor notified (it still alerts: tone and inbox).
     let finished = |pending| {
         let message = Control::AgentState {
             id: "s".into(),
@@ -503,6 +505,7 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             pending,
             interrupted: false,
             alert: Some(Alert::Finished),
+            notify: pending,
             writing: false,
             subagents: vec![],
             activity: None,
@@ -515,6 +518,13 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
     assert_eq!(turn(&mut app, Some(2), true).await, finished(true));
     assert_eq!(turn(&mut app, None, true).await, finished(true));
     assert_eq!(turn(&mut app, Some(1), true).await, finished(false));
+    // Any other alert in view of the focused window is not notified either, yet pending.
+    let ask = hook(&repo, &mut app, "1", "PermissionRequest", s()).await;
+    let mut asking = state("s", WaitingPermission, vec![]);
+    if let Control::AgentState { notify, .. } = &mut asking {
+        *notify = false;
+    }
+    assert_eq!(ask, vec![(1, asking)]);
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -1003,10 +1013,11 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
         pending,
         interrupted: quiet,
         alert,
+        notify,
         ..
     } = &mut interrupted
     {
-        (*pending, *quiet, *alert) = (false, true, None);
+        (*pending, *quiet, *alert, *notify) = (false, true, None, false);
     }
     assert_eq!(next_state(&mut app).await, interrupted);
 
@@ -1041,11 +1052,18 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
     );
     let again = main(json!({"transcript_path": log, "source": "compact"}));
     assert_eq!(hook(&repo, &mut app, "1", "SessionStart", again).await, []);
-    // Its turn ends with the subagent still at work: not finished, nothing alerts (13.3).
+    // Its turn ends with the subagent still at work: not finished, nothing alerts or notifies
+    // (13.3, 13.4).
     let seen = hook(&repo, &mut app, "1", "Stop", main(json!({}))).await;
     let mut quiet = state("s", WaitingYou, vec![sub("a", Working)]);
-    if let Control::AgentState { pending, alert, .. } = &mut quiet {
-        (*pending, *alert) = (false, None);
+    if let Control::AgentState {
+        pending,
+        alert,
+        notify,
+        ..
+    } = &mut quiet
+    {
+        (*pending, *alert, *notify) = (false, None, false);
     }
     assert_eq!(seen, [(1, quiet)]);
     drop(app);

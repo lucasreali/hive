@@ -2,10 +2,10 @@ import type { AgentState, ServiceMessage } from "./protocol";
 import { addToInbox, type HiveState, spaceOf, useHive } from "./store";
 import { showNotification } from "./window";
 
-// Presentation of the alerts the service decided (hive.md item 5, 2.4, #37): a tone and an
-// inbox item for each `agent_state` with an `alert`, and an OS notification when the agent
-// finished, unless the service says it is not pending (it finished in view of the focused
-// window: already seen). Nothing here computes a state or a transition.
+// Presentation of the alerts the service decided (hive.md item 5, 2.4, 13.4, #37): a tone and
+// an inbox item for each `agent_state` with an `alert`, and an OS notification when the service
+// says `notify` (the agent is not in view of the focused window). Nothing here computes a state
+// or a transition.
 
 /** What an alert says after the agent's name; "finished" when it finished. */
 const ALERT_TEXT: Partial<Record<AgentState, string>> = {
@@ -53,6 +53,21 @@ export function spaceName(s: HiveState, id: string): string | undefined {
   return spaceOf(s, s.agents[id]?.project ?? null)?.name;
 }
 
+type AgentStateMessage = Extract<ServiceMessage, { type: "agent_state" }>;
+
+/** An alert's text: the OS notification's and, its title, the inbox item's. */
+export type AlertText = { agent: string; title: string; body: string };
+
+/**
+ * The text of an `agent_state` with an alert: the title names the agent (its title, else
+ * "Claude") and what happened ("fix login finished"); the body is where it is.
+ */
+export function alertText(s: HiveState, message: AgentStateMessage): AlertText {
+  const { id, state, alert } = message;
+  const what = alert === "finished" ? "finished" : ALERT_TEXT[state];
+  return { agent: id, title: `${s.agentTitles[id] ?? "Claude"} ${what}`, body: agentPlace(s, id) };
+}
+
 /**
  * Presents a message's alert. The service sets `alert` only on the message whose state changed,
  * never on an agent's first state, the snapshot after `welcome` or an interrupt.
@@ -64,20 +79,13 @@ export function notify(
   wall = Date.now(),
 ): void {
   if (message.type !== "agent_state" || !message.alert) return;
-  const { id, state, alert } = message;
-  const name = s.agentTitles[id] ?? "Claude";
-  const what = alert === "finished" ? "finished" : ALERT_TEXT[state];
-  addToInbox({ agent: id, state, at: wall, text: `${name} ${what}`, space: spaceName(s, id) });
+  const { id, state } = message;
+  const text = alertText(s, message);
+  addToInbox({ agent: id, state, at: wall, text: text.title, space: spaceName(s, id) });
   const volume = s.settings.notifications.volume;
   if (volume > 0 && now - lastTone >= TONE_GAP_MS) {
     lastTone = now;
     tone(volume);
   }
-  if (alert === "finished" && message.pending) {
-    const where = agentPlace(s, message.id);
-    void showNotification(
-      "Agent finished",
-      where ? `${where}: waiting for you` : "Waiting for you",
-    );
-  }
+  if (message.notify) void showNotification(text.title, text.body);
 }

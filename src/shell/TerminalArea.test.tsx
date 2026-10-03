@@ -158,6 +158,7 @@ test("a tab running Claude shows the agent's state and its session's name", () =
       pending: false,
       interrupted: false,
       alert: null,
+      notify: false,
       writing: true,
       subagents: [],
       activity: null,

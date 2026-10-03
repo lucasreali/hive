@@ -38,6 +38,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     pending: true,
     interrupted: true,
     alert: true,
+    notify: true,
     writing: true,
     subagents: true,
     activity: true,

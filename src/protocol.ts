@@ -379,6 +379,8 @@ export type AgentStatus = {
   interrupted: boolean;
   /** Set only on the message whose state changed; never on the snapshot after `welcome`. */
   alert: Alert | null;
+  /** Show an OS notification for `alert`: the service's call (out of the focused window's view). */
+  notify: boolean;
   /** Its state may be writing files, in its worktree: "Agent working here". */
   writing: boolean;
   subagents: Subagent[];

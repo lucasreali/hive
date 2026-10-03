@@ -345,7 +345,7 @@ test("agent states carry the service's urgency and pending flag", () => {
     "waiting_plan",
     "waiting_permission",
   ] as const;
-  const doing = { activity: null, since_ms: 0, interrupted: false, alert: null };
+  const doing = { activity: null, since_ms: 0, interrupted: false, alert: null, notify: false };
   expect([...calm, ...pending].map((s) => agentStatus(s))).toEqual([
     { state: "ended", urgency: 0, pending: false, writing: false, ...doing },
     { state: "idle", urgency: 1, pending: false, writing: false, ...doing },

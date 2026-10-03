@@ -247,6 +247,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
     pending: true,
     interrupted: false,
     alert: "waiting",
+    notify: true,
     writing: true,
     ...doing,
   } as const;
@@ -256,6 +257,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
     pending: false,
     interrupted: false,
     alert: null,
+    notify: false,
     writing: false,
     ...doing,
   } as const;
@@ -267,6 +269,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
     pending: false,
     interrupted: false,
     alert: null,
+    notify: false,
     writing: true,
     subagents: [],
     activity: null,
@@ -600,6 +603,7 @@ test("an agent is working in a worktree while it (or its subagent there) may wri
       pending: false,
       interrupted: false,
       alert: null,
+      notify: false,
       writing,
       subagents,
       ...none,

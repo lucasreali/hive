@@ -94,7 +94,19 @@ export const agentStatus = (
   const urgency = URGENCY.indexOf(state);
   const pending = urgency >= URGENCY.indexOf("waiting_you");
   const writing = WRITES.includes(state);
-  return { state, urgency, pending, interrupted: false, alert, writing, activity, since_ms };
+  // Mock agents have no view: every alert notifies.
+  const notify = alert !== null;
+  return {
+    state,
+    urgency,
+    pending,
+    interrupted: false,
+    alert,
+    notify,
+    writing,
+    activity,
+    since_ms,
+  };
 };
 
 /**
