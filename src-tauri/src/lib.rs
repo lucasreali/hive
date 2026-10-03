@@ -11,6 +11,7 @@ use std::future::Future;
 use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -315,6 +316,71 @@ pub fn notifier<'a>(dev: bool, identifier: &'a str, stand_in: &'a str) -> &'a st
     }
 }
 
+/// How many notifications wait for their click at once (`waiting_notifier`); later ones show
+/// without click handling until one is answered. On macOS each wait holds a thread and a timer
+/// on the main run loop until the notification leaves the Notification Center.
+pub const CLICK_WAITS: usize = 8;
+
+/// A notifier for a platform whose `send(title, body, wait)` blocks (macOS: until the click or
+/// the dismissal, when `wait`) and answers whether the user clicked it: each one is sent on a
+/// thread of its own, at most [`CLICK_WAITS`] of them waiting for their click.
+pub fn waiting_notifier(
+    send: impl Fn(&str, &str, bool) -> Result<bool, String> + Send + Sync + 'static,
+) -> impl Fn(&str, &str, Click) -> Result<(), String> + Send + Sync + 'static {
+    waits(send, notification_thread)
+}
+
+/// [`waiting_notifier`], its threads started by `start`.
+fn waits(
+    send: impl Fn(&str, &str, bool) -> Result<bool, String> + Send + Sync + 'static,
+    start: Start,
+) -> impl Fn(&str, &str, Click) -> Result<(), String> + Send + Sync + 'static {
+    let send = Arc::new(send);
+    let waiting = Arc::new(AtomicUsize::new(0));
+    move |title: &str, body: &str, click: Click| {
+        let below = |n: usize| (n < CLICK_WAITS).then_some(n + 1);
+        let wait = waiting.fetch_update(SeqCst, SeqCst, below).is_ok();
+        let done = Arc::clone(&waiting);
+        let release = move || {
+            if wait {
+                done.fetch_sub(1, SeqCst);
+            }
+        };
+        let (send, title, body) = (Arc::clone(&send), title.to_owned(), body.to_owned());
+        let release_here = release.clone();
+        let started = start(Box::new(move || {
+            let outcome = send(&title, &body, wait);
+            release();
+            answered(outcome, &click);
+        }));
+        started.map_err(|error| {
+            release_here();
+            format!("cannot show the notification: {error}")
+        })
+    }
+}
+
+/// Runs `click` when the platform says the user clicked the notification; a failure to show it
+/// is logged.
+pub fn answered(outcome: Result<bool, String>, click: &Click) {
+    match outcome {
+        Ok(true) => click(),
+        Ok(false) => {}
+        Err(error) => eprintln!("hive-app: notification failed: {error}"),
+    }
+}
+
+/// Starts a [`waiting_notifier`]'s notification on a new thread.
+fn notification_thread(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    let thread = std::thread::Builder::new().name("notification".into());
+    thread.spawn(work).map(drop)
+}
+
+/// The text without control characters, which a Windows toast's XML refuses.
+fn printable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
 #[derive(Default)]
 struct Link {
     /// Control messages to the UI.
@@ -420,8 +486,8 @@ impl Hive {
         self
     }
 
-    /// Shows an OS notification about `agent` (13.5). A click on it brings the window to the
-    /// front, restored and focused, and sends `notification_clicked {agent}` to the UI, which
+    /// Shows an OS notification about `agent` (13.5), its text without control characters. A
+    /// click on it brings the window to the front, restored and focused, and sends `notification_clicked {agent}` to the UI, which
     /// goes to the agent if it is still there (`goToAgent`).
     pub fn show_notification<R: Runtime>(
         &self,
@@ -443,7 +509,7 @@ impl Hive {
             }
             lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
         };
-        notify(title, body, Box::new(click))
+        notify(&printable(title), &printable(body), Box::new(click))
     }
 
     /// Opens paths with `open` (the system's default app), or `reveal` (the file manager).

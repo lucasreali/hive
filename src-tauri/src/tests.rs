@@ -2135,7 +2135,7 @@ fn a_notification_shows_as_the_installed_app_or_borrows_one_in_development() {
 }
 
 #[test]
-fn a_notification_click_brings_the_window_up_and_names_its_agent() {
+fn a_notification_click_names_its_agent_to_the_ui_with_or_without_the_window() {
     let (tx, shown) = std::sync::mpsc::channel::<(String, String, Click)>();
     let (channel, mut rx) = ui();
     let hive = hive().with_notify(move |title, body, click| {
@@ -2151,7 +2151,9 @@ fn a_notification_click_brings_the_window_up_and_names_its_agent() {
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
-    let args = json!({"title": "fix login finished", "body": "shop · main", "agent": "a1"});
+    // Control characters go: a Windows toast's XML refuses them.
+    let title = "fix\u{7} login finished\n";
+    let args = json!({"title": title, "body": "shop ·\u{1b} main", "agent": "a1"});
     assert_eq!(invoke(&webview, "show_notification", args), Ok(Value::Null));
     let (title, body, click) = shown.try_recv().unwrap();
     assert_eq!(
@@ -2162,7 +2164,7 @@ fn a_notification_click_brings_the_window_up_and_names_its_agent() {
         rx.try_recv().is_err(),
         "nothing goes to the UI before the click"
     );
-    webview.minimize().unwrap();
+    // The window comes up too; the mock runtime keeps no window state to check it with.
     click();
     let clicked = json!({"type": "notification_clicked", "agent": "a1"});
     assert_eq!(rx.try_recv().unwrap(), clicked);
@@ -2180,4 +2182,81 @@ fn a_notification_fails_without_a_notifier_or_when_the_os_refuses_it() {
     let refused = hive().with_notify(|_, _, _| Err("toasts are off".into()));
     let shown = refused.show_notification(app.handle(), "t", "b", "a1".into());
     assert_eq!(shown, Err("toasts are off".into()));
+}
+
+#[test]
+fn only_a_click_runs_the_click() {
+    let (tx, clicks) = std::sync::mpsc::channel();
+    let click: Click = Box::new(move || tx.send(()).unwrap());
+    answered(Ok(false), &click);
+    answered(Err("no notification center".into()), &click);
+    assert!(clicks.try_recv().is_err());
+    answered(Ok(true), &click);
+    assert_eq!(clicks.try_recv(), Ok(()));
+}
+
+#[test]
+fn at_most_click_waits_notifications_wait_for_their_click() {
+    let (asked_tx, asked) = std::sync::mpsc::channel::<bool>();
+    let (answer, answers) = std::sync::mpsc::channel::<bool>();
+    let answers = Mutex::new(answers);
+    let notify = waits(
+        move |_, _, wait| {
+            asked_tx.send(wait).unwrap();
+            Ok(wait && answers.lock().unwrap().recv().unwrap())
+        },
+        notification_thread,
+    );
+    let (clicked_tx, clicked) = std::sync::mpsc::channel::<usize>();
+    let click = |i: usize| -> Click {
+        let tx = clicked_tx.clone();
+        Box::new(move || tx.send(i).unwrap())
+    };
+    for i in 0..=CLICK_WAITS {
+        assert_eq!(notify("t", "b", click(i)), Ok(()));
+    }
+    let waiting = (0..=CLICK_WAITS)
+        .filter(|_| asked.recv_timeout(WAIT).unwrap())
+        .count();
+    assert_eq!(
+        waiting, CLICK_WAITS,
+        "one beyond the cap shows without waiting"
+    );
+    // One is clicked: its wait ends, so the next notification waits again.
+    answer.send(true).unwrap();
+    clicked.recv_timeout(WAIT).unwrap();
+    assert_eq!(notify("t", "b", click(99)), Ok(()));
+    assert_eq!(asked.recv_timeout(WAIT), Ok(true));
+    for _ in 0..CLICK_WAITS {
+        answer.send(false).unwrap();
+    }
+}
+
+static NO_THREADS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// [`notification_thread`], failing while [`NO_THREADS`] holds.
+fn flaky(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    if NO_THREADS.load(SeqCst) {
+        return Err(std::io::Error::other("no threads"));
+    }
+    notification_thread(work)
+}
+
+#[test]
+fn a_notification_whose_thread_cannot_start_fails_and_frees_its_wait() {
+    let (asked_tx, asked) = std::sync::mpsc::channel::<bool>();
+    let notify = waits(
+        move |_, _, wait| {
+            asked_tx.send(wait).unwrap();
+            Ok(false)
+        },
+        flaky,
+    );
+    let failed = Err("cannot show the notification: no threads".to_owned());
+    for _ in 0..=CLICK_WAITS {
+        assert_eq!(notify("t", "b", Box::new(|| {})), failed);
+    }
+    NO_THREADS.store(false, SeqCst);
+    assert_eq!(notify("t", "b", Box::new(|| {})), Ok(()));
+    assert_eq!(asked.recv_timeout(WAIT), Ok(true), "no wait was kept");
 }

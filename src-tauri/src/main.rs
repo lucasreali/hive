@@ -181,8 +181,8 @@ fn notifier(
     }
 }
 
-/// macOS notifications as the app's bundle (13.5); `send` waits for the click or the dismissal,
-/// so each runs on a thread of its own. Silent: Hive plays its own tone.
+/// macOS notifications as the app's bundle (13.5), silent (Hive plays its own tone); `send`
+/// blocks until the click or the dismissal, so `waiting_notifier` runs each on a thread.
 #[cfg(target_os = "macos")]
 fn notifier(
     app: &tauri::App,
@@ -193,23 +193,15 @@ fn notifier(
     if let Err(error) = mac_notification_sys::set_application(id) {
         eprintln!("hive-app: notifications cannot show as {id}: {error}");
     }
-    |title: &str, body: &str, click: hive_lib::Click| {
-        let (title, body) = (title.to_owned(), body.to_owned());
-        // ponytail: one blocked thread per notification until it is clicked or dismissed.
-        std::thread::spawn(move || {
-            let sent = Notification::new()
-                .title(&title)
-                .message(&body)
-                .wait_for_click(true)
-                .send();
-            match sent {
-                Ok(NotificationResponse::Click) => click(),
-                Ok(_) => {}
-                Err(error) => eprintln!("hive-app: notification failed: {error}"),
-            }
-        });
-        Ok(())
-    }
+    hive_lib::waiting_notifier(|title: &str, body: &str, wait: bool| {
+        let sent = Notification::new()
+            .title(title)
+            .message(body)
+            .wait_for_click(wait)
+            .send();
+        sent.map(|response| response == NotificationResponse::Click)
+            .map_err(|error| error.to_string())
+    })
 }
 
 /// Linux (development only): the notification plugin's, which reports no click.
