@@ -243,6 +243,14 @@ Created 2026-09-29 at the human's request. Tasks come only from the human, added
 
 ---
 
+## Stage 14 — Next release
+
+Created 2026-10-03 at the human's request. Tasks come only from the human, added here as they are asked for. Run with `/stage 14`.
+
+- [ ] **14.1 A project folder that holds other projects.** Human request 2026-10-03: one more level of indentation in the sidebar. Work that is an API and a front end in two repositories lives under one folder; the human wants one project with the two inside it. **Changes #22** (the hierarchy becomes Group → Project → Worktree → Agent, inside a space, #48; the human updates `docs/hive.md`). Human answers 2026-10-03: (a) **the group is a folder on disk**, not a name: adding a folder that is not a git repository (`projects.rs` refuses it today: "… is not in a git repository with a working tree") makes it a group, and the git repositories inside it become its projects, indented under it; a repository that later appears in or leaves the folder joins or leaves the group on its own (the file watcher, not a manual refresh). (b) **The group row has its own terminals and chats**, opened in the group folder, so one Claude can work on the API and the front end together; an agent running there shows under the group row, and each repository's agents stay under their own project. The group has no worktrees (it is not a repository); its state and pending count propagate from its own agents and from its projects, as a collapsed project does (hive.md list item 4). Defaults (pending human review): only the folder's direct children are searched for repositories; a folder with no repository inside is refused as before; a repository already followed elsewhere in the space moves into the group; removing the group stops following the group and its projects (nothing on disk is touched); session history (4.11) and the untrusted-folder confirmation (#46) treat the group folder like a project; the group's scripts and ports (#49) are out of scope until asked. Tests: adding a folder with two repositories gives a group with two projects; a repository created or removed in the folder is added or dropped; a terminal opened on the group runs in its folder and its agent shows under the group; the group's propagated state and pending count; the old `projects.json`/spaces file still loads unchanged.
+
+---
+
 ## Not now (Fase 2)
 
 Kanban screen, rich interactions (permissions and choices answered in the app), live edit view, session history. Do not build any of it during v1.
