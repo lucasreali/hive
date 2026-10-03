@@ -424,6 +424,67 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
 }
 
 #[tokio::test]
+async fn a_remote_base_is_fetched_as_the_space_and_never_prompts() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = fake_gh(&repo);
+    let fish = repo.env.path("config/fish");
+    std::fs::create_dir_all(&fish).unwrap();
+    let config = format!("set -gx PATH '{}' $PATH\n", fake.display());
+    std::fs::write(fish.join("config.fish"), config).unwrap();
+    // The remote answers through a fake ssh that logs what git gave it, then fails.
+    let log = repo.env.path("ssh.log");
+    let ssh = repo.env.path("ssh");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$GH_TOKEN\" \"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\" \"$WSLENV\" >> '{}'\necho 'ssh: no network here' >&2\nexit 255\n",
+        log.display()
+    );
+    std::fs::write(&ssh, script).unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&ssh, mode).unwrap();
+    repo.git(&["remote", "add", "origin", "ssh://example.invalid/x.git"]);
+    repo.git(&["config", "core.sshCommand", ssh.to_str().unwrap()]);
+    repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    // Under WSL a Windows credential helper sees only what `WSLENV` lists.
+    let mut hive = repo.env.hive();
+    hive.env("WSLENV", "WT_SESSION");
+    let mut daemon = repo.env.daemon_with(&mut hive);
+    let mut app = repo.env.connect(Role::App).await;
+    let work = Control::UpdateSpace {
+        id: "default".into(),
+        name: "Work".into(),
+        env: SpaceEnv {
+            gh_account: Some(gh_account("octo-work")),
+            ..SpaceEnv::default()
+        },
+    };
+    ask(&mut app, work).await;
+    let add = Control::AddProject { path: root.clone() };
+    ask(&mut app, add).await;
+    app.control().await;
+
+    let create = Control::CreateWorktree {
+        project: root.clone(),
+        name: "fetched".into(),
+        base: Some("origin/main".into()),
+    };
+    app.send(0, create).await;
+    let Control::WorktreeCreated { path, notes, .. } = app.control().await.1 else {
+        panic!("expected a new worktree")
+    };
+    assert_eq!(path, format!("{root}/.claude/worktrees/fetched"));
+    assert_eq!(
+        notes,
+        ["could not fetch origin/main: ssh: no network here; created from the last fetched copy"]
+    );
+    let log = std::fs::read_to_string(log).unwrap();
+    let quiet = "GIT_TERMINAL_PROMPT:GCM_INTERACTIVE";
+    assert_eq!(log, format!("tok-octo-work|0|never|WT_SESSION:{quiet}\n"));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn without_gh_the_accounts_say_so() {
     let repo = Repo::new();
     let empty = repo.env.path("no-programs");

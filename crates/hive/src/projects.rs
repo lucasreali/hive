@@ -235,6 +235,11 @@ impl Projects {
         worktree::check_name(&self.root(id)?, name).map(drop)
     }
 
+    /// [`worktree::fetch_base`] in the followed project `id`; none in another folder.
+    pub fn fetch_base(&self, id: &str, base: &str, env: &[(&str, String)]) -> Option<String> {
+        worktree::fetch_base(&self.root(id).ok()?, base, env)
+    }
+
     /// `hive worktree create` in the followed project `id`; answers the project with its
     /// updated worktrees.
     pub fn create_worktree(

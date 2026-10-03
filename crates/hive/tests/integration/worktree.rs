@@ -235,6 +235,49 @@ fn base_can_be_a_local_or_remote_branch() {
 }
 
 #[test]
+fn a_remote_base_is_fetched_first() {
+    let repo = Repo::new();
+    let origin = repo.env.path("home/origin.git");
+    repo.git(&["init", "-q", "--bare", origin.to_str().unwrap()]);
+    repo.git(&["remote", "add", "origin", origin.to_str().unwrap()]);
+    let old = repo.git(&["rev-parse", "main"]);
+    repo.git(&["push", "-q", "origin", "main", "main:feature/x"]);
+    // Pushed after the clone's last fetch: its remote-tracking branches still show `old`.
+    repo.commit("newer", "on the remote");
+    let new = repo.git(&["rev-parse", "main"]);
+    repo.git(&["push", "-q", "origin", "main", "main:feature/x"]);
+    let stale = |branch: &str| repo.git(&["update-ref", &format!("refs/remotes/{branch}"), &old]);
+    stale("origin/main");
+    stale("origin/feature/x");
+
+    // A local base fetches nothing.
+    let local = repo.hive(&["create", "local", "--base", "main"]);
+    assert_eq!(stderr(&local), "");
+    assert_eq!(repo.git(&["rev-parse", "origin/main"]), old);
+
+    let fetched = repo.hive(&["create", "fetched", "--base", "origin/feature/x"]);
+    assert!(fetched.status.success(), "{}", stderr(&fetched));
+    assert_eq!(stderr(&fetched), "");
+    let head = |name: &str| repo.git_in(&repo.path(name), &["rev-parse", "HEAD"]);
+    assert_eq!(head("fetched"), new);
+    // Only that branch, and no tags.
+    assert_eq!(repo.git(&["rev-parse", "origin/main"]), old);
+
+    // Unreachable: created from the last fetched copy, and said so.
+    std::fs::rename(&origin, repo.env.path("home/moved.git")).unwrap();
+    let offline = repo.hive(&["create", "offline", "--base", "origin/main"]);
+    assert!(offline.status.success(), "{}", stderr(&offline));
+    assert_eq!(
+        stderr(&offline),
+        format!(
+            "hive: could not fetch origin/main: fatal: '{}' does not appear to be a git repository; created from the last fetched copy\n",
+            origin.display()
+        )
+    );
+    assert_eq!(head("offline"), old);
+}
+
+#[test]
 fn invalid_and_existing_names_are_refused() {
     let repo = Repo::new();
     for name in ["Feat", "-x", ".x", "a/b", ""] {

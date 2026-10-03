@@ -337,20 +337,46 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             project,
             name,
             base,
-        }) => state.change_worktrees(move |projects| {
-            match projects.create_worktree(&project, &name, base.as_deref()) {
-                Ok((project, created)) => Control::WorktreeCreated {
-                    project,
-                    path: created.path.to_string_lossy().into_owned(),
-                    notes: created.notes,
-                },
-                Err(err) => Control::CreateWorktreeFailed {
-                    project,
-                    name,
-                    message: err.to_string(),
-                },
-            }
-        }),
+        }) => {
+            let state = state.clone();
+            tokio::spawn(async move {
+                // A remote base is fetched first, outside the turn below, as the project's
+                // space's terminals would: with its identity and its GitHub account's token
+                // (9.30, 13.2).
+                let mut fetched = None;
+                if let Some(base) = &base {
+                    let space = tokio::task::block_in_place(|| state.projects.space_env(&project));
+                    let mut env = crate::spaces::vars(&space);
+                    if space.gh_account.is_some() {
+                        let gh = state.gh().await;
+                        let token = tokio::task::block_in_place(|| gh.vars(&space));
+                        // Without it git asks as the user's own credentials would.
+                        env.extend(token.unwrap_or_default());
+                    }
+                    let fetch = || state.projects.fetch_base(&project, base, &env);
+                    fetched = tokio::task::block_in_place(fetch);
+                }
+                // As `change_worktrees`, in turn with the registry watch.
+                let _turn = state.changing.lock().await;
+                let create = |projects: &crate::projects::Projects| match projects.create_worktree(
+                    &project,
+                    &name,
+                    base.as_deref(),
+                ) {
+                    Ok((project, created)) => Control::WorktreeCreated {
+                        project,
+                        path: created.path.to_string_lossy().into_owned(),
+                        notes: fetched.into_iter().chain(created.notes).collect(),
+                    },
+                    Err(err) => Control::CreateWorktreeFailed {
+                        project,
+                        name,
+                        message: err.to_string(),
+                    },
+                };
+                state.answer(create).await;
+            });
+        }
         Ok(Control::RemoveWorktree { path, force }) => {
             let archiving = state.clone();
             state.change_worktrees(move |projects| {

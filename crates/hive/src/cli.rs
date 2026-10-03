@@ -148,7 +148,11 @@ fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
     let cwd = std::env::current_dir()?;
     match command {
         WorktreeCommand::Create { name, base } => {
-            report(worktree::create(&cwd, &name, base.as_deref())?)
+            // The terminal's own environment is its space's.
+            let fetched = (base.as_deref()).and_then(|base| worktree::fetch_base(&cwd, base, &[]));
+            let mut created = worktree::create(&cwd, &name, base.as_deref())?;
+            created.notes.splice(0..0, fetched);
+            report(created)
         }
         WorktreeCommand::List => worktree::list(&cwd)?
             .iter()
