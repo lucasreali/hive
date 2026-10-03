@@ -17,6 +17,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   diagnostics: { settings_file: true, wrapper: true, claude: true },
   update_ready: { version: true },
   update_failed: { error: true },
+  notification_clicked: { agent: true },
   version_mismatch: {
     protocol: true,
     version: true,
@@ -116,7 +117,13 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
 };
 
 /** Sent by the app's own Rust side, never by the service. */
-const APP_SIDE = ["update_ready", "update_failed", "disconnected", "app_mode"];
+const APP_SIDE = [
+  "update_ready",
+  "update_failed",
+  "notification_clicked",
+  "disconnected",
+  "app_mode",
+];
 
 /** A service message as the UI gets it: the Tauri pump (`src-tauri/src/lib.rs`) adds these. */
 function fromPump(sample: { type: string }) {

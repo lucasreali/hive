@@ -1,10 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
 
 export type WindowAction = "minimize" | "toggleMaximize" | "close";
 
@@ -60,13 +55,6 @@ export function watchFocus(onChange: (focused: boolean) => void): () => void {
     window.removeEventListener("focus", focus);
     window.removeEventListener("blur", blur);
   };
-}
-
-/** An OS notification through Tauri's plugin; nothing outside Tauri (browser, mock transport). */
-export async function showNotification(title: string, body: string): Promise<void> {
-  if (!isTauri()) return;
-  if (!(await isPermissionGranted()) && (await requestPermission()) !== "granted") return;
-  sendNotification({ title, body });
 }
 
 /** Whether Hive runs on macOS, from the WebView's user agent; asked on every call. */

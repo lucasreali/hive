@@ -71,4 +71,5 @@ export const tauriTransport: Transport = {
   getDiagnostics: () => send("get_diagnostics"),
   checkUpdate: () => send("check_update"),
   installUpdate: () => send("install_update"),
+  showNotification: (title, body, agent) => send("show_notification", { title, body, agent }),
 };

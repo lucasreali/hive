@@ -1,6 +1,7 @@
 import type { AgentState, ServiceMessage } from "./protocol";
+import { goToAgent } from "./shortcuts";
 import { addToInbox, type HiveState, spaceOf, useHive } from "./store";
-import { showNotification } from "./window";
+import { transport } from "./transport";
 
 // Presentation of the alerts the service decided (hive.md item 5, 2.4, 13.4, #37): a tone and
 // an inbox item for each `agent_state` with an `alert`, and an OS notification when the service
@@ -87,5 +88,15 @@ export function notify(
     lastTone = now;
     tone(volume);
   }
-  if (message.notify) void showNotification(text.title, text.body);
+  if (message.notify) void transport.showNotification(text.title, text.body, id);
+}
+
+/**
+ * A click on an agent's OS notification (13.5): goes to the agent as an inbox item does,
+ * switching space when needed. One whose agent is gone changes nothing; the app side already
+ * brought the window up.
+ */
+export function goToClicked(id: string): void {
+  const agent = useHive.getState().agents[id];
+  if (agent) goToAgent(agent);
 }

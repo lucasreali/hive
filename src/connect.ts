@@ -1,4 +1,4 @@
-import { notify } from "./notify";
+import { goToClicked, notify } from "./notify";
 import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
 import { openLocated, restore } from "./sessions";
@@ -12,6 +12,7 @@ function onMessage(message: ServiceMessage): void {
   if (message.type === "session_located") void openLocated(message);
   if (message.type === "restore_sessions") void restore(message.sessions);
   if (message.type === "editor_target") void openTarget(message);
+  if (message.type === "notification_clicked") goToClicked(message.agent);
 }
 
 /** Connects to the service, at startup and on "Reconnect", always with the same handler. */

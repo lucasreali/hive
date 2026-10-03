@@ -686,6 +686,8 @@ export function createMockTransport(
     return `in use by ${ids.map(([id]) => `fish (${id})`).join(", ")}: close its terminals first`;
   };
   let sessions = MOCK_SESSIONS;
+  /** The agent of the last OS notification (13.5). */
+  let notified: string | null = null;
   // Kept in memory; the real service checks the ranges and saves them.
   let settings: Settings = DEFAULT_SETTINGS;
   // The typed line stands in for the tool call it is doing.
@@ -894,6 +896,11 @@ export function createMockTransport(
     },
     async installUpdate() {
       later({ type: "update_failed", error: "mock: nothing to install" });
+    },
+    // The browser shows none; `notification-click` typed in a terminal stands in for a click on
+    // the last one.
+    async showNotification(_title, _body, agent) {
+      notified = agent;
     },
     async addProject(path) {
       const repo = MOCK_REPOS.find((p) => p.path === path);
@@ -1131,6 +1138,9 @@ export function createMockTransport(
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
+        if (line === "notification-click" && notified) {
+          later({ type: "notification_clicked", agent: notified });
+        }
         if (line.startsWith("hive badge ")) {
           const text = line.slice(11).trim();
           later({ type: "badge", channel: id, text: text === "--clear" ? "" : text });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { alertText, notify, TONE_GAP_MS } from "./notify";
 import type { AgentState, Alert } from "./protocol";
 import { apply } from "./reduce";
@@ -10,13 +10,14 @@ import {
   initialState,
   useHive,
 } from "./store";
+import { transport } from "./transport";
 import { agentStatus } from "./transport/mock";
 
 const g = globalThis as Record<string, unknown>;
 let tones = 0;
 /** The gain each tone started at. */
 let gains: number[] = [];
-let shown: { title: string; body?: string }[] = [];
+let shown: { title: string; body: string; agent: string }[] = [];
 // Advances past the rate limit between tests; each test moves its own clock from here.
 let clock = 1_000_000;
 
@@ -36,12 +37,11 @@ class FakeAudio {
   });
 }
 
-class FakeNotification {
-  static permission = "granted";
-  constructor(title: string, options: { body?: string }) {
-    shown.push({ title, body: options.body });
-  }
-}
+// The app side shows them (13.5); the test transport would only keep the last agent.
+const show = spyOn(transport, "showNotification").mockImplementation(async (title, body, agent) => {
+  shown.push({ title, body, agent });
+});
+afterAll(() => show.mockRestore());
 
 beforeEach(() => {
   tones = 0;
@@ -49,14 +49,10 @@ beforeEach(() => {
   shown = [];
   clock += 10 * TONE_GAP_MS;
   g.AudioContext = FakeAudio;
-  g.isTauri = true;
-  (window as unknown as Record<string, unknown>).Notification = FakeNotification;
 });
 
 afterEach(() => {
   useHive.setState(initialState, true);
-  delete g.isTauri;
-  delete (window as unknown as Record<string, unknown>).Notification;
 });
 
 const state = (id: string, s: AgentState, alert: Alert | null = null) => ({
@@ -148,12 +144,12 @@ test("every alert the service marks notifies with the agent's name, what happene
   feed("c", "waiting_you", "waiting");
   await settle();
   expect(shown).toEqual([
-    { title: "fix login finished", body: "shop · feat" },
-    { title: "fix login is waiting for permission", body: "shop · feat" },
-    { title: "Claude is waiting for plan approval", body: "shop" },
-    { title: "Claude is waiting for your answer", body: "shop" },
-    { title: "Claude failed", body: "" },
-    { title: "Claude is waiting for you", body: "" },
+    { title: "fix login finished", body: "shop · feat", agent: "a" },
+    { title: "fix login is waiting for permission", body: "shop · feat", agent: "a" },
+    { title: "Claude is waiting for plan approval", body: "shop", agent: "b" },
+    { title: "Claude is waiting for your answer", body: "shop", agent: "b" },
+    { title: "Claude failed", body: "", agent: "c" },
+    { title: "Claude is waiting for you", body: "", agent: "c" },
   ]);
   const message = state("a", "waiting_you", "finished");
   expect(alertText(useHive.getState(), message)).toEqual({

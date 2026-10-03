@@ -198,6 +198,11 @@ export interface Transport {
   checkUpdate(): Promise<void>;
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */
   installUpdate(): Promise<void>;
+  /**
+   * An OS notification about `agent` (13.5), shown by the app side; a click on it brings the
+   * window up and is answered by `notification_clicked`.
+   */
+  showNotification(title: string, body: string, agent: string): Promise<void>;
 }
 
 /**
