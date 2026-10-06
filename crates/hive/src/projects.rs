@@ -1352,7 +1352,12 @@ mod tests {
     fn a_folder_of_repositories_is_a_group_of_them() {
         let tmp = tempfile::tempdir().unwrap();
         let top = canonical(tmp.path()).unwrap();
-        let at = |p: &str| top.join(p).display().to_string();
+        let at = |p: &str| {
+            p.split('/')
+                .fold(top.clone(), |d, n| d.join(n))
+                .display()
+                .to_string()
+        };
         let g = at("g");
         for name in ["api", "web", "loose/deep"] {
             repo(&top.join("g").join(name));
@@ -1452,7 +1457,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let top = canonical(tmp.path()).unwrap();
         let g = top.join("g").display().to_string();
-        repo(&top.join("g/api"));
+        repo(&top.join("g").join("api"));
         let projects = load(&top.join("data"));
         projects.add(&g).unwrap();
         let ids = || {
@@ -1462,16 +1467,16 @@ mod tests {
                 .map(|p| p.id)
                 .collect::<Vec<_>>()
         };
-        let web = top.join("g/web").display().to_string();
-        let api = top.join("g/api").display().to_string();
+        let web = top.join("g").join("web").display().to_string();
+        let api = top.join("g").join("api").display().to_string();
         assert_eq!(ids(), [g.clone(), api.clone()]);
         // Made or removed in its folder: listed or not once forgotten (its folder's watch),
         // with no change to the spaces.
-        repo(&top.join("g/web"));
+        repo(&top.join("g").join("web"));
         assert_eq!(ids(), [g.clone(), api.clone()]);
         projects.forget();
         assert_eq!(ids(), [g.clone(), api.clone(), web.clone()]);
-        std::fs::remove_dir_all(top.join("g/api")).unwrap();
+        std::fs::remove_dir_all(top.join("g").join("api")).unwrap();
         projects.forget();
         assert_eq!(ids(), [g.clone(), web]);
         assert_eq!(projects.spaces().spaces[0].projects, [g.as_str()]);
