@@ -1112,7 +1112,7 @@ function RenderedView({ text }: { text: string }) {
   }, []);
   return (
     <div className="markdown-view hive-scroll">
-      <Markdown text={text} />
+      <Markdown text={text} document />
     </div>
   );
 }
