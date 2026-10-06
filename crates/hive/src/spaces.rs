@@ -108,7 +108,11 @@ impl Spaces {
         let current = &self.current;
         let space = self.spaces.iter_mut().find(|s| s.id == *current);
         if let Some(space) = space.filter(|s| !s.groups.contains(&group)) {
-            space.projects.retain(|p| !inside.contains(p));
+            // Never a group into another (one whose `.git` git refuses is listed in it).
+            let groups = &space.groups;
+            space
+                .projects
+                .retain(|p| !inside.contains(p) || groups.contains(p));
             space.groups.push(group);
         }
         Ok(())
@@ -591,6 +595,12 @@ mod tests {
         spaces.add_group("/other".into(), &[]).unwrap();
         assert_eq!(spaces.spaces[0].projects, ["/g/api", "/other"]);
         assert!(spaces.is_group("/other"));
+        // A group never moves into another, even listed among its repositories.
+        spaces
+            .add_group("/top".into(), &["/other".to_owned()])
+            .unwrap();
+        assert_eq!(spaces.spaces[0].projects, ["/g/api", "/other", "/top"]);
+        assert_eq!(spaces.clone().check(), Ok(spaces.clone()));
         // Removed, it is no group any more.
         spaces.remove("/g").unwrap();
         assert!(!spaces.is_group("/g"));

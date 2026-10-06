@@ -30,6 +30,10 @@ pub struct Projects {
     /// Each project with its worktrees as git last listed them (9.14), until [`Projects::forget`].
     /// One lock per project, held while git lists it (9.20).
     listed: Mutex<HashMap<String, Arc<Mutex<Option<Project>>>>>,
+    /// Each group's repositories as its folder was last read ([`scan`], 14.1), or why it could
+    /// not be, until [`Projects::forget`] (its folder's watch, the health tick): a slow folder
+    /// never slows every list.
+    scanned: Mutex<HashMap<String, Result<Vec<String>, String>>>,
     /// The Claude config folders the file's spaces had before accounts (12.2), with their
     /// space's name, until they are accounts ([`Projects::migrate_accounts`]).
     legacy: Mutex<Vec<(String, String)>>,
@@ -61,6 +65,7 @@ impl Projects {
             file,
             spaces: Mutex::new(spaces),
             listed: Mutex::default(),
+            scanned: Mutex::default(),
             legacy: Mutex::new(accounts),
         }
     }
@@ -115,9 +120,9 @@ impl Projects {
                 entries.push(Entry::Repo(path.clone(), None));
                 continue;
             }
-            let (inside, error) = match scan(Path::new(path)) {
+            let (inside, error) = match self.scanned(path) {
                 Ok(inside) => (inside, None),
-                Err(err) => (Vec::new(), Some(format!("cannot read {path}: {err}"))),
+                Err(error) => (Vec::new(), Some(error)),
             };
             entries.push(Entry::Group(path.clone(), error));
             let inside = inside.into_iter().filter(|id| !taken.contains(id));
@@ -165,6 +170,21 @@ impl Projects {
     /// next request lists them again.
     pub fn forget(&self) {
         (self.listed.lock().unwrap_or_else(PoisonError::into_inner)).clear();
+        (self.scanned.lock().unwrap_or_else(PoisonError::into_inner)).clear();
+    }
+
+    /// The group `path`'s repositories, read from its folder only when not known.
+    fn scanned(&self, path: &str) -> Result<Vec<String>, String> {
+        let known = self.scanned.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(known) = known.get(path) {
+            return known.clone();
+        }
+        // Not held while the folder is read.
+        drop(known);
+        let read = scan(Path::new(path)).map_err(|err| format!("cannot read {path}: {err}"));
+        let mut known = self.scanned.lock().unwrap_or_else(PoisonError::into_inner);
+        known.insert(path.to_owned(), read.clone());
+        read
     }
 
     /// The spaces and the current one, for the app.
@@ -237,6 +257,8 @@ impl Projects {
         if next == *spaces {
             return Ok(());
         }
+        // Never a file the next start would refuse to read.
+        let next = next.check()?;
         save(&self.file, &next)
             .map_err(|err| format!("cannot save {}: {err}", self.file.display()))?;
         *spaces = next;
@@ -1275,6 +1297,14 @@ mod tests {
         assert_eq!(refused, Err(r#"no space "nope""#.to_owned()));
         // A request that changes nothing does not write at all.
         assert_eq!(projects.change_spaces(|s| s.select("default")), Ok(()));
+        // Nor one leaving spaces the next start would refuse.
+        let stray = projects.change_spaces(|s| {
+            s.spaces[0].groups.push("/g".into());
+            Ok(())
+        });
+        let refused = "the group /g is not a project of its space".to_owned();
+        assert_eq!(stray, Err(refused));
+        assert_eq!(*projects.spaces(), Spaces::with(vec![]));
     }
 
     #[test]
@@ -1435,18 +1465,44 @@ mod tests {
         let web = top.join("g/web").display().to_string();
         let api = top.join("g/api").display().to_string();
         assert_eq!(ids(), [g.clone(), api.clone()]);
-        // Made or removed in its folder: listed or not, with no change to the spaces.
+        // Made or removed in its folder: listed or not once forgotten (its folder's watch),
+        // with no change to the spaces.
         repo(&top.join("g/web"));
+        assert_eq!(ids(), [g.clone(), api.clone()]);
+        projects.forget();
         assert_eq!(ids(), [g.clone(), api.clone(), web.clone()]);
         std::fs::remove_dir_all(top.join("g/api")).unwrap();
+        projects.forget();
         assert_eq!(ids(), [g.clone(), web]);
         assert_eq!(projects.spaces().spaces[0].projects, [g.as_str()]);
         // Its folder gone: the group stays, with why.
         std::fs::remove_dir_all(top.join("g")).unwrap();
+        projects.forget();
         let listed = projects.list();
         assert_eq!(listed.len(), 1);
         let error = listed[0].error.as_deref().unwrap_or_default();
         assert!(error.starts_with(&format!("cannot read {g}: ")), "{error}");
+    }
+
+    #[test]
+    fn a_groups_folder_is_read_up_to_its_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..=GROUP_ENTRIES {
+            std::fs::create_dir_all(tmp.path().join(format!("r{i:04}/.git"))).unwrap();
+        }
+        assert_eq!(scan(tmp.path()).unwrap().len(), GROUP_ENTRIES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_repository_whose_name_is_not_utf8_is_skipped() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b"\xff");
+        std::fs::create_dir_all(tmp.path().join(name).join(".git")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("ok/.git")).unwrap();
+        let ok = tmp.path().join("ok").display().to_string();
+        assert_eq!(scan(tmp.path()).unwrap(), [ok]);
     }
 
     #[cfg(unix)]
