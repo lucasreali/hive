@@ -18,6 +18,7 @@ import {
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { expectClearButton } from "../../test/searchClear";
 import type { ChangedFile, Changes, FileText, SearchResults } from "../protocol";
 import { apply } from "../reduce";
 import { initialState, select, setOpenFile, setPanelView, setRightPanel, useHive } from "../store";
@@ -757,6 +758,12 @@ function filesView() {
 
 const find = (value: string) =>
   fireEvent.change(screen.getByRole("searchbox", { name: "Find files" }), { target: { value } });
+
+test("Find files has the app's clear button, which brings the tree back", () => {
+  filesView();
+  expectClearButton("Find files");
+  expect(screen.getByRole("tree")).toBeDefined();
+});
 
 test("Names lists the files whose path holds the text; one opens as the tree opens it", () => {
   filesView();

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { version } from "../../package.json";
+import { expectClearButton } from "../../test/searchClear";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { COMMANDS } from "../shortcuts";
@@ -41,6 +42,12 @@ const search = (value: string) =>
 const settings = () => useHive.getState().settings;
 const labels = () =>
   [...document.querySelectorAll(".settings-body .field")].map((f) => f.textContent);
+
+test("Search settings has the app's clear button, which brings the section back", () => {
+  open();
+  expectClearButton("Search settings");
+  expect(input("Font size").value).toBe("13");
+});
 
 test("Ctrl+, opens it on the terminal section, focused on the search; Esc and Close close it", () => {
   const dialog = open();
