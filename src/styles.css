@@ -49,6 +49,7 @@
   --text-3: #878a98;
   --text-4: #5d636f; /* separators, line numbers, kbd borders */
   --close-hover: #c42b1c;
+  --active-line: rgba(255, 255, 255, 0.04); /* the editor's cursor line, over its selection */
 
   --state-permission: #dec184;
   --state-error: #d07277;
@@ -63,6 +64,16 @@
   --git-added: #a1c181;
   --git-deleted: #d07277;
   --git-renamed: #74ade8;
+
+  /* code in the Markdown preview (14.6): the editor's One Dark groups */
+  --syn-keyword: #c678dd;
+  --syn-name: #e06c75;
+  --syn-function: #61afef;
+  --syn-constant: #d19a66;
+  --syn-type: #e5c07b;
+  --syn-operator: #56b6c2;
+  --syn-comment: #7f848e;
+  --syn-string: #98c379;
 
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
@@ -103,6 +114,7 @@
   --text-2: #58585a;
   --text-3: #7e8086;
   --text-4: #b4b4bb;
+  --active-line: rgba(0, 0, 0, 0.04);
 
   --state-permission: #a48819;
   --state-error: #d36151;
@@ -116,6 +128,15 @@
   --git-added: #669f59;
   --git-deleted: #d36151;
   --git-renamed: #5c78e2;
+
+  --syn-keyword: #a626a4;
+  --syn-name: #e45649;
+  --syn-function: #4078f2;
+  --syn-constant: #986801;
+  --syn-type: #c18401;
+  --syn-operator: #0184bc;
+  --syn-comment: #a0a1a7;
+  --syn-string: #50a14f;
 
   color-scheme: light;
 }
@@ -1838,23 +1859,6 @@ button.chevron:hover {
   border-right: 1px solid var(--border-subtle);
 }
 
-.settings-nav input {
-  height: 28px;
-  margin-bottom: 8px;
-  padding: 0 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--fs-small);
-  outline: none;
-}
-
-.settings-nav input:focus {
-  border-color: var(--focus);
-}
-
 .settings-section {
   display: flex;
   align-items: center;
@@ -2500,7 +2504,31 @@ button.chevron:hover {
   border: none;
   outline: none;
   color: var(--text);
+  font-family: inherit;
   font-size: var(--fs-small);
+}
+
+/* 14.5: the WebView's own clear button is blue; `SearchField` draws the app's instead. */
+.files-search-field input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.settings-nav .files-search-field {
+  flex: none;
+  margin-bottom: 8px;
+}
+
+.search-clear {
+  flex: none;
+  display: inline-flex;
+  padding: 0;
+  border-radius: var(--radius);
+  color: var(--text-3);
+}
+
+.search-clear:hover {
+  color: var(--text);
 }
 
 .files-search .segmented {
@@ -3397,4 +3425,153 @@ button.link:hover {
   min-height: 0;
   overflow: auto;
   padding: 12px 16px;
+  container-type: inline-size;
+}
+
+/* The preview's document style (14.6): the editor's density and code look (VS Code's and Zed's
+   previews), tables with horizontal rules only. A pull request's text keeps `.markdown`. */
+.markdown-doc {
+  max-width: 900px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.markdown-doc :is(p, ul, ol, pre, blockquote, .md-table) {
+  margin: 0 0 12px;
+}
+
+.markdown-doc :is(h1, h2, h3, h4, h5, h6) {
+  margin: 22px 0 8px;
+  line-height: 1.35;
+}
+
+.markdown-doc h1 {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 20px;
+}
+
+.markdown-doc h2 {
+  font-size: 16px;
+}
+
+.markdown-doc h3 {
+  font-size: 14px;
+}
+
+.markdown-doc :is(h4, h5, h6) {
+  color: var(--text-2);
+}
+
+.markdown-doc li:not(:first-child) {
+  margin-top: 2px;
+}
+
+.markdown-doc li::marker {
+  color: var(--text-3);
+}
+
+.markdown-doc .contains-task-list {
+  padding-left: 4px;
+  list-style: none;
+}
+
+/* A list inside a task starts under its text, past the checkbox. */
+.markdown-doc .task-list-item :is(ul, ol) {
+  padding-left: 42px;
+}
+
+.markdown-doc .task-list-item input {
+  margin: 0 8px 0 0;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+}
+
+/* An image is never loaded: its alt text, as a chip. */
+.markdown-doc .md-img {
+  padding: 1px 6px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.markdown-doc blockquote {
+  padding: 2px 12px;
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--panel) 50%, transparent);
+}
+
+.markdown-doc hr {
+  margin: 20px 0;
+}
+
+.markdown-doc :not(pre) > code {
+  padding: 1px 4px;
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-code);
+  font-size: 12px;
+}
+
+.markdown-doc pre {
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.markdown-doc table {
+  width: 100%;
+}
+
+.markdown-doc :is(th, td) {
+  padding: 6px 10px;
+  border-width: 0 0 1px;
+  border-color: var(--border-subtle);
+  vertical-align: top;
+  text-align: left;
+}
+
+.markdown-doc th {
+  border-color: var(--border);
+  background: none;
+}
+
+/* A first column (usually the keys) is not squeezed to a letter a line by a long one beside
+   it, yet never takes more than a third of the view (13.1). */
+.markdown-doc :is(th, td):first-child {
+  min-width: min(9em, 33cqi);
+}
+
+.markdown-doc .tok-keyword {
+  color: var(--syn-keyword);
+}
+
+.markdown-doc .tok-name {
+  color: var(--syn-name);
+}
+
+.markdown-doc .tok-function {
+  color: var(--syn-function);
+}
+
+.markdown-doc .tok-constant {
+  color: var(--syn-constant);
+}
+
+.markdown-doc .tok-type {
+  color: var(--syn-type);
+}
+
+.markdown-doc .tok-operator {
+  color: var(--syn-operator);
+}
+
+.markdown-doc .tok-comment {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.markdown-doc .tok-string {
+  color: var(--syn-string);
 }

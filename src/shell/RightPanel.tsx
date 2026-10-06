@@ -66,6 +66,7 @@ import { Markdown } from "./Markdown";
 import { PullsView } from "./PullsView";
 import { RunsView } from "./RunsView";
 import { ResizeHandle } from "./resize";
+import { SearchField } from "./SearchField";
 import { SessionsView } from "./SessionsView";
 
 /**
@@ -377,18 +378,16 @@ export function FilesView({ worktree }: { worktree: string }) {
   return (
     <>
       <div className="files-search">
-        <label className="files-search-field">
+        <SearchField
+          aria-label="Find files"
+          placeholder={mode === "names" ? "Find files" : "Search in files"}
+          value={query}
+          onChange={setQuery}
+          spellCheck={false}
+          autoComplete="off"
+        >
           <MagnifyingGlassIcon size={14} aria-hidden="true" />
-          <input
-            type="search"
-            aria-label="Find files"
-            placeholder={mode === "names" ? "Find files" : "Search in files"}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </label>
+        </SearchField>
         <fieldset className="segmented" aria-label="Search in">
           {tab("names", "Names")}
           {tab("contents", "Contents")}
@@ -1112,7 +1111,7 @@ function RenderedView({ text }: { text: string }) {
   }, []);
   return (
     <div className="markdown-view hive-scroll">
-      <Markdown text={text} />
+      <Markdown text={text} document />
     </div>
   );
 }

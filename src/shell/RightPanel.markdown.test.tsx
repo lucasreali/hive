@@ -82,7 +82,7 @@ test("the eye button shows only for Markdown files and switches the tab to rende
   expect(shown.querySelector("h1")?.textContent).toBe("Title");
   expect(shown.querySelector("li")?.textContent).toBe("one");
   expect([...shown.querySelectorAll("td")].map((c) => c.textContent)).toEqual(["1", "2"]);
-  expect(shown.querySelector("pre code")?.textContent).toBe("code\n");
+  expect(shown.querySelector("pre code")?.textContent).toBe("code");
   // Sanitised as #43: only http(s)/mailto links, raw HTML as text, no image loaded.
   expect([...shown.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
     "https://x.dev",

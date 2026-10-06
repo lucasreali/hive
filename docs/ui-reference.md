@@ -28,6 +28,7 @@ The tokens live as CSS custom properties in `src/styles.css`.
 | `--text-2` | `#A9AFBC` | Secondary text ("Secundário") |
 | `--text-3` | `#878A98` | Tertiary text ("Terciário") |
 | `--text-4` | `#5D636F` | Breadcrumb separators, diff line numbers, kbd borders |
+| `--active-line` | `rgba(255,255,255,0.04)` | The editor's cursor line and its line number (14.3, the number in `--text`); translucent so a selection under it still shows. One Light: `rgba(0,0,0,0.04)` |
 | `--close-hover` | `#C42B1C` | Window close button hover (text `#FFFFFF`) |
 
 Other values seen: canvas behind the prototype `#1B1E23` (not used in the app), disabled primary button `#3E4A5C` with `--text-3` text, dialog backdrop `rgba(18,20,24,0.55)`, dialog shadow `0 16px 40px rgba(0,0,0,0.45)`, picker shadow `0 12px 32px rgba(0,0,0,0.4)`, pending chip `rgba(222,193,132,0.10)` background (`0.18` hover) and `0.28` border, sidebar resize hover `rgba(71,103,158,0.6)`.
@@ -45,6 +46,8 @@ Other values seen: canvas behind the prototype `#1B1E23` (not used in the app), 
 | `--state-ended` | `#878A98` | `StopCircleIcon` | none |
 
 Git status colors in the files panel: modified `#DEC184`, added `#A1C181`, deleted `#D07277` (strikethrough). Diff backgrounds: added `rgba(161,193,129,0.12)`, removed `rgba(208,114,119,0.12)`, hunk header `rgba(116,173,232,0.08)` with `#74ADE8` text.
+
+Code in the Markdown preview (14.6): `--syn-keyword`, `--syn-name`, `--syn-function`, `--syn-constant`, `--syn-type`, `--syn-operator`, `--syn-comment`, `--syn-string`, the editor's One Dark groups (`#C678DD`, `#E06C75`, `#61AFEF`, `#D19A66`, `#E5C07B`, `#56B6C2`, `#7F848E`, `#98C379`); One Light uses Atom One Light's.
 
 ### Typography
 
