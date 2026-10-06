@@ -146,7 +146,7 @@ impl Projects {
     /// as the repository `id` alone.
     fn project(&self, id: &str) -> Project {
         let entry = self.entries(&self.all()).into_iter().find(|e| e.id() == id);
-        self.build(entry.unwrap_or_else(|| Entry::Repo(id.to_owned(), None)))
+        self.build(entry.unwrap_or(Entry::Repo(id.to_owned(), None)))
     }
 
     /// Whether the followed project `id` is a group (14.1).
