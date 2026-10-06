@@ -157,7 +157,12 @@ test("the reducer takes every sample, and a type it does not know changes nothin
   const s = useHive.getState();
   expect(s.connection.status).toBe("version_mismatch");
   expect(Object.keys(s.projects ?? {})).toEqual(["/r"]);
-  expect(s.worktreeFiles).toMatchObject({ path: "/r", files: ["a.rs"], ignored: [".env", "target/"], truncated: false });
+  expect(s.worktreeFiles).toMatchObject({
+    path: "/r",
+    files: ["a.rs"],
+    ignored: [".env", "target/"],
+    truncated: false,
+  });
   apply({ type: "from_a_newer_service" } as unknown as ServiceMessage);
   expect(useHive.getState()).toEqual(s);
 });
