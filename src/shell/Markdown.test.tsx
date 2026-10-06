@@ -1,6 +1,8 @@
-import { afterEach, expect, mock, test } from "bun:test";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { LanguageDescription } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 import { notice } from "../../test/notice";
 import { initialState, useHive } from "../store";
@@ -133,7 +135,6 @@ test("the same text is not parsed again; a new text is", () => {
 
 // 14.6: a file's preview is a document, its fenced code coloured by the editor's parsers.
 const doc = (text: string) => render(<Markdown text={text} document />).container;
-const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 test("a file's preview colours a fenced block by its language, without the closing newline", async () => {
   const view = doc('```ts\nexport function f(x: number) {\n  return "a" + 1; // b\n}\n```');
@@ -155,9 +156,13 @@ test("a file's preview colours a fenced block by its language, without the closi
   expect(code.textContent).toBe('export function f(x: number) {\n  return "a" + 1; // b\n}');
 });
 
-test("a file's preview leaves inline code, an unknown language and no language plain", async () => {
+test("a file's preview leaves inline code, an unknown language and no language plain", () => {
+  const lookup = spyOn(LanguageDescription, "matchLanguageName");
   const view = doc("`let x`\n\n```nolang\nlet y\n```\n\n```\nlet z\n```");
-  await settle();
+  // Only the fenced block with a language is looked up, and nothing is found: nothing loads.
+  expect(lookup.mock.calls).toEqual([[languages, "nolang", true]]);
+  expect(lookup.mock.results.map((r) => r.value)).toEqual([null]);
+  lookup.mockRestore();
   expect(view.querySelector("p code")?.textContent).toBe("let x");
   const blocks = [...view.querySelectorAll("pre > code")];
   expect(blocks.map((c) => [c.className, c.textContent])).toEqual([
@@ -167,9 +172,27 @@ test("a file's preview leaves inline code, an unknown language and no language p
   expect(view.querySelector("span")).toBeNull();
 });
 
-test("a pull request's text is not a document: its code stays plain", async () => {
+test("a block whose parser fails to load stays plain", async () => {
+  const ts = LanguageDescription.matchLanguageName(languages, "ts", true) as LanguageDescription;
+  const failed = Promise.reject(new Error("chunk failed"));
+  const load = spyOn(ts, "load").mockReturnValue(failed);
+  const view = doc("```ts\nexport const a = 1;\n```");
+  expect(load).toHaveBeenCalledTimes(1);
+  // The rejection is caught (an unhandled one fails the run); the block keeps its text.
+  await act(async () => {
+    await failed.catch(() => {});
+  });
+  load.mockRestore();
+  expect(view.querySelector("pre > code")?.textContent).toBe("export const a = 1;");
+  expect(view.querySelector("pre span")).toBeNull();
+});
+
+test("a pull request's text is not a document: its code stays plain", () => {
+  const lookup = spyOn(LanguageDescription, "matchLanguageName");
   const view = md("```ts\nexport const a = 1;\n```");
-  await settle();
+  // No language is looked up, so nothing can colour it later.
+  expect(lookup).not.toHaveBeenCalled();
+  lookup.mockRestore();
   expect(view.querySelector(".markdown")?.classList).not.toContain("markdown-doc");
   expect(view.querySelector("pre > code")?.textContent).toBe("export const a = 1;\n");
   expect(view.querySelector("pre span")).toBeNull();

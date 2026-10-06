@@ -51,7 +51,8 @@ const HIGHLIGHTER = tagHighlighter([
 
 /**
  * A fenced block's code coloured by the editor's own parsers (`tok-*` classes, coloured by the
- * theme's tokens in styles.css); plain until its language loads, and plain for an unknown one.
+ * theme's tokens in styles.css); plain until its language loads, and plain for an unknown one
+ * or one whose parser fails to load.
  */
 function Code({ lang, text }: { lang: string; text: string }) {
   const [nodes, setNodes] = useState<ReactNode[] | null>(null);
@@ -78,7 +79,9 @@ function Code({ lang, text }: { lang: string; text: string }) {
           () => out.push("\n"),
         );
         if (live) setNodes(out);
-      });
+      })
+      // A parser that fails to load leaves the block plain: the code still reads.
+      .catch(() => {});
     return () => {
       live = false;
     };
