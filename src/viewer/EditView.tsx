@@ -63,6 +63,11 @@ export function EditView({ edit }: { edit: EditBuffer }) {
     revealLine(view, goto.line);
     clearGotoLine();
   }, [goto, path, edit.worktree]);
+  // The base text the service sent with the file (`HEAD` or the merge-base), for the markers.
+  const base = useHive((s) =>
+    s.file?.worktree === edit.worktree && s.file.path === path ? s.file.base : null,
+  );
+  useEffect(() => editor.current?.setBase(base), [base]);
   const original = comparing && conflict ? (conflict.content ?? "") : null;
   useEffect(() => editor.current?.compare(original), [original]);
   const choose = (keepMine: boolean) => {
