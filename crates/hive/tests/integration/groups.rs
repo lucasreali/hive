@@ -39,6 +39,7 @@ async fn a_group_follows_its_folder_and_holds_its_own_agents() {
     };
     let (api, web) = (init("api"), init("web"));
     std::fs::create_dir(work.join("docs")).unwrap();
+    std::fs::create_dir(work.join("scratch")).unwrap();
     let g = work.display().to_string();
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
@@ -59,6 +60,13 @@ async fn a_group_follows_its_folder_and_holds_its_own_agents() {
     let tools = init("tools");
     assert_eq!(listed(&mut app).await, inside(&[&api, &tools, &web]));
     std::fs::remove_dir_all(&tools).unwrap();
+    assert_eq!(listed(&mut app).await, inside(&[&api, &web]));
+    // So does a folder already there that becomes a repository, or stops being one.
+    let scratch = work.join("scratch");
+    repo.git_in(&scratch, &["init", "-q", "-b", "main"]);
+    let scratch = scratch.display().to_string();
+    assert_eq!(listed(&mut app).await, inside(&[&api, &scratch, &web]));
+    std::fs::remove_dir_all(work.join("scratch/.git")).unwrap();
     assert_eq!(listed(&mut app).await, inside(&[&api, &web]));
 
     // A terminal opened on the group runs in its folder; its agent shows under the group.

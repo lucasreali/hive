@@ -22,7 +22,7 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 /// Most processes named when a worktree is in use.
 const BUSY_SHOWN: usize = 5;
 /// Most entries of a group's folder read for its repositories (14.1).
-const GROUP_ENTRIES: usize = 1024;
+pub const GROUP_ENTRIES: usize = 1024;
 
 pub struct Projects {
     file: PathBuf,
@@ -1498,7 +1498,8 @@ mod tests {
         assert_eq!(scan(tmp.path()).unwrap().len(), GROUP_ENTRIES);
     }
 
-    #[cfg(unix)]
+    // macOS refuses a name that is not UTF-8.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_repository_whose_name_is_not_utf8_is_skipped() {
         use std::os::unix::ffi::OsStrExt;
