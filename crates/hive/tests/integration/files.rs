@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use hive_protocol::{Control, DiffBase, Role};
 
-use crate::common::Conn;
+use crate::common::{Conn, stop};
 use crate::worktree::Repo;
 
 /// Longer than the debounce and a re-list: whatever a change triggers has been sent by then.
@@ -15,19 +15,116 @@ async fn watch(conn: &mut Conn, path: &str, base: DiffBase) {
 
 /// The next control messages, which must be `files` for `path` and then its `changes`.
 async fn files(conn: &mut Conn, path: &str) -> Vec<String> {
-    let files = match conn.control().await {
+    listing(conn, path).await.0
+}
+
+/// The next control messages, which must be `files` for `path` and then its `changes`: its
+/// files and ignored entries.
+async fn listing(conn: &mut Conn, path: &str) -> (Vec<String>, Vec<String>) {
+    let listing = match conn.control().await {
         (
             0,
             Control::Files {
                 path: got,
                 files,
+                ignored,
                 truncated: false,
             },
-        ) if got == path => files,
+        ) if got == path => (files, ignored),
         other => panic!("{other:?}"),
     };
     changed(conn, path).await;
-    files
+    listing
+}
+
+async fn expand(conn: &mut Conn, path: &str, folders: &[&str]) {
+    let path = path.to_owned();
+    let folders = folders.iter().map(|f| (*f).to_owned()).collect();
+    conn.send(0, Control::ExpandIgnored { path, folders }).await;
+}
+
+/// Nothing arrives for a while.
+async fn quiet(conn: &mut Conn) {
+    let quiet = tokio::time::timeout(SETTLE, conn.control()).await;
+    assert!(quiet.is_err(), "{quiet:?}");
+}
+
+#[tokio::test]
+async fn ignored_entries_show_and_an_open_ignored_folder_is_listed_and_watched() {
+    let repo = Repo::new();
+    repo.write(".gitignore", ".env\nnode_modules/\n");
+    repo.write(".env", "KEY=1\n");
+    repo.write("node_modules/pkg/index.js", "");
+    let root = repo.root.display().to_string();
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    conn.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        conn.control().await.1,
+        Control::ProjectAdded { .. }
+    ));
+    watch(&mut conn, &root, DiffBase::Head).await;
+    let (files, ignored) = listing(&mut conn, &root).await;
+    assert_eq!(files, [".gitignore", "README"]);
+    assert_eq!(ignored, [".env", "node_modules/"]);
+    // Closed, the folder is not watched.
+    repo.write("node_modules/top.js", "");
+    quiet(&mut conn).await;
+    // Another worktree's folders change nothing.
+    expand(&mut conn, "/elsewhere", &["node_modules"]).await;
+    quiet(&mut conn).await;
+
+    // Opened, one level of it is listed, and watched.
+    expand(&mut conn, &root, &["node_modules"]).await;
+    let level = [
+        ".env",
+        "node_modules/",
+        "node_modules/pkg/",
+        "node_modules/top.js",
+    ];
+    assert_eq!(listing(&mut conn, &root).await.1, level);
+    repo.write("node_modules/new.js", "");
+    let (_, ignored) = listing(&mut conn, &root).await;
+    assert!(
+        ignored.contains(&"node_modules/new.js".to_owned()),
+        "{ignored:?}"
+    );
+    // Closed again, its watch goes.
+    expand(&mut conn, &root, &[]).await;
+    assert_eq!(listing(&mut conn, &root).await.1, [".env", "node_modules/"]);
+    repo.write("node_modules/later.js", "");
+    quiet(&mut conn).await;
+
+    // An ignored file opens and saves as any other.
+    conn.send(0, Control::UnwatchWorktree).await;
+    let open = Control::OpenFile {
+        worktree: root.clone(),
+        path: ".env".into(),
+        base: DiffBase::Head,
+    };
+    conn.send(0, open).await;
+    let version = match conn.control().await.1 {
+        Control::File {
+            content, version, ..
+        } => {
+            assert_eq!(content.as_deref(), Some("KEY=1\n"));
+            version
+        }
+        other => panic!("{other:?}"),
+    };
+    let save = Control::SaveFile {
+        worktree: root.clone(),
+        path: ".env".into(),
+        content: "KEY=2\n".into(),
+        version,
+    };
+    conn.send(0, save).await;
+    assert!(matches!(conn.control().await.1, Control::FileSaved { .. }));
+    let saved = std::fs::read_to_string(repo.root.join(".env")).unwrap();
+    assert_eq!(saved, "KEY=2\n");
+    drop(conn);
+    stop(daemon);
 }
 
 /// The next control message, which must be `changes` for `path`: the changed paths.

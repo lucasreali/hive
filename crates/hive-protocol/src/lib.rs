@@ -607,8 +607,19 @@ pub enum Control {
     Files {
         path: String,
         files: Vec<String>,
+        /// What git ignores, sorted, apart from `files`: files, and folders as `dir/` (shown
+        /// closed), with one level of what each folder in `ExpandIgnored` holds.
+        ignored: Vec<String>,
         /// The list stopped at the service's cap.
         truncated: bool,
+    },
+    /// App → service: the ignored folders open in the files tree of the watched worktree
+    /// `path` (relative, no trailing `/`), replacing the last ones sent. While a folder is one
+    /// that `Files` lists in `ignored`, what it holds is listed (one level) and watched; a
+    /// closed folder costs nothing. Answered by `Files` when the list changes.
+    ExpandIgnored {
+        path: String,
+        folders: Vec<String>,
     },
     /// App → service: what changed in a worktree of a followed project, answered by
     /// `Changes`.
@@ -2016,12 +2027,22 @@ mod tests {
         let files = Control::Files {
             path: "/r".into(),
             files: vec!["a/b.rs".into()],
+            ignored: vec![".env".into(), "target/".into()],
             truncated: false,
         };
         assert_eq!(
             &Frame::control(0, &files).payload[..],
-            br#"{"type":"files","path":"/r","files":["a/b.rs"],"truncated":false}"#
+            br#"{"type":"files","path":"/r","files":["a/b.rs"],"ignored":[".env","target/"],"truncated":false}"#
         );
+        let expand = Control::ExpandIgnored {
+            path: "/r".into(),
+            folders: vec!["target".into()],
+        };
+        assert_eq!(
+            &Frame::control(0, &expand).payload[..],
+            br#"{"type":"expand_ignored","path":"/r","folders":["target"]}"#
+        );
+        assert_eq!(Frame::control(0, &expand).to_control().unwrap(), expand);
         let watch = Control::WatchWorktree {
             path: "/r".into(),
             base: DiffBase::Branch,

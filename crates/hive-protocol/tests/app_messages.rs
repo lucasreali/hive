@@ -59,6 +59,7 @@ sort! {
         | RenameWorktree
         | WatchWorktree
         | UnwatchWorktree
+        | ExpandIgnored
         | View
         | ListChanges
         | ListSessions
@@ -369,6 +370,7 @@ fn samples() -> Vec<Control> {
         Files {
             path: s("/r"),
             files: vec![s("a.rs")],
+            ignored: vec![s(".env"), s("target/")],
             truncated: false,
         },
         Changes {

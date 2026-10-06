@@ -2,10 +2,13 @@
 //! crate (#31): inotify on Linux, FSEvents on macOS.
 //!
 //! What a worktree holds is what git lists: tracked files and untracked ones that are not
-//! ignored, so `node_modules` or `target` never show up. Watches go only on the directories
-//! of those files (plus empty untracked ones) and on the worktree's git dir, where `HEAD` and
-//! `index` change what git reports; ignored trees never cost a watch. Every relevant event
-//! (a queue overflow included) leads, after a short debounce, to a full re-list.
+//! ignored, and apart from them what git ignores (14.2): ignored files, and ignored folders
+//! (`node_modules`, `target`) as one entry each, whose contents are listed one level deep and
+//! watched only while the app has them open. Watches go only on the directories of the listed
+//! files (plus empty untracked ones), on the open ignored folders and on the worktree's git
+//! dir, where `HEAD` and `index` change what git reports; a closed ignored folder never costs
+//! a watch. Every relevant event (a queue overflow included) leads, after a short debounce, to
+//! a full re-list.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -43,38 +46,113 @@ const EVENT_QUEUE: usize = 4096;
 pub struct Listing {
     /// Sorted, `/`-separated, relative to the worktree.
     pub files: Vec<String>,
-    /// The list stopped at `MAX_FILES`, `LIST_BUDGET` or git's output limit.
+    /// What git ignores, sorted: files, and folders as `dir/`, with one level of what each
+    /// open one holds (its folders as `dir/sub/`).
+    pub ignored: Vec<String>,
+    /// The list stopped at `MAX_FILES`, `LIST_BUDGET` or git's output limit; files and
+    /// ignored entries share the caps, files first.
     pub truncated: bool,
+}
+
+/// Room left in one list: entries, and bytes of their JSON strings.
+#[derive(Debug, Clone, Copy)]
+struct Room {
+    entries: usize,
+    bytes: usize,
+}
+
+impl Room {
+    const FULL: Room = Room {
+        entries: MAX_FILES,
+        bytes: LIST_BUDGET,
+    };
+
+    /// The first of `names` while they fit; true when one was left out.
+    fn fill<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) -> (Vec<String>, bool) {
+        let mut kept = Vec::new();
+        for name in names {
+            let cost = serde_json::to_string(name).map_or(usize::MAX, |json| json.len());
+            match (self.entries.checked_sub(1), self.bytes.checked_sub(cost)) {
+                (Some(entries), Some(bytes)) => *self = Room { entries, bytes },
+                _ => return (kept, true),
+            }
+            kept.push(name.to_owned());
+        }
+        (kept, false)
+    }
+}
+
+/// The paths of `git ls-files -z`'s output, sorted, each once (a conflict's stages list one
+/// several times), names that are not UTF-8 skipped. The last piece is dropped: empty after
+/// the last NUL, or partial when the output was cut off.
+fn paths(out: &[u8]) -> Vec<&str> {
+    let mut pieces: Vec<&[u8]> = out.split(|&b| b == 0).collect();
+    pieces.pop();
+    let mut paths: Vec<&str> = pieces
+        .into_iter()
+        .filter_map(|p| std::str::from_utf8(p).ok())
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    paths
 }
 
 /// NUL-terminated paths from `git ls-files -z` → a [`Listing`]. `cut` says git's output was
 /// cut off, so its last path is partial. Names that are not UTF-8 are skipped, and so are
 /// nested repositories (`dir/`); a path listed twice (a conflict's stages) is kept once.
 pub fn parse(out: &[u8], cut: bool) -> Listing {
-    let mut pieces: Vec<&[u8]> = out.split(|&b| b == 0).collect();
-    // Empty after the last NUL, or partial when cut.
-    pieces.pop();
-    let mut files: Vec<&str> = pieces
-        .into_iter()
-        .filter_map(|p| std::str::from_utf8(p).ok())
-        .filter(|p| !p.ends_with('/'))
-        .collect();
-    files.sort_unstable();
-    files.dedup();
-    let mut budget = LIST_BUDGET;
-    let mut kept = Vec::new();
-    for name in files.iter().take(MAX_FILES) {
-        let cost = serde_json::to_string(name).map_or(usize::MAX, |json| json.len());
-        let Some(left) = budget.checked_sub(cost) else {
-            break;
-        };
-        budget = left;
-        kept.push((*name).to_owned());
-    }
+    let mut files = paths(out);
+    files.retain(|p| !p.ends_with('/'));
+    let mut room = Room::FULL;
+    let (files, left_out) = room.fill(files);
     Listing {
-        truncated: cut || kept.len() < files.len(),
-        files: kept,
+        files,
+        ignored: Vec::new(),
+        truncated: cut || left_out,
     }
+}
+
+/// The entries of `git ls-files --others --ignored --exclude-standard --directory -z`: files,
+/// and folders as `dir/` without what they hold (git also names each file of a folder it
+/// lists for holding nothing but ignored files).
+pub fn parse_ignored(out: &[u8]) -> Vec<&str> {
+    let mut folder: Option<&str> = None;
+    let mut entries = paths(out);
+    // Sorted: what a folder holds comes right after it.
+    entries.retain(|entry| {
+        if folder.is_some_and(|folder| entry.starts_with(folder)) {
+            return false;
+        }
+        if entry.ends_with('/') {
+            folder = Some(entry);
+        }
+        true
+    });
+    entries
+}
+
+/// One level of the ignored folder `folder` (relative, no trailing `/`) of `root`: at most
+/// `most` entries, its folders as `folder/name/`, names that are not UTF-8 skipped. Nothing
+/// when it cannot be read, or is no longer a folder.
+fn level(root: &Path, folder: &str, most: usize) -> Vec<String> {
+    let dir = root.join(folder);
+    // Never through a link: one could lead out of the worktree.
+    let real = dir.symlink_metadata().is_ok_and(|meta| meta.is_dir());
+    let Some(entries) = std::fs::read_dir(dir).ok().filter(|_| real) else {
+        return Vec::new();
+    };
+    let entry = |entry: io::Result<std::fs::DirEntry>| {
+        let entry = entry.ok()?;
+        let name = entry.file_name().into_string().ok()?;
+        // A link to a folder is listed as a file: it is never opened as a folder.
+        let slash = if entry.file_type().ok()?.is_dir() {
+            "/"
+        } else {
+            ""
+        };
+        Some(format!("{folder}/{name}{slash}"))
+    };
+    entries.take(most).filter_map(entry).collect()
 }
 
 /// Every directory holding one of `paths`, the worktree itself (`""`) included. A path
@@ -137,6 +215,8 @@ pub struct Watcher {
     git_dir: Option<PathBuf>,
     /// Watched directories, relative to `root`.
     dirs: BTreeSet<String>,
+    /// The ignored folders the app opened, relative to `root`.
+    open: BTreeSet<String>,
 }
 
 impl Watcher {
@@ -163,7 +243,15 @@ impl Watcher {
             events,
             git_dir,
             dirs: BTreeSet::new(),
+            open: BTreeSet::new(),
         })
+    }
+
+    /// The ignored folders the app has open (`/`-separated, relative, no trailing `/`), at
+    /// most `MAX_WATCHES`. [`Watcher::list`] lists and watches one only while it is an ignored
+    /// folder that listing holds, so a folder inside one counts only while that one is open.
+    pub fn open(&mut self, folders: impl IntoIterator<Item = String>) {
+        self.open = folders.into_iter().take(MAX_WATCHES).collect();
     }
 
     /// Lists the worktree and moves the watches to the directories it lists. Blocks on git.
@@ -176,7 +264,38 @@ impl Watcher {
             "-z",
         ];
         let (out, cut) = git(&self.root, &ls, GIT_LIMIT)?;
-        let listing = parse(&out, cut);
+        let mut listing = parse(&out, cut);
+        let ls = [
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ];
+        let (out, cut) = git(&self.root, &ls, GIT_LIMIT)?;
+        let mut ignored: BTreeSet<String> =
+            parse_ignored(&out).into_iter().map(str::to_owned).collect();
+        // Parents first: a folder inside an open one is there once that one was listed.
+        let mut opened = Vec::new();
+        for folder in &self.open {
+            // Enough to fill the list: whatever comes next would be left out.
+            if listing.files.len() + ignored.len() > MAX_FILES {
+                break;
+            }
+            if !ignored.contains(&format!("{folder}/")) {
+                continue;
+            }
+            // One more than fits, so a cut list says so; never more, however big the folder.
+            // Git names a folder only when it tracks nothing in it, so nothing here is listed.
+            ignored.extend(level(&self.root, folder, MAX_FILES + 1));
+            opened.push(folder.as_str());
+        }
+        let mut room = Room::FULL;
+        room.fill(listing.files.iter().map(String::as_str));
+        let (kept, left_out) = room.fill(ignored.iter().map(String::as_str));
+        listing.ignored = kept;
+        listing.truncated |= cut || left_out;
         // Untracked directories too, even empty ones, so files created in them are seen.
         // ponytail: git names only the top of a new untracked tree, so `mkdir -p a/b` watches
         // `a` alone until a file appears; walk such trees if deep late writes go unseen.
@@ -190,10 +309,9 @@ impl Watcher {
         let (untracked, _) = git(&self.root, &ls, GIT_LIMIT)?;
         let untracked = parse_dirs(&untracked);
         let files = listing.files.iter().map(String::as_str);
-        let wanted: BTreeSet<&str> = dirs(files.chain(untracked))
-            .into_iter()
-            .take(MAX_WATCHES)
-            .collect();
+        let mut wanted = dirs(files.chain(untracked));
+        wanted.extend(opened);
+        let wanted: BTreeSet<&str> = wanted.into_iter().take(MAX_WATCHES).collect();
         // ponytail: on macOS every re-list restarts the FSEvents stream, even when no watch
         // moves; skip the restart if its cost or its short blind spot shows.
         // Removed first: a renamed directory keeps its watch, which must not be reused.
@@ -396,6 +514,38 @@ mod tests {
     }
 
     #[test]
+    fn ignored_folders_are_listed_without_what_they_hold() {
+        // As git lists a folder holding only ignored files: the folder, then each file.
+        let out = b"logs/b.log\0.env\0logs/\0logs/a.log\0src/x.o\0logs-old.txt\0bad\xff\0par";
+        assert_eq!(
+            parse_ignored(out),
+            [".env", "logs-old.txt", "logs/", "src/x.o"]
+        );
+        assert!(parse_ignored(b"").is_empty());
+    }
+
+    #[test]
+    fn a_level_of_an_ignored_folder_never_goes_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "deps/a/x.js");
+        write(root, "deps/b.js");
+        let mut got = level(root, "deps", 10);
+        got.sort();
+        assert_eq!(got, ["deps/a/", "deps/b.js"]);
+        assert_eq!(level(root, "deps", 1).len(), 1);
+        assert!(level(root, "gone", 10).is_empty());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("deps"), root.join("link")).unwrap();
+            std::os::unix::fs::symlink(root.join("deps"), root.join("deps/c")).unwrap();
+            assert!(level(root, "link", 10).is_empty());
+            // A link to a folder inside one is listed as a file, so it is never opened.
+            assert!(level(root, "deps", 10).contains(&"deps/c".to_owned()));
+        }
+    }
+
+    #[test]
     fn every_directory_of_the_listed_paths_is_watched() {
         let got = dirs(["a/b/c.rs", "a/d.rs", "top.rs", "new/", "x/y/"]);
         let want = BTreeSet::from(["", "a", "a/b", "new", "x", "x/y"]);
@@ -537,6 +687,8 @@ mod tests {
         assert!(watcher.git_dir.is_some());
         let listing = watcher.list().unwrap();
         assert_eq!(names(&listing), [".gitignore", "src/a.rs"]);
+        // Listed apart, as one closed folder.
+        assert_eq!(listing.ignored, ["ignored/"]);
         assert_eq!(watched(&watcher), ["", "empty", "src"]);
         // FSEvents (macOS) may still report the writes made just before the watch began.
         changes(&mut watcher, NEVER).await;
@@ -612,6 +764,109 @@ mod tests {
         assert_eq!(watched(&watcher), [""]);
         write(&root, "d/b.txt");
         assert!(!changes(&mut watcher, NEVER).await);
+    }
+
+    #[tokio::test]
+    async fn an_open_ignored_folder_is_listed_one_level_deep_and_watched() {
+        let (_dir, root) = repo();
+        std::fs::write(root.join(".gitignore"), ".env\nnode_modules/\n").unwrap();
+        write(&root, ".env");
+        write(&root, "node_modules/pkg/index.js");
+        write(&root, "node_modules/top.js");
+        let mut watcher = Watcher::new(&root).unwrap();
+        let listing = watcher.list().unwrap();
+        assert_eq!(names(&listing), [".gitignore"]);
+        assert_eq!(listing.ignored, [".env", "node_modules/"]);
+        // Closed: no watch, and nothing in it counts.
+        assert_eq!(watched(&watcher), [""]);
+        changes(&mut watcher, NEVER).await;
+        write(&root, "node_modules/later.js");
+        assert!(!changes(&mut watcher, NEVER).await);
+
+        // A folder inside counts only while the one holding it is open too; an unknown one,
+        // or one not ignored, never.
+        let open = |watcher: &mut Watcher, folders: &[&str]| {
+            watcher.open(folders.iter().map(|f| (*f).to_owned()));
+            watcher.list().unwrap()
+        };
+        let listing = open(&mut watcher, &["node_modules/pkg", "src", "../x"]);
+        assert_eq!(listing.ignored, [".env", "node_modules/"]);
+        assert_eq!(watched(&watcher), [""]);
+        let listing = open(&mut watcher, &["node_modules"]);
+        let level = [".env", "node_modules/", "node_modules/later.js"];
+        let level = [&level[..], &["node_modules/pkg/", "node_modules/top.js"]].concat();
+        assert_eq!(listing.ignored, level);
+        assert_eq!(watched(&watcher), ["", "node_modules"]);
+        let listing = open(&mut watcher, &["node_modules", "node_modules/pkg"]);
+        let deeper = ["node_modules/pkg/", "node_modules/pkg/index.js"];
+        assert!(
+            deeper
+                .iter()
+                .all(|path| listing.ignored.contains(&(*path).to_owned()))
+        );
+        assert_eq!(watched(&watcher), ["", "node_modules", "node_modules/pkg"]);
+        assert!(!listing.truncated);
+        // Open, a change in it counts.
+        write(&root, "node_modules/pkg/more.js");
+        assert!(changes(&mut watcher, SOON).await);
+        let listing = watcher.list().unwrap();
+        assert!(
+            listing
+                .ignored
+                .contains(&"node_modules/pkg/more.js".to_owned())
+        );
+
+        // Closing it drops its watch and what it held.
+        let listing = open(&mut watcher, &["node_modules/pkg"]);
+        assert_eq!(listing.ignored, [".env", "node_modules/"]);
+        assert_eq!(watched(&watcher), [""]);
+        changes(&mut watcher, NEVER).await;
+        write(&root, "node_modules/pkg/last.js");
+        assert!(!changes(&mut watcher, NEVER).await);
+
+        // A file that becomes ignored, or stops being ignored, moves between the lists.
+        write(&root, "notes.txt");
+        std::fs::write(root.join(".gitignore"), "node_modules/\nnotes.txt\n").unwrap();
+        assert!(changes(&mut watcher, SOON).await);
+        let listing = watcher.list().unwrap();
+        assert_eq!(names(&listing), [".env", ".gitignore"]);
+        assert_eq!(listing.ignored, ["node_modules/", "notes.txt"]);
+    }
+
+    #[tokio::test]
+    async fn the_caps_hold_for_a_huge_ignored_folder() {
+        let (_dir, root) = repo();
+        // Ignored without a `.gitignore`: nothing else is listed.
+        std::fs::write(root.join(".git/info/exclude"), "huge/\n").unwrap();
+        let huge = root.join("huge");
+        std::fs::create_dir_all(huge.join("a")).unwrap();
+        std::fs::write(huge.join("a/x"), "").unwrap();
+        // With "huge/" and "a/": one short of the cap.
+        for i in 0..MAX_FILES - 2 {
+            std::fs::write(huge.join(format!("f{i:06}")), "").unwrap();
+        }
+        let mut watcher = Watcher::new(&root).unwrap();
+        watcher.open(["huge".to_owned(), "huge/a".to_owned()]);
+        let listing = watcher.list().unwrap();
+        assert!(listing.files.is_empty());
+        // Room for "huge/a" and its file: the last of the others is left out.
+        assert_eq!(listing.ignored.len(), MAX_FILES);
+        assert_eq!(listing.ignored[..3], ["huge/", "huge/a/", "huge/a/x"]);
+        let last = format!("huge/f{:06}", MAX_FILES - 4);
+        assert_eq!(listing.ignored.last(), Some(&last));
+        assert!(listing.truncated);
+        assert_eq!(watched(&watcher), ["", "huge", "huge/a"]);
+        // Past the cap, a folder inside is not listed at all, nor watched.
+        for i in MAX_FILES - 2..MAX_FILES {
+            std::fs::write(huge.join(format!("f{i:06}")), "").unwrap();
+        }
+        let listing = watcher.list().unwrap();
+        assert_eq!(listing.ignored.len(), MAX_FILES);
+        assert_eq!(listing.ignored[..3], ["huge/", "huge/a/", "huge/f000000"]);
+        let last = format!("huge/f{:06}", MAX_FILES - 3);
+        assert_eq!(listing.ignored.last(), Some(&last));
+        assert!(listing.truncated);
+        assert_eq!(watched(&watcher), ["", "huge"]);
     }
 
     #[tokio::test]

@@ -385,6 +385,10 @@
     "files": [
       "a.rs"
     ],
+    "ignored": [
+      ".env",
+      "target/"
+    ],
     "truncated": false
   },
   {

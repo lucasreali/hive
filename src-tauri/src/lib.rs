@@ -829,6 +829,12 @@ impl Hive {
         self.link().send(0, &Control::UnwatchWorktree)
     }
 
+    /// The ignored folders open in the watched worktree's tree; answered by `files`.
+    pub fn expand_ignored(&self, path: String, folders: Vec<String>) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::ExpandIgnored { path, folders })
+    }
+
     /// The terminal shown and whether the window has the focus.
     pub fn set_view(&self, terminal: Option<u32>, focused: bool) -> Result<(), String> {
         self.link().send(0, &Control::View { terminal, focused })
@@ -1407,6 +1413,15 @@ pub mod commands {
     #[tauri::command]
     pub fn unwatch_worktree(hive: State<'_, Hive>) -> Result<(), String> {
         hive.unwatch_worktree()
+    }
+
+    #[tauri::command]
+    pub fn expand_ignored(
+        hive: State<'_, Hive>,
+        path: String,
+        folders: Vec<String>,
+    ) -> Result<(), String> {
+        hive.expand_ignored(path, folders)
     }
 
     #[tauri::command]

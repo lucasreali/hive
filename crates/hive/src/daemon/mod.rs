@@ -159,7 +159,7 @@ async fn serve(
     // (waiting for the lock) instead of a listen queue nobody accepts.
     drop(listener);
     let _ = std::fs::remove_file(socket);
-    let files = state.watching.lock().await.take();
+    let files = state.watching.lock().await.take().map(|files| files.task);
     for task in [watcher, health, registry].into_iter().chain(files) {
         stop(task).await;
     }
@@ -184,6 +184,14 @@ async fn stop(task: tokio::task::JoinHandle<()>) {
     let _ = task.await;
 }
 
+/// The worktree of the app's files panel: the task watching it, and the ignored folders open
+/// in its tree (14.2), which that task follows.
+struct Watching {
+    path: String,
+    task: tokio::task::JoinHandle<()>,
+    open: tokio::sync::watch::Sender<Vec<String>>,
+}
+
 /// The service's state. Lock order, when one task holds several: `terminals` → `agents` →
 /// `app`, and `usage` → `app`. `agents` is held across slow work (placing an agent runs git, reading a session
 /// log or a transcript), so a terminal's input and output never take an async lock (9.13):
@@ -201,8 +209,8 @@ struct State {
     terminal_worktrees: std::sync::Mutex<HashMap<u32, String>>,
     /// Detected agents by session id, with their terminal and state; followed by [`agents`].
     agents: Mutex<HashMap<String, Agent>>,
-    /// The task watching the worktree of the app's files panel.
-    watching: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The worktree of the app's files panel, while one is watched.
+    watching: Mutex<Option<Watching>>,
     /// The terminal in view in the focused app window (the app's `view`); 0 when none, since
     /// terminal channels start at 1.
     watched: AtomicU32,
@@ -678,10 +686,24 @@ impl State {
     /// its changes against `base`.
     async fn watch_worktree(self: &Arc<Self>, path: Option<(String, DiffBase)>) {
         let mut watching = self.watching.lock().await;
-        if let Some(task) = watching.take() {
-            task.abort();
+        if let Some(old) = watching.take() {
+            old.task.abort();
         }
-        *watching = path.map(|(path, base)| tokio::spawn(watch_files(self.clone(), path, base)));
+        *watching = path.map(|(path, base)| {
+            let (open, folders) = tokio::sync::watch::channel(Vec::new());
+            let task = tokio::spawn(watch_files(self.clone(), path.clone(), base, folders));
+            Watching { path, task, open }
+        });
+    }
+
+    /// The ignored folders open in the files tree of the watched worktree `path`; nothing when
+    /// another one is watched (the app asked before it switched).
+    async fn expand_ignored(&self, path: &str, folders: Vec<String>) {
+        if let Some(watching) = self.watching.lock().await.as_ref()
+            && watching.path == path
+        {
+            watching.open.send_replace(folders);
+        }
     }
 
     /// The one place a change in the watched worktree `path` is reported to the app, after
@@ -693,6 +715,7 @@ impl State {
             let files = Control::Files {
                 path: path.to_owned(),
                 files: listing.files.clone(),
+                ignored: listing.ignored.clone(),
                 truncated: listing.truncated,
             };
             self.to_app(0, &files).await;
@@ -725,9 +748,15 @@ async fn watch_health(state: Arc<State>, interval: std::time::Duration) {
     }
 }
 
-/// Lists the worktree `path` now and after every change, until aborted or the watch fails.
-/// Git and inotify run on a blocking thread, off the frame loop.
-async fn watch_files(state: Arc<State>, path: String, base: DiffBase) {
+/// Lists the worktree `path` now and after every change, or of the ignored folders `open` in
+/// its tree, until aborted or the watch fails. Git and inotify run on a blocking thread, off
+/// the frame loop.
+async fn watch_files(
+    state: Arc<State>,
+    path: String,
+    base: DiffBase,
+    mut open: tokio::sync::watch::Receiver<Vec<String>>,
+) {
     let started = tokio::task::block_in_place(|| {
         let root = state.projects.worktree(&path)?;
         Watcher::new(&root)
@@ -739,6 +768,7 @@ async fn watch_files(state: Arc<State>, path: String, base: DiffBase) {
     let mut last = None;
     let mut watching = Ok(());
     while watching.is_ok() {
+        watcher.open(open.borrow_and_update().iter().cloned());
         match tokio::task::block_in_place(|| watcher.list()) {
             Ok(listing) => {
                 let changed = last.as_ref() != Some(&listing);
@@ -750,7 +780,13 @@ async fn watch_files(state: Arc<State>, path: String, base: DiffBase) {
             // E.g. the worktree was removed; it is listed again on the next change.
             Err(err) => state.to_app(0, &error(err)).await,
         }
-        watching = watcher.changed().await;
+        // A folder opened or closed mid-burst ends the wait too: the re-list covers both, and
+        // the changes go with it as after any change.
+        watching = tokio::select! {
+            changed = watcher.changed() => changed,
+            // Never an error: the sender outlives this task.
+            Ok(()) = open.changed() => Ok(()),
+        };
     }
 }
 
