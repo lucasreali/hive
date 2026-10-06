@@ -48,6 +48,8 @@ test("the editor marks added, modified and deleted lines in its gutter, in dark 
   await expect(added).toHaveCount(1);
   await expect(modified).toHaveCount(4);
   await expect(deleted).toHaveCount(1);
+  // On the cursor's line (14.3): `check` below sees the marker drawn over the line's tint.
+  await expect(deleted).toHaveClass(/cm-activeLineGutter/);
   // Their own gutter, left of the line numbers.
   const numbers = await view.locator(".cm-lineNumbers").boundingBox();
   expect((await gutter.boundingBox())?.x).toBeLessThan(numbers?.x ?? 0);
