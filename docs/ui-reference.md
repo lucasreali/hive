@@ -28,6 +28,7 @@ The tokens live as CSS custom properties in `src/styles.css`.
 | `--text-2` | `#A9AFBC` | Secondary text ("Secundário") |
 | `--text-3` | `#878A98` | Tertiary text ("Terciário") |
 | `--text-4` | `#5D636F` | Breadcrumb separators, diff line numbers, kbd borders |
+| `--active-line` | `rgba(255,255,255,0.04)` | The editor's cursor line and its line number (14.3, the number in `--text`); translucent so a selection under it still shows. One Light: `rgba(0,0,0,0.04)` |
 | `--close-hover` | `#C42B1C` | Window close button hover (text `#FFFFFF`) |
 
 Other values seen: canvas behind the prototype `#1B1E23` (not used in the app), disabled primary button `#3E4A5C` with `--text-3` text, dialog backdrop `rgba(18,20,24,0.55)`, dialog shadow `0 16px 40px rgba(0,0,0,0.45)`, picker shadow `0 12px 32px rgba(0,0,0,0.4)`, pending chip `rgba(222,193,132,0.10)` background (`0.18` hover) and `0.28` border, sidebar resize hover `rgba(71,103,158,0.6)`.
