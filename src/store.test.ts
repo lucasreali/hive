@@ -30,7 +30,7 @@ import {
   useTerminal,
 } from "./store";
 import { fileVisible, tabsPlace, visibleTabs } from "./tabs";
-import { MOCK_REPOS, MOCK_SESSIONS } from "./transport/mock";
+import { MOCK_GROUP, MOCK_REPOS, MOCK_SESSIONS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";
 
 beforeEach(() => useHive.setState(initialState, true));
@@ -412,6 +412,12 @@ test("the files panel shows the selected worktree or the selected agent's", () =
   expect(shown()).toBeNull();
   select(null);
   expect(shown()).toBeNull();
+  // A group's folder is no repository (14.1): no files panel; its projects have one.
+  apply({ type: "projects", projects: MOCK_GROUP });
+  select(MOCK_GROUP[0]?.id ?? null);
+  expect(shown()).toBeNull();
+  select(MOCK_GROUP[1]?.id ?? null);
+  expect(shown()).toBe(MOCK_GROUP[1]?.id as string);
 });
 
 const fileAnswer = (content: string | null, path = "a.ts"): ServiceMessage => ({

@@ -1184,6 +1184,8 @@ not json
                 wt(&format!("{path}/.claude/worktrees/w"), false),
             ],
             error: None,
+            group: false,
+            parent: None,
         }
     }
 

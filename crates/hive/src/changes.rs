@@ -665,6 +665,8 @@ garbage\0\
             path: String::new(),
             worktrees,
             error: None,
+            group: false,
+            parent: None,
         }
     }
 

@@ -56,6 +56,17 @@ async fn ignored_entries_show_and_an_open_ignored_folder_is_listed_and_watched()
     repo.write(".env", "KEY=1\n");
     repo.write("node_modules/pkg/index.js", "");
     let root = repo.root.display().to_string();
+    // Another worktree of the project, outside it.
+    let other = repo.env.path("home/other");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "other",
+        &other.display().to_string(),
+    ]);
+    let other = other.canonicalize().unwrap().display().to_string();
     let daemon = repo.env.daemon();
     let mut conn = repo.env.connect(Role::App).await;
     conn.send(0, Control::AddProject { path: root.clone() })
@@ -71,9 +82,15 @@ async fn ignored_entries_show_and_an_open_ignored_folder_is_listed_and_watched()
     // Closed, the folder is not watched.
     repo.write("node_modules/top.js", "");
     quiet(&mut conn).await;
-    // Another worktree's folders change nothing.
-    expand(&mut conn, "/elsewhere", &["node_modules"]).await;
+    // Another worktree's folders change nothing; a path of no followed worktree is refused.
+    expand(&mut conn, &other, &["node_modules"]).await;
     quiet(&mut conn).await;
+    expand(&mut conn, "/elsewhere", &["node_modules"]).await;
+    let refused = "/elsewhere is not a worktree of a followed project".to_owned();
+    assert_eq!(
+        conn.control().await,
+        (0, Control::Error { message: refused })
+    );
 
     // Opened, one level of it is listed, and watched.
     expand(&mut conn, &root, &["node_modules"]).await;

@@ -51,6 +51,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         id: "default".into(),
         name: "Default".into(),
         projects: vec![],
+        groups: vec![],
         env: SpaceEnv::default(),
     };
     assert_eq!(
@@ -80,6 +81,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         id: "space-1".into(),
         name: "Work".into(),
         projects: vec![],
+        groups: vec![],
         env: env.clone(),
     };
     let create = Control::CreateSpace {

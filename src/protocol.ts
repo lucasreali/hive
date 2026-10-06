@@ -150,6 +150,12 @@ export type Project = {
   path: string;
   worktrees: Worktree[];
   error: string | null;
+  /**
+   * A group (14.1): a folder of repositories, whose one worktree is its folder (its own
+   * terminals and agents); its repositories have it as `parent`. Absent from an older service.
+   */
+  group?: boolean;
+  parent?: string | null;
 };
 
 export type ProjectError =
@@ -185,7 +191,14 @@ export type GhAccounts = {
 };
 
 /** Mirrors `hive_protocol::Space` (6.14): its projects' ids and its terminals' environment. */
-export type Space = { id: string; name: string; projects: string[]; env: SpaceEnv };
+/** `groups` (14.1): which of `projects` are groups; sent only when there are some. */
+export type Space = {
+  id: string;
+  name: string;
+  projects: string[];
+  groups?: string[];
+  env: SpaceEnv;
+};
 
 /** A project's branches; `current` is checked out in its main worktree (the "default"). */
 export type Branches = {

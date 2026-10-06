@@ -27,6 +27,9 @@ mod file;
 mod files;
 #[cfg(unix)]
 #[cfg(test)]
+mod groups;
+#[cfg(unix)]
+#[cfg(test)]
 mod hook;
 #[cfg(unix)]
 #[cfg(test)]

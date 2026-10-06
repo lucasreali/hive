@@ -356,12 +356,12 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Whether the app has every one of `projects` with these worktrees.
+    /// Whether the app has `projects`, no others (a group's repository may leave, 14.1), with
+    /// these worktrees.
     fn known(&self, projects: &[Project]) -> bool {
         let sent = self.worktrees_sent();
-        projects
-            .iter()
-            .all(|p| sent.get(&p.id) == Some(&p.worktrees))
+        sent.len() == projects.len()
+            && (projects.iter()).all(|p| sent.get(&p.id) == Some(&p.worktrees))
     }
 
     /// The one place the followed projects' worktrees are known to have changed outside
@@ -389,7 +389,11 @@ impl State {
     /// thread), remembered as sent.
     fn with_health(&self, reply: &mut Control) {
         let projects = match reply {
-            Control::Projects { projects } => projects.as_mut_slice(),
+            Control::Projects { projects } => {
+                // Every project the app has.
+                self.worktrees_sent().clear();
+                projects.as_mut_slice()
+            }
             Control::ProjectAdded { project }
             | Control::WorktreeCreated { project, .. }
             | Control::WorktreeRemoved { project, .. }
@@ -460,10 +464,10 @@ impl State {
     }
 
     /// The `HIVE_*` environment (6.8) of a process in the `place` (`projects::place`) of its
-    /// cwd: none outside the followed worktrees, and no `HIVE_PORT` when its block cannot be
-    /// given.
+    /// cwd: none outside the followed worktrees, nor in a group's folder (its scripts and ports
+    /// are not asked for, 14.1), and no `HIVE_PORT` when its block cannot be given.
     fn hive_env(&self, place: Option<(String, String)>) -> Vec<(&'static str, String)> {
-        let Some((root, worktree)) = place else {
+        let Some((root, worktree)) = place.filter(|(root, _)| !self.projects.is_group(root)) else {
             return Vec::new();
         };
         let port = self.ports.port(&worktree).inspect_err(|err| {
@@ -652,14 +656,15 @@ impl State {
         });
     }
 
-    /// Stops following the project `id` (9.28), unless a process of Hive's terminals (their
-    /// `sessions`) works in it; its settings and its worktrees' port blocks go with it.
+    /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
+    /// process of Hive's terminals (their `sessions`) works in it; their settings and their
+    /// worktrees' port blocks go with them. A group's repositories are removed before it.
     async fn remove_project(&self, id: String, sessions: &HashSet<i32>) {
         let removed = tokio::task::block_in_place(|| {
             self.projects.remove(&id, procs::Source::System, sessions)
         });
-        let worktrees = match removed {
-            Ok(worktrees) => worktrees,
+        let (worktrees, inside) = match removed {
+            Ok(removed) => removed,
             Err(err) => {
                 let message = err.to_string();
                 return self
@@ -669,17 +674,20 @@ impl State {
         };
         self.refollow.notify_one();
         self.to_app(0, &self.projects.spaces_message()).await;
-        let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
-            Ok(settings) => settings.map(|settings| Control::Settings { settings }),
-            Err(message) => Some(Control::SettingsFailed { message }),
-        };
-        if let Some(reply) = reply {
-            self.to_app(0, &reply).await;
-        }
         if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");
         }
-        self.to_app(0, &Control::ProjectRemoved { id }).await;
+        for id in inside.into_iter().chain([id]) {
+            let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
+                Ok(settings) => settings.map(|settings| Control::Settings { settings }),
+                Err(message) => Some(Control::SettingsFailed { message }),
+            };
+            if let Some(reply) = reply {
+                self.to_app(0, &reply).await;
+            }
+            self.worktrees_sent().remove(&id);
+            self.to_app(0, &Control::ProjectRemoved { id }).await;
+        }
     }
 
     /// Watches `path` for the files panel instead of the worktree watched until now, if any;
@@ -697,8 +705,12 @@ impl State {
     }
 
     /// The ignored folders open in the files tree of the watched worktree `path`; nothing when
-    /// another one is watched (the app asked before it switched).
+    /// another one is watched (the app asked before it switched). Refused, as `watch_worktree`
+    /// is, for a path that is no worktree of a followed project (a group's folder, 14.1).
     async fn expand_ignored(&self, path: &str, folders: Vec<String>) {
+        if let Err(err) = tokio::task::block_in_place(|| self.projects.worktree(path)) {
+            return self.to_app(0, &error(err)).await;
+        }
         if let Some(watching) = self.watching.lock().await.as_ref()
             && watching.path == path
         {
@@ -790,8 +802,9 @@ async fn watch_files(
     }
 }
 
-/// Watches git's worktree registry of the current space's projects (9.36): however a
-/// worktree is added or removed, the app gets the projects again, once per burst.
+/// Watches git's worktree registry of the current space's projects (9.36), and its groups'
+/// folders (14.1): however a worktree, or a group's repository, is added or removed, the app
+/// gets the projects again, once per burst.
 async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
     let mut registry = match registry {
         Ok(registry) => registry,
@@ -800,9 +813,9 @@ async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
     };
     let mut started = false;
     loop {
-        let roots = state.projects.roots();
+        let (roots, groups) = (state.projects.roots(), state.projects.groups());
         // Before listing, so a change made meanwhile is seen next time.
-        tokio::task::block_in_place(|| registry.follow(&roots));
+        tokio::task::block_in_place(|| registry.follow(&roots, &groups));
         // After a change, and after the projects followed changed: what happened in a
         // registry while it was not watched yet (e.g. right after a space switch) is sent too.
         if started {

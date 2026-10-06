@@ -1,12 +1,12 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
-import type { AgentState } from "../protocol";
+import type { AgentState, Project } from "../protocol";
 import { apply } from "../reduce";
 import { initialState, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
-import { agentStatus, MOCK_REPOS } from "../transport/mock";
+import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
 import * as icons from "./icons";
 import { STATE_LABEL } from "./icons";
 import { elapsed } from "./Sidebar";
@@ -621,4 +621,55 @@ test("a hook event re-renders only its own agent's row, not other worktrees' row
     branch.mockRestore();
     state.mockRestore();
   }
+});
+
+test("a group shows its own agents, then its projects one level in; collapsed, the most urgent of all", async () => {
+  const [group, backend, frontend] = MOCK_GROUP as [Project, Project, Project];
+  const pulls = spyOn(transport, "listPulls").mockResolvedValue();
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(4);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  render(<App />);
+  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const space = { id: "default", name: "Default", projects: [shop.id, group.id], env };
+  act(() => {
+    useHive.setState({ connection: { status: "connected", version: "t", distro: null } });
+    apply({ type: "spaces", spaces: [{ ...space, groups: [group.id] }], current: "default" });
+    apply({ type: "projects", projects: [shop, ...MOCK_GROUP, api] });
+    const agent = (id: string, project: Project, state: AgentState) => {
+      const placed = { project: project.id, worktree: project.path, cwd: project.path };
+      apply({ type: "agent_detected", channel: 1, id, ...placed });
+      apply({ type: "agent_state", id, ...agentStatus(state), subagents: [] });
+    };
+    agent("s1", group, "working");
+    agent("s2", backend, "waiting_permission");
+  });
+  // Another space's project is not shown; a group's are, under it, after its own agents.
+  const rows = [...tree().querySelectorAll(".tree-row")].map((r) => [
+    r.className,
+    r.closest("li")?.className ?? "",
+    r.querySelector(".label")?.textContent,
+  ]);
+  expect(rows.slice(4)).toEqual([
+    ["tree-row project group", "", "work"],
+    ["tree-row agent", "", "Claude"],
+    ["tree-row project", "in-group", "backend"],
+    ["tree-row worktree", "", "main"],
+    ["tree-row agent", "", "Claude"],
+    ["tree-row project", "in-group", "frontend"],
+    ["tree-row worktree", "", "main"],
+  ]);
+  // A group has no pull requests of its own.
+  const asked = pulls.mock.calls.map((c) => c[0]);
+  expect(asked).toEqual([shop.id, backend.id, frontend.id]);
+  // Collapsed, it shows the most urgent state inside it, its projects' agents too.
+  fireEvent.click(screen.getByRole("button", { name: "Collapse work" }));
+  const row = screen.getByRole("button", { name: /^work/ });
+  expect(row.querySelector(".state-icon")?.getAttribute("data-state")).toBe("waiting_permission");
+  expect(screen.queryByRole("button", { name: "backend" })).toBeNull();
+  // Its "+" opens a new chat in its folder.
+  fireEvent.click(screen.getByRole("button", { name: "New chat in work" }));
+  await waitFor(() => expect(write).toHaveBeenCalledWith(4, "claude\r"));
+  expect(open.mock.calls[0]?.[0]).toBe(group.path);
+  closeTerminal(4);
+  for (const spy of [pulls, open, write]) spy.mockRestore();
 });

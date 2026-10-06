@@ -19,6 +19,10 @@ pub const INTERVAL: Duration = Duration::from_secs(30);
 /// counted against nothing; the others against its branch, when it has one. `totals`: its
 /// changes against `HEAD` when already counted (`changes::answer`), so git is not run again.
 pub fn of(project: &Project, w: &Worktree, totals: Option<Totals>) -> Option<WorktreeStatus> {
+    // A group's folder is no repository (14.1): git is not even asked.
+    if project.group {
+        return None;
+    }
     read(Path::new(&w.path), branch(project, w), totals).ok()
 }
 
@@ -196,6 +200,8 @@ pub(crate) mod tests {
                 worktree(&wt("gone"), Some("gone"), false),
             ],
             error: None,
+            group: false,
+            parent: None,
         };
         fill(&mut project);
         let got: Vec<_> = project.worktrees.iter().map(|w| w.status.clone()).collect();
@@ -235,6 +241,9 @@ pub(crate) mod tests {
             of(&project, &project.worktrees[0], None),
             status((0, 0, 0), None)
         );
+        // A group's folder (14.1) has none, even in a repository.
+        project.group = true;
+        assert_eq!(of(&project, &project.worktrees[0], None), None);
         // A base branch that no longer exists is an error.
         let err = read(&wt("ahead"), Some("missing"), None)
             .unwrap_err()

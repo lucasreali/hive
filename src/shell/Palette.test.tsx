@@ -1,13 +1,14 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
+import type { Project } from "../protocol";
 import { apply } from "../reduce";
 import { COMMANDS } from "../shortcuts";
 import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
-import { agentStatus, MOCK_REPOS } from "../transport/mock";
-import { FILE_LIMIT, fuzzy, type PaletteItem, rank } from "./Palette";
+import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
+import { FILE_LIMIT, fuzzy, type PaletteItem, paletteCommands, rank } from "./Palette";
 
 beforeAll(async () => {
   await transport.connect(apply);
@@ -124,6 +125,25 @@ test("removing the current project from the palette asks first", () => {
   key("Enter");
   const asked = screen.getByRole("dialog", { name: "Remove project?" });
   expect(asked.textContent).toContain(`Remove ${shop.name} from Hive?`);
+});
+
+test("a group can be removed from the palette, not its projects; their worktrees open it", () => {
+  const [group, backend] = MOCK_GROUP as [Project, Project];
+  render(<App />);
+  act(() => apply({ type: "projects", projects: MOCK_GROUP }));
+  const labels = () => paletteCommands(useHive.getState()).map((c) => c.label);
+  act(() => useHive.setState({ selection: group.id }));
+  expect(labels()).toContain("Remove group…");
+  expect(labels()).not.toContain("Remove merged worktrees…");
+  act(() => useHive.setState({ selection: backend.id }));
+  expect(labels()).toContain("Remove merged worktrees…");
+  expect(labels().filter((l) => l.startsWith("Remove ") && !l.includes("merged"))).toEqual([]);
+  act(() => useHive.setState({ selection: null, collapsed: { [group.id]: true } }));
+  act(() => openModal("palette"));
+  type("backend");
+  key("Enter");
+  expect(useHive.getState().collapsed).toMatchObject({ [group.id]: false, [backend.id]: false });
+  expect(useHive.getState().selection).toBe(backend.worktrees[0]?.id);
 });
 
 test("Enter on a worktree selects it and expands its project", () => {

@@ -33,6 +33,7 @@ impl Spaces {
             id: DEFAULT_ID.to_owned(),
             name: "Default".to_owned(),
             projects,
+            groups: Vec::new(),
             env: SpaceEnv::default(),
         };
         Self {
@@ -55,6 +56,9 @@ impl Spaces {
             }
             if let Some(twice) = space.projects.iter().find(|p| !projects.insert(*p)) {
                 return Err(format!("{twice} is in two spaces"));
+            }
+            if let Some(stray) = space.groups.iter().find(|g| !space.projects.contains(g)) {
+                return Err(format!("the group {stray} is not a project of its space"));
             }
         }
         if !ids.contains(&self.current) {
@@ -97,6 +101,28 @@ impl Spaces {
         Ok(())
     }
 
+    /// Adds the group `group` (14.1) to the current space as [`Spaces::add`] adds a project;
+    /// the current space's projects among `inside` (its repositories) move into it.
+    pub fn add_group(&mut self, group: String, inside: &[String]) -> Result<(), String> {
+        self.add(group.clone())?;
+        let current = &self.current;
+        let space = self.spaces.iter_mut().find(|s| s.id == *current);
+        if let Some(space) = space.filter(|s| !s.groups.contains(&group)) {
+            // Never a group into another (one whose `.git` git refuses is listed in it).
+            let groups = &space.groups;
+            space
+                .projects
+                .retain(|p| !inside.contains(p) || groups.contains(p));
+            space.groups.push(group);
+        }
+        Ok(())
+    }
+
+    /// Whether the project `id` is a group (14.1).
+    pub fn is_group(&self, id: &str) -> bool {
+        self.spaces.iter().any(|s| s.groups.iter().any(|g| g == id))
+    }
+
     /// Takes the project `id` out of the space holding it (9.28); an unfollowed one is refused.
     pub fn remove(&mut self, project: &str) -> Result<(), String> {
         let space = self
@@ -105,6 +131,7 @@ impl Spaces {
             .find(|s| s.projects.iter().any(|p| p == project));
         let space = space.ok_or_else(|| format!("{project} is not a followed project"))?;
         space.projects.retain(|p| p != project);
+        space.groups.retain(|g| g != project);
         Ok(())
     }
 
@@ -122,6 +149,7 @@ impl Spaces {
             id,
             name,
             projects,
+            groups: Vec::new(),
             env,
         });
         Ok(())
@@ -496,6 +524,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             projects: projects.iter().map(|p| p.to_string()).collect(),
+            groups: vec![],
             env: env(Some(gone), None),
         };
         let spaces = |current: &str, list: Vec<Space>| Spaces {
@@ -533,6 +562,50 @@ mod tests {
         let mut relative = spaces("a", vec![space("a", &[])]);
         relative.spaces[0].env = env(Some("gone"), None);
         assert!(relative.check().is_err());
+        // A group is one of its space's projects.
+        let mut stray = spaces("a", vec![space("a", &["/g"]), space("b", &[])]);
+        stray.spaces[0].groups = vec!["/g".into()];
+        assert_eq!(stray.clone().check(), Ok(stray.clone()));
+        stray.spaces[1].groups = vec!["/g".into()];
+        assert_eq!(
+            stray.check(),
+            Err("the group /g is not a project of its space".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_group_takes_in_its_space_projects_and_leaves_with_its_mark() {
+        let mut spaces = Spaces::with(vec!["/g/api".into(), "/other".into()]);
+        spaces.create("Work", SpaceEnv::default()).unwrap();
+        spaces.add("/g/web".into()).unwrap();
+        // Only the current space's projects move into it; another space's stay there.
+        let inside = ["/g/api".to_owned(), "/g/web".to_owned()];
+        spaces.add_group("/g".into(), &inside).unwrap();
+        assert_eq!(spaces.spaces[1].projects, ["/g"]);
+        assert_eq!(spaces.spaces[1].groups, ["/g"]);
+        assert_eq!(spaces.spaces[0].projects, ["/g/api", "/other"]);
+        assert!(spaces.is_group("/g") && !spaces.is_group("/g/api"));
+        // Again changes nothing; from another space it is refused.
+        let before = spaces.clone();
+        spaces.add_group("/g".into(), &inside).unwrap();
+        assert_eq!(spaces, before);
+        spaces.select("default").unwrap();
+        assert_eq!(spaces.add_group("/g".into(), &[]), Err("Work".to_owned()));
+        // A project of its space that turned out to be a group is marked as one.
+        spaces.add_group("/other".into(), &[]).unwrap();
+        assert_eq!(spaces.spaces[0].projects, ["/g/api", "/other"]);
+        assert!(spaces.is_group("/other"));
+        // A group never moves into another, even listed among its repositories.
+        spaces
+            .add_group("/top".into(), &["/other".to_owned()])
+            .unwrap();
+        assert_eq!(spaces.spaces[0].projects, ["/g/api", "/other", "/top"]);
+        assert_eq!(spaces.clone().check(), Ok(spaces.clone()));
+        // Removed, it is no group any more.
+        spaces.remove("/g").unwrap();
+        assert!(!spaces.is_group("/g"));
+        assert_eq!(spaces.spaces[1].groups, Vec::<String>::new());
+        assert_eq!(spaces.clone().check(), Ok(spaces));
     }
 
     #[test]
