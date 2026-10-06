@@ -1137,7 +1137,7 @@ test("a folder of repositories is added as a group, and removed with them", asyn
   await tick();
   const added = { ...space("default", "Default", [SHOP, API, group.id]), groups: [group.id] };
   const listed = [...MOCK_REPOS.slice(0, 2), ...MOCK_GROUP];
-  const answer = [
+  const answer: ServiceMessage[] = [
     { type: "spaces", spaces: [added], current: "default" },
     { type: "projects", projects: listed },
     { type: "project_added", project: group },
