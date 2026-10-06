@@ -13,6 +13,7 @@ import {
 import { oneDark } from "@codemirror/theme-one-dark";
 import { Decoration, drawSelection, EditorView, keymap, lineNumbers } from "@codemirror/view";
 import type { Lines } from "../store";
+import { changeMarkers } from "./gutterMarkers";
 
 /** What the viewer shows: `content`, and as a unified diff against `original` when given. */
 export type Doc = { content: string; original: string | null };
@@ -212,6 +213,8 @@ export type Editor = {
   load(doc: Text): void;
   /** A read-only unified diff of the text against `original` (on disk), or null to edit. */
   compare(original: string | null): void;
+  /** The text the change markers compare with (14.4), or null for none. */
+  setBase(base: string | null): void;
   destroy(): void;
 };
 
@@ -229,6 +232,11 @@ export function createEditor(
   const view = new EditorView({ parent });
   const language = highlighting(view, path);
   const comparing = new Compartment();
+  // The change markers, hidden while comparing: that diff has its own colors.
+  const markers = new Compartment();
+  let base: string | null = null;
+  let compared = false;
+  const marked = () => changeMarkers(compared ? null : base);
   const create = (doc: Text, selection?: EditorSelection) =>
     EditorState.create({
       doc,
@@ -249,6 +257,7 @@ export function createEditor(
           ...historyKeymap,
         ]),
         drawSelection(),
+        markers.of(marked()),
         lineNumbers(),
         oneDark,
         theme,
@@ -277,7 +286,12 @@ export function createEditor(
         original === null
           ? []
           : [EditorState.readOnly.of(true), unifiedMergeView({ original, mergeControls: false })];
-      view.dispatch({ effects: comparing.reconfigure(diff) });
+      compared = original !== null;
+      view.dispatch({ effects: [comparing.reconfigure(diff), markers.reconfigure(marked())] });
+    },
+    setBase(text) {
+      base = text;
+      view.dispatch({ effects: markers.reconfigure(marked()) });
     },
     destroy: language.destroy,
   };
