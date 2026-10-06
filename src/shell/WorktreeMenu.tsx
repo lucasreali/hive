@@ -197,34 +197,45 @@ const closeProjectMenu = () => openProjectMenu(null);
 /** A project row's context menu (right click). */
 export function ProjectMenu() {
   const menu = useHive((s) => s.projectMenu);
+  const project = useHive((s) => s.projects?.[menu?.project ?? ""]);
   if (!menu) return null;
   const dialog = (modal: "new-worktree" | "remove-merged") => () => {
     closeProjectMenu();
     openModal(modal, menu.project);
   };
+  // A group (14.1) has no worktrees; a group's repository leaves only with its group.
+  const group = !!project?.group;
   return (
     <ContextMenu at={menu} label="Project" onClose={closeProjectMenu}>
-      <button type="button" role="menuitem" onClick={dialog("new-worktree")}>
-        <PlusIcon {...ICON} />
-        New worktree… <kbd>{keyText("Ctrl+Shift+N")}</kbd>
-      </button>
-      <button type="button" role="menuitem" onClick={dialog("remove-merged")}>
-        <BroomIcon {...ICON} />
-        Remove merged worktrees…
-      </button>
-      <hr />
-      <button
-        type="button"
-        role="menuitem"
-        className="danger"
-        onClick={() => {
-          closeProjectMenu();
-          askRemoveProject(menu.project);
-        }}
-      >
-        <TrashIcon {...ICON} />
-        Remove project…
-      </button>
+      {!group && (
+        <>
+          <button type="button" role="menuitem" onClick={dialog("new-worktree")}>
+            <PlusIcon {...ICON} />
+            New worktree… <kbd>{keyText("Ctrl+Shift+N")}</kbd>
+          </button>
+          <button type="button" role="menuitem" onClick={dialog("remove-merged")}>
+            <BroomIcon {...ICON} />
+            Remove merged worktrees…
+          </button>
+        </>
+      )}
+      {!project?.parent && (
+        <>
+          {!group && <hr />}
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onClick={() => {
+              closeProjectMenu();
+              askRemoveProject(menu.project);
+            }}
+          >
+            <TrashIcon {...ICON} />
+            {group ? "Remove group…" : "Remove project…"}
+          </button>
+        </>
+      )}
     </ContextMenu>
   );
 }

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import type { Space } from "./protocol";
+import type { Project, Space } from "./protocol";
 import { apply } from "./reduce";
 import { goToAgent } from "./shortcuts";
 import { addTab, initialState, select, useHive } from "./store";
 import { visibleTabs } from "./tabs";
 import { transport } from "./transport";
-import { MOCK_REPOS } from "./transport/mock";
+import { MOCK_GROUP, MOCK_REPOS } from "./transport/mock";
 
 // 11.5: switching space selects the place last selected there.
 
@@ -112,6 +112,21 @@ test("going to an agent of another space selects it, and its space keeps the pla
   to("default");
   expect(selection()).toBe(shop.worktrees[1].id);
   to("w");
+  expect(selection()).toBe("a");
+  selectSpace.mockRestore();
+});
+
+test("a group's projects are in its space: an agent in one goes there, and stays selected", () => {
+  const selectSpace = spyOn(transport, "selectSpace").mockResolvedValue();
+  const [group, backend] = MOCK_GROUP as [Project, Project];
+  const grouped: Space = { ...work, projects: [group.id], groups: [group.id] };
+  apply({ type: "projects", projects: [shop, ...MOCK_GROUP] });
+  apply({ type: "spaces", spaces: [home, grouped], current: "default" });
+  const agent = { id: "a", project: backend.id, worktree: backend.id, cwd: backend.path };
+  apply({ type: "agent_detected", channel: 2, ...agent });
+  goToAgent(useHive.getState().agents.a as never);
+  expect(selectSpace).toHaveBeenCalledWith("w");
+  apply({ type: "spaces", spaces: [home, grouped], current: "w" });
   expect(selection()).toBe("a");
   selectSpace.mockRestore();
 });

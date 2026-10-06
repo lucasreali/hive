@@ -53,11 +53,14 @@ export function goToAgent(agent: Agent): void {
   const away = space && space.id !== s.currentSpace;
   if (away) void transport.selectSpace(space.id);
   const tab = s.tabs.find((t) => t.id === agent.terminal);
+  // A group's repository opens its group too (14.1).
+  const group = s.projects?.[agent.project ?? ""]?.parent ?? "";
   useHive.setState({
     // The place left behind is the one that space shows again (11.5).
     ...(away ? leaveSpace(s) : {}),
     collapsed: {
       ...s.collapsed,
+      [group]: false,
       [agent.project ?? ""]: false,
       [`worktree:${agent.worktree}`]: false,
     },
@@ -102,8 +105,11 @@ export const COMMANDS: readonly Command[] = [
     label: "New worktree",
     keys: "Ctrl+Shift+N",
     run: () => {
-      const project = currentProject(useHive.getState());
-      // No project to add a worktree to: adding a project is the step before.
+      const s = useHive.getState();
+      const project = currentProject(s);
+      // No project to add a worktree to: adding a project is the step before. A group (14.1)
+      // has no worktrees.
+      if (s.projects?.[project ?? ""]?.group) return;
       if (project) openModal("new-worktree", project);
       else openModal("add-project");
     },

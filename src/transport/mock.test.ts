@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { AgentState, ServiceMessage, Settings, Space, SpaceEnv } from "../protocol";
+import type { AgentState, Project, ServiceMessage, Settings, Space, SpaceEnv } from "../protocol";
 import { DEFAULT_SETTINGS } from "../store";
 import {
   agentStatus,
@@ -11,6 +11,7 @@ import {
   MOCK_CHANGES,
   MOCK_DIAGNOSTICS,
   MOCK_FILES,
+  MOCK_GROUP,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_SESSIONS,
@@ -978,6 +979,8 @@ test("folders are browsed on both sides of the fake machine", async () => {
         { name: "dotfiles", git: true },
         { name: "Downloads", git: false },
         { name: "projects", git: false },
+        // A group's folder (14.1).
+        { name: "work", git: false },
       ],
       error: null,
     },
@@ -1123,6 +1126,48 @@ test("deleting the current space makes the first one current, never the last one
     { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
     { type: "space_failed", message: "the last space cannot be deleted" },
   ]);
+});
+
+test("a folder of repositories is added as a group, and removed with them", async () => {
+  const { transport, messages } = await connected();
+  const [group, backend, frontend] = MOCK_GROUP as [Project, Project, Project];
+  messages.length = 0;
+  await transport.addProject(group.path);
+  await transport.addProject(group.path);
+  await tick();
+  const added = { ...space("default", "Default", [SHOP, API, group.id]), groups: [group.id] };
+  const listed = [...MOCK_REPOS.slice(0, 2), ...MOCK_GROUP];
+  const answer = [
+    { type: "spaces", spaces: [added], current: "default" },
+    { type: "projects", projects: listed },
+    { type: "project_added", project: group },
+  ];
+  // Again: nothing changes.
+  expect(messages).toEqual([...answer, ...answer]);
+  // From another space it is refused.
+  await transport.createSpace("Work", NO_ENV);
+  await tick();
+  messages.length = 0;
+  await transport.addProject(group.path);
+  await tick();
+  const message = `${group.path} is already in the space Default`;
+  expect(messages).toEqual([
+    { type: "add_project_failed", path: group.path, error: "in_other_space", message },
+  ]);
+  // Its repository leaves only with it; it leaves with its repositories.
+  messages.length = 0;
+  await transport.removeProject(backend.id);
+  await transport.removeProject(group.id);
+  await tick();
+  const refused = `${backend.id} is in the group ${group.id}: remove the group to stop following it`;
+  expect(messages.map((m) => ("id" in m ? [m.type, m.id] : m.type))).toEqual([
+    ["remove_project_failed", backend.id],
+    "spaces",
+    ["project_removed", backend.id],
+    ["project_removed", frontend.id],
+    ["project_removed", group.id],
+  ]);
+  expect(messages[0]).toMatchObject({ message: refused });
 });
 
 test("a project is removed with its settings, never while a terminal works in it", async () => {

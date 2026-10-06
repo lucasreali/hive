@@ -19,15 +19,20 @@ export function askRemoveProject(id: string): void {
   const s = useHive.getState();
   const project = s.projects?.[id];
   if (!project) return;
-  const places = [id, ...project.worktrees.map((w) => w.id)];
+  const removed = Object.values(s.projects ?? {}).filter((p) => p.id === id || p.parent === id);
+  const places = removed.flatMap((p) => [p.id, ...p.worktrees.map((w) => w.id)]);
   const unsaved = s.openFiles.some((f) => {
     const { edit } = fileTabState(s, f);
     return places.includes(f.worktree) && !!edit && isDirty(edit);
   });
   const lost = unsaved ? " Unsaved changes in its open files will be lost." : "";
+  // A group (14.1) leaves with its repositories.
+  const kept = project.group
+    ? "with its projects? Its files stay on disk: the folder and its repositories are not deleted."
+    : "from Hive? Its files stay on disk: the repository and its worktrees are not deleted.";
   ask({
-    title: "Remove project?",
-    text: `Remove ${project.name} from Hive? Its files stay on disk: the repository and its worktrees are not deleted.${lost}`,
+    title: project.group ? "Remove group?" : "Remove project?",
+    text: `Remove ${project.name} ${kept}${lost}`,
     action: "Remove",
     run: () => void transport.removeProject(id),
   });

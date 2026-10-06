@@ -69,15 +69,19 @@ export function rank(items: PaletteItem[], query: string): PaletteItem[] {
 export function paletteCommands(s: HiveState): PaletteItem[] {
   const project = currentProject(s);
   const extra: PaletteItem[] = [];
-  if (project) {
+  // A group (14.1) has no worktrees; a group's repository leaves only with its group.
+  const { group = false, parent = null, name } = s.projects?.[project ?? ""] ?? {};
+  if (project && !group) {
     extra.push({
       label: "Remove merged worktrees…",
-      detail: s.projects?.[project]?.name,
+      detail: name,
       run: () => openModal("remove-merged", project),
     });
+  }
+  if (project && !parent) {
     extra.push({
-      label: "Remove project…",
-      detail: s.projects?.[project]?.name,
+      label: group ? "Remove group…" : "Remove project…",
+      detail: name,
       run: () => askRemoveProject(project),
     });
   }
@@ -115,7 +119,11 @@ export function places(s: HiveState): PaletteItem[] {
       label: w.name,
       detail: project.name,
       run: () => {
-        useHive.setState((s) => ({ collapsed: { ...s.collapsed, [project.id]: false } }));
+        // A group's repository opens its group too (14.1).
+        const group = project.parent ?? "";
+        useHive.setState((s) => ({
+          collapsed: { ...s.collapsed, [group]: false, [project.id]: false },
+        }));
         select(w.id);
       },
     })),

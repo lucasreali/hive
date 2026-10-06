@@ -262,11 +262,43 @@ export const MOCK_REPOS = [
 ];
 
 /**
+ * A folder outside git holding two repositories (14.1): "Add project" follows it as a group, its
+ * folder its one worktree, as `projects::group` lists it.
+ */
+const MOCK_GROUP_PATH = "/home/user/work";
+export const MOCK_GROUP: Project[] = [
+  {
+    id: MOCK_GROUP_PATH,
+    name: "work",
+    path: MOCK_GROUP_PATH,
+    worktrees: [
+      {
+        id: MOCK_GROUP_PATH,
+        name: "work",
+        path: MOCK_GROUP_PATH,
+        branch: null,
+        main: true,
+        claude: false,
+        status: null,
+      },
+    ],
+    error: null,
+    group: true,
+    parent: null,
+  },
+  ...["backend", "frontend"].map((name) => ({
+    ...project(`${MOCK_GROUP_PATH}/${name}`, name, []),
+    parent: MOCK_GROUP_PATH,
+  })),
+];
+
+/**
  * The fake machine's folders for "Add project", besides the repositories (every folder above
  * one exists too): WSL's home and Windows' user folder (`C:\Users\user`, `/mnt/c/...`).
  */
 export const MOCK_FOLDERS = [
   ...MOCK_REPOS.map((p) => p.path),
+  ...MOCK_GROUP.map((p) => p.path),
   "/home/user/Downloads",
   "/home/user/projects/notes",
   "/mnt/c/Users/user/Documents",
@@ -903,6 +935,23 @@ export function createMockTransport(
       notified = agent;
     },
     async addProject(path) {
+      // The group (14.1): its repositories come in the list, before it.
+      if (path === MOCK_GROUP_PATH) {
+        const owner = spaces.find((x) => x.projects.includes(path));
+        if (owner && owner.id !== current) {
+          const message = `${path} is already in the space ${owner.name}`;
+          return void later({ type: "add_project_failed", path, error: "in_other_space", message });
+        }
+        if (!owner) {
+          projects.push(...MOCK_GROUP);
+          const here = space(current) as Space;
+          here.projects.push(path);
+          here.groups = [...(here.groups ?? []), path];
+        }
+        sendSpaces();
+        later({ type: "projects", projects: structuredClone(projects) });
+        return void later({ type: "project_added", project: find(path) as Project });
+      }
       const repo = MOCK_REPOS.find((p) => p.path === path);
       if (!repo) {
         const message = `cannot open ${path}: No such file or directory (os error 2)`;
@@ -923,17 +972,25 @@ export function createMockTransport(
     async removeProject(id) {
       const project = find(id);
       const busy = project?.worktrees.map((w) => inUse(w.path)).find((m) => m !== null);
-      const refused = project ? busy : `${id} is not a followed project`;
+      const inGroup =
+        project?.parent &&
+        `${id} is in the group ${project.parent}: remove the group to stop following it`;
+      const refused = project ? inGroup || busy : `${id} is not a followed project`;
       if (refused) return void later({ type: "remove_project_failed", id, message: refused });
-      projects.splice(projects.indexOf(project as Project), 1);
-      for (const x of spaces) x.projects = x.projects.filter((p) => p !== id);
+      // A group goes with its repositories, removed before it (14.1).
+      const removed = projects.filter((p) => p.parent === id).concat(project as Project);
+      for (const p of removed) projects.splice(projects.indexOf(p), 1);
+      for (const x of spaces) {
+        x.projects = x.projects.filter((p) => p !== id);
+        x.groups = x.groups?.filter((p) => p !== id);
+      }
       sendSpaces();
       if (settings.projects[id]) {
         const { [id]: _, ...rest } = settings.projects;
         settings = { ...settings, projects: rest };
         later({ type: "settings", settings });
       }
-      later({ type: "project_removed", id });
+      for (const p of removed) later({ type: "project_removed", id: p.id });
     },
     async listDirs(path, windows) {
       later({ type: "dirs", ...mockDirs(path, windows, mode === "native") });

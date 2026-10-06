@@ -55,7 +55,7 @@ test("the dialog opens focused on the field, which shows the home folder once li
   // Without WSL (macOS) there is no Windows side to pick.
   expect(kind()).toBeNull();
   await waitFor(() => expect(field().value).toBe("/home/user/"));
-  expect(folders()).toEqual(["/home/", "dotfiles", "Downloads", "projects"]);
+  expect(folders()).toEqual(["/home/", "dotfiles", "Downloads", "projects", "work"]);
   expect(submit().disabled).toBe(false);
   expect(dialog.textContent).toContain("A git repository, or any folder inside one");
   expect(dialog.textContent).not.toContain("Windows folders are slower");

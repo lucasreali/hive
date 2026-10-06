@@ -8,7 +8,7 @@ import type { Project, Session } from "../protocol";
 import { apply } from "../reduce";
 import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, select, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
+import { MOCK_GROUP, MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
 import { type EditBuffer, toText } from "../viewer/buffer";
 
 afterEach(() => {
@@ -446,6 +446,43 @@ test("with no merged worktree the dialog says so", () => {
   expect(
     (within(dialog).getByRole("button", { name: /^Remove/ }) as HTMLButtonElement).disabled,
   ).toBe(true);
+});
+
+test("a group's menu only removes it, with its projects; its projects' menus cannot", () => {
+  const remove = spyOn(transport, "removeProject").mockResolvedValue();
+  const [group, backend] = MOCK_GROUP as [Project, Project];
+  render(<App />);
+  act(() => apply({ type: "projects", projects: MOCK_GROUP }));
+  fireEvent.contextMenu(row("backend"), { clientX: 10, clientY: 20 });
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+    "New worktree… Ctrl+Shift+N",
+    "Remove merged worktrees…",
+  ]);
+  fireEvent.keyDown(screen.getByRole("menu", { name: "Project" }), { key: "Escape" });
+  fireEvent.contextMenu(row("work"), { clientX: 10, clientY: 20 });
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Remove group…"]);
+  // Unsaved edits in a file of one of its projects are named.
+  const edit: EditBuffer = {
+    worktree: backend.id,
+    path: "a.ts",
+    doc: toText("edited"),
+    saved: toText("saved"),
+    version: "v",
+    conflict: null,
+    saving: null,
+    error: null,
+    recheck: 0,
+  };
+  const open = { worktree: backend.id, path: "a.ts", editing: false, edit, view: null };
+  act(() => useHive.setState({ openFiles: [open] }));
+  fireEvent.click(item("Remove group…"));
+  const asked = screen.getByRole("dialog", { name: "Remove group?" });
+  expect(asked.textContent).toBe(
+    "Remove group?Remove work with its projects? Its files stay on disk: the folder and its repositories are not deleted. Unsaved changes in its open files will be lost.CancelRemove",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  expect(remove).toHaveBeenCalledWith(group.id);
+  remove.mockRestore();
 });
 
 test("removing a project asks first, Cancel does nothing, and its state goes with it", () => {

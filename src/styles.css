@@ -1540,6 +1540,28 @@ button.chevron:hover {
   overflow-wrap: anywhere;
 }
 
+/* A group's repositories (14.1), and all under them, one level in. */
+.in-group .tree-row.project {
+  padding-left: 20px;
+}
+
+.in-group .tree-row.worktree {
+  padding-left: 34px;
+}
+
+.in-group .tree-row.agent {
+  padding-left: 54px;
+}
+
+.in-group .subagent-line {
+  --line: 59px;
+  padding-left: 70px;
+}
+
+.in-group .tree-error {
+  padding-left: 54px;
+}
+
 /* Empty state (screen 1e) */
 .empty-state {
   height: 100%;
@@ -1770,7 +1792,9 @@ button.chevron:hover {
 
 /* Keyboard focus shows the "+" too; a mouse click on the chevron does not (7.13). */
 .tree-row.worktree:hover .new-chat,
-.tree-row.worktree:has(:focus-visible) .new-chat {
+.tree-row.worktree:has(:focus-visible) .new-chat,
+.tree-row.group:hover .new-chat,
+.tree-row.group:has(:focus-visible) .new-chat {
   display: flex;
 }
 

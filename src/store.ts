@@ -793,7 +793,9 @@ export function selectedPlace(s: HiveState): string | null {
  * worktree, which shares its id) or the selected agent's; else the shown terminal's.
  */
 export function panelWorktree(s: HiveState): { project: Project; worktree: Worktree } | null {
-  const all = Object.values(s.projects ?? {}).flatMap((project) =>
+  // A group's folder is no repository (14.1): it has no files or changes panel.
+  const repos = Object.values(s.projects ?? {}).filter((p) => !p.group);
+  const all = repos.flatMap((project) =>
     project.worktrees.map((worktree) => ({ project, worktree })),
   );
   const find = (id: string | null | undefined) => all.find((e) => e.worktree.id === id);
@@ -816,9 +818,13 @@ export function setDiffBase(path: string, base: DiffBase): void {
   useHive.setState((s) => ({ diffBases: { ...s.diffBases, [path]: base } }));
 }
 
-/** The space holding the project `id`. */
+/** The project a space lists for the project `id`: its group (14.1), else itself. */
+const listedAs = (s: HiveState, project: string | null): string =>
+  s.projects?.[project ?? ""]?.parent ?? project ?? "";
+
+/** The space holding the project `id` (a group's repository is in its group's). */
 export const spaceOf = (s: HiveState, project: string | null): Space | undefined =>
-  s.spaces?.find((space) => space.projects.includes(project ?? ""));
+  s.spaces?.find((space) => space.projects.includes(listedAs(s, project)));
 
 /** The current space. */
 export const currentSpace = (s: HiveState): Space | undefined =>
@@ -833,7 +839,7 @@ const placeProject = (s: HiveState, id: string | null): string | null =>
 
 /** Whether place `id` is in the current space. */
 export const inCurrentSpace = (s: HiveState, id: string | null): boolean =>
-  !!currentSpace(s)?.projects.includes(placeProject(s, id) ?? "");
+  !!currentSpace(s)?.projects.includes(listedAs(s, placeProject(s, id)));
 
 /** Remembers the selection as the current space's place, as the user leaves that space. */
 export function leaveSpace(s: HiveState): Partial<HiveState> {
@@ -856,11 +862,14 @@ export function spacePlace(s: HiveState): string | null {
   return shown[0] ?? null;
 }
 
-/** The projects the sidebar shows: the current space's (every one until the spaces arrive). */
+/**
+ * The projects the sidebar shows: the current space's, its groups' repositories too (14.1;
+ * every one until the spaces arrive).
+ */
 export function spaceProjects(s: HiveState): Project[] {
   const all = Object.values(s.projects ?? {});
   const space = currentSpace(s);
-  return space ? all.filter((p) => space.projects.includes(p.id)) : all;
+  return space ? all.filter((p) => space.projects.includes(p.parent ?? p.id)) : all;
 }
 
 /**

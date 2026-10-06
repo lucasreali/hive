@@ -8,6 +8,7 @@ import {
   CirclesThreeIcon,
   FolderPlusIcon,
   FolderSimpleIcon,
+  FoldersIcon,
   GitBranchIcon,
   ListChecksIcon,
   MagnifyingGlassIcon,
@@ -76,6 +77,9 @@ export const ChevronIcon = ({ open }: { open: boolean }) => (
 );
 
 export const FolderIcon = icon(FolderSimpleIcon);
+
+/** A group (14.1): a folder of projects. */
+export const GroupIcon = icon(FoldersIcon);
 
 export const FileIcon = icon(PhosphorFileIcon);
 

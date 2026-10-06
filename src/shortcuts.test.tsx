@@ -2,14 +2,14 @@ import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, createEvent, fireEvent, render, waitFor } from "@testing-library/react";
 import { asMac } from "../test/mac";
 import { App } from "./App";
-import type { AgentState } from "./protocol";
+import type { AgentState, Project } from "./protocol";
 import { apply } from "./reduce";
 import { paletteCommands } from "./shell/Palette";
 import { nextPending, shortcut } from "./shortcuts";
 import { initialState, openModal, renderedShown, select, setOpenFile, useHive } from "./store";
 import { closeTerminal, openTerminal, terminal } from "./terminals";
 import { transport } from "./transport";
-import { agentStatus, MOCK_REPOS } from "./transport/mock";
+import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "./transport/mock";
 
 beforeAll(async () => {
   await transport.connect(apply);
@@ -94,6 +94,24 @@ test("Ctrl+Shift+N opens the new worktree dialog for the current project", () =>
   });
   press(ctrlShift("N"));
   expect(useHive.getState()).toMatchObject({ modal: "new-worktree", modalProject: api.id });
+});
+
+test("a group has no new worktree; F8 to an agent of one of its projects opens the group", () => {
+  const [group, backend] = MOCK_GROUP as [Project, Project];
+  render(<App />);
+  act(() => apply({ type: "projects", projects: MOCK_GROUP }));
+  act(() => select(group.id));
+  press(ctrlShift("N"));
+  expect(useHive.getState().modal).toBeNull();
+  act(() => {
+    useHive.setState({ collapsed: { [group.id]: true } });
+    const placed = { project: backend.id, worktree: backend.id, cwd: null };
+    apply({ type: "agent_detected", channel: 9, id: "s", ...placed });
+    apply({ type: "agent_state", id: "s", ...agentStatus("waiting_you"), subagents: [] });
+  });
+  press({ key: "F8" });
+  expect(useHive.getState().selection).toBe("s");
+  expect(useHive.getState().collapsed[group.id]).toBe(false);
 });
 
 test("Ctrl+Shift+N without projects opens the add project dialog", () => {

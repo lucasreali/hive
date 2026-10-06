@@ -42,6 +42,7 @@ import {
   BranchIcon,
   ChevronIcon,
   FolderIcon,
+  GroupIcon,
   PlusIcon,
   RefreshIcon,
   STATE_LABEL,
@@ -82,11 +83,15 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
 
 // ponytail: plain list, add TanStack Virtual when trees get long.
 export function Sidebar() {
-  const list = useHive(useShallow(spaceProjects));
+  const all = useHive(useShallow(spaceProjects));
   const width = useHive((s) => s.sidebarWidth);
-  const ids = list.map((p) => p.id);
+  // A group (14.1) is no repository: no pull requests or runs of its own.
+  const ids = all.filter((p) => !p.group).map((p) => p.id);
   usePullBadges(ids);
   useRunBadges(ids);
+  // A group's repositories show under it.
+  const list = all.filter((p) => !p.parent);
+  const inside = (group: Project) => all.filter((p) => p.parent === group.id);
   return (
     <nav className="sidebar" aria-label="Projects" onKeyDown={moveInTree} style={{ width }}>
       <ResizeHandle side="sidebar" />
@@ -118,7 +123,7 @@ export function Sidebar() {
         ) : (
           <ul>
             {list.map((p) => (
-              <ProjectNode key={p.id} project={p} />
+              <ProjectNode key={p.id} project={p} inside={inside(p)} />
             ))}
           </ul>
         )}
@@ -156,7 +161,19 @@ function SpacePicker() {
   );
 }
 
-function ProjectNode({ project }: { project: Project }) {
+/**
+ * A project and its worktrees; or a group (14.1): its own agents (in its folder, its one
+ * worktree), then its repositories (`inside`), one level in.
+ */
+function ProjectNode({
+  project,
+  inside = [],
+  inGroup = false,
+}: {
+  project: Project;
+  inside?: Project[];
+  inGroup?: boolean;
+}) {
   const open = useHive((s) => !s.collapsed[project.id]);
   const selection = useHive((s) => s.selection);
   // A subagent's own worktree has no row, only its line's tooltip (9.35); the service leaves
@@ -165,10 +182,12 @@ function ProjectNode({ project }: { project: Project }) {
   const shown = useHive(
     useShallow((s) => project.worktrees.filter((w) => !s.subagentWorktrees.includes(w.id))),
   );
+  // Collapsed, it shows the most urgent state of every agent inside, its repositories' too.
+  const places = new Set([project, ...inside].flatMap((p) => p.worktrees.map((w) => w.id)));
   return (
-    <li>
+    <li className={inGroup ? "in-group" : undefined}>
       <div
-        className="tree-row project"
+        className={project.group ? "tree-row project group" : "tree-row project"}
         title={project.path}
         data-selected={selection === project.id}
       >
@@ -189,21 +208,57 @@ function ProjectNode({ project }: { project: Project }) {
           onClick={() => select(project.id)}
           onContextMenu={(e) => openProjectMenu({ project: project.id, ...menuAt(e) })}
         >
-          <FolderIcon />
+          {project.group ? <GroupIcon /> : <FolderIcon />}
           <span className="label">{project.name}</span>
-          {!open && <Rollup agents={(a) => project.worktrees.some((w) => w.id === a.worktree)} />}
+          {!open && <Rollup agents={(a) => places.has(a.worktree ?? "")} />}
         </button>
+        {project.group && (
+          <button
+            type="button"
+            className="new-chat"
+            title="New chat: a terminal running claude"
+            aria-label={`New chat in ${project.name}`}
+            onClick={() => showOpenFailure(openClaude(project.path))}
+          >
+            <NewChatIcon size={12} weight="bold" aria-hidden="true" />
+          </button>
+        )}
       </div>
       {open && (
         <ul>
           {project.error && <li className="tree-error">{project.error}</li>}
-          {shown.map((w) => (
-            <WorktreeNode key={w.id} worktree={w} />
-          ))}
+          {project.group ? (
+            <>
+              <AgentRows place={project.id} />
+              {inside.map((p) => (
+                <ProjectNode key={p.id} project={p} inGroup />
+              ))}
+            </>
+          ) : (
+            shown.map((w) => <WorktreeNode key={w.id} worktree={w} />)
+          )}
         </ul>
       )}
     </li>
   );
+}
+
+/** The agents the service placed in `place` (a worktree, or a group's folder), in the user's order. */
+const useAgentsIn = (place: string) =>
+  useHive(
+    useShallow((s) =>
+      inAgentOrder(
+        Object.values(s.agents).filter((a) => a.worktree === place),
+        s.agentOrder,
+      ),
+    ),
+  );
+
+/** A group's own agents (14.1), each movable among them as a worktree's are (8.2). */
+function AgentRows({ place }: { place: string }) {
+  const agents = useAgentsIn(place);
+  const drag = useReorder(`agents:${place}`, moveAgent);
+  return agents.map((a) => <AgentRow key={a.id} agent={a} drag={drag(a.id)} />);
 }
 
 /** Where a row's context menu opens: at the pointer, or under the row for the menu key. */
@@ -253,14 +308,7 @@ function Health({ status: s }: { status: WorktreeStatus }) {
  * worktree's hook event (9.23).
  */
 const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Worktree }) {
-  const agents = useHive(
-    useShallow((s) =>
-      inAgentOrder(
-        Object.values(s.agents).filter((a) => a.worktree === w.id),
-        s.agentOrder,
-      ),
-    ),
-  );
+  const agents = useAgentsIn(w.id);
   const open = useHive((s) => !s.collapsed[`worktree:${w.id}`]);
   const selected = useHive((s) => s.selection === w.id);
   // Agents move only among their worktree's: the service places each by its cwd (8.2).
