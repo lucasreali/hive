@@ -17,6 +17,7 @@ import { ago, copy, locate, remove, resume, sessionName, sessionTokens } from ".
 import { openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
+import { SearchField } from "./SearchField";
 import { ContextMenu } from "./WorktreeMenu";
 
 /** How often the open Sessions tab asks for the sessions again. */
@@ -69,17 +70,14 @@ export function SessionsView({ worktree }: { worktree: string }) {
   return (
     <>
       <div className="files-search sessions-search">
-        <label className="files-search-field">
-          <input
-            type="search"
-            aria-label="Search sessions"
-            placeholder="Search sessions"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </label>
+        <SearchField
+          aria-label="Search sessions"
+          placeholder="Search sessions"
+          value={query}
+          onChange={setQuery}
+          spellCheck={false}
+          autoComplete="off"
+        />
         <span className="sessions-count">{sessions ? `${shown.length} shown` : "Loading…"}</span>
         <button
           type="button"

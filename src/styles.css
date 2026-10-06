@@ -1814,23 +1814,6 @@ button.chevron:hover {
   border-right: 1px solid var(--border-subtle);
 }
 
-.settings-nav input {
-  height: 28px;
-  margin-bottom: 8px;
-  padding: 0 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--fs-small);
-  outline: none;
-}
-
-.settings-nav input:focus {
-  border-color: var(--focus);
-}
-
 .settings-section {
   display: flex;
   align-items: center;
@@ -2476,7 +2459,31 @@ button.chevron:hover {
   border: none;
   outline: none;
   color: var(--text);
+  font-family: inherit;
   font-size: var(--fs-small);
+}
+
+/* 14.5: the WebView's own clear button is blue; `SearchField` draws the app's instead. */
+.files-search-field input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.settings-nav .files-search-field {
+  flex: none;
+  margin-bottom: 8px;
+}
+
+.search-clear {
+  flex: none;
+  display: inline-flex;
+  padding: 0;
+  border-radius: var(--radius);
+  color: var(--text-3);
+}
+
+.search-clear:hover {
+  color: var(--text);
 }
 
 .files-search .segmented {
