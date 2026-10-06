@@ -22,6 +22,7 @@ import { Select } from "../ui/Select";
 import { openSettingsFile } from "../viewer/external";
 import { keyText } from "../window";
 import { CloseIcon, ICON } from "./icons";
+import { SearchField } from "./SearchField";
 
 const close = () => openModal(null);
 
@@ -882,12 +883,11 @@ export function SettingsDialog() {
       </header>
       <div className="settings-main">
         <nav className="settings-nav">
-          <input
-            type="search"
+          <SearchField
             aria-label="Search settings"
             placeholder="Search settings"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={setQuery}
           />
           {SECTIONS.map((name) => {
             const Shape = SECTION_ICON[name];

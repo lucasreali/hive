@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { notice } from "../../test/notice";
+import { expectClearButton } from "../../test/searchClear";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { initialState, select, setPanelView, setRightPanel, useHive } from "../store";
@@ -100,6 +101,13 @@ test("Sessions lists the shown worktree's sessions only, searched", () => {
     apply({ type: "sessions", sessions: [], error: "permission denied", truncated: false }),
   );
   expect(screen.getByText("permission denied")).toBeDefined();
+});
+
+test("Search sessions has the app's clear button, which lists them all again", () => {
+  show(shop.id);
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
+  expectClearButton("Search sessions");
+  expect(screen.getByText("2 shown")).toBeDefined();
 });
 
 test("a list cut short says so at its end", () => {
