@@ -135,6 +135,26 @@ test("the editor is editable text that reports edits, selections and Ctrl+S", ()
   expect(view.state.doc.toString()).toBe("one\r\ntwo\n");
 });
 
+test("the cursor's line and its number are highlighted, focused or not", () => {
+  const { view } = editing("one\ntwo\nthree\n");
+  const active = () =>
+    [...view.dom.querySelectorAll(".cm-activeLine")].map((line) => line.textContent);
+  const numbers = () =>
+    [...view.dom.querySelectorAll(".cm-lineNumbers .cm-activeLineGutter")].map(
+      (n) => n.textContent,
+    );
+  expect(view.hasFocus).toBe(false);
+  expect(active()).toEqual(["one"]);
+  expect(numbers()).toEqual(["1"]);
+  view.dispatch({ selection: { anchor: 5 } });
+  expect(active()).toEqual(["two"]);
+  expect(numbers()).toEqual(["2"]);
+  // A selection: the line its head (the cursor) is on.
+  view.dispatch({ selection: { anchor: 1, head: 9 } });
+  expect(active()).toEqual(["three"]);
+  expect(numbers()).toEqual(["3"]);
+});
+
 test("a reload swaps the text, keeping scroll and a clamped selection", () => {
   const { editor, view, heard } = editing("0123456789\n");
   const doc = view.state.doc;

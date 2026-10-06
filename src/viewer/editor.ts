@@ -11,7 +11,15 @@ import {
   type Text,
 } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { Decoration, drawSelection, EditorView, keymap, lineNumbers } from "@codemirror/view";
+import {
+  Decoration,
+  drawSelection,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+} from "@codemirror/view";
 import type { Lines } from "../store";
 import { changeMarkers } from "./gutterMarkers";
 
@@ -28,6 +36,9 @@ const theme = Prec.highest(
       ".cm-content": { padding: "4px 0" },
       ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--text-4)", border: "none" },
       ".cm-lineNumbers .cm-gutterElement": { minWidth: "32px", padding: "0 6px 0 4px" },
+      // The cursor's line (14.3): translucent, so the selection layer beneath still shows.
+      ".cm-activeLine": { backgroundColor: "var(--active-line)" },
+      ".cm-activeLineGutter": { backgroundColor: "var(--active-line)", color: "var(--text)" },
       "&.cm-merge-b .cm-changedLine": { backgroundColor: "rgba(161, 193, 129, 0.12)" },
       "&.cm-merge-b .cm-changedText": { background: "rgba(161, 193, 129, 0.25)" },
       ".cm-deletedChunk": { backgroundColor: "rgba(208, 114, 119, 0.12)" },
@@ -259,6 +270,8 @@ export function createEditor(
         drawSelection(),
         markers.of(marked()),
         lineNumbers(),
+        highlightActiveLine(),
+        highlightActiveLineGutter(),
         oneDark,
         theme,
         language.extension(),

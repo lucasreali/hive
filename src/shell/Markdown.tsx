@@ -1,6 +1,9 @@
+import { LanguageDescription } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
+import { highlightCode, tags as t, tagHighlighter } from "@lezer/highlight";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { memo } from "react";
+import { memo, type ReactNode, useEffect, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { showNotice } from "../store";
@@ -29,7 +32,76 @@ export async function openLink(url: string, tauri = isTauri()): Promise<void> {
   }
 }
 
+/** The editor's One Dark groups (`oneDarkHighlightStyle`) as classes, coloured per theme. */
+const HIGHLIGHTER = tagHighlighter([
+  { tag: t.keyword, class: "tok-keyword" },
+  { tag: [t.name, t.deleted, t.character, t.propertyName, t.macroName], class: "tok-name" },
+  { tag: [t.function(t.variableName), t.labelName], class: "tok-function" },
+  { tag: [t.color, t.constant(t.name), t.standard(t.name)], class: "tok-constant" },
+  { tag: [t.definition(t.name), t.separator], class: "tok-plain" },
+  {
+    tag: [t.typeName, t.className, t.number, t.changed, t.annotation, t.modifier, t.self],
+    class: "tok-type",
+  },
+  { tag: [t.operator, t.operatorKeyword, t.url, t.escape, t.regexp], class: "tok-operator" },
+  { tag: [t.meta, t.comment], class: "tok-comment" },
+  { tag: [t.atom, t.bool, t.special(t.variableName)], class: "tok-constant" },
+  { tag: [t.processingInstruction, t.string, t.inserted], class: "tok-string" },
+]);
+
+/**
+ * A fenced block's code coloured by the editor's own parsers (`tok-*` classes, coloured by the
+ * theme's tokens in styles.css); plain until its language loads, and plain for an unknown one
+ * or one whose parser fails to load.
+ */
+function Code({ lang, text }: { lang: string; text: string }) {
+  const [nodes, setNodes] = useState<ReactNode[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    void LanguageDescription.matchLanguageName(languages, lang, true)
+      ?.load()
+      .then(({ language }) => {
+        const out: ReactNode[] = [];
+        highlightCode(
+          text,
+          language.parser.parse(text),
+          HIGHLIGHTER,
+          (part, cls) =>
+            out.push(
+              cls ? (
+                <span key={out.length} className={cls}>
+                  {part}
+                </span>
+              ) : (
+                part
+              ),
+            ),
+          () => out.push("\n"),
+        );
+        if (live) setNodes(out);
+      })
+      // A parser that fails to load leaves the block plain: the code still reads.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [lang, text]);
+  return <code className={`language-${lang}`}>{nodes ?? text}</code>;
+}
+
 const PLUGINS = [remarkGfm];
+const DOC_COMPONENTS: Components = {
+  // A block's text ends with its newline, which would show as an empty last line.
+  code: ({ className, children }) => {
+    const lang = /language-(\S+)/.exec(className ?? "")?.[1];
+    const text = typeof children === "string" ? children.replace(/\n$/, "") : children;
+    return lang && typeof text === "string" ? (
+      <Code lang={lang} text={text} />
+    ) : (
+      <code className={className}>{text}</code>
+    );
+  },
+};
 const COMPONENTS: Components = {
   // A refused link (`safeUrl` gave "") is its text only.
   a: ({ href, children }) =>
@@ -67,10 +139,21 @@ const COMPONENTS: Components = {
  * lists), no raw HTML (react-markdown shows it as text without `rehype-raw`), links filtered by
  * `safeUrl`. Memoized on the text, so an unchanged one is not parsed again.
  */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({
+  text,
+  document = false,
+}: {
+  text: string;
+  /** A whole file in its tab (14.6): the document style, with coloured code blocks. */
+  document?: boolean;
+}) {
   return (
-    <div className="markdown">
-      <ReactMarkdown remarkPlugins={PLUGINS} urlTransform={safeUrl} components={COMPONENTS}>
+    <div className={document ? "markdown markdown-doc" : "markdown"}>
+      <ReactMarkdown
+        remarkPlugins={PLUGINS}
+        urlTransform={safeUrl}
+        components={document ? { ...COMPONENTS, ...DOC_COMPONENTS } : COMPONENTS}
+      >
         {text}
       </ReactMarkdown>
     </div>
