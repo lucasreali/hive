@@ -433,6 +433,13 @@ export const MOCK_FILES = [
   "tests/checkout.test.ts",
   "tsconfig.json",
 ];
+/** What the fake service lists as ignored in every worktree, closed (14.2). */
+export const MOCK_IGNORED = [".env", "node_modules/"];
+/** One level of each ignored folder of the fake worktrees, listed while it is open. */
+const MOCK_IGNORED_LEVELS: Record<string, string[]> = {
+  node_modules: ["node_modules/.package-lock.json", "node_modules/react/"],
+  "node_modules/react": ["node_modules/react/index.js", "node_modules/react/package.json"],
+};
 const mockFiles = (worktree: Worktree) =>
   [
     ...MOCK_FILES,
@@ -710,9 +717,17 @@ export function createMockTransport(
   let watchedBase: DiffBase = "head";
   const worktreeAt = (path: string) =>
     projects.flatMap((p) => p.worktrees).find((w) => w.path === path);
+  // The ignored folders open in the watched worktree's tree (`expandIgnored`).
+  let expanded: string[] = [];
   // As the service does after every refresh of the watched worktree: its files, then its changes.
   const sendFiles = (path: string) => {
-    later({ type: "files", path, files: files.get(path) as string[], truncated: false });
+    const ignored = [...MOCK_IGNORED];
+    // Parents first: a folder inside counts once the one holding it is listed.
+    for (const folder of [...expanded].sort()) {
+      if (ignored.includes(`${folder}/`)) ignored.push(...(MOCK_IGNORED_LEVELS[folder] ?? []));
+    }
+    const listed = files.get(path) as string[];
+    later({ type: "files", path, files: listed, ignored: ignored.sort(), truncated: false });
     later(changes(projects, path, watchedBase));
   };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
@@ -1158,6 +1173,7 @@ export function createMockTransport(
       const worktree = worktreeAt(path);
       watched = worktree ? path : null;
       watchedBase = base;
+      expanded = [];
       if (!worktree) {
         const message = `${path} is not a worktree of a followed project`;
         return void later({ type: "error", message });
@@ -1167,6 +1183,11 @@ export function createMockTransport(
     },
     async unwatchWorktree() {
       watched = null;
+    },
+    async expandIgnored(path, folders) {
+      if (path !== watched) return;
+      expanded = folders;
+      sendFiles(path);
     },
     // Mock agents never finish, so nothing depends on the view.
     async setView() {},

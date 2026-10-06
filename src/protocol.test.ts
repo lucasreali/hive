@@ -75,7 +75,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   worktree_renamed: { project: true, from: true, path: true },
   rename_worktree_failed: { path: true, name: true, message: true },
   worktree_status: { path: true, status: true },
-  files: { path: true, files: true, truncated: true },
+  files: { path: true, files: true, ignored: true, truncated: true },
   error: { message: true },
   changes: {
     path: true,
@@ -157,7 +157,7 @@ test("the reducer takes every sample, and a type it does not know changes nothin
   const s = useHive.getState();
   expect(s.connection.status).toBe("version_mismatch");
   expect(Object.keys(s.projects ?? {})).toEqual(["/r"]);
-  expect(s.worktreeFiles).toMatchObject({ path: "/r", files: ["a.rs"], truncated: false });
+  expect(s.worktreeFiles).toMatchObject({ path: "/r", files: ["a.rs"], ignored: [".env", "target/"], truncated: false });
   apply({ type: "from_a_newer_service" } as unknown as ServiceMessage);
   expect(useHive.getState()).toEqual(s);
 });

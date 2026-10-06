@@ -209,9 +209,16 @@ export type CreateFailure = { project: string; name: string; message: string };
 
 /**
  * Every file git lists in the watched worktree `path`: sorted `/`-separated relative paths,
- * replaced as a whole on each `files`. `truncated` when the service's cap cut the list.
+ * replaced as a whole on each `files`. `ignored`: what git ignores, apart (14.2): files, and
+ * folders as `dir/`, with one level of each folder sent in `expand_ignored`. `truncated` when
+ * the service's cap cut the list.
  */
-export type WorktreeFiles = { path: string; files: string[]; truncated: boolean };
+export type WorktreeFiles = {
+  path: string;
+  files: string[];
+  ignored: string[];
+  truncated: boolean;
+};
 
 /** Mirrors `hive_protocol::FileStatus`: against HEAD, as `git status` shows it. */
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";

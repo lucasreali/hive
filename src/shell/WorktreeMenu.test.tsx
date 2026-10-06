@@ -502,7 +502,7 @@ test("removing a project asks first, Cancel does nothing, and its state goes wit
       },
       comments: { [login.id]: [], [apiMain.id]: [] },
       newFolders: { [main.id]: ["x"] },
-      worktreeFiles: { path: login.id, files: [], truncated: false },
+      worktreeFiles: { path: login.id, files: [], ignored: [], truncated: false },
       searchResults: { worktree: main.id, query: "q", matches: [], truncated: false, error: null },
     }),
   );

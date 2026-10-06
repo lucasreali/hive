@@ -386,9 +386,9 @@ test("new-worktree answers are kept for the dialog until it opens again", () => 
 });
 
 test("files replace the watched worktree's list; a disconnect drops it", () => {
-  apply({ type: "files", path: "/a", files: ["x"], truncated: false });
-  apply({ type: "files", path: "/b", files: ["y", "z"], truncated: true });
-  const files = { path: "/b", files: ["y", "z"], truncated: true };
+  apply({ type: "files", path: "/a", files: ["x"], ignored: [], truncated: false });
+  apply({ type: "files", path: "/b", files: ["y", "z"], ignored: [], truncated: true });
+  const files = { path: "/b", files: ["y", "z"], ignored: [], truncated: true };
   expect(useHive.getState().worktreeFiles).toEqual(files);
   apply({ type: "disconnected", reason: "gone", bundled: false });
   expect(useHive.getState().worktreeFiles).toBeNull();

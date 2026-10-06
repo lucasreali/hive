@@ -291,7 +291,7 @@ test("a file moved into another folder (8.3) keeps its tab, its place and its un
 
 test("a renamed or moved file keeps its tab and its place; a deleted one's tab closes", () => {
   const listing = (files: string[], truncated = false) =>
-    apply({ type: "files", path: W, files, truncated });
+    apply({ type: "files", path: W, files, ignored: [], truncated });
   keepOpen(file("a.ts"), true);
   answer("a.ts", "a\n");
   addTab(1, W);
@@ -318,9 +318,23 @@ test("a renamed or moved file keeps its tab and its place; a deleted one's tab c
   expect(bar()).toEqual([1]);
   // Another worktree's listing, or the first one, closes nothing.
   keepOpen(file("d.ts"));
-  apply({ type: "files", path: checkout.path, files: [], truncated: false });
+  apply({ type: "files", path: checkout.path, files: [], ignored: [], truncated: false });
   listing([]);
   expect(bar()).toEqual([1, "d.ts"]);
+});
+
+test("an ignored file's tab closes when it is deleted, not when it moves or its folder closes", () => {
+  const listing = (files: string[], ignored: string[]) =>
+    apply({ type: "files", path: W, files, ignored, truncated: false });
+  listing([], [".env", "notes.txt", "deps/", "deps/a.js"]);
+  for (const path of [".env", "notes.txt", "deps/a.js"]) keepOpen(file(path));
+  // No longer ignored, or its ignored folder closed: still there.
+  listing(["notes.txt"], [".env", "deps/"]);
+  expect(bar()).toEqual([".env", "notes.txt", "deps/a.js"]);
+  listing([], [".env", "notes.txt", "deps/"]);
+  expect(bar()).toEqual([".env", "notes.txt", "deps/a.js"]);
+  listing([], ["notes.txt", "deps/"]);
+  expect(bar()).toEqual(["notes.txt", "deps/a.js"]);
 });
 
 test("a deleted file or folder leaves the tree at once and its tabs close, asking once when dirty", () => {
@@ -328,6 +342,7 @@ test("a deleted file or folder leaves the tree at once and its tabs close, askin
     type: "files",
     path: W,
     files: ["a.ts", "src/b.ts", "src/lib/c.ts", "srcx/d.ts"],
+    ignored: [".env", "srcx/out/"],
     truncated: false,
   });
   useHive.setState({ newFolders: { [W]: ["src/empty", "other"] } });
@@ -343,6 +358,9 @@ test("a deleted file or folder leaves the tree at once and its tabs close, askin
   apply({ type: "file_deleted", worktree: W, path: "src" });
   expect(s().worktreeFiles?.files).toEqual(["a.ts", "srcx/d.ts"]);
   expect(s().newFolders).toEqual({ [W]: ["other"] });
+  // An ignored folder goes the same way.
+  apply({ type: "file_deleted", worktree: W, path: "srcx/out" });
+  expect(s().worktreeFiles?.ignored).toEqual([".env"]);
   expect(open()).toEqual(["src/b.ts", "src/lib/c.ts", "srcx/d.ts", "a.ts", "other:src/b.ts"]);
   expect(s().question?.text).toBe(
     "src/b.ts, src/lib/c.ts were deleted. Your unsaved changes to them will be lost.",
@@ -363,7 +381,7 @@ test("a deleted file or folder leaves the tree at once and its tabs close, askin
 
 test("dirty files deleted one after another are asked about in one question, over the dialog open", () => {
   const paths = ["a.ts", "b.ts", "c.ts"];
-  apply({ type: "files", path: W, files: [...paths, "d.ts"], truncated: false });
+  apply({ type: "files", path: W, files: [...paths, "d.ts"], ignored: [], truncated: false });
   for (const path of paths) {
     keepOpen(file(path), true);
     answer(path, "x\n");
@@ -372,7 +390,7 @@ test("dirty files deleted one after another are asked about in one question, ove
   useHive.setState({ modal: "settings" });
   // Each goes in its own message: the question grows instead of being replaced.
   apply({ type: "file_deleted", worktree: W, path: "a.ts" });
-  apply({ type: "files", path: W, files: ["c.ts", "d.ts"], truncated: false });
+  apply({ type: "files", path: W, files: ["c.ts", "d.ts"], ignored: [], truncated: false });
   apply({ type: "file_deleted", worktree: W, path: "c.ts" });
   expect(s().modal).toBe("confirm");
   expect(s().question?.text).toBe(

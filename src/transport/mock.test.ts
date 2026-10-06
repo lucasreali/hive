@@ -11,6 +11,7 @@ import {
   MOCK_CHANGES,
   MOCK_DIAGNOSTICS,
   MOCK_FILES,
+  MOCK_IGNORED,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_SESSIONS,
@@ -468,13 +469,39 @@ test("a watched worktree lists its files and again after a touch in its terminal
   expect(main?.type === "files" && main.files.length).toBe(MOCK_FILES.length + 400);
   await transport.watchWorktree(fix, "head");
   await tick();
-  expect(filesOf()[2]).toEqual({ type: "files", path: fix, files: MOCK_FILES, truncated: false });
+  const listing = (files: string[], ignored = MOCK_IGNORED) => ({
+    type: "files" as const,
+    path: fix,
+    files,
+    ignored,
+    truncated: false,
+  });
+  expect(filesOf()[2]).toEqual(listing(MOCK_FILES));
 
   const id = await transport.openTerminal(fix, 80, 24, () => {});
   await transport.writeTerminal(id, "touch a.txt\r");
   await tick();
   const touched = ["a.txt", ...MOCK_FILES].sort();
-  expect(filesOf()[3]).toEqual({ type: "files", path: fix, files: touched, truncated: false });
+  expect(filesOf()[3]).toEqual(listing(touched));
+  // An open ignored folder lists one level, a folder inside it once it is listed too; another
+  // worktree's folders change nothing.
+  await transport.expandIgnored(shop.path, ["node_modules"]);
+  await transport.expandIgnored(fix, ["node_modules/react"]);
+  await transport.expandIgnored(fix, ["node_modules", "node_modules/react", "src"]);
+  await tick();
+  const levels = [
+    ".env",
+    "node_modules/",
+    "node_modules/.package-lock.json",
+    "node_modules/react/",
+    "node_modules/react/index.js",
+    "node_modules/react/package.json",
+  ];
+  expect(filesOf().slice(4)).toEqual([listing(touched), listing(touched, levels)]);
+  // A new watch starts with none open.
+  await transport.watchWorktree(fix, "head");
+  await tick();
+  expect(filesOf()[6]).toEqual(listing(touched));
   // Unwatched, or outside a worktree, a touch sends nothing.
   await transport.unwatchWorktree();
   await transport.writeTerminal(id, "touch b.txt\r");
@@ -484,11 +511,11 @@ test("a watched worktree lists its files and again after a touch in its terminal
   const other = await transport.openTerminal(shop.path, 80, 24, () => {});
   await transport.writeTerminal(other, "touch d.txt\r");
   await tick();
-  expect(filesOf()).toHaveLength(4);
+  expect(filesOf()).toHaveLength(7);
   await transport.watchWorktree(fix, "head");
   await transport.watchWorktree(shop.path, "head");
   await tick();
-  const [, , , , again, main2] = filesOf();
+  const [again, main2] = filesOf().slice(7);
   expect(again?.type === "files" && again.files).toEqual(["b.txt", ...touched].sort());
   expect(main2?.type === "files" && main2.files.includes("d.txt")).toBe(true);
 });

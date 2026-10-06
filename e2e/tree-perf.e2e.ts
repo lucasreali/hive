@@ -42,7 +42,7 @@ test("files tree: ↑/↓ in a 50 000-file worktree stays under a frame", async 
       collapsed[`files:${path}/${dir}`] = false;
       for (let s = 0; s < 20; s++) collapsed[`files:${path}/${dir}/sub${s}`] = false;
     }
-    apply({ type: "files", path, files, truncated: false });
+    apply({ type: "files", path, files, ignored: [], truncated: false });
     useHive.setState((s: { collapsed: Record<string, boolean> }) => ({
       collapsed: { ...s.collapsed, ...collapsed },
     }));

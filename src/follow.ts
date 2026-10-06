@@ -5,10 +5,13 @@ import type { Transport } from "./transport";
 
 /**
  * Keeps the service watching the worktree the right panel shows (`panelWorktree`), none while it
- * is closed. A new connection starts with no watch, so it is sent again. Returns the unsubscribe.
+ * is closed. A new connection starts with no watch, so it is sent again. Also tells it which of
+ * the listing's ignored folders (`dir/`) the Files tree has open (14.2), whenever that changes
+ * and after every new watch (which starts with none). Returns the unsubscribe.
  */
 export function followPanel(transport: Transport): () => void {
   let watched: string | null = null;
+  let expanded = "[]";
   const sync = (s: HiveState) => {
     const connected = s.connection.status === "connected";
     const open = connected && s.rightPanel === "files";
@@ -16,10 +19,19 @@ export function followPanel(transport: Transport): () => void {
     // A new base is watched anew: the service lists its changes against it.
     const base = shown && diffBase(s, shown);
     const key = shown && `${base}:${shown}`;
-    if (key === watched) return;
-    if (shown && base) void transport.watchWorktree(shown, base);
-    else if (connected) void transport.unwatchWorktree();
-    watched = key;
+    if (key !== watched) {
+      if (shown && base) void transport.watchWorktree(shown, base);
+      else if (connected) void transport.unwatchWorktree();
+      watched = key;
+      expanded = "[]";
+    }
+    const listing = shown && s.worktreeFiles?.path === shown ? s.worktreeFiles : null;
+    const folders = (listing?.ignored ?? [])
+      .filter((p) => p.endsWith("/") && s.collapsed[`files:${shown}/${p.slice(0, -1)}`] === false)
+      .map((p) => p.slice(0, -1));
+    if (!shown || JSON.stringify(folders) === expanded) return;
+    expanded = JSON.stringify(folders);
+    void transport.expandIgnored(shown, folders);
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);

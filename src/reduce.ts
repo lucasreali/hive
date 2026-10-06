@@ -400,7 +400,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         ...s,
         worktreeFiles:
           listing?.path === m.worktree
-            ? { ...listing, files: listing.files.filter((p) => !gone(p)) }
+            ? {
+                ...listing,
+                files: listing.files.filter((p) => !gone(p)),
+                ignored: listing.ignored.filter((p) => !gone(p)),
+              }
             : listing,
         newFolders: shown
           ? { ...s.newFolders, [m.worktree]: shown.filter((p) => !gone(p)) }
@@ -457,15 +461,20 @@ function patchEdits(
 /**
  * After a new listing of a worktree: the tabs of its files that the last listing held and this
  * one does not (deleted) close; one with unsaved edits asks first. A listing cut short proves
- * nothing.
+ * nothing, nor does one that lists an ignored folder holding the file: it may only be closed.
  */
 function deletedFiles(s: HiveState, before: WorktreeFiles | null): HiveState {
   const now = s.worktreeFiles as WorktreeFiles;
   if (before?.path !== now.path || before.truncated || now.truncated) return s;
-  const was = new Set(before.files);
-  const is = new Set(now.files);
+  const was = new Set([...before.files, ...before.ignored]);
+  const is = new Set([...now.files, ...now.ignored]);
+  const folders = now.ignored.filter((p) => p.endsWith("/"));
   const gone = s.openFiles.filter(
-    (f) => f.worktree === now.path && was.has(f.path) && !is.has(f.path),
+    (f) =>
+      f.worktree === now.path &&
+      was.has(f.path) &&
+      !is.has(f.path) &&
+      !folders.some((folder) => f.path.startsWith(folder)),
   );
   return closeDeleted(s, gone);
 }

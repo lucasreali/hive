@@ -882,6 +882,14 @@ label:has(> input[type="checkbox"]:disabled) {
   text-decoration: line-through;
 }
 
+/* What git ignores (14.2), dimmed as VS Code does: the name and its icon. */
+.file-row[data-ignored="true"] {
+  --git: var(--text-3);
+}
+.file-row[data-ignored="true"] .tree-icon {
+  opacity: 0.6;
+}
+
 .file-view {
   position: absolute;
   inset: 0;

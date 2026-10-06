@@ -40,7 +40,7 @@ test("the service watches the worktree the open files panel shows, and nothing e
   apply({ type: "welcome", version: "0.1.0", distro: null });
   expect(calls).toEqual([shop.id]);
   // Other changes do not send it again.
-  apply({ type: "files", path: shop.id, files: [], truncated: false });
+  apply({ type: "files", path: shop.id, files: [], ignored: [], truncated: false });
   select(api.id);
   setRightPanel(null);
   expect(calls).toEqual([shop.id, api.id, null]);
@@ -53,6 +53,61 @@ test("the service watches the worktree the open files panel shows, and nothing e
   stop();
   select(shop.id);
   expect(calls).toHaveLength(5);
+});
+
+test("the ignored folders open in the tree are sent when they change, and again after a new watch", () => {
+  const sent: unknown[] = [];
+  const transport = {
+    watchWorktree: async (path: string) => void sent.push(`watch ${path}`),
+    unwatchWorktree: async () => void sent.push("unwatch"),
+    expandIgnored: async (path: string, folders: string[]) => void sent.push([path, folders]),
+  } as unknown as Transport;
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  apply({ type: "projects", projects: MOCK_REPOS });
+  apply({ type: "welcome", version: "0.1.0", distro: null });
+  setRightPanel("files");
+  select(shop.id);
+  const stop = followPanel(transport);
+  const listing = (ignored: string[], path = shop.id) =>
+    apply({ type: "files", path, files: ["a.ts"], ignored, truncated: false });
+  const setOpen = (folder: string, open: boolean) =>
+    useHive.setState((s) => ({
+      collapsed: { ...s.collapsed, [`files:${shop.id}/${folder}`]: !open },
+    }));
+  // What was sent since the last look.
+  const taken = () => sent.splice(0);
+  listing([".env", "deps/", "out/"]);
+  expect(taken()).toEqual([`watch ${shop.id}`]);
+  // An open folder that is not ignored is not sent.
+  setOpen("src", true);
+  expect(taken()).toEqual([]);
+  setOpen("deps", true);
+  expect(taken()).toEqual([[shop.id, ["deps"]]]);
+  // Another worktree's listing holds none of this one's.
+  listing([".env", "deps/", "deps/a/", "out/"], "/elsewhere");
+  listing([".env", "deps/", "deps/a/", "out/"]);
+  expect(taken()).toEqual([
+    [shop.id, []],
+    [shop.id, ["deps"]],
+  ]);
+  // A folder inside counts once the listing names it; one closed is not sent.
+  setOpen("deps/a", true);
+  setOpen("out", false);
+  expect(taken()).toEqual([[shop.id, ["deps", "deps/a"]]]);
+  // Unchanged, nothing goes; closed, it goes.
+  listing([".env", "deps/", "deps/a/", "deps/a/x.js", "out/"]);
+  setOpen("deps", false);
+  expect(taken()).toEqual([[shop.id, ["deps/a"]]]);
+  // A new watch starts with none open: sent again once listed.
+  apply({ type: "disconnected", reason: "gone", bundled: false });
+  apply({ type: "welcome", version: "0.1.0", distro: null });
+  listing([".env", "deps/", "deps/a/", "out/"]);
+  expect(taken()).toEqual([`watch ${shop.id}`, [shop.id, ["deps/a"]]]);
+  // Closed panel: nothing.
+  setRightPanel(null);
+  setOpen("out", true);
+  expect(taken()).toEqual(["unwatch"]);
+  stop();
 });
 
 test("a Claude worktree is watched against its branch, and anew when its base is picked", () => {

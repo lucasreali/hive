@@ -104,7 +104,7 @@ test("a folder's menu creates in that folder; the root is named as such and has 
 test("Delete… asks first, naming the entry and a folder's files; Cancel deletes nothing", () => {
   const remove = spyOn(transport, "deleteFile").mockResolvedValue();
   const files = ["src/a.ts", "src/lib/b.ts", "srcx/c.ts", "top.ts"];
-  apply({ type: "files", path: "/w", files, truncated: false });
+  apply({ type: "files", path: "/w", files, ignored: ["node_modules/"], truncated: false });
   render(<Shown />);
   act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
   expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
@@ -137,6 +137,11 @@ test("Delete… asks first, naming the entry and a folder's files; Cancel delete
   act(() => askDelete({ worktree: "/x", folder: "d", path: "d" }));
   expect(useHive.getState().question?.text).toStartWith(
     "Delete the folder d and the 0 files in it?",
+  );
+  // An ignored folder's files are listed only while it is open: none counted.
+  act(() => askDelete({ worktree: "/w", folder: "node_modules", path: "node_modules" }));
+  expect(useHive.getState().question?.text).toStartWith(
+    "Delete the ignored folder node_modules and everything in it?",
   );
   // Nothing to delete without a path (the root, a deleted file).
   act(() => useHive.setState({ modal: null, question: null }));

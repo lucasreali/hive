@@ -72,10 +72,14 @@ export function askDelete({ worktree, folder, path }: FileTarget) {
   const listing = useHive.getState().worktreeFiles;
   const listed = listing?.path === worktree ? listing.files : [];
   const count = listed.filter((p) => within(p, path)).length;
+  // The tree lists what an ignored folder holds only while it is open: no count.
+  const ignored = listing?.path === worktree && listing.ignored.includes(`${path}/`);
   const what =
     path !== folder
       ? path
-      : `the folder ${path} and the ${count} file${count === 1 ? "" : "s"} in it`;
+      : ignored
+        ? `the ignored folder ${path} and everything in it`
+        : `the folder ${path} and the ${count} file${count === 1 ? "" : "s"} in it`;
   ask({
     title: path === folder ? "Delete folder?" : "Delete file?",
     text: `Delete ${what}? Nothing goes to a trash: git can bring back tracked files, but untracked and ignored ones are lost for good.`,

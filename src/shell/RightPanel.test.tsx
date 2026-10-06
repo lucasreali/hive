@@ -422,7 +422,15 @@ test("the Files tree opens a changed file as editable text, the Diff tab as its 
       </>,
     );
   const files = withTabs(<FilesView worktree={fixLogin.path} />);
-  act(() => apply({ type: "files", path: fixLogin.path, files: ["src/a.ts"], truncated: false }));
+  act(() =>
+    apply({
+      type: "files",
+      path: fixLogin.path,
+      files: ["src/a.ts"],
+      ignored: [],
+      truncated: false,
+    }),
+  );
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/a.ts")]) }));
   const open = { worktree: fixLogin.path, path: "src/a.ts" };
   const answer = { ...open, content: "new\n", base: "old\n", version: "v" };
@@ -653,7 +661,15 @@ test("a closed folder shows its counts before its dot; an open or clean one show
       ]),
     }),
   );
-  act(() => apply({ type: "files", path: fixLogin.path, files: ["lib/x.ts"], truncated: false }));
+  act(() =>
+    apply({
+      type: "files",
+      path: fixLogin.path,
+      files: ["lib/x.ts"],
+      ignored: [],
+      truncated: false,
+    }),
+  );
   const parts = (name: string) =>
     [...treeRow(name).children].slice(2).map((e) => [e.className, e.textContent]);
   expect(parts("src")).toEqual([
@@ -699,7 +715,9 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
   act(() => select(fixLogin.id));
   const listed = ["README.md", "src/auth/session.ts", "src/main.ts"];
   // Another worktree's list is not this one's.
-  act(() => apply({ type: "files", path: refactor.path, files: ["x"], truncated: false }));
+  act(() =>
+    apply({ type: "files", path: refactor.path, files: ["x"], ignored: [], truncated: false }),
+  );
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/auth/session.ts")]) }));
   expand();
   expect(rows()).toEqual([
@@ -707,7 +725,9 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
     ["auth", "M"],
     ["session.ts+1M", "M"],
   ]);
-  act(() => apply({ type: "files", path: fixLogin.path, files: listed, truncated: false }));
+  act(() =>
+    apply({ type: "files", path: fixLogin.path, files: listed, ignored: [], truncated: false }),
+  );
   expect(rows()).toEqual([
     ["src", "M"],
     ["auth", "M"],
@@ -717,7 +737,15 @@ test("Files shows the watched worktree's files, the Changes panel only the chang
   ]);
   expect(screen.queryByText(/cut short/)).toBeNull();
   // A collapsed folder with nothing changed inside shows no dot.
-  act(() => apply({ type: "files", path: fixLogin.path, files: ["lib/x.ts"], truncated: true }));
+  act(() =>
+    apply({
+      type: "files",
+      path: fixLogin.path,
+      files: ["lib/x.ts"],
+      ignored: [],
+      truncated: true,
+    }),
+  );
   fireEvent.click(screen.getByText("lib"));
   expect(document.querySelectorAll(".status-dot")).toHaveLength(0);
   expect(screen.getByText("Too many files: the list is cut short.")).toBeDefined();
@@ -750,7 +778,9 @@ function filesView() {
     </>,
   );
   const listed = ["README.md", "src/auth/session.ts", "src/main.ts", "docs/session-notes.md"];
-  act(() => apply({ type: "files", path: fixLogin.path, files: listed, truncated: false }));
+  act(() =>
+    apply({ type: "files", path: fixLogin.path, files: listed, ignored: [], truncated: false }),
+  );
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("src/auth/session.ts")]) }));
   return asked;
 }
@@ -788,10 +818,47 @@ test("Names lists the files whose path holds the text; one opens as the tree ope
   expect(screen.getByRole("tree", { name: "Files" })).toBeDefined();
 });
 
+test("what git ignores shows dimmed, an ignored folder closed until opened; Names leaves it out", () => {
+  filesView();
+  const listing = (ignored: string[]) =>
+    act(() =>
+      apply({
+        type: "files",
+        path: fixLogin.path,
+        files: ["README.md"],
+        ignored,
+        truncated: false,
+      }),
+    );
+  listing([".env", "node_modules/"]);
+  const dim = () =>
+    screen
+      .queryAllByRole("treeitem")
+      .filter((r) => r.dataset.ignored === "true")
+      .map((r) => r.textContent);
+  expect(dim()).toEqual(["node_modules", ".env"]);
+  expect(treeRow("README.md").dataset.ignored).toBe("false");
+  expect(treeRow("node_modules").getAttribute("aria-expanded")).toBe("false");
+  // Opened, what the service then lists in it shows, dimmed too.
+  fireEvent.click(screen.getByText("node_modules"));
+  listing([".env", "node_modules/", "node_modules/react/", "node_modules/x.js"]);
+  expect(dim()).toEqual(["node_modules", "react", "x.js", ".env"]);
+  // An ignored file opens as any other.
+  fireEvent.click(screen.getByTitle(".env"));
+  expect(useHive.getState().openFile).toEqual({ worktree: fixLogin.path, path: ".env" });
+  // Names finds what git lists, not what it ignores.
+  find("env");
+  expect(screen.getByRole("list", { name: "Matching files" }).textContent).toBe(
+    "No file name holds “env”.",
+  );
+});
+
 test("Names shows at most its cap and says how many there are", () => {
   filesView();
   const many = Array.from({ length: NAME_LIMIT + 3 }, (_, i) => `f/${i}.ts`);
-  act(() => apply({ type: "files", path: fixLogin.path, files: many, truncated: false }));
+  act(() =>
+    apply({ type: "files", path: fixLogin.path, files: many, ignored: [], truncated: false }),
+  );
   find(".ts");
   expect(document.querySelectorAll(".search-results .result-file")).toHaveLength(NAME_LIMIT);
   expect(
@@ -1128,7 +1195,9 @@ test("the tree's active row follows a renamed or moved entry once it is listed",
   act(() => apply({ type: "file_renamed", worktree: fixLogin.path, path: "docs", to: "zeta" }));
   expect(useHive.getState().movedRow).toEqual({ worktree: fixLogin.path, path: "zeta" });
   const listed = ["README.md", "src/main.ts", "zeta/session-notes.md"];
-  act(() => apply({ type: "files", path: fixLogin.path, files: listed, truncated: false }));
+  act(() =>
+    apply({ type: "files", path: fixLogin.path, files: listed, ignored: [], truncated: false }),
+  );
   expect(tree().getAttribute("aria-activedescendant")).toBe(treeRow("zeta").id);
   expect(useHive.getState().movedRow).toBeNull();
   // A moved file too.

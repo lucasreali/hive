@@ -50,6 +50,7 @@ export const tauriTransport: Transport = {
   renameWorktree: (path, name) => send("rename_worktree", { path, name }),
   watchWorktree: (path, base) => send("watch_worktree", { path, base }),
   unwatchWorktree: () => send("unwatch_worktree"),
+  expandIgnored: (path, folders) => send("expand_ignored", { path, folders }),
   setView: (terminal, focused) => send("set_view", { terminal, focused }),
   listChanges: (path, base) => send("list_changes", { path, base }),
   listSessions: () => send("list_sessions"),

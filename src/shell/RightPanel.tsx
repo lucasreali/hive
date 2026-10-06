@@ -80,8 +80,11 @@ const STATUS: Record<FileStatus, { letter: string; rank: number }> = {
   deleted: { letter: "D", rank: 4 },
 };
 
-/** A file of the tree: a changed one, or in "All" one git lists unchanged (`status` null). */
-export type TreeFile = Omit<ChangedFile, "status"> & { status: FileStatus | null };
+/**
+ * A file of the tree: a changed one, or in "All" one git lists unchanged (`status` null), or
+ * one git ignores (`ignored`, shown dimmed).
+ */
+export type TreeFile = Omit<ChangedFile, "status"> & { status: FileStatus | null; ignored?: true };
 
 export type FileRow =
   | {
@@ -96,6 +99,8 @@ export type FileRow =
       /** The lines changed below the folder (`Folder`). */
       added: number;
       removed: number;
+      /** Ignored as a whole: shown dimmed, its contents listed only while it is open. */
+      ignored?: true;
     }
   | { kind: "file"; key: string; name: string; depth: number; file: TreeFile };
 
@@ -109,13 +114,19 @@ export type Folder = {
   status: FileStatus | null;
   added: number;
   removed: number;
+  ignored?: true;
 };
 
 /**
  * "All": every file the service lists (`files`, sorted), each with its status from the
- * changes, plus the changed files it no longer lists (deleted ones), in path order.
+ * changes, plus the changed files it no longer lists (deleted ones), and the ignored files of
+ * `ignored` (its folders, `dir/`, go to `fileTree`), in path order.
  */
-export function allFiles(listed: string[], changed: ChangedFile[]): TreeFile[] {
+export function allFiles(
+  listed: string[],
+  changed: ChangedFile[],
+  ignored: string[] = [],
+): TreeFile[] {
   const byPath = new Map(changed.map((f) => [f.path, f]));
   const listedPaths = new Set(listed);
   const unchanged = (path: string): TreeFile => ({
@@ -128,6 +139,9 @@ export function allFiles(listed: string[], changed: ChangedFile[]): TreeFile[] {
   return [
     ...listed.map((path) => byPath.get(path) ?? unchanged(path)),
     ...changed.filter((f) => !listedPaths.has(f.path)),
+    ...ignored
+      .filter((path) => !path.endsWith("/"))
+      .map((path): TreeFile => ({ ...unchanged(path), ignored: true })),
   ].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
@@ -139,10 +153,15 @@ const stronger = (a: FileStatus | null, b: FileStatus | null) =>
  * `files` (sorted by the service) grouped into folders, each folder's strongest status and line
  * counts computed while building. Built once per listing (9.23): moving in the tree or opening a folder only
  * walks it again (`fileRows`). Grouping paths is presentation; statuses and counts are the
- * service's. `folders` (created from the tree) show even when git lists nothing in them.
+ * service's. `folders` (created from the tree) show even when git lists nothing in them, and
+ * so do the ignored folders of `ignored` (`dir/`), marked.
  */
-export function fileTree(files: TreeFile[], folders: string[] = []): Folder {
-  type Building = { folders: Map<string, Building>; files: TreeFile[] };
+export function fileTree(
+  files: TreeFile[],
+  folders: string[] = [],
+  ignored: string[] = [],
+): Folder {
+  type Building = { folders: Map<string, Building>; files: TreeFile[]; ignored?: true };
   const root: Building = { folders: new Map(), files: [] };
   const folderOf = (parts: string[]) => {
     let folder = root;
@@ -154,6 +173,9 @@ export function fileTree(files: TreeFile[], folders: string[] = []): Folder {
     return folder;
   };
   for (const path of folders) folderOf(path.split("/"));
+  for (const path of ignored.filter((p) => p.endsWith("/"))) {
+    folderOf(path.slice(0, -1).split("/")).ignored = true;
+  }
   for (const file of files) folderOf(file.path.split("/").slice(0, -1)).files.push(file);
   const finish = (folder: Building): Folder => {
     const inner = [...folder.folders]
@@ -161,6 +183,7 @@ export function fileTree(files: TreeFile[], folders: string[] = []): Folder {
       .map(([name, f]): [string, Folder] => [name, finish(f)]);
     const below = [...folder.files, ...inner.map(([, f]) => f)];
     return {
+      ignored: folder.ignored,
       folders: inner,
       files: folder.files,
       status: below.reduce<FileStatus | null>((a, f) => stronger(a, f.status), null),
@@ -188,8 +211,8 @@ export function fileRows(
       const key = `${tree}:${worktree}/${prefix}${name}`;
       const open = collapsed[key] === false;
       const path = `${prefix}${name}`;
-      const { status, added, removed } = inner;
-      rows.push({ kind: "folder", key, path, name, depth, open, status, added, removed });
+      const { status, added, removed, ignored } = inner;
+      rows.push({ kind: "folder", key, path, name, depth, open, status, added, removed, ignored });
       if (open) walk(inner, `${prefix}${name}/`, depth + 1);
     }
     for (const file of folder.files) {
@@ -655,8 +678,9 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   const root = useMemo(
     () =>
       fileTree(
-        all ? allFiles(all.files, changes?.files ?? []) : (changes?.files ?? []),
+        all ? allFiles(all.files, changes?.files ?? [], all.ignored) : (changes?.files ?? []),
         newFolders,
+        all?.ignored,
       ),
     [all, changes, newFolders],
   );
@@ -805,6 +829,7 @@ const TreeRow = memo(function TreeRow(props: {
       data-active={props.active}
       data-status={status ? STATUS[status].letter : undefined}
       data-deleted={status === "deleted"}
+      data-ignored={(row.kind === "folder" ? row.ignored : row.file.ignored) ?? false}
       data-index={index}
       data-file-drop={props.dropTarget}
       draggable={props.movable && (row.kind === "folder" || status !== "deleted")}
