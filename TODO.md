@@ -266,6 +266,15 @@ Created 2026-10-03 at the human's request. Tasks come only from the human, added
 
 ---
 
+## Stage 15 — Next release
+
+Created 2026-10-06 at the human's request, from the Stage 14 checkpoint. Tasks come only from the human, added here as they are asked for. Run with `/stage 15`.
+
+- [ ] **15.1 The editor's selection matches the light theme.** Found at the 14.3 checkpoint (2026-10-06): the file editor (`src/viewer/editor.ts`) always loads `oneDark` from `@codemirror/theme-one-dark`, so in One Light the selection keeps One Dark's dark `#3E4451`; it still shows (on 14.3's active line too) but looks out of place on a light background. The selection colour becomes a theme token (as `--active-line`, 14.3), One Light's own selection colour in the light theme and One Dark's in the dark one, for the editor and the read-only viewer and diff (`createViewer`, `compare`); a selection still shows over the active line (14.3) and the change markers (14.4). Check whether anything else of `oneDark`'s chrome (cursor, matching brackets, search match) is also dark in the light theme and fix it the same way. No new package (One Light colours are already in the token set, `docs/ui-reference.md`). Tests: a bun test that the selection uses the token; a Playwright check in light and dark that a selection is visible and in the theme's colour, on the active line and off it.
+- [ ] **15.2 An ignored folder is read without following links, race included.** Found at the 14.2 checkpoint (2026-10-06): `level()` in `crates/hive/src/files.rs` refuses an ignored folder whose canonical path is not its own path (a link anywhere in it), then calls `read_dir`; a link swapped into the path between that check and the read still wins (the `ponytail:` comment there). Close it: open each part of the path from the worktree's root with `openat` and `O_NOFOLLOW | O_DIRECTORY` (e.g. `rustix`, or `std` + `libc` if already a dependency; any new crate is named to the human first, CLAUDE.md rule 3) and list the folder from that descriptor; the watch added for an expanded folder gets the same treatment, or the reason it cannot is recorded. Windows (12.5) keeps its own path: say what it does there. Remove the `ponytail:` comment. Tests: a folder swapped for a link to outside the worktree after the check is neither listed nor watched (the swap injected through a test hook, not a timing race); the existing 14.2 tests still pass.
+
+---
+
 ## Not now (Fase 2)
 
 Kanban screen, rich interactions (permissions and choices answered in the app), live edit view, session history. Do not build any of it during v1.
