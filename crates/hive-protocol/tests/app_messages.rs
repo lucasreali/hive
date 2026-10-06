@@ -170,6 +170,8 @@ fn project() -> Project {
             }),
         }],
         error: None,
+        group: false,
+        parent: Some(s("/g")),
     }
 }
 
@@ -255,7 +257,8 @@ fn samples() -> Vec<Control> {
             spaces: vec![Space {
                 id: s("default"),
                 name: s("Default"),
-                projects: vec![s("/r")],
+                projects: vec![s("/r"), s("/g")],
+                groups: vec![s("/g")],
                 env: SpaceEnv::default(),
             }],
             current: s("default"),

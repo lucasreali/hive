@@ -21,6 +21,8 @@ use crate::{git, health, procs};
 const FILE_LIMIT: u64 = 1024 * 1024;
 /// Most processes named when a worktree is in use.
 const BUSY_SHOWN: usize = 5;
+/// Most entries of a group's folder read for its repositories (14.1).
+const GROUP_ENTRIES: usize = 1024;
 
 pub struct Projects {
     file: PathBuf,
@@ -85,14 +87,73 @@ impl Projects {
         }
     }
 
-    /// Every project with its worktrees, in the order they were added.
+    /// Every project with its worktrees, in the order they were added, each group (14.1)
+    /// followed by its repositories.
     pub fn list(&self) -> Vec<Project> {
-        let paths: Vec<String> = self.spaces().projects().cloned().collect();
-        paths.iter().map(|path| self.project(path)).collect()
+        let paths = self.all();
+        let entries = self.entries(&paths);
+        entries.into_iter().map(|e| self.build(e)).collect()
     }
 
-    /// The project `id` with its worktrees; git lists them only when they are not known.
+    /// Every space's project ids, groups included.
+    fn all(&self) -> Vec<String> {
+        self.spaces().projects().cloned().collect()
+    }
+
+    /// What `paths` (project ids of the spaces) hold, without asking git: each project, and
+    /// each group followed by its repositories, those of its folder's direct children that no
+    /// space follows on their own.
+    fn entries(&self, paths: &[String]) -> Vec<Entry> {
+        let (groups, taken): (HashSet<String>, HashSet<String>) = {
+            let spaces = self.spaces();
+            let groups = spaces.spaces.iter().flat_map(|s| s.groups.iter().cloned());
+            (groups.collect(), spaces.projects().cloned().collect())
+        };
+        let mut entries = Vec::new();
+        for path in paths {
+            if !groups.contains(path) {
+                entries.push(Entry::Repo(path.clone(), None));
+                continue;
+            }
+            let (inside, error) = match scan(Path::new(path)) {
+                Ok(inside) => (inside, None),
+                Err(err) => (Vec::new(), Some(format!("cannot read {path}: {err}"))),
+            };
+            entries.push(Entry::Group(path.clone(), error));
+            let inside = inside.into_iter().filter(|id| !taken.contains(id));
+            entries.extend(inside.map(|id| Entry::Repo(id, Some(path.clone()))));
+        }
+        entries
+    }
+
+    /// The project of `entry`, with its worktrees.
+    fn build(&self, entry: Entry) -> Project {
+        match entry {
+            Entry::Group(path, error) => group(&path, error),
+            Entry::Repo(id, parent) => Project {
+                parent,
+                ..self.listed(&id)
+            },
+        }
+    }
+
+    /// The followed project or group `id` with its worktrees (git lists only its own); else
+    /// as the repository `id` alone.
     fn project(&self, id: &str) -> Project {
+        let entries = self.entries(&self.all());
+        match entries.into_iter().find(|e| e.id() == id) {
+            Some(entry) => self.build(entry),
+            None => self.listed(id),
+        }
+    }
+
+    /// Whether the followed project `id` is a group (14.1).
+    pub fn is_group(&self, id: &str) -> bool {
+        self.spaces().is_group(id)
+    }
+
+    /// The repository `id` with its worktrees; git lists them only when they are not known.
+    fn listed(&self, id: &str) -> Project {
         let slot = (self.listed.lock().unwrap_or_else(PoisonError::into_inner))
             .entry(id.to_owned())
             .or_default()
@@ -118,15 +179,26 @@ impl Projects {
         }
     }
 
-    /// The current space's projects.
+    /// The current space's projects, each group followed by its repositories.
     pub fn current(&self) -> Vec<Project> {
         let (paths, _) = self.spaces().current();
-        paths.iter().map(|path| self.project(path)).collect()
+        let entries = self.entries(&paths);
+        entries.into_iter().map(|e| self.build(e)).collect()
     }
 
-    /// The current space's project folders, without asking git.
+    /// The current space's repository folders, its groups' too, without asking git.
     pub fn roots(&self) -> Vec<String> {
-        self.spaces().current().0
+        let (paths, _) = self.spaces().current();
+        let entries = self.entries(&paths).into_iter();
+        let repos = entries.filter_map(|e| matches!(e, Entry::Repo(..)).then(|| e.id().to_owned()));
+        repos.collect()
+    }
+
+    /// The current space's group folders (14.1).
+    pub fn groups(&self) -> Vec<String> {
+        let spaces = self.spaces();
+        let (paths, _) = spaces.current();
+        paths.into_iter().filter(|p| spaces.is_group(p)).collect()
     }
 
     /// The environment of the space of the project holding `cwd` (also what `gh` gets for a
@@ -137,19 +209,22 @@ impl Projects {
         // ponytail: a worktree of one project inside another's folder takes the outer one's space.
         // Resolved first, as `place` does: `..` or a link may lead into another project.
         let real = canonical(Path::new(cwd)).unwrap_or_default();
-        let ids: Vec<String> = self.spaces().projects().cloned().collect();
-        let inside: Vec<Project> = (ids.iter())
-            .filter(|id| real.starts_with(id))
-            .map(|id| self.project(id))
-            .collect();
-        let listed = if inside.is_empty() {
-            self.list()
-        } else {
-            inside
+        let mut ids = self.all();
+        ids.retain(|id| real.starts_with(id));
+        let listed = match ids.is_empty() {
+            true => self.list(),
+            false => self
+                .entries(&ids)
+                .into_iter()
+                .map(|e| self.build(e))
+                .collect(),
         };
         let place = place(&listed, cwd);
+        // A group's repository is in its group's space (14.1).
+        let placed = place.and_then(|(id, _)| listed.into_iter().find(|p| p.id == id));
+        let top = placed.map(|p| p.parent.unwrap_or(p.id));
         let spaces = self.spaces();
-        let space = place.and_then(|(project, _)| spaces.of(&project).cloned());
+        let space = top.and_then(|project| spaces.of(&project).cloned());
         space.map(|s| s.env).unwrap_or_default()
     }
 
@@ -173,15 +248,40 @@ impl Projects {
         Ok(())
     }
 
-    /// Follows the git repository containing `path` in the current space. Adding one
-    /// already there changes nothing and answers the same project; one in another space is
-    /// refused (a project is in one space only).
+    /// Follows the git repository containing `path` in the current space; a folder outside
+    /// git holding repositories becomes a group (14.1), into which the current space's
+    /// projects among them move. Adding one already there (a group's repository too) changes
+    /// nothing and answers the same project; one in another space is refused (a project is in
+    /// one space only).
     pub fn add(&self, path: &str) -> Result<Project, (ProjectError, String)> {
-        let id = validate(path)?.to_string_lossy().into_owned();
+        let (id, inside) = match validate(path) {
+            Ok(root) => (root.to_string_lossy().into_owned(), None),
+            Err((ProjectError::NotAGitRepository, message)) => {
+                let dir = canonical(Path::new(path)).ok();
+                let inside = dir.as_deref().map(scan).and_then(Result::ok);
+                match dir.zip(inside.filter(|repos| !repos.is_empty())) {
+                    Some((dir, repos)) => (dir.to_string_lossy().into_owned(), Some(repos)),
+                    // No repository inside: refused as before.
+                    None => return Err((ProjectError::NotAGitRepository, message)),
+                }
+            }
+            Err(refused) => return Err(refused),
+        };
+        // A repository of a followed group is followed already, in its group's space.
+        let held = match self.entries(&self.all()).into_iter().find(|e| e.id() == id) {
+            Some(Entry::Repo(_, parent)) => parent,
+            _ => None,
+        };
         // Checked and added under one lock, so two adds at once cannot both add it.
         let mut other = false;
         let added = self.change_spaces(|spaces| {
-            spaces.add(id.clone()).map_err(|name| {
+            let added = match (&inside, &held) {
+                (Some(inside), _) => spaces.add_group(id.clone(), inside),
+                // Followed: nothing changes, or the other space's name.
+                (None, Some(group)) => spaces.add(group.clone()),
+                (None, None) => spaces.add(id.clone()),
+            };
+            added.map_err(|name| {
                 other = true;
                 format!("{id} is already in the space {name}")
             })
@@ -195,20 +295,33 @@ impl Projects {
         Ok(self.project(&id))
     }
 
-    /// Stops following the project `id` (9.28); nothing on disk changes. Refused while a
-    /// process of one of Hive's terminals (their session ids, `terminals`, as `proc` lists
-    /// processes) works in it or one of its worktrees. Answers its worktrees' paths.
+    /// Stops following the project `id` (9.28), a group with its repositories (14.1); nothing
+    /// on disk changes. Refused while a process of one of Hive's terminals (their session
+    /// ids, `terminals`, as `proc` lists processes) works in it or one of its worktrees, and
+    /// for a group's repository (it follows its folder). Answers its worktrees' paths and a
+    /// group's repositories.
     pub fn remove(
         &self,
         id: &str,
         proc: procs::Source,
         terminals: &HashSet<i32>,
-    ) -> io::Result<Vec<String>> {
-        self.root(id)?;
-        let worktrees: Vec<String> = self
-            .project(id)
-            .worktrees
-            .into_iter()
+    ) -> io::Result<(Vec<String>, Vec<String>)> {
+        let entries = self.entries(&self.all());
+        let repos: Vec<String> = match entries.iter().find(|e| e.id() == id) {
+            None => return Err(not_followed(id)),
+            Some(Entry::Repo(_, Some(group))) => {
+                return Err(io::Error::other(format!(
+                    "{id} is in the group {group}: remove the group to stop following it"
+                )));
+            }
+            Some(Entry::Repo(_, None)) => vec![id.to_owned()],
+            Some(Entry::Group(..)) => (entries.iter())
+                .filter(|e| matches!(e, Entry::Repo(_, Some(group)) if group == id))
+                .map(|e| e.id().to_owned())
+                .collect(),
+        };
+        let worktrees: Vec<String> = (repos.iter())
+            .flat_map(|repo| self.listed(repo).worktrees)
             .map(|w| w.path)
             .collect();
         // The root too, in case its worktrees cannot be listed (e.g. its folder is gone).
@@ -222,7 +335,8 @@ impl Projects {
         refuse(busy)?;
         self.change_spaces(|spaces| spaces.remove(id))
             .map_err(io::Error::other)?;
-        Ok(worktrees)
+        let inside = repos.into_iter().filter(|repo| repo != id).collect();
+        Ok((worktrees, inside))
     }
 
     /// The branches of the followed project `id`.
@@ -312,7 +426,8 @@ impl Projects {
 
     /// The followed project holding the worktree `path` (its main one included), and it.
     pub fn holding(&self, path: &str) -> io::Result<(Project, Worktree)> {
-        let found = self.list().into_iter().find_map(|p| {
+        let mut repos = self.list().into_iter().filter(|p| !p.group);
+        let found = repos.find_map(|p| {
             let wt = p.worktrees.iter().find(|w| w.path == path).cloned();
             wt.map(|wt| (p, wt))
         });
@@ -331,12 +446,14 @@ impl Projects {
         followed(&self.list(), path).map(|(dir, _)| dir)
     }
 
-    /// Only followed projects are acted on: the id comes from the app.
+    /// Only followed repositories are acted on (a group's too, never a group): the id comes
+    /// from the app.
     fn root(&self, id: &str) -> io::Result<PathBuf> {
-        if self.spaces().projects().any(|path| path == id) {
+        let mut entries = self.entries(&self.all()).into_iter();
+        if entries.any(|e| matches!(&e, Entry::Repo(repo, _) if repo == id)) {
             return Ok(PathBuf::from(id));
         }
-        Err(io::Error::other(format!("{id} is not a followed project")))
+        Err(not_followed(id))
     }
 
     fn spaces(&self) -> MutexGuard<'_, Spaces> {
@@ -347,7 +464,8 @@ impl Projects {
 /// The worktree `path` of `projects` and the branch it is compared with
 /// ([`health::branch`]); an error when no project has it.
 pub fn followed(projects: &[Project], path: &str) -> io::Result<(PathBuf, Option<String>)> {
-    for project in projects {
+    // A group's folder is no git worktree (14.1).
+    for project in projects.iter().filter(|p| !p.group) {
         if let Some(w) = project.worktrees.iter().find(|w| w.path == path) {
             let branch = health::branch(project, w).map(str::to_owned);
             return Ok((PathBuf::from(path), branch));
@@ -487,6 +605,70 @@ fn validate(path: &str) -> Result<PathBuf, (ProjectError, String)> {
     }
 }
 
+/// What a space's project id holds.
+enum Entry {
+    /// A repository, with the group holding it when it is a group's.
+    Repo(String, Option<String>),
+    /// A group (14.1), with why its folder cannot be read, if it cannot.
+    Group(String, Option<String>),
+}
+
+impl Entry {
+    fn id(&self) -> &str {
+        match self {
+            Entry::Repo(id, _) | Entry::Group(id, _) => id,
+        }
+    }
+}
+
+fn not_followed(id: &str) -> io::Error {
+    io::Error::other(format!("{id} is not a followed project"))
+}
+
+/// The repositories directly inside the folder `dir`, a group's (14.1): its subfolders (not
+/// links) holding a `.git` folder, sorted. Only the first [`GROUP_ENTRIES`] entries are read;
+/// a name that is not UTF-8 is skipped.
+fn scan(dir: &Path) -> io::Result<Vec<String>> {
+    let mut repos = Vec::new();
+    for entry in std::fs::read_dir(dir)?.take(GROUP_ENTRIES).flatten() {
+        let folder = entry.file_type().is_ok_and(|t| t.is_dir());
+        let git = entry.path().join(".git").symlink_metadata();
+        let name = entry.file_name();
+        match name.to_str() {
+            Some(name) if folder && git.is_ok_and(|m| m.is_dir()) => {
+                repos.push(dir.join(name).to_string_lossy().into_owned())
+            }
+            _ => {}
+        }
+    }
+    repos.sort();
+    Ok(repos)
+}
+
+/// A group (14.1): no repository, so its one worktree is its folder, where its own
+/// terminals and agents are placed, with no branch and no status.
+fn group(path: &str, error: Option<String>) -> Project {
+    let name = file_name(Path::new(path)).unwrap_or(path.to_owned());
+    let folder = Worktree {
+        id: path.to_owned(),
+        name: name.clone(),
+        path: path.to_owned(),
+        branch: None,
+        main: true,
+        claude: false,
+        status: None,
+    };
+    Project {
+        id: path.to_owned(),
+        name,
+        path: path.to_owned(),
+        worktrees: vec![folder],
+        error,
+        group: true,
+        parent: None,
+    }
+}
+
 fn project(path: &str) -> Project {
     let root = Path::new(path);
     let (worktrees, error) = match worktree::list(root) {
@@ -499,6 +681,8 @@ fn project(path: &str) -> Project {
         path: path.to_owned(),
         worktrees,
         error,
+        group: false,
+        parent: None,
     }
 }
 
@@ -612,7 +796,7 @@ mod tests {
         assert_eq!(load(tmp.path()).spaces().projects().count(), 1);
 
         // A process outside Hive's terminals does not keep it.
-        assert_eq!(remove(&id, &[8]).unwrap(), Vec::<String>::new());
+        assert_eq!(remove(&id, &[8]).unwrap(), (vec![], vec![]));
         assert!(projects.list().is_empty());
         assert_eq!(*load(tmp.path()).spaces(), Spaces::with(vec![]));
         assert_eq!(std::fs::read_to_string(root.join("src/f")).unwrap(), "kept");
@@ -640,6 +824,8 @@ mod tests {
             path: r.to_string(),
             worktrees: worktrees(&root, list),
             error: None,
+            group: false,
+            parent: None,
         }];
         let proc = tempfile::tempdir().unwrap();
         let held = |folder: &str| {
@@ -757,6 +943,8 @@ mod tests {
             path: root.into(),
             worktrees: worktrees(Path::new(root), list),
             error: None,
+            group: false,
+            parent: None,
         };
         let (r, a, r2) = (
             at_link("r"),
@@ -1115,5 +1303,230 @@ mod tests {
     fn a_terminal_outside_every_project_gets_no_space_environment() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(load(tmp.path()).space_env("/anywhere"), SpaceEnv::default());
+    }
+
+    /// A git repository made at `dir`.
+    fn repo(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        crate::health::tests::run(dir, &["init", "-q", "-b", "main"]);
+    }
+
+    /// The ids of `projects`, a group's marked `+`, a repository of a group's with its group.
+    fn shown(projects: &[Project]) -> Vec<String> {
+        let shown = |p: &Project| match (&p.parent, p.group) {
+            (_, true) => format!("+{}", p.id),
+            (Some(group), _) => format!("{} in {group}", p.id),
+            (None, _) => p.id.clone(),
+        };
+        projects.iter().map(shown).collect()
+    }
+
+    #[test]
+    fn a_folder_of_repositories_is_a_group_of_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        let at = |p: &str| top.join(p).display().to_string();
+        let g = at("g");
+        for name in ["api", "web", "loose/deep"] {
+            repo(&top.join("g").join(name));
+        }
+        // Not repositories of the group: a plain folder, a file, a link to a repository, and a
+        // folder whose `.git` is a file.
+        std::fs::write(top.join("g/notes.txt"), "").unwrap();
+        std::fs::create_dir_all(top.join("g/linked")).unwrap();
+        std::fs::write(top.join("g/linked/.git"), "gitdir: /elsewhere").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(top.join("g/api"), top.join("g/link")).unwrap();
+        repo(&top.join("other"));
+        std::fs::create_dir(top.join("empty")).unwrap();
+        let projects = load(&top.join("data"));
+        // A folder with no repository inside is refused as before.
+        let (error, message) = projects.add(&at("empty")).unwrap_err();
+        assert_eq!(error, ProjectError::NotAGitRepository);
+        assert!(message.contains("is not in a git repository"), "{message}");
+
+        // A repository followed on its own moves into the group added after it.
+        projects.add(&at("g/web")).unwrap();
+        projects.add(&at("other")).unwrap();
+        // Added through a path that is not its own: the group is the folder, resolved.
+        let added = projects.add(&format!("{g}/api/..")).unwrap();
+        assert_eq!(shown(std::slice::from_ref(&added)), [format!("+{g}")]);
+        assert_eq!((added.name.as_str(), &added.error), ("g", &None));
+        let folder = &added.worktrees[..];
+        assert_eq!(folder.len(), 1);
+        assert_eq!(
+            (folder[0].path.as_str(), folder[0].main),
+            (g.as_str(), true)
+        );
+        assert_eq!((&folder[0].branch, &folder[0].status), (&None, &None));
+        let listed = [
+            at("other"),
+            format!("+{g}"),
+            format!("{} in {g}", at("g/api")),
+            format!("{} in {g}", at("g/web")),
+        ];
+        assert_eq!(shown(&projects.list()), listed);
+        assert_eq!(shown(&projects.current()), listed);
+        assert_eq!(
+            projects.spaces().spaces[0].projects,
+            [at("other"), g.clone()]
+        );
+        assert_eq!(projects.roots(), [at("other"), at("g/api"), at("g/web")]);
+        assert_eq!(projects.groups(), [g.as_str()]);
+        assert!(projects.is_group(&g) && !projects.is_group(&at("g/api")));
+
+        // Its repositories are projects (with their group), the group itself is none.
+        assert_eq!(
+            projects.followed(&at("g/api")).unwrap().parent,
+            Some(g.clone())
+        );
+        assert!(projects.branches(&at("g/web")).is_ok());
+        let err = projects.branches(&g).unwrap_err();
+        assert_eq!(err.to_string(), format!("{g} is not a followed project"));
+        assert!(projects.worktree(&g).is_err());
+        assert!(projects.holding(&g).is_err());
+        assert!(projects.worktree(&at("g/api")).is_ok());
+
+        // Adding it, or one of its repositories, again changes nothing.
+        let again = projects.add(&g).unwrap();
+        assert_eq!(again, added);
+        let api = projects.add(&at("g/api")).unwrap();
+        assert_eq!(shown(&[api]), [format!("{} in {g}", at("g/api"))]);
+        assert_eq!(shown(&projects.list()), listed);
+        // From another space both are refused.
+        projects
+            .change_spaces(|s| s.create("Work", Default::default()))
+            .unwrap();
+        for path in [&g, &at("g/web")] {
+            let (error, message) = projects.add(path).unwrap_err();
+            assert_eq!(error, ProjectError::InOtherSpace);
+            assert_eq!(message, format!("{path} is already in the space Default"));
+        }
+        assert_eq!(projects.current(), vec![]);
+        assert_eq!(projects.roots(), Vec::<String>::new());
+        assert_eq!(projects.groups(), Vec::<String>::new());
+        // A repository another space follows stays there, out of the group.
+        let follow = |s: &mut Spaces| {
+            s.spaces[1].projects.push(at("g/web"));
+            Ok(())
+        };
+        projects.change_spaces(follow).unwrap();
+        let mut moved = listed.to_vec();
+        moved.pop();
+        moved.push(at("g/web"));
+        assert_eq!(shown(&projects.list()), moved);
+
+        // It is kept as the projects are, and loads back the same.
+        assert_eq!(shown(&load(&top.join("data")).list()), moved);
+    }
+
+    #[test]
+    fn a_groups_repositories_follow_its_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        let g = top.join("g").display().to_string();
+        repo(&top.join("g/api"));
+        let projects = load(&top.join("data"));
+        projects.add(&g).unwrap();
+        let ids = || {
+            projects
+                .list()
+                .into_iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>()
+        };
+        let web = top.join("g/web").display().to_string();
+        let api = top.join("g/api").display().to_string();
+        assert_eq!(ids(), [g.clone(), api.clone()]);
+        // Made or removed in its folder: listed or not, with no change to the spaces.
+        repo(&top.join("g/web"));
+        assert_eq!(ids(), [g.clone(), api.clone(), web.clone()]);
+        std::fs::remove_dir_all(top.join("g/api")).unwrap();
+        assert_eq!(ids(), [g.clone(), web]);
+        assert_eq!(projects.spaces().spaces[0].projects, [g.as_str()]);
+        // Its folder gone: the group stays, with why.
+        std::fs::remove_dir_all(top.join("g")).unwrap();
+        let listed = projects.list();
+        assert_eq!(listed.len(), 1);
+        let error = listed[0].error.as_deref().unwrap_or_default();
+        assert!(error.starts_with(&format!("cannot read {g}: ")), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_group_and_its_repositories_are_placed_and_removed_together() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        let at = |p: &str| top.join(p).display().to_string();
+        let g = at("g");
+        repo(&top.join("g/api"));
+        repo(&top.join("g/web"));
+        std::fs::create_dir_all(top.join("g/docs")).unwrap();
+        let projects = load(&top.join("data"));
+        let env = SpaceEnv {
+            git_name: Some("Group".into()),
+            ..SpaceEnv::default()
+        };
+        projects
+            .change_spaces(|s| s.update("default", "D", env.clone()))
+            .unwrap();
+        projects.add(&g).unwrap();
+        // A cwd in its folder is the group's; in a repository, the repository's.
+        let list = projects.list();
+        assert_eq!(place(&list, &at("g/docs")), Some((g.clone(), g.clone())));
+        assert_eq!(place(&list, &at("g/api")), Some((at("g/api"), at("g/api"))));
+        // Both get the group's space environment.
+        assert_eq!(projects.space_env(&at("g/docs")), env);
+        assert_eq!(projects.space_env(&at("g/web")), env);
+
+        // A process of a terminal of Hive's in the folder keeps the group; a repository of it
+        // is removed only with it.
+        let proc = top.join("proc");
+        let entry = proc.join("10");
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("stat"), "10 (p10) S 1 7 7 0").unwrap();
+        std::os::unix::fs::symlink(top.join("g/docs"), entry.join("cwd")).unwrap();
+        let proc = procs::Source::Dir(&proc);
+        let remove = |id: &str, sessions: &[i32]| {
+            projects.remove(id, proc, &sessions.iter().copied().collect())
+        };
+        let err = remove(&g, &[7]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "in use by p10 (10): close its terminals first"
+        );
+        let err = remove(&at("g/api"), &[]).unwrap_err();
+        let said = format!(
+            "{} is in the group {g}: remove the group to stop following it",
+            at("g/api")
+        );
+        assert_eq!(err.to_string(), said);
+        let removed = remove(&g, &[]).unwrap();
+        assert_eq!(
+            removed,
+            (
+                vec![at("g/api"), at("g/web")],
+                vec![at("g/api"), at("g/web")]
+            )
+        );
+        assert_eq!(projects.list(), vec![]);
+        assert!(!projects.is_group(&g));
+        assert!(top.join("g/api/.git").is_dir());
+    }
+
+    #[test]
+    fn a_spaces_file_from_before_groups_loads_and_saves_as_it_was() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("spaces.json");
+        let old = r#"{"current":"default","spaces":[{"id":"default","name":"Default","projects":["/a"],"env":{"git_name":null,"git_email":null,"gh_config_dir":null,"gh_account":null}}]}"#;
+        std::fs::write(&file, old).unwrap();
+        let projects = load(tmp.path());
+        assert_eq!(*projects.spaces(), Spaces::with(vec!["/a".into()]));
+        assert!(!projects.is_group("/a"));
+        projects
+            .change_spaces(|s| s.create("Work", Default::default()))
+            .unwrap();
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(!saved.contains("groups"), "{saved}");
     }
 }

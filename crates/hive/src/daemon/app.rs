@@ -255,24 +255,31 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 let _turn = state.changing.lock().await;
                 let added = tokio::task::block_in_place(|| {
                     let project = state.projects.add(&path)?;
-                    let mut reply = Control::ProjectAdded { project };
-                    state.with_health(&mut reply);
-                    Ok(reply)
+                    // A group's repositories come in the list, before it (14.1).
+                    let list = project.group.then(|| Control::Projects {
+                        projects: state.projects.list(),
+                    });
+                    let mut replies: Vec<Control> = list.into_iter().collect();
+                    replies.push(Control::ProjectAdded { project });
+                    replies.iter_mut().for_each(|r| state.with_health(r));
+                    Ok(replies)
                 });
-                let reply = match added {
-                    Ok(reply) => {
+                let replies = match added {
+                    Ok(replies) => {
                         // It joined the current space.
                         state.refollow.notify_one();
                         state.to_app(0, &state.projects.spaces_message()).await;
-                        reply
+                        replies
                     }
-                    Err((error, message)) => Control::AddProjectFailed {
+                    Err((error, message)) => vec![Control::AddProjectFailed {
                         path,
                         error,
                         message,
-                    },
+                    }],
                 };
-                state.to_app(0, &reply).await;
+                for reply in replies {
+                    state.to_app(0, &reply).await;
+                }
             });
         }
         Ok(Control::RemoveProject { id }) => {

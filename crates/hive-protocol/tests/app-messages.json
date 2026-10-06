@@ -108,7 +108,9 @@
             }
           }
         ],
-        "error": null
+        "error": null,
+        "group": false,
+        "parent": "/g"
       }
     ]
   },
@@ -137,7 +139,9 @@
           }
         }
       ],
-      "error": null
+      "error": null,
+      "group": false,
+      "parent": "/g"
     }
   },
   {
@@ -162,7 +166,11 @@
         "id": "default",
         "name": "Default",
         "projects": [
-          "/r"
+          "/r",
+          "/g"
+        ],
+        "groups": [
+          "/g"
         ],
         "env": {
           "git_name": null,
@@ -293,7 +301,9 @@
           }
         }
       ],
-      "error": null
+      "error": null,
+      "group": false,
+      "parent": "/g"
     },
     "path": "/r/.claude/worktrees/x",
     "notes": []
@@ -329,7 +339,9 @@
           }
         }
       ],
-      "error": null
+      "error": null,
+      "group": false,
+      "parent": "/g"
     },
     "path": "/r/.claude/worktrees/x"
   },
@@ -363,7 +375,9 @@
           }
         }
       ],
-      "error": null
+      "error": null,
+      "group": false,
+      "parent": "/g"
     },
     "from": "/r/.claude/worktrees/x",
     "path": "/r/.claude/worktrees/y"

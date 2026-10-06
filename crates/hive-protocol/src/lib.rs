@@ -1062,6 +1062,9 @@ pub struct Space {
     /// Ids of its projects, in the order they were added. A project is in one space only.
     #[serde(default)]
     pub projects: Vec<String>,
+    /// Which of `projects` are groups (14.1); a group's repositories are not in `projects`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
     #[serde(default)]
     pub env: SpaceEnv,
 }
@@ -1309,18 +1312,26 @@ pub struct GhLogin {
     pub logged_in: bool,
 }
 
-/// A git repository inside WSL that the app follows (#4). Paths are the service's, never
-/// derived by the app.
+/// A git repository inside WSL that the app follows (#4), or a group: a folder holding
+/// repositories (14.1). Paths are the service's, never derived by the app.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
-    /// Stable id: the repository's top-level path.
+    /// Stable id: the repository's top-level path (the group's folder).
     pub id: String,
     pub name: String,
     pub path: String,
-    /// Every worktree from `git worktree list` (#8), the main one first.
+    /// Every worktree from `git worktree list` (#8), the main one first. A group has one, its
+    /// folder (never a git worktree): where its own terminals and agents are placed.
     pub worktrees: Vec<Worktree>,
     /// Why the worktrees could not be listed (e.g. the folder was moved).
     pub error: Option<String>,
+    /// A group (14.1): a folder that is not a repository, whose repositories are the
+    /// projects with it as `parent`. Optional, so adding it kept protocol 1 compatible.
+    #[serde(default)]
+    pub group: bool,
+    /// The group holding this project; `None` for one followed on its own.
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1886,6 +1897,7 @@ mod tests {
                 id: "default".into(),
                 name: "Default".into(),
                 projects: vec!["/r".into()],
+                groups: vec![],
                 env: SpaceEnv {
                     git_email: Some("a@b".into()),
                     ..env
@@ -1976,9 +1988,17 @@ mod tests {
                 path: "/r".into(),
                 worktrees: vec![worktree],
                 error: None,
+                group: false,
+                parent: None,
             },
         };
         assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
+        // From a service without groups (14.1): neither a group nor in one.
+        let older = br#"{"type":"project_added","project":{"id":"/r","name":"r","path":"/r","worktrees":[],"error":null}}"#;
+        let Control::ProjectAdded { project } = serde_json::from_slice(older).unwrap() else {
+            panic!("not a project_added");
+        };
+        assert_eq!((project.group, project.parent), (false, None));
         let failed = Control::AddProjectFailed {
             path: "x".into(),
             error: ProjectError::NotAGitRepository,
