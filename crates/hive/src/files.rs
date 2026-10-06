@@ -131,16 +131,18 @@ pub fn parse_ignored(out: &[u8]) -> Vec<&str> {
     entries
 }
 
-/// One level of the ignored folder `folder` (relative, no trailing `/`) of `root`: at most
-/// `most` entries, its folders as `folder/name/`, names that are not UTF-8 skipped. Nothing
-/// when it cannot be read, or is no longer a folder.
-fn level(root: &Path, folder: &str, most: usize) -> Vec<String> {
+/// One level of the ignored folder `folder` (relative, no trailing `/`) of the canonical
+/// `root`: at most `most` entries, its folders as `folder/name/`, names that are not UTF-8
+/// skipped. `None` when it cannot be read, or is no longer a folder of `root` itself.
+fn level(root: &Path, folder: &str, most: usize) -> Option<Vec<String>> {
     let dir = root.join(folder);
-    // Never through a link: one could lead out of the worktree.
-    let real = dir.symlink_metadata().is_ok_and(|meta| meta.is_dir());
-    let Some(entries) = std::fs::read_dir(dir).ok().filter(|_| real) else {
-        return Vec::new();
-    };
+    // Never through a link, in any part of the path: one could lead out of the worktree.
+    // ponytail: a link swapped in between this check and the read still wins the race;
+    // `openat` with `O_NOFOLLOW` on each part if agents ever stop being the user's own.
+    if !canonical(&dir).is_ok_and(|real| real == dir) {
+        return None;
+    }
+    let entries = std::fs::read_dir(&dir).ok()?;
     let entry = |entry: io::Result<std::fs::DirEntry>| {
         let entry = entry.ok()?;
         let name = entry.file_name().into_string().ok()?;
@@ -152,7 +154,7 @@ fn level(root: &Path, folder: &str, most: usize) -> Vec<String> {
         };
         Some(format!("{folder}/{name}{slash}"))
     };
-    entries.take(most).filter_map(entry).collect()
+    Some(entries.take(most).filter_map(entry).collect())
 }
 
 /// Every directory holding one of `paths`, the worktree itself (`""`) included. A path
@@ -288,7 +290,11 @@ impl Watcher {
             }
             // One more than fits, so a cut list says so; never more, however big the folder.
             // Git names a folder only when it tracks nothing in it, so nothing here is listed.
-            ignored.extend(level(&self.root, folder, MAX_FILES + 1));
+            // Not read, not watched either: the watch would follow the same path.
+            let Some(level) = level(&self.root, folder, MAX_FILES + 1) else {
+                continue;
+            };
+            ignored.extend(level);
             opened.push(folder.as_str());
         }
         let mut room = Room::FULL;
@@ -527,21 +533,28 @@ mod tests {
     #[test]
     fn a_level_of_an_ignored_folder_never_goes_through_a_link() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
+        let root = &canonical(dir.path()).unwrap();
         write(root, "deps/a/x.js");
         write(root, "deps/b.js");
-        let mut got = level(root, "deps", 10);
+        let mut got = level(root, "deps", 10).unwrap();
         got.sort();
         assert_eq!(got, ["deps/a/", "deps/b.js"]);
-        assert_eq!(level(root, "deps", 1).len(), 1);
-        assert!(level(root, "gone", 10).is_empty());
+        assert_eq!(level(root, "deps", 1).unwrap().len(), 1);
+        assert_eq!(level(root, "gone", 10), None);
+        assert_eq!(level(root, "deps/b.js", 10), None);
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("deps"), root.join("link")).unwrap();
             std::os::unix::fs::symlink(root.join("deps"), root.join("deps/c")).unwrap();
-            assert!(level(root, "link", 10).is_empty());
+            assert_eq!(level(root, "link", 10), None);
+            // Nor through a link in the middle of the path.
+            assert_eq!(level(root, "link/a", 10), None);
             // A link to a folder inside one is listed as a file, so it is never opened.
-            assert!(level(root, "deps", 10).contains(&"deps/c".to_owned()));
+            assert!(
+                level(root, "deps", 10)
+                    .unwrap()
+                    .contains(&"deps/c".to_owned())
+            );
         }
     }
 
@@ -831,6 +844,19 @@ mod tests {
         let listing = watcher.list().unwrap();
         assert_eq!(names(&listing), [".env", ".gitignore"]);
         assert_eq!(listing.ignored, ["node_modules/", "notes.txt"]);
+
+        // An open folder that cannot be read is neither listed nor watched.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let modules = root.join("node_modules");
+            let mode = |mode| std::fs::set_permissions(&modules, PermissionsExt::from_mode(mode));
+            mode(0o000).unwrap();
+            let listing = open(&mut watcher, &["node_modules"]);
+            mode(0o755).unwrap();
+            assert_eq!(listing.ignored, ["node_modules/", "notes.txt"]);
+            assert_eq!(watched(&watcher), [""]);
+        }
     }
 
     #[tokio::test]
