@@ -140,11 +140,8 @@ impl Projects {
     /// The followed project or group `id` with its worktrees (git lists only its own); else
     /// as the repository `id` alone.
     fn project(&self, id: &str) -> Project {
-        let entries = self.entries(&self.all());
-        match entries.into_iter().find(|e| e.id() == id) {
-            Some(entry) => self.build(entry),
-            None => self.listed(id),
-        }
+        let entry = self.entries(&self.all()).into_iter().find(|e| e.id() == id);
+        self.build(entry.unwrap_or_else(|| Entry::Repo(id.to_owned(), None)))
     }
 
     /// Whether the followed project `id` is a group (14.1).
