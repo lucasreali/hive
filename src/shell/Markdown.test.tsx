@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 import { notice } from "../../test/notice";
 import { initialState, useHive } from "../store";
@@ -129,4 +129,48 @@ test("the same text is not parsed again; a new text is", () => {
   expect(parses).toBe(before);
   rerender(<Markdown text="one two" />);
   expect(parses).toBe(before + 1);
+});
+
+// 14.6: a file's preview is a document, its fenced code coloured by the editor's parsers.
+const doc = (text: string) => render(<Markdown text={text} document />).container;
+const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+test("a file's preview colours a fenced block by its language, without the closing newline", async () => {
+  const view = doc('```ts\nexport function f(x: number) {\n  return "a" + 1; // b\n}\n```');
+  expect(view.querySelector(".markdown")?.classList).toContain("markdown-doc");
+  const code = view.querySelector("pre > code") as HTMLElement;
+  expect(code.className).toBe("language-ts");
+  // Plain until the language loads.
+  expect(code.querySelector("span")).toBeNull();
+  // The parser is a lazy chunk: the first load in a test run can take a while.
+  await waitFor(() => expect(code.querySelector(".tok-keyword")?.textContent).toBe("export"), {
+    timeout: 4000,
+  });
+  const cls = (c: string) => [...code.querySelectorAll(`.tok-${c}`)].map((s) => s.textContent);
+  expect(cls("keyword")).toEqual(["export", "function", "return"]);
+  expect(cls("type")).toEqual(["number", "1"]);
+  expect(cls("string")).toEqual(['"a"']);
+  expect(cls("comment")).toEqual(["// b"]);
+  expect(cls("operator")).toEqual(["+"]);
+  expect(code.textContent).toBe('export function f(x: number) {\n  return "a" + 1; // b\n}');
+});
+
+test("a file's preview leaves inline code, an unknown language and no language plain", async () => {
+  const view = doc("`let x`\n\n```nolang\nlet y\n```\n\n```\nlet z\n```");
+  await settle();
+  expect(view.querySelector("p code")?.textContent).toBe("let x");
+  const blocks = [...view.querySelectorAll("pre > code")];
+  expect(blocks.map((c) => [c.className, c.textContent])).toEqual([
+    ["language-nolang", "let y"],
+    ["", "let z"],
+  ]);
+  expect(view.querySelector("span")).toBeNull();
+});
+
+test("a pull request's text is not a document: its code stays plain", async () => {
+  const view = md("```ts\nexport const a = 1;\n```");
+  await settle();
+  expect(view.querySelector(".markdown")?.classList).not.toContain("markdown-doc");
+  expect(view.querySelector("pre > code")?.textContent).toBe("export const a = 1;\n");
+  expect(view.querySelector("pre span")).toBeNull();
 });

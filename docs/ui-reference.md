@@ -46,6 +46,8 @@ Other values seen: canvas behind the prototype `#1B1E23` (not used in the app), 
 
 Git status colors in the files panel: modified `#DEC184`, added `#A1C181`, deleted `#D07277` (strikethrough). Diff backgrounds: added `rgba(161,193,129,0.12)`, removed `rgba(208,114,119,0.12)`, hunk header `rgba(116,173,232,0.08)` with `#74ADE8` text.
 
+Code in the Markdown preview (14.6): `--syn-keyword`, `--syn-name`, `--syn-function`, `--syn-constant`, `--syn-type`, `--syn-operator`, `--syn-comment`, `--syn-string`, the editor's One Dark groups (`#C678DD`, `#E06C75`, `#61AFEF`, `#D19A66`, `#E5C07B`, `#56B6C2`, `#7F848E`, `#98C379`); One Light uses Atom One Light's.
+
 ### Typography
 
 IBM Plex Sans and IBM Plex Mono, weights 400/500/600, bundled with `@fontsource/*` (no Google Fonts), for the UI. The terminal and the editor use **Hive Mono** (IBM Plex Mono with Fira Code ligatures, renamed for the OFL; regular and bold) with **Symbols Nerd Font** as the fallback for Nerd Font icons, both in `src/assets/fonts/` (built by `scripts/build-terminal-font.sh`, licences next to them); the editor via `--font-code`.

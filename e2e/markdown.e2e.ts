@@ -45,6 +45,73 @@ test("markdown: the eye and Ctrl+Shift+V show a Markdown file rendered; Ctrl+S s
   await expect(view.locator(".cm-content")).toContainText("# Hello");
 });
 
+// 14.6: the preview's document style, compared with its reference in each theme. A fixed text
+// with every kind of block, so only a change of style changes the picture.
+const DOCUMENT = `# Hive document
+
+A paragraph with **bold**, *emphasis*, ~~struck~~, a [link](https://example.com) and \`inline code\`.
+
+## Lists
+
+- [x] A task that is done
+- [ ] A task to do
+  - a nested item
+
+1. First
+2. Second
+
+> A quote: Hive only *observes* agents.
+
+### A table
+
+| Key | Value | Count |
+|---|---|--:|
+| COVERAGE_EXCLUSIONS.md | Approved coverage exclusions, created when the first one is approved | 1 |
+| \`docs/hive.md\` | Single source of truth for every decision | 22 |
+
+#### Code
+
+\`\`\`ts
+// Coloured by the editor's parsers.
+export function safeUrl(url: string): string {
+  return /^https?:/i.test(url) ? url : "";
+}
+\`\`\`
+
+\`\`\`
+plain text, no language
+\`\`\`
+
+---
+
+![A screenshot](shot.png)
+`;
+
+test("markdown: the preview's document style in light and dark (14.6)", async ({ page }) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await page
+    .getByRole("region", { name: "Files" })
+    .getByRole("treeitem", { name: "README.md" })
+    .click();
+  const view = page.getByRole("region", { name: "README.md" });
+  await view.locator(".cm-line").first().click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(DOCUMENT);
+  await view.getByRole("button", { name: "Show rendered Markdown" }).click();
+  const rendered = view.locator(".markdown-view");
+  await expect(rendered.locator(".tok-keyword").first()).toHaveText("export");
+
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate((light) => {
+      if (light) document.documentElement.dataset.theme = "one-light";
+      else delete document.documentElement.dataset.theme;
+    }, theme === "light");
+    await expect(rendered).toHaveScreenshot(`markdown-document-${theme}.png`);
+  }
+});
+
 // 13.1: the rendered Markdown never scrolls sideways; a wide table, a long inline path and a long
 // code line wrap, in the editor area beside the right panel at its narrowest and its widest.
 for (const panelWidth of [280, 640]) {
