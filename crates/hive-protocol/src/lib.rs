@@ -1994,10 +1994,8 @@ mod tests {
         };
         assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
         // From a service without groups (14.1): neither a group nor in one.
-        let older = br#"{"type":"project_added","project":{"id":"/r","name":"r","path":"/r","worktrees":[],"error":null}}"#;
-        let Control::ProjectAdded { project } = serde_json::from_slice(older).unwrap() else {
-            panic!("not a project_added");
-        };
+        let older = br#"{"id":"/r","name":"r","path":"/r","worktrees":[],"error":null}"#;
+        let project: Project = serde_json::from_slice(older).unwrap();
         assert_eq!((project.group, project.parent), (false, None));
         let failed = Control::AddProjectFailed {
             path: "x".into(),
