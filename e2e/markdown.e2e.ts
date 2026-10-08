@@ -146,3 +146,60 @@ for (const panelWidth of [280, 640]) {
     await page.screenshot({ path: `target/e2e/markdown-wrap-${panelWidth}.png` });
   });
 }
+
+// 15.5: the document column is centred in a view wider than it (equal gaps on both sides) and
+// fills a narrower one (no gaps), in light and dark. The default window leaves the editor area
+// just under the column's 900 px, so the wide view is a wider window.
+for (const [view, windowWidth, panelWidth] of [
+  ["wide", 1920, 280],
+  ["narrow", 1440, 640],
+] as const) {
+  test(`markdown: the preview's column in a ${view} view, light and dark (15.5)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: windowWidth, height: 900 });
+    await page.addInitScript(
+      (w) => localStorage.setItem("hive.widths", JSON.stringify({ panelWidth: w })),
+      panelWidth,
+    );
+    await page.goto("/");
+    const tree = page.getByRole("navigation", { name: "Projects" });
+    await tree.getByRole("button", { name: "fix-login" }).click();
+    const panel = page.getByRole("region", { name: "Files" });
+    await panel.getByRole("treeitem", { name: "docs" }).click();
+    await panel.getByRole("treeitem", { name: "api.md" }).click();
+    const tab = page.getByRole("region", { name: "docs/api.md" });
+    await tab.getByRole("button", { name: "Show rendered Markdown" }).click();
+    const rendered = tab.locator(".markdown-view");
+    await expect(rendered.getByRole("table")).toBeVisible();
+
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((light) => {
+        if (light) document.documentElement.dataset.theme = "one-light";
+        else delete document.documentElement.dataset.theme;
+      }, theme === "light");
+      // The gaps between the column and the view's content box (inside its padding).
+      const { left, right, room } = await rendered.evaluate((root) => {
+        const style = getComputedStyle(root);
+        const origin = root.getBoundingClientRect().left + root.clientLeft;
+        const start = origin + Number.parseFloat(style.paddingLeft);
+        const end = origin + root.clientWidth - Number.parseFloat(style.paddingRight);
+        const doc = root.querySelector(".markdown-doc")?.getBoundingClientRect();
+        return {
+          left: (doc?.left ?? 0) - start,
+          right: end - (doc?.right ?? 0),
+          room: end - start,
+        };
+      });
+      if (view === "wide") {
+        expect(room, theme).toBeGreaterThan(900);
+        expect(left, theme).toBeGreaterThan(0);
+        expect(left, theme).toBeCloseTo(right, 0);
+      } else {
+        expect(room, theme).toBeLessThan(900);
+        expect([left, right], theme).toEqual([0, 0]);
+      }
+    }
+    await page.screenshot({ path: `target/e2e/markdown-centred-${view}.png` });
+  });
+}
