@@ -57,10 +57,10 @@ pub struct Agent {
     /// an older event arrived late and does not change that one's state or activity.
     stamps: HashMap<Option<String>, u64>,
     /// Whether its terminal is the one in view in the focused app window (the app's `view`);
-    /// the daemon keeps it current.
+    /// the daemon keeps it current (`watch`).
     pub watched: bool,
-    /// It finished while watched, or its turn ended with subagents still at work (13.3): not
-    /// pending until its state changes.
+    /// It waited for you while watched (15.6), was interrupted, or its turn ended with
+    /// subagents still at work (13.3): not pending until its state changes.
     seen: bool,
     /// It waits for you because the user interrupted it, until its state changes.
     interrupted: bool,
@@ -102,6 +102,17 @@ impl Agent {
             since_ms: wall_ms,
             origin: (now, wall_ms),
         }
+    }
+
+    /// Its terminal came into view in the focused window, or left it (the app's `view`).
+    /// Waiting for you in view is seen (15.6): not pending until its state changes; a dialog
+    /// or an error stays pending. Returns the new message when it changed.
+    pub fn watch(&mut self, id: &str, watched: bool) -> Option<Control> {
+        let before = self.message(id);
+        self.watched = watched;
+        self.seen |= watched && self.displayed() == AgentState::WaitingYou;
+        let after = self.message(id);
+        (after != before).then_some(after)
     }
 
     /// `now` on the wall clock.
@@ -401,8 +412,8 @@ impl Agent {
             .fold(self.state, Ord::max)
     }
 
-    /// Applies `update`; when the displayed state changed, the agent is seen only if it just
-    /// finished (working or with subagents → waiting for you) while watched (hive.md item 5),
+    /// Applies `update`; when the displayed state changed, the agent is seen only if it waits
+    /// for you while watched (hive.md item 5, 15.6),
     /// or was made to wait for you `quiet`ly (an interrupt), or waits for you while a
     /// subagent is still in its turn (13.3: it has not finished; Claude Code wakes it when
     /// they end). That change alerts (2.4): it finished, or it waits for the user (a pending
@@ -428,10 +439,11 @@ impl Agent {
         let mut alert = None;
         if shown != was {
             let busy = matches!(was, AgentState::Working | AgentState::WithSubagents);
-            let finished = busy && shown == AgentState::WaitingYou;
-            self.interrupted = quiet && shown == AgentState::WaitingYou;
-            let early = shown == AgentState::WaitingYou && self.delegating();
-            self.seen = self.interrupted || early || self.watched && finished;
+            let waits = shown == AgentState::WaitingYou;
+            let finished = busy && waits;
+            self.interrupted = quiet && waits;
+            let early = waits && self.delegating();
+            self.seen = self.interrupted || early || self.watched && waits;
             self.since_ms = wall;
             // One expression: every instantiation of `changed` runs each of its lines.
             alert = if finished {
@@ -1382,6 +1394,43 @@ mod tests {
         assert_eq!((shown(&agent).0, pending(&agent)), (WaitingYou, true));
     }
 
+    #[test]
+    fn looking_at_an_agent_waiting_for_you_makes_it_seen_until_its_state_changes() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        // Not waiting for you: coming into view changes nothing.
+        assert_eq!(agent.watch("s", true), None);
+        assert_eq!(agent.watch("s", false), None);
+        // It finishes out of view: pending.
+        agent.feed("s", &hook("PreToolUse", None, json!({})), now);
+        agent.feed("s", &hook("Stop", None, json!({})), now);
+        assert!(pending(&agent));
+        assert_eq!(agent.watch("s", false), None);
+        // In view later: seen at once, its message says so; looking again sends nothing.
+        let sent = agent.watch("s", true);
+        assert!(agent.watched);
+        assert_eq!(sent, Some(agent.message("s")));
+        assert!(!pending(&agent));
+        assert_eq!(agent.watch("s", true), None);
+        // Out of view again: still seen.
+        assert_eq!(agent.watch("s", false), None);
+        assert!(!agent.watched && !pending(&agent));
+        // Its next finish, out of view, is pending again.
+        agent.feed("s", &hook("PreToolUse", None, json!({})), now);
+        agent.feed("s", &hook("Stop", None, json!({})), now);
+        assert!(pending(&agent));
+        // A dialog or an error in view stays pending.
+        for (name, state) in [
+            ("PermissionRequest", WaitingPermission),
+            ("StopFailure", Error),
+        ] {
+            agent.feed("s", &hook(name, None, json!({})), now);
+            assert_eq!(agent.watch("s", true), None, "{name}");
+            assert_eq!((shown(&agent).0, pending(&agent)), (state, true), "{name}");
+            agent.watch("s", false);
+        }
+    }
+
     /// The alert and `notify` of a message `apply` sent.
     fn notifies(sent: Option<Control>) -> Option<(Option<Alert>, bool)> {
         let Some(Control::AgentState { alert, notify, .. }) = sent else {
@@ -1456,7 +1505,7 @@ mod tests {
     }
 
     #[test]
-    fn only_finishing_while_watched_is_seen() {
+    fn waiting_for_you_while_watched_is_seen() {
         let now = Instant::now();
         let watched = |events: &[AgentEvent]| {
             let mut agent = Agent::new(1, now, 0);
@@ -1470,11 +1519,15 @@ mod tests {
         let with = hook("SubagentStart", Some("a"), json!({}));
         let sub_stop = hook("Stop", Some("a"), json!({}));
         assert_eq!(watched(&[with, sub_stop]), (WaitingYou, false));
-        // From idle it did not finish anything; asking permission is not finishing.
-        assert_eq!(watched(&[notification("idle_prompt")]), (WaitingYou, true));
+        // Waiting for you without finishing anything, in view, is seen too (15.6).
+        assert_eq!(watched(&[notification("idle_prompt")]), (WaitingYou, false));
         let ask = hook("PermissionRequest", None, json!({}));
         let tool = hook("PreToolUse", None, json!({}));
-        assert_eq!(watched(&[tool, ask, stop]), (WaitingYou, true));
+        assert_eq!(watched(&[tool, ask.clone(), stop]), (WaitingYou, false));
+        // A dialog or an error asks for an action: pending, in view or not.
+        assert_eq!(watched(&[ask]), (WaitingPermission, true));
+        let failed = hook("StopFailure", None, json!({}));
+        assert_eq!(watched(&[failed]), (Error, true));
         // Interrupted (silence) while watched is finishing too.
         let mut agent = Agent::new(1, now, 0);
         agent.watched = true;

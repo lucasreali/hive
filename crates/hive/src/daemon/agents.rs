@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::PoisonError;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use hive_protocol::{AgentEvent, Control, EventKind, OpenSession};
@@ -14,6 +15,17 @@ use crate::states::{self, Agent};
 use crate::transcript;
 
 impl State {
+    /// The app's `view`: the terminal `watched` (0 for none) is in view in the focused window.
+    /// Its agent waiting for you is seen now (15.6), not at its next event.
+    pub(super) async fn view(&self, watched: u32) {
+        self.watched.store(watched, Ordering::Relaxed);
+        for (id, agent) in self.agents.lock().await.iter_mut() {
+            if let Some(message) = agent.watch(id, self.watches(agent.channel)) {
+                self.to_app(agent.channel, &message).await;
+            }
+        }
+    }
+
     /// Sends `subagent_worktrees` when the set changed. Called with the agents lock held, so
     /// the changes go out in order.
     pub(super) async fn owned_changed(&self, agents: &HashMap<String, Agent>) {

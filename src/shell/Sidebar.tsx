@@ -25,6 +25,7 @@ import {
   inAgentOrder,
   mostUrgent,
   moveAgent,
+  muted,
   openMenu,
   openModal,
   openProjectMenu,
@@ -77,8 +78,8 @@ function moveInTree(event: KeyboardEvent<HTMLElement>): void {
 
 /** A collapsed node's most urgent state inside (rule 1), by the service's urgency. */
 function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
-  const state = useHive((s) => mostUrgent(s, Object.values(s.agents).filter(agents)));
-  return state && <StateIcon state={state} />;
+  const top = useHive((s) => mostUrgent(s, Object.values(s.agents).filter(agents)));
+  return top && <StateIcon state={top.state} muted={muted(top)} />;
 }
 
 // ponytail: plain list, add TanStack Virtual when trees get long.
@@ -411,19 +412,28 @@ function StateLines({
   doing,
   usage,
   title,
+  quiet,
 }: {
   state: AgentState;
   doing?: Doing;
   usage?: AgentUsage;
   title: ReactNode;
+  quiet?: boolean;
 }) {
   return (
     <>
-      <StateIcon state={state} />
+      <StateIcon state={state} muted={quiet} />
       <span className="agent-lines">
-        <span className="label">{title}</span>
+        <span className="label" data-muted={quiet || undefined}>
+          {title}
+        </span>
         <span className="state-line">
-          <span className="state-label" data-state={state} aria-hidden="true">
+          <span
+            className="state-label"
+            data-state={state}
+            data-muted={quiet || undefined}
+            aria-hidden="true"
+          >
             {STATE_LABEL[state]}
           </span>
           {doing && <Meta doing={doing} />}
@@ -489,7 +499,13 @@ function AgentRow({
             setTimeout(() => button.focus());
           }}
         >
-          <StateLines state={status?.state ?? "idle"} doing={status} usage={usage} title={name} />
+          <StateLines
+            state={status?.state ?? "idle"}
+            doing={status}
+            usage={usage}
+            title={name}
+            quiet={muted(status)}
+          />
           {badge && (
             <span className="tab-badge label-badge" title="Set with hive badge">
               {badge}

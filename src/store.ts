@@ -895,15 +895,23 @@ export const pendingAgents = (s: HiveState): Agent[] =>
 export const unseenPending = (s: HiveState): number =>
   pendingAgents(s).filter((a) => s.pendingSeen[a.id] !== s.agentStates[a.id]?.state).length;
 
-/** The state of highest `urgency` among `agents` (rule 1, for a collapsed node), or null. */
-export function mostUrgent(s: HiveState, agents: Agent[]): AgentState | null {
+/**
+ * The status of highest `urgency` among `agents` (rule 1, for a collapsed node), a pending one
+ * first at equal urgency (a seen 🟠 propagates as not pending, 15.6), or null.
+ */
+export function mostUrgent(s: HiveState, agents: Agent[]): AgentStatus | null {
   let top: AgentStatus | undefined;
   for (const a of agents) {
     const status = s.agentStates[a.id];
-    if (status && (!top || status.urgency > top.urgency)) top = status;
+    const rank = (x: AgentStatus) => x.urgency * 2 + Number(x.pending);
+    if (status && (!top || rank(status) > rank(top))) top = status;
   }
-  return top?.state ?? null;
+  return top ?? null;
 }
+
+/** Waiting for you yet not pending (seen, interrupted, 13.3's quiet 🟠): drawn muted (15.6). */
+export const muted = (status: AgentStatus | null | undefined): boolean =>
+  status?.state === "waiting_you" && !status.pending;
 
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
 

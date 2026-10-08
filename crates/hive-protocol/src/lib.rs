@@ -603,8 +603,8 @@ pub enum Control {
         status: Option<WorktreeStatus>,
     },
     /// App → service, sent when it changes: the terminal shown (none while a file, or
-    /// nothing, is) and whether the app window has the focus. An agent that finishes in that
-    /// terminal while the window has the focus was seen, so it is not pending.
+    /// nothing, is) and whether the app window has the focus. An agent waiting for you in that
+    /// terminal while the window has the focus was seen, so it is not pending (15.6).
     View {
         terminal: Option<u32>,
         focused: bool,

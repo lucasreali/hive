@@ -1395,6 +1395,10 @@ button.chevron:hover {
   color: var(--text);
 }
 
+.label[data-muted] {
+  color: var(--text-2);
+}
+
 .project .label {
   font-weight: 500;
 }
@@ -1540,6 +1544,10 @@ button.chevron:hover {
 .state-icon[data-state="waiting_you"] {
   color: var(--state-you);
 }
+/* A 🟠 already seen (15.6): its icon, title and state name step back to the muted text. */
+.state-icon[data-state][data-muted] {
+  color: var(--text-3);
+}
 .state-icon[data-state="working"] {
   color: var(--state-working);
   animation: hive-spin 3s linear infinite;
@@ -1586,6 +1594,10 @@ button.chevron:hover {
 .state-label {
   flex-shrink: 0;
   color: var(--text-2);
+}
+
+.state-label[data-muted] {
+  color: var(--text-3);
 }
 
 /* The time in the state and the activity: muted, cut with an ellipsis. */
