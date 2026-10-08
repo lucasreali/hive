@@ -40,6 +40,9 @@ const theme = Prec.highest(
       // The cursor's line (14.3): translucent, so the selection layer beneath still shows.
       ".cm-activeLine": { backgroundColor: "var(--active-line)" },
       ".cm-activeLineGutter": { backgroundColor: "var(--active-line)", color: "var(--text)" },
+      // The selected text (15.1): oneDark's own selectors, so its fixed #3E4451 never wins.
+      "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+        { backgroundColor: "var(--editor-selection)" },
       "&.cm-merge-b .cm-changedLine": { backgroundColor: "rgba(161, 193, 129, 0.12)" },
       "&.cm-merge-b .cm-changedText": { background: "rgba(161, 193, 129, 0.25)" },
       ".cm-deletedChunk": { backgroundColor: "rgba(208, 114, 119, 0.12)" },
