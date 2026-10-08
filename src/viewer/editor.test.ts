@@ -204,3 +204,27 @@ test("a line is revealed selected, clamped to the text", () => {
   revealLine(view, 0);
   expect(selected()).toBe("one");
 });
+
+/** The CSS rules in the document that style `view` and mention `selector`, in order. */
+function rulesFor(view: { dom: HTMLElement }, selector: string) {
+  const sheets = [...document.adoptedStyleSheets, ...document.styleSheets];
+  const scopes = [...view.dom.classList].map((c) => `.${c}`);
+  return sheets
+    .flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText))
+    .filter((rule) => rule.includes(selector) && scopes.some((s) => rule.includes(s)));
+}
+
+test("the selection is painted with the theme's token, in the editor and the viewer (15.1)", () => {
+  const { view } = editing("one\ntwo\n");
+  viewer = createViewer(document.body, "a.txt");
+  viewer.show({ content: "one\n", original: null });
+  for (const v of [view, viewer.view]) {
+    const rules = rulesFor(v, "cm-selectionBackground");
+    const fixed = rules.findIndex((r) => /#3e4451/i.test(r));
+    const ours = rules.findIndex((r) => r.includes("var(--editor-selection)"));
+    // oneDark's fixed colour stays loaded; ours, on the same selectors, comes after it.
+    expect(fixed).toBeGreaterThanOrEqual(0);
+    expect(ours).toBeGreaterThan(fixed);
+    expect(rules[ours]).toContain("::selection");
+  }
+});

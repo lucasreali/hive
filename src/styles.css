@@ -50,6 +50,7 @@
   --text-4: #5d636f; /* separators, line numbers, kbd borders */
   --close-hover: #c42b1c;
   --active-line: rgba(255, 255, 255, 0.04); /* the editor's cursor line, over its selection */
+  --editor-selection: #3e4451; /* the editor's selected text: One Dark's */
 
   --state-permission: #dec184;
   --state-error: #d07277;
@@ -115,6 +116,7 @@
   --text-3: #7e8086;
   --text-4: #b4b4bb;
   --active-line: rgba(0, 0, 0, 0.04);
+  --editor-selection: #5c78e23d;
 
   --state-permission: #a48819;
   --state-error: #d36151;
@@ -3452,6 +3454,8 @@ button.link:hover {
    previews), tables with horizontal rules only. A pull request's text keeps `.markdown`. */
 .markdown-doc {
   max-width: 900px;
+  /* Centred in a wider view (15.5); a narrower one keeps it at full width. */
+  margin-inline: auto;
   font-size: 13px;
   line-height: 20px;
 }
