@@ -2427,6 +2427,43 @@ mod tests {
     }
 
     #[test]
+    fn an_ignored_folder_is_never_read_through_a_link() {
+        use std::os::windows::fs::symlink_dir;
+        let tmp = tempfile::tempdir().unwrap();
+        // Canonical, as the watcher's root is (the runner's temporary folder is an 8.3 name).
+        let root = crate::paths::canonical(tmp.path()).unwrap().join("repo");
+        let outside = root.with_file_name("outside");
+        std::fs::create_dir_all(root.join(r"deps\a")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(root.join(r"deps\x.js"), "x").unwrap();
+        std::fs::write(outside.join("y.js"), "y").unwrap();
+        symlink_dir(&outside, root.join("sym")).unwrap();
+        let junction = root.join("junction");
+        let made = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .args([&junction, &outside])
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        // A link in the middle of the path, to a folder of the worktree itself.
+        symlink_dir(root.join("deps"), root.join("inner")).unwrap();
+
+        assert!(same_folder(&root, "deps", &()));
+        assert!(same_folder(&root, "deps/a", &()));
+        let (mut names, ()) = folder_level(&root, "deps", 10).unwrap();
+        names.sort();
+        assert_eq!(names, ["deps/a/", "deps/x.js"]);
+        assert_eq!(folder_level(&root, "deps", 1).unwrap().0.len(), 1);
+        for folder in ["sym", "junction", "inner/a"] {
+            assert!(!same_folder(&root, folder, &()), "{folder}");
+            assert_eq!(folder_level(&root, folder, 10), None, "{folder}");
+        }
+        // Not a folder, or not there.
+        assert_eq!(folder_level(&root, "deps/x.js", 10), None);
+        assert_eq!(folder_level(&root, "gone", 10), None);
+    }
+
+    #[test]
     fn this_process_runs_as_a_user_sid() {
         let me = process_user(std::process::id()).unwrap();
         assert!(me.starts_with("S-1-5-"), "{me}");
