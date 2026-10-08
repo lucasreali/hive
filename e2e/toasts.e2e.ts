@@ -35,9 +35,10 @@ test("messages: a failure is a toast bottom-right above the status bar that stay
   expect(view.width - (toast.x + toast.width)).toBeLessThanOrEqual(16);
   expect(toast.y + toast.height).toBeLessThanOrEqual(bar.y);
   expect(bar.y - (toast.y + toast.height)).toBeLessThanOrEqual(16);
-  // The status bar holds no message: the place, the connection and the version only.
+  // The status bar holds no message: the place, the connection, the usage ring's (hidden)
+  // tooltip and the version only.
   await expect(statusbar).toHaveText(
-    /^WSL(: \S+)?connectedSession 42% · resets \d\d:\d\dv\d+\.\d+\.\d+$/,
+    /^WSL(: \S+)?connectedSession 42% · resets \d\d:\d\dWeek 41% · resets \w{3} \d\d:\d\dv\d+\.\d+\.\d+$/,
   );
 
   // A confirmation fades after about 4 s; the error stays until dismissed.

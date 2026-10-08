@@ -107,8 +107,12 @@ async fn hook_connection<R: AsyncRead + Unpin>(
                 state.to_app(channel, &Control::Badge { text }).await;
             }
         }
-        Ok(Control::StatuslineUsage { claude_dir, usage }) => {
-            state.usage.lock().await.report(claude_dir, usage);
+        Ok(Control::StatuslineUsage {
+            claude_dir,
+            usage,
+            week,
+        }) => {
+            state.usage.lock().await.report(claude_dir, usage, week);
             state.send_usage().await;
         }
         Ok(Control::Hook {

@@ -243,7 +243,7 @@ struct State {
     pulls: std::sync::Mutex<crate::pulls::Cache>,
     /// The Actions runs lists fetched (9.32).
     runs: std::sync::Mutex<crate::pulls::Cache>,
-    /// The 5-hour usage windows `hive statusline` reported (12.1), and the one the app has.
+    /// The usage windows `hive statusline` reported (12.1, 15.3), and the ones the app has.
     usage: Mutex<usage::Usage>,
 }
 
@@ -585,8 +585,8 @@ impl State {
         })
     }
 
-    /// Sends the current account's 5-hour window when it is not the one the app has: after a
-    /// report, and every second for its reset and an account switch.
+    /// Sends the current account's windows (5-hour, 7-day) when they are not the ones the app
+    /// has: after a report, and every second for their resets and an account switch.
     async fn send_usage(&self) {
         let account = self.account();
         let mut usage = self.usage.lock().await;

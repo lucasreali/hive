@@ -1107,6 +1107,57 @@ label:has(> input[type="checkbox"]:disabled) {
   margin: 0 16px 0 auto;
 }
 
+/* The session usage ring (15.3): a thin track and an arc filled to the 5-hour percentage, in
+   the warning colour from 80%; its tooltip opens above it on hover and keyboard focus. */
+.session-usage {
+  position: relative;
+  display: flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.session-usage circle {
+  fill: none;
+  stroke-width: 2;
+}
+
+.usage-track {
+  stroke: var(--text-4);
+}
+
+.usage-arc {
+  stroke: var(--text-2);
+}
+
+.session-usage[data-warning] .usage-arc {
+  stroke: var(--state-permission);
+}
+
+.usage-tip {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: calc(100% + 6px);
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.session-usage:hover > .usage-tip,
+.session-usage:focus-visible > .usage-tip {
+  display: flex;
+}
+
 /* Connection block (#29): covers the workspace while the service is unusable */
 .workspace {
   position: relative;

@@ -53,7 +53,7 @@ fn usage(used_percentage: u8, resets_at: u64) -> (u32, Control) {
         used_percentage,
         resets_at,
     });
-    (0, Control::SessionUsage { usage })
+    (0, Control::SessionUsage { usage, week: None })
 }
 
 #[tokio::test]
@@ -74,7 +74,13 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
     // Past its reset it is not shown (the service checks every second).
     assert_eq!(
         app.control().await,
-        (0, Control::SessionUsage { usage: None })
+        (
+            0,
+            Control::SessionUsage {
+                usage: None,
+                week: None
+            }
+        )
     );
 
     // Another account's window is kept, not shown, until it is the selected account (12.2).
@@ -114,6 +120,22 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
     let out = statusline(&env, &hive, Some(&work), &input(9.0, now + 3600));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(app.control().await, usage(9, now + 3600));
+    // The 7-day window goes with it (15.3).
+    let window = |used_percentage, resets_at| SessionWindow {
+        used_percentage,
+        resets_at,
+    };
+    let both = json!({ "rate_limits": {
+        "five_hour": { "used_percentage": 9, "resets_at": now + 3600 },
+        "seven_day": { "used_percentage": 40.6, "resets_at": now + 86400 },
+    } });
+    let out = statusline(&env, &hive, Some(&work), &both.to_string());
+    assert!(out.status.success(), "{out:?}");
+    let week = Control::SessionUsage {
+        usage: Some(window(9, now + 3600)),
+        week: Some(window(41, now + 86400)),
+    };
+    assert_eq!(app.control().await, (0, week));
     drop(app);
     assert!(daemon.wait_exit().success());
 }

@@ -202,15 +202,22 @@ pub enum Control {
     },
     /// `hive statusline` → service (on a hook connection, 12.1): the 5-hour window Claude
     /// Code's statusline input shows for the Claude config folder `claude_dir`
-    /// (`$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`).
+    /// (`$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`), and its 7-day window when it shows one
+    /// (15.3; absent from an older `hive statusline`).
     StatuslineUsage {
         claude_dir: String,
         usage: SessionWindow,
+        #[serde(default)]
+        week: Option<SessionWindow>,
     },
     /// The current account's 5-hour window (12.1), `None` when none came yet or it is past its
-    /// reset. Sent when it changes, and after the app's `Welcome` when there is one.
+    /// reset, and its 7-day window (15.3), only alongside a 5-hour one and until its own reset
+    /// (absent from an older service). Sent when either changes, and after the app's `Welcome`
+    /// when there is one.
     SessionUsage {
         usage: Option<SessionWindow>,
+        #[serde(default)]
+        week: Option<SessionWindow>,
     },
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
@@ -1424,8 +1431,9 @@ pub struct Session {
     pub resume_command: Option<String>,
 }
 
-/// A Claude account's 5-hour usage window (`rate_limits.five_hour` of Claude Code's statusline
-/// input, 12.1): the percentage used, rounded, and when it resets (Unix epoch seconds).
+/// A Claude account's usage window (`rate_limits.five_hour` of Claude Code's statusline input,
+/// 12.1, or `rate_limits.seven_day`, 15.3): the percentage used, rounded, and when it resets
+/// (Unix epoch seconds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionWindow {
     pub used_percentage: u8,
@@ -1767,6 +1775,44 @@ mod tests {
             distro: None,
         };
         assert_eq!(frame.to_control().unwrap(), welcome);
+    }
+
+    #[test]
+    fn usage_without_a_weekly_window_still_decodes() {
+        let decode = |json: &'static [u8]| {
+            let payload = Bytes::from_static(json);
+            let channel = 0;
+            let kind = FrameType::Control;
+            Frame::to_control(&Frame {
+                kind,
+                channel,
+                payload,
+            })
+            .unwrap()
+        };
+        let usage = SessionWindow {
+            used_percentage: 7,
+            resets_at: 9,
+        };
+        let old = br#"{"type":"session_usage","usage":{"used_percentage":7,"resets_at":9}}"#;
+        let usage_only = Control::SessionUsage {
+            usage: Some(usage),
+            week: None,
+        };
+        assert_eq!(decode(old), usage_only);
+        let old = br#"{"type":"statusline_usage","claude_dir":"/c","usage":{"used_percentage":7,"resets_at":9}}"#;
+        let report = Control::StatuslineUsage {
+            claude_dir: "/c".into(),
+            usage,
+            week: None,
+        };
+        assert_eq!(decode(old), report);
+        // A new one carries both.
+        let both = Control::SessionUsage {
+            usage: Some(usage),
+            week: Some(usage),
+        };
+        assert_eq!(Frame::control(0, &both).to_control().unwrap(), both);
     }
 
     #[test]

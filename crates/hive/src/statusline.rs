@@ -1,6 +1,6 @@
 //! `hive statusline` (12.1): Claude Code's `statusLine` in Hive's terminals (set by the
-//! `--settings` the `claude` wrapper injects). It reports the 5-hour usage window of its input
-//! to the service, then runs the user's own statusline with the same input and prints what that
+//! `--settings` the `claude` wrapper injects). It reports the 5-hour usage window of its input,
+//! with the 7-day one when it shows one (15.3), to the service, then runs the user's own statusline with the same input and prints what that
 //! prints, so what the user sees does not change. The service keeps the latest window per
 //! Claude config folder (`daemon::usage`).
 
@@ -55,10 +55,15 @@ pub async fn run(
         .flatten();
     let claude_dir = crate::sessions::claude_dir(&var);
     let report = async {
-        let usage = parsed.as_ref().and_then(five_hour);
-        if let (Some(dir), Some(usage)) = (&claude_dir, usage) {
+        let window = |name| parsed.as_ref().and_then(|input| rate_limit(input, name));
+        if let (Some(dir), Some(usage)) = (&claude_dir, window("five_hour")) {
             let claude_dir = dir.to_string_lossy().into_owned();
-            let message = Control::StatuslineUsage { claude_dir, usage };
+            let week = window("seven_day");
+            let message = Control::StatuslineUsage {
+                claude_dir,
+                usage,
+                week,
+            };
             // Gives up after ~200 ms, like a hook: the statusline never waits for Hive.
             let _ = crate::hook::send(paths, 0, &message).await;
         }
@@ -82,10 +87,10 @@ pub fn env(key: &str) -> Option<OsString> {
     std::env::var_os(key)
 }
 
-/// `rate_limits.five_hour` of Claude Code's statusline input, when whole: the percentage
-/// rounded into 0–100.
-fn five_hour(input: &Value) -> Option<SessionWindow> {
-    let window = input.pointer("/rate_limits/five_hour")?;
+/// The window `name` of Claude Code's statusline input's `rate_limits` (`five_hour`,
+/// `seven_day`), when whole: the percentage rounded into 0–100.
+fn rate_limit(input: &Value, name: &str) -> Option<SessionWindow> {
+    let window = input.get("rate_limits")?.get(name)?;
     let used = window.get("used_percentage")?.as_f64()?;
     Some(SessionWindow {
         used_percentage: used.clamp(0.0, 100.0).round() as u8,
@@ -225,28 +230,33 @@ mod tests {
     }
 
     #[test]
-    fn the_five_hour_window_is_read_when_whole() {
-        let input = |five_hour: Value| json!({ "rate_limits": { "five_hour": five_hour } });
-        let at =
-            |used: Value| five_hour(&input(json!({ "used_percentage": used, "resets_at": 9 })));
-        assert_eq!(at(json!(41.5)), Some(window(42, 9)));
-        assert_eq!(at(json!(12)), Some(window(12, 9)));
-        assert_eq!(at(json!(-3)), Some(window(0, 9)));
-        assert_eq!(at(json!(250.7)), Some(window(100, 9)));
-        assert_eq!(at(json!("42")), None);
-        for broken in [
-            json!({ "used_percentage": 1 }),
-            json!({ "resets_at": 9 }),
-            json!({ "used_percentage": 1, "resets_at": -9 }),
-            json!({ "used_percentage": 1, "resets_at": "9" }),
-            json!(null),
-        ] {
-            assert_eq!(five_hour(&input(broken.clone())), None, "{broken}");
+    fn the_five_hour_and_seven_day_windows_are_read_when_whole() {
+        for name in ["five_hour", "seven_day"] {
+            let input = |window: Value| json!({ "rate_limits": { name: window } });
+            let read = |window: Value| rate_limit(&input(window), name);
+            let at = |used: Value| read(json!({ "used_percentage": used, "resets_at": 9 }));
+            assert_eq!(at(json!(41.5)), Some(window(42, 9)), "{name}");
+            assert_eq!(at(json!(12)), Some(window(12, 9)));
+            assert_eq!(at(json!(-3)), Some(window(0, 9)));
+            assert_eq!(at(json!(250.7)), Some(window(100, 9)));
+            assert_eq!(at(json!("42")), None);
+            for broken in [
+                json!({ "used_percentage": 1 }),
+                json!({ "resets_at": 9 }),
+                json!({ "used_percentage": 1, "resets_at": -9 }),
+                json!({ "used_percentage": 1, "resets_at": "9" }),
+                json!(null),
+            ] {
+                assert_eq!(read(broken.clone()), None, "{name} {broken}");
+            }
         }
+        // Each is read on its own: one missing does not hide the other.
         let seven_day =
             json!({ "rate_limits": { "seven_day": { "used_percentage": 1, "resets_at": 9 } } });
-        assert_eq!(five_hour(&seven_day), None);
-        assert_eq!(five_hour(&json!("text")), None);
+        assert_eq!(rate_limit(&seven_day, "five_hour"), None);
+        assert_eq!(rate_limit(&seven_day, "seven_day"), Some(window(1, 9)));
+        assert_eq!(rate_limit(&json!({ "rate_limits": 1 }), "seven_day"), None);
+        assert_eq!(rate_limit(&json!("text"), "five_hour"), None);
     }
 
     #[test]
