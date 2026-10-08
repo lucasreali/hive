@@ -3440,6 +3440,8 @@ button.link:hover {
    previews), tables with horizontal rules only. A pull request's text keeps `.markdown`. */
 .markdown-doc {
   max-width: 900px;
+  /* Centred in a wider view (15.5); a narrower one keeps it at full width. */
+  margin-inline: auto;
   font-size: 13px;
   line-height: 20px;
 }
