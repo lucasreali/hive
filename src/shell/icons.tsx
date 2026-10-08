@@ -114,18 +114,23 @@ const STATE_ICON: Record<AgentState, PhosphorIcon> = {
   ended: StopCircleIcon,
 };
 
-/** A state's icon and color (`--state-*`), named for screen readers; working spins. */
-export const StateIcon = ({ state }: { state: AgentState }) => {
+/**
+ * A state's icon and color (`--state-*`), named for screen readers; working spins. A `muted` one
+ * (a 🟠 already seen, 15.6) is drawn in the muted text color and named so.
+ */
+export const StateIcon = ({ state, muted }: { state: AgentState; muted?: boolean }) => {
   const Shape = STATE_ICON[state];
+  const label = muted ? `${STATE_LABEL[state]}, seen` : STATE_LABEL[state];
   return (
     <Shape
       className="state-icon"
       size={14}
       weight="bold"
       role="img"
-      aria-label={STATE_LABEL[state]}
-      alt={STATE_LABEL[state]}
+      aria-label={label}
+      alt={label}
       data-state={state}
+      data-muted={muted || undefined}
     />
   );
 };

@@ -334,6 +334,51 @@ test("rows show the time in the state and the activity, all ticking on one timer
 
 const at = (w: (typeof shop.worktrees)[number]) => ({ worktree: w.id, cwd: w.path });
 
+test("a 🟠 the service no longer counts as pending is drawn muted, in its row and rolled up", () => {
+  render(<App />);
+  const [main, fixLogin] = shop.worktrees;
+  act(() => apply({ type: "projects", projects: [shop] }));
+  const agent = (id: string, worktree: string, state: AgentState, pending?: boolean) => {
+    const placed = { project: shop.id, worktree, cwd: worktree };
+    apply({ type: "agent_detected", channel: 1, id, ...placed });
+    const status = { ...agentStatus(state), ...(pending === undefined ? {} : { pending }) };
+    apply({ type: "agent_state", id, ...status, subagents: [] });
+  };
+  act(() => {
+    agent("seen", main.id, "waiting_you", false);
+    agent("unseen", fixLogin.id, "waiting_you");
+  });
+  const row = (worktree: string) =>
+    screen.getByRole("button", { name: worktree }).closest("li")?.querySelector(".tree-row.agent");
+  const drawn = (el: Element | null | undefined) =>
+    [".state-icon", ".label", ".state-label"].map((part) =>
+      el?.querySelector(part)?.hasAttribute("data-muted"),
+    );
+  // Icon, title and "waiting for you" muted; the icon says so to screen readers.
+  expect(drawn(row("main"))).toEqual([true, true, true]);
+  expect(row("main")?.querySelector(".state-icon")?.getAttribute("aria-label")).toBe(
+    "waiting for you, seen",
+  );
+  expect(drawn(row("fix-login"))).toEqual([false, false, false]);
+  // Only a 🟠: another state not pending is drawn as usual.
+  act(() => agent("seen", main.id, "working"));
+  expect(drawn(row("main"))).toEqual([false, false, false]);
+  // Collapsed, an unseen 🟠 wins over a seen one; with only seen ones, the rollup is muted.
+  act(() => agent("seen", main.id, "waiting_you", false));
+  fireEvent.click(screen.getByRole("button", { name: "Collapse shop" }));
+  const rollup = () =>
+    screen
+      .getByRole("button", { name: /^shop\b/ })
+      .closest(".tree-row")
+      ?.querySelector(".state-icon");
+  expect(rollup()?.hasAttribute("data-muted")).toBe(false);
+  act(() => agent("unseen", fixLogin.id, "waiting_you", false));
+  expect(rollup()?.getAttribute("aria-label")).toBe("waiting for you, seen");
+  // A dialog still outranks them.
+  act(() => agent("unseen", fixLogin.id, "waiting_permission"));
+  expect(rollup()?.getAttribute("data-state")).toBe("waiting_permission");
+});
+
 test("a collapsed node shows the most urgent state inside; the bell counts pending agents", () => {
   render(<App />);
   const [main, fixLogin] = shop.worktrees;
@@ -603,7 +648,7 @@ test("a hook event re-renders only its own agent's row, not other worktrees' row
     act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("working"), subagents: [] }));
     expect(branch).not.toHaveBeenCalled();
     expect(state).toHaveBeenCalledTimes(1);
-    expect(state.mock.calls[0]?.[0]).toEqual({ state: "working" });
+    expect(state.mock.calls[0]?.[0]).toEqual({ state: "working", muted: false });
     // A status for one worktree re-renders that row only.
     const status = {
       changes: 1,

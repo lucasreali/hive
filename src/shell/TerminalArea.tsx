@@ -20,6 +20,7 @@ import {
   type FileTab as FileTabData,
   type HiveState,
   moveTab,
+  muted,
   openFileDialog,
   openModal,
   pinFile,
@@ -171,6 +172,7 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
   const agentState = useHive((s) => (agent ? (s.agentStates[agent]?.state ?? "idle") : null));
+  const seen = useHive((s) => muted(agent ? s.agentStates[agent] : null));
   const title = useHive((s) => (agent ? s.agentTitles[agent] : undefined));
   const label = title ?? name;
   return (
@@ -187,7 +189,7 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
       close={`Close terminal ${label}`}
       onClose={() => closeTerminal(tab.id)}
     >
-      {agentState ? <StateIcon state={agentState} /> : <TerminalIcon />}
+      {agentState ? <StateIcon state={agentState} muted={seen} /> : <TerminalIcon />}
       <span className="tab-name" data-agent={title ? true : undefined}>
         {label}
       </span>

@@ -5,7 +5,7 @@ import { apply } from "../reduce";
 import { addTab, initialState, select, setEdit, setOpenFile, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
-import { MOCK_REPOS } from "../transport/mock";
+import { agentStatus, MOCK_REPOS } from "../transport/mock";
 import { toText } from "../viewer/buffer";
 
 const [shop, api] = MOCK_REPOS;
@@ -167,6 +167,14 @@ test("a tab running Claude shows the agent's state and its session's name", () =
     apply({ type: "agent_title", channel: 4, id: "s", title: "Fix the login redirect" });
   });
   expect(tab().querySelector("[role=img]")?.getAttribute("aria-label")).toBe("working");
+  // A 🟠 already seen (not pending) is drawn muted, as in the sidebar (15.6).
+  const waiting = { type: "agent_state", id: "s", ...agentStatus("waiting_you"), subagents: [] };
+  act(() => apply({ ...waiting, type: "agent_state", pending: false }));
+  expect(tab().querySelector("[role=img]")?.getAttribute("aria-label")).toBe(
+    "waiting for you, seen",
+  );
+  act(() => apply({ ...waiting, type: "agent_state" }));
+  expect(tab().querySelector("[role=img]")?.hasAttribute("data-muted")).toBe(false);
   expect(tab().querySelector(".tab-name")?.textContent).toBe("Fix the login redirect");
   expect(tab().closest(".tab")?.getAttribute("title")).toBe(
     `Fix the login redirect\n${fixLogin.path}`,
