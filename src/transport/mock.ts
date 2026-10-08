@@ -535,6 +535,10 @@ export const MOCK_TEXTS: Record<string, [string, string]> = {
     ).replace("import { SESSION_TTL }", "import { REMEMBER_ME_TTL, SESSION_TTL }"),
     SESSION_BASE,
   ],
+  // Long enough to scroll far (15.4); unchanged.
+  "src/server.ts": Array(2).fill(
+    Array.from({ length: 400 }, (_, i) => `// server line ${i + 1}`).join("\n"),
+  ) as [string, string],
   // Wider than any panel: a table, an inline path and a code line that must wrap (13.1).
   "docs/api.md": Array(2).fill(
     [

@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { syntaxTree } from "@codemirror/language";
 import { getOriginalDoc } from "@codemirror/merge";
 import { EditorState } from "@codemirror/state";
@@ -8,8 +8,10 @@ import {
   createEditor,
   createViewer,
   type Editor,
+  restoreView,
   revealLine,
   selectedLines,
+  snapshot,
   type Viewer,
 } from "./editor";
 
@@ -19,6 +21,13 @@ afterEach(() => {
   viewer = null;
   document.body.innerHTML = "";
 });
+
+/** Scrolls `view` to `top` as the user does; the scroll it then keeps. */
+const scroll = (view: Viewer["view"], top: number) => {
+  view.scrollDOM.scrollTop = top;
+  view.scrollDOM.dispatchEvent(new Event("scroll"));
+  return snapshot(view).scroll;
+};
 
 const until = async (check: () => boolean) => {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5));
@@ -35,11 +44,14 @@ test("shows a file read-only, as a diff only when it has an original", () => {
   expect(view.state.facet(EditorState.readOnly)).toBe(true);
   expect(view.dom.classList.contains("cm-merge-b")).toBe(false);
 
-  view.scrollDOM.scrollTop = 40;
+  const kept = scroll(view, 40);
+  const sent = spyOn(view, "dispatch");
   viewer.show({ content: "a\nB\n", original: "a\nb\n" });
   expect(view.state.doc.toString()).toBe("a\nB\n");
   expect(getOriginalDoc(view.state).toString()).toBe("a\nb\n");
-  expect(view.scrollDOM.scrollTop).toBe(40);
+  // The same line goes back on top once the new text is measured.
+  expect(sent).toHaveBeenCalledWith({ effects: kept });
+  expect(snapshot(view).scroll).toBe(kept);
 });
 
 test("highlights by the file name's language once it is loaded", async () => {
@@ -161,12 +173,15 @@ test("a reload swaps the text, keeping scroll and a clamped selection", () => {
   editor.load(doc);
   expect(view.state.doc).toBe(doc); // Its own text: nothing to do.
   view.dispatch({ selection: { anchor: 2, head: 9 } });
-  view.scrollDOM.scrollTop = 30;
+  const kept = scroll(view, 30);
+  const sent = spyOn(view, "dispatch");
   heard.selections.length = 0;
   editor.load(toText("abcde"));
   expect(view.state.doc.toString()).toBe("abcde");
   expect([view.state.selection.main.anchor, view.state.selection.main.head]).toEqual([2, 5]);
-  expect(view.scrollDOM.scrollTop).toBe(30);
+  // Fewer lines: CodeMirror keeps the nearest position it has.
+  expect(sent).toHaveBeenCalledWith({ effects: kept });
+  sent.mockRestore();
   expect(heard.selections).toEqual([{ from: 1, to: 1 }]);
   expect(heard.changes).toEqual([]); // A reload is not an edit.
   // Still editable, with its keys.
@@ -203,6 +218,24 @@ test("a line is revealed selected, clamped to the text", () => {
   expect(selected()).toBe("three");
   revealLine(view, 0);
   expect(selected()).toBe("one");
+});
+
+test("a view's scroll is the line at its top at its last scroll, kept when hidden or put back", () => {
+  const long = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
+  const { view } = editing(long);
+  const kept = scroll(view, 3000);
+  const top = (kept.value as { range: { head: number } }).range.head;
+  expect(view.state.doc.lineAt(top).number).toBeGreaterThan(1);
+  // Hidden or detached, the scroller reads 0 without a scroll event: the last one stays.
+  view.scrollDOM.scrollTop = 0;
+  expect(snapshot(view).scroll).toBe(kept);
+  // Put back into a new view: sent to CodeMirror, and kept until the user scrolls it.
+  const other = editing(long).view;
+  const sent = spyOn(other, "dispatch");
+  restoreView(other, snapshot(view));
+  expect(sent).toHaveBeenCalledWith({ effects: kept });
+  expect(snapshot(other).scroll).toBe(kept);
+  expect(scroll(other, 0)).not.toBe(kept);
 });
 
 /** The CSS rules in the document that style `view` and mention `selector`, in order. */

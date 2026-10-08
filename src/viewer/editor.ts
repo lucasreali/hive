@@ -8,6 +8,7 @@ import {
   EditorState,
   type Extension,
   Prec,
+  type StateEffect,
   type Text,
 } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -98,29 +99,49 @@ function highlighting(view: EditorView, path: string) {
   };
 }
 
-/** Replaces the view's state, keeping its scroll position. */
+/**
+ * Each view's scroll as it was last seen (15.4): the line at its top and how far into it, so it
+ * survives a resize. Kept at every scroll event, because the scroller reads 0 once the view is
+ * hidden or detached, which is when it is left; a view not scrolled since keeps what was put back.
+ */
+const scrolls = new WeakMap<EditorView, StateEffect<unknown>>();
+
+/** Keeps `view`'s scroll at every scroll event, for `snapshot` and `replaceState`. */
+function trackScroll(view: EditorView) {
+  view.scrollDOM.addEventListener("scroll", () => scrolls.set(view, view.scrollSnapshot()));
+}
+
+const scrollOf = (view: EditorView) => scrolls.get(view) ?? view.scrollSnapshot();
+
+/** Scrolls `view` to `scroll` once it has measured its text (clamped to it), and keeps it. */
+function scrollTo(view: EditorView, scroll: StateEffect<unknown>) {
+  scrolls.set(view, scroll);
+  view.dispatch({ effects: scroll });
+}
+
+/** Replaces the view's state, keeping its scroll position (the same line at its top). */
 function replaceState(view: EditorView, state: EditorState) {
-  const top = view.scrollDOM.scrollTop;
+  const scroll = scrollOf(view);
   view.setState(state);
-  view.scrollDOM.scrollTop = top;
+  scrollTo(view, scroll);
 }
 
 /** A view's selection and scroll, kept in a file's tab to show it again as it was left (8.21). */
-export type ViewSnapshot = { selection: EditorSelection; top: number };
+export type ViewSnapshot = { selection: EditorSelection; scroll: StateEffect<unknown> };
 
 export const snapshot = (view: EditorView): ViewSnapshot => ({
   selection: view.state.selection,
-  top: view.scrollDOM.scrollTop,
+  scroll: scrollOf(view),
 });
 
 /** Puts a snapshot back into `view`, its selection kept within the text; none does nothing. */
 export function restoreView(view: EditorView, saved: unknown): void {
   if (!saved) return;
-  const { selection, top } = saved as ViewSnapshot;
+  const { selection, scroll } = saved as ViewSnapshot;
   const clamp = (n: number) => Math.min(n, view.state.doc.length);
   const ranges = selection.ranges.map((r) => EditorSelection.range(clamp(r.anchor), clamp(r.head)));
   view.dispatch({ selection: EditorSelection.create(ranges, selection.mainIndex) });
-  view.scrollDOM.scrollTop = top;
+  scrollTo(view, scroll);
 }
 
 const commented = Decoration.line({ class: "cm-commented" });
@@ -160,6 +181,7 @@ export function createViewer(
   onSelect: (lines: Lines | null) => void = () => {},
 ): Viewer {
   const view = new EditorView({ parent });
+  trackScroll(view);
   const language = highlighting(view, path);
   const marks = new Compartment();
   let marked: Lines[] = [];
@@ -244,6 +266,7 @@ export function createEditor(
   on: EditorEvents,
 ): Editor {
   const view = new EditorView({ parent });
+  trackScroll(view);
   const language = highlighting(view, path);
   const comparing = new Compartment();
   // The change markers, hidden while comparing: that diff has its own colors.
