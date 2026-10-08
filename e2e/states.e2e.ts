@@ -141,3 +141,58 @@ test("states: a subagent's own worktree has no row; its path is the line's toolt
     ["56px", "9px"],
   ]);
 });
+
+// 15.6: a 🟠 the service no longer counts as pending (looked at) is drawn muted beside one that
+// still is, in both themes; its colors are the muted text tokens.
+test("states: a seen and an unseen agent waiting for you side by side, dark and light", async ({
+  page,
+}) => {
+  await page.goto("/?mock=states");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await expect(tree.locator(".tree-row.agent")).toHaveCount(7);
+  // api's first two agents become an unseen and a seen 🟠, as the service would send them.
+  await page.evaluate(async () => {
+    const url = "/src/reduce.ts";
+    const { apply } = await import(/* @vite-ignore */ url);
+    const status = {
+      type: "agent_state",
+      state: "waiting_you",
+      urgency: 4,
+      interrupted: false,
+      alert: null,
+      notify: false,
+      writing: false,
+      subagents: [],
+      activity: null,
+      since_ms: Date.now() - 60_000,
+    };
+    apply({ ...status, id: "mock-state-4", pending: true });
+    apply({ ...status, id: "mock-state-5", pending: false });
+  });
+  await expect(tree.locator(".tree-row.agent .state-icon[data-state=waiting_you]")).toHaveCount(3);
+  const unseen = tree.locator(".tree-row.agent").nth(3);
+  const seen = tree.locator(".tree-row.agent").nth(4);
+  await expect(seen.locator(".state-icon")).toHaveAttribute("aria-label", "waiting for you, seen");
+  const both = seen.locator("xpath=ancestor::ul[1]");
+  const themes = {
+    dark: ["rgb(224, 138, 90)", "rgb(220, 224, 229)", "rgb(169, 175, 188)", "rgb(135, 138, 152)"],
+    light: ["rgb(173, 110, 37)", "rgb(36, 37, 41)", "rgb(88, 88, 90)", "rgb(126, 128, 134)"],
+  };
+  for (const [theme, [you, text, text2, text3]] of Object.entries(themes)) {
+    await page.evaluate((light) => {
+      if (light) document.documentElement.dataset.theme = "one-light";
+      else delete document.documentElement.dataset.theme;
+    }, theme === "light");
+    // Unseen: today's orange icon, highlighted title, the usual state name.
+    await expect(unseen.locator(".state-icon")).toHaveCSS("color", you);
+    await expect(unseen.locator(".label")).toHaveCSS("color", text);
+    await expect(unseen.locator(".state-label")).toHaveCSS("color", text2);
+    // Seen: icon and "waiting for you" in the muted text color, the title not highlighted.
+    await expect(seen.locator(".state-icon")).toHaveCSS("color", text3);
+    await expect(seen.locator(".label")).toHaveCSS("color", text2);
+    await expect(seen.locator(".state-label")).toHaveCSS("color", text3);
+    await both.screenshot({ path: `target/e2e/seen-waiting-you-${theme}.png` });
+  }
+  // The seen one is not pending: the bell counts the permission and the two unseen 🟠 only.
+  await expect(page.getByRole("button", { name: "3 pending: notifications" })).toBeVisible();
+});
