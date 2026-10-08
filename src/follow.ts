@@ -40,7 +40,8 @@ export function followPanel(transport: Transport): () => void {
 /**
  * Tells the service which terminal is in view (none while a file is shown) and whether the
  * window has the focus, whenever either changes and after a new `welcome`: the service decides
- * that an agent finishing there was already seen (hive.md item 5). Returns the unsubscribe.
+ * that an agent waiting for you there was already seen (hive.md item 5, 15.6). Returns the
+ * unsubscribe.
  */
 export function followView(transport: Transport): () => void {
   let sent: unknown[] = [];
