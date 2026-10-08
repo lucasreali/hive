@@ -139,7 +139,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
     case "session_usage":
-      return { sessionUsage: m.usage };
+      return { sessionUsage: m.usage, weekUsage: m.week ?? null };
     case "agent_usage": {
       const { type: _, id, ...usage } = m;
       return { agentUsage: { ...s.agentUsage, [id]: usage } };
@@ -425,6 +425,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return {
         connection: { status: "disconnected", reason: m.reason, bundled: m.bundled },
         sessionUsage: null,
+        weekUsage: null,
         agents: {},
         agentStates: {},
         subagentWorktrees: [],

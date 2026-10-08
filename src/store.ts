@@ -317,6 +317,8 @@ export type HiveState = {
   appMode: { mode: AppMode | null; wsl: boolean } | null;
   /** The current account's 5-hour window, as the service decides it (12.1). */
   sessionUsage: SessionWindow | null;
+  /** Its 7-day window (15.3), only alongside the 5-hour one. */
+  weekUsage: SessionWindow | null;
   /** The service's settings (the defaults until they arrive). */
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
@@ -433,6 +435,7 @@ export const initialState: HiveState = {
   connection: { status: "connecting" },
   appMode: null,
   sessionUsage: null,
+  weekUsage: null,
   settings: DEFAULT_SETTINGS,
   settingsError: null,
   settingsPending: false,

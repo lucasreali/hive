@@ -849,9 +849,12 @@ export function createMockTransport(
       for (const m of mockStates()) later(m);
       later({ type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] });
     }
-    // The current account's session window (12.1), resetting in 2 hours.
-    const resets_at = Math.floor(Date.now() / 1000) + 2 * 3600;
-    later({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
+    // The current account's session window (12.1), resetting in 2 hours, and its weekly one
+    // (15.3), in 3 days.
+    const now = Math.floor(Date.now() / 1000);
+    const usage = { used_percentage: 42, resets_at: now + 2 * 3600 };
+    const week = { used_percentage: 41, resets_at: now + 3 * 86400 };
+    later({ type: "session_usage", usage, week });
   };
 
   return {
