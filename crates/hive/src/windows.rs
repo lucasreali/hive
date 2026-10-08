@@ -1619,6 +1619,34 @@ pub fn open_nonblocking(path: &Path) -> io::Result<File> {
     File::open(path)
 }
 
+/// `files::same` (15.2): Windows has no `openat`, so the path is checked (no link in any part,
+/// nor a network or device path: [`crate::paths::canonical`]) and then used, and a link swapped
+/// in between still wins here. A folder has no identity to compare.
+pub fn same_folder(root: &Path, folder: &str, _: &()) -> bool {
+    let dir = root.join(folder);
+    crate::paths::canonical(&dir).is_ok_and(|real| real == dir)
+}
+
+/// `files::level` (14.2): the path checked by [`same_folder`], then `read_dir`; a link to a
+/// folder inside is listed as a file, so it is never opened as a folder.
+pub fn folder_level(root: &Path, folder: &str, most: usize) -> Option<(Vec<String>, ())> {
+    if !same_folder(root, folder, &()) {
+        return None;
+    }
+    let entries = std::fs::read_dir(root.join(folder)).ok()?;
+    let entry = |entry: io::Result<std::fs::DirEntry>| {
+        let entry = entry.ok()?;
+        let name = entry.file_name().into_string().ok()?;
+        let slash = if entry.file_type().ok()?.is_dir() {
+            "/"
+        } else {
+            ""
+        };
+        Some(format!("{folder}/{name}{slash}"))
+    };
+    Some((entries.take(most).filter_map(entry).collect(), ()))
+}
+
 pub use claude::{
     claude_names, claude_wrapper, install_hive, install_wrapper, statusline_command,
     statusline_job, statusline_shell,

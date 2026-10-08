@@ -133,12 +133,10 @@ pub fn parse_ignored(out: &[u8]) -> Vec<&str> {
     entries
 }
 
-/// What tells one folder from another: on Unix its device and inode; on Windows nothing, its
-/// path is checked for links again instead.
+/// What tells one folder from another: its device and inode. (Windows has none: its path is
+/// checked for links again instead.)
 #[cfg(unix)]
 type Id = (u64, u64);
-#[cfg(windows)]
-type Id = ();
 
 /// The folder `folder` (relative, `/`-separated) of the canonical `root`, each part of its path
 /// opened from the one before with `O_NOFOLLOW`: a link in any part, swapped in at any time,
@@ -148,7 +146,14 @@ fn open_folder(root: &Path, folder: &str) -> Option<(std::fs::File, Id)> {
     use nix::fcntl::{AT_FDCWD, OFlag, openat};
     use nix::sys::stat::Mode;
     use std::os::unix::fs::MetadataExt;
-    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    // `O_DIRECTORY` also keeps a FIFO from blocking the open.
+    let flags = [
+        OFlag::O_RDONLY,
+        OFlag::O_DIRECTORY,
+        OFlag::O_NOFOLLOW,
+        OFlag::O_CLOEXEC,
+    ];
+    let flags: OFlag = flags.into_iter().collect();
     let mut fd = openat(AT_FDCWD, root, flags, Mode::empty()).ok()?;
     for part in folder.split('/') {
         // Names only: `..` would climb out.
@@ -168,13 +173,9 @@ fn same(root: &Path, folder: &str, id: &Id) -> bool {
     open_folder(root, folder).is_some_and(|(_, now)| now == *id)
 }
 
-/// Windows has no `openat`: the path is checked (no link in any part, nor a network or device
-/// path: [`canonical`]) and then used, so a link swapped in between still wins there.
+// Windows has no `openat`: its folder is checked by path, then read (`crate::windows`).
 #[cfg(windows)]
-fn same(root: &Path, folder: &str, _: &Id) -> bool {
-    let dir = root.join(folder);
-    canonical(&dir).is_ok_and(|real| real == dir)
-}
+use crate::windows::{folder_level as level, same_folder as same};
 
 /// One level of the ignored folder `folder` (relative, no trailing `/`) of the canonical
 /// `root`, and which folder it was: at most `most` entries, its folders as `folder/name/`,
@@ -205,26 +206,6 @@ fn level(root: &Path, folder: &str, most: usize) -> Option<(Vec<String>, Id)> {
         .filter_map(entry)
         .collect();
     Some((entries, id))
-}
-
-#[cfg(windows)]
-fn level(root: &Path, folder: &str, most: usize) -> Option<(Vec<String>, Id)> {
-    if !same(root, folder, &()) {
-        return None;
-    }
-    let entries = std::fs::read_dir(root.join(folder)).ok()?;
-    let entry = |entry: io::Result<std::fs::DirEntry>| {
-        let entry = entry.ok()?;
-        let name = entry.file_name().into_string().ok()?;
-        // A link to a folder is listed as a file: it is never opened as a folder.
-        let slash = if entry.file_type().ok()?.is_dir() {
-            "/"
-        } else {
-            ""
-        };
-        Some(format!("{folder}/{name}{slash}"))
-    };
-    Some((entries.take(most).filter_map(entry).collect(), ()))
 }
 
 /// Every directory holding one of `paths`, the worktree itself (`""`) included. A path
