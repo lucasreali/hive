@@ -30,7 +30,7 @@ libc = "0.2.189"
 libproc = "0.14.11"
 
 [target."cfg(unix)".dependencies]
-nix = { version = "0.31.3", features = ["signal", "user", "process", "fs", "time"] }
+nix = { version = "0.31.3", features = ["signal", "user", "process", "fs", "time", "dir"] }
 pty-process = { version = "0.5.3", features = ["async"] }
 
 [target."cfg(windows)".dependencies]
