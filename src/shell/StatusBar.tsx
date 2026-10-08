@@ -66,19 +66,57 @@ export function StatusBar() {
   );
 }
 
-/** "Session 42% · resets 14:30": the service sends none once it reset. */
+/** The ring turns the warning colour from this share of the 5-hour window (15.3). */
+const USAGE_WARNING = 80;
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** "14:30" in local time. */
+function clock(at: Date) {
+  return at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+}
+
+/**
+ * The session (5-hour) window as a ring filled to its percentage (15.3), with "Session 42% ·
+ * resets 14:30" and, when the service sent one, "Week 41% · resets Mon 09:00" as its tooltip
+ * (on hover and keyboard focus) and accessible name. The service sends none once it reset.
+ */
 function SessionUsage() {
   const usage = useHive((s) => s.sessionUsage);
+  const week = useHive((s) => s.weekUsage);
   if (!usage) return null;
-  const resets = new Date(usage.resets_at * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
-  const title = `Current session (5-hour limit): ${usage.used_percentage}% used, resets at ${resets}`;
+  const lines = [
+    `Session ${usage.used_percentage}% · resets ${clock(new Date(usage.resets_at * 1000))}`,
+  ];
+  if (week) {
+    const at = new Date(week.resets_at * 1000);
+    lines.push(`Week ${week.used_percentage}% · resets ${WEEKDAYS[at.getDay()]} ${clock(at)}`);
+  }
   return (
-    <span className="session-usage" title={title}>
-      Session {usage.used_percentage}% · resets {resets}
-    </span>
+    // A button only so the keyboard reaches its tooltip (as the ARIA tooltip pattern); it does
+    // nothing when pressed.
+    <button
+      type="button"
+      className="session-usage"
+      aria-label={lines.join(", ")}
+      data-warning={usage.used_percentage >= USAGE_WARNING || undefined}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        <circle className="usage-track" cx="7" cy="7" r="5.5" />
+        <circle
+          className="usage-arc"
+          cx="7"
+          cy="7"
+          r="5.5"
+          pathLength={100}
+          strokeDasharray={`${usage.used_percentage} 100`}
+          transform="rotate(-90 7 7)"
+        />
+      </svg>
+      <span className="usage-tip" aria-hidden="true">
+        {lines.map((line) => (
+          <span key={line}>{line}</span>
+        ))}
+      </span>
+    </button>
   );
 }

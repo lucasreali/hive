@@ -39,26 +39,49 @@ test("shows Windows while the service runs on Windows itself (12.5.4)", () => {
   expect(screen.getByTitle("WSL connection").textContent).toBe("WSL: Ubuntuconnected");
 });
 
-test("shows the current account's session usage with its reset in local time (12.1)", () => {
+test("shows the current account's session usage as a ring, with its reset in local time (12.1, 15.3)", () => {
   render(<StatusBar />);
   const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;
   act(() => {
     apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
-    apply({ type: "session_usage", usage: { used_percentage: 42, resets_at } });
+    apply({ type: "session_usage", usage: { used_percentage: 42, resets_at }, week: null });
   });
-  const usage = screen.getByTitle("Current session (5-hour limit): 42% used, resets at 14:30");
-  expect(usage.textContent).toBe("Session 42% · resets 14:30");
-  expect(screen.getByRole("contentinfo").textContent).toBe(
-    `WSL: UbuntuconnectedSession 42% · resets 14:30v${version}`,
-  );
+  // No text in the bar: the ring, its tooltip and its accessible name.
+  const ring = screen.getByRole("button", { name: "Session 42% · resets 14:30" });
+  expect(ring.querySelector(".usage-arc")?.getAttribute("stroke-dasharray")).toBe("42 100");
+  expect(ring.querySelector(".usage-arc")?.getAttribute("pathLength")).toBe("100");
+  expect(ring.querySelector(".usage-tip")?.textContent).toBe("Session 42% · resets 14:30");
+  expect(ring.hasAttribute("data-warning")).toBe(false);
   // None once it reset, and none from a service that is gone.
-  act(() => apply({ type: "session_usage", usage: null }));
+  act(() => apply({ type: "session_usage", usage: null, week: null }));
+  expect(screen.queryByRole("button")).toBeNull();
   expect(screen.getByRole("contentinfo").textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
   act(() => {
     apply({ type: "session_usage", usage: { used_percentage: 7, resets_at } });
     apply({ type: "disconnected", reason: "gone", bundled: false });
   });
   expect(screen.getByRole("contentinfo").textContent).toBe(`WSLdisconnectedv${version}`);
+});
+
+test("the ring's tooltip adds the weekly window when the service sends one (15.3)", () => {
+  render(<StatusBar />);
+  const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;
+  // A Monday.
+  const week = { used_percentage: 41, resets_at: new Date(2026, 9, 5, 9, 0).getTime() / 1000 };
+  act(() => apply({ type: "session_usage", usage: { used_percentage: 80, resets_at }, week }));
+  const lines = ["Session 80% · resets 14:30", "Week 41% · resets Mon 09:00"];
+  const ring = screen.getByRole("button", { name: lines.join(", ") });
+  const tip = ring.querySelector(".usage-tip");
+  expect([...(tip?.children ?? [])].map((line) => line.textContent)).toEqual(lines);
+  // The warning colour from 80%.
+  expect(ring.hasAttribute("data-warning")).toBe(true);
+  act(() => apply({ type: "session_usage", usage: { used_percentage: 79, resets_at }, week }));
+  expect(ring.hasAttribute("data-warning")).toBe(false);
+  // An older service sends no week: the session alone.
+  act(() => apply({ type: "session_usage", usage: { used_percentage: 100, resets_at } }));
+  expect(ring.getAttribute("aria-label")).toBe("Session 100% · resets 14:30");
+  expect(ring.querySelector(".usage-arc")?.getAttribute("stroke-dasharray")).toBe("100 100");
+  expect(useHive.getState().weekUsage).toBeNull();
 });
 
 test("holds no message:a failure or a confirmation shows elsewhere, as a toast (10.3)", () => {

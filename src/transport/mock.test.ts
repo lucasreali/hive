@@ -55,7 +55,11 @@ test("welcomes the UI asynchronously", async () => {
     { type: "settings", settings: DEFAULT_SETTINGS },
     { type: "spaces", spaces: [space("default", "Default", [SHOP, API])], current: "default" },
     { type: "projects", projects: MOCK_REPOS.slice(0, 2) },
-    { type: "session_usage", usage: { used_percentage: 42, resets_at: expect.any(Number) } },
+    {
+      type: "session_usage",
+      usage: { used_percentage: 42, resets_at: expect.any(Number) },
+      week: { used_percentage: 41, resets_at: expect.any(Number) },
+    },
   ]);
 });
 
