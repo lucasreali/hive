@@ -197,7 +197,9 @@ fn level(root: &Path, folder: &str, most: usize) -> Option<(Vec<String>, Id)> {
     };
     let entries = dir
         .into_iter()
-        .filter_map(Result::ok)
+        // Stops at the first error, as `read_dir` does: one that keeps failing (EIO) would
+        // otherwise never end.
+        .map_while(Result::ok)
         .filter(|entry| !matches!(entry.file_name().to_bytes(), b"." | b".."))
         .take(most)
         .filter_map(entry)
@@ -419,6 +421,19 @@ impl Watcher {
             .iter()
             .map(|dir| PathOp::Watch(self.root.join(dir), config.clone()));
         let ops = unwatch.chain(watch).collect();
+        let keys = |watcher: &RecommendedWatcher| -> io::Result<BTreeSet<PathBuf>> {
+            let paths = watcher.watched_paths().map_err(io::Error::other)?;
+            Ok(paths.into_iter().map(|(path, _)| path).collect())
+        };
+        // Only an open folder watched anew is checked below.
+        let fresh = opened
+            .iter()
+            .any(|(folder, _)| !self.dirs.contains(*folder));
+        let before = if fresh {
+            keys(&self.watcher)?
+        } else {
+            BTreeSet::new()
+        };
         for (folder, _) in &opened {
             (self.hook)(Step::Watch, &self.root, folder);
         }
@@ -435,8 +450,20 @@ impl Watcher {
             .map(|(folder, _)| self.root.join(folder))
             .collect();
         if !swapped.is_empty() {
-            let unwatch = swapped.iter().map(PathOp::unwatch).collect();
-            update(|ops| watcher.update_paths(ops).map_err(Box::new), unwatch)
+            // Dropped by the key the watcher keeps: inotify keeps the path given, FSEvents what
+            // it resolved to, which the path may no longer lead to. Every new watch but those
+            // of the folders kept goes.
+            let kept: BTreeSet<PathBuf> = added
+                .iter()
+                .map(|dir| self.root.join(dir))
+                .filter(|path| !swapped.contains(path))
+                .collect();
+            let stray = keys(watcher)?
+                .into_iter()
+                .filter(|key| !before.contains(key) && !kept.contains(key))
+                .map(PathOp::unwatch)
+                .collect();
+            update(|ops| watcher.update_paths(ops).map_err(Box::new), stray)
                 .map_err(io::Error::other)?;
             failed.extend(swapped);
         }
@@ -692,48 +719,68 @@ mod tests {
         run_git(&root, &["init", "-q"]);
         std::fs::write(root.join(".gitignore"), "deps/\n").unwrap();
         write(&root, "deps/x.js");
+        write(&root, "deps/a/z.js");
         let mut watcher = Watcher::new(&root).unwrap();
-        watcher.open(["deps".to_owned()]);
-        let watching = |watcher: &Watcher| {
+        watcher.open(["deps".to_owned(), "deps/a".to_owned()]);
+        // What the watcher itself watches: FSEvents keeps what a path resolved to.
+        let keys = |watcher: &Watcher| {
             let paths = watcher.watcher.watched_paths().unwrap();
-            paths.into_iter().any(|(path, _)| path == root.join("deps"))
+            paths
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect::<BTreeSet<_>>()
         };
 
         // Swapped after git named it an ignored folder, right before it is read.
         watcher.hook = |step, root, folder| {
-            if matches!(step, Step::Read) {
+            if matches!(step, Step::Read) && folder == "deps" {
                 swap(root, folder);
             }
         };
         let listing = watcher.list().unwrap();
         assert_eq!(listing.ignored, ["deps/"]);
         assert_eq!(watched(&watcher), [""]);
-        assert!(!watching(&watcher));
+        let base = keys(&watcher);
+        assert_eq!(base.len(), 2, "the worktree and its git dir: {base:?}");
+        assert!(base.iter().all(|key| key.starts_with(&root)), "{base:?}");
         unswap(&root, "deps");
 
         // Swapped after it was read, right before it is watched: read from the worktree, but
-        // the watch made through the link is dropped again.
+        // the watches made through the link, at the end of the path or in its middle, go.
         watcher.hook = |step, root, folder| {
-            if matches!(step, Step::Watch) {
+            if matches!(step, Step::Watch) && folder == "deps" {
                 swap(root, folder);
             }
         };
         let listing = watcher.list().unwrap();
-        assert_eq!(listing.ignored, ["deps/", "deps/x.js"]);
+        let read = ["deps/", "deps/a/", "deps/a/z.js", "deps/x.js"];
+        assert_eq!(listing.ignored, read);
         assert_eq!(watched(&watcher), [""]);
-        assert!(!watching(&watcher));
+        assert_eq!(keys(&watcher), base);
         // A write out there is not seen.
         changes(&mut watcher, NEVER).await;
-        std::fs::write(root.with_file_name("outside").join("y.js"), "").unwrap();
+        let outside = root.with_file_name("outside");
+        std::fs::write(outside.join("y.js"), "").unwrap();
+        std::fs::write(outside.join("a/w.js"), "").unwrap();
         assert!(!changes(&mut watcher, NEVER).await);
         unswap(&root, "deps");
 
         // Left alone, it is read and watched.
         watcher.hook = |_, _, _| {};
         let listing = watcher.list().unwrap();
-        assert_eq!(listing.ignored, ["deps/", "deps/x.js", "deps/y.js"]);
-        assert_eq!(watched(&watcher), ["", "deps"]);
-        assert!(watching(&watcher));
+        let read = [
+            "deps/",
+            "deps/a/",
+            "deps/a/w.js",
+            "deps/a/z.js",
+            "deps/x.js",
+            "deps/y.js",
+        ];
+        assert_eq!(listing.ignored, read);
+        assert_eq!(watched(&watcher), ["", "deps", "deps/a"]);
+        let mut all = base.clone();
+        all.extend([root.join("deps"), root.join("deps/a")]);
+        assert_eq!(keys(&watcher), all);
     }
 
     #[test]
