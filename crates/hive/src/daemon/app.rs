@@ -6,7 +6,6 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
@@ -205,8 +204,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
         Ok(Control::ExpandIgnored { path, folders }) => state.expand_ignored(&path, folders).await,
         Ok(Control::View { terminal, focused }) => {
-            let watched = terminal.filter(|_| focused).unwrap_or(0);
-            state.watched.store(watched, Ordering::Relaxed);
+            state.view(terminal.filter(|_| focused).unwrap_or(0)).await;
         }
         Ok(Control::GetSettings) => state.send_settings().await,
         Ok(Control::SetSettings { settings }) => {

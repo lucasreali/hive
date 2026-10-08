@@ -1420,7 +1420,10 @@ mod tests {
         agent.feed("s", &hook("Stop", None, json!({})), now);
         assert!(pending(&agent));
         // A dialog or an error in view stays pending.
-        for (name, state) in [("PermissionRequest", WaitingPermission), ("StopFailure", Error)] {
+        for (name, state) in [
+            ("PermissionRequest", WaitingPermission),
+            ("StopFailure", Error),
+        ] {
             agent.feed("s", &hook(name, None, json!({})), now);
             assert_eq!(agent.watch("s", true), None, "{name}");
             assert_eq!((shown(&agent).0, pending(&agent)), (state, true), "{name}");

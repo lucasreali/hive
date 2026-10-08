@@ -489,11 +489,12 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
     hook(&repo, &mut app, "1", "SessionStart", start).await;
     let s = || json!({"session_id": "s"});
     let turn = async |app: &mut Conn, terminal, focused| {
+        // Working when the view changes: looking at it sees nothing yet (15.6).
+        hook(&repo, app, "1", "UserPromptSubmit", s()).await;
         app.send(0, Control::View { terminal, focused }).await;
         // Answered after the view is applied: frames are handled in order.
         app.send(0, Control::ListProjects).await;
         assert!(matches!(app.control().await, (0, Control::Projects { .. })));
-        hook(&repo, app, "1", "UserPromptSubmit", s()).await;
         hook(&repo, app, "1", "Stop", s()).await
     };
     // Seen as it finished: neither pending nor notified (it still alerts: tone and inbox).
@@ -525,6 +526,66 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
         *notify = false;
     }
     assert_eq!(ask, vec![(1, asking)]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn looking_at_an_agent_waiting_for_you_makes_it_not_pending_until_its_next_state() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let cwd = repo.root.display().to_string();
+    let start = json!({"session_id": "s", "cwd": cwd});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let s = || json!({"session_id": "s"});
+    // What a view sends before the next reply (frames are handled in order).
+    let view = async |app: &mut Conn, terminal, focused| {
+        app.send(0, Control::View { terminal, focused }).await;
+        app.send(0, Control::ListProjects).await;
+        let mut sent = vec![];
+        loop {
+            match app.control().await {
+                (0, Control::Projects { .. }) => return sent,
+                other => sent.push(other),
+            }
+        }
+    };
+    let waiting = |pending| {
+        let message = Control::AgentState {
+            id: "s".into(),
+            state: WaitingYou,
+            urgency: WaitingYou.urgency(),
+            pending,
+            interrupted: false,
+            alert: None,
+            notify: false,
+            writing: false,
+            subagents: vec![],
+            activity: None,
+            since_ms: 0,
+        };
+        vec![(1, message)]
+    };
+    // It finishes out of view: pending.
+    hook(&repo, &mut app, "1", "UserPromptSubmit", s()).await;
+    hook(&repo, &mut app, "1", "Stop", s()).await;
+    // Shown in an unfocused window: still pending, nothing sent.
+    assert_eq!(view(&mut app, Some(1), false).await, []);
+    // In view of the focused window: no longer pending, at once; looking away keeps it so.
+    assert_eq!(view(&mut app, Some(1), true).await, waiting(false));
+    assert_eq!(view(&mut app, None, true).await, []);
+    // The next finish out of view is pending again.
+    hook(&repo, &mut app, "1", "UserPromptSubmit", s()).await;
+    let finished = hook(&repo, &mut app, "1", "Stop", s()).await;
+    assert!(matches!(
+        finished[..],
+        [(1, Control::AgentState { pending: true, .. })]
+    ));
+    // A dialog stays pending in view.
+    hook(&repo, &mut app, "1", "PermissionRequest", s()).await;
+    assert_eq!(view(&mut app, Some(1), true).await, []);
     drop(app);
     assert!(daemon.wait_exit().success());
 }
