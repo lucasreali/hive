@@ -76,6 +76,10 @@
     "usage": {
       "used_percentage": 42,
       "resets_at": 1738425600
+    },
+    "week": {
+      "used_percentage": 41,
+      "resets_at": 1738857600
     }
   },
   {

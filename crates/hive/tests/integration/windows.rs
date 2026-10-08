@@ -413,7 +413,8 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         assert!(out.status.success(), "{shell:?}: {out:?}");
     }
     let usage = Some(usage);
-    app.wait_for(0, Control::SessionUsage { usage }).await;
+    app.wait_for(0, Control::SessionUsage { usage, week: None })
+        .await;
     // `hive hook` as Claude Code runs it: quiet, and it always succeeds.
     let mut call = env.hive();
     let mut call = call

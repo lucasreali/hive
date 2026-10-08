@@ -238,6 +238,10 @@ fn samples() -> Vec<Control> {
                 used_percentage: 42,
                 resets_at: 1_738_425_600,
             }),
+            week: Some(SessionWindow {
+                used_percentage: 41,
+                resets_at: 1_738_857_600,
+            }),
         },
         AgentRemoved { id: s("s") },
         Projects {
