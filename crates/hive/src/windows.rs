@@ -34,6 +34,7 @@ use windows_sys::Win32::Security::{
     TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{GetLogicalDrives, MoveFileExW};
+use windows_sys::Win32::System::Console::{PHANDLER_ROUTINE, SetConsoleCtrlHandler};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, OpenProcess,
@@ -299,6 +300,25 @@ pub fn spawn_detached(command: &mut Command) -> io::Result<Child> {
         .creation_flags(breakaway)
         .spawn()
         .or_else(|_| command.creation_flags(detached).spawn())
+}
+
+/// Makes every console control event do nothing to this process. The service shares its
+/// console with every program it runs ([`spawn_detached`]): Ctrl+Break sent by one of them to
+/// the console or to the service's process group (`GenerateConsoleCtrlEvent`) would end the
+/// service, and every terminal with it (its own process group turns off Ctrl+C only). The
+/// `claude` wrapper leaves them to `claude`.
+pub fn ignore_ctrl() -> io::Result<()> {
+    set_ctrl_handler(|handler| unsafe { SetConsoleCtrlHandler(handler, 1) })
+}
+
+/// Adds [`ignore`] through `set` (`SetConsoleCtrlHandler`).
+fn set_ctrl_handler(set: impl FnOnce(PHANDLER_ROUTINE) -> BOOL) -> io::Result<()> {
+    check(set(Some(ignore)))
+}
+
+/// A console control handler that handles every event by doing nothing.
+unsafe extern "system" fn ignore(_event: u32) -> BOOL {
+    1
 }
 
 /// The machine-wide monotonic clock in ns, from the performance counter: one clock for every
@@ -1638,8 +1658,6 @@ pub mod claude {
     use std::process::{Command, ExitCode};
 
     use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
-    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
-    use windows_sys::core::BOOL;
 
     use super::{Job, monotonic_ns, wide};
     use crate::paths::canonical;
@@ -1811,7 +1829,8 @@ pub mod claude {
     fn wrap(exe: &Path, args: Vec<OsString>, var: &dyn Fn(&str) -> Option<OsString>) -> i32 {
         // Ctrl+C and Ctrl+Break reach every program of the console: `claude` decides what
         // they do, while the wrapper waits for it.
-        unsafe { SetConsoleCtrlHandler(Some(ignore), 1) };
+        // (Without it, `claude` still runs: only a Ctrl+C would end the wrapper too.)
+        let _ = super::ignore_ctrl();
         let bin = exe.parent().unwrap_or(exe);
         let Some(real) = crate::wrapper::real_claude(var("PATH").as_deref(), bin) else {
             eprintln!("hive: no claude found in PATH");
@@ -1829,11 +1848,6 @@ pub mod claude {
                 126
             }
         }
-    }
-
-    /// The wrapper's console control handler: every event is handled, by doing nothing.
-    unsafe extern "system" fn ignore(_event: u32) -> BOOL {
-        1
     }
 
     #[cfg(test)]
@@ -2141,7 +2155,7 @@ pub mod claude {
             assert_eq!(exit_code(256), ExitCode::FAILURE);
             assert_eq!(exit_code(0xC000_013A_u32 as i32), ExitCode::FAILURE);
             // Ctrl+C and Ctrl+Break do nothing to it.
-            assert_eq!(unsafe { ignore(0) }, 1);
+            assert_eq!(unsafe { crate::windows::ignore(0) }, 1);
         }
     }
 }
@@ -2491,6 +2505,13 @@ mod tests {
         exit.args(["/c", "exit 7"]);
         let status = spawn_detached(&mut exit).unwrap().wait().unwrap();
         assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn a_console_handler_not_added_is_an_error() {
+        let added = set_ctrl_handler(|handler| BOOL::from(handler.is_some()));
+        assert!(added.is_ok());
+        assert!(set_ctrl_handler(|_| 0).is_err());
     }
 
     #[test]

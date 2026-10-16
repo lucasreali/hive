@@ -54,6 +54,9 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // (On Windows the bridge starts it detached.)
     #[cfg(unix)]
     let _ = nix::unistd::setsid();
+    // Its console is every program's it runs (16.4): a Ctrl+Break from one must not end it.
+    #[cfg(windows)]
+    crate::windows::ignore_ctrl()?;
     paths.prepare_runtime()?;
     let _lock = lock(paths).await?;
     wrapper::install(paths, &std::env::current_exe()?)?;
