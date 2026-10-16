@@ -564,12 +564,16 @@ async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_sh
 async fn a_ctrl_break_from_a_program_the_service_runs_leaves_it_running() {
     let env = Env::new();
     // The archive script sends Ctrl+Break (1) to every process of its console (0): the
-    // service's own, which it shares (16.4).
+    // service's own, which it shares (16.4). It first creates the file it is given, so the
+    // test knows it ran (its own Ctrl+Break may end it right after).
     let source = env.path("ctrl_break.rs");
     std::fs::write(
         &source,
         "extern \"system\" { fn GenerateConsoleCtrlEvent(event: u32, group: u32) -> i32; }\n\
-         fn main() { unsafe { GenerateConsoleCtrlEvent(1, 0) }; }\n",
+         fn main() {\n\
+             std::fs::write(std::env::args().nth(1).unwrap(), \"\").unwrap();\n\
+             unsafe { GenerateConsoleCtrlEvent(1, 0) };\n\
+         }\n",
     )
     .unwrap();
     let sender = env.path("ctrl_break.exe");
@@ -579,11 +583,13 @@ async fn a_ctrl_break_from_a_program_the_service_runs_leaves_it_running() {
         .arg(&source)
         .status();
     assert!(built.unwrap().success());
-    let script = format!(r#""{}""#, sender.display());
+    let sent = env.path("sent");
+    let script = format!(r#""{}" "{}""#, sender.display(), sent.display());
     let (mut bridge, mut app, path) = with_worktree(&env, TerminalShell::Cmd, script).await;
     let remove = Control::RemoveWorktree { path, force: false };
     app.send(0, remove).await;
     app.until(0, "the removal", removal).await;
+    assert!(sent.exists(), "the script did not run");
     // Still there, once the event has reached every process.
     tokio::time::sleep(Duration::from_secs(1)).await;
     app.send(0, Control::ListProjects).await;
