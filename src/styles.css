@@ -3472,6 +3472,18 @@ button.link:hover {
   color: var(--text-2);
 }
 
+/* 16.3: text buttons, sized by their text, not the right panel's 24 px icon width. */
+.run-log-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.run-log-actions .ghost.text {
+  width: auto;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
 .run-log {
   max-height: 320px;
   margin: 4px 0 8px;

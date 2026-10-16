@@ -103,3 +103,34 @@ for (const panelWidth of [280, 640]) {
     }
   });
 }
+
+// 16.3: a failed job's log buttons keep their text on one line at the panel's narrowest width.
+test("actions: the log's buttons show whole at 280 px", async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("hive.widths", JSON.stringify({ panelWidth: 280 })),
+  );
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .locator(".tree-row.worktree", { hasText: "fix-login" })
+    .locator(".run-badge")
+    .click();
+  const jobs = page
+    .getByRole("region", { name: "Actions" })
+    .getByRole("region", { name: "Jobs (2)" });
+  const oneLine = (name: string) =>
+    jobs.getByRole("button", { name }).evaluate((button) => {
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      return {
+        lines: range.getClientRects().length,
+        whole: button.scrollWidth <= button.clientWidth,
+      };
+    });
+  expect(await oneLine("Show the end of its log")).toEqual({ lines: 1, whole: true });
+  await jobs.getByRole("button", { name: "Show the end of its log" }).click();
+  await expect(jobs.locator(".run-log")).toContainText("##[error]");
+  for (const name of ["Hide the log", "Copy the log"]) {
+    expect(await oneLine(name)).toEqual({ lines: 1, whole: true });
+  }
+});

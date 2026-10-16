@@ -16,7 +16,7 @@ import {
   showRun,
   words,
 } from "../runs";
-import { ago } from "../sessions";
+import { ago, copy } from "../sessions";
 import { ask, runsKey, select, setPanelView, setRightPanel, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
@@ -268,6 +268,8 @@ function Job({ project, job }: { project: string; job: RunJob }) {
     s.jobLog?.project === project && s.jobLog.job === job.id ? s.jobLog : null,
   );
   const running = job.state === "running";
+  // Copied as shown: only once loaded, not while loading or on an error.
+  const text = log && !log.error ? log.log : null;
   return (
     <li className="run-job">
       <details open={job.state === "failing" || running}>
@@ -286,34 +288,46 @@ function Job({ project, job }: { project: string; job: RunJob }) {
             </li>
           ))}
         </ol>
-        {job.state === "failing" &&
-          (log ? (
-            <>
-              <button type="button" className="ghost" onClick={hideJobLog}>
-                Hide the log
-              </button>
-              {log.error && (
-                <p className="pulls-error" role="alert">
-                  {log.error}
-                </p>
-              )}
-              {!log.error && (
-                <pre
-                  className="run-log"
-                  // The failure is at the end: show it first.
-                  ref={(pre) => {
-                    if (pre) pre.scrollTop = pre.scrollHeight;
-                  }}
+        {job.state === "failing" && (
+          <>
+            <div className="run-log-actions">
+              {log ? (
+                <button type="button" className="ghost text" onClick={hideJobLog}>
+                  Hide the log
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ghost text"
+                  onClick={() => showJobLog(project, job.id)}
                 >
-                  {log.log ?? "Loading the log…"}
-                </pre>
+                  Show the end of its log
+                </button>
               )}
-            </>
-          ) : (
-            <button type="button" className="ghost" onClick={() => showJobLog(project, job.id)}>
-              Show the end of its log
-            </button>
-          ))}
+              {text !== null && (
+                <button type="button" className="ghost text" onClick={() => copy(text, "log")}>
+                  Copy the log
+                </button>
+              )}
+            </div>
+            {log?.error && (
+              <p className="pulls-error" role="alert">
+                {log.error}
+              </p>
+            )}
+            {log && !log.error && (
+              <pre
+                className="run-log"
+                // The failure is at the end: show it first.
+                ref={(pre) => {
+                  if (pre) pre.scrollTop = pre.scrollHeight;
+                }}
+              >
+                {log.log ?? "Loading the log…"}
+              </pre>
+            )}
+          </>
+        )}
       </details>
     </li>
   );
