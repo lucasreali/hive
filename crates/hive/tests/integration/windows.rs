@@ -354,6 +354,20 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
     );
     app.type_line(5, &first).await;
     app.shows(5, "claude=fake").await;
+    // The wrapper runs the fake with Hive's hooks and passes its exit code on. Waited for until
+    // it ends, whatever it printed: a broken wrapper fails here at once, not after waiting
+    // `TIMEOUT` for an agent it never starts (with the unit tests before, past cargo-mutants'
+    // 120 s).
+    let from = app.output[&5].len();
+    app.type_line(5, "claude; 'wrapped=' + $LASTEXITCODE").await;
+    let ended = |_: Option<&Control>, output: &str| {
+        let mut after = output[from..].split("wrapped=").skip(1);
+        after.any(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    app.until(5, "the wrapper's end", ended).await;
+    let output = &app.output[&5][from..];
+    assert!(output.contains("settings"), "{output:?}");
+    assert!(output.contains("wrapped=0"), "{output:?}");
     app.type_line(5, "claude SessionStart s2 WorktreeCreate w1")
         .await;
     let detected = |message: Option<&Control>, _: &str| matches!(message, Some(Control::AgentDetected { id, .. }) if id == "s2");
