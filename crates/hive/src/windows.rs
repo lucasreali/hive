@@ -36,7 +36,7 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{GetLogicalDrives, MoveFileExW};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, OpenProcess,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, OpenProcess,
     OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::core::BOOL;
@@ -288,10 +288,12 @@ fn instance(name: &str, user: &str, first: bool) -> io::Result<NamedPipeServer> 
 
 /// Starts the service out of this console and process group, so it outlives the bridge and
 /// ends with the app connection only; also out of this process's job (the app's), unless the
-/// job forbids it (e.g. cargo's).
+/// job forbids it (e.g. cargo's). It gets a console of its own without a window, which every
+/// program it runs shares (git, `gh`, scripts, and whatever they run): without a console
+/// (`DETACHED_PROCESS`), Windows would open a console window for each of them (16.4).
 pub fn spawn_detached(command: &mut Command) -> io::Result<Child> {
     // `bitor`, not `|`: or-ing and xor-ing flags that share no bit are the same.
-    let detached = DETACHED_PROCESS.bitor(CREATE_NEW_PROCESS_GROUP);
+    let detached = CREATE_NO_WINDOW.bitor(CREATE_NEW_PROCESS_GROUP);
     let breakaway = detached.bitor(CREATE_BREAKAWAY_FROM_JOB);
     command
         .creation_flags(breakaway)
@@ -2489,6 +2491,36 @@ mod tests {
         exit.args(["/c", "exit 7"]);
         let status = spawn_detached(&mut exit).unwrap().wait().unwrap();
         assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn a_detached_program_has_a_console_without_a_window() {
+        // What the service gets, and so every console program it runs: a console of its own
+        // (without one, each program would get a new console window) with no window shown.
+        // The probe writes what it found, so a PowerShell that never ran the script fails too
+        // (one without a console exits 0 at once).
+        let probe = r#"Add-Type -Namespace Hive -Name Console -MemberDefinition '
+            [DllImport("kernel32.dll")] public static extern uint GetConsoleCP();
+            [DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr w);'
+            $console = [Hive.Console]::GetConsoleCP() -ne 0
+            $shown = [Hive.Console]::IsWindowVisible([Hive.Console]::GetConsoleWindow())
+            [IO.File]::WriteAllText("$PSScriptRoot\found", "console=$console shown=$shown")
+        "#;
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("probe.ps1");
+        std::fs::write(&file, probe).unwrap();
+        let mut powershell = Command::new("powershell");
+        let options = [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+        ];
+        powershell.args(options).arg("-File").arg(&file);
+        spawn_detached(&mut powershell).unwrap().wait().unwrap();
+        let found = std::fs::read_to_string(tmp.path().join("found"));
+        assert_eq!(found.ok().as_deref(), Some("console=True shown=False"));
     }
 
     #[test]
