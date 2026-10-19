@@ -17,7 +17,8 @@ You are the **orchestrator**. You do not write product code yourself: you plan, 
 ## 2. Run
 - Launch every ready task at once: `Agent` with `subagent_type: general-purpose`, `isolation: worktree`, `run_in_background: true`. The prompt is: "Read and follow `.claude/skills/stage/task-brief.md` first", the task id and name, the decisions it cites, **what already exists on main that it must reuse** (APIs, files — taken from earlier reports), the orchestrator defaults that apply, and the specific scope/tests you expect. Tasks the human does (recordings, reviews) are not delegated.
 - When an agent reports a finished task with **green CI on its branch tip** (run URLs in the report), **integrate it** from the main checkout:
-  `git merge-base --is-ancestor main <branch> && flock /var/tmp/hive-merge.lock git merge --ff-only <branch>`.
+  `git merge-base --is-ancestor main <branch> && mkdir /var/tmp/hive-merge.lock && { git merge --ff-only <branch>; rmdir /var/tmp/hive-merge.lock; }`.
+  `mkdir` is the lock (macOS has no `flock`): when it fails another merge holds the lock, so wait and retry; a lock left by a crashed session (no merge running) is removed with `rmdir`.
   If `main` moved (not an ancestor), send the agent back with `SendMessage` to merge `main`, resolve and re-run the gates. After the merge, delete the branch once the agent's worktree is gone (`git worktree remove` / `git branch -d`; a worktree stays locked while its agent process lives). Relay a short summary to the human (what landed, gates, items for the checkpoint). Launch every task that just became ready.
 - If an agent stops with a question, answer it yourself when a decision or default covers it (continue the agent with `SendMessage`); otherwise ask the human.
 - If an agent dies (session restart), check its worktree/branch for partial work and resume it with `SendMessage`.
