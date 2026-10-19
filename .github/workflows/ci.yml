@@ -76,12 +76,19 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun test --coverage
-      - run: bunx playwright install --with-deps chromium
+      # WebKit (TODO 17.3): the engine of macOS' WKWebView, where Hive runs on a Mac.
+      - run: bunx playwright install --with-deps chromium webkit
       # The load spec renders WebGL through ANGLE on the system GL (Mesa; llvmpipe here, the
       # runner has no GPU). Without Mesa's EGL and a display Chromium falls back to
       # SwiftShader, which the spec rejects as unrepresentative.
       - run: sudo apt-get install -y libegl1 libegl-mesa0 libgl1-mesa-dri xvfb
       - run: xvfb-run -a bun run e2e
+      # One-off (TODO 17.3): print WebKit's new Linux snapshot baselines to take them from the log.
+      - if: always()
+        run: |
+          for f in e2e/markdown.e2e.ts-snapshots/*-webkit-linux.png; do
+            [ -f "$f" ] && { echo "SNAPSHOT $f"; base64 -w0 "$f"; echo; }
+          done
       - if: failure()
         uses: actions/upload-artifact@v6
         with:
