@@ -153,13 +153,25 @@ Details: [`docs/architecture.md`](docs/architecture.md). Decisions: [`docs/hive.
 
 ### Prerequisites
 
-- Rust stable (`rustup`), [bun](https://bun.sh), fish and git.
-- To build the Windows app from WSL: `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin --locked`.
-- For the gates: `cargo-llvm-cov`, `cargo-mutants`, `cargo-nextest` (mutants run under it), `cargo-deny`, `cargo-machete`.
+- Rust stable (`rustup`), [bun](https://bun.sh) and git.
+- For the gates: `cargo-llvm-cov` (with the `llvm-tools-preview` component), `cargo-mutants`, `cargo-nextest` (mutants run under it), `cargo-deny`, `cargo-machete`.
+- To build the Windows app from WSL: `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin --locked`. Windows is otherwise verified by CI ([`windows.yml`](.github/workflows/windows.yml)).
+
+### macOS setup
+
+The main development host is an Apple Silicon Mac. With [Homebrew](https://brew.sh) and [bun](https://bun.sh) installed, from the repository:
 
 ```sh
-bun install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path   # --no-modify-path: add ~/.cargo/bin to PATH yourself
+export PATH=$HOME/.cargo/bin:$PATH                       # fish: fish_add_path ~/.cargo/bin
+rustup component add llvm-tools-preview                  # for cargo llvm-cov
+cargo install --locked cargo-llvm-cov cargo-mutants cargo-nextest cargo-deny cargo-machete
+bun install --frozen-lockfile
+bunx playwright install webkit chromium                  # e2e browsers
+brew install fontforge                                   # only for scripts/build-terminal-font.sh
 ```
+
+Code behind a Linux-only `cfg` is checked by [`ci.yml`](.github/workflows/ci.yml) and Windows code by [`windows.yml`](.github/workflows/windows.yml), not on the Mac.
 
 ### Running
 
@@ -186,7 +198,7 @@ cargo mutants --in-diff <(git diff main -- '*.rs')    # no missed mutants
 bun install --frozen-lockfile
 bun run lint && bun run typecheck
 bun test --coverage     # 100% line threshold in bunfig.toml
-bun run e2e             # Playwright; needs libnss3 and libnspr4
+bun run e2e             # Playwright; on Linux needs libnss3 and libnspr4
 ```
 
 - 100% line coverage in Rust and in the frontend, plus mutation testing on the changed code. Excluded files are listed with their reasons in [`COVERAGE_EXCLUSIONS.md`](COVERAGE_EXCLUSIONS.md).
