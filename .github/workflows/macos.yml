@@ -69,8 +69,6 @@ jobs:
       # `--no-config`: `.cargo/mutants.toml` excludes this file for Linux.
       - run: cargo mutants --no-config -f crates/hive/src/macos.rs -j 2 --timeout 120
       - run: bun test
-      # release.sh and the gates' memory watchdog (TODO 17.2), as ci.yml does on Linux.
-      - run: scripts/test-scripts.sh
 
   bundle:
     needs: changes
