@@ -44,6 +44,8 @@ jobs:
       - run: cargo deny check
       - run: cargo machete
       - run: python3 .claude/hooks/test_guard.py
+      # release.sh and the gates' memory watchdog (TODO 17.2); macos.yml runs it on macOS.
+      - run: scripts/test-scripts.sh
 
   coverage:
     runs-on: ubuntu-latest
