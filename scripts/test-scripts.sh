@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests the portable scripts on this OS (TODO 17.2; ci.yml runs it on Linux, the Mac by hand):
+# Tests the portable scripts on this OS, Linux or macOS (TODO 17.2):
 #   - release.sh in a scratch repository holding a copy of the manifests (a fake `cargo`)
 #   - memwatch.sh reads the available memory, stops a process below its threshold, and leaves it
 #     alone above
