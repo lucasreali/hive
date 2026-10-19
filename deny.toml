@@ -12,6 +12,13 @@ ignore = [
     { id = "RUSTSEC-2025-0081", reason = "unic-*: via tauri-utils -> urlpattern" },
     { id = "RUSTSEC-2025-0098", reason = "unic-*: via tauri-utils -> urlpattern" },
     { id = "RUSTSEC-2025-0100", reason = "unic-*: via tauri-utils -> urlpattern" },
+    # Approved by the human on 2026-10-19. Remove once Tauri moves to zip >= 9 / zbus 6.
+    { id = "RUSTSEC-2026-0367", reason = "zip < 9: via tauri-plugin-updater 2.12 (latest stable); it extracts only an update whose minisign signature it verified" },
+    { id = "RUSTSEC-2026-0368", reason = "zip < 9: via tauri-plugin-updater 2.12 (latest stable); it extracts only an update whose minisign signature it verified" },
+    { id = "RUSTSEC-2026-0369", reason = "zip < 9: via tauri-plugin-updater 2.12 (latest stable); it extracts only an update whose minisign signature it verified" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, merged into zbus 6; via zbus 5 (notify-rust, tauri-plugin-opener)" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, merged into zbus 6; via zbus 5 (notify-rust, tauri-plugin-opener)" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, merged into zbus 6; via zbus 5 (notify-rust, tauri-plugin-opener)" },
 ]
 
 [licenses]
