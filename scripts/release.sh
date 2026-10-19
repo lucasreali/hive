@@ -11,8 +11,10 @@ version=${1:-}
 
 # Only each manifest's own version line, never a dependency's. The handshake compares the app's
 # and the service's versions (#29); hive-protocol keeps its own.
-sed -i "0,/\"version\": \"[^\"]*\"/s//\"version\": \"$version\"/" src-tauri/tauri.conf.json package.json
-sed -i "0,/^version = \"[^\"]*\"/s//version = \"$version\"/" src-tauri/Cargo.toml crates/hive/Cargo.toml
+# perl, not `sed -i "0,/re/…"`: that is GNU-only and BSD sed (macOS) refuses it. `-0777` reads
+# each file whole, and `s///` without `g` replaces its first match only.
+perl -0777 -pi -e "s/\"version\": \"[^\"]*\"/\"version\": \"$version\"/" src-tauri/tauri.conf.json package.json
+perl -0777 -pi -e "s/^version = \"[^\"]*\"/version = \"$version\"/m" src-tauri/Cargo.toml crates/hive/Cargo.toml
 cargo check --workspace --quiet   # moves the workspace crates' versions in Cargo.lock
 
 git commit -qam "chore(release): v$version"
