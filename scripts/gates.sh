@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # CI is the authoritative gate run (.github/workflows/ci.yml and macos.yml, TODO 5.11): a task
-# merges only with green CI on its branch tip. This script is for optional local use.
+# merges only with green CI on its branch tip. This script is for optional local use, on Linux or
+# macOS; each runs what its CI workflow runs (TODO 17.2): on Linux ci.yml's coverage and diff
+# mutants, on macOS also macos.yml's (coverage with macos.rs counted, mutants of macos.rs).
 # Runs every Rust quality gate from CLAUDE.md and prints one line per gate.
-#   BASE=<rev>   diff base for cargo mutants (default: main)
-#   MUTANTS=0    skip mutation testing
+#   BASE=<rev>              diff base for cargo mutants (default: main)
+#   MUTANTS=0               skip mutation testing
+#   MUTANTS_JOBS=<n>        mutants tested at a time (default 1)
+#   CARGO_BUILD_JOBS=<n>    build jobs (default: every core)
+#   GATES_MEM_MIN_KIB=<n>   stop the mutants below this much available memory (default 1500000)
 # Logs go to target/gates-*/<gate>.log.
 cd "$(dirname "$0")/.." || exit 1
 export PATH=$HOME/.cargo/bin:$PATH
-# The WSL VM has ~10 GB: instrumented builds on every core, or a runaway mutant, can take
-# the whole VM down (and every Hive terminal with it). Keep builds narrow, one mutant at a
-# time, and stop mutants when memory runs low.
-export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-3}
+os=$(uname -s)
+if [ "$os" = Darwin ]; then cores=$(sysctl -n hw.ncpu); else cores=$(nproc); fi
+export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$cores}
+mkdir -p target
 out=$(mktemp -d -p target gates-XXXXXX)
 run() { local name=$1; shift; if "$@" >"$out/$name.log" 2>&1; then echo "ok    $name"; else echo "FAIL  $name ($out/$name.log)"; fi; }
 run fmt cargo fmt --all --check
@@ -20,24 +25,35 @@ run check-locked cargo check --workspace --locked
 run deny cargo deny check
 run machete cargo machete
 run guard python3 .claude/hooks/test_guard.py
-run llvm-cov cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs|crates/hive/src/windows[^/]*\.rs'
+# Exclusions: COVERAGE_EXCLUSIONS.md. The same regex as ci.yml (Linux) and macos.yml (macOS, where
+# macos.rs is compiled and counted, and the windows files are not compiled).
+if [ "$os" = Darwin ]; then
+  ignore='src-tauri/src/main\.rs'
+else
+  ignore='src-tauri/src/main\.rs|crates/hive/src/macos\.rs|crates/hive/src/windows[^/]*\.rs'
+fi
+run llvm-cov cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex "$ignore"
 grep -E '^\S+\.rs|^TOTAL' "$out/llvm-cov.log" | awk '$10 != "100.00%" || /TOTAL/ {print "      " $1, "lines missed:", $9, $10}'
+
+# One cargo-mutants run, logged to $out/<log>.log, with the memory watchdog (scripts/memwatch.sh):
+# a runaway mutant must not take the machine (and every Hive terminal) down.
+mutants() {
+  local log=$out/$1.log; shift
+  scripts/memwatch.sh cargo-mutants "${GATES_MEM_MIN_KIB:-1500000}" "$log" &
+  TMPDIR=/var/tmp/hive-mutants cargo mutants --gitignore true -j "${MUTANTS_JOBS:-1}" "$@" >"$log" 2>&1
+  wait
+  grep -E '^(MISSED|TIMEOUT|ERROR)|mutants tested|memory' "$log" | sed 's/^/      /'
+}
 if [ "${MUTANTS:-1}" = 1 ]; then
   git add -N . 2>/dev/null  # untracked files must show up in the diff
-  # /tmp is a small tmpfs and the mutant trees must live outside the repository
-  # (worktree tests would otherwise find this repo by walking up).
+  # The mutant trees must live outside the repository (worktree tests would otherwise find this
+  # repo by walking up).
   mkdir -p /var/tmp/hive-mutants
   git diff "${BASE:-main}" -- '*.rs' > "$out/diff.patch"
-  ( while sleep 2; do
-      pgrep -x cargo-mutants >/dev/null || break  # -x: by name, never another shell's command line
-      if [ "$(awk '/MemAvailable/{print $2}' /proc/meminfo)" -lt 1500000 ]; then
-        echo "gates: memory low, mutants stopped" >>"$out/mutants.log"
-        pkill -x cargo-mutants
-        break
-      fi
-    done ) &
   # Same setup as CI (.cargo/mutants.toml: nextest, `mutants` profile; needs cargo-nextest) in
   # one shard, with the baseline run here: it sets the automatic test timeout.
-  TMPDIR=/var/tmp/hive-mutants cargo mutants --gitignore true -j 1 --in-diff "$out/diff.patch" >"$out/mutants.log" 2>&1
-  grep -E '^(MISSED|TIMEOUT|ERROR)|mutants tested|memory low' "$out/mutants.log" | sed 's/^/      /'
+  mutants mutants --in-diff "$out/diff.patch"
+  # As macos.yml: `--no-config`, since `.cargo/mutants.toml` excludes this file for Linux.
+  [ "$os" = Darwin ] && mutants mutants-macos --no-config -f crates/hive/src/macos.rs --timeout 120
 fi
+exit 0
