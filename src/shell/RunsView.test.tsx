@@ -215,10 +215,18 @@ test("a failed run re-runs all or its failed jobs and shows its failed job's log
   fireEvent.click(within(body).getByRole("button", { name: "Show the end of its log" }));
   expect(log).toHaveBeenLastCalledWith(shop.id, 12);
   expect(body.querySelector(".run-log")?.textContent).toBe("Loading the log…");
+  // Copied as shown (16.3), once it is there: not while loading, not on an error.
+  const copyButton = () => within(body).queryByRole("button", { name: "Copy the log" });
+  expect(copyButton()).toBeNull();
   act(() => apply({ type: "job_log", project: shop.id, job: 12, log: MOCK_LOG, error: null }));
   expect(body.querySelector(".run-log")?.textContent).toBe(MOCK_LOG);
+  const writeText = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  fireEvent.click(copyButton() as HTMLElement);
+  expect(writeText).toHaveBeenCalledWith(MOCK_LOG);
+  writeText.mockRestore();
   act(() => apply({ type: "job_log", project: shop.id, job: 12, log: null, error: "HTTP 410" }));
   expect(within(body).getByRole("alert").textContent).toBe("HTTP 410");
+  expect(copyButton()).toBeNull();
   fireEvent.click(within(body).getByRole("button", { name: "Hide the log" }));
   expect(useHive.getState().jobLog).toBeNull();
   // No jobs at all.

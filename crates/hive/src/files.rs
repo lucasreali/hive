@@ -18,7 +18,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use notify::event::ModifyKind;
-use notify::{Event, EventKind, PathOp, RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{
+    Event, EventKind, PathOp, RecommendedWatcher, RecursiveMode, WatchPathConfig, Watcher as _,
+};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -131,30 +133,79 @@ pub fn parse_ignored(out: &[u8]) -> Vec<&str> {
     entries
 }
 
-/// One level of the ignored folder `folder` (relative, no trailing `/`) of the canonical
-/// `root`: at most `most` entries, its folders as `folder/name/`, names that are not UTF-8
-/// skipped. `None` when it cannot be read, or is no longer a folder of `root` itself.
-fn level(root: &Path, folder: &str, most: usize) -> Option<Vec<String>> {
-    let dir = root.join(folder);
-    // Never through a link, in any part of the path: one could lead out of the worktree.
-    // ponytail: a link swapped in between this check and the read still wins the race;
-    // `openat` with `O_NOFOLLOW` on each part if agents ever stop being the user's own.
-    if !canonical(&dir).is_ok_and(|real| real == dir) {
-        return None;
+/// What tells one folder from another: its device and inode. (Windows has none: its path is
+/// checked for links again instead.)
+#[cfg(unix)]
+type Id = (u64, u64);
+
+/// The folder `folder` (relative, `/`-separated) of the canonical `root`, each part of its path
+/// opened from the one before with `O_NOFOLLOW`: a link in any part, swapped in at any time,
+/// fails the open instead of leading out of the worktree.
+#[cfg(unix)]
+fn open_folder(root: &Path, folder: &str) -> Option<(std::fs::File, Id)> {
+    use nix::fcntl::{AT_FDCWD, OFlag, openat};
+    use nix::sys::stat::Mode;
+    use std::os::unix::fs::MetadataExt;
+    // `O_DIRECTORY` also keeps a FIFO from blocking the open.
+    let flags = [
+        OFlag::O_RDONLY,
+        OFlag::O_DIRECTORY,
+        OFlag::O_NOFOLLOW,
+        OFlag::O_CLOEXEC,
+    ];
+    let flags: OFlag = flags.into_iter().collect();
+    let mut fd = openat(AT_FDCWD, root, flags, Mode::empty()).ok()?;
+    for part in folder.split('/') {
+        // Names only: `..` would climb out.
+        if matches!(part, "" | "." | "..") {
+            return None;
+        }
+        fd = openat(&fd, part, flags, Mode::empty()).ok()?;
     }
-    let entries = std::fs::read_dir(&dir).ok()?;
-    let entry = |entry: io::Result<std::fs::DirEntry>| {
-        let entry = entry.ok()?;
-        let name = entry.file_name().into_string().ok()?;
-        // A link to a folder is listed as a file: it is never opened as a folder.
-        let slash = if entry.file_type().ok()?.is_dir() {
-            "/"
-        } else {
-            ""
-        };
+    let file = std::fs::File::from(fd);
+    let meta = file.metadata().ok()?;
+    Some((file, (meta.dev(), meta.ino())))
+}
+
+/// Whether `folder` of `root` is still the folder `id` names, reached without a link.
+#[cfg(unix)]
+fn same(root: &Path, folder: &str, id: &Id) -> bool {
+    open_folder(root, folder).is_some_and(|(_, now)| now == *id)
+}
+
+// Windows has no `openat`: its folder is checked by path, then read (`crate::windows`).
+#[cfg(windows)]
+use crate::windows::{folder_level as level, same_folder as same};
+
+/// One level of the ignored folder `folder` (relative, no trailing `/`) of the canonical
+/// `root`, and which folder it was: at most `most` entries, its folders as `folder/name/`,
+/// names that are not UTF-8 skipped. `None` when it cannot be read, or is no longer a folder
+/// of `root` itself (a link in any part of its path).
+#[cfg(unix)]
+fn level(root: &Path, folder: &str, most: usize) -> Option<(Vec<String>, Id)> {
+    use nix::fcntl::AtFlags;
+    use nix::sys::stat::{SFlag, fstatat};
+    let (file, id) = open_folder(root, folder)?;
+    let dir = nix::dir::Dir::from_fd(file.try_clone().ok()?.into()).ok()?;
+    let entry = |entry: nix::dir::Entry| {
+        let name = entry.file_name().to_str().ok()?;
+        // Its own type, never its target's: a link to a folder is listed as a file, so it is
+        // never opened as a folder.
+        let stat = fstatat(&file, entry.file_name(), AtFlags::AT_SYMLINK_NOFOLLOW).ok()?;
+        let kind = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
+        let slash = if kind == SFlag::S_IFDIR { "/" } else { "" };
         Some(format!("{folder}/{name}{slash}"))
     };
-    Some(entries.take(most).filter_map(entry).collect())
+    let entries = dir
+        .into_iter()
+        // Stops at the first error, as `read_dir` does: one that keeps failing (EIO) would
+        // otherwise never end.
+        .map_while(Result::ok)
+        .filter(|entry| !matches!(entry.file_name().to_bytes(), b"." | b".."))
+        .take(most)
+        .filter_map(entry)
+        .collect();
+    Some((entries, id))
 }
 
 /// Every directory holding one of `paths`, the worktree itself (`""`) included. A path
@@ -219,6 +270,19 @@ pub struct Watcher {
     dirs: BTreeSet<String>,
     /// The ignored folders the app opened, relative to `root`.
     open: BTreeSet<String>,
+    /// Called with each open ignored folder right before it is read and right before it is
+    /// watched: tests swap the folder there.
+    hook: fn(Step, &Path, &str),
+    /// Most entries in one list, `MAX_FILES`: tests lower it, as tens of thousands of files
+    /// take minutes to write on Windows.
+    most: usize,
+}
+
+/// Where [`Watcher::list`] is with an open ignored folder when it calls its hook.
+#[derive(Debug, Clone, Copy)]
+enum Step {
+    Read,
+    Watch,
 }
 
 impl Watcher {
@@ -246,6 +310,8 @@ impl Watcher {
             git_dir,
             dirs: BTreeSet::new(),
             open: BTreeSet::new(),
+            hook: |_, _, _| {},
+            most: MAX_FILES,
         })
     }
 
@@ -282,7 +348,7 @@ impl Watcher {
         let mut opened = Vec::new();
         for folder in &self.open {
             // Enough to fill the list: whatever comes next would be left out.
-            if listing.files.len() + ignored.len() > MAX_FILES {
+            if listing.files.len() + ignored.len() > self.most {
                 break;
             }
             if !ignored.contains(&format!("{folder}/")) {
@@ -291,13 +357,17 @@ impl Watcher {
             // One more than fits, so a cut list says so; never more, however big the folder.
             // Git names a folder only when it tracks nothing in it, so nothing here is listed.
             // Not read, not watched either: the watch would follow the same path.
-            let Some(level) = level(&self.root, folder, MAX_FILES + 1) else {
+            (self.hook)(Step::Read, &self.root, folder);
+            let Some((level, id)) = level(&self.root, folder, self.most + 1) else {
                 continue;
             };
             ignored.extend(level);
-            opened.push(folder.as_str());
+            opened.push((folder.as_str(), id));
         }
-        let mut room = Room::FULL;
+        let mut room = Room {
+            entries: self.most,
+            ..Room::FULL
+        };
         room.fill(listing.files.iter().map(String::as_str));
         let (kept, left_out) = room.fill(ignored.iter().map(String::as_str));
         listing.ignored = kept;
@@ -316,7 +386,7 @@ impl Watcher {
         let untracked = parse_dirs(&untracked);
         let files = listing.files.iter().map(String::as_str);
         let mut wanted = dirs(files.chain(untracked));
-        wanted.extend(opened);
+        wanted.extend(opened.iter().map(|(folder, _)| *folder));
         let wanted: BTreeSet<&str> = wanted.into_iter().take(MAX_WATCHES).collect();
         // ponytail: on macOS every re-list restarts the FSEvents stream, even when no watch
         // moves; skip the restart if its cost or its short blind spot shows.
@@ -332,13 +402,59 @@ impl Watcher {
             .copied()
             .filter(|dir| !self.dirs.contains(*dir))
             .collect();
+        // A link at the end of the path is watched as itself, never followed (inotify).
+        let config = WatchPathConfig::new(RecursiveMode::NonRecursive);
+        let config = config.with_dereference_symlinks(false);
         let watch = added
             .iter()
-            .map(|dir| PathOp::watch_non_recursive(self.root.join(dir)));
+            .map(|dir| PathOp::Watch(self.root.join(dir), config.clone()));
         let ops = unwatch.chain(watch).collect();
+        let keys = |watcher: &RecommendedWatcher| -> io::Result<BTreeSet<PathBuf>> {
+            let paths = watcher.watched_paths().map_err(io::Error::other)?;
+            Ok(paths.into_iter().map(|(path, _)| path).collect())
+        };
+        // Only an open folder watched anew is checked below.
+        let fresh = opened
+            .iter()
+            .any(|(folder, _)| !self.dirs.contains(*folder));
+        let before = if fresh {
+            keys(&self.watcher)?
+        } else {
+            BTreeSet::new()
+        };
+        for (folder, _) in &opened {
+            (self.hook)(Step::Watch, &self.root, folder);
+        }
         let watcher = &mut self.watcher;
-        let failed = update(|ops| watcher.update_paths(ops).map_err(Box::new), ops)
+        let mut failed = update(|ops| watcher.update_paths(ops).map_err(Box::new), ops)
             .map_err(io::Error::other)?;
+        // A watch takes a path, never a descriptor (inotify, FSEvents and Windows alike), so it
+        // may follow a link swapped in after the read: an open folder that is no longer the one
+        // read loses its new watch again. One swapped out and back between the watch and this
+        // check keeps it, on a folder whose events only ever ask for a re-list.
+        let swapped: Vec<PathBuf> = opened
+            .iter()
+            .filter(|(folder, id)| !self.dirs.contains(*folder) && !same(&self.root, folder, id))
+            .map(|(folder, _)| self.root.join(folder))
+            .collect();
+        if !swapped.is_empty() {
+            // Dropped by the key the watcher keeps: inotify keeps the path given, FSEvents what
+            // it resolved to, which the path may no longer lead to. Every new watch but those
+            // of the folders kept goes.
+            let kept: BTreeSet<PathBuf> = added
+                .iter()
+                .map(|dir| self.root.join(dir))
+                .filter(|path| !swapped.contains(path))
+                .collect();
+            let stray = keys(watcher)?
+                .into_iter()
+                .filter(|key| !before.contains(key) && !kept.contains(key))
+                .map(PathOp::unwatch)
+                .collect();
+            update(|ops| watcher.update_paths(ops).map_err(Box::new), stray)
+                .map_err(io::Error::other)?;
+            failed.extend(swapped);
+        }
         self.dirs.retain(|dir| wanted.contains(dir.as_str()));
         let watched = added
             .into_iter()
@@ -536,26 +652,123 @@ mod tests {
         let root = &canonical(dir.path()).unwrap();
         write(root, "deps/a/x.js");
         write(root, "deps/b.js");
-        let mut got = level(root, "deps", 10).unwrap();
+        let names = |folder| level(root, folder, 10).map(|(names, _)| names);
+        let (mut got, id) = level(root, "deps", 10).unwrap();
         got.sort();
         assert_eq!(got, ["deps/a/", "deps/b.js"]);
-        assert_eq!(level(root, "deps", 1).unwrap().len(), 1);
-        assert_eq!(level(root, "gone", 10), None);
-        assert_eq!(level(root, "deps/b.js", 10), None);
+        assert!(same(root, "deps", &id));
+        // Windows checks the path only.
+        #[cfg(unix)]
+        assert!(!same(root, "deps/a", &id));
+        assert_eq!(level(root, "deps", 1).unwrap().0.len(), 1);
+        assert_eq!(names("deps/a"), Some(vec!["deps/a/x.js".to_owned()]));
+        assert_eq!(names("gone"), None);
+        assert_eq!(names("deps/b.js"), None);
         #[cfg(unix)]
         {
+            // Names only, never a step up or an empty part.
+            assert_eq!(names("deps/.."), None);
+            assert_eq!(names("deps/a/.."), None);
+            assert_eq!(names("deps/."), None);
+            assert_eq!(names("deps//a"), None);
             std::os::unix::fs::symlink(root.join("deps"), root.join("link")).unwrap();
             std::os::unix::fs::symlink(root.join("deps"), root.join("deps/c")).unwrap();
-            assert_eq!(level(root, "link", 10), None);
+            assert_eq!(names("link"), None);
             // Nor through a link in the middle of the path.
-            assert_eq!(level(root, "link/a", 10), None);
+            assert_eq!(names("link/a"), None);
             // A link to a folder inside one is listed as a file, so it is never opened.
-            assert!(
-                level(root, "deps", 10)
-                    .unwrap()
-                    .contains(&"deps/c".to_owned())
-            );
+            assert!(names("deps").unwrap().contains(&"deps/c".to_owned()));
         }
+    }
+
+    /// Moves `folder` of `root` out of the worktree, next to it, and puts a link to it there.
+    #[cfg(unix)]
+    fn swap(root: &Path, folder: &str) {
+        let dir = root.join(folder);
+        let outside = root.with_file_name("outside");
+        std::fs::rename(&dir, &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &dir).unwrap();
+    }
+
+    /// Takes the link back out and the folder back in.
+    #[cfg(unix)]
+    fn unswap(root: &Path, folder: &str) {
+        let dir = root.join(folder);
+        std::fs::remove_file(&dir).unwrap();
+        std::fs::rename(root.with_file_name("outside"), &dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_folder_swapped_for_a_link_out_of_the_worktree_is_neither_listed_nor_watched() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical(dir.path()).unwrap().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        run_git(&root, &["init", "-q"]);
+        std::fs::write(root.join(".gitignore"), "deps/\n").unwrap();
+        write(&root, "deps/x.js");
+        write(&root, "deps/a/z.js");
+        let mut watcher = Watcher::new(&root).unwrap();
+        watcher.open(["deps".to_owned(), "deps/a".to_owned()]);
+        // What the watcher itself watches: FSEvents keeps what a path resolved to.
+        let keys = |watcher: &Watcher| {
+            let paths = watcher.watcher.watched_paths().unwrap();
+            paths
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect::<BTreeSet<_>>()
+        };
+
+        // Swapped after git named it an ignored folder, right before it is read.
+        watcher.hook = |step, root, folder| {
+            if matches!(step, Step::Read) && folder == "deps" {
+                swap(root, folder);
+            }
+        };
+        let listing = watcher.list().unwrap();
+        assert_eq!(listing.ignored, ["deps/"]);
+        assert_eq!(watched(&watcher), [""]);
+        let base = keys(&watcher);
+        assert_eq!(base.len(), 2, "the worktree and its git dir: {base:?}");
+        assert!(base.iter().all(|key| key.starts_with(&root)), "{base:?}");
+        unswap(&root, "deps");
+
+        // Swapped after it was read, right before it is watched: read from the worktree, but
+        // the watches made through the link, at the end of the path or in its middle, go.
+        watcher.hook = |step, root, folder| {
+            if matches!(step, Step::Watch) && folder == "deps" {
+                swap(root, folder);
+            }
+        };
+        let listing = watcher.list().unwrap();
+        let read = ["deps/", "deps/a/", "deps/a/z.js", "deps/x.js"];
+        assert_eq!(listing.ignored, read);
+        assert_eq!(watched(&watcher), [""]);
+        assert_eq!(keys(&watcher), base);
+        // A write out there is not seen.
+        changes(&mut watcher, NEVER).await;
+        let outside = root.with_file_name("outside");
+        std::fs::write(outside.join("y.js"), "").unwrap();
+        std::fs::write(outside.join("a/w.js"), "").unwrap();
+        assert!(!changes(&mut watcher, NEVER).await);
+        unswap(&root, "deps");
+
+        // Left alone, it is read and watched.
+        watcher.hook = |_, _, _| {};
+        let listing = watcher.list().unwrap();
+        let read = [
+            "deps/",
+            "deps/a/",
+            "deps/a/w.js",
+            "deps/a/z.js",
+            "deps/x.js",
+            "deps/y.js",
+        ];
+        assert_eq!(listing.ignored, read);
+        assert_eq!(watched(&watcher), ["", "deps", "deps/a"]);
+        let mut all = base.clone();
+        all.extend([root.join("deps"), root.join("deps/a")]);
+        assert_eq!(keys(&watcher), all);
     }
 
     #[test]
@@ -867,29 +1080,33 @@ mod tests {
         let huge = root.join("huge");
         std::fs::create_dir_all(huge.join("a")).unwrap();
         std::fs::write(huge.join("a/x"), "").unwrap();
+        let mut watcher = Watcher::new(&root).unwrap();
+        assert_eq!(watcher.most, MAX_FILES);
+        // A lower cap: 50 000 files take minutes to write on a Windows runner (16.5).
+        let most = 100;
+        watcher.most = most;
         // With "huge/" and "a/": one short of the cap.
-        for i in 0..MAX_FILES - 2 {
+        for i in 0..most - 2 {
             std::fs::write(huge.join(format!("f{i:06}")), "").unwrap();
         }
-        let mut watcher = Watcher::new(&root).unwrap();
         watcher.open(["huge".to_owned(), "huge/a".to_owned()]);
         let listing = watcher.list().unwrap();
         assert!(listing.files.is_empty());
         // Room for "huge/a" and its file: the last of the others is left out.
-        assert_eq!(listing.ignored.len(), MAX_FILES);
+        assert_eq!(listing.ignored.len(), most);
         assert_eq!(listing.ignored[..3], ["huge/", "huge/a/", "huge/a/x"]);
-        let last = format!("huge/f{:06}", MAX_FILES - 4);
+        let last = format!("huge/f{:06}", most - 4);
         assert_eq!(listing.ignored.last(), Some(&last));
         assert!(listing.truncated);
         assert_eq!(watched(&watcher), ["", "huge", "huge/a"]);
         // Past the cap, a folder inside is not listed at all, nor watched.
-        for i in MAX_FILES - 2..MAX_FILES {
+        for i in most - 2..most {
             std::fs::write(huge.join(format!("f{i:06}")), "").unwrap();
         }
         let listing = watcher.list().unwrap();
-        assert_eq!(listing.ignored.len(), MAX_FILES);
+        assert_eq!(listing.ignored.len(), most);
         assert_eq!(listing.ignored[..3], ["huge/", "huge/a/", "huge/f000000"]);
-        let last = format!("huge/f{:06}", MAX_FILES - 3);
+        let last = format!("huge/f{:06}", most - 3);
         assert_eq!(listing.ignored.last(), Some(&last));
         assert!(listing.truncated);
         assert_eq!(watched(&watcher), ["", "huge"]);

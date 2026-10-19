@@ -2461,11 +2461,12 @@ button.chevron:hover {
   border-top: 1px solid var(--border-subtle);
 }
 
-.primary.danger {
+/* Disabled, a danger button is a disabled `.primary` (16.1). */
+.primary.danger:not(:disabled) {
   background: var(--state-error);
 }
 
-.primary.danger:hover {
+.primary.danger:not(:disabled):hover {
   background: #db8a8e;
 }
 
@@ -3470,6 +3471,18 @@ button.link:hover {
   gap: 6px;
   min-height: 20px;
   color: var(--text-2);
+}
+
+/* 16.3: text buttons, sized by their text, not the right panel's 24 px icon width. */
+.run-log-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.run-log-actions .ghost.text {
+  width: auto;
+  padding: 0 6px;
+  white-space: nowrap;
 }
 
 .run-log {

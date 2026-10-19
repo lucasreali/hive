@@ -1641,6 +1641,34 @@ pub fn open_nonblocking(path: &Path) -> io::Result<File> {
     File::open(path)
 }
 
+/// `files::same` (15.2): Windows has no `openat`, so the path is checked (no link in any part,
+/// nor a network or device path: [`crate::paths::canonical`]) and then used, and a link swapped
+/// in between still wins here. A folder has no identity to compare.
+pub fn same_folder(root: &Path, folder: &str, _: &()) -> bool {
+    let dir = root.join(folder);
+    crate::paths::canonical(&dir).is_ok_and(|real| real == dir)
+}
+
+/// `files::level` (14.2): the path checked by [`same_folder`], then `read_dir`; a link to a
+/// folder inside is listed as a file, so it is never opened as a folder.
+pub fn folder_level(root: &Path, folder: &str, most: usize) -> Option<(Vec<String>, ())> {
+    if !same_folder(root, folder, &()) {
+        return None;
+    }
+    let entries = std::fs::read_dir(root.join(folder)).ok()?;
+    let entry = |entry: io::Result<std::fs::DirEntry>| {
+        let entry = entry.ok()?;
+        let name = entry.file_name().into_string().ok()?;
+        let slash = if entry.file_type().ok()?.is_dir() {
+            "/"
+        } else {
+            ""
+        };
+        Some(format!("{folder}/{name}{slash}"))
+    };
+    Some((entries.take(most).filter_map(entry).collect(), ()))
+}
+
 pub use claude::{
     claude_names, claude_wrapper, install_hive, install_wrapper, statusline_command,
     statusline_job, statusline_shell,
@@ -2412,6 +2440,43 @@ mod tests {
             .map(|dir| dir["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, ["deep", "self", "sub"]);
+    }
+
+    #[test]
+    fn an_ignored_folder_is_never_read_through_a_link() {
+        use std::os::windows::fs::symlink_dir;
+        let tmp = tempfile::tempdir().unwrap();
+        // Canonical, as the watcher's root is (the runner's temporary folder is an 8.3 name).
+        let root = crate::paths::canonical(tmp.path()).unwrap().join("repo");
+        let outside = root.with_file_name("outside");
+        std::fs::create_dir_all(root.join(r"deps\a")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(root.join(r"deps\x.js"), "x").unwrap();
+        std::fs::write(outside.join("y.js"), "y").unwrap();
+        symlink_dir(&outside, root.join("sym")).unwrap();
+        let junction = root.join("junction");
+        let made = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .args([&junction, &outside])
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        // A link in the middle of the path, to a folder of the worktree itself.
+        symlink_dir(root.join("deps"), root.join("inner")).unwrap();
+
+        assert!(same_folder(&root, "deps", &()));
+        assert!(same_folder(&root, "deps/a", &()));
+        let (mut names, ()) = folder_level(&root, "deps", 10).unwrap();
+        names.sort();
+        assert_eq!(names, ["deps/a/", "deps/x.js"]);
+        assert_eq!(folder_level(&root, "deps", 1).unwrap().0.len(), 1);
+        for folder in ["sym", "junction", "inner/a"] {
+            assert!(!same_folder(&root, folder, &()), "{folder}");
+            assert_eq!(folder_level(&root, folder, 10), None, "{folder}");
+        }
+        // Not a folder, or not there.
+        assert_eq!(folder_level(&root, "deps/x.js", 10), None);
+        assert_eq!(folder_level(&root, "gone", 10), None);
     }
 
     #[test]

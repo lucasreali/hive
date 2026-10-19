@@ -59,10 +59,12 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const matches = (x: Session) =>
     [x.title, x.last_text, x.branch, x.id].some((v) => v?.toLowerCase().includes(q));
   const shown = (sessions ?? []).filter((x) => x.worktree === worktree && matches(x));
-  // Hundreds of sessions: only the rows in view are rendered, each measured as it shows.
+  // Hundreds of sessions: only the rows in view are rendered, each measured as it shows. A size
+  // is kept by session id, not place: the refresh and the search move a session to another index.
   const scroller = useRef<HTMLDivElement>(null);
   const virtual = useVirtualizer({
     count: shown.length,
+    getItemKey: (i) => shown[i].id,
     getScrollElement: () => scroller.current,
     estimateSize: () => 72,
     overscan: 6,
