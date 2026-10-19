@@ -273,6 +273,9 @@ pub struct Watcher {
     /// Called with each open ignored folder right before it is read and right before it is
     /// watched: tests swap the folder there.
     hook: fn(Step, &Path, &str),
+    /// Most entries in one list, `MAX_FILES`: tests lower it, as tens of thousands of files
+    /// take minutes to write on Windows.
+    most: usize,
 }
 
 /// Where [`Watcher::list`] is with an open ignored folder when it calls its hook.
@@ -308,6 +311,7 @@ impl Watcher {
             dirs: BTreeSet::new(),
             open: BTreeSet::new(),
             hook: |_, _, _| {},
+            most: MAX_FILES,
         })
     }
 
@@ -344,7 +348,7 @@ impl Watcher {
         let mut opened = Vec::new();
         for folder in &self.open {
             // Enough to fill the list: whatever comes next would be left out.
-            if listing.files.len() + ignored.len() > MAX_FILES {
+            if listing.files.len() + ignored.len() > self.most {
                 break;
             }
             if !ignored.contains(&format!("{folder}/")) {
@@ -354,13 +358,16 @@ impl Watcher {
             // Git names a folder only when it tracks nothing in it, so nothing here is listed.
             // Not read, not watched either: the watch would follow the same path.
             (self.hook)(Step::Read, &self.root, folder);
-            let Some((level, id)) = level(&self.root, folder, MAX_FILES + 1) else {
+            let Some((level, id)) = level(&self.root, folder, self.most + 1) else {
                 continue;
             };
             ignored.extend(level);
             opened.push((folder.as_str(), id));
         }
-        let mut room = Room::FULL;
+        let mut room = Room {
+            entries: self.most,
+            ..Room::FULL
+        };
         room.fill(listing.files.iter().map(String::as_str));
         let (kept, left_out) = room.fill(ignored.iter().map(String::as_str));
         listing.ignored = kept;
@@ -1073,29 +1080,33 @@ mod tests {
         let huge = root.join("huge");
         std::fs::create_dir_all(huge.join("a")).unwrap();
         std::fs::write(huge.join("a/x"), "").unwrap();
+        let mut watcher = Watcher::new(&root).unwrap();
+        assert_eq!(watcher.most, MAX_FILES);
+        // A lower cap: 50 000 files take minutes to write on a Windows runner (16.5).
+        let most = 100;
+        watcher.most = most;
         // With "huge/" and "a/": one short of the cap.
-        for i in 0..MAX_FILES - 2 {
+        for i in 0..most - 2 {
             std::fs::write(huge.join(format!("f{i:06}")), "").unwrap();
         }
-        let mut watcher = Watcher::new(&root).unwrap();
         watcher.open(["huge".to_owned(), "huge/a".to_owned()]);
         let listing = watcher.list().unwrap();
         assert!(listing.files.is_empty());
         // Room for "huge/a" and its file: the last of the others is left out.
-        assert_eq!(listing.ignored.len(), MAX_FILES);
+        assert_eq!(listing.ignored.len(), most);
         assert_eq!(listing.ignored[..3], ["huge/", "huge/a/", "huge/a/x"]);
-        let last = format!("huge/f{:06}", MAX_FILES - 4);
+        let last = format!("huge/f{:06}", most - 4);
         assert_eq!(listing.ignored.last(), Some(&last));
         assert!(listing.truncated);
         assert_eq!(watched(&watcher), ["", "huge", "huge/a"]);
         // Past the cap, a folder inside is not listed at all, nor watched.
-        for i in MAX_FILES - 2..MAX_FILES {
+        for i in most - 2..most {
             std::fs::write(huge.join(format!("f{i:06}")), "").unwrap();
         }
         let listing = watcher.list().unwrap();
-        assert_eq!(listing.ignored.len(), MAX_FILES);
+        assert_eq!(listing.ignored.len(), most);
         assert_eq!(listing.ignored[..3], ["huge/", "huge/a/", "huge/f000000"]);
-        let last = format!("huge/f{:06}", MAX_FILES - 3);
+        let last = format!("huge/f{:06}", most - 3);
         assert_eq!(listing.ignored.last(), Some(&last));
         assert!(listing.truncated);
         assert_eq!(watched(&watcher), ["", "huge"]);
