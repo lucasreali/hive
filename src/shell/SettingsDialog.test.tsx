@@ -204,6 +204,31 @@ test("the shell is a setting only when the service runs natively on Windows", as
   expect(screen.queryByRole("combobox", { name: "Shell" })).toBeNull();
 });
 
+test("keeping the Mac awake is a setting on a Mac only, which says the lid still sleeps it (17.17)", async () => {
+  const label = "Keep the Mac awake while agents work";
+  open();
+  section("Agents");
+  expect(screen.queryByLabelText(label)).toBeNull();
+  cleanup();
+  useHive.setState(initialState, true);
+  const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+  Object.defineProperty(navigator, "userAgent", { value: mac, configurable: true });
+  try {
+    render(<App />);
+    act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+    act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS }));
+    fireEvent.keyDown(document.body, { key: ",", metaKey: true });
+    section("Agents");
+    expect(input(label).checked).toBe(true);
+    expect(labels().join()).toContain("closing the lid on battery still sleeps the Mac");
+    fireEvent.click(input(label));
+    await waitFor(() => expect(settings().agents.keep_awake).toBe(false));
+  } finally {
+    Reflect.deleteProperty(navigator, "userAgent");
+  }
+  expect(navigator.userAgent).not.toContain("Mac");
+});
+
 test("the archive script's help names the shell it runs in", () => {
   open();
   section("Projects");

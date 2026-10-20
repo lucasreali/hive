@@ -542,7 +542,8 @@
       },
       "agents": {
         "silence_secs": 5,
-        "confirm_close": true
+        "confirm_close": true,
+        "keep_awake": true
       },
       "worktrees": {
         "default_base": null

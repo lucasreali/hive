@@ -19,6 +19,7 @@ pub mod hook;
 pub mod macos;
 pub mod mode;
 pub mod paths;
+pub mod power;
 pub mod procs;
 pub mod projects;
 pub mod pulls;

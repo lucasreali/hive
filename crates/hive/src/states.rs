@@ -345,6 +345,15 @@ impl Agent {
         matches!(shown, AgentState::Working | AgentState::WithSubagents) || dialog(shown)
     }
 
+    /// Working or with subagents at work (🔵, 🟣), as shown: the computer is kept awake
+    /// meanwhile (17.17).
+    pub fn works(&self) -> bool {
+        matches!(
+            self.displayed(),
+            AgentState::Working | AgentState::WithSubagents
+        )
+    }
+
     /// The agent and its subagents (not those waiting on a background task) in a state `hit`
     /// accepts wait for you; the tool call they were on is over.
     fn settle(&mut self, hit: impl Fn(AgentState) -> bool) {
@@ -583,6 +592,16 @@ fn state_of(kind: &EventKind, current: AgentState) -> Option<AgentState> {
 }
 
 #[cfg(test)]
+impl Agent {
+    /// A working agent on `channel`, for other modules' tests.
+    pub fn working(channel: u32, now: Instant) -> Self {
+        let mut agent = Self::new(channel, now, 0);
+        agent.state = AgentState::Working;
+        agent
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapter::{Adapter, ClaudeCode};
@@ -667,6 +686,29 @@ mod tests {
         for (kind, state) in notifications {
             assert_eq!(after(&notification(kind)), state, "{kind}");
         }
+    }
+
+    #[test]
+    fn it_works_while_shown_working_or_with_subagents() {
+        let now = Instant::now();
+        let works = |events: &[AgentEvent]| {
+            let mut agent = Agent::new(1, now, 0);
+            for event in events {
+                agent.feed("s", event, now);
+            }
+            agent.works()
+        };
+        let prompt = hook("UserPromptSubmit", None, json!({}));
+        let start = hook("SubagentStart", Some("a"), json!({}));
+        let ask = hook("PermissionRequest", None, json!({"tool_name": "Bash"}));
+        let stop = hook("Stop", None, json!({}));
+        assert!(!works(&[]));
+        assert!(works(std::slice::from_ref(&prompt)));
+        assert!(works(&[prompt.clone(), start.clone()]));
+        assert!(!works(&[start.clone(), stop.clone()]));
+        assert!(!works(&[prompt.clone(), start, ask]));
+        assert!(!works(&[prompt, stop]));
+        assert!(Agent::working(1, now).works());
     }
 
     /// A tool call as Claude Code sends it (hooks reference), from the agent itself.

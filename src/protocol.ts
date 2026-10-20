@@ -452,7 +452,7 @@ export type Settings = {
    * an agent needs an action while Hive is not focused (17.16).
    */
   notifications: { volume: number; bounce: boolean };
-  agents: { silence_secs: number; confirm_close: boolean };
+  agents: { silence_secs: number; confirm_close: boolean; keep_awake: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */
   projects: Record<string, { scripts: ProjectScripts }>;

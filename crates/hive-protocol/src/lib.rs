@@ -1034,6 +1034,9 @@ pub struct AgentSettings {
     pub silence_secs: u32,
     /// Closing the app asks first while agents run.
     pub confirm_close: bool,
+    /// The service keeps the computer from sleeping while idle as long as an agent works or
+    /// has subagents at work (17.17; macOS only).
+    pub keep_awake: bool,
 }
 
 impl Default for AgentSettings {
@@ -1041,6 +1044,7 @@ impl Default for AgentSettings {
         Self {
             silence_secs: 5,
             confirm_close: true,
+            keep_awake: true,
         }
     }
 }
@@ -2587,7 +2591,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,

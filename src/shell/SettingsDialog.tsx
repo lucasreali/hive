@@ -197,7 +197,7 @@ type Field = {
   modes?: boolean;
   /** Shown only while the service runs natively on Windows (the app's mode, 12.5.4). */
   windows?: boolean;
-  /** Shown only on macOS (the Dock, 17.16; Option as Meta, 17.14). */
+  /** Shown only on macOS (the Dock, 17.16; Option as Meta, 17.14; the power assertion, 17.17). */
   mac?: boolean;
   control: (id: string, label: string) => ReactNode;
 };
@@ -383,6 +383,22 @@ const FIELDS: Field[] = [
         get={(s) => s.agents.confirm_close}
         set={(s, on) => {
           s.agents.confirm_close = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Agents",
+    label: "Keep the Mac awake while agents work",
+    help: "While an agent is working or has subagents at work, the Mac does not sleep when idle. The display still sleeps, and closing the lid on battery still sleeps the Mac.",
+    check: true,
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Keep the Mac awake while agents work"
+        get={(s) => s.agents.keep_awake}
+        set={(s, on) => {
+          s.agents.keep_awake = on;
         }}
       />
     ),
@@ -907,8 +923,9 @@ function NotificationsOff() {
 function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
   const windows = useHive((s) => s.appMode?.mode === "native");
+  const mac = isMac();
   const fields = FIELDS.filter(
-    (f) => (modes || !f.modes) && (windows || !f.windows) && (isMac() || !f.mac),
+    (f) => (modes || !f.modes) && (windows || !f.windows) && (mac || !f.mac),
   );
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
