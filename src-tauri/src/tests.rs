@@ -2981,3 +2981,32 @@ fn a_menu_click_goes_to_the_ui_and_quit_quits() {
     menu::on_menu(bare.handle(), "quit");
     assert!(exits.try_recv().is_err());
 }
+
+#[test]
+fn files_dropped_on_the_window_go_to_the_ui_as_typed_paths() {
+    let (hive, mut rx) = hive_with_ui();
+    let app = mock_builder()
+        .manage(hive)
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let paths = ["/Users/me/My Shots/a.png".to_owned(), "/tmp/b".to_owned()];
+    assert!(files_dropped(app.handle(), &paths, 120.5, 64.0));
+    assert_eq!(
+        rx.try_recv(),
+        Ok(json!({
+            "type": "files_dropped",
+            "text": r"/Users/me/My\ Shots/a.png /tmp/b ",
+            "x": 120.5,
+            "y": 64.0,
+        }))
+    );
+    // Nothing dropped: nothing sent.
+    assert!(!files_dropped(app.handle(), &[], 1.0, 1.0));
+    assert!(rx.try_recv().is_err());
+    // No UI to send it to.
+    app.state::<Hive>().link().ui = None;
+    assert!(!files_dropped(app.handle(), &paths, 1.0, 1.0));
+    // An app without its `Hive` sends nothing.
+    let bare = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(!files_dropped(bare.handle(), &paths, 1.0, 1.0));
+}

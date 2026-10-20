@@ -1290,6 +1290,13 @@ export function createMockTransport(
         if (line === "notification-click" && notified) {
           later({ type: "notification_clicked", agent: notified });
         }
+        // Stands in for files dropped from Finder (18.1): `drop-files <x> <y> <text>`, the text
+        // as the app side sends it (already quoted).
+        const drop = /^drop-files (\S+) (\S+) (.+)$/.exec(line);
+        if (drop) {
+          const [, x, y, text] = drop as unknown as [string, string, string, string];
+          later({ type: "files_dropped", text, x: Number(x), y: Number(y) });
+        }
         const chosen = tray?.agents[0]?.[0];
         if (line === "tray-click" && chosen) later({ type: "tray_clicked", agent: chosen });
         if (line.startsWith("hive badge ")) {

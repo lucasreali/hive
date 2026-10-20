@@ -381,6 +381,21 @@ export function terminalAt(target: EventTarget | null): { id: number; selection:
 }
 
 /**
+ * Files dropped from Finder (18.1): `text`, their shell-quoted paths, is pasted into the
+ * terminal whose pane is at (`x`, `y`), found as the terminal menu finds it, bracketed when
+ * the program asked and never with Enter; that terminal takes the keyboard. A drop anywhere
+ * else (the sidebar, a dialog over the pane, a file tab) is ignored. True when it was typed.
+ */
+export function dropFiles(text: string, x: number, y: number): boolean {
+  const at = terminalAt(document.elementFromPoint(x, y));
+  const term = at && terminal(at.id);
+  if (!term) return false;
+  term.paste(text);
+  term.focus();
+  return true;
+}
+
+/**
  * The terminal menu's Copy, Paste and Clear (17.20), as their keys do (Clear as ⌘K); the
  * terminal keeps the keyboard.
  */

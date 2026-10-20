@@ -252,6 +252,241 @@ pub fn ask_before_terminating(
     }
 }
 
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn object_getClass(object: Id) -> Id;
+    fn class_getInstanceMethod(class: Id, name: Sel) -> Id;
+    fn class_getMethodImplementation(class: Id, name: Sel) -> *const c_void;
+    fn class_replaceMethod(
+        class: Id,
+        name: Sel,
+        imp: *const c_void,
+        types: *const c_char,
+    ) -> *const c_void;
+    fn method_getTypeEncoding(method: Id) -> *const c_char;
+}
+
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {
+    /// The pasteboard type of a drag's file paths: an array of strings (what wry reads too).
+    static NSFilenamesPboardType: Id;
+}
+
+/// `objc_msgSend` as a function of type `F`, an `unsafe extern "C" fn` pointer with the
+/// message's own signature (arm64 has no variadic messages).
+unsafe fn message<F: Copy>() -> F {
+    const { assert!(size_of::<F>() == size_of::<unsafe extern "C" fn()>()) };
+    // SAFETY: `F` is a function pointer (the size is checked); the caller gives its signature.
+    unsafe { std::mem::transmute_copy(&(objc_msgSend as unsafe extern "C" fn())) }
+}
+
+// On Intel a message answering a struct too big for registers (an `NSRect`) goes through
+// `objc_msgSend_stret`, which arm64 does not have (D18.8 may ship Intel).
+#[cfg(target_arch = "x86_64")]
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn objc_msgSend_stret();
+}
+
+/// The `bounds` of `view`.
+///
+/// # Safety
+/// `view` is an `NSView`.
+unsafe fn bounds(view: Id) -> Rect {
+    #[cfg(target_arch = "x86_64")]
+    let send = objc_msgSend_stret as unsafe extern "C" fn();
+    #[cfg(not(target_arch = "x86_64"))]
+    let send = objc_msgSend as unsafe extern "C" fn();
+    // SAFETY: the variant of `objc_msgSend` for a struct answer on this architecture, with the
+    // message's signature; an `NSView` answers `bounds`.
+    unsafe {
+        let bounds = std::mem::transmute::<
+            unsafe extern "C" fn(),
+            unsafe extern "C" fn(Id, Sel) -> Rect,
+        >(send);
+        bounds(view, selector(c"bounds"))
+    }
+}
+
+/// `NSPoint` and `NSSize`: two doubles.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pair {
+    x: f64,
+    y: f64,
+}
+
+/// `NSRect`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rect {
+    origin: Pair,
+    size: Pair,
+}
+
+/// The most paths one drop types (`take_file_drops`); past that, the first ones.
+pub const DROP_LIMIT: usize = 1000;
+/// The longest path (in bytes) a drop types; a longer one is left out (macOS' own limit is
+/// 1024).
+pub const PATH_LIMIT: usize = 4096;
+
+/// Gets the paths of the files dropped from another app and where (`take_file_drops`).
+type OnDrop = Box<dyn Fn(Vec<String>, f64, f64) + Send + Sync>;
+static ON_DROP: OnceLock<OnDrop> = OnceLock::new();
+/// The view class's `performDragOperation:` before `take_file_drops` replaced it.
+static PERFORM: OnceLock<usize> = OnceLock::new();
+/// `performDragOperation:`'s signature: YES when the drop was taken.
+type Perform = unsafe extern "C" fn(Id, Sel, Id) -> bool;
+
+/// Makes files dropped from another app (Finder) on the webview `view` go to `on_drop` (18.1)
+/// with their paths and where they were dropped, in points from the view's top left; the
+/// webview never gets them, so it never opens a file in place of the app.
+///
+/// Tauri's own drag and drop (`dragDropEnabled`) stays off: wry's handler answers every drag,
+/// so WebKit would get none, and the app's own HTML5 drags (tabs, the sidebar's agents, the
+/// Files tree, #57) go through the same AppKit methods (`draggingEntered:` …) of the same
+/// view. Here only the drop itself (`performDragOperation:`) is replaced, on the view's class,
+/// and only a drag from another app (no `draggingSource`) carrying file paths is taken: every
+/// other drop goes on to the class's own method (wry's, which hands it to WebKit). A taken drop
+/// is ended for WebKit as a drag that left (`draggingExited:`), so the page's drag state ends.
+/// At most [`DROP_LIMIT`] paths of at most [`PATH_LIMIT`] bytes.
+///
+/// Only the first call does anything; false when it did not (an earlier call, no view, or a
+/// class that does not take drops).
+///
+/// # Safety
+/// `view` is an Objective-C object (the webview, an `NSView`) or null, used on the main
+/// thread, where AppKit sends its drags.
+pub unsafe fn take_file_drops(
+    view: *mut c_void,
+    on_drop: impl Fn(Vec<String>, f64, f64) + Send + Sync + 'static,
+) -> bool {
+    if view.is_null() || ON_DROP.get().is_some() {
+        return false;
+    }
+    let name = selector(c"performDragOperation:");
+    // SAFETY: `view` is an object (the caller's promise); the class, its method and its type encoding are the
+    // runtime's. The replacement has the same signature ("c@:@" / "B@:@": a BOOL from self,
+    // _cmd and the dragging info), so it is installed with the method's own encoding.
+    unsafe {
+        let class = object_getClass(view);
+        let method = class_getInstanceMethod(class, name);
+        if method.is_null() {
+            return false;
+        }
+        let _ = ON_DROP.set(Box::new(on_drop));
+        let _ = PERFORM.set(class_getMethodImplementation(class, name) as usize);
+        let types = method_getTypeEncoding(method);
+        class_replaceMethod(class, name, perform_drag as *const c_void, types);
+    }
+    true
+}
+
+/// The replaced `performDragOperation:`: a drop `take_drop` takes, or the class's own.
+/// Nothing unwinds into AppKit: a panic leaves the drop to the class's method.
+unsafe extern "C" fn perform_drag(view: Id, name: Sel, info: Id) -> bool {
+    // SAFETY: AppKit calls this as `performDragOperation:` on a view, with its dragging info.
+    let taken = catch_unwind(AssertUnwindSafe(|| unsafe { take_drop(view, info) }));
+    if taken.unwrap_or(false) {
+        return true;
+    }
+    let Some(&original) = PERFORM.get() else {
+        return false;
+    };
+    // SAFETY: the class's own implementation of this very message, kept by `take_file_drops`.
+    unsafe { std::mem::transmute::<usize, Perform>(original)(view, name, info) }
+}
+
+/// Takes the drop `info` on `view` when it comes from another app with file paths: gives them
+/// to `ON_DROP` with the point, and tells WebKit the drag left. False for any other drop.
+///
+/// # Safety
+/// `view` is an `NSView` and `info` an `NSDraggingInfo`.
+unsafe fn take_drop(view: Id, info: Id) -> bool {
+    let (Some(on_drop), false) = (ON_DROP.get(), info.is_null()) else {
+        return false;
+    };
+    // SAFETY: messages `NSDraggingInfo` and `NSView` answer, with their signatures.
+    unsafe {
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        if !object(info, selector(c"draggingSource")).is_null() {
+            return false;
+        }
+        let paths = file_paths(object(info, selector(c"draggingPasteboard")));
+        if paths.is_empty() {
+            return false;
+        }
+        let location = message::<unsafe extern "C" fn(Id, Sel) -> Pair>();
+        let location = location(info, selector(c"draggingLocation"));
+        let convert = message::<unsafe extern "C" fn(Id, Sel, Pair, Id) -> Pair>();
+        let at = convert(
+            view,
+            selector(c"convertPoint:fromView:"),
+            location,
+            null_mut(),
+        );
+        let flipped = message::<unsafe extern "C" fn(Id, Sel) -> bool>();
+        let y = if flipped(view, selector(c"isFlipped")) {
+            at.y
+        } else {
+            bounds(view).size.y - at.y
+        };
+        on_drop(paths, at.x, y);
+        let exited = message::<unsafe extern "C" fn(Id, Sel, Id)>();
+        exited(view, selector(c"draggingExited:"), info);
+    }
+    true
+}
+
+/// The file paths on `pasteboard` (`NSFilenamesPboardType`): the first [`DROP_LIMIT`] strings
+/// of at most [`PATH_LIMIT`] bytes; none when it has none.
+///
+/// # Safety
+/// `pasteboard` is an `NSPasteboard` (or nil).
+unsafe fn file_paths(pasteboard: Id) -> Vec<String> {
+    let mut paths = Vec::new();
+    // SAFETY: messages `NSPasteboard`, `NSArray` and `NSString` answer, with their signatures;
+    // each object is checked to be of its class first. nil answers nil, 0 and NO.
+    unsafe {
+        let object = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+        let list = object(
+            pasteboard,
+            selector(c"propertyListForType:"),
+            NSFilenamesPboardType,
+        );
+        let is = |object: Id, class: &CStr| {
+            let is = message::<unsafe extern "C" fn(Id, Sel, Id) -> bool>();
+            is(
+                object,
+                selector(c"isKindOfClass:"),
+                objc_getClass(class.as_ptr()),
+            )
+        };
+        if !is(list, c"NSArray") {
+            return paths;
+        }
+        let count = message::<unsafe extern "C" fn(Id, Sel) -> usize>();
+        let at = message::<unsafe extern "C" fn(Id, Sel, usize) -> Id>();
+        let text = message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>();
+        for index in 0..count(list, selector(c"count")).min(DROP_LIMIT) {
+            let item = at(list, selector(c"objectAtIndex:"), index);
+            let utf8 = if is(item, c"NSString") {
+                text(item, selector(c"UTF8String"))
+            } else {
+                std::ptr::null()
+            };
+            if utf8.is_null() {
+                continue;
+            }
+            let path = CStr::from_ptr(utf8).to_string_lossy();
+            if path.len() <= PATH_LIMIT {
+                paths.push(path.into_owned());
+            }
+        }
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,8 +497,6 @@ mod tests {
     unsafe extern "C" {
         fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
         fn objc_registerClassPair(class: Id);
-        fn class_getMethodImplementation(class: Id, name: Sel) -> *const c_void;
-        fn object_getClass(object: Id) -> Id;
     }
 
     // libSystem's blocks runtime, which the center copies its completion blocks with.
@@ -456,5 +689,222 @@ mod tests {
             MODE.store(mode, SeqCst);
             assert_eq!(should_terminate(null, null, null), reply, "mode {mode}");
         }
+    }
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn class_createInstance(class: Id, extra: usize) -> Id;
+    }
+
+    // What the stand-in view and dragging info answer, and what they were asked.
+    /// The info's `draggingSource` (an address, 0 for nil: a drag from another app).
+    static SOURCE: AtomicUsize = AtomicUsize::new(0);
+    /// The info's pasteboard's `propertyListForType:` answer (an address, 0 for nil).
+    static LIST: AtomicUsize = AtomicUsize::new(0);
+    /// Whether the pasteboard was asked for anything but `NSFilenamesPboardType`.
+    static WRONG_TYPE: AtomicU8 = AtomicU8::new(0);
+    /// The view's `isFlipped`.
+    static FLIPPED: AtomicU8 = AtomicU8::new(0);
+    /// Calls of the view's own `performDragOperation:` and of its `draggingExited:`.
+    static PERFORMED: AtomicUsize = AtomicUsize::new(0);
+    static EXITED: AtomicUsize = AtomicUsize::new(0);
+    /// What `take_file_drops`' handler got; it panics while `PANIC` is set.
+    static DROPPED: std::sync::Mutex<Vec<(Vec<String>, f64, f64)>> =
+        std::sync::Mutex::new(Vec::new());
+    static PANIC: AtomicU8 = AtomicU8::new(0);
+
+    extern "C" fn own_perform(_: Id, _: Sel, _: Id) -> bool {
+        PERFORMED.fetch_add(1, SeqCst);
+        false
+    }
+    extern "C" fn exited(_: Id, _: Sel, _: Id) {
+        EXITED.fetch_add(1, SeqCst);
+    }
+    extern "C" fn flipped(_: Id, _: Sel) -> bool {
+        FLIPPED.load(SeqCst) == 1
+    }
+    extern "C" fn bounds(_: Id, _: Sel) -> Rect {
+        let origin = Pair { x: 0.0, y: 0.0 };
+        let size = Pair { x: 800.0, y: 600.0 };
+        Rect { origin, size }
+    }
+    /// The view starts 10 points right and 20 up of the window's origin.
+    extern "C" fn convert(_: Id, _: Sel, point: Pair, from: Id) -> Pair {
+        assert!(from.is_null(), "from the window");
+        Pair {
+            x: point.x - 10.0,
+            y: point.y - 20.0,
+        }
+    }
+    extern "C" fn source(_: Id, _: Sel) -> Id {
+        SOURCE.load(SeqCst) as Id
+    }
+    extern "C" fn list(_: Id, _: Sel, kind: Id) -> Id {
+        // SAFETY: AppKit's constant, read only.
+        if kind != unsafe { NSFilenamesPboardType } {
+            WRONG_TYPE.store(1, SeqCst);
+        }
+        LIST.load(SeqCst) as Id
+    }
+    extern "C" fn location(_: Id, _: Sel) -> Pair {
+        Pair { x: 110.0, y: 520.0 }
+    }
+
+    /// A new subclass of NSObject `name` with the instance methods `methods`, and one instance.
+    fn instance(name: &CStr, methods: &[(&CStr, *const c_void, &CStr)]) -> Id {
+        // SAFETY: a new class, registered once, with methods of the signatures they say.
+        unsafe {
+            let class =
+                objc_allocateClassPair(objc_getClass(c"NSObject".as_ptr()), name.as_ptr(), 0);
+            assert!(!class.is_null());
+            for (name, imp, types) in methods {
+                assert!(class_addMethod(class, selector(name), *imp, types.as_ptr()));
+            }
+            objc_registerClassPair(class);
+            class_createInstance(class, 0)
+        }
+    }
+
+    /// A Foundation string of `text`.
+    fn string(text: &str) -> Id {
+        let text = std::ffi::CString::new(text).unwrap();
+        // SAFETY: `[[NSString alloc] initWithUTF8String:]`, never released (a test's).
+        unsafe {
+            let new = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+            let alloc = new(objc_getClass(c"NSString".as_ptr()), selector(c"alloc"));
+            let init = message::<unsafe extern "C" fn(Id, Sel, *const c_char) -> Id>();
+            init(alloc, selector(c"initWithUTF8String:"), text.as_ptr())
+        }
+    }
+
+    /// A Foundation array of `items`.
+    fn array(items: &[Id]) -> Id {
+        // SAFETY: `[[NSArray alloc] initWithObjects:count:]`, never released (a test's).
+        unsafe {
+            let new = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+            let alloc = new(objc_getClass(c"NSArray".as_ptr()), selector(c"alloc"));
+            let init = message::<unsafe extern "C" fn(Id, Sel, *const Id, usize) -> Id>();
+            init(
+                alloc,
+                selector(c"initWithObjects:count:"),
+                items.as_ptr(),
+                items.len(),
+            )
+        }
+    }
+
+    #[test]
+    fn files_dropped_from_another_app_go_to_the_handler_and_every_other_drop_to_the_view() {
+        let view = instance(
+            c"HiveDropView",
+            &[
+                (
+                    c"performDragOperation:",
+                    own_perform as *const c_void,
+                    c"B@:@",
+                ),
+                (c"draggingExited:", exited as *const c_void, c"v@:@"),
+                (c"isFlipped", flipped as *const c_void, c"B@:"),
+                (c"bounds", bounds as *const c_void, c"{CGRect=dddd}@:"),
+                (
+                    c"convertPoint:fromView:",
+                    convert as *const c_void,
+                    c"{CGPoint=dd}@:{CGPoint=dd}@",
+                ),
+            ],
+        );
+        let info = instance(
+            c"HiveDragInfo",
+            &[
+                (c"draggingSource", source as *const c_void, c"@@:"),
+                // The info is its own pasteboard.
+                (c"draggingPasteboard", itself as *const c_void, c"@@:"),
+                (c"propertyListForType:", list as *const c_void, c"@@:@"),
+                (
+                    c"draggingLocation",
+                    location as *const c_void,
+                    c"{CGPoint=dd}@:",
+                ),
+            ],
+        );
+        let no_drops = instance(c"HiveNoDropView", &[]);
+        let handler = |paths: Vec<String>, x: f64, y: f64| {
+            assert_eq!(PANIC.load(SeqCst), 0, "a broken handler");
+            DROPPED.lock().unwrap().push((paths, x, y));
+        };
+        // No view, or one that takes no drops: nothing replaced.
+        // SAFETY: stand-in objects (or null), on the test's thread.
+        let take = |view: Id| unsafe { take_file_drops(view, handler) };
+        assert!(!take(null_mut()));
+        assert!(!take(no_drops));
+        assert!(take(view));
+        assert!(!take(view), "only once");
+
+        // AppKit's call, through the class's (replaced) method.
+        let drop = |info: Id| {
+            // SAFETY: the stand-in view's `performDragOperation:`.
+            unsafe {
+                let perform = message::<unsafe extern "C" fn(Id, Sel, Id) -> bool>();
+                perform(view, selector(c"performDragOperation:"), info)
+            }
+        };
+        let dropped = || std::mem::take(&mut *DROPPED.lock().unwrap());
+        let counts = || (PERFORMED.swap(0, SeqCst), EXITED.swap(0, SeqCst));
+
+        let long = format!("/{}", "x".repeat(PATH_LIMIT - 1));
+        let paths = [
+            string("/Users/me/My Shots/a.png"),
+            // Not a string: left out.
+            no_drops,
+            string(&long),
+            // One byte too long: left out.
+            string(&format!("{long}y")),
+            string("/tmp/日本語"),
+        ];
+        LIST.store(array(&paths) as usize, SeqCst);
+        // From another app, with files: taken, and WebKit told the drag left.
+        assert!(drop(info));
+        let expected = vec![
+            "/Users/me/My Shots/a.png".to_owned(),
+            long,
+            "/tmp/日本語".into(),
+        ];
+        // The window's (110, 520) is the view's (100, 500), 100 from its top.
+        assert_eq!(dropped(), [(expected.clone(), 100.0, 100.0)]);
+        assert_eq!(counts(), (0, 1));
+        // A flipped view counts from its top already.
+        FLIPPED.store(1, SeqCst);
+        assert!(drop(info));
+        assert_eq!(dropped(), [(expected, 100.0, 500.0)]);
+        assert_eq!(counts(), (0, 1));
+        assert_eq!(WRONG_TYPE.load(SeqCst), 0, "asked for file paths");
+
+        // Past the limit, the first ones.
+        let many: Vec<Id> = (0..=DROP_LIMIT).map(|i| string(&format!("/{i}"))).collect();
+        LIST.store(array(&many) as usize, SeqCst);
+        assert!(drop(info));
+        let got = dropped();
+        assert_eq!(got[0].0.len(), DROP_LIMIT);
+        assert_eq!(got[0].0.last().map(String::as_str), Some("/999"));
+        counts();
+
+        // Every other drop is the view's own: the app's own drags (a source), no paths, no
+        // array, an empty one, no info, or a handler that panics.
+        let own = |info: Id| {
+            assert!(!drop(info), "the view's answer");
+            assert!(dropped().is_empty());
+            assert_eq!(counts(), (1, 0));
+        };
+        SOURCE.store(view as usize, SeqCst);
+        own(info);
+        SOURCE.store(0, SeqCst);
+        for list in [null_mut(), string("/tmp/a"), array(&[]), array(&[no_drops])] {
+            LIST.store(list as usize, SeqCst);
+            own(info);
+        }
+        own(null_mut());
+        LIST.store(array(&paths) as usize, SeqCst);
+        PANIC.store(1, SeqCst);
+        own(info);
     }
 }

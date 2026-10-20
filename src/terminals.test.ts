@@ -65,6 +65,7 @@ afterAll(() => Reflect.deleteProperty(document, "fonts"));
 const {
   ACK_BYTES,
   closeTerminal,
+  dropFiles,
   interceptKeys,
   ligatureRanges,
   mountTerminals,
@@ -647,6 +648,52 @@ test("the terminal menu copies, pastes (bracketed when asked) and clears, then f
   expect(focus).toHaveBeenCalledTimes(5);
   copy.mockRestore();
   read.mockRestore();
+});
+
+test("files dropped on a pane are typed into that terminal, bracketed when asked, never with Enter", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  const other = await open();
+  showTerminals([id, other.id], id);
+  const focus = spyOn(other.term, "focus");
+  // The second terminal's program (Claude Code, a shell) asked for bracketed paste.
+  await new Promise<void>((resolve) => other.term.write("\x1b[?2004h", resolve));
+  const inside = (term: Terminal) => term.element?.querySelector(".xterm-screen") as Element;
+  // What is at each point of the window: each pane, the host around them, nothing.
+  const points: Record<string, Element | null> = {
+    "10,10": inside(term),
+    "500,10": inside(other.term),
+    "1,1": host,
+    "2,2": document.body,
+    "3,3": null,
+  };
+  const at = spyOn(document, "elementFromPoint").mockImplementation(
+    (x, y) => points[`${x},${y}`] ?? null,
+  );
+  const text = "/Users/me/My\\ Shots/a.png /tmp/b ";
+  await settle();
+  write.mockClear();
+
+  expect(dropFiles(text, 10, 10)).toBe(true);
+  expect(write.mock.calls).toEqual([[id, text]]);
+  expect(dropFiles(text, 500, 10)).toBe(true);
+  expect(write.mock.calls.at(-1)).toEqual([other.id, `\x1b[200~${text}\x1b[201~`]);
+  expect(focus).toHaveBeenCalledTimes(1);
+  // Outside every pane: ignored.
+  for (const [x, y] of [
+    [1, 1],
+    [2, 2],
+    [3, 3],
+  ] as const) {
+    expect(dropFiles(text, x, y)).toBe(false);
+  }
+  expect(write).toHaveBeenCalledTimes(2);
+  // A newline inside a quoted name is pasted as text: no Enter after the paths.
+  const lined = "'/tmp/a\nb' ";
+  expect(dropFiles(lined, 500, 10)).toBe(true);
+  expect(write.mock.calls.at(-1)).toEqual([other.id, `\x1b[200~'/tmp/a\rb' \x1b[201~`]);
+  at.mockRestore();
+  write.mockRestore();
 });
 
 test("on macOS ⌘↑ and ⌘↓ jump to the shell's previous and next prompt, never typed", async () => {

@@ -32,6 +32,9 @@ export type ServiceMessage =
   | { type: "update_checked"; error: string | null }
   // From the app side (Rust): the user chose `agent` in the menu bar icon's menu (17.22).
   | { type: "tray_clicked"; agent: string }
+  // From the app side (Rust, macOS): files dropped from Finder at (`x`, `y`), CSS pixels from
+  // the window's top left (18.1); `text` is their paths, shell-quoted, each followed by a space.
+  | { type: "files_dropped"; text: string; x: number; y: number }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {

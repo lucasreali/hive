@@ -337,7 +337,9 @@ function onContextMenu(event: MouseEvent): void {
 /**
  * A file or a link dragged from outside that nothing on the way took:
  * its drop would make the WebView open it in place of the app. Refused, and shown as not
- * droppable. The app's own drags (tree, sidebar) are left to their targets.
+ * droppable. The app's own drags (tree, sidebar) are left to their targets. On macOS the drop
+ * of files from Finder never reaches the page: the app side takes it and types the paths into
+ * the terminal under it (18.1, `dropFiles`).
  */
 function onUnhandledDrag(event: DragEvent): void {
   const types = event.dataTransfer?.types ?? [];

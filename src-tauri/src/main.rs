@@ -92,10 +92,25 @@ fn main() {
             let dev = tauri::is_dev()
                 .then(|| app.config().build.dev_url.clone())
                 .flatten();
-            tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
+            let _window = tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
                 .on_navigation(move |url| hive_lib::app_url(url, macos, dev.as_ref()))
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
+            // Files dropped from Finder type their paths into the terminal under them (18.1).
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                let drop = move |paths: Vec<String>, x, y| {
+                    hive_lib::files_dropped(&handle, &paths, x, y);
+                };
+                _window.with_webview(move |webview| {
+                    // SAFETY: the window's WKWebView, on the main thread (`with_webview`).
+                    let taken = unsafe { hive_lib::macos::take_file_drops(webview.inner(), drop) };
+                    if !taken {
+                        eprintln!("hive-app: files dropped from Finder cannot reach a terminal");
+                    }
+                })?;
+            }
             #[cfg(windows)]
             disable_browser_keys(app);
             Ok(())
