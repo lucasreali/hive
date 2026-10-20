@@ -2281,24 +2281,19 @@ fn the_title_bar_double_click_follows_the_macos_setting() {
     }
 }
 
-/// A fake `defaults` in `dir`: checks it is asked for the double-click setting, then runs
-/// `script`.
-fn fake_defaults(dir: &Temp, script: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let program = dir.0.join("defaults");
-    let check = r#"[ "$*" = "read -g AppleActionOnDoubleClick" ] || exit 9"#;
-    std::fs::write(&program, format!("#!/bin/sh\n{check}\n{script}\n")).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    program
+/// A `Hive` whose `defaults` is `sh -c`: it checks it is asked for the double-click setting,
+/// then runs `script`.
+fn reading(script: &str) -> Hive {
+    let script = format!(r#"[ "$*" = "read -g AppleActionOnDoubleClick" ] || exit 9; {script}"#);
+    sh("exit 0").with_defaults("sh", &["-c", &script, "defaults"])
 }
 
 #[test]
 fn the_title_bar_command_reads_the_setting_on_each_click() {
     let dir = Temp::new("defaults");
     let setting = dir.0.join("setting");
-    let script = format!("cat '{}'", setting.display());
     let app = mock_builder()
-        .manage(sh("exit 0").with_defaults(fake_defaults(&dir, &script)))
+        .manage(reading(&format!("cat '{}'", setting.display())))
         .invoke_handler(tauri::generate_handler![title_bar_action])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -2313,19 +2308,16 @@ fn the_title_bar_command_reads_the_setting_on_each_click() {
     std::fs::write(&setting, "None\n").unwrap();
     assert_eq!(action(), json!("none"));
     // Whatever a failing `defaults` prints is no setting.
-    let failing = Temp::new("defaults-failing");
-    let failing = fake_defaults(&failing, "echo Minimize; exit 1");
-    assert_eq!(
-        sh("exit 0").with_defaults(failing).title_bar_action(),
-        "zoom"
-    );
+    let failing = reading("echo Minimize; exit 1");
+    assert_eq!(failing.title_bar_action(), "zoom");
+    // Asked anything else, the stand-in fails.
+    assert_eq!(reading("echo Minimize").title_bar_action(), "minimize");
+    let asked = sh("exit 0").with_defaults("sh", &["-c", "echo Minimize; [ $# = 0 ]", "x"]);
+    assert_eq!(asked.title_bar_action(), "zoom");
     // No `defaults` at all (not macOS).
-    assert_eq!(
-        sh("exit 0")
-            .with_defaults("/nonexistent/defaults")
-            .title_bar_action(),
-        "zoom"
-    );
+    let missing = sh("exit 0").with_defaults("/nonexistent/defaults", &[]);
+    assert_eq!(missing.title_bar_action(), "zoom");
     // The real one by default, never run here.
-    assert_eq!(sh("exit 0").defaults, "/usr/bin/defaults");
+    let (program, args) = sh("exit 0").defaults;
+    assert_eq!((program, args), ("/usr/bin/defaults".into(), vec![]));
 }

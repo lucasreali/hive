@@ -293,8 +293,9 @@ pub struct Hive {
     open: Option<Box<Opener>>,
     /// Shows an OS notification; given by `main.rs` (`with_notify`).
     notify: Option<Box<Notifier>>,
-    /// `defaults`, which reads the title bar's double-click setting (`with_defaults`).
-    defaults: OsString,
+    /// `defaults` and arguments before its own, which read the title bar's double-click
+    /// setting (`with_defaults`).
+    defaults: (OsString, Vec<OsString>),
 }
 
 /// Runs the installer of a downloaded update.
@@ -390,7 +391,7 @@ fn printable(text: &str) -> String {
 /// macOS' `defaults`, which reads the user's preferences.
 const DEFAULTS: &str = "/usr/bin/defaults";
 /// How long reading a preference may take: it runs on a double click.
-const DEFAULTS_WAIT: Duration = Duration::from_secs(1);
+const DEFAULTS_WAIT: Duration = Duration::from_secs(2);
 
 /// What a double click on the title bar does, from macOS' "Double-click a window's title bar
 /// to" (Desktop & Dock), the global `AppleActionOnDoubleClick`: "Minimize" minimizes, "None"
@@ -497,13 +498,14 @@ impl Hive {
             install: None,
             open: None,
             notify: None,
-            defaults: DEFAULTS.into(),
+            defaults: (DEFAULTS.into(), Vec::new()),
         }
     }
 
-    /// Reads macOS preferences with `program` instead of `/usr/bin/defaults` (tests).
-    pub fn with_defaults(mut self, program: impl Into<OsString>) -> Self {
-        self.defaults = program.into();
+    /// Reads macOS preferences with `program` and its first `args` instead of
+    /// `/usr/bin/defaults` (tests).
+    pub fn with_defaults(mut self, program: &str, args: &[&str]) -> Self {
+        self.defaults = (program.into(), args.iter().map(OsString::from).collect());
         self
     }
 
@@ -511,8 +513,10 @@ impl Hive {
     /// setting is read on every click, so a change in System Settings counts at once. A
     /// `defaults` that fails (the key never set) or takes too long counts as unset.
     pub fn title_bar_action(&self) -> &'static str {
-        let mut read = std::process::Command::new(&self.defaults);
-        read.args(["read", "-g", "AppleActionOnDoubleClick"]);
+        let (program, args) = &self.defaults;
+        let mut read = std::process::Command::new(program);
+        read.args(args)
+            .args(["read", "-g", "AppleActionOnDoubleClick"]);
         let out = output_within(&mut read, DEFAULTS_WAIT, reader).ok();
         let out = out.filter(|out| out.status.success());
         let setting = out.map(|out| String::from_utf8_lossy(&out.stdout).into_owned());
