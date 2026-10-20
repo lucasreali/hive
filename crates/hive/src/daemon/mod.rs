@@ -7,6 +7,8 @@
 
 mod agents;
 mod app;
+#[cfg(unix)]
+mod claim;
 mod terminals;
 mod usage;
 
@@ -14,8 +16,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{File, TryLockError};
 use std::io;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -29,7 +29,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
 
 #[cfg(windows)]
-use crate::windows::{Listener, accept};
+use crate::windows::{Claim, Listener, accept};
 
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
@@ -43,10 +43,15 @@ use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
 use crate::{bridge, changes, health, hook, procs, wrapper};
 use app::connection;
+#[cfg(unix)]
+use claim::Claim;
 use terminals::watch_terminals;
 
 /// How often a service waiting for the lock tries it again.
 const LOCK_RETRY: Duration = Duration::from_millis(20);
+
+/// How often the service checks that its lock and socket are still in place ([`Claim::keep`]).
+const CLAIM_CHECK: Duration = Duration::from_secs(2);
 
 pub async fn run(paths: &Paths) -> io::Result<()> {
     // Started by `hive bridge`: leave its session, so the service outlives nothing but the
@@ -58,7 +63,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     #[cfg(unix)]
     crate::fds::raise_at_start(&crate::fds::Process, &mut io::stderr());
     paths.prepare_runtime()?;
-    let _lock = lock(paths).await?;
+    let lock = lock(paths).await?;
     wrapper::install(paths, &std::env::current_exe()?)?;
     // Handle SIGTERM before anyone can connect, so an early one still cleans up.
     #[cfg(unix)]
@@ -70,19 +75,17 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // Nothing signals a service started detached: it ends with the app connection.
     #[cfg(windows)]
     let terminated = std::future::pending();
-    // On Windows this file names the service's pipe: removed too, once the service ends.
-    let socket = paths.socket();
     #[cfg(unix)]
-    let listener = {
-        // A socket left by a crashed daemon; the lock proves nobody is serving it.
-        let _ = std::fs::remove_file(&socket);
-        let listener = Listener::bind(&socket)?;
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
-        listener
-    };
+    let (hold, listener) = Claim::take(paths, lock)?;
     // A new pipe, named in the runtime folder.
     #[cfg(windows)]
-    let listener = Listener::bind(paths)?;
+    let (hold, listener) = (
+        Claim {
+            lock,
+            socket: paths.socket(),
+        },
+        Listener::bind(paths)?,
+    );
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
@@ -101,17 +104,14 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         restore,
     );
     let state = Arc::new(state);
-    let result = serve(listener, &socket, terminated, state).await;
-    let _ = std::fs::remove_file(&socket);
-    result
+    serve(listener, hold, terminated, state).await
 }
 
 /// Single-instance guard: an exclusive lock held for the daemon's whole life. A service that
 /// is still ending holds it for up to its grace period, so the lock is tried again for as long
 /// as the bridge waits for a new service.
 async fn lock(paths: &Paths) -> io::Result<File> {
-    let file = crate::mode::private(File::options().create(true).truncate(false).write(true))
-        .open(paths.lock())?;
+    let file = open_lock(paths)?;
     let retry = async {
         loop {
             match file.try_lock() {
@@ -123,13 +123,21 @@ async fn lock(paths: &Paths) -> io::Result<File> {
     let locked = tokio::time::timeout(bridge::START_TIMEOUT, retry)
         .await
         .unwrap_or_else(|_| file.try_lock());
-    locked.map_err(|err| {
-        io::Error::other(format!(
-            "cannot lock {}: {err}; is another hive daemon running?",
-            paths.lock().display()
-        ))
-    })?;
+    locked.map_err(|err| lock_error(paths, err))?;
     Ok(file)
+}
+
+/// The lockfile, created private, not yet locked.
+fn open_lock(paths: &Paths) -> io::Result<File> {
+    crate::mode::private(File::options().create(true).truncate(false).write(true))
+        .open(paths.lock())
+}
+
+fn lock_error(paths: &Paths, err: TryLockError) -> io::Error {
+    io::Error::other(format!(
+        "cannot lock {}: {err}; is another hive daemon running?",
+        paths.lock().display()
+    ))
 }
 
 /// The next connection to the service.
@@ -138,9 +146,11 @@ async fn accept(listener: &mut Listener) -> io::Result<UnixStream> {
     listener.accept().await.map(|(stream, _)| stream)
 }
 
+/// Serves until the app connection ends, a SIGTERM, or a failure: accepting, or keeping the
+/// lock and socket in place ([`Claim::keep`]). Ends the terminals whatever the reason.
 async fn serve(
     mut listener: Listener,
-    socket: &Path,
+    mut hold: Claim,
     terminated: impl Future<Output = ()>,
     state: Arc<State>,
 ) -> io::Result<()> {
@@ -148,20 +158,27 @@ async fn serve(
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
+    let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
-    loop {
-        tokio::select! {
-            accepted = accept(&mut listener) => {
-                tokio::spawn(connection(accepted?, state.clone(), app_gone.clone()));
+    let ended = async {
+        loop {
+            tokio::select! {
+                accepted = accept(&mut listener) => {
+                    tokio::spawn(connection(accepted?, state.clone(), app_gone.clone()));
+                }
+                _ = check.tick() => if let Some(bound) = hold.keep()? {
+                    listener = bound;
+                },
+                _ = app_gone_rx.recv() => return Ok(()),
+                () = &mut terminated => return Ok(()),
             }
-            _ = app_gone_rx.recv() => break,
-            () = &mut terminated => break,
         }
     }
+    .await;
     // Released before the terminals end: an app started again meanwhile gets a new service
     // (waiting for the lock) instead of a listen queue nobody accepts.
     drop(listener);
-    let _ = std::fs::remove_file(socket);
+    hold.release();
     let files = state.watching.lock().await.take().map(|files| files.task);
     for task in [watcher, health, registry].into_iter().chain(files) {
         stop(task).await;
@@ -176,7 +193,8 @@ async fn serve(
         .map(|t| t.session)
         .collect();
     terminal::end_sessions(&sessions).await;
-    Ok(())
+    // The lock goes last, with `hold`.
+    ended
 }
 
 /// Stops a background task and waits until it has. One caught in blocking work

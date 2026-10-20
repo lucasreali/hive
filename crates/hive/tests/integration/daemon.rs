@@ -247,6 +247,42 @@ async fn daemon_exits_and_removes_its_socket_when_the_app_disconnects() {
 }
 
 #[tokio::test]
+async fn a_socket_and_lock_removed_while_the_service_runs_are_put_back() {
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let mut app = env.app().await;
+    std::fs::remove_file(env.socket()).unwrap();
+    std::fs::remove_file(env.path("run/hive/hive.lock")).unwrap();
+    common::wait_until(|| {
+        env.path("run/hive/hive.lock").exists()
+            && std::os::unix::net::UnixStream::connect(env.socket()).is_ok()
+    });
+    assert_eq!(mode(env.socket()), 0o600);
+    // No second service starts: the lock is taken again.
+    let out = env.hive().arg("daemon").output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.ends_with("; is another hive daemon running?\n"),
+        "{stderr}"
+    );
+    // The same service still serves the app, and answers on its new socket.
+    app.send(0, Control::ListProjects).await;
+    let projects = Control::Projects { projects: vec![] };
+    assert_eq!(app.control().await, (0, projects));
+    let mut second = env.handshake(Role::App).await;
+    assert_eq!(
+        second.control().await.1,
+        Control::Error {
+            message: "another app is already connected".into()
+        }
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+    assert!(!env.socket().exists());
+}
+
+#[tokio::test]
 async fn daemon_exits_cleanly_on_sigterm() {
     let env = Env::new();
     let daemon = env.daemon();

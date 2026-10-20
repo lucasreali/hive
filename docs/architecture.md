@@ -405,11 +405,11 @@ The files panel (screen 1g, "Árvore de arquivos com diff do git").
 12. Delete (9.29): "Delete…" in the same menu (a folder or a file still on disk), or the Delete key on the tree's active row, asks through `ConfirmDialog` (`askDelete` in `FileMenu.tsx`, Cancel focused): the text names the entry, for a folder how many files of the tree's listing it holds, and says nothing goes to a trash (git brings back tracked files; untracked and ignored ones are lost). Delete sends `delete_file`; `file_deleted` drops the entry from the listing and `newFolders` at once and closes the tabs under it (`closeDeleted` in `src/reduce.ts`, shared with a deletion seen in a new listing: the clean ones at once, those with unsaved edits after one "Discard changes?" question). One entry at a time.
 
 ### Daemon start
-1. Prepare the runtime dir (0700, owned by the user).
+1. Prepare the runtime dir (0700, owned by the user). A socket path `bind` cannot take (104 bytes or more on macOS, 108 on Linux) is refused first, naming the path and `XDG_RUNTIME_DIR` (17.9).
 2. Take the lockfile with an exclusive `flock`. If it is already held, exit with an error.
 3. Install the wrapper and the hooks settings.
 4. Remove any stale socket, bind it and set it to 0600.
-5. Serve.
+5. Serve. Every 2 s (`daemon::claim`, 17.9) the service checks that the runtime dir, the lockfile and the socket are still the ones it made (same device and inode): one removed or replaced (macOS cleans old temporary files; a user may delete the folder) is made again, the lock taken and the socket bound anew, so neither a second daemon nor a bridge's new one can start beside it. A folder that cannot be made, a lock that cannot be opened or a socket that cannot be bound is logged and tried again at the next check. Only when another daemon took the new lock meanwhile, or the folder is no longer safe (`check_runtime`), does this one stop as on SIGTERM, leaving another's socket in place.
 
 ### Native Windows service (12.5.2)
 The same daemon, bridge, hook and badge, over a named pipe instead of the socket (`hive::windows`):
@@ -597,7 +597,7 @@ Diagnostics names the `claude` the wrapper would run (`wrapper::real_claude` on 
 | `<config>/hive/settings.json` | 0600 | The user's settings (see [Settings](#settings)); written only when the app saves them. |
 | `<data>/hive/hive-hooks.json` | 0644 | One exec-form hook per observed event (15 events, `hive hook <Event>`, 1 s) plus `WorktreeCreate` → `hive worktree hook-create` (60 s) and `WorktreeRemove` → `hive worktree hook-remove` (10 s), and `statusLine` → `'<hive>' statusline` (12.1). On Windows the hooks run `bin\hive.exe` and `statusLine` has no quotes when it can (12.5.5). |
 
-On native Windows (12.5.2) `<runtime>` is `%LOCALAPPDATA%\hive\run` and `<data>/hive` is `%LOCALAPPDATA%\hive`; there is no socket file (the service's named pipe instead) and no mode: files get their folder's ACL.
+On Unix `<runtime>` is `$XDG_RUNTIME_DIR/hive`; when that is unset, on macOS the user's own temporary folder's `hive` (`confstr(_CS_DARWIN_USER_TEMP_DIR)`, the `$TMPDIR` launchd gives the user's processes, so a `TMPDIR` a shell changes does not hide the service from `hive hook`; `$TMPDIR` itself only if the system does not answer, and only when it is a folder of the user's that others cannot write to, else `/tmp/hive-<uid>`; D17.5, 17.9), elsewhere `/tmp/hive-<uid>`. Nobody else can create a folder in the user's temporary folder, which closes risk 9.7 on macOS. On native Windows (12.5.2) `<runtime>` is `%LOCALAPPDATA%\hive\run` and `<data>/hive` is `%LOCALAPPDATA%\hive`; there is no socket file (the service's named pipe instead) and no mode: files get their folder's ACL.
 
 ## Run and test
 

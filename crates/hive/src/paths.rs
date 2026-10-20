@@ -18,7 +18,8 @@ pub type Stream = tokio::net::windows::named_pipe::NamedPipeClient;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
-    /// `$XDG_RUNTIME_DIR/hive`, or `/tmp/hive-<uid>` when it is unset.
+    /// `$XDG_RUNTIME_DIR/hive`; when it is unset, on macOS the user's own temporary folder's
+    /// `hive` (`$TMPDIR/hive`, D17.5), elsewhere `/tmp/hive-<uid>`.
     pub runtime: PathBuf,
     /// `$XDG_DATA_HOME/hive`, or `~/.local/share/hive`.
     pub data: PathBuf,
@@ -30,17 +31,38 @@ pub struct Paths {
 impl Paths {
     #[cfg(unix)]
     pub fn from_env() -> Self {
-        Self::resolve(|key| std::env::var_os(key), nix::unistd::getuid().as_raw())
+        #[cfg(target_os = "macos")]
+        let user_temp = Some(crate::macos::user_temp_dir());
+        #[cfg(not(target_os = "macos"))]
+        let user_temp = None;
+        Self::resolve(
+            |key| std::env::var_os(key),
+            nix::unistd::getuid().as_raw(),
+            user_temp,
+        )
     }
 
+    /// `user_temp` is `None` off macOS, and on macOS the user's temporary folder as the system
+    /// gives it ([`crate::macos::user_temp_dir`]), which `TMPDIR` replaces only when unknown,
+    /// and only when it is the user's own folder ([`own_folder`]). Under `/tmp`, which every
+    /// user can write to, another user could create the folder first and so keep Hive from
+    /// starting (risk 9.7): there the name carries the uid, as on Linux.
     #[cfg(unix)]
-    fn resolve(var: impl Fn(&str) -> Option<OsString>, uid: u32) -> Self {
+    fn resolve(
+        var: impl Fn(&str) -> Option<OsString>,
+        uid: u32,
+        user_temp: Option<Option<PathBuf>>,
+    ) -> Self {
         let var = |key| {
             var(key)
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         };
-        let runtime = var("XDG_RUNTIME_DIR").map_or_else(
+        let user_temp = user_temp.map(|dir| {
+            dir.filter(|dir| dir.is_absolute())
+                .or_else(|| var("TMPDIR").filter(|dir| own_folder(dir, uid)))
+        });
+        let runtime = var("XDG_RUNTIME_DIR").or(user_temp.flatten()).map_or_else(
             || PathBuf::from(format!("/tmp/hive-{uid}")),
             |dir| dir.join("hive"),
         );
@@ -106,14 +128,23 @@ impl Paths {
     }
 
     /// Creates the runtime directory with mode `0700` and refuses one that
-    /// another user owns or that others can access (e.g. a planted `/tmp/hive-<uid>`).
+    /// another user owns or that others can access (e.g. a planted `/tmp/hive-<uid>`), or
+    /// whose socket path is too long to bind.
     #[cfg(unix)]
     pub fn prepare_runtime(&self) -> io::Result<()> {
+        check_socket_len(&self.socket(), SUN_PATH)?;
+        self.make_runtime()?;
+        self.check_runtime()
+    }
+
+    /// Creates the runtime directory (and its parents) with mode `0700` if it is missing;
+    /// [`Paths::check_runtime`] then tells whether it can be used.
+    #[cfg(unix)]
+    pub fn make_runtime(&self) -> io::Result<()> {
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(&self.runtime)?;
-        self.check_runtime()
+            .create(&self.runtime)
     }
 
     /// Refuses a runtime directory another user owns or others can access: the socket in it
@@ -147,6 +178,36 @@ impl Paths {
         check_peer(&stream, nix::unistd::getuid().as_raw())?;
         Ok(stream)
     }
+}
+
+/// Whether `dir` is an absolute path to a folder `uid` owns and others cannot write to (links
+/// followed): never a shared one such as `/tmp`, where another user could create Hive's folder
+/// first.
+#[cfg(unix)]
+fn own_folder(dir: &Path, uid: u32) -> bool {
+    dir.is_absolute()
+        && std::fs::metadata(dir)
+            .is_ok_and(|meta| meta.is_dir() && meta.uid() == uid && meta.mode() & 0o022 == 0)
+}
+
+/// `sizeof(sockaddr_un.sun_path)`: a socket path takes one byte less (its closing NUL).
+#[cfg(unix)]
+const SUN_PATH: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
+
+/// Refuses a socket path `bind` would reject with an obscure error ("path must be shorter
+/// than SUN_LEN"), e.g. under a long `XDG_RUNTIME_DIR`.
+#[cfg(unix)]
+fn check_socket_len(socket: &Path, sun_path: usize) -> io::Result<()> {
+    let len = socket.as_os_str().len();
+    if len >= sun_path {
+        return Err(io::Error::other(format!(
+            "the socket path {} is {len} bytes, over the {} a Unix socket path can have: \
+             set XDG_RUNTIME_DIR to a shorter folder",
+            socket.display(),
+            sun_path - 1
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -217,7 +278,108 @@ mod tests {
         Paths::resolve(
             |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into()),
             1000,
+            None,
         )
+    }
+
+    /// As this process's user, so that the `TMPDIR` folders a test makes are its own.
+    fn resolve_as(vars: &[(&str, &str)], user_temp: Option<Option<&str>>) -> Paths {
+        Paths::resolve(
+            |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into()),
+            nix::unistd::getuid().as_raw(),
+            user_temp.map(|dir| dir.map(PathBuf::from)),
+        )
+    }
+
+    #[test]
+    fn on_macos_the_runtime_dir_is_in_the_users_temporary_folder() {
+        let me = nix::unistd::getuid().as_raw();
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = |name: &str, mode: u32| {
+            let dir = tmp.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+            dir.to_str().unwrap().to_owned()
+        };
+        let own = folder("T", 0o700);
+        let tmpdir = ("TMPDIR", own.as_str());
+        let fallback = PathBuf::from(format!("/tmp/hive-{me}"));
+        let system = Some(Some("/var/folders/sys/T/"));
+        let runtime = |vars: &[(&str, &str)], user_temp| resolve_as(vars, user_temp).runtime;
+        // The system's answer first: a `TMPDIR` changed in a shell does not move it.
+        assert_eq!(
+            runtime(&[tmpdir], system),
+            PathBuf::from("/var/folders/sys/T/hive")
+        );
+        let own_hive = Path::new(&own).join("hive");
+        assert_eq!(runtime(&[tmpdir], Some(None)), own_hive);
+        assert_eq!(runtime(&[tmpdir], Some(Some("rel"))), own_hive);
+        // `XDG_RUNTIME_DIR` still wins (the tests, `scripts/mac-dev.sh`).
+        assert_eq!(
+            runtime(&[("XDG_RUNTIME_DIR", "/x"), tmpdir], system),
+            PathBuf::from("/x/hive")
+        );
+        // Neither known, or a `TMPDIR` that is not the user's own folder: `/tmp/hive-<uid>`,
+        // as on Linux. Never `/tmp/hive`, which another user could create first.
+        let shared = folder("shared", 0o1777);
+        let grouped = folder("grouped", 0o770);
+        let file = tmp.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        let file = file.to_str().unwrap().to_owned();
+        let missing = tmp.path().join("missing").to_str().unwrap().to_owned();
+        for dir in ["", "rel/T", "/tmp", &missing, &file, &shared, &grouped] {
+            assert_eq!(runtime(&[("TMPDIR", dir)], Some(None)), fallback, "{dir}");
+        }
+        assert_eq!(runtime(&[], Some(None)), fallback);
+        assert_eq!(runtime(&[], Some(Some("rel"))), fallback);
+        // Off macOS `TMPDIR` is not read.
+        assert_eq!(runtime(&[tmpdir], None), fallback);
+    }
+
+    #[test]
+    fn a_temporary_folder_of_another_user_is_not_used() {
+        let tmp = tempfile::tempdir().unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        assert!(own_folder(tmp.path(), me));
+        assert!(!own_folder(tmp.path(), me + 1));
+    }
+
+    #[test]
+    fn a_socket_path_too_long_to_bind_is_refused_clearly() {
+        let path = |len: usize| PathBuf::from(format!("/{}", "s".repeat(len - 1)));
+        for sun_path in [104, 108] {
+            check_socket_len(&path(sun_path - 1), sun_path).unwrap();
+            let err = check_socket_len(&path(sun_path), sun_path).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "the socket path {} is {sun_path} bytes, over the {} a Unix socket path \
+                     can have: set XDG_RUNTIME_DIR to a shorter folder",
+                    path(sun_path).display(),
+                    sun_path - 1
+                )
+            );
+        }
+        // The service refuses it before creating anything; one byte less binds.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("run").as_os_str().len() + "/hive.sock".len();
+        let runtime = |len: usize| {
+            let mut dir = tmp.path().join("run").into_os_string();
+            dir.push("x".repeat(len - base));
+            PathBuf::from(dir)
+        };
+        let paths = |len| Paths {
+            runtime: runtime(len),
+            ..paths_in(tmp.path())
+        };
+        let long = paths(SUN_PATH);
+        assert_eq!(long.socket().as_os_str().len(), SUN_PATH);
+        let err = long.prepare_runtime().unwrap_err();
+        assert!(err.to_string().contains("XDG_RUNTIME_DIR"), "{err}");
+        assert!(!long.runtime.exists());
+        let longest = paths(SUN_PATH - 1);
+        longest.prepare_runtime().unwrap();
+        std::os::unix::net::UnixListener::bind(longest.socket()).unwrap();
     }
 
     #[test]
