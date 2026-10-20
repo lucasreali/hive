@@ -16,6 +16,7 @@ pub mod hook;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mode;
+pub mod offers;
 pub mod paths;
 pub mod procs;
 pub mod projects;

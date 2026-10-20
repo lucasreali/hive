@@ -95,6 +95,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         sessions,
         settings,
         ports,
+        crate::offers::Offers::new(paths.offers()),
         restore,
     );
     let state = Arc::new(state);
@@ -220,6 +221,8 @@ struct State {
     sessions: Sessions,
     settings: settings::Store,
     ports: Ports,
+    /// The pull requests already offered for removing their worktree (17.27).
+    offers: crate::offers::Offers,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -262,6 +265,7 @@ impl State {
         sessions: Sessions,
         settings: settings::Store,
         ports: Ports,
+        offers: crate::offers::Offers,
         restore: Restore,
     ) -> Self {
         Self {
@@ -277,6 +281,7 @@ impl State {
             sessions,
             settings,
             ports,
+            offers,
             restore,
             sent: Default::default(),
             listed: Default::default(),
@@ -648,12 +653,30 @@ impl State {
                 replies
                     .iter_mut()
                     .for_each(|reply| state.with_health(reply));
-                replies
+                // The offers a list raised (17.27), before the replies.
+                let offers = replies.iter().flat_map(|reply| state.offers_of(reply));
+                let mut offers: Vec<Control> = offers.collect();
+                offers.append(&mut replies);
+                offers
             });
             for reply in replies {
                 state.to_app(0, &reply).await;
             }
         });
+    }
+
+    /// The offers to remove a worktree a `pulls` reply raises (17.27), against the project's
+    /// worktrees as they are now (none when it is no longer followed). Blocks (git).
+    fn offers_of(&self, reply: &Control) -> Vec<Control> {
+        let Control::Pulls { project, .. } = reply else {
+            return Vec::new();
+        };
+        let followed = self.projects.followed(project);
+        let worktrees = followed.map(|p| p.worktrees).unwrap_or_default();
+        self.offers.raised(reply, &worktrees).unwrap_or_else(|err| {
+            eprintln!("hive: warning: cannot keep the pull requests offered: {err}");
+            Vec::new()
+        })
     }
 
     /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
@@ -848,6 +871,7 @@ fn test_state(dir: &Path) -> Arc<State> {
         Sessions::new(None),
         settings::Store::load(dir.join("settings.json")),
         Ports::new(dir.join("ports.json")),
+        crate::offers::Offers::new(dir.join("offered-pulls.json")),
         restore,
     ))
 }
