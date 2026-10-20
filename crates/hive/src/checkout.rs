@@ -69,7 +69,7 @@ pub(crate) fn pull(
             )
         }
     };
-    worktree::check_branch(root, &branch).map_err(|err| err.to_string())?;
+    worktree::check_branch(root, &branch)?;
     worktree::fetch(root, &remote, &refspec, &fetch_vars(gh, env)).map_err(shown)?;
     let name = format!("pr-{number}");
     created(projects, project, &name, &branch, Some(&start), None)
@@ -98,7 +98,7 @@ pub(crate) fn issue(
     ];
     let title = parse_issue(&pulls::run(gh, &env, root, &args, ACTION_OUTPUT)?, number)?;
     let branch = named("issue", number, &title);
-    worktree::check_branch(root, &branch).map_err(|err| err.to_string())?;
+    worktree::check_branch(root, &branch)?;
     let fetched = base.and_then(|base| worktree::fetch_base(root, base, &fetch_vars(gh, &env)));
     created(projects, &project, &branch, &branch, base, fetched)
 }
@@ -114,7 +114,7 @@ fn created(
     fetched: Option<String>,
 ) -> Result<Control, String> {
     let root = Path::new(&project.path);
-    let exists = worktree::has_branch(root, branch).map_err(|err| err.to_string())?;
+    let exists = worktree::has_branch(root, branch);
     let (head, kept) = match exists {
         true => {
             let note = format!("branch {branch} already existed: checked out as it is");

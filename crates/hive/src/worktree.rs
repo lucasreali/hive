@@ -266,25 +266,27 @@ pub fn create_on(dir: &Path, name: &str, head: Head) -> io::Result<Created> {
 
 /// Refuses a branch name from outside (GitHub's) longer than [`BRANCH_LIMIT`] or one
 /// `git check-ref-format --branch` rejects or rewrites (`@{-1}` names another branch).
-pub fn check_branch(dir: &Path, branch: &str) -> io::Result<()> {
-    let refused = || io::Error::other(format!("{branch:?} is not a branch name git accepts"));
+pub fn check_branch(dir: &Path, branch: &str) -> Result<(), String> {
     if branch.len() > BRANCH_LIMIT {
         // Not shown: it may be as long as `gh`'s whole answer.
-        let message = format!("A branch name over {BRANCH_LIMIT} bytes is not accepted");
-        return Err(io::Error::other(message));
+        return Err(format!(
+            "A branch name over {BRANCH_LIMIT} bytes is not accepted"
+        ));
     }
-    let out = git(dir, &["check-ref-format", "--branch", branch]).map_err(|_| refused())?;
+    // Refused: git prints nothing.
+    let out = git(dir, &["check-ref-format", "--branch", branch]).unwrap_or_default();
     match out.strip_suffix(b"\n") == Some(branch.as_bytes()) {
         true => Ok(()),
-        false => Err(refused()),
+        false => Err(format!("{branch:?} is not a branch name git accepts")),
     }
 }
 
-/// Whether the repository at `dir` has the local branch `branch`.
-pub fn has_branch(dir: &Path, branch: &str) -> io::Result<bool> {
+/// Whether the repository at `dir` has the local branch `branch` (no when git cannot tell:
+/// creating the worktree then says why).
+pub fn has_branch(dir: &Path, branch: &str) -> bool {
     let name = format!("refs/heads/{branch}");
     let args = ["rev-parse", "--verify", "--quiet", &name];
-    git::output(dir, &args, &[0, 1]).map(|out| !out.is_empty())
+    git::output(dir, &args, &[0, 1]).is_ok_and(|out| !out.is_empty())
 }
 
 /// The remote and branch of `base` when it is `<remote>/<branch>` for one of `remotes` (as

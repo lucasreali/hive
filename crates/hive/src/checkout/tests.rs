@@ -6,6 +6,7 @@ use std::process::Command;
 #[cfg(unix)]
 use std::sync::Mutex;
 
+#[cfg(unix)]
 use hive_protocol::PullAction;
 use serde_json::json;
 
@@ -158,11 +159,11 @@ fn branch_names_from_github_are_checked_by_git() {
         err.to_string(),
         "A branch name over 255 bytes is not accepted"
     );
-    assert!(!worktree::has_branch(dir, "main").unwrap());
+    assert!(!worktree::has_branch(dir, "main"));
     git(dir, &["commit", "-q", "--allow-empty", "-m", "x"]);
     git(dir, &["branch", "-M", "main"]);
-    assert!(worktree::has_branch(dir, "main").unwrap());
-    assert!(!worktree::has_branch(dir, "mai").unwrap());
+    assert!(worktree::has_branch(dir, "main"));
+    assert!(!worktree::has_branch(dir, "mai"));
     // Git accepts `@{-1}` once a branch was checked out before, as that branch's name.
     git(dir, &["checkout", "-q", "-b", "other"]);
     git(dir, &["checkout", "-q", "main"]);
@@ -173,6 +174,51 @@ fn branch_names_from_github_are_checked_by_git() {
         err.to_string(),
         r#""@{-1}" is not a branch name git accepts"#
     );
+}
+
+#[test]
+fn fetches_carry_the_space_identity_without_a_token_gh_cannot_give() {
+    let tmp = tempfile::tempdir().unwrap();
+    let gh = Gh {
+        program: tmp.path().join("no-gh").into(),
+        path: tmp.path().into(),
+    };
+    let mut env = SpaceEnv {
+        git_name: Some("Me".into()),
+        ..SpaceEnv::default()
+    };
+    let identity = vec![
+        ("GIT_AUTHOR_NAME", "Me".to_owned()),
+        ("GIT_COMMITTER_NAME", "Me".to_owned()),
+    ];
+    assert_eq!(fetch_vars(&gh, &env), identity);
+    env.gh_account = Some(hive_protocol::GhAccount {
+        host: "github.com".into(),
+        login: "me".into(),
+    });
+    assert_eq!(fetch_vars(&gh, &env), identity);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_create_on_an_existing_branch_keeps_the_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    git(dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(dir.join(".worktreeinclude"), ".env\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "x"]);
+    git(dir, &["branch", "kept"]);
+    let env = dir.join(".env");
+    std::fs::write(&env, "SECRET=1").unwrap();
+    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let made = worktree::create_on(dir, "kept", Head::Existing("kept"));
+    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let err = made.unwrap_err();
+    assert!(err.to_string().contains("Permission denied"), "{err}");
+    assert!(!dir.join(".claude/worktrees/kept").exists());
+    assert!(worktree::has_branch(dir, "kept"));
 }
 
 /// A followed repository whose remote `origin` names github.com/o/r but is fetched from a
