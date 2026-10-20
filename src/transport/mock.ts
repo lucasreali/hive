@@ -1217,6 +1217,8 @@ export function createMockTransport(
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
+        // Stands in for ⌘Q, which the app side passes on only while agents would end (D17.3).
+        if (line === "quit-app") later({ type: "quit_requested" });
         if (line === "notification-click" && notified) {
           later({ type: "notification_clicked", agent: notified });
         }

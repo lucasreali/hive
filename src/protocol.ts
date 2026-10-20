@@ -18,6 +18,9 @@ export type ServiceMessage =
   | { type: "update_failed"; error: string }
   // From the app side (Rust): the user clicked the OS notification about `agent` (13.5).
   | { type: "notification_clicked"; agent: string }
+  // From the app side (Rust): ⌘Q, the Dock's Quit or logging out while agents would end
+  // (D17.3); the UI asks as the window's Close button does.
+  | { type: "quit_requested" }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
