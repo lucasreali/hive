@@ -33,6 +33,14 @@ export function confirmClose(): boolean {
   return true;
 }
 
+/**
+ * ⌘Q, the Dock's Quit or logging out (D17.3): the app side asks only while agents would end, so
+ * this asks through the same guard as closing the window, and quits when it has nothing to ask.
+ */
+export function requestQuit(): void {
+  if (!confirmClose()) closeWindow();
+}
+
 /** Installs the update found at startup (4.19); the app restarts, or says why it could not. */
 export function installUpdate(): void {
   openModal(null);

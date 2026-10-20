@@ -19,9 +19,11 @@ fn main() {
             let (program, args, bundled) = hive_lib::bridge_command(macos, &var, resource("hive"));
             // Restarting runs the exit events, so the connection ends first (`on_run_event`).
             let handle = app.handle().clone();
+            let exit = app.handle().clone();
             let hive = hive_lib::Hive::new(program, args)
                 .with_bundled(bundled)
                 .with_restart(move || handle.request_restart())
+                .with_exit(move || exit.exit(0))
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))
                 .with_open(
                     |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
@@ -36,6 +38,15 @@ fn main() {
                 hive_lib::native_bridge(&var, resource("hive.exe")),
             ));
             app.manage(hive);
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                let class = c"TaoAppDelegateParent";
+                let ask = move || hive_lib::should_quit(&handle);
+                if !hive_lib::macos::ask_before_terminating(class, ask) {
+                    eprintln!("hive-app: ⌘Q cannot ask before quitting: no app delegate to extend");
+                }
+            }
             // The window (`"create": false` in the config) with its guards (open point #15): the
             // webview never leaves the app and never opens another window.
             let window = app.config().app.windows.first().cloned();
@@ -111,7 +122,19 @@ fn main() {
         ])
         .build(tauri::generate_context!());
     match result {
-        Ok(app) => app.run(hive_lib::on_run_event),
+        Ok(app) => app.run(|app, event| {
+            // Tauri's `RunEvent::Reopen` cannot be built outside it, so a test could not send it
+            // to `on_run_event`: unpacked here, decided in the tested `reopen`.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                hive_lib::reopen(app, has_visible_windows);
+            }
+            hive_lib::on_run_event(app, event)
+        }),
         Err(error) => {
             eprintln!("hive-app: {error}");
             std::process::exit(1);

@@ -2321,3 +2321,206 @@ fn the_title_bar_command_reads_the_setting_on_each_click() {
     let (program, args) = sh("exit 0").defaults;
     assert_eq!((program, args), ("/usr/bin/defaults".into(), vec![]));
 }
+
+#[test]
+fn quitting_asks_only_with_a_ui_the_setting_on_and_agents_at_risk() {
+    assert_eq!(quit_decision(true, true, 1, None), Quit::Ask);
+    assert_eq!(quit_decision(true, true, 3, None), Quit::Ask);
+    assert_eq!(quit_decision(true, true, 0, None), Quit::Now);
+    assert_eq!(quit_decision(true, false, 2, None), Quit::Now);
+    assert_eq!(quit_decision(false, true, 2, None), Quit::Now);
+    // Asked again within ASK_AGAIN: it quits (a hung UI never keeps the app); later it asks.
+    let ago = |secs| Some(Duration::from_millis(secs));
+    assert_eq!(quit_decision(true, true, 1, ago(0)), Quit::Now);
+    assert_eq!(quit_decision(true, true, 1, ago(4_999)), Quit::Now);
+    assert_eq!(quit_decision(true, true, 1, ago(5_000)), Quit::Ask);
+}
+
+#[test]
+fn agents_at_risk_are_the_close_dialogs() {
+    use AgentState::*;
+    let risky = [
+        Working,
+        WithSubagents,
+        WaitingYou,
+        WaitingAnswer,
+        WaitingPlan,
+        WaitingPermission,
+    ];
+    for state in risky {
+        assert!(at_risk(state), "{state:?}");
+    }
+    for state in [Ended, Idle, Error] {
+        assert!(!at_risk(state), "{state:?}");
+    }
+}
+
+#[test]
+fn the_window_comes_up_when_there_is_one() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(!show_window(app.handle()));
+    assert!(!reopen(app.handle(), false));
+    let _window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    assert!(show_window(app.handle()));
+    // A Dock click brings it back only when no window shows.
+    assert!(reopen(app.handle(), false));
+    assert!(!reopen(app.handle(), true));
+}
+
+/// Sends `message` from the service on `channel` and waits for the UI to get it.
+async fn relay(
+    service: &mut Service,
+    rx: &mut mpsc::UnboundedReceiver<Value>,
+    channel: u32,
+    message: Value,
+) {
+    let frame = Frame {
+        kind: FrameType::Control,
+        channel,
+        payload: message.to_string().into_bytes().into(),
+    };
+    service.writer.send(frame).await.unwrap();
+    assert_eq!(next(rx).await["type"], message["type"]);
+}
+
+#[tokio::test]
+async fn quitting_asks_the_ui_while_agents_would_end_with_the_app() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (hive, mut service, mut rx) = welcomed().await;
+    let exits = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&exits);
+    let hive = hive.with_exit(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    let exited = || exits.load(Ordering::SeqCst);
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let app = app.handle();
+    hive.link().terminals.insert(5, output().0);
+    // Each question long after the last (`ASK_AGAIN` is tested on its own).
+    let quits = |hive: &Hive| {
+        hive.link().asked = None;
+        hive.should_quit(app)
+    };
+    let state = |id: &str, state: &str| json!({"type": "agent_state", "id": id, "state": state});
+    let confirm =
+        |on: bool| json!({"type": "settings", "settings": {"agents": {"confirm_close": on}}});
+
+    // Nothing at risk: it quits.
+    assert!(quits(&hive));
+    hive.link().asked = None;
+    hive.request_quit(app);
+    assert_eq!(exited(), 1);
+    relay(&mut service, &mut rx, 5, state("a1", "idle")).await;
+    assert!(quits(&hive));
+
+    // A working agent: the UI asks, nothing quits.
+    relay(&mut service, &mut rx, 5, state("a1", "working")).await;
+    hive.link().asked = None;
+    hive.request_quit(app);
+    assert_eq!(exited(), 1);
+    assert_eq!(next(&mut rx).await, json!({"type": "quit_requested"}));
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await, json!({"type": "quit_requested"}));
+
+    // The setting off quits; on again asks.
+    relay(&mut service, &mut rx, 0, confirm(false)).await;
+    assert!(quits(&hive));
+    relay(&mut service, &mut rx, 0, confirm(true)).await;
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await["type"], "quit_requested");
+
+    // Its state leaves the risky ones, or it goes.
+    relay(&mut service, &mut rx, 5, state("a1", "error")).await;
+    assert!(quits(&hive));
+    relay(&mut service, &mut rx, 5, state("a1", "waiting_you")).await;
+    relay(
+        &mut service,
+        &mut rx,
+        5,
+        state("a2", "from a newer service"),
+    )
+    .await;
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await["type"], "quit_requested");
+    let removed = json!({"type": "agent_removed", "id": "a1"});
+    relay(&mut service, &mut rx, 5, removed).await;
+    assert!(quits(&hive));
+
+    // Agents end with the connection.
+    relay(&mut service, &mut rx, 5, state("a3", "waiting_permission")).await;
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await["type"], "quit_requested");
+    drop(service);
+    while next(&mut rx).await["type"] != "disconnected" {}
+    assert!(quits(&hive));
+    hive.link().asked = None;
+    hive.request_quit(app);
+    assert_eq!(exited(), 2);
+}
+
+#[test]
+fn without_a_ui_quitting_never_asks() {
+    let hive = hive();
+    hive.link().at_risk.insert("a1".into());
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(hive.should_quit(app.handle()));
+    // Nothing to end the app with: nothing happens.
+    hive.request_quit(app.handle());
+}
+
+/// A connected `Hive` with an agent at risk, its app, and a UI asked a moment ago (`asked`).
+fn asking(
+    asked: Option<Duration>,
+) -> (
+    Hive,
+    tauri::App<tauri::test::MockRuntime>,
+    mpsc::UnboundedReceiver<Value>,
+) {
+    let (hive, rx) = hive_with_ui();
+    {
+        let mut link = hive.link();
+        link.at_risk.insert("a1".into());
+        link.asked = asked.map(|ago| Instant::now().checked_sub(ago).unwrap());
+    }
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    (hive, app, rx)
+}
+
+#[test]
+fn a_second_quit_soon_after_asking_quits() {
+    let (hive, app, mut rx) = asking(None);
+    assert!(!hive.should_quit(app.handle()));
+    assert_eq!(rx.try_recv().unwrap()["type"], "quit_requested");
+    // ⌘Q again with the dialog up (or a hung UI): it quits.
+    assert!(hive.should_quit(app.handle()));
+    assert!(rx.try_recv().is_err());
+    // Long after the last question it asks again.
+    let (hive, app, mut rx) = asking(Some(Duration::from_secs(6)));
+    assert!(!hive.should_quit(app.handle()));
+    assert_eq!(rx.try_recv().unwrap()["type"], "quit_requested");
+}
+
+#[test]
+fn a_ui_that_cannot_get_the_question_lets_the_app_quit() {
+    let (hive, app, _rx) = asking(None);
+    hive.link().ui = Some(Channel::new(|_| Err(tauri::Error::FailedToReceiveMessage)));
+    assert!(hive.should_quit(app.handle()));
+    // The stale UI is forgotten.
+    assert!(hive.link().ui.is_none());
+    assert!(hive.link().asked.is_none());
+}
+
+#[test]
+fn the_app_asks_its_hive_and_quits_without_one() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(should_quit(app.handle()));
+    let (hive, _, mut rx) = asking(None);
+    let app = mock_builder()
+        .manage(hive)
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    assert!(!should_quit(app.handle()));
+    assert_eq!(rx.try_recv().unwrap()["type"], "quit_requested");
+}

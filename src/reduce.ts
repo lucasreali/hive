@@ -436,6 +436,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "restore_sessions":
     case "editor_target":
     case "notification_clicked":
+    case "quit_requested":
       // Answered where they were asked (see `ServiceMessage`), not stored.
       return {};
     default:
