@@ -23,6 +23,8 @@ pub const MAX_TITLE: usize = 100;
 pub const MAX_BODY: usize = 300;
 /// A terminal's notifications closer together than this are dropped.
 pub const NOTE_GAP: Duration = Duration::from_secs(1);
+/// The shortest command that can alert: the lowest `notifications.command_secs` but 0 (never).
+pub const MIN_COMMAND: Duration = Duration::from_secs(1);
 
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
@@ -233,7 +235,9 @@ impl Shell {
             Signal::CommandFinished(exit) => {
                 let started = self.started.take()?;
                 let took = now.saturating_duration_since(started);
-                Some(Event::Alert(Alert::Finished { exit, took }))
+                // Shorter than any setting alerts: nothing to ask about, so a program marking
+                // commands in a loop makes at most one alert check a second.
+                (took >= MIN_COMMAND).then_some(Event::Alert(Alert::Finished { exit, took }))
             }
             Signal::Notification { title, body } => {
                 if self.noted.is_some_and(|at| now < at + NOTE_GAP) {
@@ -431,6 +435,13 @@ mod tests {
         assert_eq!(end, Some(Event::Alert(finished(Some(3), 12))));
         // The next prompt's end with no command run in between: nothing.
         assert_eq!(shell.on(Signal::CommandFinished(None), at(15)), None);
+        // A command shorter than any setting alerts is not even asked about.
+        let short = at(16) + MIN_COMMAND - Duration::from_millis(1);
+        assert_eq!(shell.on(Signal::CommandStarted, at(16)), None);
+        assert_eq!(shell.on(Signal::CommandFinished(Some(0)), short), None);
+        assert_eq!(shell.on(Signal::CommandStarted, at(20)), None);
+        let end = shell.on(Signal::CommandFinished(None), at(20) + MIN_COMMAND);
+        assert_eq!(end, Some(Event::Alert(finished(None, 1))));
     }
 
     #[test]
