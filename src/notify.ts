@@ -130,8 +130,9 @@ type TerminalAlert = Extract<
 
 /**
  * A terminal alert's text (17.25): the OS notification's title and body, and the inbox item's.
- * A long command says how it ended and how long it ran; a program's notification shows its own
- * title (else the terminal's name) and body.
+ * A long command says how it ended and how long it ran. A program's notification is titled with
+ * the terminal's name, never the program's own title, so a program cannot pass its text off as
+ * Hive's (an agent's alert); its title and body follow ("make — done").
  */
 export function terminalAlertText(s: HiveState, m: TerminalAlert): AlertText & { inbox: string } {
   const name = terminalName(s, m.channel);
@@ -142,9 +143,9 @@ export function terminalAlertText(s: HiveState, m: TerminalAlert): AlertText & {
     const body = `after ${duration(m.secs)}`;
     return { agent, title, body, inbox: `${title} ${body}` };
   }
-  const title = m.title || name;
-  const inbox = m.body ? `${title}: ${m.body}` : title;
-  return { agent, title, body: m.body, inbox };
+  const body = [m.title, m.body].filter((part) => part).join(" — ");
+  const inbox = body ? `${name}: ${body}` : name;
+  return { agent, title: name, body, inbox };
 }
 
 /**

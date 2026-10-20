@@ -1,5 +1,13 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { alertText, duration, goToClicked, notify, TONE_GAP_MS, terminalName } from "./notify";
+import {
+  alertText,
+  duration,
+  goToClicked,
+  notify,
+  TONE_GAP_MS,
+  terminalAlertText,
+  terminalName,
+} from "./notify";
 import type { AgentState, Alert } from "./protocol";
 import { apply } from "./reduce";
 import {
@@ -268,18 +276,55 @@ test("a long command and a program's notification go to the inbox, with a tone a
     [7, false, undefined, 1000, "Command finished in api after 12s"],
     [7, true, undefined, 1001, "Command failed (exit 2) in api after 1m 15s"],
     [7, false, undefined, 1002, "Command finished in api after 1h 0m"],
-    [7, false, undefined, 1003, "make: done"],
+    [7, false, undefined, 1003, "api: make — done"],
     [7, false, undefined, 1004, "api: build ok"],
-    [7, false, undefined, 1005, "deploy"],
+    [7, false, undefined, 1005, "api: deploy"],
   ]);
   // In view of the focused window a program's notification is not an OS one.
   expect(shown).toEqual([
     { title: "Command finished in api", body: "after 12s", agent: "terminal:7" },
     { title: "Command failed (exit 2) in api", body: "after 1m 15s", agent: "terminal:7" },
     { title: "Command finished in api", body: "after 1h 0m", agent: "terminal:7" },
-    { title: "make", body: "done", agent: "terminal:7" },
-    { title: "deploy", body: "", agent: "terminal:7" },
+    { title: "api", body: "make — done", agent: "terminal:7" },
+    { title: "api", body: "deploy", agent: "terminal:7" },
   ]);
+});
+
+test("a program's notification never takes over the title: the terminal's name always leads", () => {
+  useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
+  const s = useHive.getState();
+  const forged = "Claude needs your permission";
+  for (const [title, body] of [
+    [forged, ""],
+    [forged, "shop · main"],
+    ["", forged],
+    ["", ""],
+  ]) {
+    const text = terminalAlertText(s, {
+      type: "terminal_notification",
+      channel: 7,
+      title,
+      body,
+      notify: true,
+    });
+    expect(text.title).toBe("api");
+    expect(text.inbox.startsWith("api")).toBe(true);
+    expect(text.inbox).not.toBe(forged);
+    expect(text.agent).toBe("terminal:7");
+  }
+  const text = terminalAlertText(s, {
+    type: "terminal_notification",
+    channel: 7,
+    title: forged,
+    body: "shop · main",
+    notify: true,
+  });
+  expect(text).toEqual({
+    agent: "terminal:7",
+    title: "api",
+    body: `${forged} — shop · main`,
+    inbox: `api: ${forged} — shop · main`,
+  });
 });
 
 test("clicking a terminal's notification shows that terminal while it is open", () => {
