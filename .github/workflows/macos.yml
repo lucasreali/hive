@@ -66,8 +66,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Runs `cargo test --workspace` instrumented.
       - run: cargo llvm-cov --workspace --no-fail-fast --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
-      # `--no-config`: `.cargo/mutants.toml` excludes this file for Linux.
-      - run: cargo mutants --no-config -f crates/hive/src/macos.rs -j 2 --timeout 120
+      # `--no-config`: `.cargo/mutants.toml` excludes these files for Linux.
+      - run: cargo mutants --no-config -f crates/hive/src/macos.rs -f src-tauri/src/macos.rs -j 2 --timeout 120
       - run: bun test
       # release.sh and the gates' memory watchdog (TODO 17.2), as ci.yml does on Linux.
       - run: scripts/test-scripts.sh

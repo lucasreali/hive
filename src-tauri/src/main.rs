@@ -39,7 +39,14 @@ fn main() {
             ));
             app.manage(hive);
             #[cfg(target_os = "macos")]
-            ask_before_terminating(app.handle().clone());
+            {
+                let handle = app.handle().clone();
+                let class = c"TaoAppDelegateParent";
+                let ask = move || hive_lib::should_quit(&handle);
+                if !hive_lib::macos::ask_before_terminating(class, ask) {
+                    eprintln!("hive-app: ⌘Q cannot ask before quitting: no app delegate to extend");
+                }
+            }
             // The window (`"create": false` in the config) with its guards (open point #15): the
             // webview never leaves the app and never opens another window.
             let window = app.config().app.windows.first().cloned();
@@ -115,14 +122,15 @@ fn main() {
         .build(tauri::generate_context!());
     match result {
         Ok(app) => app.run(|app, event| {
-            // A click on the Dock icon with the window minimized or hidden brings it back.
+            // Tauri's `RunEvent::Reopen` cannot be built outside it, so a test could not send it
+            // to `on_run_event`: unpacked here, decided in the tested `reopen`.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
-                has_visible_windows: false,
+                has_visible_windows,
                 ..
             } = event
             {
-                hive_lib::show_window(app);
+                hive_lib::reopen(app, has_visible_windows);
             }
             hive_lib::on_run_event(app, event)
         }),
@@ -130,59 +138,6 @@ fn main() {
             eprintln!("hive-app: {error}");
             std::process::exit(1);
         }
-    }
-}
-
-/// The app, for `should_terminate`, which AppKit calls without one.
-#[cfg(target_os = "macos")]
-static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
-
-/// Makes ⌘Q, the Dock's "Quit" and logging out ask `Hive::should_quit` first (D17.3): they
-/// all reach `[NSApp terminate:]`, which quits at once unless the app delegate answers
-/// `applicationShouldTerminate:`. tao's delegate (`TaoAppDelegateParent`) has no such method,
-/// and Tauri sends no `ExitRequested` for them, so the method is added to its class here.
-#[cfg(target_os = "macos")]
-fn ask_before_terminating(app: tauri::AppHandle) {
-    use std::ffi::{c_char, c_void};
-
-    // The Objective-C runtime, which every macOS app links.
-    #[link(name = "objc")]
-    unsafe extern "C" {
-        fn objc_getClass(name: *const c_char) -> *mut c_void;
-        fn sel_registerName(name: *const c_char) -> *mut c_void;
-        fn class_addMethod(
-            class: *mut c_void,
-            name: *mut c_void,
-            imp: *const c_void,
-            types: *const c_char,
-        ) -> i8;
-    }
-
-    /// `NSApplicationTerminateReply`: `NSTerminateCancel` (0) keeps the app, which then asks
-    /// the user; `NSTerminateNow` (1) quits. A logout the app cancels stops, as macOS does for
-    /// any app that asks first.
-    extern "C" fn should_terminate(_: *mut c_void, _: *mut c_void, _: *mut c_void) -> usize {
-        let quit = APP
-            .get()
-            .is_none_or(|app| app.state::<hive_lib::Hive>().should_quit(app));
-        usize::from(quit)
-    }
-
-    let _ = APP.set(app);
-    // SAFETY: C strings with their NUL; the method's types ("Q@:@": NSUInteger from self, _cmd
-    // and the sender) match `should_terminate`'s signature.
-    let added = unsafe {
-        let class = objc_getClass(c"TaoAppDelegateParent".as_ptr());
-        !class.is_null()
-            && class_addMethod(
-                class,
-                sel_registerName(c"applicationShouldTerminate:".as_ptr()),
-                should_terminate as *const c_void,
-                c"Q@:@".as_ptr(),
-            ) != 0
-    };
-    if !added {
-        eprintln!("hive-app: ⌘Q cannot ask before quitting: no app delegate to extend");
     }
 }
 

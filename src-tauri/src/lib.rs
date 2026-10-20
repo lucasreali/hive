@@ -12,7 +12,7 @@ use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
@@ -415,6 +415,8 @@ struct Link {
     at_risk: HashSet<String>,
     /// The `confirm_close` setting the service last sent; `None` before any (its default: on).
     confirm_close: Option<bool>,
+    /// When the UI was last asked to confirm a quit (`quit_requested`).
+    asked: Option<Instant>,
 }
 
 impl Link {
@@ -447,16 +449,16 @@ impl Link {
         }
     }
 
-    /// The exit decision for what this link knows now.
-    fn quit(&self) -> Quit {
+    /// The exit decision for what this link knows at `now`.
+    fn quit(&self, now: Instant) -> Quit {
         let confirm = self.confirm_close.unwrap_or(true);
-        quit_decision(self.ui.is_some(), confirm, self.at_risk.len())
+        let asked = self.asked.map(|asked| now.saturating_duration_since(asked));
+        quit_decision(self.ui.is_some(), confirm, self.at_risk.len(), asked)
     }
 
-    fn to_ui(&self, message: Value) {
-        if let Some(ui) = &self.ui {
-            let _ = ui.send(message);
-        }
+    /// Sends `message` to the UI; false when there is none or the send failed.
+    fn to_ui(&self, message: Value) -> bool {
+        (self.ui.as_ref()).is_some_and(|ui| ui.send(message).is_ok())
     }
 
     fn frame(&self, frame: Frame) -> Result<(), String> {
@@ -629,22 +631,24 @@ impl Hive {
     }
 
     /// Whether the app may quit now (D17.3, #47): ⌘Q, the Dock's "Quit" and logging out ask
-    /// this first on macOS (`applicationShouldTerminate:`, wired in `main.rs`), and
-    /// `request_quit` too. When agents would end with the app and the `confirm_close` setting
-    /// is on, the answer is no: the window comes up and the UI gets `quit_requested`, which
-    /// shows the same close dialog as the window's Close button; confirming it closes the
-    /// window, which quits.
+    /// this first on macOS (`macos::ask_before_terminating`), and `request_quit` too. When
+    /// agents would end with the app and the `confirm_close` setting is on, the answer is no:
+    /// the window comes up and the UI gets `quit_requested`, which shows the same close dialog
+    /// as the window's Close button; confirming it closes the window, which quits. A UI that
+    /// cannot get the message (gone, stale) is forgotten and the app quits; so does a second
+    /// request within [`ASK_AGAIN`] of the last one, so a hung UI never keeps the app.
     pub fn should_quit<R: Runtime>(&self, app: &AppHandle<R>) -> bool {
-        let link = self.link();
-        match link.quit() {
-            Quit::Now => true,
-            Quit::Ask => {
-                drop(link);
-                show_window(app);
-                self.link().to_ui(json!({"type": "quit_requested"}));
-                false
-            }
+        if self.link().quit(Instant::now()) == Quit::Now {
+            return true;
         }
+        show_window(app);
+        let mut link = self.link();
+        if !link.to_ui(json!({"type": "quit_requested"})) {
+            link.ui = None;
+            return true;
+        }
+        link.asked = Some(Instant::now());
+        false
     }
 
     /// Quits the app from inside it (the app menu's Quit, 17.13): at once, or after the UI's
@@ -1208,9 +1212,10 @@ impl Hive {
     fn installed(&self, result: Result<(), String>) {
         match result {
             Ok(()) => self.restart.iter().for_each(|restart| restart()),
-            Err(error) => self
-                .link()
-                .to_ui(json!({"type": "update_failed", "error": error})),
+            Err(error) => {
+                self.link()
+                    .to_ui(json!({"type": "update_failed", "error": error}));
+            }
         }
     }
 }
@@ -1300,10 +1305,16 @@ enum Quit {
     Ask,
 }
 
+/// How long after asking the UI another request to quit quits at once (17.7's escape hatch:
+/// ⌘Q twice quits even with a hung UI).
+const ASK_AGAIN: Duration = Duration::from_secs(5);
+
 /// The exit decision (D17.3, #47): ask first only when a UI is there to ask, the
-/// `confirm_close` setting is on and `at_risk` agents would end with the app.
-fn quit_decision(ui: bool, confirm_close: bool, at_risk: usize) -> Quit {
-    if ui && confirm_close && at_risk > 0 {
+/// `confirm_close` setting is on and `at_risk` agents would end with the app, unless the UI
+/// was `asked` less than [`ASK_AGAIN`] ago.
+fn quit_decision(ui: bool, confirm_close: bool, at_risk: usize, asked: Option<Duration>) -> Quit {
+    let again = asked.is_some_and(|ago| ago < ASK_AGAIN);
+    if ui && confirm_close && at_risk > 0 && !again {
         Quit::Ask
     } else {
         Quit::Now
@@ -1314,6 +1325,18 @@ fn quit_decision(ui: bool, confirm_close: bool, at_risk: usize) -> Quit {
 /// subagents, waiting for permission, a plan or an answer, or waiting for you.
 fn at_risk(state: AgentState) -> bool {
     state.writes() || state == AgentState::WaitingYou
+}
+
+/// [`Hive::should_quit`] for the app's `Hive`; an app without one quits.
+pub fn should_quit<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<Hive>()
+        .is_none_or(|hive| hive.should_quit(app))
+}
+
+/// A click on the Dock icon (`RunEvent::Reopen`): with no visible window (minimized, hidden)
+/// the window comes back. True when it did.
+pub fn reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) -> bool {
+    !has_visible_windows && show_window(app)
 }
 
 /// Brings the main window to the front, restored and focused; false when there is none.
@@ -1761,6 +1784,9 @@ pub mod commands {
         hive.show_notification(&app, &title, &body, agent)
     }
 }
+
+#[cfg(target_os = "macos")]
+pub mod macos;
 
 #[cfg(test)]
 mod tests;
