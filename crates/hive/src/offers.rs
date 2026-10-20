@@ -252,33 +252,14 @@ mod tests {
     fn a_failed_list_or_another_message_raises_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let offers = Offers::new(tmp.path().join("offered-pulls.json"));
-        let Control::Pulls {
-            project,
-            repo,
-            mine,
-            review,
-            fetched_ms,
-            ..
-        } = pulls(vec![pull(1, PullState::Merged, Some("/a"))])
-        else {
-            unreachable!()
-        };
-        let failed = Control::Pulls {
-            project: project.clone(),
-            repo: repo.clone(),
-            mine: mine.clone(),
-            review: review.clone(),
-            fetched_ms,
-            error: Some("rate limit".into()),
-        };
-        let no_repo = Control::Pulls {
-            project,
-            repo: None,
-            mine,
-            review,
-            fetched_ms,
-            error: None,
-        };
+        let list = || pulls(vec![pull(1, PullState::Merged, Some("/a"))]);
+        let (mut failed, mut no_repo) = (list(), list());
+        if let Control::Pulls { error, .. } = &mut failed {
+            *error = Some("rate limit".into());
+        }
+        if let Control::Pulls { repo, .. } = &mut no_repo {
+            *repo = None;
+        }
         let other = Control::Notice {
             message: "m".into(),
         };
