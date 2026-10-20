@@ -1679,6 +1679,12 @@ impl AgentState {
         self >= AgentState::WaitingYou
     }
 
+    /// Asks the user for an action (🟡 waiting for permission, a plan or an answer; 🔴 error):
+    /// pending and more urgent than waiting for you.
+    pub fn asks_action(self) -> bool {
+        self > AgentState::WaitingYou
+    }
+
     /// May be writing files: working, with subagents, or on a dialog about to go on.
     pub fn writes(self) -> bool {
         matches!(
@@ -1693,14 +1699,28 @@ impl AgentState {
 }
 
 /// Why an agent's new state alerts (a tone, an inbox item and, out of view, an OS
-/// notification): it `Finished` (working or with subagents, then waiting for you), or entered
-/// another state that is `Waiting` for the user (`AgentState::pending`). An interrupt never
-/// alerts: the user caused it.
+/// notification): it `Finished` (working or with subagents, then waiting for you), entered a
+/// state that asks the user for an `Action` (waiting for permission, a plan or an answer, or
+/// error: [`AgentState::asks_action`]; the Dock bounces, 17.16), or is `Waiting` for you
+/// otherwise. An interrupt never alerts: the user caused it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Alert {
     Finished,
     Waiting,
+    Action,
+}
+
+impl Alert {
+    /// The alert of entering `state` other than by finishing: `Action` for a state that asks
+    /// for an action, `Waiting` for waiting for you, none for a state that is not pending.
+    pub fn entering(state: AgentState) -> Option<Alert> {
+        if state.asks_action() {
+            Some(Alert::Action)
+        } else {
+            state.pending().then_some(Alert::Waiting)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1844,7 +1864,7 @@ mod tests {
             urgency: 8,
             pending: true,
             interrupted: false,
-            alert: Some(Alert::Waiting),
+            alert: Some(Alert::Action),
             notify: true,
             writing: true,
             subagents: vec![SubagentState {
@@ -1861,11 +1881,28 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"waiting","notify":true,"writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
-        let finished = serde_json::to_string(&[Some(Alert::Finished), None]).unwrap();
-        assert_eq!(finished, r#"["finished",null]"#);
+        let alerts = [Some(Alert::Finished), Some(Alert::Waiting), None];
+        let alerts = serde_json::to_string(&alerts).unwrap();
+        assert_eq!(alerts, r#"["finished","waiting",null]"#);
+        // Entering a state: an action for 🟡 and 🔴, waiting for 🟠, none when not pending.
+        let entering = [
+            (AgentState::WaitingPermission, Some(Alert::Action)),
+            (AgentState::WaitingPlan, Some(Alert::Action)),
+            (AgentState::WaitingAnswer, Some(Alert::Action)),
+            (AgentState::Error, Some(Alert::Action)),
+            (AgentState::WaitingYou, Some(Alert::Waiting)),
+            (AgentState::WithSubagents, None),
+            (AgentState::Working, None),
+            (AgentState::Idle, None),
+            (AgentState::Ended, None),
+        ];
+        for (state, alert) in entering {
+            assert_eq!((state, Alert::entering(state)), (state, alert));
+            assert_eq!(state.asks_action(), alert == Some(Alert::Action));
+        }
     }
 
     #[test]

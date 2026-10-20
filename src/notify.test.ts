@@ -76,7 +76,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 
 test("a tone for each alert; a message without one raises nothing", async () => {
   for (const s of ["waiting_plan", "waiting_answer", "waiting_permission", "error"] as const) {
-    feed("a", s, "waiting", tones * TONE_GAP_MS * 2);
+    feed("a", s, "action", tones * TONE_GAP_MS * 2);
   }
   expect(tones).toBe(4);
   // An agent's first state, a state that needs nobody, the snapshot after welcome, an interrupt.
@@ -90,23 +90,23 @@ test("a tone for each alert; a message without one raises nothing", async () => 
 });
 
 test("the tone follows the volume setting; 0 plays none", () => {
-  feed("a", "error", "waiting");
+  feed("a", "error", "action");
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.notifications.volume = 40;
   apply({ type: "settings", settings });
-  feed("a", "error", "waiting", TONE_GAP_MS);
+  feed("a", "error", "action", TONE_GAP_MS);
   settings.notifications.volume = 0;
   apply({ type: "settings", settings: structuredClone(settings) });
-  feed("a", "error", "waiting", 2 * TONE_GAP_MS);
+  feed("a", "error", "action", 2 * TONE_GAP_MS);
   expect([tones, gains]).toEqual([2, [0.15, 0.06]]);
 });
 
 test("several agents changing at once play one tone", () => {
   feed("a", "waiting_you", "finished");
-  feed("b", "error", "waiting", 10);
-  feed("c", "waiting_permission", "waiting", TONE_GAP_MS - 1);
+  feed("b", "error", "action", 10);
+  feed("c", "waiting_permission", "action", TONE_GAP_MS - 1);
   expect(tones).toBe(1);
-  feed("a", "error", "waiting", TONE_GAP_MS);
+  feed("a", "error", "action", TONE_GAP_MS);
   expect(tones).toBe(2);
 });
 
@@ -136,10 +136,10 @@ test("every alert the service marks notifies with the agent's name, what happene
   apply({ type: "agent_detected", channel: 2, id: "b", project: "p", worktree: null, cwd: null });
   apply({ type: "agent_title", channel: 1, id: "a", title: "fix login" });
   feed("a", "waiting_you", "finished");
-  feed("a", "waiting_permission", "waiting");
-  feed("b", "waiting_plan", "waiting");
-  feed("b", "waiting_answer", "waiting");
-  feed("c", "error", "waiting");
+  feed("a", "waiting_permission", "action");
+  feed("b", "waiting_plan", "action");
+  feed("b", "waiting_answer", "action");
+  feed("c", "error", "action");
   // Waiting for you without having finished (e.g. from idle).
   feed("c", "waiting_you", "waiting");
   await settle();
@@ -176,14 +176,14 @@ test("other messages are ignored", () => {
 test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", () => {
   apply({ type: "agent_title", channel: 1, id: "a", title: "fix login" });
   feed("a", "waiting_you", "finished");
-  feed("a", "waiting_permission", "waiting");
+  feed("a", "waiting_permission", "action");
   feed("b", "waiting_you", "waiting");
-  feed("b", "error", "waiting");
+  feed("b", "error", "action");
   // Muted: no tone, but still an alert.
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.notifications.volume = 0;
   apply({ type: "settings", settings });
-  notify(state("b", "waiting_permission", "waiting"), useHive.getState(), clock, 1234);
+  notify(state("b", "waiting_permission", "action"), useHive.getState(), clock, 1234);
   const { inbox } = useHive.getState();
   expect(inbox.map((i) => [i.id, i.agent, i.state, i.text])).toEqual([
     [5, "b", "waiting_permission", "Claude is waiting for permission"],
@@ -193,8 +193,8 @@ test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", 
     [1, "a", "waiting_you", "fix login finished"],
   ]);
   expect(inbox[0]?.at).toBe(1234);
-  feed("a", "waiting_plan", "waiting");
-  feed("a", "waiting_answer", "waiting");
+  feed("a", "waiting_plan", "action");
+  feed("a", "waiting_answer", "action");
   const texts = useHive.getState().inbox.map((i) => i.text);
   expect(texts.slice(0, 2)).toEqual([
     "fix login is waiting for your answer",

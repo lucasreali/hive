@@ -15,7 +15,7 @@ afterEach(() => {
   delete g.isTauri;
 });
 
-const message = (state: AgentState, alert: Alert | null = "waiting", pending?: boolean) => {
+const message = (state: AgentState, alert: Alert | null = "action", pending?: boolean) => {
   const status = agentStatus(state, null, 0, alert);
   return {
     type: "agent_state" as const,
@@ -38,17 +38,18 @@ test("a new 🟡 or 🔴 bounces only while Hive is not focused", () => {
   }
 });
 
-test("a 🟠, seen or not, and the other states never bounce", () => {
+test("a 🟠, seen or not, never bounces: only the service's action alert does", () => {
   expect(shouldBounce(message("waiting_you", "finished"), at(false))).toBe(false);
+  expect(shouldBounce(message("waiting_you", "waiting"), at(false))).toBe(false);
   expect(shouldBounce(message("waiting_you", "finished", false), at(false))).toBe(false);
-  for (const s of ["idle", "working", "with_subagents", "ended"] as const)
-    expect(shouldBounce(message(s), at(false))).toBe(false);
+  // The service's classification is read as it is: no table of states here.
+  expect(shouldBounce(message("error", "waiting"), at(false))).toBe(false);
 });
 
 test("no bounce without the service's alert, when not pending, or with the setting off", () => {
   // The snapshot after `welcome` carries no alert.
   expect(shouldBounce(message("error", null), at(false))).toBe(false);
-  expect(shouldBounce(message("error", "waiting", false), at(false))).toBe(false);
+  expect(shouldBounce(message("error", "action", false), at(false))).toBe(false);
   expect(shouldBounce(message("error"), at(false, false))).toBe(false);
   const other: ServiceMessage = { type: "agent_title", channel: 1, id: "a", title: "x" };
   expect(shouldBounce(other, at(false))).toBe(false);

@@ -290,7 +290,7 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   const alerts = messages.slice(-5).map((m) => m.type === "agent_state" && [m.state, m.alert]);
   expect(alerts).toEqual([
     ["working", null],
-    ["error", "waiting"],
+    ["error", "action"],
     ["working", null],
     ["working", null],
     ["waiting_you", "finished"],

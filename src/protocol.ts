@@ -386,8 +386,11 @@ export type Subagent = {
 /** What an agent or subagent is doing (its current tool call) and since when (ms since the epoch) its state lasts. */
 export type Doing = { activity: string | null; since_ms: number };
 
-/** Mirrors `hive_protocol::Alert`: why a new state alerts (`notify`). */
-export type Alert = "finished" | "waiting";
+/**
+ * Mirrors `hive_protocol::Alert`: why a new state alerts (`notify`): it finished, it asks for an
+ * action (🟡 or 🔴; the Dock bounces, 17.16), or it waits for you otherwise.
+ */
+export type Alert = "finished" | "waiting" | "action";
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins),
