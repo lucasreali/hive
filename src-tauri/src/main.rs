@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use hive_lib::commands;
+use hive_lib::{commands, tray};
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 
@@ -27,7 +27,8 @@ fn main() {
                     |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
                     |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
                 )
-                .with_notify(notifier(app));
+                .with_notify(notifier(app))
+                .with_tray(tray(app));
             // WSL or Windows (12.5.4), only on Windows.
             #[cfg(windows)]
             let hive = hive.with_modes(hive_lib::Modes::new(
@@ -107,6 +108,7 @@ fn main() {
             commands::open_settings_file,
             commands::get_diagnostics,
             commands::show_notification,
+            commands::set_tray,
         ])
         .build(tauri::generate_context!());
     match result {
@@ -216,4 +218,53 @@ fn notifier(
         let builder = app.notification().builder().title(title).body(body);
         builder.show().map_err(|error| error.to_string())
     }
+}
+
+/// The menu bar icon (17.22): shows `hive_lib::tray`'s view, or removes it. Choosing an item
+/// goes to `hive_lib::tray::chosen`.
+fn tray(app: &tauri::App) -> impl Fn(Option<tray::View>) -> Result<(), String> + Send + Sync {
+    let app = app.handle().clone();
+    move |view| show_tray(&app, view).map_err(|error| error.to_string())
+}
+
+fn show_tray(app: &tauri::AppHandle, view: Option<tray::View>) -> tauri::Result<()> {
+    use tauri::image::Image;
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::TrayIconBuilder;
+    let Some(view) = view else {
+        app.remove_tray_by_id(tray::TRAY);
+        return Ok(());
+    };
+    let menu = Menu::new(app)?;
+    for entry in &view.entries {
+        match entry {
+            // Without an id, a disabled line of text.
+            tray::Entry::Item { id, text } => {
+                let item = match id {
+                    Some(id) => MenuItem::with_id(app, id, text, true, None::<&str>)?,
+                    None => MenuItem::new(app, text, false, None::<&str>)?,
+                };
+                menu.append(&item)?;
+            }
+            tray::Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
+        }
+    }
+    let icon = Image::new_owned(view.icon.rgba, tray::SIZE, tray::SIZE);
+    if let Some(shown) = app.tray_by_id(tray::TRAY) {
+        shown.set_icon(Some(icon))?;
+        shown.set_icon_as_template(view.icon.template)?;
+        shown.set_tooltip(Some(view.tooltip))?;
+        return shown.set_menu(Some(menu));
+    }
+    TrayIconBuilder::with_id(tray::TRAY)
+        .icon(icon)
+        .icon_as_template(view.icon.template)
+        .tooltip(view.tooltip)
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| {
+            let _ = tray::chosen(app, &app.state::<hive_lib::Hive>(), event.id().as_ref());
+        })
+        .build(app)
+        .map(drop)
 }

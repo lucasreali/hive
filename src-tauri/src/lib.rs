@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AccountDir, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction,
-    Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
+    PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -293,6 +293,8 @@ pub struct Hive {
     open: Option<Box<Opener>>,
     /// Shows an OS notification; given by `main.rs` (`with_notify`).
     notify: Option<Box<Notifier>>,
+    /// Shows the menu bar icon; given by `main.rs` (`with_tray`, 17.22).
+    tray: Option<Box<tray::Show>>,
 }
 
 /// Runs the installer of a downloaded update.
@@ -372,6 +374,18 @@ pub fn answered(outcome: Result<bool, String>, click: &Click) {
         Ok(false) => {}
         Err(error) => eprintln!("hive-app: notification failed: {error}"),
     }
+}
+
+/// Brings the window to the front, restored and focused (a notification's click, the menu bar
+/// icon's menu). Answers whether there was a window to bring.
+fn bring_up<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
 }
 
 /// Starts a [`waiting_notifier`]'s notification on a new thread.
@@ -478,6 +492,7 @@ impl Hive {
             install: None,
             open: None,
             notify: None,
+            tray: None,
         }
     }
 
@@ -506,11 +521,7 @@ impl Hive {
             .ok_or("this app cannot show notifications")?;
         let (app, link) = (app.clone(), Arc::clone(&self.link));
         let click = move || {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            let _ = bring_up(&app);
             lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
         };
         notify(&printable(title), &printable(body), Box::new(click))
@@ -1659,7 +1670,22 @@ pub mod commands {
     ) -> Result<(), String> {
         hive.show_notification(&app, &title, &body, agent)
     }
+
+    /// The menu bar icon (17.22) for what the UI sent: `shown` (the setting), the most urgent
+    /// state (and whether it is pending), the pending agents and the usage ring's lines.
+    #[tauri::command]
+    pub fn set_tray(
+        hive: State<'_, Hive>,
+        shown: bool,
+        urgent: Option<(AgentState, bool)>,
+        agents: Vec<tray::Agent>,
+        usage: Vec<String>,
+    ) -> Result<(), String> {
+        hive.set_tray(shown, urgent, &agents, &usage)
+    }
 }
+
+pub mod tray;
 
 #[cfg(test)]
 mod tests;
