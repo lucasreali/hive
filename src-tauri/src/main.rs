@@ -23,8 +23,10 @@ fn main() {
             // Restarting runs the exit events, so the connection ends first (`on_run_event`).
             let handle = app.handle().clone();
             let exit = app.handle().clone();
+            let translocated = hive_lib::translocated(macos, std::env::current_exe().ok());
             let hive = hive_lib::Hive::new(program, args)
                 .with_bundled(bundled)
+                .with_translocated(translocated)
                 .with_restart(move || handle.request_restart())
                 .with_exit(move || exit.exit(0))
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))

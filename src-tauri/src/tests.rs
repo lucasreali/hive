@@ -2087,6 +2087,58 @@ async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
     assert!(installed.try_recv().is_err());
 }
 
+#[test]
+fn translocation_is_told_from_the_app_path() {
+    let path = |p: &str| Some(std::path::PathBuf::from(p));
+    let moved =
+        "/private/var/folders/x1/abc/T/AppTranslocation/1F2E-AB/d/Hive.app/Contents/MacOS/hive-app";
+    assert!(translocated(true, path(moved)));
+    for installed in [
+        "/Applications/Hive.app/Contents/MacOS/hive-app",
+        "/Users/me/AppTranslocationNotes/Hive.app/Contents/MacOS/hive-app",
+        "/Users/me/Downloads/AppTranslocation.app/Contents/MacOS/hive-app",
+        "",
+    ] {
+        assert!(!translocated(true, path(installed)), "{installed}");
+    }
+    // Only macOS translocates; an executable path the OS cannot give is not translocated.
+    assert!(!translocated(false, path(moved)));
+    assert!(!translocated(true, None));
+}
+
+#[tokio::test]
+async fn a_translocated_app_tells_every_ui_and_opens_the_notice_once() {
+    let hive = sh("exit 3").with_translocated(true);
+    for notice in [true, false] {
+        let (channel, mut rx) = ui();
+        hive.connect(channel);
+        let told = json!({"type": "translocated", "notice": notice});
+        assert_eq!(next(&mut rx).await, told);
+        assert_eq!(next(&mut rx).await["type"], "disconnected");
+    }
+    // An app that is not translocated says nothing about it.
+    let (channel, mut rx) = ui();
+    sh("exit 3").connect(channel);
+    assert_eq!(next(&mut rx).await["type"], "disconnected");
+}
+
+#[tokio::test]
+async fn a_translocated_app_does_not_run_the_installer() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let (tx, restarted) = std::sync::mpsc::channel();
+    let hive = hive
+        .with_translocated(true)
+        .with_restart(move || tx.send(()).unwrap());
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    next(&mut rx).await;
+    hive.install_update().await;
+    let failed = json!({"type": "update_failed", "error": TRANSLOCATED});
+    assert_eq!(next(&mut rx).await, failed);
+    assert!(installed.try_recv().is_err());
+    assert!(restarted.try_recv().is_err());
+}
+
 #[tokio::test]
 async fn a_failed_download_offers_nothing() {
     let (hive, mut rx, _installed) = hive_installing(Ok(()));

@@ -279,6 +279,22 @@ pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool 
     bundled || dev.is_some_and(|dev| dev.origin() == url.origin())
 }
 
+/// Whether the app at `exe` runs translocated (17.10): macOS runs a quarantined app opened
+/// where it was downloaded from a random read-only copy under `…/AppTranslocation/…`, where
+/// the updater cannot replace it. A path check is enough: that folder exists only for this.
+/// Only on macOS (`main.rs` passes `cfg!(target_os = "macos")`); an unknown `exe` is not.
+pub fn translocated(macos: bool, exe: Option<std::path::PathBuf>) -> bool {
+    macos
+        && exe.is_some_and(|exe| {
+            exe.components()
+                .any(|part| part.as_os_str() == "AppTranslocation")
+        })
+}
+
+/// Why an update does not install while translocated; the UI explains the fix (17.10).
+pub const TRANSLOCATED: &str =
+    "Hive runs from a temporary read-only copy; move it to Applications to update";
+
 /// Tauri state: the bridge command and the live link to the service.
 pub struct Hive {
     /// `hive bridge` through WSL, or natively on macOS (`bridge_command`).
@@ -302,6 +318,8 @@ pub struct Hive {
     /// `defaults` and arguments before its own, which read the title bar's double-click
     /// setting (`with_defaults`).
     defaults: (OsString, Vec<OsString>),
+    /// The app runs translocated (`translocated`); given by `main.rs` (`with_translocated`).
+    translocated: bool,
 }
 
 /// Runs the installer of a downloaded update.
@@ -429,6 +447,9 @@ struct Link {
     update: Option<(Update, Vec<u8>)>,
     /// The paths the service sent for the app to open, oldest first, each for one `open_path`.
     approved: VecDeque<String>,
+    /// Whether the UI was already told to move a translocated app (`connect`): the notice
+    /// opens once per run, not again on a reload.
+    translocation_told: bool,
     /// Whether the bridge runs the installer's `hive` (`Bridge`); sent with
     /// `version_mismatch` and `disconnected`, so the UI shows only fixes an installed app's
     /// user can apply (12.4).
@@ -539,6 +560,7 @@ impl Hive {
             open: None,
             notify: None,
             defaults: (DEFAULTS.into(), Vec::new()),
+            translocated: false,
         }
     }
 
@@ -561,6 +583,13 @@ impl Hive {
         let out = out.filter(|out| out.status.success());
         let setting = out.map(|out| String::from_utf8_lossy(&out.stdout).into_owned());
         double_click_action(setting.as_deref())
+    }
+
+    /// Tells the UI the app runs translocated (17.10): `connect` sends `translocated`, and an
+    /// update is not installed.
+    pub fn with_translocated(mut self, translocated: bool) -> Self {
+        self.translocated = translocated;
+        self
     }
 
     /// Shows OS notifications with `notify`, the platform's own (13.5).
@@ -726,6 +755,11 @@ impl Hive {
     pub fn connect(&self, ui: Channel<Value>) {
         let mut link = self.link();
         link.ui = Some(ui);
+        if self.translocated {
+            // Every UI learns it (the update button explains it); only the first opens the notice.
+            let notice = !std::mem::replace(&mut link.translocation_told, true);
+            link.to_ui(json!({"type": "translocated", "notice": notice}));
+        }
         for id in std::mem::take(&mut link.terminals).into_keys() {
             let _ = link.send(id, &Control::CloseTerminal);
         }
@@ -1247,9 +1281,13 @@ impl Hive {
     }
 
     /// Installs the downloaded update, if any, so the next start runs it. Taken once: the exit
-    /// that follows `install_update`'s restart does not install it again.
+    /// that follows `install_update`'s restart does not install it again. A translocated app
+    /// cannot replace itself, so it says why instead of running the installer (17.10).
     pub fn install_pending(&self) -> Option<Result<(), String>> {
         let (update, bytes) = self.link().update.take()?;
+        if self.translocated {
+            return Some(Err(TRANSLOCATED.to_owned()));
+        }
         let install = self.install.as_ref()?;
         Some(install(&update, &bytes))
     }

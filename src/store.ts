@@ -187,6 +187,7 @@ export type Modal =
   | "worktree-picker"
   | "close-app"
   | "update-app"
+  | "translocated"
   | "remove-worktree"
   | "rename-worktree"
   | "new-space"
@@ -250,6 +251,8 @@ export type HiveState = {
   notices: Notice[];
   /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
   update: { version: string; installing: boolean } | null;
+  /** macOS runs Hive from a read-only copy (17.10): the update button explains the fix instead. */
+  translocated: boolean;
   rightPanel: RightPanel;
   /** What the right panel shows, for the shown worktree. */
   panelView: PanelView;
@@ -409,6 +412,7 @@ export const initialState: HiveState = {
   question: null,
   notices: [],
   update: null,
+  translocated: false,
   rightPanel: "files",
   panelView: "files",
   sidebarWidth: 264,

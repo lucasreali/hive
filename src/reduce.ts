@@ -102,6 +102,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "update_ready":
       return { update: { version: m.version, installing: false } };
+    case "translocated":
+      return { translocated: true, ...(m.notice ? { modal: "translocated" as const } : {}) };
     case "update_failed":
       return {
         update: s.update && { ...s.update, installing: false },

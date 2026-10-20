@@ -84,12 +84,15 @@ function WindowControls() {
 /** A newer release, downloaded at startup (4.19): a click installs it and restarts Hive. */
 function UpdateButton() {
   const update = useHive((s) => s.update);
+  const translocated = useHive((s) => s.translocated);
   if (!update) return null;
   return (
     <button
       type="button"
       className="update-button"
-      title="Restart Hive to finish the update"
+      title={
+        translocated ? "Move Hive to Applications to update" : "Restart Hive to finish the update"
+      }
       disabled={update.installing}
       onClick={requestUpdate}
     >

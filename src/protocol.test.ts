@@ -17,6 +17,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   diagnostics: { settings_file: true, wrapper: true, claude: true },
   update_ready: { version: true },
   update_failed: { error: true },
+  translocated: { notice: true },
   notification_clicked: { agent: true },
   quit_requested: {},
   version_mismatch: {
@@ -121,6 +122,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
 const APP_SIDE = [
   "update_ready",
   "update_failed",
+  "translocated",
   "notification_clicked",
   "quit_requested",
   "disconnected",
