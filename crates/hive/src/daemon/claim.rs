@@ -74,7 +74,7 @@ impl Claim {
                 let err = super::lock_error(&self.paths, TryLockError::WouldBlock);
                 return Err(Problem::Lost(err));
             }
-            taken.map_err(|err| Problem::Passing(err.into()))?;
+            taken.map_err(io::Error::from).map_err(Problem::Passing)?;
             self.lock_id = id(&lock.metadata().map_err(Problem::Passing)?);
             self.lock = lock;
         }
