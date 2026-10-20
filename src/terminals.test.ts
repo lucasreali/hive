@@ -4,10 +4,12 @@ import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
 import { notice } from "../test/notice";
 import LIGATURES from "./assets/fonts/ligatures.json";
+import type { AgentState } from "./protocol";
 import { apply } from "./reduce";
 import { DEFAULT_SETTINGS, initialState, setWidth, useHive } from "./store";
 import { shownTerminals } from "./tabs";
 import { transport } from "./transport";
+import { agentStatus } from "./transport/mock";
 
 // happy-dom has no WebGL: a fake addon records what the manager does with the renderer.
 let webglFails = false;
@@ -574,6 +576,46 @@ test("split terminals both render with WebGL, left then right; showing one alone
   expect(pane(two.term).hidden).toBe(true);
   // The one still shown keeps its renderer.
   expect(addons.map((a) => a.disposed)).toEqual([true, false]);
+});
+
+test("a shown pane whose agent is pending on a dialog or an error is marked with its state (17.26)", async () => {
+  const one = await open();
+  const two = await open();
+  const pane = (t: Terminal) => t.element?.parentElement as HTMLElement;
+  const state = (id: string, s: AgentState) =>
+    apply({ type: "agent_state", id, ...agentStatus(s), subagents: [] });
+  // Known before its pane shows: marked when shown.
+  apply({
+    type: "agent_detected",
+    channel: one.id,
+    id: "a",
+    project: null,
+    worktree: null,
+    cwd: null,
+  });
+  state("a", "waiting_permission");
+  showTerminals([one.id, two.id], one.id);
+  expect(pane(one.term).dataset.attention).toBe("waiting_permission");
+  expect(pane(two.term).dataset.attention).toBeUndefined();
+  // Follows the service's states while shown: an error, then a pending 🟠 that only finished.
+  apply({
+    type: "agent_detected",
+    channel: two.id,
+    id: "b",
+    project: null,
+    worktree: null,
+    cwd: null,
+  });
+  state("b", "error");
+  expect(pane(two.term).dataset.attention).toBe("error");
+  state("a", "waiting_you");
+  expect(pane(one.term).dataset.attention).toBeUndefined();
+  // A hidden pane is not updated; it is when shown again.
+  showTerminal(two.id);
+  state("a", "waiting_answer");
+  expect(pane(one.term).dataset.attention).toBeUndefined();
+  showTerminals([one.id, two.id], one.id);
+  expect(pane(one.term).dataset.attention).toBe("waiting_answer");
 });
 
 test("Ctrl+Shift+D splits with the next tab of the worktree, again un-splits; a click focuses a pane", async () => {

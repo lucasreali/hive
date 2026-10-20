@@ -641,6 +641,19 @@ label:has(> input[type="checkbox"]:disabled) {
   min-width: 0;
 }
 
+/* 17.26: in a split, the pane whose agent is pending on a dialog (🟡) or an error (🔴) is
+   outlined in its state's colour. An outline, so the terminal keeps its size; it stays clear of
+   the divider's line, 6px away. */
+.terminal-host[data-split] > .terminal-pane[data-attention] {
+  outline: 2px solid var(--state-permission);
+  outline-offset: 2px;
+  border-radius: var(--radius-md);
+}
+
+.terminal-host[data-split] > .terminal-pane[data-attention="error"] {
+  outline-color: var(--state-error);
+}
+
 .terminal-host[data-split] > .terminal-pane[data-pane="right"] {
   order: 1;
   flex: 1 1 0;
