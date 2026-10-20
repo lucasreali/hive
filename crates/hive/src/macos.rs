@@ -123,6 +123,8 @@ pub mod power {
     const UTF8: u32 = 0x0800_0100;
     /// `kIOReturnSuccess`.
     const SUCCESS: IoReturn = 0;
+    /// `kIOReturnNoMemory`.
+    const NO_MEMORY: IoReturn = 0xe000_02bd_u32 as IoReturn;
 
     #[link(name = "IOKit", kind = "framework")]
     unsafe extern "C" {
@@ -147,31 +149,33 @@ pub mod power {
         fn CFRelease(cf: *const c_void);
     }
 
-    /// An owned `CFString`, released on drop; null if Core Foundation could not make it,
-    /// which IOKit then refuses.
+    /// An owned `CFString` (never null), released on drop.
     struct CfString(CfStringRef);
 
     impl CfString {
-        fn new(text: &str) -> Self {
+        /// `None` when Core Foundation could not make it (out of memory).
+        fn new(text: &str) -> Option<Self> {
             let len = text.len() as isize;
             // SAFETY: `text` is valid UTF-8 of `len` bytes; the default allocator (null)
             // copies it.
-            Self(unsafe { CFStringCreateWithBytes(std::ptr::null(), text.as_ptr(), len, UTF8, 0) })
+            let string =
+                unsafe { CFStringCreateWithBytes(std::ptr::null(), text.as_ptr(), len, UTF8, 0) };
+            (!string.is_null()).then_some(Self(string))
         }
     }
 
     impl Drop for CfString {
         fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: an owned reference from `CFStringCreateWithBytes`, released once.
-                unsafe { CFRelease(self.0) }
-            }
+            // SAFETY: an owned, non-null reference from `CFStringCreateWithBytes`, released
+            // once.
+            unsafe { CFRelease(self.0) }
         }
     }
 
     /// Takes an assertion of `kind`: its id, or IOKit's error code.
     fn create(kind: &str) -> Result<AssertionId, IoReturn> {
-        let (kind, name) = (CfString::new(kind), CfString::new(NAME));
+        let kind = CfString::new(kind).ok_or(NO_MEMORY)?;
+        let name = CfString::new(NAME).ok_or(NO_MEMORY)?;
         let mut id: AssertionId = 0;
         // SAFETY: both strings live until the call returns; `id` is a valid out pointer.
         match unsafe { IOPMAssertionCreateWithName(kind.0, LEVEL_ON, name.0, &mut id) } {
@@ -274,7 +278,7 @@ pub mod power {
         #[test]
         fn a_string_is_released_once() {
             // Longer than a tagged pointer holds, so it is a counted object.
-            let string = CfString::new(NAME);
+            let string = CfString::new(NAME).unwrap();
             // SAFETY: a live CFString, retained once more and released below.
             let raw = unsafe { CFRetain(string.0) };
             drop(string);
@@ -282,8 +286,6 @@ pub mod power {
             assert_eq!(unsafe { CFGetRetainCount(raw) }, 1);
             // SAFETY: the extra reference, released once.
             unsafe { CFRelease(raw) }
-            // One Core Foundation could not make is never released.
-            drop(CfString(std::ptr::null()));
         }
 
         #[test]
