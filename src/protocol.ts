@@ -1,4 +1,4 @@
-import type { PullDetail, Pulls } from "./pulls";
+import type { PullDetail, PullState, Pulls } from "./pulls";
 import type { JobLog, RunDetail, Runs } from "./runs";
 
 // The service's messages to the app and what they carry: `hive_protocol::Control` as the app
@@ -56,6 +56,15 @@ export type ServiceMessage =
   | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
   | { type: "pull_done"; project: string; number: number; message: string }
   | { type: "pull_failed"; project: string; number: number | null; message: string }
+  // A worktree's pull request merged or closed (17.27): the inbox offers to remove the worktree.
+  | {
+      type: "pull_ended";
+      project: string;
+      worktree: string;
+      number: number;
+      title: string;
+      state: PullState;
+    }
   | ({ type: "runs" } & Runs)
   | { type: "run"; project: string; run: number; detail: RunDetail | null; error: string | null }
   | ({ type: "job_log" } & JobLog)

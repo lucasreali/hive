@@ -79,6 +79,10 @@ export function notify(
   now = performance.now(),
   wall = Date.now(),
 ): void {
+  if (message.type === "pull_ended") {
+    offerRemoval(s, message, wall);
+    return;
+  }
   if (message.type !== "agent_state" || !message.alert) return;
   const { id, state } = message;
   const text = alertText(s, message);
@@ -89,6 +93,26 @@ export function notify(
     tone(volume);
   }
   if (message.notify) void transport.showNotification(text.title, text.body, id);
+}
+
+type PullEnded = Extract<ServiceMessage, { type: "pull_ended" }>;
+
+/**
+ * A worktree's pull request merged or closed (17.27): an inbox item offering to remove the
+ * worktree ("#12 merged: remove fix-login?"), naming its project (and space, when there are
+ * several). No tone and no OS notification: nothing waits on the user.
+ */
+function offerRemoval(s: HiveState, m: PullEnded, wall: number): void {
+  const project = s.projects?.[m.project];
+  const worktree = project?.worktrees.find((w) => w.id === m.worktree);
+  const several = (s.spaces?.length ?? 0) > 1;
+  const space = several ? spaceOf(s, m.project)?.name : undefined;
+  addToInbox({
+    offer: { worktree: m.worktree, number: m.number, title: m.title, state: m.state },
+    at: wall,
+    text: `#${m.number} ${m.state}: remove ${worktree?.name ?? "its worktree"}?`,
+    space: [space, project?.name].filter(Boolean).join(" · ") || undefined,
+  });
 }
 
 /**

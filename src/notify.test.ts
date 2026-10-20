@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { alertText, notify, TONE_GAP_MS } from "./notify";
 import type { AgentState, Alert } from "./protocol";
+import type { PullState } from "./pulls";
 import { apply } from "./reduce";
 import {
   addToInbox,
@@ -11,7 +12,7 @@ import {
   useHive,
 } from "./store";
 import { transport } from "./transport";
-import { agentStatus } from "./transport/mock";
+import { agentStatus, MOCK_REPOS } from "./transport/mock";
 
 const g = globalThis as Record<string, unknown>;
 let tones = 0;
@@ -185,7 +186,7 @@ test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", 
   apply({ type: "settings", settings });
   notify(state("b", "waiting_permission", "waiting"), useHive.getState(), clock, 1234);
   const { inbox } = useHive.getState();
-  expect(inbox.map((i) => [i.id, i.agent, i.state, i.text])).toEqual([
+  expect(inbox.map((i) => "agent" in i && [i.id, i.agent, i.state, i.text])).toEqual([
     [5, "b", "waiting_permission", "Claude is waiting for permission"],
     [4, "b", "error", "Claude failed"],
     [3, "b", "waiting_you", "Claude is waiting for you"],
@@ -207,4 +208,50 @@ test("every alert is kept in the inbox, the newest first, at most INBOX_LIMIT", 
   }
   const kept = useHive.getState().inbox;
   expect([kept.length, kept[0]?.at, kept.at(-1)?.at]).toEqual([INBOX_LIMIT, INBOX_LIMIT + 4, 5]);
+});
+
+test("a worktree's pull request that ended is an inbox item offering to remove it (17.27)", () => {
+  const [shop, api] = MOCK_REPOS;
+  const fix = shop.worktrees[1];
+  const ended = (worktree: string, state: PullState, project = shop.id) => ({
+    type: "pull_ended" as const,
+    project,
+    worktree,
+    number: 12,
+    title: "Fix the login",
+    state,
+  });
+  apply({ type: "projects", projects: [shop, api] });
+  for (const m of [ended(fix.id, "merged"), ended("/gone", "closed", "/unknown")]) {
+    notify(m, useHive.getState(), clock, 99);
+    apply(m);
+  }
+  // No tone and no OS notification: nothing waits on the user.
+  expect([tones, shown]).toEqual([0, []]);
+  expect(useHive.getState().inbox).toEqual([
+    {
+      id: 2,
+      at: 99,
+      text: "#12 closed: remove its worktree?",
+      space: undefined,
+      offer: { worktree: "/gone", number: 12, title: "Fix the login", state: "closed" },
+    },
+    {
+      id: 1,
+      at: 99,
+      text: `#12 merged: remove ${fix.name}?`,
+      space: "shop",
+      offer: { worktree: fix.id, number: 12, title: "Fix the login", state: "merged" },
+    },
+  ]);
+
+  // With several spaces, the item names the worktree's.
+  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const spaces = [
+    { id: "default", name: "Home", projects: [shop.id], env },
+    { id: "w", name: "Work", projects: [api.id], env },
+  ];
+  apply({ type: "spaces", spaces, current: "w" });
+  notify(ended(fix.id, "merged"), useHive.getState(), clock, 100);
+  expect(useHive.getState().inbox[0]?.space).toBe("Home · shop");
 });

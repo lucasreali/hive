@@ -61,6 +61,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   pull: { project: true, number: true, pull: true, error: true },
   pull_done: { project: true, number: true, message: true },
   pull_failed: { project: true, number: true, message: true },
+  pull_ended: { project: true, worktree: true, number: true, title: true, state: true },
   runs: { project: true, branch: true, runs: true, fetched_ms: true, error: true },
   run: { project: true, run: true, detail: true, error: true },
   job_log: { project: true, job: true, log: true, error: true },
