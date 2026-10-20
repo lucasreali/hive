@@ -51,7 +51,9 @@ jobs:
   test:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: macos-14
+    # The newest arm64 macOS (TODO 18.13): the one the human runs, where the traffic lights,
+    # notifications and FSEvents were measured. The bundle stays on macos-14 (below).
+    runs-on: macos-26
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
@@ -103,6 +105,8 @@ jobs:
   bundle:
     needs: changes
     if: needs.changes.outputs.bundle == 'true'
+    # As release.yml builds the shipped app: the SDK an app links against decides some of its
+    # AppKit behaviour (macOS 26 SDK: the new window style), so moving it is the release's call.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
