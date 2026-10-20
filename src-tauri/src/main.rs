@@ -8,7 +8,19 @@ use tauri::Manager;
 // Wiring only (excluded from coverage, see COVERAGE_EXCLUSIONS.md): builder, plugins, state and
 // command registration. Commands and any logic live in lib.rs, which is tested.
 fn main() {
+    let mut context = tauri::generate_context!();
+    let identifier = hive_lib::instance_identifier(tauri::is_dev(), &context.config().identifier);
+    context.config_mut().identifier = identifier;
     let result = tauri::Builder::default()
+        // First, so a second launch exits before anything else starts (17.18).
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            hive_lib::bring_up(app);
+        }))
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(hive_lib::WINDOW_STATE)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -108,7 +120,7 @@ fn main() {
             commands::get_diagnostics,
             commands::show_notification,
         ])
-        .build(tauri::generate_context!());
+        .build(context);
     match result {
         Ok(app) => app.run(hive_lib::on_run_event),
         Err(error) => {

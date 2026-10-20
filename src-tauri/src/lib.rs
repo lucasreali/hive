@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 use tauri_plugin_updater::{Update, Updater};
+use tauri_plugin_window_state::StateFlags;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -315,6 +316,39 @@ pub fn notifier<'a>(dev: bool, identifier: &'a str, stand_in: &'a str) -> &'a st
     }
 }
 
+/// The identifier the app runs under (17.18): the installed app's `identifier`, or, for a
+/// development build, that with `.dev` after it. The single-instance plugin keys the running
+/// instance on it (a socket in `/tmp` on macOS, a D-Bus name on Linux, a mutex on Windows) and
+/// the window-state plugin keeps its file in the app config folder named after it, so a
+/// development run neither focuses the installed app (nor is focused by it) nor moves its window.
+pub fn instance_identifier(dev: bool, identifier: &str) -> String {
+    if dev {
+        format!("{identifier}.dev")
+    } else {
+        identifier.to_owned()
+    }
+}
+
+/// What the window-state plugin saves and restores (17.18): size, position, maximised and full
+/// screen. Not its decorations (each platform's config sets them) nor whether it is visible (the
+/// app always opens its window).
+pub const WINDOW_STATE: StateFlags = StateFlags::SIZE
+    .union(StateFlags::POSITION)
+    .union(StateFlags::MAXIMIZED)
+    .union(StateFlags::FULLSCREEN);
+
+/// Brings the main window up, minimised or hidden: a click on a notification (13.5) or a second
+/// launch of the app (17.18). Answers whether there was a window to bring up.
+pub fn bring_up<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
+}
+
 /// How many notifications wait for their click at once (`waiting_notifier`); later ones show
 /// without click handling until one is answered. On macOS each wait holds a thread and a timer
 /// on the main run loop until the notification leaves the Notification Center.
@@ -506,11 +540,7 @@ impl Hive {
             .ok_or("this app cannot show notifications")?;
         let (app, link) = (app.clone(), Arc::clone(&self.link));
         let click = move || {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            bring_up(&app);
             lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
         };
         notify(&printable(title), &printable(body), Box::new(click))
