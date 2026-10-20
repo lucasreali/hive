@@ -80,7 +80,15 @@
     "week": {
       "used_percentage": 41,
       "resets_at": 1738857600
-    }
+    },
+    "limit_at": 1738420200,
+    "week_limit_at": null
+  },
+  {
+    "type": "usage_alert",
+    "window": "session",
+    "threshold": 80,
+    "resets_at": 1738425600
   },
   {
     "type": "agent_removed",

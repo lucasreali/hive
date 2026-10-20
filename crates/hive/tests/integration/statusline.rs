@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{Account, Control, SessionWindow, Settings};
+use hive_protocol::{Account, Control, SessionWindow, Settings, UsageWindow};
 use serde_json::{Value, json};
 
 use crate::common::{Env, wait_until};
@@ -53,7 +53,13 @@ fn usage(used_percentage: u8, resets_at: u64) -> (u32, Control) {
         used_percentage,
         resets_at,
     });
-    (0, Control::SessionUsage { usage, week: None })
+    let shown = Control::SessionUsage {
+        usage,
+        week: None,
+        limit_at: None,
+        week_limit_at: None,
+    };
+    (0, shown)
 }
 
 #[tokio::test]
@@ -78,7 +84,9 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
             0,
             Control::SessionUsage {
                 usage: None,
-                week: None
+                week: None,
+                limit_at: None,
+                week_limit_at: None,
             }
         )
     );
@@ -134,8 +142,24 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
     let week = Control::SessionUsage {
         usage: Some(window(9, now + 3600)),
         week: Some(window(41, now + 86400)),
+        limit_at: None,
+        week_limit_at: None,
     };
     assert_eq!(app.control().await, (0, week));
+    // 80% of a window alerts once (17.23), after its usage; 85% this late in the window lasts
+    // until its reset: no pace.
+    let out = statusline(&env, &hive, Some(&work), &input(85.0, now + 600));
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(app.control().await, usage(85, now + 600));
+    let alert = Control::UsageAlert {
+        window: UsageWindow::Session,
+        threshold: 80,
+        resets_at: now + 600,
+    };
+    assert_eq!(app.control().await, (0, alert));
+    let out = statusline(&env, &hive, Some(&work), &input(86.0, now + 600));
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(app.control().await, usage(86, now + 600));
     drop(app);
     assert!(daemon.wait_exit().success());
 }

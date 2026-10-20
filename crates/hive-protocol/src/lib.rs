@@ -213,11 +213,25 @@ pub enum Control {
     /// The current account's 5-hour window (12.1), `None` when none came yet or it is past its
     /// reset, and its 7-day window (15.3), only alongside a 5-hour one and until its own reset
     /// (absent from an older service). Sent when either changes, and after the app's `Welcome`
-    /// when there is one.
+    /// when there is one. `limit_at` and `week_limit_at` (17.23; absent from an older service)
+    /// are when each window reaches 100% at its pace so far (Unix seconds, whole minutes),
+    /// `None` when it would not before its reset.
     SessionUsage {
         usage: Option<SessionWindow>,
         #[serde(default)]
         week: Option<SessionWindow>,
+        #[serde(default)]
+        limit_at: Option<u64>,
+        #[serde(default)]
+        week_limit_at: Option<u64>,
+    },
+    /// The current account's `window` reached `threshold` percent (80 or 95, 17.23): sent once
+    /// per threshold and window (a jump past both sends 95 alone). The app adds it to the inbox
+    /// and shows an OS notification.
+    UsageAlert {
+        window: UsageWindow,
+        threshold: u8,
+        resets_at: u64,
     },
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
@@ -1440,6 +1454,16 @@ pub struct SessionWindow {
     pub resets_at: u64,
 }
 
+/// Which usage window a `UsageAlert` is about (17.23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageWindow {
+    /// The 5-hour window.
+    Session,
+    /// The 7-day window.
+    Week,
+}
+
 /// A Claude session that ran in a Hive terminal, the folder it ran in and its terminal's Claude
 /// config folder (`None`: the default account, 12.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1798,6 +1822,8 @@ mod tests {
         let usage_only = Control::SessionUsage {
             usage: Some(usage),
             week: None,
+            limit_at: None,
+            week_limit_at: None,
         };
         assert_eq!(decode(old), usage_only);
         let old = br#"{"type":"statusline_usage","claude_dir":"/c","usage":{"used_percentage":7,"resets_at":9}}"#;
@@ -1811,8 +1837,29 @@ mod tests {
         let both = Control::SessionUsage {
             usage: Some(usage),
             week: Some(usage),
+            limit_at: Some(60),
+            week_limit_at: None,
         };
         assert_eq!(Frame::control(0, &both).to_control().unwrap(), both);
+        // The pace (17.23) and its alerts.
+        let paced = br#"{"type":"session_usage","usage":{"used_percentage":7,"resets_at":9},"week":null,"limit_at":60,"week_limit_at":120}"#;
+        assert_eq!(
+            decode(paced),
+            Control::SessionUsage {
+                usage: Some(usage),
+                week: None,
+                limit_at: Some(60),
+                week_limit_at: Some(120),
+            }
+        );
+        let alert = Control::UsageAlert {
+            window: UsageWindow::Week,
+            threshold: 95,
+            resets_at: 9,
+        };
+        let json = br#"{"type":"usage_alert","window":"week","threshold":95,"resets_at":9}"#;
+        assert_eq!(decode(json), alert);
+        assert_eq!(Frame::control(0, &alert).to_control().unwrap(), alert);
     }
 
     #[test]
