@@ -65,10 +65,6 @@ pub enum Native {
     Zoom,
 }
 
-const fn own(id: &'static str, text: &'static str, keys: Option<&'static str>) -> Item {
-    Item::Own { id, text, keys }
-}
-
 /// The menu bar, in order. The first menu is the app's (macOS titles it with the app's name).
 pub const MENUS: &[Menu] = &[
     Menu {
@@ -77,8 +73,16 @@ pub const MENUS: &[Menu] = &[
         items: &[
             Item::Native(Native::About),
             Item::Separator,
-            own("settings", "Settings…", Some("CmdOrCtrl+,")),
-            own("check-updates", "Check for Updates…", None),
+            Item::Own {
+                id: "settings",
+                text: "Settings…",
+                keys: Some("CmdOrCtrl+,"),
+            },
+            Item::Own {
+                id: "check-updates",
+                text: "Check for Updates…",
+                keys: None,
+            },
             Item::Separator,
             Item::Native(Native::Services),
             Item::Separator,
@@ -86,7 +90,11 @@ pub const MENUS: &[Menu] = &[
             Item::Native(Native::HideOthers),
             Item::Native(Native::ShowAll),
             Item::Separator,
-            own(QUIT, "Quit Hive", Some("CmdOrCtrl+Q")),
+            Item::Own {
+                id: QUIT,
+                text: "Quit Hive",
+                keys: Some("CmdOrCtrl+Q"),
+            },
         ],
     },
     Menu {
@@ -106,12 +114,16 @@ pub const MENUS: &[Menu] = &[
         title: "View",
         role: Role::Plain,
         items: &[
-            own("toggle-sidebar", "Toggle Sidebar", None),
-            own(
-                "toggle-panel",
-                "Toggle Right Panel",
-                Some("CmdOrCtrl+Shift+B"),
-            ),
+            Item::Own {
+                id: "toggle-sidebar",
+                text: "Toggle Sidebar",
+                keys: None,
+            },
+            Item::Own {
+                id: "toggle-panel",
+                text: "Toggle Right Panel",
+                keys: Some("CmdOrCtrl+Shift+B"),
+            },
             Item::Separator,
             Item::Native(Native::Fullscreen),
         ],
@@ -123,15 +135,27 @@ pub const MENUS: &[Menu] = &[
             Item::Native(Native::Minimize),
             Item::Native(Native::Zoom),
             Item::Separator,
-            own("close-tab", "Close Tab", Some("CmdOrCtrl+W")),
+            Item::Own {
+                id: "close-tab",
+                text: "Close Tab",
+                keys: Some("CmdOrCtrl+W"),
+            },
         ],
     },
     Menu {
         title: "Help",
         role: Role::Help,
         items: &[
-            own("help", "Hive Help", None),
-            own("report-issue", "Report an Issue…", None),
+            Item::Own {
+                id: "help",
+                text: "Hive Help",
+                keys: None,
+            },
+            Item::Own {
+                id: "report-issue",
+                text: "Report an Issue…",
+                keys: None,
+            },
         ],
     },
 ];
