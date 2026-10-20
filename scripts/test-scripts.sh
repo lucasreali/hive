@@ -100,7 +100,26 @@ check "gates: the watchdog's stop fails" 'has "$o" "FAIL  m (stopped by the memo
 o=$(gates 0 mutants_verdict m 0 1)
 check "gates: an unreadable memory fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
 
-# --- macos-bundle.sh (macOS only: codesign) ----------------------------------------------------
+# --- macos-bundle.sh signing-mode ---------------------------------------------------------------
+secrets="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8"
+# mode <how many of the secrets to set> [<value of the others>]: signing-mode's output, or "failed".
+# The others are unset, or set to the given value (an absent GitHub secret is an empty string).
+mode() {
+  ( n=0
+    for v in $secrets; do
+      if [ $n -lt "$1" ]; then export "$v=x"; elif [ $# = 2 ]; then export "$v=$2"; else unset "$v"; fi
+      n=$((n + 1))
+    done
+    scripts/macos-bundle.sh signing-mode 2>/dev/null || echo failed )
+}
+check "signing-mode: no secrets is ad-hoc" '[ "$(mode 0)" = adhoc ]'
+check "signing-mode: six empty secrets are ad-hoc" '[ "$(mode 0 "")" = adhoc ]'
+check "signing-mode: all six is Developer ID" '[ "$(mode 6)" = developer-id ]'
+check "signing-mode: one secret fails" '[ "$(mode 1)" = failed ]'
+check "signing-mode: five secrets fail" '[ "$(mode 5)" = failed ]'
+check "signing-mode: five and an empty one fail" '[ "$(mode 5 "")" = failed ]'
+
+# --- macos-bundle.sh check (macOS only: codesign) -----------------------------------------------
 # A small bundle shaped like Hive.app, with the real Info.plist keys and entitlements, signed
 # ad-hoc as the macos.yml bundle is; each case breaks one thing and re-signs the app.
 if [ "$(uname)" = Darwin ]; then
@@ -145,6 +164,21 @@ if [ "$(uname)" = Darwin ]; then
   done
   seal --entitlements src-tauri/Entitlements.plist
   check "bundle: restored, it passes again" 'bundle_check'
+  # Another signer for the nested hive: a second real identity would need a keychain on the
+  # user's search list (the real environment), so a wrapper around /usr/bin/codesign reports the
+  # hive's signature as a certificate's (an Authority chain and a team).
+  mkdir -p "$tmp/signer"
+  cat >"$tmp/signer/codesign" <<'EOF'
+#!/bin/sh
+/usr/bin/codesign "$@"; status=$?
+case "$*" in *-dvv*/Resources/hive) echo "Authority=Developer ID Application: Other (OTHER1234)" >&2
+  echo "TeamIdentifier=OTHER1234" >&2 ;; esac
+exit $status
+EOF
+  chmod +x "$tmp/signer/codesign"
+  check "bundle: a hive with another signer fails" '! PATH=$tmp/signer:$PATH bundle_check'
+  check "bundle: it fails on the signers" \
+    '[[ $(PATH=$tmp/signer:$PATH scripts/macos-bundle.sh check "$app" 2>&1) == *"different signers"* ]]'
 fi
 
 [ $bad = 0 ]

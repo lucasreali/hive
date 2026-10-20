@@ -87,12 +87,15 @@ jobs:
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
           cp target/release/hive src-tauri/resources/hive
-          # Ad-hoc, as the app (D17.1); release.yml signs both with a Developer ID when it has one.
-          scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
       - run: bun install --frozen-lockfile
+      # Built, then bundled, as release.yml does (its signing secrets reach only the bundling).
       # No updater artifacts, so no signing key: that stays in release.yml's `release`
       # environment (#29), out of reach of any branch.
-      - run: bun tauri build --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - run: bun tauri build --no-bundle --config src-tauri/tauri.release.macos.conf.json
+      # Ad-hoc, as the app (D17.1); release.yml signs both with a Developer ID when it has one.
+      - run: |
+          scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
+          bun tauri bundle --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
       # The bundle validates (`codesign --verify --deep --strict`), the nested `hive` has the
       # app's signer, the JIT entitlement and the folder prompts' texts are there (TODO 17.11).
       - run: scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app

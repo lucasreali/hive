@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Signing and checking Hive.app on macOS (TODO 17.11, D17.1).
 #
+#   macos-bundle.sh signing-mode
+#       Prints "developer-id" when all six APPLE_* secrets are in the environment, "adhoc" when
+#       none is; fails on a partial set.
 #   macos-bundle.sh sign-hive <hive binary>
 #       Signs the service binary before Tauri bundles it, with the identity Tauri then signs the app
 #       with: $APPLE_SIGNING_IDENTITY (a Developer ID, with the hardened runtime and a secure
@@ -71,8 +74,23 @@ check() {
   echo "ok    $app"
 }
 
+# Which signing the release does: "developer-id" with all six secrets (release.yml passes them under
+# their own names), "adhoc" with none; a partial set fails rather than ship ad-hoc by mistake.
+signing_mode() {
+  local v set=0
+  for v in $SIGNING_SECRETS; do [ -z "${!v:-}" ] || set=$((set + 1)); done
+  case $set in
+    0) echo adhoc ;;
+    6) echo developer-id ;;
+    *) die "only $set of the 6 Developer ID secrets are set ($SIGNING_SECRETS)" ;;
+  esac
+}
+SIGNING_SECRETS="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER
+APPLE_API_KEY APPLE_API_KEY_P8"
+
 case ${1:-} in
+  signing-mode) [ $# = 1 ] || die "usage: $0 signing-mode"; signing_mode ;;
   sign-hive) [ $# = 2 ] || die "usage: $0 sign-hive <hive binary>"; sign_hive "$2" ;;
   check) [ $# -ge 2 ] && [ $# -le 3 ] || die "usage: $0 check <Hive.app> [--developer-id]"; check "$2" "${3:-}" ;;
-  *) die "usage: $0 sign-hive <hive binary> | check <Hive.app> [--developer-id]" ;;
+  *) die "usage: $0 signing-mode | sign-hive <hive binary> | check <Hive.app> [--developer-id]" ;;
 esac
