@@ -11,7 +11,19 @@ fn main() {
     // A GUI app starts with 256 descriptors on macOS (17.6).
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     hive_lib::fds::raise_at_start(&hive_lib::fds::Process, &mut std::io::stderr());
+    let mut context = tauri::generate_context!();
+    let identifier = hive_lib::instance_identifier(tauri::is_dev(), &context.config().identifier);
+    context.config_mut().identifier = identifier;
     let result = tauri::Builder::default()
+        // First, so a second launch exits before anything else starts (17.18).
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            hive_lib::bring_up(app);
+        }))
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(hive_lib::WINDOW_STATE)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -125,7 +137,7 @@ fn main() {
             commands::title_bar_action,
             commands::show_notification,
         ])
-        .build(tauri::generate_context!());
+        .build(context);
     match result {
         Ok(app) => app.run(|app, event| {
             // Tauri's `RunEvent::Reopen` cannot be built outside it, so a test could not send it

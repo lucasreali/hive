@@ -2410,12 +2410,12 @@ fn agents_at_risk_are_the_close_dialogs() {
 #[test]
 fn the_window_comes_up_when_there_is_one() {
     let app = mock_builder().build(mock_context(noop_assets())).unwrap();
-    assert!(!show_window(app.handle()));
+    assert!(!bring_up(app.handle()));
     assert!(!reopen(app.handle(), false));
     let _window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
-    assert!(show_window(app.handle()));
+    assert!(bring_up(app.handle()));
     // A Dock click brings it back only when no window shows.
     assert!(reopen(app.handle(), false));
     assert!(!reopen(app.handle(), true));
@@ -2575,4 +2575,34 @@ fn the_app_asks_its_hive_and_quits_without_one() {
         .unwrap();
     assert!(!should_quit(app.handle()));
     assert_eq!(rx.try_recv().unwrap()["type"], "quit_requested");
+}
+
+#[test]
+fn a_development_build_runs_under_its_own_identifier() {
+    assert_eq!(
+        instance_identifier(false, "com.lucas.hive"),
+        "com.lucas.hive"
+    );
+    assert_eq!(
+        instance_identifier(true, "com.lucas.hive"),
+        "com.lucas.hive.dev"
+    );
+}
+
+#[test]
+fn the_window_keeps_its_size_position_maximised_and_full_screen_only() {
+    let kept = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED;
+    assert_eq!(WINDOW_STATE.bits(), (kept | StateFlags::FULLSCREEN).bits());
+    assert!(!WINDOW_STATE.intersects(StateFlags::VISIBLE | StateFlags::DECORATIONS));
+}
+
+#[test]
+fn a_second_launch_brings_the_window_up_when_there_is_one() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(!bring_up(app.handle()), "no window yet");
+    tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    // The mock runtime keeps no window state: unminimised, shown and focused cannot be checked.
+    assert!(bring_up(app.handle()));
 }

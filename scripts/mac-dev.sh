@@ -4,7 +4,8 @@
 #   - builds target/debug/hive and points the app's bridge at it (HIVE_BRIDGE)
 #   - gives that service its own runtime folder (socket, lock) and data folder (wrapper, hooks,
 #     projects), through XDG_RUNTIME_DIR and XDG_DATA_HOME
-#   - runs `bun run tauri dev`, which starts Vite on port 1420 (hot reload) and the debug app
+#   - runs `bun run tauri dev`, which starts Vite on port 1420 (hot reload) and the debug app,
+#     which runs as `com.lucas.hive.dev` (TODO 17.18): its own single instance and window state
 # The service passes its environment to its terminals, so they see both variables too: `hive hook`
 # needs XDG_RUNTIME_DIR to reach this service, and XDG-aware tools in those terminals (e.g. fish's
 # history) keep their data under the dev folder. XDG_CONFIG_HOME is left alone (git, gh and fish
