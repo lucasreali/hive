@@ -65,7 +65,7 @@ jobs:
           components: llvm-tools-preview, clippy
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
-          tool: cargo-llvm-cov,cargo-mutants
+          tool: cargo-llvm-cov,cargo-mutants,cargo-nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # The integration tests' terminals run fish, as on WSL (`common::Env`).
@@ -79,15 +79,17 @@ jobs:
       # The diff's mutants (D2, D6), as mutants.yml on Linux: a file the branch did not change
       # runs none, and nothing runs on `main` (its commits come from tested branches); every
       # mutant runs nightly (mutants-full.yml). `--no-config`: `.cargo/mutants.toml` excludes
-      # these files for Linux. One run per crate: a run's unmutated baseline tests every package
-      # it mutates, and both suites in a row no longer fit the timeout.
+      # these files for Linux, so its `[profile.mutants]` build and nextest (fails fast: the
+      # first failing test ends the mutant's run) are passed here. One run per crate: a run's
+      # unmutated baseline tests every package it mutates, and both suites in a row no longer fit
+      # the timeout.
       - run: |
           if [ "$GITHUB_REF" = refs/heads/main ]; then echo "on main: nothing to test"; exit 0; fi
           base=$(git merge-base origin/main HEAD)
           for f in crates/hive/src/macos.rs src-tauri/src/macos.rs; do
             git diff "$base" -- "$f" > diff.patch
             if [ -s diff.patch ]; then
-              cargo mutants --no-config -f "$f" --in-diff diff.patch -j 2 --timeout 120
+              cargo mutants --no-config --profile mutants --test-tool nextest -f "$f" --in-diff diff.patch -j 2 --timeout 120
             else
               echo "$f: unchanged, no mutants"
             fi

@@ -63,7 +63,7 @@ jobs:
           components: llvm-tools-preview, clippy
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
-          tool: cargo-llvm-cov,cargo-mutants
+          tool: cargo-llvm-cov,cargo-mutants,cargo-nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy -p hive -p hive-protocol --all-targets --locked -- -D warnings
       # Runs `cargo test` of both crates instrumented; every Windows file needs all its lines.
@@ -75,12 +75,13 @@ jobs:
             | length > 0 and all(.summary.lines.percent == 100)' cov.json
       # The diff's mutants, as macos.yml: none when the branch left these files unchanged and
       # none on `main`; every mutant runs nightly (mutants-full.yml). `--no-config`:
-      # `.cargo/mutants.toml` excludes these files for Linux (and runs nextest).
+      # `.cargo/mutants.toml` excludes these files for Linux, so its `[profile.mutants]` build
+      # and nextest (fails fast) are passed here.
       - run: |
           if [ "$GITHUB_REF" = refs/heads/main ]; then echo "on main: nothing to test"; exit 0; fi
           git diff "$(git merge-base origin/main HEAD)" -- 'crates/hive/src/windows*.rs' > diff.patch
           if [ -s diff.patch ]; then
-            cargo mutants --no-config -p hive -f 'crates/hive/src/windows*.rs' --in-diff diff.patch -j 2 --timeout 120
+            cargo mutants --no-config --profile mutants --test-tool nextest -p hive -f 'crates/hive/src/windows*.rs' --in-diff diff.patch -j 2 --timeout 120
           else
             echo "crates/hive/src/windows*.rs: unchanged, no mutants"
           fi
