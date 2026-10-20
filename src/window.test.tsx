@@ -4,7 +4,16 @@ import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { asMac } from "../test/mac";
 import { TitleBar } from "./shell/TitleBar";
-import { closeWindow, guardClose, isMac, keyText, watchFocus, windowAction } from "./window";
+import {
+  bounceDock,
+  closeWindow,
+  guardClose,
+  isMac,
+  keyText,
+  setDockBadge,
+  watchFocus,
+  windowAction,
+} from "./window";
 
 const g = globalThis as { isTauri?: boolean };
 
@@ -134,4 +143,33 @@ test("window focus: Tauri's focus events in the app", async () => {
   await settle();
   await emit("tauri://blur");
   expect(seen).toEqual([document.hasFocus(), false, true]);
+});
+
+test("the Dock badge and bounce reach only the macOS app's window, failures dropped", async () => {
+  const calls: unknown[] = [];
+  mockIPC((cmd, args) => {
+    calls.push([cmd, (args as { value?: unknown }).value]);
+    if (cmd === "plugin:window|set_badge_count" && (args as { value?: number }).value === 9)
+      throw new Error("no Dock");
+  });
+  // Outside Tauri, and in the Windows app, there is no Dock.
+  setDockBadge(2);
+  bounceDock();
+  g.isTauri = true;
+  mockWindows("main");
+  setDockBadge(2);
+  bounceDock();
+  expect(calls).toEqual([]);
+  asMac();
+  setDockBadge(2);
+  setDockBadge(0);
+  setDockBadge(9);
+  bounceDock();
+  await Promise.resolve();
+  expect(calls).toEqual([
+    ["plugin:window|set_badge_count", 2],
+    ["plugin:window|set_badge_count", undefined],
+    ["plugin:window|set_badge_count", 9],
+    ["plugin:window|request_user_attention", { type: "Informational" }],
+  ]);
 });

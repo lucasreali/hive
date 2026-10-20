@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { connect } from "./connect";
+import { followDock } from "./dock";
 import { followOpenFile, followPanel, followView } from "./follow";
 import { setFocused } from "./store";
 import { transport } from "./transport";
@@ -13,6 +14,7 @@ followOpenFile(transport);
 followPanel(transport);
 watchFocus(setFocused);
 followView(transport);
+followDock();
 
 export const root = createRoot(document.getElementById("root") as HTMLElement);
 root.render(
