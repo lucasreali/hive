@@ -21,7 +21,8 @@ data=${HIVE_DEV_DIR:-$HOME/.local/share/hive-dev}
 mkdir -p "$data"
 data=$(cd "$data" && pwd -P)
 # A short path under the per-user $TMPDIR: a Unix socket path is limited to 104 bytes. One per data
-# folder, so two dev runs with different HIVE_DEV_DIR get two services.
+# folder, so two dev runs with different HIVE_DEV_DIR get two services. Never $TMPDIR/hive itself:
+# that is the installed service's runtime folder (17.9).
 runtime=${TMPDIR:-/tmp}
 runtime=${runtime%/}/hive-dev-$(printf %s "$data" | cksum | cut -d' ' -f1)
 mkdir -p -m 700 "$runtime"

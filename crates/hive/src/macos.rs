@@ -68,6 +68,17 @@ fn text(buf: &[c_char]) -> Option<String> {
     Some(text.to_string_lossy().into_owned())
 }
 
+/// The per-user temporary folder launchd gives every process of the user as `TMPDIR`
+/// (`confstr(_CS_DARWIN_USER_TEMP_DIR)`), asked of the system so that a `TMPDIR` changed in a
+/// shell (nix-shell sets its own) does not move the service's socket away from `hive hook`.
+pub fn user_temp_dir() -> Option<PathBuf> {
+    let mut buf: [c_char; PATH_MAX] = [0; PATH_MAX];
+    // SAFETY: `confstr` writes at most `buf.len()` bytes, NUL-terminated; on failure it writes
+    // nothing and the buffer stays an empty string.
+    unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buf.as_mut_ptr(), buf.len()) };
+    text(&buf).filter(|dir| !dir.is_empty()).map(PathBuf::from)
+}
+
 /// The user's login shell (`$SHELL`), started as [`crate::terminal::login::launch`] says.
 pub fn shell(bin_dir: &Path) -> pty_process::Command {
     let var = std::env::var_os;
@@ -157,6 +168,16 @@ mod tests {
         assert!(rename_new(&at("b\0"), &at("c")).is_err());
         assert!(rename_new(&at("b"), &at("c\0")).is_err());
         assert!(at("b").is_dir());
+    }
+
+    #[test]
+    fn the_user_temp_dir_is_private_to_the_user() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = user_temp_dir().unwrap();
+        let meta = std::fs::metadata(&dir).unwrap();
+        assert!(dir.is_absolute() && meta.is_dir(), "{dir:?}");
+        assert_eq!(meta.uid(), nix::unistd::getuid().as_raw(), "{dir:?}");
+        assert_eq!(meta.mode() & 0o077, 0, "{dir:?}");
     }
 
     #[test]
