@@ -168,6 +168,24 @@ test("an alert the service does not mark (in view of the focused window) is not 
   expect([tones, useHive.getState().inbox.length, shown]).toEqual([2, 2, []]);
 });
 
+test("a usage alert goes to the inbox and the system, with no agent and no tone (17.23)", async () => {
+  const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;
+  const alert = { type: "usage_alert", window: "session", threshold: 80, resets_at } as const;
+  notify(alert, useHive.getState(), clock, 4321);
+  apply(alert);
+  await settle();
+  expect(tones).toBe(0);
+  expect(shown).toEqual([{ title: "Session usage at 80%", body: "Resets 14:30", agent: "" }]);
+  const { inbox } = useHive.getState();
+  expect(inbox.map((i) => [i.agent, i.state, i.text, i.at])).toEqual([
+    [null, null, "Session usage at 80%", 4321],
+  ]);
+  // The window's day for the week.
+  notify({ ...alert, window: "week", threshold: 95 }, useHive.getState(), clock);
+  await settle();
+  expect(shown[1]).toEqual({ title: "Weekly usage at 95%", body: "Resets Mon 14:30", agent: "" });
+});
+
 test("other messages are ignored", () => {
   notify({ type: "welcome", version: "1", distro: null }, useHive.getState() as HiveState, clock);
   expect(tones).toBe(0);

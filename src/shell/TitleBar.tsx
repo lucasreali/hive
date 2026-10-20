@@ -1,4 +1,4 @@
-import { ArrowCircleUpIcon, BellIcon } from "@phosphor-icons/react";
+import { ArrowCircleUpIcon, BellIcon, GaugeIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { spaceName } from "../notify";
@@ -174,17 +174,29 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
       })}
       {pending.length > 0 && inbox.length > 0 && <hr />}
       {inbox.map((item) => {
-        const agent = agents[item.agent];
+        // A usage alert (17.23) is about no agent: choosing it only closes the inbox.
+        const usage = item.agent === null;
+        const agent = usage ? undefined : agents[item.agent ?? ""];
         return (
           <button
             key={item.id}
             type="button"
             role="menuitem"
-            disabled={!agent}
-            title={agent ? undefined : "This agent has ended"}
+            disabled={!(agent || usage)}
+            title={agent || usage ? undefined : "This agent has ended"}
             onClick={go(agent)}
           >
-            <StateIcon state={item.state} />
+            {item.state === null ? (
+              <GaugeIcon
+                className="usage-alert-icon"
+                size={14}
+                weight="bold"
+                role="img"
+                aria-label="Usage"
+              />
+            ) : (
+              <StateIcon state={item.state} />
+            )}
             <span className="label">{item.text}</span>
             <span className="inbox-meta">
               {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}

@@ -40,8 +40,17 @@ export type ServiceMessage =
   | ({ type: "agent_state"; id: string } & AgentStatus)
   | ({ type: "agent_usage"; id: string } & AgentUsage)
   // The current account's 5-hour window (12.1); null when none came yet or it reset.
-  // `week` (15.3) is absent from an older service.
-  | { type: "session_usage"; usage: SessionWindow | null; week?: SessionWindow | null }
+  // `week` (15.3) is absent from an older service, and so are the pace's `limit_at` and
+  // `week_limit_at` (17.23: when each reaches 100% at its pace, Unix s; null when it lasts).
+  | {
+      type: "session_usage";
+      usage: SessionWindow | null;
+      week?: SessionWindow | null;
+      limit_at?: number | null;
+      week_limit_at?: number | null;
+    }
+  // A window of the current account reached 80% or 95%, once per window (17.23).
+  | { type: "usage_alert"; window: UsageWindow; threshold: number; resets_at: number }
   | { type: "subagent_worktrees"; worktrees: string[] }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
@@ -415,6 +424,8 @@ export type AgentStatus = {
  */
 /** A Claude account's 5-hour or 7-day usage window: the percentage used and when it resets (Unix s). */
 export type SessionWindow = { used_percentage: number; resets_at: number };
+/** Which window a `usage_alert` is about: the 5-hour one or the 7-day one. */
+export type UsageWindow = "session" | "week";
 
 export type AgentUsage = { context_tokens: number; context_limit: number; output_tokens: number };
 

@@ -2,6 +2,7 @@ import type { AgentState, ServiceMessage } from "./protocol";
 import { goToAgent } from "./shortcuts";
 import { addToInbox, type HiveState, spaceOf, useHive } from "./store";
 import { transport } from "./transport";
+import { usageAlertText } from "./usage";
 
 // Presentation of the alerts the service decided (hive.md item 5, 2.4, 13.4, #37): a tone and
 // an inbox item for each `agent_state` with an `alert`, and an OS notification when the service
@@ -79,6 +80,10 @@ export function notify(
   now = performance.now(),
   wall = Date.now(),
 ): void {
+  if (message.type === "usage_alert") {
+    usageAlert(message, wall);
+    return;
+  }
   if (message.type !== "agent_state" || !message.alert) return;
   const { id, state } = message;
   const text = alertText(s, message);
@@ -89,6 +94,17 @@ export function notify(
     tone(volume);
   }
   if (message.notify) void transport.showNotification(text.title, text.body, id);
+}
+
+/**
+ * A window of the account's usage reached 80% or 95% (17.23; the service sends it once per
+ * threshold and window): an inbox item and an OS notification, focused or not, with no agent
+ * (a click only brings the window up) and no tone.
+ */
+function usageAlert(message: Extract<ServiceMessage, { type: "usage_alert" }>, wall: number) {
+  const text = usageAlertText(message);
+  addToInbox({ agent: null, state: null, at: wall, text: text.title });
+  void transport.showNotification(text.title, text.body, "");
 }
 
 /**

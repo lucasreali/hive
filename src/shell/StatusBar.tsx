@@ -1,6 +1,7 @@
 import { version } from "../../package.json";
 import { type Connection, useHive } from "../store";
 import { Select } from "../ui/Select";
+import { usageLines } from "../usage";
 import { isMac } from "../window";
 import { DEFAULT_ACCOUNT, saveSettings } from "./SettingsDialog";
 
@@ -68,29 +69,19 @@ export function StatusBar() {
 
 /** The ring turns the warning colour from this share of the 5-hour window (15.3). */
 const USAGE_WARNING = 80;
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/** "14:30" in local time. */
-function clock(at: Date) {
-  return at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-}
 
 /**
  * The session (5-hour) window as a ring filled to its percentage (15.3), with "Session 42% ·
  * resets 14:30" and, when the service sent one, "Week 41% · resets Mon 09:00" as its tooltip
- * (on hover and keyboard focus) and accessible name. The service sends none once it reset.
+ * (on hover and keyboard focus) and accessible name, each followed by its pace when the service
+ * forecasts a limit before the reset (17.23, `usageLines`). The service sends none once it reset.
  */
 function SessionUsage() {
   const usage = useHive((s) => s.sessionUsage);
   const week = useHive((s) => s.weekUsage);
+  const limits = useHive((s) => s.usageLimits);
   if (!usage) return null;
-  const lines = [
-    `Session ${usage.used_percentage}% · resets ${clock(new Date(usage.resets_at * 1000))}`,
-  ];
-  if (week) {
-    const at = new Date(week.resets_at * 1000);
-    lines.push(`Week ${week.used_percentage}% · resets ${WEEKDAYS[at.getDay()]} ${clock(at)}`);
-  }
+  const lines = usageLines(usage, week, limits);
   return (
     // A button only so the keyboard reaches its tooltip (as the ARIA tooltip pattern); it does
     // nothing when pressed.

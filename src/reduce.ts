@@ -139,7 +139,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
     case "session_usage":
-      return { sessionUsage: m.usage, weekUsage: m.week ?? null };
+      return {
+        sessionUsage: m.usage,
+        weekUsage: m.week ?? null,
+        usageLimits: { session: m.limit_at ?? null, week: m.week_limit_at ?? null },
+      };
     case "agent_usage": {
       const { type: _, id, ...usage } = m;
       return { agentUsage: { ...s.agentUsage, [id]: usage } };
@@ -426,6 +430,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         connection: { status: "disconnected", reason: m.reason, bundled: m.bundled },
         sessionUsage: null,
         weekUsage: null,
+        usageLimits: { session: null, week: null },
         agents: {},
         agentStates: {},
         subagentWorktrees: [],
@@ -437,6 +442,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "editor_target":
     case "notification_clicked":
       // Answered where they were asked (see `ServiceMessage`), not stored.
+      return {};
+    case "usage_alert":
+      // An inbox item and a notification (`notify`), nothing else.
       return {};
     default:
       // Every known type has its case: a new one fails the typecheck here, and a type the app
