@@ -956,6 +956,16 @@ export function createMockTransport(
     async showNotification(_title, _body, agent) {
       notified = agent;
     },
+    // `?mock=denied`: notifications are turned off, as macOS's settings can say.
+    async checkNotifications() {
+      const permission = scenario === "denied" ? "denied" : "granted";
+      later({ type: "notification_permission", permission });
+    },
+    async openNotificationSettings() {},
+    // The browser plays the tone itself.
+    async playTone() {
+      throw new Error("mock: no app to play the tone");
+    },
     async addProject(path) {
       // The group (14.1): its repositories come in the list, before it.
       if (path === MOCK_GROUP_PATH) {

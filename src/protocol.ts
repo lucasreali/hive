@@ -18,6 +18,8 @@ export type ServiceMessage =
   | { type: "update_failed"; error: string }
   // From the app side (Rust): the user clicked the OS notification about `agent` (13.5).
   | { type: "notification_clicked"; agent: string }
+  // From the app side (Rust): whether the OS lets Hive show notifications (17.19).
+  | { type: "notification_permission"; permission: NotificationPermission }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
@@ -465,6 +467,12 @@ export type ProjectScripts = {
   /** Run by the service before it removes a worktree. */
   archive: string | null;
 };
+
+/**
+ * Whether the OS lets Hive show notifications (17.19): `unknown` where the app cannot ask (a
+ * development build, a platform without a check) or before the user answered.
+ */
+export type NotificationPermission = "granted" | "denied" | "unknown";
 
 /** What the settings' About section shows (the service's `diagnostics`). */
 export type Diagnostics = {

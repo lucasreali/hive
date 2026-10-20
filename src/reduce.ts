@@ -100,6 +100,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...diagnostics } = m;
       return { diagnostics };
     }
+    case "notification_permission":
+      return { notificationPermission: m.permission };
     case "update_ready":
       return { update: { version: m.version, installing: false } };
     case "update_failed":

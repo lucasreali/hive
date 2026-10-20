@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { asMac } from "../test/mac";
 import { alertText, notify, TONE_GAP_MS } from "./notify";
 import type { AgentState, Alert } from "./protocol";
 import { apply } from "./reduce";
@@ -99,6 +100,30 @@ test("the tone follows the volume setting; 0 plays none", () => {
   apply({ type: "settings", settings: structuredClone(settings) });
   feed("a", "error", "waiting", 2 * TONE_GAP_MS);
   expect([tones, gains]).toEqual([2, [0.15, 0.06]]);
+});
+
+test("on macOS the app plays the tone; the webview's only when the app cannot (17.19)", async () => {
+  asMac();
+  const played: number[] = [];
+  let refuse = false;
+  const play = spyOn(transport, "playTone").mockImplementation(async (volume) => {
+    played.push(volume);
+    if (refuse) throw new Error("no afplay");
+  });
+  try {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.notifications.volume = 40;
+    apply({ type: "settings", settings });
+    feed("a", "error", "waiting");
+    await settle();
+    expect([played, tones]).toEqual([[40], 0]);
+    refuse = true;
+    feed("a", "error", "waiting", TONE_GAP_MS);
+    await settle();
+    expect([played, tones, gains]).toEqual([[40, 40], 1, [0.06]]);
+  } finally {
+    play.mockRestore();
+  }
 });
 
 test("several agents changing at once play one tone", () => {

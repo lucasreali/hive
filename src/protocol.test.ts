@@ -18,6 +18,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   update_ready: { version: true },
   update_failed: { error: true },
   notification_clicked: { agent: true },
+  notification_permission: { permission: true },
   version_mismatch: {
     protocol: true,
     version: true,
@@ -121,6 +122,7 @@ const APP_SIDE = [
   "update_ready",
   "update_failed",
   "notification_clicked",
+  "notification_permission",
   "disconnected",
   "app_mode",
 ];

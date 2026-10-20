@@ -208,6 +208,18 @@ export interface Transport {
    * window up and is answered by `notification_clicked`.
    */
   showNotification(title: string, body: string, agent: string): Promise<void>;
+  /**
+   * Whether the OS lets Hive show notifications (17.19); answered by `notification_permission`
+   * (`unknown` where the app cannot ask).
+   */
+  checkNotifications(): Promise<void>;
+  /** Opens macOS's notification settings, where the user lets Hive notify again (17.19). */
+  openNotificationSettings(): Promise<void>;
+  /**
+   * Plays the alert tone from the app at `volume` percent (17.19: macOS, where a hidden
+   * webview's audio can be throttled); rejects where the app plays none.
+   */
+  playTone(volume: number): Promise<void>;
 }
 
 /**

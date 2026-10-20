@@ -2271,3 +2271,198 @@ fn a_notification_whose_thread_cannot_start_fails_and_frees_its_wait() {
     assert_eq!(notify("t", "b", Box::new(|| {})), Ok(()));
     assert_eq!(asked.recv_timeout(WAIT), Ok(true), "no wait was kept");
 }
+
+/// A folder of its own for `name` under the system's temporary folder, empty.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("hive-app-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn only_an_app_bundle_can_ask_the_notification_center() {
+    let bundled = [
+        "/Applications/Hive.app/Contents/MacOS/hive-app",
+        "/x/a b.app/Contents/MacOS/h",
+    ];
+    for exe in bundled {
+        assert!(in_app_bundle(Path::new(exe)), "{exe}");
+    }
+    let other = [
+        "/src/hive/target/debug/hive-app",
+        "/Applications/Hive/Contents/MacOS/hive-app",
+        "/Applications/Hive.app/Contents/Other/hive-app",
+        "/Applications/Hive.app/Other/MacOS/hive-app",
+        "Contents/MacOS/hive-app",
+        "MacOS/hive-app",
+        "hive-app",
+        "",
+    ];
+    for exe in other {
+        assert!(!in_app_bundle(Path::new(exe)), "{exe}");
+    }
+}
+
+#[test]
+fn the_notification_permission_goes_to_the_ui() {
+    let (channel, mut rx) = ui();
+    let hive = hive().with_permission(|| Permission::Denied);
+    hive.link().ui = Some(channel);
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![check_notifications])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let checking = invoke(&webview, "check_notifications", json!({}));
+    assert_eq!(checking, Ok(Value::Null));
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let answer = json!({"type": "notification_permission", "permission": "denied"});
+    assert_eq!(runtime.block_on(next(&mut rx)), answer);
+    // An app that cannot ask says so.
+    let (channel, mut rx) = ui();
+    let unknown = self::hive();
+    unknown.link().ui = Some(channel);
+    unknown.check_notifications();
+    let answer = json!({"type": "notification_permission", "permission": "unknown"});
+    assert_eq!(runtime.block_on(next(&mut rx)), answer);
+    let all = [Permission::Granted, Permission::Denied, Permission::Unknown];
+    assert_eq!(all.map(Permission::name), ["granted", "denied", "unknown"]);
+}
+
+#[test]
+fn the_notification_settings_open_at_their_pane() {
+    let (tx, opened) = std::sync::mpsc::channel::<String>();
+    let hive = hive().with_url(move |url: &str| {
+        tx.send(url.into()).unwrap();
+        Ok(())
+    });
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![open_notification_settings])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let opening = invoke(&webview, "open_notification_settings", json!({}));
+    assert_eq!(opening, Ok(Value::Null));
+    let pane = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+    assert_eq!(opened.try_recv().unwrap(), pane);
+    let none = self::hive().open_notification_settings();
+    assert_eq!(none, Err("this app cannot open URLs".into()));
+    let refused = self::hive().with_url(|_: &str| Err("no handler".into()));
+    assert_eq!(
+        refused.open_notification_settings(),
+        Err("no handler".into())
+    );
+}
+
+#[test]
+fn the_tone_is_the_web_audio_beep_as_a_wav_file() {
+    let wav = tone_wav();
+    let word = |at: usize| u32::from_le_bytes(wav[at..at + 4].try_into().unwrap());
+    let half = |at: usize| u16::from_le_bytes(wav[at..at + 2].try_into().unwrap());
+    let samples = 8820; // 0.2 s at 44.1 kHz
+    assert_eq!(wav.len(), 44 + samples * 2);
+    assert_eq!(&wav[..4], b"RIFF");
+    assert_eq!(word(4) as usize, wav.len() - 8);
+    assert_eq!(&wav[8..16], b"WAVEfmt ");
+    assert_eq!((word(16), half(20), half(22)), (16, 1, 1), "PCM, mono");
+    assert_eq!((word(24), word(28)), (44_100, 88_200));
+    assert_eq!((half(32), half(34)), (2, 16), "16-bit samples");
+    assert_eq!(&wav[36..40], b"data");
+    assert_eq!(word(40) as usize, samples * 2);
+    let sample = |i: usize| i16::from_le_bytes([wav[44 + 2 * i], wav[45 + 2 * i]]);
+    let peak =
+        |range: std::ops::Range<usize>| range.map(|i| sample(i).unsigned_abs()).max().unwrap();
+    // 880 Hz at 0.15 of full scale, fading to 0.001 (Web Audio's exponential ramp).
+    assert_eq!(sample(0), 0);
+    let start = peak(0..100);
+    assert!((4800..=4916).contains(&start), "{start}");
+    let middle = peak(4360..4460); // 0.1 s in: about 0.0122
+    assert!((380..=410).contains(&middle), "{middle}");
+    let end = peak(samples - 100..samples);
+    assert!((30..=40).contains(&end), "{end}");
+}
+
+#[test]
+fn the_tone_is_written_once_and_played_at_the_volume() {
+    let dir = scratch("tone").join("cache");
+    let (tx, played) = std::sync::mpsc::channel::<(PathBuf, f32)>();
+    let hive = hive().with_tone(dir.clone(), move |file: &Path, volume: f32| {
+        tx.send((file.to_owned(), volume)).unwrap();
+        Ok(())
+    });
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![play_tone])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let playing = invoke(&webview, "play_tone", json!({"volume": 50}));
+    assert_eq!(playing, Ok(Value::Null));
+    let file = dir.join("alert-tone.wav");
+    assert_eq!(played.try_recv().unwrap(), (file.clone(), 0.5));
+    assert_eq!(std::fs::read(&file).unwrap(), tone_wav());
+    assert!(!dir.join("alert-tone.wav.tmp").exists());
+    // Written once a run: the next tone plays the same file.
+    std::fs::remove_file(&file).unwrap();
+    let hive = app.state::<Hive>();
+    assert_eq!(hive.play_tone(255), Ok(()));
+    assert_eq!(
+        played.try_recv().unwrap(),
+        (file.clone(), 1.0),
+        "at most 100"
+    );
+    assert!(!file.exists());
+    // 0 plays nothing.
+    assert_eq!(hive.play_tone(0), Ok(()));
+    assert!(played.try_recv().is_err());
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+}
+
+#[test]
+fn a_tone_fails_without_a_player_or_a_folder() {
+    assert_eq!(hive().play_tone(50), Err("this app plays no tone".into()));
+    let root = scratch("tone-fails");
+    let file = root.join("file");
+    std::fs::write(&file, "").unwrap();
+    let blocked = hive().with_tone(file.join("cache"), |_: &Path, _: f32| Ok(()));
+    let failed = blocked.play_tone(50).unwrap_err();
+    assert!(failed.starts_with("cannot write the tone: "), "{failed}");
+    let refused = hive().with_tone(root.clone(), |_: &Path, _: f32| Err("no audio".into()));
+    assert_eq!(refused.play_tone(50), Err("no audio".into()));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn afplay_gets_the_volume_and_the_file_as_separate_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch("afplay");
+    let program = root.join("afplay");
+    let args = root.join("args");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{0}.tmp'\nmv '{0}.tmp' '{0}'\n",
+        args.display()
+    );
+    std::fs::write(&program, script).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let play = afplay(program.clone());
+    let file = root.join("a tone; echo x.wav");
+    assert_eq!(play(&file, 0.25), Ok(()));
+    let deadline = std::time::Instant::now() + WAIT;
+    while !args.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let written = std::fs::read_to_string(&args).unwrap();
+    assert_eq!(written, format!("-v\n0.25\n{}\n", file.display()));
+    let missing = afplay(root.join("missing"))(&file, 1.0).unwrap_err();
+    assert!(missing.starts_with("cannot play the tone: "), "{missing}");
+    let _ = std::fs::remove_dir_all(root);
+}
