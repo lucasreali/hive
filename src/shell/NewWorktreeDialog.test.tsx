@@ -391,6 +391,10 @@ test("a refused issue is explained under its number until it changes; back to a 
   expect(create().disabled).toBe(true);
   // Another project's or another name's refusal is not this one's.
   act(() => apply({ type: "create_worktree_failed", project: shop.id, name: "7", message: "x" }));
+  // Still on 7: the refusal named "7" (not "#7") is never shown as this issue's.
+  expect(field.value).toBe("7");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(create().disabled).toBe(false);
   fireEvent.change(field, { target: { value: "8" } });
   expect(screen.queryByRole("alert")).toBeNull();
   expect(create().disabled).toBe(false);
