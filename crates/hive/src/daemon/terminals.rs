@@ -234,14 +234,12 @@ async fn copy(
         if !output.send(&buf[..n]).await {
             break;
         }
-        let now = Instant::now();
-        for event in signals.into_iter().filter_map(|s| shell.on(s, now)) {
-            match event {
-                osc::Event::Progress(state, value) => {
-                    output.control(&Control::TerminalProgress { state, value });
-                }
-                osc::Event::Alert(alert) => state.alert(channel, alert),
-            }
+        let (progress, alerts) = shell.read(signals, Instant::now());
+        if let Some(progress) = progress {
+            output.control(&progress);
+        }
+        for alert in alerts {
+            state.alert(channel, alert);
         }
     }
 }

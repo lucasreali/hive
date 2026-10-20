@@ -224,6 +224,21 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// The events of one read's `signals` at `now`: its alerts, and only the last progress
+    /// change (a program flooding progress makes one message a read, not one a sequence).
+    pub fn read(&mut self, signals: Vec<Signal>, now: Instant) -> (Option<Control>, Vec<Alert>) {
+        let (mut progress, mut alerts) = (None, Vec::new());
+        for event in signals.into_iter().filter_map(|s| self.on(s, now)) {
+            match event {
+                Event::Progress(state, value) => {
+                    progress = Some(Control::TerminalProgress { state, value });
+                }
+                Event::Alert(alert) => alerts.push(alert),
+            }
+        }
+        (progress, alerts)
+    }
+
     /// The event `signal` makes at `now`: a command's end (only after its start), a
     /// notification at least [`NOTE_GAP`] after the last, a progress that changed.
     pub fn on(&mut self, signal: Signal, now: Instant) -> Option<Event> {
@@ -463,6 +478,29 @@ mod tests {
         assert_eq!(shell.on(normal(6), t0), progress(ProgressState::Normal, 6));
         let error = shell.on(Signal::Progress(ProgressState::Error, 6), t0);
         assert_eq!(error, progress(ProgressState::Error, 6));
+    }
+
+    #[test]
+    fn a_read_sends_its_last_progress_change_and_every_alert() {
+        let mut shell = Shell::default();
+        let t0 = Instant::now();
+        let normal = |value| Signal::Progress(ProgressState::Normal, value);
+        let mut flood: Vec<_> = (0..1000).map(|n| normal((n % 2) as u8)).collect();
+        flood.push(note("", "a"));
+        flood.push(normal(7));
+        let (progress, alerts) = shell.read(flood, t0);
+        let seven = Control::TerminalProgress {
+            state: ProgressState::Normal,
+            value: 7,
+        };
+        assert_eq!(progress, Some(seven));
+        let a = Alert::Notification {
+            title: "".into(),
+            body: "a".into(),
+        };
+        assert_eq!(alerts, [a]);
+        // Nothing changed: nothing to send.
+        assert_eq!(shell.read(vec![normal(7)], t0), (None, vec![]));
     }
 
     #[test]
