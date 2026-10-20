@@ -621,12 +621,13 @@ impl State {
     }
 
     /// Sends the current account's windows (5-hour, 7-day) when they are not the ones the app
-    /// has: after a report, and every second for their resets and an account switch.
+    /// has: after a report, and every second for their resets, their pace and an account switch;
+    /// then any alert they raise (17.23).
     async fn send_usage(&self) {
         let account = self.account();
         let mut usage = self.usage.lock().await;
         let now = hook::now_ms() / 1000;
-        if let Some(message) = usage.changed(account.as_deref(), now) {
+        for message in usage.changed(account.as_deref(), now) {
             self.to_app(0, &message).await;
         }
     }

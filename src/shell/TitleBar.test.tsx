@@ -75,6 +75,24 @@ test("with agents running the update asks first, like closing", () => {
   install.mockRestore();
 });
 
+test("a usage alert in the inbox is about no agent: choosing it only closes the inbox (17.23)", () => {
+  render(<App />);
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    useHive.setState({ selection: "x" });
+    addToInbox({ agent: null, state: null, at: Date.now() - 5_000, text: "Session usage at 80%" });
+  });
+  fireEvent.click(document.querySelector(".pending-bell") as HTMLButtonElement);
+  const item = screen.getByRole("menuitem", { name: /Session usage at 80%/ });
+  expect(item.textContent).toBe("Session usage at 80%5s ago");
+  expect((item as HTMLButtonElement).disabled).toBe(false);
+  expect(item.title).toBe("");
+  expect(item.querySelector(".usage-alert-icon")?.getAttribute("aria-label")).toBe("Usage");
+  fireEvent.click(item);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(useHive.getState().selection).toBe("x");
+});
+
 test("the bell's inbox: pending agents, then the alerts; going to an agent", () => {
   render(<App />);
   const bell = () => document.querySelector(".pending-bell") as HTMLButtonElement;

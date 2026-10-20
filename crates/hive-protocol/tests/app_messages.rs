@@ -92,6 +92,7 @@ sort! {
         | AgentTitle
         | AgentUsage
         | SessionUsage
+        | UsageAlert
         | AgentRemoved
         | Projects
         | ProjectAdded
@@ -242,6 +243,13 @@ fn samples() -> Vec<Control> {
                 used_percentage: 41,
                 resets_at: 1_738_857_600,
             }),
+            limit_at: Some(1_738_420_200),
+            week_limit_at: None,
+        },
+        UsageAlert {
+            window: UsageWindow::Session,
+            threshold: 80,
+            resets_at: 1_738_425_600,
         },
         AgentRemoved { id: s("s") },
         Projects {

@@ -342,6 +342,13 @@ label:has(> input[type="checkbox"]:disabled) {
   white-space: nowrap;
 }
 
+/* A usage alert's item (17.23): the ring's warning colour. */
+.usage-alert-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--state-permission);
+}
+
 .window-controls button {
   width: 46px;
   display: flex;

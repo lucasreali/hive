@@ -139,9 +139,13 @@ export type WorktreeDialog = {
 /** One alert `notify` raised, kept for the bell's inbox (6.5). `id` grows with each alert. */
 export type InboxItem = {
   id: number;
-  /** The agent's session id: clicking the item goes to it while it runs. */
-  agent: string;
-  state: AgentState;
+  /**
+   * The agent's session id: clicking the item goes to it while it runs; null for a usage alert
+   * (17.23), which is about no agent.
+   */
+  agent: string | null;
+  /** The agent's state then; null for a usage alert. */
+  state: AgentState | null;
   /** Wall clock, ms since the epoch. */
   at: number;
   /** E.g. "fix login is waiting for permission". */
@@ -326,6 +330,8 @@ export type HiveState = {
   sessionUsage: SessionWindow | null;
   /** Its 7-day window (15.3), only alongside the 5-hour one. */
   weekUsage: SessionWindow | null;
+  /** When each window reaches 100% at its pace (17.23, Unix s), null when it lasts. */
+  usageLimits: { session: number | null; week: number | null };
   /** The service's settings (the defaults until they arrive). */
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
@@ -445,6 +451,7 @@ export const initialState: HiveState = {
   appMode: null,
   sessionUsage: null,
   weekUsage: null,
+  usageLimits: { session: null, week: null },
   settings: DEFAULT_SETTINGS,
   settingsError: null,
   settingsPending: false,
