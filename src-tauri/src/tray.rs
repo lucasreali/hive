@@ -54,8 +54,8 @@ fn note(name: &str, text: String) -> Entry {
     }
 }
 
-/// The icon: `SIZE`×`SIZE` RGBA pixels, drawn as a template (the menu bar's own colour) or in
-/// the colour of the most urgent state.
+/// The icon: `SIZE`×`SIZE` RGBA pixels of a hexagon outline, drawn as a template (the menu
+/// bar's own colour) or in the colour of the most urgent state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Icon {
     pub rgba: Vec<u8>,
@@ -179,9 +179,9 @@ pub fn tint(state: AgentState, pending: bool) -> Option<[u8; 3]> {
     }
 }
 
-/// How much of the pixel at (`x`, `y`) a hexagon of `radius` (centre to corner, pointy top)
-/// centred on the icon covers, in 0..=255, from 4×4 samples. A sample inside the hexagon and
-/// outside the one of `inner` (0 for none) counts: an outline, or a filled hexagon.
+/// How much of the pixel at (`x`, `y`) a hexagon outline covers, in 0..=255, from 4×4
+/// samples: inside the hexagon of `radius` (centre to corner, pointy top) centred on the icon
+/// and outside the one of `inner`.
 fn coverage(x: u32, y: u32, radius: f64, inner: f64) -> u8 {
     let centre = f64::from(SIZE) / 2.0;
     let inside = |px: f64, py: f64, r: f64| {
@@ -201,15 +201,14 @@ fn coverage(x: u32, y: u32, radius: f64, inner: f64) -> u8 {
     u8::try_from(hits * 255 / 16).unwrap_or(u8::MAX)
 }
 
-/// The icon for the most urgent state (`None`: no agent): a hexagon outline as a template, or
-/// a filled hexagon in the state's [`tint`].
+/// The icon for the most urgent state (`None`: no agent): always the same hexagon outline, as
+/// a template when calm (the menu bar's own colour) or in the state's [`tint`] otherwise; only
+/// its colour changes (18.5).
 pub fn icon(urgent: Option<(AgentState, bool)>) -> Icon {
     let tint = urgent.and_then(|(state, pending)| tint(state, pending));
     let radius = f64::from(SIZE) / 2.0 - 2.0;
-    let (colour, inner) = match tint {
-        Some(colour) => (colour, 0.0),
-        None => ([0, 0, 0], radius - 4.0),
-    };
+    let inner = radius - 4.0;
+    let colour = tint.unwrap_or([0, 0, 0]);
     let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
     for y in 0..SIZE {
         for x in 0..SIZE {

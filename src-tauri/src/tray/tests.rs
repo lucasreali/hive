@@ -191,17 +191,34 @@ fn a_calm_icon_is_a_template_hexagon_outline() {
     }
 }
 
+/// The icon's alpha mask: its shape, whatever its colour.
+fn mask(icon: &Icon) -> Vec<u8> {
+    icon.rgba.iter().skip(3).step_by(4).copied().collect()
+}
+
 #[test]
-fn an_urgent_icon_is_a_filled_hexagon_in_its_colour() {
-    let icon = icon(Some((AgentState::Error, true)));
-    assert!(!icon.template);
-    assert!(icon.rgba.chunks(4).all(|p| p[..3] == [0xd3, 0x61, 0x51]));
-    assert_eq!(alpha(&icon, SIZE / 2, SIZE / 2), 255);
-    assert_eq!(alpha(&icon, SIZE / 2, 3), 255);
-    assert_eq!(alpha(&icon, 0, 0), 0);
-    // Anti-aliased: the edge of a slanted side is partly covered.
-    assert!((1..255).contains(&alpha(&icon, 9, 6)));
-    assert_eq!(total_alpha(&icon), 168_768, "the hexagon's area");
+fn an_urgent_icon_is_the_same_outline_only_in_its_colour() {
+    let calm = icon(None);
+    let urgent = [
+        (AgentState::WaitingPermission, true, [0xa4, 0x88, 0x19]),
+        (AgentState::WaitingPlan, true, [0xa4, 0x88, 0x19]),
+        (AgentState::WaitingAnswer, true, [0xa4, 0x88, 0x19]),
+        (AgentState::Error, true, [0xd3, 0x61, 0x51]),
+        (AgentState::WaitingYou, true, [0xad, 0x6e, 0x25]),
+        (AgentState::Working, false, [0x5c, 0x78, 0xe2]),
+        (AgentState::WithSubagents, false, [0xa4, 0x49, 0xab]),
+    ];
+    for (state, pending, colour) in urgent {
+        let icon = icon(Some((state, pending)));
+        assert!(!icon.template, "{state:?} carries a colour");
+        assert_eq!(icon.rgba.len(), calm.rgba.len());
+        assert!(icon.rgba.chunks(4).all(|p| p[..3] == colour), "{state:?}");
+        // The same shape as the calm template, so never filled.
+        assert_eq!(mask(&icon), mask(&calm), "{state:?}");
+        assert_eq!(alpha(&icon, SIZE / 2, SIZE / 2), 0, "{state:?} is hollow");
+        assert_eq!(alpha(&icon, SIZE / 2, 3), 255);
+        assert_eq!(total_alpha(&icon), 72_600);
+    }
 }
 
 #[test]
