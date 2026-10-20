@@ -336,7 +336,15 @@ static ON_DROP: OnceLock<OnDrop> = OnceLock::new();
 /// The view class's `performDragOperation:` before `take_file_drops` replaced it.
 static PERFORM: OnceLock<usize> = OnceLock::new();
 /// `performDragOperation:`'s signature: YES when the drop was taken.
-type Perform = unsafe extern "C" fn(Id, Sel, Id) -> bool;
+type Perform = unsafe extern "C" fn(Id, Sel, Id) -> Bool;
+
+/// Objective-C's `BOOL`: a signed char on Intel (where only its low byte is set, so it is read
+/// as a byte and compared with `NO`), a C `bool` on arm64; both one byte, 0 for NO.
+type Bool = i8;
+const NO: Bool = 0;
+const YES: Bool = 1;
+/// `NSUTF8StringEncoding`.
+const UTF8: usize = 4;
 
 /// Makes files dropped from another app (Finder) on the webview `view` go to `on_drop` (18.1)
 /// with their paths and where they were dropped, in points from the view's top left; the
@@ -365,8 +373,8 @@ pub unsafe fn take_file_drops(
         return false;
     }
     let name = selector(c"performDragOperation:");
-    // SAFETY: `view` is an object (the caller's promise); the class, its method and its type encoding are the
-    // runtime's. The replacement has the same signature ("c@:@" / "B@:@": a BOOL from self,
+    // SAFETY: `view` is an object (the caller's promise); the class, its method and its type
+    // encoding are the runtime's. The replacement has the same signature ("c@:@" / "B@:@": a BOOL from self,
     // _cmd and the dragging info), so it is installed with the method's own encoding.
     unsafe {
         let class = object_getClass(view);
@@ -384,11 +392,11 @@ pub unsafe fn take_file_drops(
 
 /// The replaced `performDragOperation:`: a drop `take_drop` takes, or the class's own.
 /// Nothing unwinds into AppKit: a panic leaves the drop to the class's method.
-unsafe extern "C" fn perform_drag(view: Id, name: Sel, info: Id) -> bool {
+unsafe extern "C" fn perform_drag(view: Id, name: Sel, info: Id) -> Bool {
     // SAFETY: AppKit calls this as `performDragOperation:` on a view, with its dragging info.
     let taken = catch_unwind(AssertUnwindSafe(|| unsafe { take_drop(view, info) }));
     if taken.unwrap_or(false) {
-        return true;
+        return YES;
     }
     // SAFETY: the class's own implementation of this very message, kept by `take_file_drops`
     // before it replaced it.
@@ -396,7 +404,7 @@ unsafe extern "C" fn perform_drag(view: Id, name: Sel, info: Id) -> bool {
     PERFORM
         .get()
         .map(own)
-        .is_some_and(|own| unsafe { own(view, name, info) })
+        .map_or(NO, |own| unsafe { own(view, name, info) })
 }
 
 /// Takes the drop `info` on `view` when it comes from another app with file paths: gives them
@@ -427,8 +435,8 @@ unsafe fn take_drop(view: Id, info: Id) -> bool {
             location,
             null_mut(),
         );
-        let flipped = message::<unsafe extern "C" fn(Id, Sel) -> bool>();
-        let y = if flipped(view, selector(c"isFlipped")) {
+        let flipped = message::<unsafe extern "C" fn(Id, Sel) -> Bool>();
+        let y = if flipped(view, selector(c"isFlipped")) != NO {
             at.y
         } else {
             bounds(view).size.y - at.y
@@ -440,8 +448,9 @@ unsafe fn take_drop(view: Id, info: Id) -> bool {
     true
 }
 
-/// The file paths on `pasteboard` (`NSFilenamesPboardType`): the first [`DROP_LIMIT`] strings
-/// of at most [`PATH_LIMIT`] bytes; none when it has none.
+/// The file paths on `pasteboard` (`NSFilenamesPboardType`): of the first [`DROP_LIMIT`]
+/// strings, those of at most [`PATH_LIMIT`] bytes that may be typed (`quote::usable`:
+/// absolute, no control character); none when it has none.
 ///
 /// # Safety
 /// `pasteboard` is an `NSPasteboard` (or nil).
@@ -457,22 +466,23 @@ unsafe fn file_paths(pasteboard: Id) -> Vec<String> {
             NSFilenamesPboardType,
         );
         let is = |object: Id, class: &CStr| {
-            let is = message::<unsafe extern "C" fn(Id, Sel, Id) -> bool>();
-            is(
-                object,
-                selector(c"isKindOfClass:"),
-                objc_getClass(class.as_ptr()),
-            )
+            let is = message::<unsafe extern "C" fn(Id, Sel, Id) -> Bool>();
+            let class = objc_getClass(class.as_ptr());
+            is(object, selector(c"isKindOfClass:"), class) != NO
         };
         if !is(list, c"NSArray") {
             return paths;
         }
         let count = message::<unsafe extern "C" fn(Id, Sel) -> usize>();
         let at = message::<unsafe extern "C" fn(Id, Sel, usize) -> Id>();
+        let bytes = message::<unsafe extern "C" fn(Id, Sel, usize) -> usize>();
         let text = message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>();
         for index in 0..count(list, selector(c"count")).min(DROP_LIMIT) {
             let item = at(list, selector(c"objectAtIndex:"), index);
-            let utf8 = if is(item, c"NSString") {
+            // Measured before it is copied out.
+            let fits = is(item, c"NSString")
+                && bytes(item, selector(c"lengthOfBytesUsingEncoding:"), UTF8) <= PATH_LIMIT;
+            let utf8 = if fits {
                 text(item, selector(c"UTF8String"))
             } else {
                 std::ptr::null()
@@ -481,7 +491,8 @@ unsafe fn file_paths(pasteboard: Id) -> Vec<String> {
                 continue;
             }
             let path = CStr::from_ptr(utf8).to_string_lossy();
-            if path.len() <= PATH_LIMIT {
+            // Never a control character or a relative path (`quote::usable`).
+            if crate::quote::usable(&path) {
                 paths.push(path.into_owned());
             }
         }
@@ -715,15 +726,16 @@ mod tests {
         std::sync::Mutex::new(Vec::new());
     static PANIC: AtomicU8 = AtomicU8::new(0);
 
-    extern "C" fn own_perform(_: Id, _: Sel, _: Id) -> bool {
+    extern "C" fn own_perform(_: Id, _: Sel, _: Id) -> Bool {
         PERFORMED.fetch_add(1, SeqCst);
-        false
+        NO
     }
     extern "C" fn exited(_: Id, _: Sel, _: Id) {
         EXITED.fetch_add(1, SeqCst);
     }
-    extern "C" fn flipped(_: Id, _: Sel) -> bool {
-        FLIPPED.load(SeqCst) == 1
+    /// Any byte but 0 is YES (Intel's `BOOL` is a signed char).
+    extern "C" fn flipped(_: Id, _: Sel) -> Bool {
+        FLIPPED.load(SeqCst) as Bool
     }
     extern "C" fn bounds(_: Id, _: Sel) -> Rect {
         let origin = Pair { x: 0.0, y: 0.0 };
@@ -843,7 +855,7 @@ mod tests {
         let drop = |info: Id| {
             // SAFETY: the stand-in view's `performDragOperation:`.
             unsafe {
-                let perform = message::<unsafe extern "C" fn(Id, Sel, Id) -> bool>();
+                let perform = message::<unsafe extern "C" fn(Id, Sel, Id) -> Bool>();
                 perform(view, selector(c"performDragOperation:"), info)
             }
         };
@@ -859,10 +871,15 @@ mod tests {
             // One byte too long: left out.
             string(&format!("{long}y")),
             string("/tmp/日本語"),
+            // Never typed: control characters (they would act as keys), a relative path.
+            string("/tmp/a\x1b[201~\x15touch ~/PWNED\n"),
+            string("/tmp/\u{9b}201~"),
+            string("/tmp/a\rb"),
+            string("a.png"),
         ];
         LIST.store(array(&paths) as usize, SeqCst);
         // From another app, with files: taken, and WebKit told the drag left.
-        assert!(drop(info));
+        assert_eq!(drop(info), YES);
         let expected = vec![
             "/Users/me/My Shots/a.png".to_owned(),
             long,
@@ -872,8 +889,8 @@ mod tests {
         assert_eq!(dropped(), [(expected.clone(), 100.0, 100.0)]);
         assert_eq!(counts(), (0, 1));
         // A flipped view counts from its top already.
-        FLIPPED.store(1, SeqCst);
-        assert!(drop(info));
+        FLIPPED.store(2, SeqCst);
+        assert_eq!(drop(info), YES);
         assert_eq!(dropped(), [(expected, 100.0, 500.0)]);
         assert_eq!(counts(), (0, 1));
         // SAFETY: AppKit's constant, read only.
@@ -883,23 +900,29 @@ mod tests {
         // Past the limit, the first ones.
         let many: Vec<Id> = (0..=DROP_LIMIT).map(|i| string(&format!("/{i}"))).collect();
         LIST.store(array(&many) as usize, SeqCst);
-        assert!(drop(info));
+        assert_eq!(drop(info), YES);
         let got = dropped();
         assert_eq!(got[0].0.len(), DROP_LIMIT);
         assert_eq!(got[0].0.last().map(String::as_str), Some("/999"));
         counts();
 
         // Every other drop is the view's own: the app's own drags (a source), no paths, no
-        // array, an empty one, no info, or a handler that panics.
+        // array, an empty one, only paths never typed, no info, or a handler that panics.
         let own = |info: Id| {
-            assert!(!drop(info), "the view's answer");
+            assert_eq!(drop(info), NO, "the view's answer");
             assert!(dropped().is_empty());
             assert_eq!(counts(), (1, 0));
         };
         SOURCE.store(view as usize, SeqCst);
         own(info);
         SOURCE.store(0, SeqCst);
-        for list in [null_mut(), string("/tmp/a"), array(&[]), array(&[no_drops])] {
+        for list in [
+            null_mut(),
+            string("/tmp/a"),
+            array(&[]),
+            array(&[no_drops]),
+            array(&paths[5..]),
+        ] {
             LIST.store(list as usize, SeqCst);
             own(info);
         }

@@ -3003,6 +3003,13 @@ fn files_dropped_on_the_window_go_to_the_ui_as_typed_paths() {
     // Nothing dropped: nothing sent.
     assert!(!files_dropped(app.handle(), &[], 1.0, 1.0));
     assert!(rx.try_recv().is_err());
+    // Only paths that may not be typed (a control character, not absolute): nothing sent.
+    let hostile = [
+        "/tmp/a\x1b[201~\x15touch x\n".to_owned(),
+        "a.png".to_owned(),
+    ];
+    assert!(!files_dropped(app.handle(), &hostile, 1.0, 1.0));
+    assert!(rx.try_recv().is_err());
     // No UI to send it to.
     app.state::<Hive>().link().ui = None;
     assert!(!files_dropped(app.handle(), &paths, 1.0, 1.0));

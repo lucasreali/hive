@@ -4,51 +4,63 @@
 //! The same text must work in bash, zsh and fish, and in Claude Code's prompt, which turns a
 //! pasted image path into an attachment. As Terminal.app and iTerm2 do, a path is written with
 //! a backslash before each character a shell treats specially (`/My\ Shots/a\ \(1\).png`);
-//! all three shells read `\` + any ASCII character as that character. A backslash before a
-//! line break would join the lines instead, so a path with a control character (a newline, a
-//! tab, an escape) is written between single quotes, which keep them as they are in all three;
-//! inside them `'` is written `'\''` and `\` as `'\\'` (fish reads `\\` and `\'` inside single
-//! quotes as escapes, bash and zsh do not, so both are written outside them). Non-ASCII
-//! characters (accents, CJK, the narrow no-break space in macOS screenshot names) are no
-//! shell's syntax and stay as they are.
+//! all three shells read `\` + any ASCII character as that character. Non-ASCII characters
+//! (accents, CJK, the narrow no-break space in macOS screenshot names) are no shell's syntax
+//! and stay as they are.
+//!
+//! A control character (C0, DEL, C1: `char::is_control`) is never typed, quoted or not: the
+//! text reaches the program's line editor as keystrokes before any shell parses it, so an
+//! escape could end a bracketed paste and a carriage return or a newline press Enter (a file
+//! named `a\x1b[201~\x15touch x\n` would run `touch x`). A path holding one is left out, as is
+//! a path that is not absolute, and a text longer than [`TYPED_LIMIT`] is not typed at all.
+
+/// The longest text a drop or a paste types; a longer one types nothing.
+pub const TYPED_LIMIT: usize = 64 * 1024;
 
 /// Whether `c` reads as itself, unquoted, anywhere in a word of bash, zsh and fish.
 fn plain(c: char) -> bool {
     !c.is_ascii() || c.is_ascii_alphanumeric() || "/._-+,:@%".contains(c)
 }
 
-/// `path` as one shell word.
+/// Whether `path` may be typed: absolute, without any control character.
+pub fn usable(path: &str) -> bool {
+    path.starts_with('/') && !path.chars().any(char::is_control)
+}
+
+/// `path` as one shell word; empty (no word) when it holds a control character, which is
+/// never typed.
 pub fn word(path: &str) -> String {
+    if path.chars().any(char::is_control) {
+        return String::new();
+    }
     if path.is_empty() {
         return "''".to_owned();
     }
     let mut out = String::with_capacity(path.len() + 2);
-    if path.chars().any(char::is_control) {
-        out.push('\'');
-        for c in path.chars() {
-            match c {
-                '\'' => out.push_str(r"'\''"),
-                '\\' => out.push_str(r"'\\'"),
-                c => out.push(c),
-            }
+    for c in path.chars() {
+        if !plain(c) {
+            out.push('\\');
         }
-        out.push('\'');
-    } else {
-        for c in path.chars() {
-            if !plain(c) {
-                out.push('\\');
-            }
-            out.push(c);
-        }
+        out.push(c);
     }
     out
 }
 
-/// What dropping (or pasting) the files at `paths` types: each one as a word followed by a
-/// space, as Terminal.app does, so the next word (or the next drop) stays apart. Never a line
-/// break outside quotes: it types the paths and never presses Enter.
+/// What dropping (or pasting) the files at `paths` types: each [`usable`] one as a word
+/// followed by a space, as Terminal.app does, so the next word (or the next drop) stays apart.
+/// The others are left out; nothing when none is left or the text would pass [`TYPED_LIMIT`].
+/// Never a control character: it types the paths and never presses Enter.
 pub fn typed(paths: &[impl AsRef<str>]) -> String {
-    paths.iter().map(|path| word(path.as_ref()) + " ").collect()
+    let text: String = paths
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|path| usable(path))
+        .map(|path| word(path) + " ")
+        .collect();
+    if text.len() > TYPED_LIMIT {
+        return String::new();
+    }
+    text
 }
 
 #[cfg(test)]
@@ -89,19 +101,43 @@ mod tests {
         assert_eq!(word("/tmp/日本語/café"), "/tmp/日本語/café");
     }
 
+    /// Names that would act as keys in a line editor: end a bracketed paste, erase the line,
+    /// press Enter, start a CSI (C1 `\x9b`), delete.
+    const HOSTILE: [&str; 9] = [
+        "/tmp/a\x1b[201~\x15touch ~/PWNED\n",
+        "/tmp/a\nb",
+        "/tmp/a\rb",
+        "/tmp/a\x15b",
+        "/tmp/tab\there",
+        "/tmp/\u{9b}201~",
+        "/tmp/\u{85}",
+        "/tmp/del\x7f",
+        "/tmp/nul\0",
+    ];
+
     #[test]
-    fn control_characters_go_between_single_quotes() {
-        assert_eq!(word("/tmp/a\nb"), "'/tmp/a\nb'");
-        assert_eq!(word("/tmp/tab\there"), "'/tmp/tab\there'");
-        assert_eq!(word("/tmp/it's\n"), "'/tmp/it'\\''s\n'");
-        assert_eq!(word("/tmp/back\\slash\r"), "'/tmp/back'\\\\'slash\r'");
-        assert_eq!(word("/tmp/$x \u{1b}"), "'/tmp/$x \u{1b}'");
-        assert_eq!(word("/tmp/\u{85}"), "'/tmp/\u{85}'", "a C1 control too");
+    fn a_path_with_a_control_character_has_no_word_and_is_left_out() {
+        for path in HOSTILE {
+            assert_eq!(word(path), "", "{path:?}");
+            assert!(!usable(path), "{path:?}");
+            assert_eq!(typed(&[path]), "", "{path:?}");
+        }
+        let mut paths = vec!["/a b"];
+        paths.extend(HOSTILE);
+        paths.push("/c");
+        let text = typed(&paths);
+        assert_eq!(text, r"/a\ b /c ");
+        assert!(!text.chars().any(char::is_control));
     }
 
     #[test]
-    fn an_empty_path_is_an_empty_word() {
+    fn only_absolute_paths_are_typed() {
         assert_eq!(word(""), "''");
+        assert!(usable("/"));
+        for path in ["", "a.png", "~/a.png", "./a", "-rf", " /a"] {
+            assert!(!usable(path), "{path:?}");
+        }
+        assert_eq!(typed(&["", "a.png", "/b", "-rf"]), "/b ");
     }
 
     #[test]
@@ -111,7 +147,18 @@ mod tests {
         assert_eq!(typed(&[] as &[&str]), "");
     }
 
-    /// Every case above, read back by a POSIX shell (`/bin/sh`), comes out as the path.
+    #[test]
+    fn a_text_past_the_limit_types_nothing() {
+        // Each word is "/" + 1022 × "x" plus its space: 1024 bytes.
+        let path = format!("/{}", "x".repeat(1022));
+        let fits = vec![path.as_str(); TYPED_LIMIT / 1024];
+        assert_eq!(typed(&fits).len(), TYPED_LIMIT);
+        let mut over = fits.clone();
+        over.push("/");
+        assert_eq!(typed(&over), "");
+    }
+
+    /// Every typed word, read back by a POSIX shell (`/bin/sh`), comes out as its path.
     #[cfg(unix)]
     #[test]
     fn a_shell_reads_each_word_back_as_its_path() {
@@ -119,14 +166,8 @@ mod tests {
             "/Users/me/My Shots/a (1).png",
             "/a'b\"c",
             "/$HOME/`x`",
-            "!#&*;<>?[]^{}|~=\\",
+            "/!#&*;<>?[]^{}|~=\\",
             "/tmp/日本語/café\u{202f}x",
-            "/tmp/a\nb",
-            "/tmp/tab\there",
-            "/tmp/it's\n",
-            "/tmp/back\\slash\r",
-            "/tmp/$x \u{1b}",
-            "",
         ];
         let script = format!("printf '%s\\0' {}", typed(&paths));
         let home = std::env::temp_dir();

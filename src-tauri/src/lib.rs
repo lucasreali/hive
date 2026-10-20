@@ -991,11 +991,13 @@ impl Hive {
 
     /// Files dropped from Finder on the window (18.1), at (`x`, `y`) in points from its top
     /// left: the UI gets `files_dropped` with their paths as one shell-quoted text
-    /// ([`quote::typed`]), which it types into the terminal whose pane is there, if any. False
-    /// when there is nothing to send or no UI to send it to.
+    /// ([`quote::typed`]: paths that may not be typed are left out), which it types into the
+    /// terminal whose pane is there, if any. False when there is nothing to type or no UI to
+    /// send it to.
     pub fn files_dropped(&self, paths: &[String], x: f64, y: f64) -> bool {
-        let message = json!({"type": "files_dropped", "text": quote::typed(paths), "x": x, "y": y});
-        !paths.is_empty() && self.link().to_ui(message)
+        let text = quote::typed(paths);
+        let message = json!({"type": "files_dropped", "text": text, "x": x, "y": y});
+        !text.is_empty() && self.link().to_ui(message)
     }
 
     /// Sends every service message to `ui`, starting the bridge unless a connection is up.

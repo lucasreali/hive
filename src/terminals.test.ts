@@ -688,10 +688,24 @@ test("files dropped on a pane are typed into that terminal, bracketed when asked
     expect(dropFiles(text, x, y)).toBe(false);
   }
   expect(write).toHaveBeenCalledTimes(2);
-  // A newline inside a quoted name is pasted as text: no Enter after the paths.
-  const lined = "'/tmp/a\nb' ";
-  expect(dropFiles(lined, 500, 10)).toBe(true);
-  expect(write.mock.calls.at(-1)).toEqual([other.id, `\x1b[200~'/tmp/a\rb' \x1b[201~`]);
+  // A text with a control character is refused: it would act as keys (end the bracketed
+  // paste, erase the line, press Enter). Non-ASCII past the C1 range is typed.
+  for (const hostile of [
+    "/tmp/a\x1b[201~\x15touch ~/PWNED\n ",
+    "/tmp/a\nb ",
+    "/tmp/a\rb ",
+    "/tmp/a\x15b ",
+    "/tmp/a\x00 ",
+    "/tmp/a\x1f ",
+    "/tmp/a\x7f ",
+    "/tmp/\x9b201~ ",
+    "/tmp/a\x85 ",
+  ]) {
+    expect(dropFiles(hostile, 500, 10)).toBe(false);
+  }
+  expect(write).toHaveBeenCalledTimes(2);
+  expect(dropFiles("/tmp/\xa0é ", 500, 10)).toBe(true);
+  expect(write.mock.calls.at(-1)).toEqual([other.id, "\x1b[200~/tmp/\xa0é \x1b[201~"]);
   at.mockRestore();
   write.mockRestore();
 });

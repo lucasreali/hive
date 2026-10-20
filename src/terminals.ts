@@ -380,13 +380,22 @@ export function terminalAt(target: EventTarget | null): { id: number; selection:
   return term ? { id, selection: term.hasSelection() } : null;
 }
 
+/** Whether `c` is a C0 or C1 control character or DEL (Rust's `char::is_control`). */
+const control = (c: string) => {
+  const code = c.charCodeAt(0);
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+};
+
 /**
  * Files dropped from Finder (18.1): `text`, their shell-quoted paths, is pasted into the
  * terminal whose pane is at (`x`, `y`), found as the terminal menu finds it, bracketed when
  * the program asked and never with Enter; that terminal takes the keyboard. A drop anywhere
  * else (the sidebar, a dialog over the pane, a file tab) is ignored. True when it was typed.
+ * A text with a control character is refused: the program would read it as keys (an escape
+ * ending the bracketed paste, Enter); the app side never sends one.
  */
 export function dropFiles(text: string, x: number, y: number): boolean {
+  if ([...text].some(control)) return false;
   const at = terminalAt(document.elementFromPoint(x, y));
   const term = at && terminal(at.id);
   if (!term) return false;
