@@ -70,6 +70,7 @@ const {
   showTerminals,
   splitTerminal,
   terminal,
+  zoomTerminals,
 } = await import("./terminals");
 
 const written = (term: Terminal) =>
@@ -98,6 +99,7 @@ afterEach(async () => {
   unmount();
   host.remove();
   interceptKeys(() => false);
+  zoomTerminals(0);
   // The mock's answers to `connect` (welcome, projects) arrive on later ticks: let them land
   // now, then reset, so none leaks into the next test file.
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -180,6 +182,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
     cursor_style: "bar",
     cursor_blink: true,
     copy_on_select: false,
+    option_as_meta: true,
     shell: "default",
   };
   settings.appearance.theme = "one-light";
@@ -191,6 +194,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
       scrollback: 1234,
       cursorStyle: "bar",
       cursorBlink: true,
+      macOptionIsMeta: true,
     });
     expect(t.options.theme?.background).toBe("#fafafa");
   }
@@ -538,6 +542,83 @@ test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shi
   copy.mockRestore();
   read.mockRestore();
   write.mockRestore();
+});
+
+test("on macOS ⌘← ⌘→ ⌘⌫ send line start, end and kill to the shell, ⌘K clears; nothing else does", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  const clear = spyOn(term, "clear");
+  const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
+  const sent = () => write.mock.calls.map(([, data]) => data);
+  // Not on macOS: Cmd is no command key there, and Ctrl+← is the shell's own.
+  press(term, "ArrowLeft", cmd);
+  press(term, "k", cmd);
+  press(term, "ArrowLeft", { shiftKey: false });
+  expect(sent()).not.toContain("\x01");
+  expect(clear).not.toHaveBeenCalled();
+  write.mockClear();
+
+  asMac();
+  expect(press(term, "ArrowLeft", cmd).defaultPrevented).toBe(true);
+  press(term, "ArrowRight", cmd);
+  press(term, "Backspace", cmd);
+  expect(sent()).toEqual(["\x01", "\x05", "\x15"]);
+  expect(press(term, "k", cmd).defaultPrevented).toBe(true);
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(sent()).toHaveLength(3);
+  // With Shift or Option, on key up, or with Ctrl (the shell's): not these keys.
+  press(term, "ArrowLeft", { ...cmd, shiftKey: true });
+  press(term, "ArrowLeft", { ...cmd, altKey: true });
+  press(term, "ArrowLeft", cmd, "keyup");
+  press(term, "K", { ...cmd, shiftKey: true });
+  press(term, "k", { shiftKey: false, keyCode: 75 }); // Ctrl+K: the shell's kill-line
+  expect(sent().filter((d) => ["\x01", "\x05", "\x15"].includes(d))).toHaveLength(3);
+  expect(sent()).toContain("\x0b");
+  expect(clear).toHaveBeenCalledTimes(1);
+  // Cmd + another key is not one of them either.
+  press(term, "ArrowUp", cmd);
+  expect(clear).toHaveBeenCalledTimes(1);
+  clear.mockRestore();
+  write.mockRestore();
+});
+
+test("Option-click selects in a program that takes the mouse; Option as Meta follows the setting", async () => {
+  const { term } = await open();
+  expect(term.options.macOptionClickForcesSelection).toBe(true);
+  expect(term.options.macOptionIsMeta).toBe(false);
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.option_as_meta = true;
+  apply({ type: "settings", settings });
+  expect(term.options.macOptionIsMeta).toBe(true);
+  expect((await open()).term.options.macOptionIsMeta).toBe(true);
+});
+
+test("the font zoom stays within the settings' sizes and follows a new size", async () => {
+  const { term } = await open();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.font_size = 31;
+  apply({ type: "settings", settings });
+  zoomTerminals(1);
+  zoomTerminals(1);
+  expect(term.options.fontSize).toBe(32);
+  // At the top already: one step down is visible at once.
+  zoomTerminals(-1);
+  expect(term.options.fontSize).toBe(31);
+  zoomTerminals(1);
+  // A new size keeps the zoom (+1), and a new terminal gets it too.
+  settings.terminal.font_size = 20;
+  apply({ type: "settings", settings: structuredClone(settings) });
+  expect(term.options.fontSize).toBe(21);
+  expect((await open()).term.options.fontSize).toBe(21);
+  settings.terminal.font_size = 9;
+  apply({ type: "settings", settings: structuredClone(settings) });
+  for (let i = 0; i < 5; i++) zoomTerminals(-1);
+  expect(term.options.fontSize).toBe(8);
+  zoomTerminals(1);
+  expect(term.options.fontSize).toBe(9);
+  zoomTerminals(0);
+  expect(term.options.fontSize).toBe(9);
 });
 
 test("closing ends a running terminal, drops it and its tab; an exited one is just dropped", async () => {

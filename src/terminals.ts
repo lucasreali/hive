@@ -70,16 +70,39 @@ const ONE_LIGHT: ITheme = {
   brightWhite: "#ffffff",
 };
 
+/** The font sizes the settings allow (`terminal.font_size`), which ⌘= / ⌘- stay within. */
+const FONT_MIN = 8;
+const FONT_MAX = 32;
+
+/**
+ * Pixels ⌘= / ⌘- (macOS, 17.14) add to the settings' font size, for every terminal until ⌘0 or
+ * a restart: a view's zoom, not a setting.
+ */
+let zoom = 0;
+const zoomed = (size: number) => Math.min(FONT_MAX, Math.max(FONT_MIN, size + zoom));
+
 /** The xterm options the settings give (6.2): used by new terminals and live by open ones. */
 export function termOptions({ terminal: t, appearance }: Settings): ITerminalOptions {
   return {
     fontFamily: t.font_family,
-    fontSize: t.font_size,
+    fontSize: zoomed(t.font_size),
     scrollback: t.scrollback,
     cursorStyle: t.cursor_style,
     cursorBlink: t.cursor_blink,
+    macOptionIsMeta: t.option_as_meta,
     theme: appearance.theme === "one-light" ? ONE_LIGHT : ONE_DARK,
   };
+}
+
+/**
+ * ⌘= (1) and ⌘- (-1) make every terminal's font a pixel bigger or smaller, within the
+ * settings' limits; ⌘0 (0) gives back the settings' size.
+ */
+export function zoomTerminals(step: -1 | 0 | 1): void {
+  const settings = useHive.getState().settings;
+  const size = settings.terminal.font_size;
+  zoom = step === 0 ? 0 : zoomed(size + step) - size;
+  applySettings(settings);
 }
 
 /**
@@ -178,6 +201,8 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   const term = new Terminal({
     lineHeight: 1.2,
     allowProposedApi: true, // registerCharacterJoiner
+    // macOS: Option-drag selects even inside a program that takes the mouse (a TUI).
+    macOptionClickForcesSelection: true,
     linkHandler: LINKS,
     ...termOptions(useHive.getState().settings),
   });
@@ -246,12 +271,40 @@ export async function openWith(
   return id;
 }
 
+/** macOS' line keys (17.14, D17.2): Cmd + the key sends the shell this. */
+const MAC_LINE_KEYS: Record<string, string> = {
+  ArrowLeft: "\x01", // line start (Ctrl+A)
+  ArrowRight: "\x05", // line end (Ctrl+E)
+  Backspace: "\x15", // delete to the line start (Ctrl+U)
+};
+
+/** The terminal's own macOS keys, for the settings' Shortcuts section. */
+export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
+  { label: "Clear the terminal", keys: "⌘K" },
+  { label: "Go to the start of the line", keys: "⌘←" },
+  { label: "Go to the end of the line", keys: "⌘→" },
+  { label: "Delete to the start of the line", keys: "⌘⌫" },
+];
+
+/** On macOS, Cmd + an arrow or Backspace (`MAC_LINE_KEYS`), or ⌘K (clear): done, never typed. */
+function macKey(term: Terminal, event: KeyboardEvent): boolean {
+  const plain = commandKey(event) && !event.shiftKey && !event.altKey;
+  if (!isMac() || event.type !== "keydown" || !plain) return false;
+  const send = MAC_LINE_KEYS[event.key];
+  const clear = event.key.toUpperCase() === "K";
+  if (send === undefined && !clear) return false;
+  event.preventDefault();
+  if (send === undefined) term.clear();
+  else term.input(send);
+  return true;
+}
+
 /**
  * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C and Cmd+V, and
- * Ctrl+C stays the shell's. Every other key is the shell's.
+ * Ctrl+C stays the shell's, plus macOS' own keys (`macKey`). Every other key is the shell's.
  */
 function keys(term: Terminal, event: KeyboardEvent): boolean {
-  if (intercept(event)) return false;
+  if (intercept(event) || macKey(term, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const key = event.key.toUpperCase();
   if (event.type !== "keydown" || !chord || (key !== "C" && key !== "V")) return true;

@@ -13,14 +13,14 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
 import type { AppMode, ProjectScripts, Settings } from "../protocol";
-import { COMMANDS } from "../shortcuts";
+import { commandKeys, platformCommands } from "../shortcuts";
 import { ask, openModal, panelWorktree, scriptsOf, useHive } from "../store";
-import { openClaude, showOpenFailure } from "../terminals";
+import { MAC_TERMINAL_KEYS, openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { openSettingsFile } from "../viewer/external";
-import { keyText } from "../window";
+import { isMac } from "../window";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
 
@@ -197,6 +197,8 @@ type Field = {
   modes?: boolean;
   /** Shown only while the service runs natively on Windows (the app's mode, 12.5.4). */
   windows?: boolean;
+  /** Shown only on macOS (17.14). */
+  mac?: boolean;
   control: (id: string, label: string) => ReactNode;
 };
 
@@ -292,6 +294,22 @@ const FIELDS: Field[] = [
         get={(s) => s.terminal.copy_on_select}
         set={(s, on) => {
           s.terminal.copy_on_select = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Terminal",
+    label: "Option as Meta",
+    check: true,
+    help: "Option+key sends Esc and the key (Claude Code's Option+P and Option+T need it) instead of typing accents and symbols.",
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Option as Meta"
+        get={(s) => s.terminal.option_as_meta}
+        set={(s, on) => {
+          s.terminal.option_as_meta = on;
         }}
       />
     ),
@@ -484,16 +502,20 @@ function Fields({ fields }: { fields: Field[] }) {
   });
 }
 
-/** Read-only: the command table `shortcut()` runs. */
+/** Read-only: the command table `shortcut()` runs and, on macOS, the terminal's own keys. */
 function Shortcuts() {
+  const rows = [
+    ...platformCommands().map((c) => ({ id: c.id, label: c.label, keys: commandKeys(c) })),
+    ...(isMac() ? MAC_TERMINAL_KEYS.map((k) => ({ ...k, id: k.keys })) : []),
+  ];
   return (
     <table className="settings-keys">
       <tbody>
-        {COMMANDS.map((c) => (
-          <tr key={c.id}>
-            <td>{c.label}</td>
+        {rows.map((row) => (
+          <tr key={row.id}>
+            <td>{row.label}</td>
             <td>
-              <kbd>{keyText(c.keys)}</kbd>
+              <kbd>{row.keys}</kbd>
             </td>
           </tr>
         ))}
@@ -841,7 +863,9 @@ function Accounts() {
 function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
   const windows = useHive((s) => s.appMode?.mode === "native");
-  const fields = FIELDS.filter((f) => (modes || !f.modes) && (windows || !f.windows));
+  const fields = FIELDS.filter(
+    (f) => (modes || !f.modes) && (windows || !f.windows) && (!f.mac || isMac()),
+  );
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
     if (found.length === 0) return <p className="field-help">No setting matches.</p>;

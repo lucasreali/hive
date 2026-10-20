@@ -90,6 +90,16 @@ test("Enter opens a terminal in the picked worktree and closes the picker", asyn
   openTerminal.mockRestore();
 });
 
+test("an Enter that ends a composition (a dead key, an IME) picks nothing (17.14)", () => {
+  const openTerminal = spyOn(transport, "openTerminal");
+  open();
+  fireEvent.keyDown(field(), { key: "Enter", isComposing: true });
+  fireEvent.keyDown(field(), { key: "Enter", keyCode: 229 });
+  expect(useHive.getState().modal).toBe("worktree-picker");
+  expect(openTerminal).not.toHaveBeenCalled();
+  openTerminal.mockRestore();
+});
+
 test("a terminal that cannot be opened is shown as an error toast, with no tab (9.21)", async () => {
   const restore = unsent("openTerminal");
   open();

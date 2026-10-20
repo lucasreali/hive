@@ -430,6 +430,8 @@ export type Settings = {
     cursor_style: "block" | "bar" | "underline";
     cursor_blink: boolean;
     copy_on_select: boolean;
+    /** macOS: Option is Meta (Esc + key) rather than the key that types accents (17.14). */
+    option_as_meta: boolean;
     /** New terminals' shell when the service runs natively on Windows; ignored elsewhere. */
     shell: "default" | "cmd" | "git_bash";
   };

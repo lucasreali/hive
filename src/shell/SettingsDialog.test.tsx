@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { version } from "../../package.json";
+import { asMac } from "../../test/mac";
 import { expectClearButton } from "../../test/searchClear";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -8,6 +9,7 @@ import { COMMANDS } from "../shortcuts";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_DIAGNOSTICS, MOCK_REPOS } from "../transport/mock";
+import { isMac } from "../window";
 import { SECTIONS } from "./SettingsDialog";
 
 beforeAll(async () => {
@@ -27,7 +29,7 @@ function open() {
   render(<App />);
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS }));
-  fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
+  fireEvent.keyDown(document.body, { key: ",", ctrlKey: !isMac(), metaKey: isMac() });
   return screen.getByRole("dialog", { name: "Settings" }) as HTMLDialogElement;
 }
 
@@ -278,7 +280,7 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   typed.mockRestore();
 
   // Removed, its folder stays on disk.
-  fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
+  fireEvent.keyDown(document.body, { key: ",", ctrlKey: !isMac(), metaKey: isMac() });
   section("Accounts");
   fireEvent.click(screen.getByTitle("Remove Job"));
   await waitFor(() => expect(accounts()).toEqual([]));
@@ -361,11 +363,46 @@ test("the search lists every matching field across sections", () => {
   expect(labels()).toHaveLength(2);
 });
 
-test("shortcuts are the command table, read-only", () => {
+const shortcutRows = () =>
+  [...document.querySelectorAll(".settings-keys tr")].map((r) => r.textContent);
+
+test("shortcuts are the command table, read-only, without macOS' own", () => {
   open();
   section("Shortcuts");
-  const rows = [...document.querySelectorAll(".settings-keys tr")].map((r) => r.textContent);
-  expect(rows).toEqual(COMMANDS.map((c) => `${c.label}${c.keys}`));
+  expect(shortcutRows()).toEqual(COMMANDS.filter((c) => !c.mac).map((c) => `${c.label}${c.keys}`));
+  expect(shortcutRows()).toContain("Go to the next pending agentF8");
+});
+
+test("on macOS the shortcuts are named with ⌘, with macOS' own and the terminal's keys", () => {
+  asMac();
+  open();
+  section("Shortcuts");
+  const rows = shortcutRows();
+  expect(rows).toHaveLength(COMMANDS.length + 4);
+  expect(rows).toContain("Command palette⇧⌘P");
+  expect(rows).toContain("Go to the next pending agent⇧⌘J or F8");
+  expect(rows).toContain("Close the tab⌘W");
+  expect(rows).toContain("Show the previous tab⇧⌘[");
+  expect(rows).toContain("Show tab 9⌘9");
+  expect(rows).toContain("Make the terminal font smaller⌘-");
+  expect(rows.slice(-4)).toEqual([
+    "Clear the terminal⌘K",
+    "Go to the start of the line⌘←",
+    "Go to the end of the line⌘→",
+    "Delete to the start of the line⌘⌫",
+  ]);
+});
+
+test("Option as Meta is a macOS setting, off by default", async () => {
+  open();
+  expect(screen.queryByLabelText("Option as Meta")).toBeNull();
+  cleanup();
+  asMac();
+  open();
+  expect(input("Option as Meta").checked).toBe(false);
+  fireEvent.click(input("Option as Meta"));
+  await waitFor(() => expect(settings().terminal.option_as_meta).toBe(true));
+  expect(input("Option as Meta").checked).toBe(true);
 });
 
 test("about shows both versions, the service's diagnostics and terminals without hooks", async () => {

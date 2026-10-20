@@ -67,3 +67,10 @@ export const commandKey = (event: KeyboardEvent) =>
 /** A text naming Ctrl shortcuts, with macOS' symbols there: "Ctrl+Shift+O" becomes "⇧⌘O". */
 export const keyText = (text: string) =>
   isMac() ? text.replaceAll("Ctrl+Shift+", "⇧⌘").replaceAll("Ctrl+", "⌘") : text;
+
+/**
+ * Whether a key belongs to a composition (an IME, or a dead key: ´ ~ ^ on a pt-BR layout,
+ * 17.14): Enter then ends the composition, never a field's own action. WebKit sends Enter's
+ * keydown after `compositionend`, marked only by keyCode 229.
+ */
+export const composing = (event: KeyboardEvent) => event.isComposing || event.keyCode === 229;
