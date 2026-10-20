@@ -70,8 +70,8 @@ jobs:
           exit 0
           EOF
           chmod +x watch.sh
-          loop() { for i in $(seq 1 20); do ./watch.sh "$1-$i" cargo test -p hive --lib; done; }
-          loop a & loop b & wait
+          loop() { for i in $(seq 1 30); do ./watch.sh "$1-$i" cargo test -p hive --lib; done; }
+          loop a & loop b & loop c & wait
       - name: loop nextest
         if: always()
         run: |
