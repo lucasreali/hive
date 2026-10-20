@@ -1181,6 +1181,8 @@ mod tests {
     #[test]
     fn a_list_of_files_too_big_is_never_parsed() {
         use crate::Clipboard;
+        // Room for the most paths of the longest length, with 64 bytes of markup each.
+        assert_eq!(LIST_LIMIT, 1000 * 4160);
         let (pasteboard, board) = own_pasteboard("HiveHugeList");
         // At the limit: read.
         write_list(board, &padded_list(&["/tmp/a", "/tmp/b"], LIST_LIMIT));
