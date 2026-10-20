@@ -65,7 +65,7 @@ export async function openExternal(target: EditorTarget, tauri = isTauri()): Pro
  * Anything that goes wrong shows as an error toast.
  */
 export async function openFolder(target: EditorTarget, tauri = isTauri()): Promise<void> {
-  if (!target.windows_path) return showNotice("error", target.error ?? "No Windows path");
+  if (!target.windows_path) return showNotice("error", target.error ?? "No path");
   // No worktree: the settings file ("Open settings file"), opened the same way.
   const what =
     target.worktree === "" ? "the settings file" : isMac() ? "the Finder" : "the Explorer";

@@ -120,6 +120,7 @@ fn main() {
             commands::act_on_run,
             commands::open_settings_file,
             commands::get_diagnostics,
+            commands::title_bar_action,
             commands::show_notification,
             commands::check_notifications,
             commands::open_notification_settings,

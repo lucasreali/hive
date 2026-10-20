@@ -1,11 +1,11 @@
 import { ArrowCircleUpIcon, BellIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { spaceName } from "../notify";
 import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
 import { markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
-import { isMac, windowAction } from "../window";
+import { isMac, titleBarDoubleClick, watchFullscreen, windowAction } from "../window";
 import { requestUpdate } from "./CloseAppDialog";
 import {
   HiveIcon,
@@ -19,14 +19,30 @@ import { elapsed, useNow } from "./Sidebar";
 import { ContextMenu } from "./WorktreeMenu";
 
 // On Windows the window has no native decorations; this bar drags it and holds the window
-// buttons. On macOS it lies under the native traffic lights (`tauri.macos.conf.json`), which
-// replace the buttons and get room on the left.
+// buttons. On macOS it lies under the native traffic lights (`tauri.macos.conf.json`, centred
+// in the bar), which replace the buttons and get room on the left, except in full screen,
+// where they are hidden. Its whole empty part drags the window (Tauri's drag region: the bar
+// itself and anything inside the brand); its buttons do not.
 // ponytail: no "project / worktree" breadcrumb yet; it shows the active tab once tabs exist (1.7).
 export function TitleBar() {
   const mac = isMac();
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => watchFullscreen(setFullscreen), []);
+  const [bar, setBar] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!mac || !bar) return;
+    bar.addEventListener("mouseup", doubleClick);
+    return () => bar.removeEventListener("mouseup", doubleClick);
+  }, [mac, bar]);
   return (
-    <header className="titlebar" data-mac={mac || undefined}>
-      <div className="titlebar-brand" data-tauri-drag-region>
+    <header
+      ref={setBar}
+      className="titlebar"
+      data-mac={mac || undefined}
+      data-fullscreen={fullscreen || undefined}
+      data-tauri-drag-region
+    >
+      <div className="titlebar-brand" data-tauri-drag-region="deep">
         <HiveIcon />
         <span>Hive</span>
       </div>
@@ -35,6 +51,18 @@ export function TitleBar() {
       {!mac && <WindowControls />}
     </header>
   );
+}
+
+/**
+ * macOS: a double click on the empty bar follows the system's setting (`titleBarDoubleClick`)
+ * instead of Tauri's drag region, which always zooms on the second mouse-up: that mouse-up is
+ * stopped here, before it reaches Tauri's listener on the document.
+ */
+function doubleClick(e: MouseEvent) {
+  const target = e.target as Element;
+  if (e.button !== 0 || e.detail !== 2 || target.closest("button, [role='menu']")) return;
+  e.stopPropagation();
+  void titleBarDoubleClick();
 }
 
 function WindowControls() {
