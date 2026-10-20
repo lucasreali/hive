@@ -254,6 +254,7 @@ Terminal content in the prototype (Claude Code output, sample code) is sample da
 | Command palette | Ctrl+Shift+P | — |
 | Worktree picker → new terminal | Ctrl+Shift+T | Alt+T |
 | Split terminal | Ctrl+Shift+D | — |
+| Search the focused terminal (17.21) | Ctrl+Shift+F (macOS: ⌘F or ⇧⌘F) | — |
 | New worktree | Ctrl+Shift+N | Alt+N |
 | Files and diff panel | Ctrl+Shift+B | Alt+B |
 | Add project | Ctrl+Shift+O | Ctrl+O |
@@ -270,6 +271,8 @@ macOS only (D17.2, 17.14), none reaching the shell as typed:
 | Terminal font bigger / smaller / the settings' size (every terminal, until restart) | ⌘= / ⌘- / ⌘0 |
 | Clear the focused terminal | ⌘K |
 | Line start / line end / delete to the line start (sends Ctrl+A / Ctrl+E / Ctrl+U) | ⌘← / ⌘→ / ⌘⌫ |
+
+The terminal's search bar sits at the top right of the pane it searches: a field, the count ("3 of 12", "No results", "1000+" past the highlight limit), "Match case" (Aa), next / previous and close. It searches up from the newest output, as iTerm2 and Ghostty do: typing finds the newest match, Enter (next, the up arrow) the older one, Shift+Enter (previous, the down arrow) the newer one; Esc closes it and gives the keyboard back to the terminal, leaving the current match selected. Matches are tinted with the theme's yellow, the current one stronger and outlined.
 
 Option-drag selects text even inside a program that takes the mouse. Option types accents unless the Terminal setting "Option as Meta" (macOS only, off by default) is on. Enter (and Esc in the review comment) that ends a composition (a dead key such as ´ ~ ^, or an IME) is the composition's, never the field's action.
 
