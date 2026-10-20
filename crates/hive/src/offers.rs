@@ -83,15 +83,13 @@ impl Offers {
             offered.extend(new.iter().map(|p| key(p)));
         }
         if offered != before {
-            let drop = offered.len().saturating_sub(KEPT);
-            offered.drain(..drop);
-            self.write(&offered)?;
+            self.write(&fitting(offered))?;
         }
         Ok(raised)
     }
 
     fn write(&self, offered: &[String]) -> io::Result<()> {
-        let json = serde_json::to_vec_pretty(offered)?;
+        let json = serde_json::to_vec(offered)?;
         self.file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
         write_atomic(&self.file, &json, 0o600)
     }
@@ -104,6 +102,24 @@ impl Offers {
         read.and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
     }
+}
+
+/// The latest `offered`, at most [`KEPT`] and as many as the file holds within [`FILE_LIMIT`]
+/// once written (`[`, the entries as JSON strings with a comma between them, `]`): what is
+/// written is always read back.
+fn fitting(mut offered: Vec<String>) -> Vec<String> {
+    let drop = offered.len().saturating_sub(KEPT);
+    offered.drain(..drop);
+    let size = |key: &String| serde_json::to_string(key).unwrap_or_default().len() + 1;
+    let mut total = 1 + offered.iter().map(size).sum::<usize>();
+    let mut drop = 0;
+    // Bound by the list, whatever the sizes say.
+    while let Some(oldest) = offered.get(drop).filter(|_| total > FILE_LIMIT as usize) {
+        total -= size(oldest);
+        drop += 1;
+    }
+    offered.drain(..drop);
+    offered
 }
 
 #[cfg(test)]
@@ -284,6 +300,61 @@ mod tests {
 
         std::fs::write(&file, "not json").unwrap();
         assert_eq!(offers.raised(&list, &worktrees()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn long_keys_keep_the_file_readable_with_the_latest_offers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("offered-pulls.json");
+        let offers = Offers::new(file.clone());
+        // A long project path: 1000 keys would be far over the read limit.
+        let project = format!("/{}", "p".repeat(3000));
+        let worktrees: Vec<Worktree> = (1..=200)
+            .map(|n| worktree(&format!("/w{n}"), false))
+            .collect();
+        let mine = (1..=200)
+            .map(|n| pull(n, PullState::Merged, Some(&format!("/w{n}"))))
+            .collect();
+        let mut list = pulls(mine);
+        if let Control::Pulls { project: p, .. } = &mut list {
+            p.clone_from(&project);
+        }
+        assert_eq!(offers.raised(&list, &worktrees).unwrap().len(), 200);
+        let written = std::fs::read(&file).unwrap();
+        assert!(written.len() <= FILE_LIMIT as usize, "{}", written.len());
+        // Read back: the latest ones, as many as fit, none offered again.
+        let kept = offers.read();
+        let size = 3000 + "/\no/r#100".len() + 3;
+        assert_eq!(kept.len(), (FILE_LIMIT as usize - 1) / size);
+        assert_eq!(kept.last(), Some(&format!("{project}\no/r#200")));
+        let latest = kept.len() as u64;
+        let mine = (201 - latest..=200)
+            .map(|n| pull(n, PullState::Merged, Some(&format!("/w{n}"))))
+            .collect();
+        let mut list = pulls(mine);
+        if let Control::Pulls { project: p, .. } = &mut list {
+            p.clone_from(&project);
+        }
+        assert_eq!(offers.raised(&list, &worktrees).unwrap(), []);
+    }
+
+    #[test]
+    fn the_kept_list_fills_the_file_to_its_last_byte() {
+        let short = || "k".repeat(100);
+        // `[`, three of 102 bytes and the long one, a comma after each but the last, `]`.
+        let long = |extra: usize| "l".repeat(FILE_LIMIT as usize - 1 - 3 * 103 - 3 + extra);
+        let full = vec![short(), short(), short(), long(0)];
+        let kept = fitting(full.clone());
+        assert_eq!(kept, full);
+        assert_eq!(
+            serde_json::to_vec(&kept).unwrap().len(),
+            FILE_LIMIT as usize
+        );
+        // One byte more: the oldest goes.
+        let over = vec![short(), short(), short(), long(1)];
+        assert_eq!(fitting(over.clone()), over[1..]);
+        // A single key too long for the file: nothing is kept.
+        assert_eq!(fitting(vec![long(400)]), Vec::<String>::new());
     }
 
     #[test]
