@@ -21,16 +21,19 @@ const MAX_P99_INPUT_MS = 100;
 const MAX_P95_FRAME_MS = 1000 / 30;
 const MAX_LONG_TASK_MS = 100;
 
-// WebGL through ANGLE on the system GL, not Chromium's default SwiftShader, which saturates the
-// main thread with a single terminal and says nothing about a real GPU. Inside WSL that GL is
-// Mesa's d3d12 driver on the Windows GPU; elsewhere whatever Mesa finds (llvmpipe without a GPU,
-// which competes with the page for CPU and can fail the thresholds).
+// WebGL through ANGLE on the system's GPU API, never Chromium's software fallback SwiftShader,
+// which saturates the main thread with a single terminal and says nothing about a real GPU (the
+// spec fails on it). On a Mac that API is Metal (ANGLE's GL backend lands on SwiftShader there).
+// Elsewhere it is the system GL: inside WSL Mesa's d3d12 driver on the Windows GPU, otherwise
+// whatever Mesa finds (llvmpipe without a GPU, as on CI, which competes with the page for CPU and
+// can fail the thresholds).
 const WSL_LIB = "/usr/lib/wsl/lib";
 const wsl = existsSync("/dev/dxg") && existsSync(WSL_LIB);
 const path = [process.env.LD_LIBRARY_PATH, WSL_LIB].filter(Boolean).join(":");
+const angle = process.platform === "darwin" ? "metal" : "gl";
 test.use({
   launchOptions: {
-    args: ["--ignore-gpu-blocklist", "--use-gl=angle", "--use-angle=gl"],
+    args: ["--ignore-gpu-blocklist", "--use-gl=angle", `--use-angle=${angle}`],
     env: wsl ? { ...process.env, GALLIUM_DRIVER: "d3d12", LD_LIBRARY_PATH: path } : undefined,
   },
 });
@@ -178,6 +181,8 @@ test("load: 20 terminals replay Claude Code output; the focused one stays fluid"
   console.log(JSON.stringify(results));
   writeFileSync("target/e2e/load.json", `${JSON.stringify(results, null, 2)}\n`);
 
+  expect(results.renderer).not.toMatch(/swiftshader/i);
+  if (angle === "metal") expect(results.renderer).toMatch(/metal/i);
   expect(input).toHaveLength(keys);
   expect(check.differing).toEqual([]);
   if (!cast) expect(check.tail).toBe("✻ Replay complete");

@@ -14,6 +14,15 @@ opt-level = 3
 panic = "abort"
 strip = true
 
+# A lighter dev build (TODO 18.16): line tables only for the workspace, so a panic's backtrace
+# still names file:line, and no debug info for dependencies. Measured on the M5: a clean
+# `cargo build --workspace` 2.3 GB instead of 3.5 GB of target, and faster in each of 3 pairs.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # cargo-mutants builds (`.cargo/mutants.toml`): without debug info every mutant builds and
 # links faster; a failing test's backtrace is not needed to count the mutant as caught.
 [profile.mutants]
