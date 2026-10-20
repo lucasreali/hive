@@ -9,6 +9,8 @@
 #   scripts/ci.sh runs [<rev>]  every run of a commit (default HEAD, any branch)
 #   scripts/ci.sh logs <run-id> the failed steps' logs (empty for a reusable workflow's jobs,
 #                               "mutants / …": gh 2.46; use `jobs` then `log`)
+#   scripts/ci.sh cancel <run-id> cancel a run (e.g. one with a hung job, whose log GitHub
+#                               gives only once it ends)
 #   scripts/ci.sh jobs <run-id> the run's minutes, then each job's id, result, start, minutes, name
 #   scripts/ci.sh log <job-id>  one job's full log (e.g. the mutants gather counts)
 #   scripts/ci.sh survivors     the open nightly mutation testing issue, if any, with its comments
@@ -59,6 +61,7 @@ case "${1:-}" in
       -q '.[] | "\(.databaseId) \(.workflowName) \(.conclusion) \(.url)"'
     ;;
   logs) gh run view "${2:?run id}" --log-failed ;;
+  cancel) gh run cancel "${2:?run id}" ;;
   jobs)
     # Minutes: the run's wall-clock, then each job's start (from the run's) and duration.
     gh run view "${2:?run id}" --json createdAt,updatedAt,jobs -q '(.createdAt | fromdate) as $t0
@@ -66,7 +69,7 @@ case "${1:-}" in
         (.jobs[] | if .status != "completed" then "\(.databaseId) \(.status) \(.name)" else
           "\(.databaseId) \(.conclusion) +\(((.startedAt | fromdate) - $t0) / 60 | floor) \(((.completedAt | fromdate) - (.startedAt | fromdate)) / 60 | floor)min \(.name)" end)'
     ;;
-  log) gh api "repos/{owner}/{repo}/actions/jobs/${2:?job id}/logs" ;;
+  log) gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/${2:?job id}/logs" ;;
   survivors)
     # The issue mutants-full.yml keeps open for surviving mutants: one comment per failed night.
     n=$(gh issue list --state open --search 'in:title "Nightly mutation testing: surviving mutants"' \
@@ -74,5 +77,5 @@ case "${1:-}" in
     # --json: gh 2.46's plain view asks for the retired Projects (classic) and fails.
     [ -z "$n" ] || gh issue view "$n" --json url,body,comments -q '.url, .body, (.comments[] | .body)'
     ;;
-  *) echo "usage: scripts/ci.sh push | watch | green [<rev>] | runs [<rev>] | logs <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
+  *) echo "usage: scripts/ci.sh push | watch | green [<rev>] | runs [<rev>] | logs <run-id> | cancel <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
 esac
