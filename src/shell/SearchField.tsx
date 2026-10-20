@@ -12,7 +12,8 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | 
 /**
  * A search box with the app's own clear button (14.5): the WebView's native one is hidden in
  * styles.css. The button shows only with text; it empties the field and leaves the focus in
- * it. Esc still clears, as `type="search"` does.
+ * it. Esc clears too: Chromium's `type="search"` does it natively, WebKit (macOS) does not
+ * (17.3); the key still goes on, as it does natively.
  */
 export function SearchField({ value, onChange, children, ...input }: Props) {
   const field = useRef<HTMLInputElement>(null);
@@ -25,6 +26,10 @@ export function SearchField({ value, onChange, children, ...input }: Props) {
         type="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onChange("");
+          input.onKeyDown?.(e);
+        }}
       />
       {value && (
         <button

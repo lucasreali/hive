@@ -3,8 +3,12 @@ import { expect, test } from "@playwright/test";
 test("messages: a failure is a toast bottom-right above the status bar that stays; a confirmation fades (10.3)", async ({
   page,
   context,
+  browserName,
 }) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  // WebKit knows only clipboard-read; it lets a page write the clipboard without a permission.
+  await context.grantPermissions(
+    browserName === "webkit" ? ["clipboard-read"] : ["clipboard-read", "clipboard-write"],
+  );
   await page.clock.install();
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
