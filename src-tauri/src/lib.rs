@@ -989,6 +989,17 @@ impl Hive {
         lock(&self.link)
     }
 
+    /// Files dropped from Finder on the window (18.1), at (`x`, `y`) in points from its top
+    /// left: the UI gets `files_dropped` with their paths as one shell-quoted text
+    /// ([`quote::typed`]: paths that may not be typed are left out), which it types into the
+    /// terminal whose pane is there, if any. False when there is nothing to type or no UI to
+    /// send it to.
+    pub fn files_dropped(&self, paths: &[String], x: f64, y: f64) -> bool {
+        let text = quote::typed(paths);
+        let message = json!({"type": "files_dropped", "text": text, "x": x, "y": y});
+        !text.is_empty() && self.link().to_ui(message)
+    }
+
     /// Sends every service message to `ui`, starting the bridge unless a connection is up.
     /// A reloaded UI calls this again: its old terminals are closed and `welcome` is replayed.
     /// With the choice of WSL or Windows, the UI first gets `app_mode`, and nothing starts
@@ -1699,6 +1710,13 @@ pub fn should_quit<R: Runtime>(app: &AppHandle<R>) -> bool {
         .is_none_or(|hive| hive.should_quit(app))
 }
 
+/// Files dropped from another app (Finder) on the window, at (`x`, `y`) in points from the
+/// window's top left (18.1): [`Hive::files_dropped`] for the app's `Hive`. False without one.
+pub fn files_dropped<R: Runtime>(app: &AppHandle<R>, paths: &[String], x: f64, y: f64) -> bool {
+    app.try_state::<Hive>()
+        .is_some_and(|hive| hive.files_dropped(paths, x, y))
+}
+
 /// A click on the Dock icon (`RunEvent::Reopen`): with no visible window (minimized, hidden)
 /// the window comes back. True when it did.
 pub fn reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) -> bool {
@@ -2192,6 +2210,7 @@ pub mod commands {
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod menu;
+pub mod quote;
 pub mod tray;
 
 #[cfg(test)]

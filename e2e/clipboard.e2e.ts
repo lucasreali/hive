@@ -133,4 +133,44 @@ test.describe("on macOS", () => {
     expect((await seen()).data).toEqual(["\x1b[200~pasted\x1b[201~"]);
     await expect.poll(() => screen(page)).toBe("mock$ echo one\necho one\nmock$ pasted");
   });
+
+  // 18.2: Cmd+C copies a selection; with nothing selected it interrupts as Ctrl+C does. Never
+  // both: what reaches the service is read from the mock transport's writes.
+  test("clipboard: Cmd+C copies a selection, else sends the interrupt", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "webkit", "WKWebView's engine only");
+    await echoOne(page);
+    await page.evaluate(async () => {
+      const url = "/src/transport/index.ts";
+      const { transport } = await import(/* @vite-ignore */ url);
+      const write = transport.writeTerminal.bind(transport);
+      const w = window as unknown as { writes: string[] };
+      w.writes = [];
+      transport.writeTerminal = (id: number, data: string) => {
+        w.writes.push(data);
+        return write(id, data);
+      };
+      await navigator.clipboard.writeText("before");
+    });
+    const writes = () => page.evaluate(() => (window as unknown as { writes: string[] }).writes);
+    const select = (on: boolean) =>
+      page.evaluate(async (on) => {
+        const url = "/src/terminals.ts";
+        const { terminal } = await import(/* @vite-ignore */ url);
+        if (on) terminal(1).select(0, 1, 8);
+        else terminal(1).clearSelection();
+      }, on);
+
+    await select(true);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe("echo one");
+    expect(await writes()).toEqual([]);
+
+    await select(false);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(writes).toEqual(["\x03"]);
+    expect(await clipboard(page)).toBe("echo one");
+  });
 });
