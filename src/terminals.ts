@@ -210,14 +210,11 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
   term.attachCustomKeyEventHandler((event) => keys(term, event));
-  term.onSelectionChange(() => {
-    const copy = useHive.getState().settings.terminal.copy_on_select;
-    if (copy && term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
-  });
   const el = document.createElement("div");
   el.className = "terminal-pane";
   el.hidden = true;
   el.addEventListener("focusin", () => focusPane(id));
+  copyOnSelect(term, el);
   entries.set(id, { term, fit, el, webgl: null });
   addTab(id, cwd);
   return id;
@@ -258,7 +255,11 @@ function keys(term: Terminal, event: KeyboardEvent): boolean {
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const key = event.key.toUpperCase();
   if (event.type !== "keydown" || !chord || (key !== "C" && key !== "V")) return true;
-  // The browser's own paste (Ctrl+Shift+V, Cmd+V) would paste a second time.
+  // 17.8: on macOS Cmd+V is left to WebKit, whose paste (the Edit menu's) reaches xterm's
+  // textarea as a paste event, bracketed paste kept; reading the clipboard from script would
+  // show WebKit's "Paste" bubble whenever another app filled it.
+  if (key === "V" && isMac()) return false;
+  // The browser's own paste (Ctrl+Shift+V) would paste a second time.
   event.preventDefault();
   if (key === "C") {
     if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
@@ -266,6 +267,22 @@ function keys(term: Terminal, event: KeyboardEvent): boolean {
     void navigator.clipboard.readText().then((text) => term.paste(text));
   }
   return false;
+}
+
+/**
+ * Copy on select (6.2) copies when the mouse button that made the selection is released,
+ * wherever that is: a user gesture, without which WebKit may refuse `writeText` (17.8).
+ */
+function copyOnSelect(term: Terminal, el: HTMLElement): void {
+  const copy = () => {
+    const on = useHive.getState().settings.terminal.copy_on_select;
+    if (on && term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
+  };
+  el.addEventListener(
+    "mousedown",
+    () => window.addEventListener("mouseup", copy, { capture: true, once: true }),
+    { capture: true },
+  );
 }
 
 /** Ends the terminal (unless it already exited), drops its xterm instance and its tab. */

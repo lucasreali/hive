@@ -109,7 +109,7 @@ test("a worktree's folder opens in the Explorer, or an error toast says why not"
   await openFolder(target(null, "wslpath failed: x", ""), true);
   expect([toast(), noticeKind()]).toEqual(["wslpath failed: x", "error"]);
   await openFolder(target(null, null, ""), true);
-  expect(toast()).toBe("No Windows path");
+  expect(toast()).toBe("No path");
   await openFolder(target(folder, null, ""), false);
   expect(toast()).toBe(`Only the Hive app opens the Explorer: ${folder}`);
   mockIPC(() => {
