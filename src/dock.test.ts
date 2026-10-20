@@ -13,6 +13,8 @@ beforeEach(() => useHive.setState(initialState, true));
 afterEach(() => {
   clearMocks();
   delete g.isTauri;
+  // The next test file starts from a clean store too.
+  useHive.setState(initialState, true);
 });
 
 const message = (state: AgentState, alert: Alert | null = "action", pending?: boolean) => {

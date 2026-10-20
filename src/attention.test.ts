@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { attention } from "./attention";
 import type { AgentState } from "./protocol";
 import { apply } from "./reduce";
@@ -6,6 +6,8 @@ import { initialState, markInboxRead, useHive } from "./store";
 import { agentStatus } from "./transport/mock";
 
 beforeEach(() => useHive.setState(initialState, true));
+// The next test file starts from a clean store too.
+afterEach(() => useHive.setState(initialState, true));
 
 const detect = (id: string, channel: number) =>
   apply({ type: "agent_detected", channel, id, project: null, worktree: null, cwd: null });
