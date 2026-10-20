@@ -390,11 +390,13 @@ unsafe extern "C" fn perform_drag(view: Id, name: Sel, info: Id) -> bool {
     if taken.unwrap_or(false) {
         return true;
     }
-    let Some(&original) = PERFORM.get() else {
-        return false;
-    };
-    // SAFETY: the class's own implementation of this very message, kept by `take_file_drops`.
-    unsafe { std::mem::transmute::<usize, Perform>(original)(view, name, info) }
+    // SAFETY: the class's own implementation of this very message, kept by `take_file_drops`
+    // before it replaced it.
+    let own = |&original: &usize| unsafe { std::mem::transmute::<usize, Perform>(original) };
+    PERFORM
+        .get()
+        .map(own)
+        .is_some_and(|own| unsafe { own(view, name, info) })
 }
 
 /// Takes the drop `info` on `view` when it comes from another app with file paths: gives them
@@ -701,8 +703,8 @@ mod tests {
     static SOURCE: AtomicUsize = AtomicUsize::new(0);
     /// The info's pasteboard's `propertyListForType:` answer (an address, 0 for nil).
     static LIST: AtomicUsize = AtomicUsize::new(0);
-    /// Whether the pasteboard was asked for anything but `NSFilenamesPboardType`.
-    static WRONG_TYPE: AtomicU8 = AtomicU8::new(0);
+    /// The type the pasteboard was last asked for.
+    static ASKED_TYPE: AtomicUsize = AtomicUsize::new(0);
     /// The view's `isFlipped`.
     static FLIPPED: AtomicU8 = AtomicU8::new(0);
     /// Calls of the view's own `performDragOperation:` and of its `draggingExited:`.
@@ -740,10 +742,7 @@ mod tests {
         SOURCE.load(SeqCst) as Id
     }
     extern "C" fn list(_: Id, _: Sel, kind: Id) -> Id {
-        // SAFETY: AppKit's constant, read only.
-        if kind != unsafe { NSFilenamesPboardType } {
-            WRONG_TYPE.store(1, SeqCst);
-        }
+        ASKED_TYPE.store(kind as usize, SeqCst);
         LIST.load(SeqCst) as Id
     }
     extern "C" fn location(_: Id, _: Sel) -> Pair {
@@ -877,7 +876,9 @@ mod tests {
         assert!(drop(info));
         assert_eq!(dropped(), [(expected, 100.0, 500.0)]);
         assert_eq!(counts(), (0, 1));
-        assert_eq!(WRONG_TYPE.load(SeqCst), 0, "asked for file paths");
+        // SAFETY: AppKit's constant, read only.
+        let paths_type = unsafe { NSFilenamesPboardType } as usize;
+        assert_eq!(ASKED_TYPE.load(SeqCst), paths_type, "asked for file paths");
 
         // Past the limit, the first ones.
         let many: Vec<Id> = (0..=DROP_LIMIT).map(|i| string(&format!("/{i}"))).collect();
