@@ -4,6 +4,7 @@ import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
 import { notice } from "../test/notice";
 import LIGATURES from "./assets/fonts/ligatures.json";
+import { Marks } from "./marks";
 import { apply } from "./reduce";
 import { DEFAULT_SETTINGS, initialState, setWidth, useHive } from "./store";
 import { shownTerminals } from "./tabs";
@@ -577,9 +578,32 @@ test("on macOS ⌘← ⌘→ ⌘⌫ send line start, end and kill to the shell, 
   expect(sent()).toContain("\x0b");
   expect(clear).toHaveBeenCalledTimes(1);
   // Cmd + another key is not one of them either.
-  press(term, "ArrowUp", cmd);
+  press(term, "Home", cmd);
   expect(clear).toHaveBeenCalledTimes(1);
   clear.mockRestore();
+  write.mockRestore();
+});
+
+test("on macOS ⌘↑ and ⌘↓ jump to the shell's previous and next prompt, never typed", async () => {
+  // The jumps themselves are `marks.test.ts`'s: happy-dom does not scroll an opened xterm.
+  const jump = spyOn(Marks.prototype, "jump");
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
+  // Not on macOS: no jump.
+  press(term, "ArrowUp", cmd);
+  expect(jump).not.toHaveBeenCalled();
+  write.mockClear();
+  asMac();
+  expect(press(term, "ArrowUp", cmd).defaultPrevented).toBe(true);
+  expect(press(term, "ArrowDown", cmd).defaultPrevented).toBe(true);
+  expect(jump.mock.calls).toEqual([[-1], [1]]);
+  // With Shift (a selection key) it is not a jump.
+  press(term, "ArrowUp", { ...cmd, shiftKey: true });
+  expect(jump).toHaveBeenCalledTimes(2);
+  expect(write).not.toHaveBeenCalled();
+  jump.mockRestore();
   write.mockRestore();
 });
 

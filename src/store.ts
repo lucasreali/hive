@@ -26,6 +26,7 @@ import type {
   FileText,
   GhAccounts,
   NameCheck,
+  ProgressState,
   Project,
   ProjectScripts,
   SearchResults,
@@ -77,6 +78,8 @@ export type Terminal = {
   unhooked: boolean;
   /** Set with `hive badge`; cleared when the terminal exits. */
   badge?: string;
+  /** A program's OSC 9;4 progress (17.25), the tab's hint; none once cleared or exited. */
+  progress?: { state: ProgressState; value: number };
   /**
    * The followed worktree the service placed its cwd in (`terminal_opened`), null outside
    * every project or until the service answered: its tab's place (`tabWorktree`).
@@ -139,8 +142,15 @@ export type WorktreeDialog = {
 export type InboxItem = {
   id: number;
   /** The agent's session id: clicking the item goes to it while it runs. */
-  agent: string;
-  state: AgentState;
+  agent?: string;
+  /** The agent's state; absent for a terminal's item. */
+  state?: AgentState;
+  /**
+   * A terminal's item (17.25: a long command, a program's notification): clicking it shows that
+   * terminal while it is open. `failed`: a command that ended with a non-zero status.
+   */
+  terminal?: number;
+  failed?: boolean;
   /** Wall clock, ms since the epoch. */
   at: number;
   /** E.g. "fix login is waiting for permission". */
@@ -170,7 +180,7 @@ export const DEFAULT_SETTINGS: Settings = {
     shell: "default",
   },
   appearance: { theme: "one-dark" },
-  notifications: { volume: 100 },
+  notifications: { volume: 100, command_secs: 10 },
   agents: { silence_secs: 5, confirm_close: true },
   worktrees: { default_base: null },
   projects: {},

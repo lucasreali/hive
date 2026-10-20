@@ -225,13 +225,40 @@ test("projects are added from the fake repositories only", async () => {
   ]);
 });
 
+// The mock shell's OSC 133 marks (17.25): its prompt, a command's start and end.
+const A = "\x1b]133;A\x07";
+const C = "\x1b]133;C\x07";
+const D = (exit: number) => `\x1b]133;D;${exit}\x07`;
+
+test("the mock shell marks its prompts and commands; false fails", async () => {
+  const { transport, id, output } = await opened();
+  await transport.writeTerminal(id, "false\r");
+  expect(output()).toBe(`${A}mock$ false\r\n${C}false\r\n${D(1)}${A}mock$ `);
+});
+
+test("typed stand-ins send a terminal's progress, long command and notification", async () => {
+  const { transport, messages, id } = await opened();
+  const typed = ["progress normal 40", "progress indeterminate", "long-command 2 75"];
+  for (const line of [...typed, "osc-notify make;done", "osc-notify bare"]) {
+    await transport.writeTerminal(id, `${line}\r`);
+  }
+  await tick();
+  expect(messages.slice(-5)).toEqual([
+    { type: "terminal_progress", channel: id, state: "normal", value: 40 },
+    { type: "terminal_progress", channel: id, state: "indeterminate", value: 0 },
+    { type: "command_finished", channel: id, exit: 2, secs: 75 },
+    { type: "terminal_notification", channel: id, title: "make", body: "done", notify: true },
+    { type: "terminal_notification", channel: id, title: "bare", body: "", notify: true },
+  ]);
+});
+
 test("a terminal prints a prompt, echoes input and repeats the line", async () => {
   const { transport, messages, id, output } = await opened();
   expect(id).toBe(1);
   expect(messages.at(-1)).toEqual({ type: "terminal_opened", channel: 1, worktree: null });
-  expect(output()).toBe("mock$ ");
+  expect(output()).toBe(`${A}mock$ `);
   await transport.writeTerminal(id, "hi\r\r");
-  expect(output()).toBe("mock$ hi\r\nhi\r\nmock$ \r\nmock$ ");
+  expect(output()).toBe(`${A}mock$ hi\r\n${C}hi\r\n${D(0)}${A}mock$ \r\n${A}mock$ `);
   await transport.resizeTerminal(id, 100, 30);
   expect(await transport.openTerminal("/", 1, 1, () => {})).toBe(2);
 });
@@ -241,7 +268,7 @@ test("exit ends the terminal with code 0 and close with no code", async () => {
   await transport.writeTerminal(id, "exit\rignored");
   await tick();
   expect(messages.at(-1)).toEqual({ type: "terminal_exited", channel: id, code: 0 });
-  expect(output()).toBe("mock$ exit");
+  expect(output()).toBe(`${A}mock$ exit`);
 
   const second = await transport.openTerminal("/", 1, 1, () => {});
   await transport.closeTerminal(second);
@@ -452,7 +479,7 @@ test("?mock=load replays a recording into each terminal and marks every echo", a
     await wait(LOAD_START_MS + b * LOAD_STAGGER_MS + 20);
     await transport.closeTerminal(b);
     await wait(100);
-    expect(out).toEqual([`x${ECHO_MARK}mock$ one two`, "mock$ one "]);
+    expect(out).toEqual([`x${ECHO_MARK}${A}mock$ one two`, `${A}mock$ one `]);
   } finally {
     globalThis.fetch = realFetch;
   }

@@ -14,6 +14,7 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import type { ProgressState } from "../protocol";
 import { useReorder } from "../reorder";
 import {
   activateTab,
@@ -198,6 +199,7 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
           {state.badge}
         </span>
       )}
+      {state?.progress && <ProgressHint {...state.progress} />}
       {state?.unhooked && (
         <span
           className="tab-badge warn"
@@ -212,6 +214,34 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
         </span>
       )}
     </TabItem>
+  );
+}
+
+/** What a program's progress (OSC 9;4, 17.25) says, by state. */
+const PROGRESS_TEXT: Record<Exclude<ProgressState, "none">, string> = {
+  normal: "Progress",
+  error: "Failed at",
+  indeterminate: "Busy",
+  paused: "Paused at",
+};
+
+/** The progress a program in the terminal reports (17.25): a small bar on its tab. */
+function ProgressHint({ state, value }: { state: ProgressState; value: number }) {
+  const busy = state === "indeterminate";
+  const text = PROGRESS_TEXT[state as Exclude<ProgressState, "none">];
+  const label = busy ? text : `${text} ${value}%`;
+  return (
+    <span
+      className="tab-progress"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={busy ? undefined : value}
+      title={label}
+      data-state={state}
+      style={{ "--progress": `${value}%` } as CSSProperties}
+    />
   );
 }
 

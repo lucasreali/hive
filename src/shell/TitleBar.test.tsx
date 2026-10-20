@@ -149,6 +149,35 @@ test("the bell's inbox: pending agents, then the alerts; going to an agent", () 
   expect(useHive.getState().selection).toBe("a");
 });
 
+test("a terminal's inbox item shows that terminal while it is open (17.25)", () => {
+  render(<App />);
+  const items = () => screen.getAllByRole("menuitem");
+  const now = Date.now();
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    useHive.setState({
+      tabs: [
+        { id: 3, cwd: "/w" },
+        { id: 4, cwd: "/v" },
+      ],
+      activeTab: 4,
+    });
+    addToInbox({ terminal: 9, at: now - 60_000, text: "make: done" });
+    addToInbox({ terminal: 3, failed: true, at: now - 5_000, text: "Command failed (exit 2)" });
+  });
+  fireEvent.click(document.querySelector(".pending-bell") as HTMLButtonElement);
+  expect(items().map((i) => [i.textContent, (i as HTMLButtonElement).disabled])).toEqual([
+    ["Command failed (exit 2)5s ago", false],
+    ["make: done1m ago", true],
+  ]);
+  expect(items()[1]?.title).toBe("This terminal is closed");
+  const icons = document.querySelectorAll(".inbox-terminal");
+  expect([...icons].map((i) => i.getAttribute("data-failed"))).toEqual(["true", null]);
+  fireEvent.click(items()[0] as HTMLElement);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(useHive.getState().activeTab).toBe(3);
+});
+
 test("the badge counts pending agents not seen yet; opening the bell clears it (8.5)", () => {
   render(<App />);
   const bell = () => document.querySelector(".pending-bell") as HTMLButtonElement;

@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { spaceName } from "../notify";
 import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
-import { markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
+import { activateTab, markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
 import { isMac, titleBarDoubleClick, watchFullscreen, windowAction } from "../window";
 import { requestUpdate } from "./CloseAppDialog";
 import {
@@ -13,6 +13,7 @@ import {
   MinimizeIcon,
   STATE_LABEL,
   StateIcon,
+  TerminalIcon,
   WindowCloseIcon,
 } from "./icons";
 import { elapsed, useNow } from "./Sidebar";
@@ -144,6 +145,7 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   const pending = useHive(useShallow(pendingAgents));
   const inbox = useHive((s) => s.inbox);
   const agents = useHive((s) => s.agents);
+  const tabs = useHive((s) => s.tabs);
   const states = useHive((s) => s.agentStates);
   const titles = useHive((s) => s.agentTitles);
   // Each item names its agent's space when there are several (6.14).
@@ -174,7 +176,29 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
       })}
       {pending.length > 0 && inbox.length > 0 && <hr />}
       {inbox.map((item) => {
-        const agent = agents[item.agent];
+        if (item.terminal !== undefined) {
+          const tab = tabs.find((t) => t.id === item.terminal);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              disabled={!tab}
+              title={tab ? undefined : "This terminal is closed"}
+              onClick={() => {
+                onClose();
+                if (tab) activateTab(tab);
+              }}
+            >
+              <span className="inbox-terminal" data-failed={item.failed || undefined}>
+                <TerminalIcon />
+              </span>
+              <span className="label">{item.text}</span>
+              <span className="inbox-meta">{`${elapsed(item.at, now)} ago`}</span>
+            </button>
+          );
+        }
+        const agent = item.agent === undefined ? undefined : agents[item.agent];
         return (
           <button
             key={item.id}
@@ -184,7 +208,7 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
             title={agent ? undefined : "This agent has ended"}
             onClick={go(agent)}
           >
-            <StateIcon state={item.state} />
+            <StateIcon state={item.state ?? "idle"} />
             <span className="label">{item.text}</span>
             <span className="inbox-meta">
               {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}

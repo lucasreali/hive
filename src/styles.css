@@ -342,6 +342,71 @@ label:has(> input[type="checkbox"]:disabled) {
   white-space: nowrap;
 }
 
+/* A terminal's inbox item (17.25): its command failed. */
+.inbox-terminal {
+  display: inline-flex;
+  color: var(--text-2);
+}
+
+.inbox-terminal[data-failed] {
+  color: var(--state-error);
+}
+
+/* A program's OSC 9;4 progress on its terminal's tab (17.25). */
+.tab-progress {
+  --fill: var(--state-working);
+  flex: none;
+  width: 24px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--fill) var(--progress, 0%),
+    var(--border) var(--progress, 0%)
+  );
+}
+
+.tab-progress[data-state="error"] {
+  --fill: var(--state-error);
+}
+
+.tab-progress[data-state="paused"] {
+  --fill: var(--state-permission);
+}
+
+.tab-progress[data-state="indeterminate"] {
+  background: linear-gradient(to right, var(--border), var(--fill), var(--border));
+  background-size: 200% 100%;
+  animation: hive-busy 1.2s linear infinite;
+}
+
+@keyframes hive-busy {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-progress[data-state="indeterminate"] {
+    animation: none;
+  }
+}
+
+/* A prompt the shell marked (OSC 133, 17.25): a bar at the left of its line, coloured by how
+   its command ended. */
+.shell-mark {
+  pointer-events: none;
+  border-left: 2px solid var(--text-4);
+}
+
+.shell-mark[data-status="ok"] {
+  border-left-color: var(--state-idle);
+}
+
+.shell-mark[data-status="failed"] {
+  border-left-color: var(--state-error);
+}
+
 .window-controls button {
   width: 46px;
   display: flex;

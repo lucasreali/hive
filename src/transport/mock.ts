@@ -8,6 +8,7 @@ import type {
   FileStatus,
   FileText,
   GhLogin,
+  ProgressState,
   Project,
   SaveError,
   ServiceMessage,
@@ -23,7 +24,8 @@ import { createMockPulls } from "./mockPulls";
 import { createMockRuns } from "./mockRuns";
 import { loadReplay, type ReplayEvent } from "./replay";
 
-const PROMPT = "mock$ ";
+/** The mock shell's prompt, marked as fish 4 marks it (OSC 133 `A`, 17.25). */
+const PROMPT = "\x1b]133;A\x07mock$ ";
 /** With `?mock=load`, sent after every echo so the load test can time it; xterm ignores it. */
 export const ECHO_MARK = "\x1b]7777;echo\x07";
 
@@ -674,6 +676,24 @@ export function createMockTransport(
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
+  /**
+   * Stand-ins for what the service reads from a terminal's OSC sequences (17.25), typed in a
+   * terminal: `progress <state> <value>`, `long-command <exit> <secs>` (a long command ended)
+   * and `osc-notify <title>;<body>` (a program's notification, out of view).
+   */
+  const shellMarks = (channel: number, line: string) => {
+    const [word, ...rest] = line.split(" ");
+    const args = rest.join(" ");
+    const [first = "", second = ""] = args.split(word === "osc-notify" ? ";" : " ");
+    if (word === "progress") {
+      const state = first as ProgressState;
+      later({ type: "terminal_progress", channel, state, value: Number(second) || 0 });
+    } else if (word === "long-command") {
+      later({ type: "command_finished", channel, exit: Number(first), secs: Number(second) });
+    } else if (word === "osc-notify") {
+      later({ type: "terminal_notification", channel, title: first, body: second, notify: true });
+    }
+  };
   let recording: Promise<ReplayEvent[]> | undefined;
   const replay = async (id: number) => {
     recording ??= loadReplay(cast);
@@ -1229,7 +1249,12 @@ export function createMockTransport(
           const dir = line.slice(3);
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;
         }
-        print(id, `\r\n${line ? `${line}\r\n` : ""}${PROMPT}`);
+        shellMarks(id, line);
+        // A command runs between OSC 133 `C` and `D;<exit>`; `false` fails.
+        const ran = line
+          ? `\x1b]133;C\x07${line}\r\n\x1b]133;D;${line === "false" ? 1 : 0}\x07`
+          : "";
+        print(id, `\r\n${ran}${PROMPT}`);
       }
       if (scenario === "load") print(id, ECHO_MARK);
     },

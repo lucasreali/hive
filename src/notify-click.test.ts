@@ -19,7 +19,10 @@ afterAll(() => useHive.setState(initialState, true));
 test("clicking an agent's notification goes to it, in its space; a gone agent changes nothing", async () => {
   await connect();
   // Muted: the test has no Web Audio.
-  await transport.setSettings({ ...DEFAULT_SETTINGS, notifications: { volume: 0 } });
+  await transport.setSettings({
+    ...DEFAULT_SETTINGS,
+    notifications: { volume: 0, command_secs: 10 },
+  });
   await settle();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
   const agent = await transport.openTerminal(shop.path, 80, 24, () => {});

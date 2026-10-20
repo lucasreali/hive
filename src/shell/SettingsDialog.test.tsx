@@ -110,6 +110,8 @@ test("numbers and texts are saved once typing pauses; non-numbers are not sent",
   section("Notifications");
   fireEvent.change(input("Alert volume"), { target: { value: "0" } });
   await waitFor(() => expect(settings().notifications.volume).toBe(0));
+  fireEvent.change(input("Long commands (seconds)"), { target: { value: "30" } });
+  await waitFor(() => expect(settings().notifications.command_secs).toBe(30));
   section("Agents");
   fireEvent.change(input("Silence before waiting for you (seconds)"), { target: { value: "9" } });
   await waitFor(() => expect(settings().agents.silence_secs).toBe(9));
@@ -378,15 +380,17 @@ test("on macOS the shortcuts are named with ⌘, with macOS' own and the termina
   open();
   section("Shortcuts");
   const rows = shortcutRows();
-  expect(rows).toHaveLength(COMMANDS.length + 4);
+  expect(rows).toHaveLength(COMMANDS.length + 6);
   expect(rows).toContain("Command palette⇧⌘P");
   expect(rows).toContain("Go to the next pending agent⇧⌘J or F8");
   expect(rows).toContain("Close the tab⌘W");
   expect(rows).toContain("Show the previous tab⇧⌘[");
   expect(rows).toContain("Show tab 9⌘9");
   expect(rows).toContain("Make the terminal font smaller⌘-");
-  expect(rows.slice(-4)).toEqual([
+  expect(rows.slice(-6)).toEqual([
     "Clear the terminal⌘K",
+    "Jump to the previous prompt⌘↑",
+    "Jump to the next prompt⌘↓",
     "Go to the start of the line⌘←",
     "Go to the end of the line⌘→",
     "Delete to the start of the line⌘⌫",

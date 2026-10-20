@@ -119,7 +119,16 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { ...patchTerminal(s, m.channel, opened), ...moved };
     }
     case "terminal_exited":
-      return patchTerminal(s, m.channel, { exited: true, code: m.code, badge: "" });
+      return patchTerminal(s, m.channel, {
+        exited: true,
+        code: m.code,
+        badge: "",
+        progress: undefined,
+      });
+    case "terminal_progress": {
+      const progress = m.state === "none" ? undefined : { state: m.state, value: m.value };
+      return patchTerminal(s, m.channel, { progress });
+    }
     case "unhooked_agent":
       return patchTerminal(s, m.channel, { unhooked: true });
     case "badge":
@@ -436,7 +445,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "restore_sessions":
     case "editor_target":
     case "notification_clicked":
-      // Answered where they were asked (see `ServiceMessage`), not stored.
+    case "command_finished":
+    case "terminal_notification":
+      // Answered where they were asked (see `ServiceMessage`), or presented by `notify`.
       return {};
     default:
       // Every known type has its case: a new one fails the typecheck here, and a type the app

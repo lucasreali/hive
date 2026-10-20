@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
+import type { ProgressState } from "../protocol";
 import { apply } from "../reduce";
 import { addTab, initialState, select, setEdit, setOpenFile, useHive } from "../store";
 import { closeTerminal } from "../terminals";
@@ -138,6 +139,42 @@ test("tabs switch and show exit and missing hooks", () => {
     "Exit code: 3",
     "Exit code: none (killed)",
   ]);
+});
+
+test("a program's progress shows on its tab until it clears or the terminal exits (17.25)", () => {
+  show();
+  act(() => addTab(1, shopMain.path));
+  const bar1 = () => screen.queryByRole("progressbar");
+  const progress = (state: ProgressState, value = 0) =>
+    act(() => apply({ type: "terminal_progress", channel: 1, state, value }));
+  expect(bar1()).toBeNull();
+  const seen: (string | null)[][] = [];
+  for (const [state, value] of [
+    ["normal", 40],
+    ["error", 70],
+    ["paused", 10],
+    ["indeterminate", 0],
+  ] as const) {
+    progress(state, value);
+    const hint = bar1() as HTMLElement;
+    seen.push([
+      hint.getAttribute("aria-label"),
+      hint.getAttribute("aria-valuenow"),
+      hint.dataset.state ?? null,
+      hint.style.getPropertyValue("--progress"),
+    ]);
+  }
+  expect(seen).toEqual([
+    ["Progress 40%", "40", "normal", "40%"],
+    ["Failed at 70%", "70", "error", "70%"],
+    ["Paused at 10%", "10", "paused", "10%"],
+    ["Busy", null, "indeterminate", "0%"],
+  ]);
+  progress("none");
+  expect(bar1()).toBeNull();
+  progress("normal", 5);
+  act(() => apply({ type: "terminal_exited", channel: 1, code: 0 }));
+  expect(bar1()).toBeNull();
 });
 
 test("a tab running Claude shows the agent's state and its session's name", () => {
