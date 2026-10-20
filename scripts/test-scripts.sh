@@ -2,6 +2,8 @@
 # Tests the portable scripts on this OS, Linux or macOS (TODO 17.2):
 #   - release.sh in a scratch repository holding a copy of the manifests (a fake `cargo`)
 #   - gates-lib.sh: a failing gate or mutants run is reported and counted (a fake `cargo`)
+#   - ci.sh with a fake `gh`: watch waits for ci and macos (--all adds windows), green asks for
+#     both (D18.1)
 #   - memwatch.sh reads the available memory, stops a process below its threshold, and leaves it
 #     alone above
 #   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
@@ -99,6 +101,59 @@ o=$(gates 0 mutants_verdict m 0 3)
 check "gates: the watchdog's stop fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
 o=$(gates 0 mutants_verdict m 0 1)
 check "gates: an unreadable memory fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
+
+# --- ci.sh --------------------------------------------------------------------------------------
+# In a scratch repository on a task branch, with a fake `gh`: it logs each call, lists the runs
+# in $tmp/ci-runs ("workflow id url" per line), fails `run watch` for the ids in $FAKE_FAILED.
+mkdir -p "$tmp/gh" "$tmp/ci"
+cat >"$tmp/gh/gh" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$FAKE_GH_LOG"
+case "$1 $2" in
+  "auth token") echo token ;;
+  "run list") cat "$FAKE_RUNS" ;;
+  "run watch") case " $FAKE_FAILED " in *" $3 "*) exit 1 ;; esac ;;
+esac
+EOF
+chmod +x "$tmp/gh/gh"
+git -C "$tmp/ci" init -q
+git -C "$tmp/ci" config user.name test
+git -C "$tmp/ci" config user.email test@example.invalid
+git -C "$tmp/ci" commit -q --allow-empty -m base
+git -C "$tmp/ci" switch -q -c task/1.0-test
+# ci <runs> <failed ids> <args…>: ci.sh's output and exit code, "exit=<n>"; the gh calls in
+# $tmp/gh.log.
+ci() {
+  printf '%s\n' "$1" | sed '/^$/d' >"$tmp/ci-runs"
+  : >"$tmp/gh.log"
+  ( cd "$tmp/ci" && FAKE_RUNS=$tmp/ci-runs FAKE_FAILED=$2 FAKE_GH_LOG=$tmp/gh.log CI_SH_WAIT=0 \
+      PATH=$tmp/gh:$PATH "$repo/scripts/ci.sh" "${@:3}" 2>&1; echo "exit=$?" )
+}
+three="ci 1 u/1
+macos 2 u/2
+windows 3 u/3"
+o=$(ci "$three" "" watch)
+check "ci.sh watch: ci and macos green" 'has "$o" "green u/1" "green u/2" "exit=0"'
+check "ci.sh watch: windows not waited for" '! grep -q "run watch 3 " "$tmp/gh.log"'
+o=$(ci "ci 1 u/1
+macos 2 u/2" "" watch)
+# No wait for windows: a handful of listings, not the 30 tries of the wait.
+check "ci.sh watch: no windows run, no wait" \
+  'has "$o" "exit=0" && [ "$(grep -c "^run list" "$tmp/gh.log")" -lt 10 ]'
+o=$(ci "$three" "" watch --all)
+check "ci.sh watch --all: windows too" 'has "$o" "green u/1" "green u/2" "green u/3" "exit=0"'
+o=$(ci "$three" "2" watch)
+check "ci.sh watch: a red macos fails" 'has "$o" "FAILED u/2 (scripts/ci.sh logs 2)" "exit=1"'
+o=$(ci "$three" "3" watch)
+check "ci.sh watch: a red windows does not count" 'has "$o" "exit=0"'
+o=$(ci "$three" "3" watch --all)
+check "ci.sh watch --all: a red windows fails" 'has "$o" "FAILED u/3 .*" "exit=1"'
+# A missing macos run: the wait is bounded (30 tries, CI_SH_WAIT=0 here), then it fails.
+o=$(ci "ci 1 u/1" "" watch)
+check "ci.sh watch: a missing macos run fails, after a bounded wait" \
+  'has "$o" "MISSING macos: no run of HEAD" "green u/1" "exit=1" && [ "$(grep -c "^run list" "$tmp/gh.log")" -gt 30 ]'
+o=$(ci "$three" "" watch --other)
+check "ci.sh watch: an unknown option fails" 'has "$o" "usage: scripts/ci.sh watch \[--all\]" "exit=2"'
 
 # --- macos-bundle.sh signing-mode ---------------------------------------------------------------
 secrets="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8"

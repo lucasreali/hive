@@ -3,7 +3,8 @@
 # rule 4): the active gh account is the work one and is never switched. Push and watch only
 # on task/* branches.
 #   scripts/ci.sh push          push the branch (sets upstream)
-#   scripts/ci.sh watch         wait for every run of HEAD (ci, macos, windows); exit 1 if one failed
+#   scripts/ci.sh watch [--all] wait for HEAD's ci and macos runs, the two a merge needs (Windows
+#                               is frozen, D17.0; --all adds windows); exit 1 if one failed
 #   scripts/ci.sh green [<rev>] print the green `ci` run of a commit (default HEAD, any branch:
 #                               /release checks main's HEAD); exit 1 if there is none
 #   scripts/ci.sh runs [<rev>]  every run of a commit (default HEAD, any branch)
@@ -23,22 +24,39 @@ esac
 GH_TOKEN=$(gh auth token -u lucasreali)
 export GH_TOKEN
 
+# HEAD's runs on this branch, one per line: workflow name, id, url.
 runs() {
-  gh run list --branch "$branch" --commit "$(git rev-parse HEAD)" --json databaseId,url \
-    -q '.[] | "\(.databaseId) \(.url)"'
+  gh run list --branch "$branch" --commit "$(git rev-parse HEAD)" --json workflowName,databaseId,url \
+    -q '.[] | "\(.workflowName) \(.databaseId) \(.url)"'
 }
 
 case "${1:-}" in
   push) git push -u origin "$branch" ;;
   watch)
-    # Runs show up a few seconds after the push; ci, macos and windows all run on task/*.
+    case "${2:-}" in
+      "") want="ci macos" ;;
+      --all) want="ci macos windows" ;;
+      *) echo "usage: scripts/ci.sh watch [--all]" >&2; exit 2 ;;
+    esac
+    # The runs of the wanted workflows, as `runs` prints them.
+    wanted() {
+      runs | while read -r name id url; do
+        case " $want " in *" $name "*) echo "$name $id $url" ;; esac
+      done
+    }
+    # Runs show up a few seconds after the push: wait until each wanted workflow has one.
     tries=0
-    while [ "$(runs | wc -l)" -lt 3 ] && [ "$tries" -lt 30 ]; do
+    while [ "$(wanted | cut -d' ' -f1 | sort -u | wc -l)" -lt "$(echo $want | wc -w)" ] &&
+      [ "$tries" -lt 30 ]; do
       tries=$((tries + 1))
-      sleep 20
+      sleep "${CI_SH_WAIT:-20}"
     done
+    # A workflow still without a run fails (the push may not have reached it); the rest are watched.
     failed=0
-    runs | while read -r id url; do
+    for name in $want; do
+      wanted | grep -q "^$name " || { echo "MISSING $name: no run of HEAD"; failed=1; }
+    done
+    wanted | while read -r name id url; do
       # Poll every 2 min: the gh API quota is shared with the human's other work.
       if gh run watch "$id" --interval 120 --exit-status >/dev/null; then
         echo "green $url"
@@ -77,5 +95,5 @@ case "${1:-}" in
     # --json: gh 2.46's plain view asks for the retired Projects (classic) and fails.
     [ -z "$n" ] || gh issue view "$n" --json url,body,comments -q '.url, .body, (.comments[] | .body)'
     ;;
-  *) echo "usage: scripts/ci.sh push | watch | green [<rev>] | runs [<rev>] | logs <run-id> | cancel <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
+  *) echo "usage: scripts/ci.sh push | watch [--all] | green [<rev>] | runs [<rev>] | logs <run-id> | cancel <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
 esac
