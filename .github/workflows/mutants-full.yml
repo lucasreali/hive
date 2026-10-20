@@ -1,7 +1,8 @@
 # Every mutant of the workspace, nightly on `main` (TODO 7.1). Does not block anything: it covers
 # the blind spot of the per-branch `--in-diff` run (a change can leave code outside its diff
 # untested), and of the macOS and Windows files, whose branch runs test only their diff (macos.yml,
-# windows.yml). Surviving mutants open a GitHub issue, or comment on the one still open.
+# windows.yml). Surviving mutants open a GitHub issue, or comment on the one still open; a night
+# with none closes it.
 name: mutants-full
 
 on:
@@ -151,3 +152,20 @@ jobs:
           else
             gh issue create --title "$title" --body-file body.md
           fi
+
+  # No survivors anywhere: the issue still open is resolved (TODO 18.11). Not on a skipped night.
+  resolved:
+    needs: [mutants, macos, windows]
+    if: needs.mutants.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Nightly mutation testing: surviving mutants"
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$open" ]; then gh issue close "$open" --comment "No surviving mutants on $RUN"; fi
