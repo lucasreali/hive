@@ -8,6 +8,9 @@ use tauri::Manager;
 // Wiring only (excluded from coverage, see COVERAGE_EXCLUSIONS.md): builder, plugins, state and
 // command registration. Commands and any logic live in lib.rs, which is tested.
 fn main() {
+    // A GUI app starts with 256 descriptors on macOS (17.6).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    hive_lib::fds::raise_at_start(&hive_lib::fds::Process, &mut std::io::stderr());
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())

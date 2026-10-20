@@ -54,6 +54,9 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // (On Windows the bridge starts it detached.)
     #[cfg(unix)]
     let _ = nix::unistd::setsid();
+    // Before any terminal, watch or socket: a GUI app's 256 runs out (17.6).
+    #[cfg(unix)]
+    crate::fds::raise_at_start(&crate::fds::Process, &mut io::stderr());
     paths.prepare_runtime()?;
     let _lock = lock(paths).await?;
     wrapper::install(paths, &std::env::current_exe()?)?;
