@@ -213,21 +213,39 @@ test("new settings apply at once to open terminals, and the shown one refits", a
   unmount = mountTerminals(host);
 });
 
-test("copy on select copies a new selection, only when set", async () => {
+test("copy on select copies the selection when the mouse button is released, only when set", async () => {
   const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const { id, term } = await open();
   showTerminal(id);
   term.write("hello");
   await written(term);
-  term.selectAll();
+  const pane = term.element?.parentElement as HTMLElement;
+  const release = (target: EventTarget = document.body) =>
+    target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  const drag = (select: () => void, target?: EventTarget) => {
+    pane.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    select();
+    release(target);
+  };
+  drag(() => term.selectAll());
   expect(copy).not.toHaveBeenCalled();
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.terminal.copy_on_select = true;
   apply({ type: "settings", settings });
+  // A selection change alone (no mouse gesture) copies nothing.
   term.clearSelection();
-  expect(copy).not.toHaveBeenCalled();
   term.selectAll();
-  expect(copy).toHaveBeenCalledWith(term.getSelection());
+  expect(copy).not.toHaveBeenCalled();
+  // Released outside the terminal too; a click that leaves nothing selected copies nothing.
+  drag(() => term.select(0, 0, 4), window);
+  expect(copy.mock.calls).toEqual([["hell"]]);
+  drag(() => term.clearSelection());
+  // Only the press that started in the terminal counts, once.
+  release();
+  term.selectAll();
+  release();
+  expect(copy).toHaveBeenCalledTimes(1);
+  apply({ type: "settings", settings: DEFAULT_SETTINGS });
   copy.mockRestore();
 });
 
@@ -484,29 +502,39 @@ test("other keys go to the shell unless an app shortcut takes them first", async
   write.mockRestore();
 });
 
-test("on macOS Cmd+C copies and Cmd+V pastes, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
+test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
   asMac();
   const write = spyOn(transport, "writeTerminal");
   const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("pasted");
   const { id, term } = await open();
   showTerminal(id);
-  await new Promise<void>((resolve) => term.write("hello world", resolve));
+  // The shell asked for bracketed paste.
+  await new Promise<void>((resolve) => term.write("hello world\x1b[?2004h", resolve));
   term.select(0, 0, 5);
   const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
 
   expect(press(term, "c", cmd).defaultPrevented).toBe(true);
   expect(copy).toHaveBeenCalledWith("hello");
-  expect(press(term, "v", cmd).defaultPrevented).toBe(true);
+  // Cmd+V: not read from script (WebKit's "Paste" bubble), not typed; the native paste event
+  // that follows reaches the shell, bracketed.
+  expect(press(term, "v", cmd).defaultPrevented).toBe(false);
   await settle();
-  expect(write.mock.calls).toEqual([[id, "pasted"]]);
+  expect(read).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
+  const paste = new Event("paste", { bubbles: true, cancelable: true });
+  const data = new DataTransfer();
+  data.setData("text/plain", "pasted");
+  Object.defineProperty(paste, "clipboardData", { value: data });
+  term.textarea?.dispatchEvent(paste);
+  expect(write.mock.calls).toEqual([[id, "\x1b[200~pasted\x1b[201~"]]);
 
   press(term, "c", { shiftKey: false, keyCode: 67 }); // Ctrl+C
   expect(write).toHaveBeenLastCalledWith(id, "\x03");
   expect(press(term, "V", { keyCode: 86 }).defaultPrevented).toBe(false); // Ctrl+Shift+V
   press(term, "C", { ...cmd, shiftKey: true }); // Cmd+Shift+C: not the copy chord
   expect(copy).toHaveBeenCalledTimes(1);
-  expect(read).toHaveBeenCalledTimes(1);
+  expect(read).not.toHaveBeenCalled();
   copy.mockRestore();
   read.mockRestore();
   write.mockRestore();
