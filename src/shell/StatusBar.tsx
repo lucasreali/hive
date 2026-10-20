@@ -74,7 +74,8 @@ const USAGE_WARNING = 80;
  * The session (5-hour) window as a ring filled to its percentage (15.3), with "Session 42% ·
  * resets 14:30" and, when the service sent one, "Week 41% · resets Mon 09:00" as its tooltip
  * (on hover and keyboard focus) and accessible name, each followed by its pace when the service
- * forecasts a limit before the reset (17.23, `usageLines`). The service sends none once it reset.
+ * forecasts a limit before the reset (17.23, `usageLines`, the menu bar icon's too). The service
+ * sends none once it reset.
  */
 function SessionUsage() {
   const usage = useHive((s) => s.sessionUsage);

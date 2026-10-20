@@ -451,6 +451,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "notification_clicked":
     case "quit_requested":
     case "menu":
+    case "tray_clicked":
       // Answered where they were asked (see `ServiceMessage`), not stored.
       return {};
     case "usage_alert":

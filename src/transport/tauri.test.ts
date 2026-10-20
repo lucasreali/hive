@@ -187,7 +187,7 @@ test("a command that fails shows why as an error toast, and rejects already hand
     throw "the hive link is down";
   });
   // Every command but these: a new one sent with a bare `invoke` fails here.
-  const own = ["connect", "openTerminal", "saveFile", "playTone"];
+  const own = ["connect", "openTerminal", "saveFile", "playTone", "setTray"];
   const methods = Object.entries(tauriTransport).filter(([name]) => !own.includes(name));
   expect(methods.length).toBe(Object.keys(tauriTransport).length - own.length);
   for (const [name, method] of methods) {
@@ -211,5 +211,8 @@ test("a command that fails shows why as an error toast, and rejects already hand
   await expect(tauriTransport.saveFile("/w", "a", "", null)).rejects.toBe("the hive link is down");
   // A tone the app cannot play falls back to the webview's (`notify.ts`).
   await expect(tauriTransport.playTone(40)).rejects.toBe("the hive link is down");
+  // The menu bar icon is a hint: `followTray` drops its failure, without a toast.
+  const tray = { shown: false, urgent: null, agents: [], usage: [] };
+  await expect(tauriTransport.setTray(tray)).rejects.toBe("the hive link is down");
   expect(notice()).toBeNull();
 });

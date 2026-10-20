@@ -30,7 +30,7 @@ const message = (state: AgentState, alert: Alert | null = "action", pending?: bo
 const at = (focused: boolean, bounce = true): HiveState => ({
   ...useHive.getState(),
   focused,
-  settings: { ...DEFAULT_SETTINGS, notifications: { volume: 100, bounce } },
+  settings: { ...DEFAULT_SETTINGS, notifications: { volume: 100, bounce, menu_bar: true } },
 });
 
 test("a new 🟡 or 🔴 bounces only while Hive is not focused", () => {

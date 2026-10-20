@@ -105,6 +105,20 @@ test("the Dock bounce setting is offered on macOS only, on by default", async ()
   expect(input(bounce).checked).toBe(false);
 });
 
+test("the menu bar icon setting is offered on macOS only, on by default", async () => {
+  open();
+  const menuBar = "Show agents in the menu bar";
+  section("Notifications");
+  expect(screen.queryByLabelText(menuBar)).toBeNull();
+  asMac();
+  section("Agents");
+  section("Notifications");
+  expect(input(menuBar).checked).toBe(true);
+  fireEvent.click(screen.getByLabelText(menuBar));
+  await waitFor(() => expect(settings().notifications.menu_bar).toBe(false));
+  expect(input(menuBar).checked).toBe(false);
+});
+
 test("numbers and texts are saved once typing pauses; non-numbers are not sent", async () => {
   open();
   const set = spyOn(transport, "setSettings");

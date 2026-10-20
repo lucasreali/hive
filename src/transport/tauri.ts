@@ -77,4 +77,6 @@ export const tauriTransport: Transport = {
   openNotificationSettings: () => send("open_notification_settings"),
   // No toast: the caller falls back to the webview's tone.
   playTone: (volume) => invoke<void>("play_tone", { volume }),
+  // No toast on a failure: the icon is a hint (`followTray` drops it).
+  setTray: (tray) => invoke("set_tray", tray),
 };

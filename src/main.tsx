@@ -6,6 +6,7 @@ import { followDock } from "./dock";
 import { followOpenFile, followPanel, followView } from "./follow";
 import { setFocused } from "./store";
 import { transport } from "./transport";
+import { followTray } from "./tray";
 import { watchFocus } from "./window";
 
 // The update check answers on the channel `connect` gives, so it goes second.
@@ -15,6 +16,7 @@ followPanel(transport);
 watchFocus(setFocused);
 followView(transport);
 followDock();
+followTray();
 
 export const root = createRoot(document.getElementById("root") as HTMLElement);
 root.render(

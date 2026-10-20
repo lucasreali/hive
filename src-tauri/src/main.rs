@@ -1,8 +1,11 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use hive_lib::commands;
+use hive_lib::{commands, tray};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::path::BaseDirectory;
+use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Manager;
 
 // Wiring only (excluded from coverage, see COVERAGE_EXCLUSIONS.md): builder, plugins, state and
@@ -52,7 +55,8 @@ fn main() {
                 .with_notify(notifier(app))
                 .with_url(|url: &str| {
                     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
-                });
+                })
+                .with_tray(tray(app));
             // Asks for notification permission at launch; the tone plays from the app (17.19).
             #[cfg(target_os = "macos")]
             let hive = hive
@@ -156,6 +160,7 @@ fn main() {
             commands::check_notifications,
             commands::open_notification_settings,
             commands::play_tone,
+            commands::set_tray,
         ])
         .build(context);
     match result {
@@ -323,4 +328,63 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
         menu.append(&submenu)?;
     }
     Ok(menu)
+}
+
+/// The menu bar icon (17.22): shows `hive_lib::tray`'s view, or removes it. Choosing an item
+/// goes to `hive_lib::tray::chosen`.
+fn tray(app: &tauri::App) -> impl Fn(tray::Tray) -> Result<(), String> + Send + Sync {
+    let app = app.handle().clone();
+    move |wanted| match wanted {
+        tray::Tray::Remove => {
+            app.remove_tray_by_id(tray::TRAY);
+            Ok(())
+        }
+        tray::Tray::Show(view) => tray::place(
+            app.tray_by_id(tray::TRAY),
+            view,
+            |shown, view| update_tray(&app, &shown, view).map_err(|e| e.to_string()),
+            |view| create_tray(&app, view).map_err(|e| e.to_string()),
+        ),
+    }
+}
+
+/// The view's menu: one item per entry, as `hive_lib::tray` made it.
+fn tray_menu(app: &tauri::AppHandle, view: &tray::View) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::new(app)?;
+    for entry in &view.entries {
+        match entry {
+            tray::Entry::Item { id, text, enabled } => {
+                menu.append(&MenuItem::with_id(app, id, text, *enabled, None::<&str>)?)?
+            }
+            tray::Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
+        }
+    }
+    Ok(menu)
+}
+
+fn update_tray(app: &tauri::AppHandle, shown: &TrayIcon, view: tray::View) -> tauri::Result<()> {
+    let menu = tray_menu(app, &view)?;
+    shown.set_icon(Some(Image::new_owned(
+        view.icon.rgba,
+        tray::SIZE,
+        tray::SIZE,
+    )))?;
+    shown.set_icon_as_template(view.icon.template)?;
+    shown.set_tooltip(Some(view.tooltip))?;
+    shown.set_menu(Some(menu))
+}
+
+fn create_tray(app: &tauri::AppHandle, view: tray::View) -> tauri::Result<()> {
+    let menu = tray_menu(app, &view)?;
+    TrayIconBuilder::with_id(tray::TRAY)
+        .icon(Image::new_owned(view.icon.rgba, tray::SIZE, tray::SIZE))
+        .icon_as_template(view.icon.template)
+        .tooltip(view.tooltip)
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| {
+            let _ = tray::chosen(app, &app.state::<hive_lib::Hive>(), event.id().as_ref());
+        })
+        .build(app)
+        .map(drop)
 }

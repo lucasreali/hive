@@ -546,7 +546,8 @@
       },
       "notifications": {
         "volume": 100,
-        "bounce": true
+        "bounce": true,
+        "menu_bar": true
       },
       "agents": {
         "silence_secs": 5,

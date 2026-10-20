@@ -23,6 +23,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   notification_permission: { permission: true },
   menu: { item: true },
   update_checked: { error: true },
+  tray_clicked: { agent: true },
   version_mismatch: {
     protocol: true,
     version: true,
@@ -132,6 +133,7 @@ const APP_SIDE = [
   "notification_permission",
   "menu",
   "update_checked",
+  "tray_clicked",
   "disconnected",
   "app_mode",
 ];

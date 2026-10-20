@@ -328,6 +328,8 @@ pub struct Hive {
     defaults: (OsString, Vec<OsString>),
     /// The app runs translocated (`translocated`); given by `main.rs` (`with_translocated`).
     translocated: bool,
+    /// Shows the menu bar icon; given by `main.rs` (`with_tray`, 17.22).
+    tray: Option<Box<tray::Apply>>,
 }
 
 /// Runs the installer of a downloaded update.
@@ -379,7 +381,8 @@ pub const WINDOW_STATE: StateFlags = StateFlags::SIZE
 
 /// Brings the main window up, minimised or hidden, restored and focused: a click on a
 /// notification (13.5), a second launch of the app (17.18), a Dock click with no window shown
-/// ([`reopen`]) or a quit that asks first (D17.3). Answers whether there was a window to bring up.
+/// ([`reopen`]), a quit that asks first (D17.3) or an agent chosen in the menu bar icon's menu
+/// (17.22). Answers whether there was a window to bring up.
 pub fn bring_up<R: Runtime>(app: &AppHandle<R>) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
@@ -740,6 +743,7 @@ impl Hive {
             url: None,
             defaults: (DEFAULTS.into(), Vec::new()),
             translocated: false,
+            tray: None,
         }
     }
 
@@ -2145,11 +2149,25 @@ pub mod commands {
     pub fn play_tone(hive: State<'_, Hive>, volume: u8) -> Result<(), String> {
         hive.play_tone(volume)
     }
+
+    /// The menu bar icon (17.22) for what the UI sent: `shown` (the setting), the most urgent
+    /// state (and whether it is pending), the pending agents and the usage ring's lines.
+    #[tauri::command]
+    pub fn set_tray(
+        hive: State<'_, Hive>,
+        shown: bool,
+        urgent: Option<(AgentState, bool)>,
+        agents: Vec<tray::Agent>,
+        usage: Vec<String>,
+    ) -> Result<(), String> {
+        hive.set_tray(shown, urgent, &agents, &usage)
+    }
 }
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod menu;
+pub mod tray;
 
 #[cfg(test)]
 mod tests;
