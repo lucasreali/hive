@@ -27,8 +27,15 @@ test("a file shown again keeps its scroll, whichever way it was left (15.4)", as
   // Far down, by the wheel as the human does.
   await page.locator(".file-view .cm-scroller").hover();
   await page.mouse.wheel(0, 4000);
-  await expect.poll(() => firstLine(page)).not.toBe("// server line 1");
-  const left = await firstLine(page);
+  // WebKit scrolls by the wheel smoothly: the line on top is read once the view has stopped.
+  let left: string | null = null;
+  await expect
+    .poll(async () => {
+      const before = left;
+      left = await firstLine(page);
+      return left !== null && left !== "// server line 1" && left === before;
+    })
+    .toBe(true);
   expect(left).toMatch(/server line (\d{3})/);
   const tab = page.getByRole("tab", { name: "server.ts" });
 

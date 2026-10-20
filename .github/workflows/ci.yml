@@ -44,6 +44,8 @@ jobs:
       - run: cargo deny check
       - run: cargo machete
       - run: python3 .claude/hooks/test_guard.py
+      # release.sh and the gates' memory watchdog (TODO 17.2); macos.yml runs it on macOS.
+      - run: scripts/test-scripts.sh
 
   coverage:
     runs-on: ubuntu-latest
@@ -76,7 +78,8 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun test --coverage
-      - run: bunx playwright install --with-deps chromium
+      # WebKit (TODO 17.3): the engine of macOS' WKWebView, where Hive runs on a Mac.
+      - run: bunx playwright install --with-deps chromium webkit
       # The load spec renders WebGL through ANGLE on the system GL (Mesa; llvmpipe here, the
       # runner has no GPU). Without Mesa's EGL and a display Chromium falls back to
       # SwiftShader, which the spec rejects as unrepresentative.
