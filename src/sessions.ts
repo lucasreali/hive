@@ -66,7 +66,7 @@ export async function openLocated(located: Located, tauri = isTauri()): Promise<
   const handing = pending.get(key);
   pending.delete(key);
   if (!handing) return;
-  if (!located.windows_path) return showNotice("error", located.error ?? "No Windows path");
+  if (!located.windows_path) return showNotice("error", located.error ?? "No path");
   if (!tauri) return showNotice("error", `Only the Hive app opens ${located.windows_path}`);
   try {
     await openPath(located.windows_path, handing === "reveal");
