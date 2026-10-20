@@ -929,6 +929,19 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentStatus | null {
 export const muted = (status: AgentStatus | null | undefined): boolean =>
   status?.state === "waiting_you" && !status.pending;
 
+/**
+ * What outlines terminal `id`'s pane in a split (17.26): its agent's state while the service
+ * says it is pending on a dialog or an error (🟡, 🔴); a pending 🟠 only finished its turn, so
+ * its pane stays plain. Null otherwise.
+ */
+export function paneAttention(s: HiveState, id: number): AgentState | null {
+  const status = mostUrgent(
+    s,
+    Object.values(s.agents).filter((a) => a.terminal === id),
+  );
+  return status?.pending && status.state !== "waiting_you" ? status.state : null;
+}
+
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
 
 /**

@@ -4,7 +4,15 @@ import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
 import type { AccountDir, Settings } from "./protocol";
 import { openLink, safeUrl } from "./shell/Markdown";
-import { addTab, focusPane, removeTab, setSplit, showFailure, useHive } from "./store";
+import {
+  addTab,
+  focusPane,
+  paneAttention,
+  removeTab,
+  setSplit,
+  showFailure,
+  useHive,
+} from "./store";
 import { inBarOrder, shownSplit, tabWorktree } from "./tabs";
 import { transport } from "./transport";
 import { commandKey, isMac } from "./window";
@@ -376,7 +384,23 @@ export function showTerminals(ids: number[], focus: number | null): void {
     if (!entry.webgl) entry.webgl = webgl(entry);
     entry.fit.fit();
   }
+  outline();
   if (focus !== null) entries.get(focus)?.term.focus();
+}
+
+/**
+ * Marks each shown pane whose agent needs the user (17.26) with that agent's state; the
+ * stylesheet outlines it in the state's colour while the terminals are split.
+ */
+function outline(): void {
+  const s = useHive.getState();
+  for (const id of shown) {
+    const el = entries.get(id)?.el;
+    if (!el) continue;
+    const state = paneAttention(s, id);
+    if (state) el.dataset.attention = state;
+    else delete el.dataset.attention;
+  }
 }
 
 /** Refits every shown terminal to its pane. */
@@ -447,6 +471,7 @@ export function mountTerminals(element: HTMLElement): () => void {
   const unsubscribe = useHive.subscribe((s, prev) => {
     if (s.settings !== prev.settings) applySettings(s.settings);
     if (s.splitPercent !== prev.splitPercent) refit();
+    if (s.agents !== prev.agents || s.agentStates !== prev.agentStates) outline();
   });
   const observer = new ResizeObserver(refit);
   observer.observe(element);
