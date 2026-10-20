@@ -24,6 +24,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   menu: { item: true },
   update_checked: { error: true },
   tray_clicked: { agent: true },
+  files_dropped: { text: true, x: true, y: true },
   version_mismatch: {
     protocol: true,
     version: true,
@@ -138,6 +139,7 @@ const APP_SIDE = [
   "menu",
   "update_checked",
   "tray_clicked",
+  "files_dropped",
   "disconnected",
   "app_mode",
 ];

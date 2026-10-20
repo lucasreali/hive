@@ -333,24 +333,48 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
 }
 
 /**
- * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C and Cmd+V, and
- * Ctrl+C stays the shell's, plus macOS' own keys (`macKey`). Every other key is the shell's.
+ * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C (Ctrl+C's
+ * interrupt with nothing selected, 18.2) and Cmd+V, and Ctrl+C stays the shell's, plus macOS'
+ * own keys (`macKey`). Every other key is the shell's.
  */
 function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
   if (intercept(event) || macKey(term, marks, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
-  const key = event.key.toUpperCase();
-  if (event.type !== "keydown" || !chord || (key !== "C" && key !== "V")) return true;
-  // 17.8: on macOS Cmd+V is left to WebKit, whose paste (the Edit menu's) reaches xterm's
-  // textarea as a paste event, bracketed paste kept; reading the clipboard from script would
-  // show WebKit's "Paste" bubble whenever another app filled it.
-  if (key === "V" && isMac()) return false;
-  // The browser's own paste (Ctrl+Shift+V) would paste a second time.
-  event.preventDefault();
-  if (key === "C") copy(term);
-  else paste(term);
+  const clipboard = CLIPBOARD_KEYS.get(event.key.toUpperCase());
+  if (event.type !== "keydown" || !chord || !clipboard) return true;
+  clipboard(term, event);
   return false;
 }
+
+/**
+ * The clipboard chords of `keys`, by key: Ctrl+Shift+C / Ctrl+Shift+V, ⌘C / ⌘V on macOS. The
+ * terminal never types them.
+ */
+const CLIPBOARD_KEYS = new Map<string, (term: Terminal, event: KeyboardEvent) => void>([
+  [
+    "C",
+    (term, event) => {
+      // Nothing else copies: neither the Edit menu's Copy nor the browser's.
+      event.preventDefault();
+      // 18.2: on macOS ⌘C with nothing selected interrupts, as Ctrl+C does (iTerm2, Ghostty);
+      // it never both copies and interrupts.
+      if (isMac() && !term.hasSelection()) term.input("\x03");
+      else copy(term);
+    },
+  ],
+  [
+    "V",
+    (term, event) => {
+      // 17.8: on macOS Cmd+V is left to WebKit, whose paste (the Edit menu's) reaches xterm's
+      // textarea as a paste event, bracketed paste kept; reading the clipboard from script
+      // would show WebKit's "Paste" bubble whenever another app filled it.
+      if (isMac()) return;
+      // The browser's own paste (Ctrl+Shift+V) would paste a second time.
+      event.preventDefault();
+      paste(term);
+    },
+  ],
+]);
 
 /** Copies the terminal's selection, if any (Ctrl+Shift+C, ⌘C, the terminal menu's Copy). */
 function copy(term: Terminal): void {
@@ -378,6 +402,30 @@ export function terminalAt(target: EventTarget | null): { id: number; selection:
   const id = Number(pane?.dataset.terminal);
   const term = terminal(id);
   return term ? { id, selection: term.hasSelection() } : null;
+}
+
+/** Whether `c` is a C0 or C1 control character or DEL (Rust's `char::is_control`). */
+const control = (c: string) => {
+  const code = c.charCodeAt(0);
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+};
+
+/**
+ * Files dropped from Finder (18.1): `text`, their shell-quoted paths, is pasted into the
+ * terminal whose pane is at (`x`, `y`), found as the terminal menu finds it, bracketed when
+ * the program asked and never with Enter; that terminal takes the keyboard. A drop anywhere
+ * else (the sidebar, a dialog over the pane, a file tab) is ignored. True when it was typed.
+ * A text with a control character is refused: the program would read it as keys (an escape
+ * ending the bracketed paste, Enter); the app side never sends one.
+ */
+export function dropFiles(text: string, x: number, y: number): boolean {
+  if ([...text].some(control)) return false;
+  const at = terminalAt(document.elementFromPoint(x, y));
+  const term = at && terminal(at.id);
+  if (!term) return false;
+  term.paste(text);
+  term.focus();
+  return true;
 }
 
 /**

@@ -65,6 +65,7 @@ afterAll(() => Reflect.deleteProperty(document, "fonts"));
 const {
   ACK_BYTES,
   closeTerminal,
+  dropFiles,
   interceptKeys,
   ligatureRanges,
   mountTerminals,
@@ -474,8 +475,10 @@ test("Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes, nothing reaches
   showTerminal(id);
   await new Promise<void>((resolve) => term.write("hello world", resolve));
 
-  press(term, "C"); // nothing selected: nothing copied
+  // Nothing selected: nothing copied, and off macOS nothing typed either (18.2 is macOS' only).
+  expect(press(term, "C").defaultPrevented).toBe(true);
   expect(copy).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
   term.select(0, 0, 5);
   expect(press(term, "C").defaultPrevented).toBe(true);
   expect(copy).toHaveBeenCalledWith("hello");
@@ -511,7 +514,7 @@ test("other keys go to the shell unless an app shortcut takes them first", async
   write.mockRestore();
 });
 
-test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
+test("on macOS Cmd+C copies or interrupts and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
   asMac();
   const write = spyOn(transport, "writeTerminal");
   const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
@@ -525,6 +528,7 @@ test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shi
 
   expect(press(term, "c", cmd).defaultPrevented).toBe(true);
   expect(copy).toHaveBeenCalledWith("hello");
+  expect(write).not.toHaveBeenCalled(); // a selection: copied, never interrupted
   // Cmd+V: not read from script (WebKit's "Paste" bubble), not typed; the native paste event
   // that follows reaches the shell, bracketed.
   expect(press(term, "v", cmd).defaultPrevented).toBe(false);
@@ -544,6 +548,14 @@ test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shi
   press(term, "C", { ...cmd, shiftKey: true }); // Cmd+Shift+C: not the copy chord
   expect(copy).toHaveBeenCalledTimes(1);
   expect(read).not.toHaveBeenCalled();
+
+  // 18.2: Cmd+C with nothing selected interrupts as Ctrl+C does, and copies nothing.
+  term.clearSelection();
+  write.mockClear();
+  expect(press(term, "c", cmd).defaultPrevented).toBe(true);
+  press(term, "c", cmd, "keyup");
+  expect(write.mock.calls).toEqual([[id, "\x03"]]);
+  expect(copy).toHaveBeenCalledTimes(1);
   copy.mockRestore();
   read.mockRestore();
   write.mockRestore();
@@ -647,6 +659,66 @@ test("the terminal menu copies, pastes (bracketed when asked) and clears, then f
   expect(focus).toHaveBeenCalledTimes(5);
   copy.mockRestore();
   read.mockRestore();
+});
+
+test("files dropped on a pane are typed into that terminal, bracketed when asked, never with Enter", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  const other = await open();
+  showTerminals([id, other.id], id);
+  const focus = spyOn(other.term, "focus");
+  // The second terminal's program (Claude Code, a shell) asked for bracketed paste.
+  await new Promise<void>((resolve) => other.term.write("\x1b[?2004h", resolve));
+  const inside = (term: Terminal) => term.element?.querySelector(".xterm-screen") as Element;
+  // What is at each point of the window: each pane, the host around them, nothing.
+  const points: Record<string, Element | null> = {
+    "10,10": inside(term),
+    "500,10": inside(other.term),
+    "1,1": host,
+    "2,2": document.body,
+    "3,3": null,
+  };
+  const at = spyOn(document, "elementFromPoint").mockImplementation(
+    (x, y) => points[`${x},${y}`] ?? null,
+  );
+  const text = "/Users/me/My\\ Shots/a.png /tmp/b ";
+  await settle();
+  write.mockClear();
+
+  expect(dropFiles(text, 10, 10)).toBe(true);
+  expect(write.mock.calls).toEqual([[id, text]]);
+  expect(dropFiles(text, 500, 10)).toBe(true);
+  expect(write.mock.calls.at(-1)).toEqual([other.id, `\x1b[200~${text}\x1b[201~`]);
+  expect(focus).toHaveBeenCalledTimes(1);
+  // Outside every pane: ignored.
+  for (const [x, y] of [
+    [1, 1],
+    [2, 2],
+    [3, 3],
+  ] as const) {
+    expect(dropFiles(text, x, y)).toBe(false);
+  }
+  expect(write).toHaveBeenCalledTimes(2);
+  // A text with a control character is refused: it would act as keys (end the bracketed
+  // paste, erase the line, press Enter). Non-ASCII past the C1 range is typed.
+  for (const hostile of [
+    "/tmp/a\x1b[201~\x15touch ~/PWNED\n ",
+    "/tmp/a\nb ",
+    "/tmp/a\rb ",
+    "/tmp/a\x15b ",
+    "/tmp/a\x00 ",
+    "/tmp/a\x1f ",
+    "/tmp/a\x7f ",
+    "/tmp/\x9b201~ ",
+    "/tmp/a\x85 ",
+  ]) {
+    expect(dropFiles(hostile, 500, 10)).toBe(false);
+  }
+  expect(write).toHaveBeenCalledTimes(2);
+  expect(dropFiles("/tmp/\xa0é ", 500, 10)).toBe(true);
+  expect(write.mock.calls.at(-1)).toEqual([other.id, "\x1b[200~/tmp/\xa0é \x1b[201~"]);
+  at.mockRestore();
+  write.mockRestore();
 });
 
 test("on macOS ⌘↑ and ⌘↓ jump to the shell's previous and next prompt, never typed", async () => {
