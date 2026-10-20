@@ -28,6 +28,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+/// The app's descriptor limit (17.6).
+#[cfg(unix)]
+pub mod fds;
+
 /// App version, compared with the `hive` binary's in the handshake (#29).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

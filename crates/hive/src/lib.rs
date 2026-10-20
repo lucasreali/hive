@@ -7,6 +7,8 @@ pub mod changes;
 pub mod cli;
 pub mod daemon;
 pub mod dirs;
+#[cfg(unix)]
+pub mod fds;
 pub mod file;
 pub mod files;
 pub mod gh;
