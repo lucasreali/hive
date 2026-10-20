@@ -5,6 +5,8 @@
     "resources": { "resources/hive": "hive" },
     "macOS": {
       "signingIdentity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist",
       "minimumSystemVersion": "12.0"
     }
   }
