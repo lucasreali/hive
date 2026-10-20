@@ -21,7 +21,10 @@ fn without_locale(env: &Env) -> Command {
 /// The `LANG` a terminal gets when the service has no locale, as the service works it out.
 fn fallback_lang() -> String {
     #[cfg(target_os = "macos")]
-    let (system, fallback) = (hive::macos::system_locale(), hive::locale::MAC_FALLBACK);
+    let (system, fallback) = (
+        hive::macos::system_locale(hive::macos::apple_locale()),
+        hive::locale::MAC_FALLBACK,
+    );
     #[cfg(target_os = "linux")]
     let (system, fallback) = (None::<String>, hive::locale::LINUX_FALLBACK);
     let exists = hive::locale::listed(std::path::Path::new(hive::locale::LOCALE_DIR));

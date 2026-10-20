@@ -229,7 +229,10 @@ fn locale_env() -> &'static [(&'static str, String)] {
         let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
         let exists = locale::listed(Path::new(locale::LOCALE_DIR));
         #[cfg(target_os = "macos")]
-        let (system, fallback) = (crate::macos::system_locale(), locale::MAC_FALLBACK);
+        let (system, fallback) = (
+            crate::macos::system_locale(crate::macos::apple_locale()),
+            locale::MAC_FALLBACK,
+        );
         // Linux has no system locale besides the environment's.
         #[cfg(target_os = "linux")]
         let (system, fallback) = (None::<String>, locale::LINUX_FALLBACK);

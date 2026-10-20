@@ -119,6 +119,14 @@ mod tests {
     }
 
     #[test]
+    fn only_a_plain_language_and_region_make_a_name() {
+        assert_eq!(utf8_locale("en_BR").as_deref(), Some("en_BR.UTF-8"));
+        for system in ["_BR", "pt_", "../x_y", "x_../y", "pt_BR/..", "en", ""] {
+            assert_eq!(utf8_locale(system), None, "{system:?}");
+        }
+    }
+
+    #[test]
     fn a_locale_already_set_is_kept() {
         for var in LOCALE_VARS {
             assert_eq!(lang(Some("pt_BR"), &[var]), None, "{var}");
