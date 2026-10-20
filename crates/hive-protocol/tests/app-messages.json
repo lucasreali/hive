@@ -237,6 +237,14 @@
     "message": "m"
   },
   {
+    "type": "pull_ended",
+    "project": "/r",
+    "worktree": "/r/.claude/worktrees/a",
+    "number": 1,
+    "title": "Fix the login",
+    "state": "merged"
+  },
+  {
     "type": "runs",
     "project": "/r",
     "branch": null,

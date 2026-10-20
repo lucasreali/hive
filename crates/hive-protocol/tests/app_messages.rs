@@ -107,6 +107,7 @@ sort! {
         | Pull
         | PullDone
         | PullFailed
+        | PullEnded
         | Runs
         | Run
         | JobLog
@@ -306,6 +307,13 @@ fn samples() -> Vec<Control> {
             project: s("/r"),
             number: None,
             message: m(),
+        },
+        PullEnded {
+            project: s("/r"),
+            worktree: s("/r/.claude/worktrees/a"),
+            number: 1,
+            title: s("Fix the login"),
+            state: PullState::Merged,
         },
         Runs {
             project: s("/r"),

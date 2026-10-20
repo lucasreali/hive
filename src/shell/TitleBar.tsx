@@ -1,14 +1,30 @@
-import { ArrowCircleUpIcon, BellIcon, GaugeIcon } from "@phosphor-icons/react";
+import {
+  ArrowCircleUpIcon,
+  BellIcon,
+  GaugeIcon,
+  GitMergeIcon,
+  GitPullRequestIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { spaceName } from "../notify";
 import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
-import { markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
+import {
+  findWorktree,
+  type InboxItem,
+  markInboxRead,
+  openModal,
+  pendingAgents,
+  type RemoveOffer,
+  unseenPending,
+  useHive,
+} from "../store";
 import { isMac, titleBarDoubleClick, watchFullscreen, windowAction } from "../window";
 import { requestUpdate } from "./CloseAppDialog";
 import {
   HiveIcon,
+  ICON,
   MaximizeIcon,
   MinimizeIcon,
   STATE_LABEL,
@@ -177,9 +193,11 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
       })}
       {pending.length > 0 && inbox.length > 0 && <hr />}
       {inbox.map((item) => {
+        if ("offer" in item)
+          return <OfferItem key={item.id} item={item} now={now} onClose={onClose} />;
         // A usage alert (17.23) is about no agent: choosing it only closes the inbox.
         const usage = item.agent === null;
-        const agent = usage ? undefined : agents[item.agent ?? ""];
+        const agent = usage ? undefined : agents[item.agent];
         return (
           <button
             key={item.id}
@@ -213,5 +231,42 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
         </button>
       )}
     </ContextMenu>
+  );
+}
+
+/**
+ * An offer to remove a worktree whose pull request merged or closed (17.27): a click opens the
+ * usual remove dialog (its archive script and health as from the worktree's menu); nothing is
+ * removed until the user confirms there. Disabled once the worktree is gone.
+ */
+function OfferItem({
+  item,
+  now,
+  onClose,
+}: {
+  item: InboxItem & { offer: RemoveOffer };
+  now: number;
+  onClose: () => void;
+}) {
+  const { worktree, title, state } = item.offer;
+  const there = useHive((s) => findWorktree(s.projects, worktree) !== undefined);
+  const Icon = state === "merged" ? GitMergeIcon : GitPullRequestIcon;
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={!there}
+      title={there ? `${title}\nRemove the worktree…` : "This worktree is gone"}
+      onClick={() => {
+        onClose();
+        openModal("remove-worktree", null, worktree);
+      }}
+    >
+      <Icon {...ICON} />
+      <span className="label">{item.text}</span>
+      <span className="inbox-meta">
+        {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}
+      </span>
+    </button>
   );
 }

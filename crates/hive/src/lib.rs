@@ -19,6 +19,7 @@ pub mod login_path;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mode;
+pub mod offers;
 pub mod paths;
 pub mod power;
 pub mod procs;

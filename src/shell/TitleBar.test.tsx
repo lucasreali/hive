@@ -7,7 +7,9 @@ import { App } from "../App";
 import { apply } from "../reduce";
 import { addToInbox, initialState, pendingAgents, useHive } from "../store";
 import { transport } from "../transport";
-import { agentStatus } from "../transport/mock";
+import { agentStatus, MOCK_REPOS } from "../transport/mock";
+import { TitleBar } from "./TitleBar";
+import { RemoveWorktreeDialog } from "./WorktreeMenu";
 
 afterEach(() => {
   cleanup();
@@ -225,6 +227,45 @@ test("the badge counts pending agents not seen yet; opening the bell clears it (
   open();
   act(() => apply({ type: "agent_removed", channel: 2, id: "b" }));
   expect(useHive.getState().pendingSeen).toEqual({ a: "waiting_permission", c: "error" });
+});
+
+test("an offer to remove a worktree opens its remove dialog; never removes by itself (17.27)", () => {
+  const [shop] = MOCK_REPOS;
+  const fix = shop.worktrees[1];
+  const remove = spyOn(transport, "removeWorktree").mockResolvedValue();
+  // Without the rest of the app, which would ask the mock service for the project's data.
+  render(
+    <>
+      <TitleBar />
+      <RemoveWorktreeDialog />
+    </>,
+  );
+  const bell = () => document.querySelector(".pending-bell") as HTMLButtonElement;
+  const items = () => screen.getAllByRole("menuitem") as HTMLButtonElement[];
+  const offer = (worktree: string, state: "merged" | "closed", text: string) =>
+    addToInbox({
+      offer: { worktree, number: 12, title: "Fix the login", state },
+      at: Date.now() - 60_000,
+      text,
+      space: "shop",
+    });
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    apply({ type: "projects", projects: [shop] });
+    offer("/gone", "closed", "#12 closed: remove its worktree?");
+    offer(fix.id, "merged", `#12 merged: remove ${fix.name}?`);
+  });
+  fireEvent.click(bell());
+  expect(items().map((i) => [i.textContent, i.disabled, i.title])).toEqual([
+    [`#12 merged: remove ${fix.name}?shop · 1m ago`, false, "Fix the login\nRemove the worktree…"],
+    ["#12 closed: remove its worktree?shop · 1m ago", true, "This worktree is gone"],
+  ]);
+  fireEvent.click(items()[0] as HTMLElement);
+  expect(screen.queryByRole("menu")).toBeNull();
+  const dialog = screen.getByRole("dialog", { name: "Delete worktree" });
+  expect(dialog.textContent).toContain(fix.path);
+  expect(remove).not.toHaveBeenCalled();
+  remove.mockRestore();
 });
 
 test("an update failure without an offered update only says why", () => {

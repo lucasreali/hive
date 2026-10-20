@@ -451,6 +451,17 @@ pub enum Control {
         number: Option<u64>,
         message: String,
     },
+    /// The pull request `number` of the project's worktree `worktree` (its id) merged or
+    /// closed (`state`), as a `Pulls` list showed (17.27): the app offers to remove the
+    /// worktree. Sent once per pull request (again only after it was reopened), never with
+    /// another open one on the worktree's branch, never for the main worktree.
+    PullEnded {
+        project: String,
+        worktree: String,
+        number: u64,
+        title: String,
+        state: PullState,
+    },
     /// App → service: the latest workflow runs of a followed project's GitHub repository
     /// (9.32), on `branch` only when given; answered by `Runs`. Fetched from GitHub as
     /// `ListPulls` is: at most once per 2 minutes for a project, branch and account unless
@@ -2837,6 +2848,17 @@ mod tests {
             serde_json::to_string(&pulls).unwrap(),
             r#"{"type":"pulls","project":"/r","repo":{"name":"o/r","url":"https://github.com/o/r","merge_methods":["squash"],"default_merge":null},"mine":[{"number":7,"title":"T","url":"https://github.com/o/r/pull/7","state":"draft","branch":"b","base":"main","author":"me","review":"changes_requested","checks":"running","updated_at":"2026-09-25T08:18:47Z","worktree":null}],"review":[],"fetched_ms":1,"error":null}"#
         );
+        let ended = Control::PullEnded {
+            project: "/r".into(),
+            worktree: "/r/w".into(),
+            number: 7,
+            title: "T".into(),
+            state: PullState::Closed,
+        };
+        assert_eq!(
+            serde_json::to_string(&ended).unwrap(),
+            r#"{"type":"pull_ended","project":"/r","worktree":"/r/w","number":7,"title":"T","state":"closed"}"#
+        );
         let merge: Control = serde_json::from_str(
             r#"{"type":"act_on_pull","project":"/r","number":7,"action":{"kind":"merge","method":"rebase","head":"abc"}}"#,
         )
@@ -2914,6 +2936,13 @@ mod tests {
                 project: "/r".into(),
                 number: None,
                 message: "m".into(),
+            },
+            Control::PullEnded {
+                project: "/r".into(),
+                worktree: "/r/.claude/worktrees/a".into(),
+                number: 1,
+                title: "t".into(),
+                state: PullState::Merged,
             },
         ] {
             assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);

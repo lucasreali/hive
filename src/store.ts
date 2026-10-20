@@ -37,7 +37,7 @@ import type {
   Worktree,
   WorktreeFiles,
 } from "./protocol";
-import type { OpenPull, PullBusy, PullError, Pulls } from "./pulls";
+import type { OpenPull, PullBusy, PullError, PullState, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
 import type { JobLog, OpenRun, RunBusy, RunError, Runs } from "./runs";
 import {
@@ -136,23 +136,29 @@ export type WorktreeDialog = {
   removeFailures: Record<string, string>;
 };
 
-/** One alert `notify` raised, kept for the bell's inbox (6.5). `id` grows with each alert. */
+/**
+ * One alert `notify` raised, kept for the bell's inbox (6.5): an agent's, or an offer to remove a
+ * worktree whose pull request ended (17.27). `id` grows with each alert.
+ */
 export type InboxItem = {
   id: number;
-  /**
-   * The agent's session id: clicking the item goes to it while it runs; null for a usage alert
-   * (17.23), which is about no agent.
-   */
-  agent: string | null;
-  /** The agent's state then; null for a usage alert. */
-  state: AgentState | null;
   /** Wall clock, ms since the epoch. */
   at: number;
   /** E.g. "fix login is waiting for permission". */
   text: string;
-  /** The agent's space, once the store knows spaces (6.14): the item names it. */
+  /** The agent's (or worktree's) space, once the store knows spaces (6.14): the item names it. */
   space?: string;
-};
+} & InboxSubject;
+/** What an inbox item is about. */
+export type InboxSubject =
+  /** The agent's session id: clicking the item goes to it while it runs. */
+  | { agent: string; state: AgentState }
+  /** A usage alert (17.23), about no agent: clicking the item only closes the inbox. */
+  | { agent: null; state: null }
+  /** Clicking the item opens the dialog removing the worktree while it is there. */
+  | { offer: RemoveOffer };
+/** A worktree whose pull request merged or closed, as the service said (`pull_ended`). */
+export type RemoveOffer = { worktree: string; number: number; title: string; state: PullState };
 /** At most this many alerts are kept, the newest first. */
 export const INBOX_LIMIT = 100;
 
@@ -611,7 +617,7 @@ export const openFileDialog = (target: FileTarget, kind: FileDialogKind = "file"
 /** Asks `question` in the confirm dialog (`ConfirmDialog`). */
 export const ask = (question: Question) => useHive.setState({ modal: "confirm", question });
 /** Keeps an alert in the inbox, the newest first. */
-export const addToInbox = (item: Omit<InboxItem, "id">) =>
+export const addToInbox = (item: { at: number; text: string; space?: string } & InboxSubject) =>
   useHive.setState((s) => ({
     inbox: [{ ...item, id: (s.inbox[0]?.id ?? 0) + 1 }, ...s.inbox].slice(0, INBOX_LIMIT),
   }));
