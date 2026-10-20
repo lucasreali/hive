@@ -427,8 +427,10 @@ impl Watcher {
         let root = canonical(root)?;
         let filter = Arc::new(Mutex::new(Filter {
             root: root.clone(),
+            git_dir: None,
+            dirs: BTreeSet::new(),
+            trees: BTreeSet::new(),
             folded: cfg!(target_os = "macos"),
-            ..Filter::default()
         }));
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
         let shared = filter.clone();
@@ -1259,14 +1261,17 @@ pub(crate) mod tests {
         assert_eq!(listing.ignored.last(), Some(&last));
         assert!(listing.truncated);
         assert_eq!(watched(&watcher), ["", "huge", "huge/a"]);
-        // Past the cap, a folder inside is not listed at all, nor watched.
-        for i in cap - 2..cap {
-            std::fs::write(huge.join(format!("f{i:06}")), "").unwrap();
+        // Past the cap, a folder inside is not listed at all, nor watched. The folder now holds
+        // one entry more than the cap, all read whatever order it lists them in: the two written
+        // last sort first and are kept.
+        for i in 0..2 {
+            std::fs::write(huge.join(format!("e{i:06}")), "").unwrap();
         }
         let listing = watcher.list().unwrap();
         assert_eq!(listing.ignored.len(), cap);
-        assert_eq!(listing.ignored[..3], ["huge/", "huge/a/", "huge/f000000"]);
-        let last = format!("huge/f{:06}", cap - 3);
+        let first = ["huge/", "huge/a/", "huge/e000000", "huge/e000001", "huge/f000000"];
+        assert_eq!(listing.ignored[..5], first);
+        let last = format!("huge/f{:06}", cap - 5);
         assert_eq!(listing.ignored.last(), Some(&last));
         assert!(listing.truncated);
         assert_eq!(watched(&watcher), ["", "huge"]);
