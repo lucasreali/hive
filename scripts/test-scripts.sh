@@ -4,6 +4,8 @@
 #   - gates-lib.sh: a failing gate or mutants run is reported and counted (a fake `cargo`)
 #   - memwatch.sh reads the available memory, stops a process below its threshold, and leaves it
 #     alone above
+#   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
+#     each broken one (TODO 17.11)
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
@@ -97,5 +99,86 @@ o=$(gates 0 mutants_verdict m 0 3)
 check "gates: the watchdog's stop fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
 o=$(gates 0 mutants_verdict m 0 1)
 check "gates: an unreadable memory fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
+
+# --- macos-bundle.sh signing-mode ---------------------------------------------------------------
+secrets="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8"
+# mode <how many of the secrets to set> [<value of the others>]: signing-mode's output, or "failed".
+# The others are unset, or set to the given value (an absent GitHub secret is an empty string).
+mode() {
+  ( n=0
+    for v in $secrets; do
+      if [ $n -lt "$1" ]; then export "$v=x"; elif [ $# = 2 ]; then export "$v=$2"; else unset "$v"; fi
+      n=$((n + 1))
+    done
+    scripts/macos-bundle.sh signing-mode 2>/dev/null || echo failed )
+}
+check "signing-mode: no secrets is ad-hoc" '[ "$(mode 0)" = adhoc ]'
+check "signing-mode: six empty secrets are ad-hoc" '[ "$(mode 0 "")" = adhoc ]'
+check "signing-mode: all six is Developer ID" '[ "$(mode 6)" = developer-id ]'
+check "signing-mode: one secret fails" '[ "$(mode 1)" = failed ]'
+check "signing-mode: five secrets fail" '[ "$(mode 5)" = failed ]'
+check "signing-mode: five and an empty one fail" '[ "$(mode 5 "")" = failed ]'
+
+# --- macos-bundle.sh check (macOS only: codesign) -----------------------------------------------
+# A small bundle shaped like Hive.app, with the real Info.plist keys and entitlements, signed
+# ad-hoc as the macos.yml bundle is; each case breaks one thing and re-signs the app.
+if [ "$(uname)" = Darwin ]; then
+  unset APPLE_SIGNING_IDENTITY
+  app=$tmp/Fake.app
+  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+  printf 'int main(void) { return 0; }\n' | cc -x c -o "$app/Contents/MacOS/fake" -
+  plutil -convert xml1 -o "$app/Contents/Info.plist" src-tauri/Info.plist
+  plutil -insert CFBundleExecutable -string fake "$app/Contents/Info.plist"
+  plutil -insert CFBundleIdentifier -string com.example.fake "$app/Contents/Info.plist"
+  new_hive() { printf 'int main(void) { return 0; }\n' | cc -x c -o "$app/Contents/Resources/hive" -; }
+  seal() { codesign --force --sign - --options runtime "$@" "$app" 2>/dev/null; }
+  bundle_check() { scripts/macos-bundle.sh check "$app" "$@" >/dev/null 2>&1; }
+  new_hive
+  scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: a signed bundle passes" 'bundle_check'
+  check "bundle: the nested hive is signed ad-hoc" \
+    'has "$(codesign -dv "$app/Contents/Resources/hive" 2>&1)" "Signature=adhoc" "Identifier=com.lucas.hive.service"'
+  check "bundle: an ad-hoc bundle fails the Developer ID check" '! bundle_check --developer-id'
+  check "bundle: an unknown option fails" '! bundle_check --other'
+  seal
+  check "bundle: no JIT entitlement fails" '! bundle_check'
+  new_hive
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: a linker-signed hive fails" '! bundle_check'
+  scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
+  echo tampered >>"$app/Contents/Resources/hive"
+  check "bundle: a changed hive fails" '! bundle_check'
+  new_hive
+  scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
+  for key in NSDocumentsFolderUsageDescription NSDesktopFolderUsageDescription \
+    NSDownloadsFolderUsageDescription NSRemovableVolumesUsageDescription; do
+    cp "$app/Contents/Info.plist" "$tmp/Info.plist"
+    plutil -remove "$key" "$app/Contents/Info.plist"
+    seal --entitlements src-tauri/Entitlements.plist
+    check "bundle: no $key fails" '! bundle_check'
+    plutil -replace "$key" -string "This app reads the folder." "$app/Contents/Info.plist"
+    seal --entitlements src-tauri/Entitlements.plist
+    check "bundle: a $key not naming Hive fails" '! bundle_check'
+    cp "$tmp/Info.plist" "$app/Contents/Info.plist"
+  done
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: restored, it passes again" 'bundle_check'
+  # Another signer for the nested hive: a second real identity would need a keychain on the
+  # user's search list (the real environment), so a wrapper around /usr/bin/codesign reports the
+  # hive's signature as a certificate's (an Authority chain and a team).
+  mkdir -p "$tmp/signer"
+  cat >"$tmp/signer/codesign" <<'EOF'
+#!/bin/sh
+/usr/bin/codesign "$@"; status=$?
+case "$*" in *-dvv*/Resources/hive) echo "Authority=Developer ID Application: Other (OTHER1234)" >&2
+  echo "TeamIdentifier=OTHER1234" >&2 ;; esac
+exit $status
+EOF
+  chmod +x "$tmp/signer/codesign"
+  check "bundle: a hive with another signer fails" '! PATH=$tmp/signer:$PATH bundle_check'
+  check "bundle: it fails on the signers" \
+    '[[ $(PATH=$tmp/signer:$PATH scripts/macos-bundle.sh check "$app" 2>&1) == *"different signers"* ]]'
+fi
 
 [ $bad = 0 ]

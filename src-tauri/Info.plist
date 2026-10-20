@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by Tauri into Hive.app's Info.plist (TODO 17.11): the texts macOS shows when Hive's
+     terminals, the agents in them or its file views first reach these folders. The service
+     (`hive`) is a child of Hive.app, so these prompts and their grants cover it too. -->
+<plist version="1.0">
+<dict>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Hive opens terminals, lists files and shows changes in the projects you keep in your Documents folder.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Hive opens terminals, lists files and shows changes in the projects you keep on your Desktop.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Hive opens terminals, lists files and shows changes in the projects you keep in your Downloads folder.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Hive opens terminals, lists files and shows changes in the projects you keep on removable drives.</string>
+</dict>
+</plist>
