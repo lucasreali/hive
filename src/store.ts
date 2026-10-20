@@ -26,6 +26,7 @@ import type {
   FileText,
   GhAccounts,
   NameCheck,
+  NotificationPermission,
   Project,
   ProjectScripts,
   SearchResults,
@@ -253,6 +254,8 @@ export type HiveState = {
   update: { version: string; installing: boolean } | null;
   /** macOS runs Hive from a read-only copy (17.10): the update button explains the fix instead. */
   translocated: boolean;
+  /** Whether the OS lets Hive notify (17.19), as the app last said (`notification_permission`). */
+  notificationPermission: NotificationPermission;
   rightPanel: RightPanel;
   /** What the right panel shows, for the shown worktree. */
   panelView: PanelView;
@@ -413,6 +416,7 @@ export const initialState: HiveState = {
   notices: [],
   update: null,
   translocated: false,
+  notificationPermission: "unknown",
   rightPanel: "files",
   panelView: "files",
   sidebarWidth: 264,

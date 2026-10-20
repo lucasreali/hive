@@ -856,6 +856,34 @@ function Accounts() {
   );
 }
 
+/**
+ * A hint while the OS keeps Hive from notifying (17.19: macOS's settings say "denied"), with a
+ * link to them. Asked when the section opens and whenever the window comes back to the front,
+ * as from System Settings.
+ */
+function NotificationsOff() {
+  const denied = useHive((s) => s.notificationPermission === "denied");
+  useEffect(() => {
+    const check = () => void transport.checkNotifications();
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, []);
+  if (!denied) return null;
+  return (
+    <p className="field-help notifications-off" role="note">
+      Notifications from Hive are turned off in System Settings: alerts show only in the inbox.{" "}
+      <button
+        type="button"
+        className="link"
+        onClick={() => void transport.openNotificationSettings()}
+      >
+        Open System Settings
+      </button>
+    </p>
+  );
+}
+
 function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
   const windows = useHive((s) => s.appMode?.mode === "native");
@@ -871,7 +899,14 @@ function Content({ section, query }: { section: Section; query: string }) {
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
   if (section === "Accounts") return <Accounts />;
-  return <Fields fields={fields.filter((f) => f.section === section)} />;
+  const shown = <Fields fields={fields.filter((f) => f.section === section)} />;
+  if (section !== "Notifications") return shown;
+  return (
+    <>
+      <NotificationsOff />
+      {shown}
+    </>
+  );
 }
 
 /**

@@ -428,3 +428,37 @@ test("Open settings file asks the service, whose answer opens it", async () => {
   expect(ask).toHaveBeenCalledTimes(1);
   ask.mockRestore();
 });
+
+test("Notifications says when the OS keeps Hive from notifying, with a link to its settings", async () => {
+  let permission: "granted" | "denied" = "denied";
+  const check = spyOn(transport, "checkNotifications").mockImplementation(async () => {
+    apply({ type: "notification_permission", permission });
+  });
+  const openPane = spyOn(transport, "openNotificationSettings").mockResolvedValue();
+  try {
+    open();
+    expect(check).not.toHaveBeenCalled();
+    section("Notifications");
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toBe(
+      "Notifications from Hive are turned off in System Settings: alerts show only in the inbox. Open System Settings",
+    );
+    fireEvent.click(within(note).getByRole("button", { name: "Open System Settings" }));
+    expect(openPane).toHaveBeenCalledTimes(1);
+    // Back from System Settings: the window's focus asks again.
+    permission = "granted";
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(screen.queryByRole("note")).toBeNull());
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(input("Alert volume").value).toBe("100");
+    // Another section asks nothing and listens no more.
+    section("Agents");
+    window.dispatchEvent(new Event("focus"));
+    expect(check).toHaveBeenCalledTimes(2);
+  } finally {
+    check.mockRestore();
+    openPane.mockRestore();
+  }
+});

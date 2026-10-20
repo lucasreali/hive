@@ -994,6 +994,22 @@ test("?mock=update offers an update whose install fails; otherwise none is offer
   ]);
 });
 
+test("?mock=denied says notifications are off; the browser plays its own tone", async () => {
+  const { transport, messages } = await connected();
+  await transport.checkNotifications();
+  await transport.openNotificationSettings();
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "notification_permission", permission: "granted" });
+  expect(transport.playTone(50)).rejects.toThrow("mock: no app to play the tone");
+
+  const denied = createMockTransport("denied");
+  const said: ServiceMessage[] = [];
+  await denied.connect((m) => said.push(m));
+  await denied.checkNotifications();
+  await tick();
+  expect(said.at(-1)).toEqual({ type: "notification_permission", permission: "denied" });
+});
+
 test("folders are browsed on both sides of the fake machine", async () => {
   const { transport, messages } = await connected();
   messages.length = 0;

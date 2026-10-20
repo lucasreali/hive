@@ -46,7 +46,21 @@ fn main() {
                     |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
                     |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
                 )
-                .with_notify(notifier(app));
+                .with_notify(notifier(app))
+                .with_url(|url: &str| {
+                    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
+                });
+            // Asks for notification permission at launch; the tone plays from the app (17.19).
+            #[cfg(target_os = "macos")]
+            let hive = hive
+                .with_permission(hive_lib::macos::permissions(
+                    std::env::current_exe().ok().as_deref(),
+                    hive_lib::macos::CENTER,
+                ))
+                .with_tone(
+                    app.path().app_cache_dir()?,
+                    hive_lib::afplay("/usr/bin/afplay".into()),
+                );
             // WSL or Windows (12.5.4), only on Windows.
             #[cfg(windows)]
             let hive = hive.with_modes(hive_lib::Modes::new(
@@ -136,6 +150,9 @@ fn main() {
             commands::get_diagnostics,
             commands::title_bar_action,
             commands::show_notification,
+            commands::check_notifications,
+            commands::open_notification_settings,
+            commands::play_tone,
         ])
         .build(context);
     match result {

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::Read as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -316,6 +316,13 @@ pub struct Hive {
     open: Option<Box<Opener>>,
     /// Shows an OS notification; given by `main.rs` (`with_notify`).
     notify: Option<Box<Notifier>>,
+    /// Whether the OS lets Hive show notifications (17.19); given by `main.rs` on macOS
+    /// (`with_permission`).
+    permission: Option<Arc<Permissions>>,
+    /// Plays the alert tone (17.19); given by `main.rs` on macOS (`with_tone`).
+    tone: Option<Tone>,
+    /// Opens a URL with the system (`with_url`).
+    url: Option<Box<UrlOpener>>,
     /// `defaults` and arguments before its own, which read the title bar's double-click
     /// setting (`with_defaults`).
     defaults: (OsString, Vec<OsString>),
@@ -327,6 +334,12 @@ pub struct Hive {
 type Installer = dyn Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync;
 /// Opens `path` with the system's default app, or shows it in the file manager when `reveal`.
 type Opener = dyn Fn(&str, bool) -> Result<(), String> + Send + Sync;
+/// Opens a URL with the system's handler for it.
+type UrlOpener = dyn Fn(&str) -> Result<(), String> + Send + Sync;
+/// Asks the OS whether Hive may show notifications; it may wait a moment for the answer.
+type Permissions = dyn Fn() -> Permission + Send + Sync;
+/// Plays a sound file at a volume from 0 to 1.
+type Player = dyn Fn(&Path, f32) -> Result<(), String> + Send + Sync;
 /// What a click on an OS notification does (13.5).
 pub type Click = Box<dyn Fn() + Send + Sync>;
 /// Shows an OS notification with a title and a body; a click on it runs the [`Click`].
@@ -445,6 +458,134 @@ fn notification_thread(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
 /// The text without control characters, which a Windows toast's XML refuses.
 fn printable(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Whether the OS lets Hive show notifications (17.19), as `notification_permission` tells
+/// the UI: `unknown` where Hive cannot ask (a development build, a platform without a check) or
+/// before the user answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    Granted,
+    Denied,
+    Unknown,
+}
+
+impl Permission {
+    /// Its name in `notification_permission`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Granted => "granted",
+            Self::Denied => "denied",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// macOS's System Settings on its Notifications pane (17.19).
+pub const NOTIFICATION_SETTINGS: &str =
+    "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+
+/// Whether `exe` runs from an app bundle (`Hive.app/Contents/MacOS/hive-app`): macOS's
+/// notification center serves only a bundled app and raises an exception for any other process
+/// (17.19), so a development build never asks it.
+pub fn in_app_bundle(exe: &Path) -> bool {
+    let mut up = exe.ancestors().skip(1).map(Path::file_name);
+    let (macos, contents, app) = (
+        up.next().flatten(),
+        up.next().flatten(),
+        up.next().flatten(),
+    );
+    let bundle = app.and_then(|name| Path::new(name).extension());
+    macos == Some("MacOS".as_ref())
+        && contents == Some("Contents".as_ref())
+        && bundle == Some("app".as_ref())
+}
+
+/// The alert tone's sample rate, length and frequency, as `src/notify.ts` synthesizes it.
+const TONE_RATE: u32 = 44_100;
+const TONE_SECS: f64 = 0.2;
+const TONE_HZ: f64 = 880.0;
+/// Its gain at full volume, falling exponentially to `TONE_END` (Web Audio's ramp).
+const TONE_GAIN: f64 = 0.15;
+const TONE_END: f64 = 0.001;
+/// The file the tone is written to, in the folder given to `with_tone`.
+const TONE_FILE: &str = "alert-tone.wav";
+
+/// The alert tone (17.19) as a 16-bit mono WAV file: the beep `src/notify.ts` synthesizes with
+/// Web Audio, at full volume (the player scales it).
+pub fn tone_wav() -> Vec<u8> {
+    let samples = (f64::from(TONE_RATE) * TONE_SECS) as u32;
+    let data = samples * 2;
+    let mut wav = Vec::with_capacity(44 + data as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes()); // the format chunk's size
+    wav.extend_from_slice(&1_u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1_u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&TONE_RATE.to_le_bytes());
+    wav.extend_from_slice(&(TONE_RATE * 2).to_le_bytes()); // bytes per second
+    wav.extend_from_slice(&2_u16.to_le_bytes()); // bytes per sample
+    wav.extend_from_slice(&16_u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data.to_le_bytes());
+    for i in 0..samples {
+        let t = f64::from(i) / f64::from(TONE_RATE);
+        let gain = TONE_GAIN * (TONE_END / TONE_GAIN).powf(t / TONE_SECS);
+        let sample = gain * (std::f64::consts::TAU * TONE_HZ * t).sin();
+        wav.extend_from_slice(&((sample * f64::from(i16::MAX)) as i16).to_le_bytes());
+    }
+    wav
+}
+
+/// Plays a sound file with `program` (macOS's `afplay`) as `program -v <volume> <file>`, each a
+/// separate argument; a thread of its own waits for it to end.
+pub fn afplay(program: PathBuf) -> impl Fn(&Path, f32) -> Result<(), String> + Send + Sync {
+    move |file: &Path, volume: f32| {
+        let mut child = std::process::Command::new(&program)
+            .arg("-v")
+            .arg(volume.to_string())
+            .arg(file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(tone_failed)?;
+        let thread = std::thread::Builder::new().name("tone".into());
+        let waiting = thread.spawn(move || child.wait().map(drop));
+        waiting.map(drop).map_err(tone_failed)
+    }
+}
+
+fn tone_failed(error: std::io::Error) -> String {
+    format!("cannot play the tone: {error}")
+}
+
+/// The alert tone played by the app (17.19): its folder, whether its file was written in this
+/// run, and the player.
+struct Tone {
+    dir: PathBuf,
+    written: Mutex<bool>,
+    play: Box<Player>,
+}
+
+impl Tone {
+    /// Writes the tone's file once a run (through a temporary file renamed over it, so a tone
+    /// still playing keeps its file), then plays it at `volume` percent.
+    fn play(&self, volume: u8) -> Result<(), String> {
+        let file = self.dir.join(TONE_FILE);
+        let mut written = self.written.lock().unwrap_or_else(PoisonError::into_inner);
+        if !*written {
+            let temporary = self.dir.join(format!("{TONE_FILE}.tmp"));
+            std::fs::create_dir_all(&self.dir)
+                .and_then(|()| std::fs::write(&temporary, tone_wav()))
+                .and_then(|()| std::fs::rename(&temporary, &file))
+                .map_err(|error| format!("cannot write the tone: {error}"))?;
+            *written = true;
+        }
+        drop(written);
+        (self.play)(&file, f32::from(volume) / 100.0)
+    }
 }
 
 /// macOS' `defaults`, which reads the user's preferences.
@@ -594,6 +735,9 @@ impl Hive {
             install: None,
             open: None,
             notify: None,
+            permission: None,
+            tone: None,
+            url: None,
             defaults: (DEFAULTS.into(), Vec::new()),
             translocated: false,
         }
@@ -656,6 +800,64 @@ impl Hive {
             lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
         };
         notify(&printable(title), &printable(body), Box::new(click))
+    }
+
+    /// Asks the OS with `check` whether Hive may show notifications (17.19).
+    pub fn with_permission(
+        mut self,
+        check: impl Fn() -> Permission + Send + Sync + 'static,
+    ) -> Self {
+        self.permission = Some(Arc::new(check));
+        self
+    }
+
+    /// Asks the OS whether Hive may show notifications, on Tauri's blocking threads (the answer
+    /// may take a moment); the answer goes to the UI as `notification_permission {permission}`,
+    /// `unknown` where the app cannot ask.
+    pub fn check_notifications(&self) {
+        let check = self.permission.clone();
+        let link = Arc::clone(&self.link);
+        let answer = move || {
+            let permission = check.map_or(Permission::Unknown, |check| check()).name();
+            let message = json!({"type": "notification_permission", "permission": permission});
+            lock(&link).to_ui(message);
+        };
+        tauri::async_runtime::spawn_blocking(answer);
+    }
+
+    /// Opens URLs with `open` (the system's handler).
+    pub fn with_url(
+        mut self,
+        open: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.url = Some(Box::new(open));
+        self
+    }
+
+    /// Opens macOS's notification settings (17.19), where the user lets Hive notify again.
+    pub fn open_notification_settings(&self) -> Result<(), String> {
+        let open = self.url.as_ref().ok_or("this app cannot open URLs")?;
+        open(NOTIFICATION_SETTINGS)
+    }
+
+    /// Plays the alert tone from the app (17.19), its file written in `dir`, with `play`.
+    pub fn with_tone(
+        mut self,
+        dir: PathBuf,
+        play: impl Fn(&Path, f32) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        let (written, play) = (Mutex::new(false), Box::new(play));
+        self.tone = Some(Tone { dir, written, play });
+        self
+    }
+
+    /// Plays the alert tone at `volume` percent (at most 100; 0 plays none).
+    pub fn play_tone(&self, volume: u8) -> Result<(), String> {
+        let tone = self.tone.as_ref().ok_or("this app plays no tone")?;
+        match volume.min(100) {
+            0 => Ok(()),
+            volume => tone.play(volume),
+        }
     }
 
     /// Opens paths with `open` (the system's default app), or `reveal` (the file manager).
@@ -1897,6 +2099,21 @@ pub mod commands {
         agent: String,
     ) -> Result<(), String> {
         hive.show_notification(&app, &title, &body, agent)
+    }
+
+    #[tauri::command]
+    pub fn check_notifications(hive: State<'_, Hive>) {
+        hive.check_notifications();
+    }
+
+    #[tauri::command]
+    pub fn open_notification_settings(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.open_notification_settings()
+    }
+
+    #[tauri::command]
+    pub fn play_tone(hive: State<'_, Hive>, volume: u8) -> Result<(), String> {
+        hive.play_tone(volume)
     }
 }
 

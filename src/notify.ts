@@ -2,6 +2,7 @@ import type { AgentState, ServiceMessage } from "./protocol";
 import { goToAgent } from "./shortcuts";
 import { addToInbox, type HiveState, spaceOf, useHive } from "./store";
 import { transport } from "./transport";
+import { isMac } from "./window";
 
 // Presentation of the alerts the service decided (hive.md item 5, 2.4, 13.4, #37): a tone and
 // an inbox item for each `agent_state` with an `alert`, and an OS notification when the service
@@ -22,8 +23,17 @@ export const TONE_GAP_MS = 500;
 let lastTone = Number.NEGATIVE_INFINITY;
 let audio: AudioContext | undefined;
 
-/** A short synthesized beep at `volume` percent; no audio file. */
+/**
+ * The alert tone at `volume` percent. On macOS the app plays it (17.19): App Nap throttles a
+ * hidden webview, so its own tone could come late or not at all; the webview's is the fallback.
+ */
 function tone(volume: number): void {
+  if (isMac()) transport.playTone(volume).catch(() => webTone(volume));
+  else webTone(volume);
+}
+
+/** A short synthesized beep at `volume` percent; no audio file. */
+function webTone(volume: number): void {
   audio ??= new AudioContext();
   void audio.resume();
   const t = audio.currentTime;

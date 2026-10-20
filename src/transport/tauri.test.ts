@@ -94,6 +94,9 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.checkUpdate();
   await tauriTransport.installUpdate();
   await tauriTransport.showNotification("fix login finished", "shop", "a");
+  await tauriTransport.checkNotifications();
+  await tauriTransport.openNotificationSettings();
+  await tauriTransport.playTone(40);
   await tauriTransport.setMode("native");
   expect(calls).toEqual([
     ["write_terminal", { id: 7, data: "ls\r" }],
@@ -139,6 +142,9 @@ test("terminal and project actions call their commands", async () => {
     ["check_update", {}],
     ["install_update", {}],
     ["show_notification", { title: "fix login finished", body: "shop", agent: "a" }],
+    ["check_notifications", {}],
+    ["open_notification_settings", {}],
+    ["play_tone", { volume: 40 }],
     ["set_mode", { mode: "native" }],
   ]);
 });
@@ -178,8 +184,8 @@ test("a command that fails shows why as an error toast, and rejects already hand
   mockIPC(() => {
     throw "the hive link is down";
   });
-  // Every command but these three: a new one sent with a bare `invoke` fails here.
-  const own = ["connect", "openTerminal", "saveFile"];
+  // Every command but these: a new one sent with a bare `invoke` fails here.
+  const own = ["connect", "openTerminal", "saveFile", "playTone"];
   const methods = Object.entries(tauriTransport).filter(([name]) => !own.includes(name));
   expect(methods.length).toBe(Object.keys(tauriTransport).length - own.length);
   for (const [name, method] of methods) {
@@ -201,5 +207,7 @@ test("a command that fails shows why as an error toast, and rejects already hand
     "the hive link is down",
   );
   await expect(tauriTransport.saveFile("/w", "a", "", null)).rejects.toBe("the hive link is down");
+  // A tone the app cannot play falls back to the webview's (`notify.ts`).
+  await expect(tauriTransport.playTone(40)).rejects.toBe("the hive link is down");
   expect(notice()).toBeNull();
 });

@@ -1,6 +1,7 @@
 # The only place the macOS-only code runs (#39, TODO 5.3): the Rust and frontend tests,
-# coverage and mutants of `crates/hive/src/macos.rs` (excluded from the Linux gates, see
-# COVERAGE_EXCLUSIONS.md), and the release bundle built without publishing it.
+# coverage and mutants of `crates/hive/src/macos.rs` and `src-tauri/src/macos.rs` (excluded
+# from the Linux gates, see COVERAGE_EXCLUSIONS.md), and the release bundle built without
+# publishing it.
 name: macos
 
 on:

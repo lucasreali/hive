@@ -73,4 +73,8 @@ export const tauriTransport: Transport = {
   checkUpdate: () => send("check_update"),
   installUpdate: () => send("install_update"),
   showNotification: (title, body, agent) => send("show_notification", { title, body, agent }),
+  checkNotifications: () => send("check_notifications"),
+  openNotificationSettings: () => send("open_notification_settings"),
+  // No toast: the caller falls back to the webview's tone.
+  playTone: (volume) => invoke<void>("play_tone", { volume }),
 };
