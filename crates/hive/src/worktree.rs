@@ -614,6 +614,25 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
     }
 
     #[test]
+    fn settings_files_up_to_one_mib_are_inspected() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join(".claude")).unwrap();
+        let hook = r#""hooks":{"WorktreeCreate":[{"hooks":[{"type":"command","command":"x"}]}]}"#;
+        // Padded with spaces to an exact size: a big settings file is still read whole.
+        let settings = |size: u64| {
+            let mut body = format!("{{{hook}}}");
+            body.push_str(&" ".repeat(size as usize - body.len()));
+            body
+        };
+        let write = |file: &str, size: u64| {
+            std::fs::write(tmp.path().join(".claude").join(file), settings(size)).unwrap();
+        };
+        write("settings.json", SETTINGS_LIMIT);
+        write("settings.local.json", SETTINGS_LIMIT + 1);
+        assert_eq!(own_create_hooks(tmp.path()), vec![".claude/settings.json"]);
+    }
+
+    #[test]
     fn branches_are_parsed() {
         let out = b"*refs/heads/main\n refs/heads/feat/x\n refs/remotes/origin/HEAD\n\
  refs/remotes/origin/main\n refs/tags/v1\n";
