@@ -1,5 +1,7 @@
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { Settings } from "./protocol";
 
 export type WindowAction = "minimize" | "toggleMaximize" | "close";
 
@@ -74,3 +76,54 @@ export const keyText = (text: string) =>
  * keydown after `compositionend`, marked only by keyCode 229.
  */
 export const composing = (event: KeyboardEvent) => event.isComposing || event.keyCode === 229;
+
+/**
+ * Calls `onChange` with whether the window is in full screen, now and on every change: Tauri's
+ * resize events in the app (entering and leaving full screen resize the window), the page's
+ * full screen outside it. Returns the cleanup.
+ */
+export function watchFullscreen(onChange: (fullscreen: boolean) => void): () => void {
+  if (isTauri()) {
+    const window = getCurrentWindow();
+    const check = () => void window.isFullscreen().then(onChange);
+    check();
+    const unlisten = window.onResized(check);
+    return () => void unlisten.then((stop) => stop());
+  }
+  const check = () => onChange(Boolean(document.fullscreenElement));
+  check();
+  document.addEventListener("fullscreenchange", check);
+  return () => document.removeEventListener("fullscreenchange", check);
+}
+
+type Theme = Settings["appearance"]["theme"];
+
+/** Each theme's `--bg` (src/styles.css): the window's background behind the page. */
+export const THEME_BACKGROUND: Record<Theme, string> = {
+  "one-dark": "#282c33",
+  "one-light": "#fafafa",
+};
+
+/**
+ * The window follows Hive's theme: native parts (the window's controls, menus, form controls)
+ * in the theme's light or dark appearance, and the theme's background behind the page, so a
+ * resize or full screen shows no other colour. The config starts on One Dark's, the default
+ * theme, so the launch shows no white. Outside Tauri nothing.
+ */
+export function nativeTheme(theme: Theme): void {
+  if (!isTauri()) return;
+  void getCurrentWindow().setTheme(theme === "one-light" ? "light" : "dark");
+  void getCurrentWebviewWindow().setBackgroundColor(THEME_BACKGROUND[theme]);
+}
+
+/**
+ * A double click on the empty title bar on macOS does what the system's "Double-click a
+ * window's title bar to" setting says, which the app reads (`title_bar_action`): zoom,
+ * minimize or nothing. Outside Tauri nothing.
+ */
+export async function titleBarDoubleClick(): Promise<void> {
+  if (!isTauri()) return;
+  const action = await invoke<string>("title_bar_action");
+  if (action === "zoom") await getCurrentWindow().toggleMaximize();
+  else if (action === "minimize") await getCurrentWindow().minimize();
+}

@@ -191,6 +191,12 @@ body {
   overflow: hidden;
 }
 
+/* macOS: grayscale smoothing thins dark text on a light background, so One Light keeps the
+   system's own, which reads darker (17.15). */
+:root[data-theme="one-light"] body {
+  -webkit-font-smoothing: auto;
+}
+
 button {
   font: inherit;
   color: inherit;
@@ -239,9 +245,13 @@ label:has(> input[type="checkbox"]:disabled) {
   user-select: none;
 }
 
-/* macOS: room for the native traffic lights on the left, none needed on the right. */
+/* macOS: room for the native traffic lights on the left, none needed on the right; full
+   screen hides them, so no room there. */
 .titlebar[data-mac] {
   padding: 0 8px 0 70px;
+}
+.titlebar[data-mac][data-fullscreen] {
+  padding-left: 0;
 }
 
 .titlebar-brand {

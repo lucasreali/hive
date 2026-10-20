@@ -122,7 +122,7 @@ test("a located log or folder opens, or is revealed, with Windows' apps", async 
   expect([notice(), noticeKind()]).toEqual(["wslpath failed: x", "error"]);
   locate(session, "log", "open");
   await openLocated({ ...located("log", null), error: null }, true);
-  expect(notice()).toBe("No Windows path");
+  expect(notice()).toBe("No path");
   locate(session, "log", "open");
   await openLocated(located("log", "C:\\log"), false);
   expect(notice()).toBe("Only the Hive app opens C:\\log");
