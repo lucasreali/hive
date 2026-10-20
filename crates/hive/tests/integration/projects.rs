@@ -178,6 +178,17 @@ async fn request(conn: &mut Conn, message: Control) -> Control {
     conn.control().await.1
 }
 
+/// [`request`] while a worktree is watched: its `Changes` pushes are skipped.
+async fn request_watching(conn: &mut Conn, message: Control) -> Control {
+    conn.send(0, message).await;
+    loop {
+        match conn.control().await.1 {
+            Control::Changes { .. } => {}
+            answer => return answer,
+        }
+    }
+}
+
 #[tokio::test]
 async fn the_dialog_lists_branches_validates_names_and_creates_worktrees() {
     let repo = Repo::new();
@@ -402,13 +413,14 @@ async fn the_menu_removes_and_renames_worktrees() {
     ));
 
     // Folder and branch follow the new name.
+    let renamed = request(&mut conn, rename(&wt("b"), "d")).await;
     let Control::WorktreeRenamed {
         project,
         from,
         path,
-    } = request(&mut conn, rename(&wt("b"), "d")).await
+    } = renamed
     else {
-        panic!("expected a rename")
+        panic!("expected a rename: {renamed:?}")
     };
     assert_eq!((from, path.clone()), (wt("b"), wt("d")));
     let renamed = project.worktrees.iter().find(|w| w.path == path).unwrap();
@@ -628,30 +640,34 @@ async fn worktrees_carry_their_health() {
     // Its lines too, as the Changes panel counts them.
     assert_eq!((status.added, status.removed), (2, 0));
 
-    // Every answer carrying a project carries the statuses.
+    // Every answer carrying a project carries the statuses. `b` is still watched: its
+    // `Changes` may come at any time (a late file event), before or between the answers.
     let create = Control::CreateWorktree {
         project: root.clone(),
         name: "c".into(),
         base: None,
     };
-    let Control::WorktreeCreated { project, .. } = request(&mut conn, create).await else {
-        panic!("expected a new worktree")
+    let created = request_watching(&mut conn, create).await;
+    let Control::WorktreeCreated { project, .. } = created else {
+        panic!("expected a new worktree: {created:?}")
     };
     assert!(health(&project).contains(&row("c", Some(0), Some(0), true, clean)));
     let rename = Control::RenameWorktree {
         path: wt("c"),
         name: "d".into(),
     };
-    let Control::WorktreeRenamed { project, .. } = request(&mut conn, rename).await else {
-        panic!("expected a rename")
+    let renamed = request_watching(&mut conn, rename).await;
+    let Control::WorktreeRenamed { project, .. } = renamed else {
+        panic!("expected a rename: {renamed:?}")
     };
     assert!(health(&project).contains(&row("d", Some(0), Some(0), true, clean)));
     let remove = Control::RemoveWorktree {
         path: wt("d"),
         force: false,
     };
-    let Control::WorktreeRemoved { project, .. } = request(&mut conn, remove).await else {
-        panic!("expected a removal")
+    let removed = request_watching(&mut conn, remove).await;
+    let Control::WorktreeRemoved { project, .. } = removed else {
+        panic!("expected a removal: {removed:?}")
     };
     let mut expected = expected;
     expected[1].4 = (1, 2, 0);
