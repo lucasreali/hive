@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Checks guard.py against command lines it must block and must allow: python3 .claude/hooks/test_guard.py"""
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 

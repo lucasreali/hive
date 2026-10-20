@@ -13,12 +13,12 @@ You implement **one** task of `TODO.md`, launched by the orchestrator (`.claude/
 - E2E: pick a free port and always set it, e.g. `E2E_PORT=$((1430 + RANDOM % 500))`; the Playwright config reuses any server already on its port, so the default 1420 may be another worktree's server.
 
 ## Gates (all green before ticking)
-Heavy gates run in CI, not on this machine (parallel local builds have restarted the WSL VM).
-- Local, fast only: `cargo fmt --all --check`, `CARGO_BUILD_JOBS=3 cargo clippy --workspace --all-targets -- -D warnings`, `CARGO_BUILD_JOBS=3 cargo test -p <crate you touched>`. Agent shells need `export PATH=$HOME/.cargo/bin:$PATH`. Never run `scripts/gates.sh`, `cargo llvm-cov` or `cargo mutants` locally.
+CI is the authority: a task merges only when CI is green on its branch tip. The host is an Apple Silicon Mac (D17.6): local builds use every core.
+- Local: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p <crate you touched>`. Agent shells need `export PATH=$HOME/.cargo/bin:$PATH`. `cargo llvm-cov` and `cargo mutants` (modest parallelism, e.g. `-j 4`, mutant trees under `/var/tmp/hive-mutants`) may run locally when they help; `scripts/gates.sh` runs the whole set. Code behind a Linux-only `cfg` is verified only by `ci.yml`.
 - CI, from your worktree on your task branch: `scripts/ci.sh push`, then `scripts/ci.sh watch` (waits for `ci` — Rust fmt/clippy/test/deny/machete/llvm-cov 100%/mutants on the diff, frontend, e2e — and `macos` on your tip; prints each run's URL). On a failure `scripts/ci.sh logs <run-id>`, fix, push again. Use only this script for pushing and gh (it carries the personal token; a raw `git push` or `GH_TOKEN=…` is denied). Report the green run URLs.
 - Frontend: `bun install --frozen-lockfile && bun run lint && bun run typecheck && bun test --coverage` (100% lines). Bun only counts files some test imports: **every new TS file needs its own test**.
-- E2E (CI runs it; locally only the specs you touch): `E2E_PORT=<port> bun run e2e`. If Chromium lacks `libnss3`/`libnspr4` (not installed system-wide), prefix `LD_LIBRARY_PATH=/var/tmp/hive-e2e-libs/root/usr/lib/x86_64-linux-gnu`.
-- If you changed `src-tauri`: `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C target-feature=+crt-static" cargo xwin build -p hive-app --target x86_64-pc-windows-msvc`. Never launch the Windows GUI.
+- E2E (CI runs it; locally only the specs you touch): `E2E_PORT=<port> bun run e2e` (Chromium and WebKit, installed by `bunx playwright install webkit chromium`). On a Linux host whose Chromium lacks `libnss3`/`libnspr4`, prefix `LD_LIBRARY_PATH` with a folder holding them; the CI runner has them.
+- If you changed `src-tauri`: `cargo clippy -p hive-app --all-targets -- -D warnings` (native macOS build). Windows is verified by `windows.yml`; no Windows-only work is added (D17.0). Never launch the installed Hive app.
 - Parallel gates load the machine: re-run a timing failure before concluding it is real, and report flaky tests.
 - Never weaken a gate; no new coverage exclusions without the human.
 
