@@ -87,12 +87,19 @@ taskkill /F /IM hive.exe
 
 ### macOS
 
-1. Download the `.dmg` and drag Hive to Applications.
-2. The app is ad-hoc signed (no Apple Developer account), so macOS blocks the first open. Go to **System Settings → Privacy & Security** and click **Open Anyway**.
+1. Download the `.dmg`, open it and drag Hive to **Applications**. Open Hive from Applications, not from the `.dmg` or Downloads.
+2. The app is ad-hoc signed (no Apple Developer account), so on macOS 15 and 26 the first open is blocked ("Hive" cannot be opened / Apple could not verify it; Control-click → Open no longer bypasses it). Click **Done**, then go to **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to the message about Hive, confirm with **Open Anyway** and your password (or Touch ID). macOS remembers the choice; later opens and updates need nothing.
+3. If Hive says it runs from a temporary read-only copy, macOS "translocated" it: it was opened where it was downloaded, and updates cannot install there. Quit Hive, move it to Applications and run, in Terminal:
+
+   ```
+   xattr -dr com.apple.quarantine /Applications/Hive.app
+   ```
+
+   then open it from Applications. The same command usually fixes a Hive that macOS reports as "damaged".
 
 ### Updates
 
-When a newer release exists, click **Update to vX** in the title bar. Hive asks first if agents are running (they end with the restart), installs the update and restarts.
+When a newer release exists, click **Update to vX** in the title bar. Hive asks first if agents are running (they end with the restart), installs the update and restarts. On macOS the update installs only when Hive runs from Applications (step 3 above); otherwise the button explains the move.
 
 ## Quick start
 
