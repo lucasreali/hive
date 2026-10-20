@@ -31,7 +31,13 @@ test("the tray's usage is the ring's lines with their pace; none without a sessi
   const limit = new Date(2026, 9, 19, 13, 50).getTime() / 1000;
   const weekLimit = new Date(2026, 9, 25, 18, 0).getTime() / 1000;
   const weekly = { used_percentage: 41, resets_at: week };
-  apply({ type: "session_usage", usage: session, week: weekly, limit_at: limit, week_limit_at: weekLimit });
+  apply({
+    type: "session_usage",
+    usage: session,
+    week: weekly,
+    limit_at: limit,
+    week_limit_at: weekLimit,
+  });
   expect(trayOf(useHive.getState()).usage).toEqual([
     "Session 42% · resets 14:30",
     "At this pace: limit at 13:50",
