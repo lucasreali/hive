@@ -4,17 +4,19 @@
 //! What a worktree holds is what git lists: tracked files and untracked ones that are not
 //! ignored, and apart from them what git ignores (14.2): ignored files, and ignored folders
 //! (`node_modules`, `target`) as one entry each, whose contents are listed one level deep and
-//! watched only while the app has them open. Watches go only on the directories of the listed
-//! files (plus empty untracked ones), on the open ignored folders and on the worktree's git
-//! dir, where `HEAD` and `index` change what git reports; a closed ignored folder never costs
-//! a watch. Every relevant event (a queue overflow included) leads, after a short debounce, to
-//! a full re-list.
+//! watched only while the app has them open. Only changes in the directories of the listed
+//! files (plus empty untracked ones), in the open ignored folders and in the worktree's git
+//! dir, where `HEAD` and `index` change what git reports, count; how they are watched is the
+//! system's [`Strategy`] (17.6): a watch on each of those folders (inotify), or one recursive
+//! watch on the worktree whose events are kept to them (FSEvents). Every relevant event (a
+//! queue overflow or a rescan included) leads, after a short debounce, to a full re-list.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use notify::event::ModifyKind;
@@ -259,6 +261,87 @@ impl Debounce {
     }
 }
 
+/// How a worktree's folders are watched (#31; 17.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strategy {
+    /// A watch on each counted folder. An inotify watch costs no descriptor, and a recursive
+    /// one would walk every ignored tree (`node_modules`, `target`) as well.
+    Folders,
+    /// One recursive watch on the worktree, its events kept to the counted folders. Each path
+    /// an FSEvents stream watches holds a descriptor on itself and on every folder above it,
+    /// so a watch per folder runs out of descriptors (~600 for 55 folders); FSEvents never
+    /// walks the tree and never follows a link in it.
+    Root,
+}
+
+impl Strategy {
+    /// This system's: FSEvents on macOS, inotify on Linux, Windows as before (D17.0).
+    pub const NATIVE: Strategy = if cfg!(target_os = "macos") {
+        Strategy::Root
+    } else {
+        Strategy::Folders
+    };
+}
+
+/// Which changes count. Shared with the watcher's thread, which drops the others before they
+/// are queued, so a build or an install in an ignored tree under a [`Strategy::Root`] watch
+/// never fills the queue.
+#[derive(Debug, Default)]
+struct Filter {
+    /// Canonical, as the paths of events are.
+    root: PathBuf,
+    git_dir: Option<PathBuf>,
+    /// A change to one of these folders (relative, `/`-separated) or to what one holds
+    /// directly counts.
+    dirs: BTreeSet<String>,
+    /// Untracked folders, of which git names only the top: a change anywhere under one counts.
+    trees: BTreeSet<String>,
+}
+
+impl Filter {
+    /// Whether `event` may change what git lists. A watcher error, an event without a path (an
+    /// overflow) and a rescan (FSEvents' `MustScanSubDirs`: events were dropped, or coalesced
+    /// into a folder) may stand for lost changes: a full re-list is safe.
+    fn wants(&self, event: &notify::Result<Event>) -> bool {
+        let Ok(event) = event else { return true };
+        event.need_rescan()
+            || event.paths.is_empty()
+            || event.paths.iter().any(|path| self.counts(path))
+    }
+
+    /// Whether a change to `path` counts: in the git dir, only `HEAD` and `index` do; in the
+    /// worktree, a counted folder, what one holds, and anything under an untracked folder.
+    fn counts(&self, path: &Path) -> bool {
+        let git_dir = self.git_dir.as_ref();
+        if let Some(git_dir) = git_dir.filter(|git_dir| path.starts_with(git_dir)) {
+            return path.parent() == Some(git_dir) && git_state(path.file_name());
+        }
+        // Kept with git's `/` (Windows: `\`).
+        let rel = path.strip_prefix(&self.root).ok().and_then(Path::to_str);
+        let Some(rel) = rel.map(|rel| rel.replace(MAIN_SEPARATOR, "/")) else {
+            return false;
+        };
+        let parent = rel.rfind('/').map_or("", |end| &rel[..end]);
+        if self.dirs.contains(&rel) || self.dirs.contains(parent) {
+            return true;
+        }
+        // One step up per `/`: bounded by the path.
+        let mut rest = rel.as_str();
+        while let Some(end) = rest.rfind('/') {
+            rest = &rest[..end];
+            if self.trees.contains(rest) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// The filter, whoever panicked holding it: it is only ever replaced whole.
+fn lock(filter: &Mutex<Filter>) -> MutexGuard<'_, Filter> {
+    filter.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Watches one worktree.
 pub struct Watcher {
     /// Canonical, as the paths of events are.
@@ -266,8 +349,14 @@ pub struct Watcher {
     watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<Event>>,
     git_dir: Option<PathBuf>,
+    strategy: Strategy,
+    /// What counts, shared with the watcher's thread.
+    filter: Arc<Mutex<Filter>>,
     /// Watched directories, relative to `root`.
     dirs: BTreeSet<String>,
+    /// Those with a watch of their own: every one with [`Strategy::Folders`], the open ignored
+    /// folders with [`Strategy::Root`].
+    own: BTreeSet<String>,
     /// The ignored folders the app opened, relative to `root`.
     open: BTreeSet<String>,
     /// Called with each open ignored folder right before it is read and right before it is
@@ -286,26 +375,50 @@ impl Watcher {
     /// Starts watching the worktree at `root`'s git dir; [`Watcher::list`] adds the rest.
     /// Blocks on git; must run inside the tokio runtime.
     pub fn new(root: &Path) -> io::Result<Self> {
+        Self::with(root, Strategy::NATIVE)
+    }
+
+    /// [`Watcher::new`] with `strategy`; with [`Strategy::Root`] the worktree is watched
+    /// at once.
+    fn with(root: &Path, strategy: Strategy) -> io::Result<Self> {
         let (out, _) = git(root, &["rev-parse", "--absolute-git-dir"], 65_536)?;
+        let root = canonical(root)?;
+        let filter = Arc::new(Mutex::new(Filter {
+            root: root.clone(),
+            ..Filter::default()
+        }));
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
-        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+        let shared = filter.clone();
+        let handler = move |event: notify::Result<Event>| {
             // Git reads the worktree on every re-list: reads never count.
-            if !matches!(&event, Ok(event) if event.kind.is_access()) {
+            let read = matches!(&event, Ok(event) if event.kind.is_access());
+            if !read && lock(&shared).wants(&event) {
                 // Full: a burst is already waiting to be seen.
                 let _ = tx.try_send(event);
             }
-        })
-        .map_err(io::Error::other)?;
+        };
+        // A recursive watch never walks into a link (inotify; FSEvents never does).
+        let config = notify::Config::default().with_follow_symlinks(false);
+        let mut watcher = RecommendedWatcher::new(handler, config).map_err(io::Error::other)?;
         let git_dir = PathBuf::from(String::from_utf8_lossy(&out).trim_end());
         let git_dir = canonical(&git_dir)
             .ok()
             .filter(|dir| watcher.watch(dir, RecursiveMode::NonRecursive).is_ok());
+        if strategy == Strategy::Root {
+            let root = root.as_path();
+            watcher
+                .watch(root, RecursiveMode::Recursive)
+                .map_err(io::Error::other)?;
+        }
         Ok(Self {
-            root: canonical(root)?,
+            root,
             watcher,
             events,
             git_dir,
+            strategy,
+            filter,
             dirs: BTreeSet::new(),
+            own: BTreeSet::new(),
             open: BTreeSet::new(),
             hook: |_, _, _| {},
         })
@@ -365,9 +478,10 @@ impl Watcher {
         let (kept, left_out) = room.fill(ignored.iter().map(String::as_str));
         listing.ignored = kept;
         listing.truncated |= cut || left_out;
-        // Untracked directories too, even empty ones, so files created in them are seen.
-        // ponytail: git names only the top of a new untracked tree, so `mkdir -p a/b` watches
-        // `a` alone until a file appears; walk such trees if deep late writes go unseen.
+        // Untracked directories too, even empty ones, so files created in them are seen. Git
+        // names only the top of a new untracked tree: under a `Root` watch a change anywhere
+        // below it counts; with `Folders` (inotify), `mkdir -p a/b` watches `a` alone until a
+        // file appears.
         let ls = [
             "ls-files",
             "--others",
@@ -376,24 +490,38 @@ impl Watcher {
             "-z",
         ];
         let (untracked, _) = git(&self.root, &ls, GIT_LIMIT)?;
-        let untracked = parse_dirs(&untracked);
+        let untracked: Vec<&str> = parse_dirs(&untracked).take(MAX_WATCHES).collect();
         let files = listing.files.iter().map(String::as_str);
-        let mut wanted = dirs(files.chain(untracked));
+        let mut wanted = dirs(files.chain(untracked.iter().copied()));
         wanted.extend(opened.iter().map(|(folder, _)| *folder));
         let wanted: BTreeSet<&str> = wanted.into_iter().take(MAX_WATCHES).collect();
-        // ponytail: on macOS every re-list restarts the FSEvents stream, even when no watch
-        // moves; skip the restart if its cost or its short blind spot shows.
+        // Counted from now on, before any watch moves, so no change in a new folder is lost.
+        {
+            let mut filter = lock(&self.filter);
+            filter.git_dir.clone_from(&self.git_dir);
+            filter.dirs = wanted.iter().map(|dir| (*dir).to_owned()).collect();
+            let trees = untracked.iter().filter_map(|dir| dir.strip_suffix('/'));
+            filter.trees = trees.map(str::to_owned).collect();
+        }
+        // The folders that need a watch of their own. Under the worktree's recursive watch only
+        // the open ignored ones get one, which it covers (FSEvents adds no path to its
+        // stream, so no descriptor), so they go through the checks below (15.2) either way.
+        let own: BTreeSet<&str> = match self.strategy {
+            Strategy::Folders => wanted.clone(),
+            Strategy::Root => opened
+                .iter()
+                .map(|(folder, _)| *folder)
+                .filter(|folder| wanted.contains(folder))
+                .collect(),
+        };
         // Removed first: a renamed directory keeps its watch, which must not be reused.
-        let gone = self
-            .dirs
-            .iter()
-            .filter(|dir| !wanted.contains(dir.as_str()));
+        let gone = self.own.iter().filter(|dir| !own.contains(dir.as_str()));
         // Unwatching fails when the directory is gone, which removed its watch already.
         let unwatch = gone.map(|dir| PathOp::unwatch(self.root.join(dir)));
-        let added: Vec<&str> = wanted
+        let added: Vec<&str> = own
             .iter()
             .copied()
-            .filter(|dir| !self.dirs.contains(*dir))
+            .filter(|dir| !self.own.contains(*dir))
             .collect();
         // A link at the end of the path is watched as itself, never followed (inotify).
         let config = WatchPathConfig::new(RecursiveMode::NonRecursive);
@@ -407,9 +535,7 @@ impl Watcher {
             Ok(paths.into_iter().map(|(path, _)| path).collect())
         };
         // Only an open folder watched anew is checked below.
-        let fresh = opened
-            .iter()
-            .any(|(folder, _)| !self.dirs.contains(*folder));
+        let fresh = opened.iter().any(|(folder, _)| !self.own.contains(*folder));
         let before = if fresh {
             keys(&self.watcher)?
         } else {
@@ -427,7 +553,7 @@ impl Watcher {
         // check keeps it, on a folder whose events only ever ask for a re-list.
         let swapped: Vec<PathBuf> = opened
             .iter()
-            .filter(|(folder, id)| !self.dirs.contains(*folder) && !same(&self.root, folder, id))
+            .filter(|(folder, id)| !self.own.contains(*folder) && !same(&self.root, folder, id))
             .map(|(folder, _)| self.root.join(folder))
             .collect();
         if !swapped.is_empty() {
@@ -448,11 +574,16 @@ impl Watcher {
                 .map_err(io::Error::other)?;
             failed.extend(swapped);
         }
-        self.dirs.retain(|dir| wanted.contains(dir.as_str()));
+        self.own.retain(|dir| own.contains(dir.as_str()));
         let watched = added
             .into_iter()
             .filter(|dir| !failed.contains(&self.root.join(dir)));
-        self.dirs.extend(watched.map(str::to_owned));
+        self.own.extend(watched.map(str::to_owned));
+        // A folder that needed a watch of its own counts only once it has one.
+        let counted = wanted
+            .into_iter()
+            .filter(|dir| !own.contains(dir) || self.own.contains(*dir));
+        self.dirs = counted.map(str::to_owned).collect();
         Ok(listing)
     }
 
@@ -480,55 +611,50 @@ impl Watcher {
 
     /// Whether `event` may change what git lists.
     fn saw(&mut self, event: notify::Result<Event>) -> bool {
-        // A watcher error may have lost events: a full re-list is safe.
-        let Ok(event) = event else { return true };
-        if matches!(
-            event.kind,
-            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
-        ) {
-            // A directory gone or moved lost its watch. Kept with git's `/` (Windows: `\`).
-            for path in &event.paths {
-                if let Some(dir) = path.strip_prefix(&self.root).ok().and_then(Path::to_str) {
-                    self.dirs.remove(&dir.replace(MAIN_SEPARATOR, "/"));
+        if let Ok(event) = &event {
+            if matches!(
+                event.kind,
+                EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+            ) {
+                // A directory gone or moved lost its watch. Kept with git's `/` (Windows: `\`).
+                for path in &event.paths {
+                    let dir = path.strip_prefix(&self.root).ok().and_then(Path::to_str);
+                    if let Some(dir) = dir.map(|dir| dir.replace(MAIN_SEPARATOR, "/")) {
+                        self.dirs.remove(&dir);
+                        self.own.remove(&dir);
+                    }
                 }
             }
-        }
-        // A folder's own change changes nothing git lists: what it holds has its own watch, or
-        // is ignored. (Windows reports one for a write anywhere under it, Unix for its mode.)
-        let own = matches!(
-            event.kind,
-            EventKind::Modify(ModifyKind::Any | ModifyKind::Metadata(_))
-        );
-        // Never through a link: one to a network path would reach its host.
-        let folder = |path: &PathBuf| path.symlink_metadata().is_ok_and(|meta| meta.is_dir());
-        if own && event.paths.iter().all(folder) {
-            return false;
-        }
-        // No path: an overflow, which calls for a full re-list.
-        event.paths.is_empty() || event.paths.iter().any(|path| self.counts(path))
-    }
-
-    /// Whether a change to `path` counts: in the git dir, only `HEAD` and `index` do.
-    fn counts(&self, path: &Path) -> bool {
-        match &self.git_dir {
-            Some(git_dir) if path.starts_with(git_dir) => {
-                path.parent() == Some(git_dir) && git_state(path.file_name())
+            // A folder's own change changes nothing git lists: what it holds has its own watch,
+            // or is ignored. (Windows reports one for a write anywhere under it, Unix for its
+            // mode.)
+            let itself = matches!(
+                event.kind,
+                EventKind::Modify(ModifyKind::Any | ModifyKind::Metadata(_))
+            );
+            // Never through a link: one to a network path would reach its host.
+            let folder = |path: &PathBuf| path.symlink_metadata().is_ok_and(|meta| meta.is_dir());
+            if itself && event.paths.iter().all(folder) {
+                return false;
             }
-            _ => true,
         }
+        lock(&self.filter).wants(&event)
     }
 }
 
 /// Applies `ops` in one batch with `apply` (a watcher's `update_paths`: FSEvents restarts its
-/// stream once a batch), going on past the ones that fail: the paths of those. An error when
-/// the watcher itself failed.
+/// stream once a batch, an empty one too, so none is applied), going on past the ones that
+/// fail: the paths of those. An error when the watcher itself failed.
 pub fn update(
     mut apply: impl FnMut(Vec<PathOp>) -> Result<(), Box<notify::UpdatePathsError>>,
     mut ops: Vec<PathOp>,
 ) -> notify::Result<Vec<PathBuf>> {
     let mut failed = Vec::new();
     // Each round leaves out the op that failed: at most one round per op.
-    while let Err(err) = apply(ops).map_err(|err| *err) {
+    while !ops.is_empty() {
+        let Err(err) = apply(ops).map_err(|err| *err) else {
+            break;
+        };
         let origin = err.origin.ok_or(err.source)?;
         failed.push(origin.into_path());
         ops = err.remaining;
@@ -1124,6 +1250,143 @@ mod tests {
             message.starts_with("git rev-parse --absolute-git-dir failed"),
             "{message}"
         );
+    }
+
+    /// How many descriptors this process holds on `dir` or anything inside it (`lsof`).
+    #[cfg(target_os = "macos")]
+    fn held_inside(dir: &Path) -> usize {
+        let out = std::process::Command::new("lsof")
+            .args(["-n", "-P", "-Fn", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&out.stdout);
+        let dir = dir.to_str().unwrap();
+        out.lines()
+            .filter_map(|line| line.strip_prefix('n'))
+            .filter(|path| path.starts_with(dir))
+            .count()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_deep_tree_holds_a_bounded_number_of_descriptors() {
+        let (_dir, root) = repo();
+        for i in 0..60 {
+            write(&root, &format!("a{i}/b/c/d/x.txt"));
+        }
+        let mut watcher = Watcher::new(&root).unwrap();
+        watcher.list().unwrap();
+        assert_eq!(watcher.dirs.len(), 241);
+        // The worktree itself, whatever it holds (a watch per folder held 843 here).
+        let held = held_inside(&root);
+        assert!(held <= 1, "{held} descriptors inside the worktree");
+    }
+
+    #[test]
+    fn only_changes_in_counted_folders_count() {
+        let root = Path::new("/w");
+        let filter = Filter {
+            root: root.to_owned(),
+            git_dir: Some(PathBuf::from("/w/.git")),
+            dirs: BTreeSet::from(["".to_owned(), "src".to_owned(), "a/b".to_owned()]),
+            trees: BTreeSet::from(["new".to_owned()]),
+        };
+        let counts = |path: &str| filter.counts(&root.join(path));
+        // The folders, and what they hold directly.
+        assert!(counts(""));
+        assert!(counts("top.rs"));
+        assert!(counts("src"));
+        assert!(counts("src/a.rs"));
+        assert!(counts("a/b/c.rs"));
+        // The folder above a counted one only through what the worktree holds.
+        assert!(counts("a"));
+        assert!(!counts("a/x.rs"));
+        assert!(!counts("src/deep/a.rs"));
+        assert!(!counts("target/debug/x.o"));
+        // Anything under an untracked folder.
+        assert!(counts("new/a/b/c.txt"));
+        assert!(counts("new/x"));
+        assert!(!counts("newer/a/b"));
+        // The git dir: HEAD and the index only.
+        assert!(counts(".git/HEAD"));
+        assert!(counts(".git/index"));
+        assert!(!counts(".git/index.lock"));
+        assert!(!counts(".git/refs/HEAD"));
+        // Nothing outside the worktree.
+        assert!(!filter.counts(Path::new("/elsewhere/a.rs")));
+        assert!(!filter.counts(Path::new("/w-other/a.rs")));
+        let event = |kind, path: &str| Ok(Event::new(kind).add_path(root.join(path)));
+        let create = EventKind::Create(notify::event::CreateKind::File);
+        assert!(filter.wants(&event(create, "src/b.rs")));
+        assert!(!filter.wants(&event(create, "target/b.o")));
+        // A rescan, an overflow or an error: anything may have changed.
+        let rescan =
+            event(EventKind::Other, "target").map(|e| e.set_flag(notify::event::Flag::Rescan));
+        assert!(filter.wants(&rescan));
+        assert!(filter.wants(&Ok(Event::new(EventKind::Other))));
+        assert!(filter.wants(&Err(notify::Error::generic("lost"))));
+    }
+
+    #[test]
+    fn an_empty_batch_leaves_the_watcher_alone() {
+        let calls = std::cell::Cell::new(0);
+        let apply = |_| -> Result<(), Box<notify::UpdatePathsError>> {
+            calls.set(calls.get() + 1);
+            Ok(())
+        };
+        assert!(update(apply, Vec::new()).unwrap().is_empty());
+        assert_eq!(calls.get(), 0);
+        let ops = vec![PathOp::watch_non_recursive("a")];
+        assert!(update(apply, ops).unwrap().is_empty());
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn both_strategies_count_the_same_changes() {
+        for strategy in [Strategy::Folders, Strategy::Root] {
+            let (_dir, root) = repo();
+            std::fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+            write(&root, "ignored/x.txt");
+            write(&root, "src/a.rs");
+            let mut watcher = Watcher::with(&root, strategy).unwrap();
+            assert_eq!(watcher.strategy, strategy);
+            watcher.list().unwrap();
+            assert_eq!(watched(&watcher), ["", "src"], "{strategy:?}");
+            // Only the open ignored folders have a watch of their own under the worktree's.
+            let own: Vec<&str> = watcher.own.iter().map(String::as_str).collect();
+            let want: &[&str] = match strategy {
+                Strategy::Folders => &["", "src"],
+                Strategy::Root => &[],
+            };
+            assert_eq!(own, want, "{strategy:?}");
+            changes(&mut watcher, NEVER).await;
+            write(&root, "ignored/y.txt");
+            assert!(!changes(&mut watcher, NEVER).await, "{strategy:?}");
+            write(&root, "src/b.rs");
+            assert!(changes(&mut watcher, SOON).await, "{strategy:?}");
+            // A new untracked tree: git names its top only. Below it, only the worktree's
+            // watch sees a change.
+            std::fs::create_dir_all(root.join("new/deep")).unwrap();
+            assert!(changes(&mut watcher, SOON).await, "{strategy:?}");
+            watcher.list().unwrap();
+            assert_eq!(watched(&watcher), ["", "new", "src"], "{strategy:?}");
+            changes(&mut watcher, NEVER).await;
+            write(&root, "new/deep/c.txt");
+            let root_watch = strategy == Strategy::Root;
+            let seen = changes(&mut watcher, if root_watch { SOON } else { NEVER }).await;
+            assert_eq!(seen, root_watch, "{strategy:?}");
+            let listing = watcher.list().unwrap();
+            assert!(names(&listing).contains(&"new/deep/c.txt"));
+            // A watcher error may have lost events.
+            assert!(watcher.saw(Err(notify::Error::generic("lost"))));
+            // Closing an open folder drops its own watch under either.
+            watcher.open(["ignored".to_owned()]);
+            watcher.list().unwrap();
+            assert!(watcher.own.contains("ignored"), "{strategy:?}");
+            watcher.open([]);
+            watcher.list().unwrap();
+            assert!(!watcher.own.contains("ignored"), "{strategy:?}");
+        }
     }
 
     #[test]
