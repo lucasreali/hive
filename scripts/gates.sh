@@ -38,11 +38,13 @@ grep -E '^\S+\.rs|^TOTAL' "$out/llvm-cov.log" | awk '$10 != "100.00%" || /TOTAL/
 # One cargo-mutants run, logged to $out/<log>.log, with the memory watchdog (scripts/memwatch.sh):
 # a runaway mutant must not take the machine (and every Hive terminal) down.
 mutants() {
-  local log=$out/$1.log; shift
-  scripts/memwatch.sh cargo-mutants "${GATES_MEM_MIN_KIB:-1500000}" "$log" &
+  local log=$out/$1.log watch=$out/$1-memwatch.log; shift
+  # Its own log: cargo-mutants writes at its own offset and would overwrite a line appended to its.
+  scripts/memwatch.sh cargo-mutants "${GATES_MEM_MIN_KIB:-1500000}" "$watch" &
   TMPDIR=/var/tmp/hive-mutants cargo mutants --gitignore true -j "${MUTANTS_JOBS:-1}" "$@" >"$log" 2>&1
   wait
-  grep -E '^(MISSED|TIMEOUT|ERROR)|mutants tested|memory' "$log" | sed 's/^/      /'
+  sed 's/^/      /' "$watch" 2>/dev/null
+  grep -E '^(MISSED|TIMEOUT|ERROR)|mutants tested' "$log" | sed 's/^/      /'
 }
 if [ "${MUTANTS:-1}" = 1 ]; then
   git add -N . 2>/dev/null  # untracked files must show up in the diff
