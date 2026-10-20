@@ -13,6 +13,7 @@ pub mod gh;
 pub mod git;
 pub mod health;
 pub mod hook;
+pub mod login_path;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mode;

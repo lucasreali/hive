@@ -142,7 +142,8 @@ pub fn run(
 ) -> io::Result<()> {
     let (reader, writer) = io::pipe()?;
     let mut command = command(script, shell)?;
-    command
+    // What the script calls (`npm`, `bun`, `docker`) is on the user's `PATH` (17.5).
+    crate::login_path::apply(&mut command)
         .current_dir(dir)
         .envs(env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())

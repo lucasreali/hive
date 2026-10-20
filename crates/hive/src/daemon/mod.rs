@@ -236,6 +236,7 @@ struct State {
     changing: Mutex<()>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for when first needed (diagnostics,
     /// `gh`), never at start (9.20), and again, in the background, while no `claude` is on it.
+    /// Once known, git and the scripts get it too ([`crate::login_path`], 17.5).
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
     /// Whether the user's `PATH` is being asked for.
     asking_path: std::sync::atomic::AtomicBool,
@@ -309,6 +310,8 @@ impl State {
             let path = wrapper::user_path(shell, var("PATH"), home, timeout).await;
             // Done before the answer wakes anyone waiting for it.
             state.asking_path.store(false, Ordering::SeqCst);
+            // Every program the service starts from now on gets it (17.5).
+            crate::login_path::set(path.clone());
             state.user_path.send_replace(Some(path));
         });
     }
