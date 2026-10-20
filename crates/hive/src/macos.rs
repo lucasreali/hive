@@ -486,9 +486,9 @@ mod tests {
         let missing = std::process::Command::new("/nonexistent/defaults");
         assert_eq!(read_locale(missing), None);
         // The real one: a locale name, when the user has one.
-        if let Some(locale) = system_locale() {
-            assert!(!locale.contains(char::is_whitespace), "{locale:?}");
-        }
+        let real = system_locale();
+        let name = |locale: &String| !locale.contains(char::is_whitespace);
+        assert!(real.as_ref().is_none_or(name), "{real:?}");
     }
 
     #[test]
