@@ -267,21 +267,17 @@ fn set_tray_refuses_an_agent_id_longer_than_max_id() {
 
 #[test]
 fn a_view_updates_the_tray_found_or_creates_one() {
-    let view = view(None, &[], &[]);
-    let created = place(
-        None::<u8>,
-        view.clone(),
-        |_, _| Err("updated".into()),
-        |v| Err(format!("created {}", v.tooltip)),
-    );
-    assert_eq!(created, Err("created Hive".into()));
-    let updated = place(
-        Some(7_u8),
-        view,
-        |tray, v| Err(format!("updated {tray} {}", v.tooltip)),
-        |_| Err("created".into()),
-    );
-    assert_eq!(updated, Err("updated 7 Hive".into()));
+    // One instantiation of `place` for both cases, so its coverage counts both arms.
+    let place_on = |found: Option<u8>| {
+        place(
+            found,
+            view(None, &[], &[]),
+            |tray, v| Err(format!("updated {tray} {}", v.tooltip)),
+            |v| Err(format!("created {}", v.tooltip)),
+        )
+    };
+    assert_eq!(place_on(None), Err("created Hive".into()));
+    assert_eq!(place_on(Some(7)), Err("updated 7 Hive".into()));
 }
 
 #[test]
