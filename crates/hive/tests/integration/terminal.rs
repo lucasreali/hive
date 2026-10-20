@@ -476,19 +476,26 @@ async fn a_terminal_echoes_within_the_load_test_bounds_while_another_floods() {
     assert!(daemon.wait_exit().success());
 }
 
-/// The next message about a terminal's shell marks (17.25), skipping every other one.
+/// The next message about a terminal's shell marks (17.25), skipping every other one; panics
+/// after [`TIMEOUT`] with what was skipped (an agent's messages would otherwise keep it waiting).
 async fn next_mark(app: &mut crate::common::Conn) -> (u32, Control) {
-    loop {
-        let next = app.control().await;
-        if matches!(
-            next.1,
-            Control::TerminalProgress { .. }
-                | Control::CommandFinished { .. }
-                | Control::TerminalNotification { .. }
-        ) {
-            return next;
+    let mut skipped = Vec::new();
+    let find = async {
+        loop {
+            let next = app.control().await;
+            if matches!(
+                next.1,
+                Control::TerminalProgress { .. }
+                    | Control::CommandFinished { .. }
+                    | Control::TerminalNotification { .. }
+            ) {
+                return next;
+            }
+            skipped.push(next);
         }
-    }
+    };
+    let found = tokio::time::timeout(crate::common::TIMEOUT, find).await;
+    found.unwrap_or_else(|_| panic!("no shell mark message; skipped {skipped:?}"))
 }
 
 #[tokio::test]
@@ -518,19 +525,21 @@ async fn shell_marks_progress_and_notifications_reach_the_app() {
     app.send(0, view(2)).await;
     // A program's notification where an agent runs: dropped (its alert is checked off the
     // output's path, so nothing waits for it).
-    app.input(2, "printf '\\e]9;agent\\a'\r").await;
+    app.input(2, "printf '\\x1b]9;agent\\a'\r").await;
     // Progress, as it changes.
-    app.input(1, "printf '\\e]9;4;1;40\\a'\r").await;
+    app.input(1, "printf '\\x1b]9;4;1;40\\a'\r").await;
     let progress = |state, value| (1, Control::TerminalProgress { state, value });
     assert_eq!(
         next_mark(&mut app).await,
         progress(ProgressState::Normal, 40)
     );
-    app.input(1, "printf '\\e]9;4;1;40\\a\\e]9;4;3\\a'\r").await;
+    app.input(1, "printf '\\x1b]9;4;1;40\\a\\x1b]9;4;3\\a'\r")
+        .await;
     let busy = progress(ProgressState::Indeterminate, 0);
     assert_eq!(next_mark(&mut app).await, busy);
     // A program's notification, out of view: an OS notification too.
-    app.input(1, "printf '\\e]777;notify;make;done\\a'\r").await;
+    app.input(1, "printf '\\x1b]777;notify;make;done\\a'\r")
+        .await;
     let note = |title: &str, body: &str, notify| {
         let (title, body) = (title.into(), body.into());
         (
@@ -544,7 +553,7 @@ async fn shell_marks_progress_and_notifications_reach_the_app() {
     };
     assert_eq!(next_mark(&mut app).await, note("make", "done", true));
     // A command longer than the setting, marked by the shell (fish 4 marks its own too).
-    let long = "printf '\\e]133;C\\a'; sleep 1.2; printf '\\e]133;D;3\\a'\r";
+    let long = "printf '\\x1b]133;C\\a'; sleep 1.2; printf '\\x1b]133;D;3\\a'\r";
     app.input(1, long).await;
     let finished = Control::CommandFinished {
         exit: Some(3),
@@ -553,7 +562,7 @@ async fn shell_marks_progress_and_notifications_reach_the_app() {
     assert_eq!(next_mark(&mut app).await, (1, finished));
     // In view of the focused window: only the inbox.
     app.send(0, view(1)).await;
-    app.input(1, "printf '\\e]9;seen\\a'\r").await;
+    app.input(1, "printf '\\x1b]9;seen\\a'\r").await;
     assert_eq!(next_mark(&mut app).await, note("", "seen", false));
     drop(app);
     assert!(daemon.wait_exit().success());
