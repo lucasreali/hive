@@ -60,19 +60,40 @@ fn with_var(var: &str) -> Vec<i32> {
         .collect()
 }
 
-/// Processes whose environment holds `var` (`NAME=value`, no spaces): `ps -E` prints the
-/// command line and then the environment, space-separated.
+/// Processes whose environment holds `var` (`NAME=value`, no spaces), and their descendants:
+/// `ps -E` prints the command line and then the environment, space-separated, but since
+/// macOS 26 not the environment of Apple's own programs (`/bin/sh`, `sleep`), which are found
+/// as children of a process that has it.
 #[cfg(target_os = "macos")]
 fn with_var(var: &str) -> Vec<i32> {
     let out = Command::new("ps")
-        .args(["-ax", "-E", "-ww", "-o", "pid=,command="])
+        .args(["-ax", "-E", "-ww", "-o", "pid=,ppid=,command="])
         .output()
         .unwrap();
-    String::from_utf8_lossy(&out.stdout)
+    let text = String::from_utf8_lossy(&out.stdout);
+    let ids = |line: &str| -> Option<(i32, i32)> {
+        let mut words = line.split_whitespace();
+        Some((words.next()?.parse().ok()?, words.next()?.parse().ok()?))
+    };
+    let all: Vec<(i32, i32)> = text.lines().filter_map(ids).collect();
+    let mut found: Vec<i32> = text
         .lines()
         .filter(|line| line.split(' ').any(|word| word == var))
-        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
-        .collect()
+        .filter_map(|line| Some(ids(line)?.0))
+        .collect();
+    // One generation per pass, at most as many passes as processes.
+    for _ in 0..all.len() {
+        let children: Vec<i32> = all
+            .iter()
+            .filter(|(pid, ppid)| found.contains(ppid) && !found.contains(pid))
+            .map(|(pid, _)| *pid)
+            .collect();
+        if children.is_empty() {
+            break;
+        }
+        found.extend(children);
+    }
+    found
 }
 
 pub struct Conn {

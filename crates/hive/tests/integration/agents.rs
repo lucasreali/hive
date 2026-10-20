@@ -1129,6 +1129,37 @@ async fn an_interrupt_in_the_transcript_waits_for_you_and_a_compaction_keeps_the
     assert!(daemon.wait_exit().success());
 }
 
+/// `hive` whose `git` waits, in a repository holding `.git/hang`, until that file is gone,
+/// having made `.git/hung` (then it runs the real git). Not a pipe in the repository's config:
+/// on macOS a reader that opens a FIFO already open by another reader and a writer never sees
+/// its end once the writer closes, nor can a writer open it again, so that git hung on.
+fn hanging_git(env: &crate::common::Env) -> std::process::Command {
+    use std::os::unix::fs::PermissionsExt;
+    let path = std::env::var_os("PATH").unwrap();
+    let real = std::env::split_paths(&path)
+        .map(|dir| dir.join("git"))
+        .find(|git| git.is_file())
+        .unwrap();
+    let bin = env.path("hang-bin");
+    std::fs::create_dir(&bin).unwrap();
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = -C ] && [ -e \"$2/.git/hang\" ]; then\n\
+         \x20 : > \"$2/.git/hung\"\n\
+         \x20 while [ -e \"$2/.git/hang\" ]; do sleep 0.01; done\n\
+         fi\n\
+         exec '{}' \"$@\"\n",
+        real.display()
+    );
+    std::fs::write(bin.join("git"), script).unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut dirs = vec![bin];
+    dirs.extend(std::env::split_paths(&path));
+    let mut hive = env.hive();
+    hive.env("PATH", std::env::join_paths(dirs).unwrap());
+    hive
+}
+
 #[tokio::test]
 async fn terminals_echo_while_agents_are_being_placed() {
     // Placing an agent holds the agents lock while git lists the projects; another agent
@@ -1136,7 +1167,8 @@ async fn terminals_echo_while_agents_are_being_placed() {
     // Neither may hold up a terminal's input or output (9.13).
     let repo = Repo::new();
     let root = repo.root.display().to_string();
-    let mut daemon = repo.env.daemon();
+    let hang = repo.root.join(".git/hang");
+    let mut daemon = repo.env.daemon_with(&mut hanging_git(&repo.env));
     let mut app = repo.env.connect(Role::App).await;
     app.send(0, Control::AddProject { path: root.clone() })
         .await;
@@ -1147,15 +1179,9 @@ async fn terminals_echo_while_agents_are_being_placed() {
     let home = repo.env.path("home");
     app.open_terminal(1, &home).await;
     app.open_terminal(2, &home).await;
-    // From now on git reads the repository's config up to a pipe, and waits there for as
-    // long as the test holds the pipe open without writing to it (a hung network drive).
-    let pipe = repo.root.join(".git/hang");
-    nix::unistd::mkfifo(&pipe, nix::sys::stat::Mode::S_IRWXU).unwrap();
-    let mut config = std::fs::OpenOptions::new()
-        .append(true)
-        .open(repo.root.join(".git/config"))
-        .unwrap();
-    config.write_all(b"[include]\n\tpath = hang\n").unwrap();
+    // From now on git waits in the repository for as long as the test keeps `hang` (a hung
+    // network drive).
+    std::fs::write(&hang, "").unwrap();
     let start = |terminal: &str| {
         let mut child = repo
             .env
@@ -1181,18 +1207,7 @@ async fn terminals_echo_while_agents_are_being_placed() {
         sent_ns: 0,
     };
     hook.send(0, removed).await;
-    // Opening the pipe for writing succeeds once git reads it.
-    let mut hold = None;
-    crate::common::wait_until(|| {
-        use std::os::unix::fs::OpenOptionsExt;
-        let nonblock = nix::fcntl::OFlag::O_NONBLOCK.bits();
-        let opened = std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(nonblock)
-            .open(&pipe);
-        hold = opened.ok();
-        hold.is_some()
-    });
+    crate::common::wait_until(|| repo.root.join(".git/hung").exists());
     start("1");
     start("2");
     // The first agent is being placed, and the second `SessionStart` holds the terminals
@@ -1211,9 +1226,8 @@ async fn terminals_echo_while_agents_are_being_placed() {
             );
         }
     }
-    // Git goes on (and the next one finds no pipe): both agents are placed.
-    std::fs::remove_file(&pipe).unwrap();
-    drop(hold);
+    // Git goes on: both agents are placed.
+    std::fs::remove_file(&hang).unwrap();
     let mut detected = Vec::new();
     while detected.len() < 2 {
         if let (channel, Control::AgentDetected { id, .. }) = app.control().await {
