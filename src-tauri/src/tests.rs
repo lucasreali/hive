@@ -2441,6 +2441,8 @@ fn a_tone_fails_without_a_player_or_a_folder() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+// A shell script stands in for `afplay` (macOS; the Linux CI runs it too).
+#[cfg(unix)]
 #[test]
 fn afplay_gets_the_volume_and_the_file_as_separate_arguments() {
     use std::os::unix::fs::PermissionsExt;
