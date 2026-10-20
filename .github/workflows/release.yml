@@ -15,8 +15,9 @@ permissions:
   contents: read
 
 jobs:
-  # Releases only from a green CI (TODO 9.4): a successful `ci` run of the tagged commit, or of its
-  # parent when the tagged commit is scripts/release.sh's version bump, which no branch tests.
+  # Releases only from a green CI (TODO 9.4): successful `ci` and `macos` runs (D18.1; `windows`
+  # is optional, D17.0) of the tagged commit, or of its parent when the tagged commit is
+  # scripts/release.sh's version bump, which no branch tests. `scripts/ci.sh green` checks the same.
   ci-green:
     runs-on: ubuntu-latest
     permissions:
@@ -29,27 +30,31 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # green <rev>: each workflow's green run, or which one has none (and status 1).
           green() {
-            gh run list --workflow ci.yml --commit "$(git rev-parse "$1")" --status success \
-              --json url -q '.[0].url // empty'
+            local workflow url status=0
+            for workflow in ci macos; do
+              url=$(gh run list --workflow "$workflow.yml" --commit "$(git rev-parse "$1")" \
+                --status success --json url -q '.[0].url // empty')
+              if [ -n "$url" ]; then echo "$workflow green: $url"; else echo "$workflow: no green run"; status=1; fi
+            done
+            return $status
           }
-          url=$(green HEAD)
-          if [ -n "$url" ]; then echo "ci is green on the tagged commit: $url"; exit 0; fi
+          if green HEAD; then echo "ci and macos are green on the tagged commit"; exit 0; fi
           # The bump: only these files, and every changed line a manifest's `version`.
           files=$(git diff --name-only HEAD^ HEAD)
           lines=$(git diff -U0 HEAD^ HEAD | grep -E '^[-+]' | grep -vE '^(---|\+\+\+) ' || true)
           if grep -qvxE 'package\.json|src-tauri/tauri\.conf\.json|src-tauri/Cargo\.toml|crates/hive/Cargo\.toml|Cargo\.lock' <<< "$files" ||
             grep -qvxE '[-+](  "version": "[0-9]+\.[0-9]+\.[0-9]+",|version = "[0-9]+\.[0-9]+\.[0-9]+")' <<< "$lines"
           then
-            echo "no green ci run for $(git rev-parse HEAD); re-run this workflow once ci is green" >&2
+            echo "$(git rev-parse HEAD) is not green; re-run this workflow once ci and macos are" >&2
             exit 1
           fi
-          url=$(green HEAD^)
-          if [ -z "$url" ]; then
-            echo "the tagged commit only bumps versions, but its parent $(git rev-parse HEAD^) has no green ci run" >&2
+          if ! green HEAD^; then
+            echo "the tagged commit only bumps versions, but its parent $(git rev-parse HEAD^) is not green" >&2
             exit 1
           fi
-          echo "the tagged commit only bumps versions: accepting its parent's green ci run: $url"
+          echo "the tagged commit only bumps versions: accepting its parent's green runs"
 
   linux:
     needs: ci-green

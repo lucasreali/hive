@@ -5,8 +5,8 @@
 #   scripts/ci.sh push          push the branch (sets upstream)
 #   scripts/ci.sh watch [--all] wait for HEAD's ci and macos runs, the two a merge needs (Windows
 #                               is frozen, D17.0; --all adds windows); exit 1 if one failed
-#   scripts/ci.sh green [<rev>] print the green `ci` run of a commit (default HEAD, any branch:
-#                               /release checks main's HEAD); exit 1 if there is none
+#   scripts/ci.sh green [<rev>] print the green `ci` and `macos` runs of a commit (default HEAD,
+#                               any branch: /release checks main's HEAD); exit 1 if one is missing
 #   scripts/ci.sh runs [<rev>]  every run of a commit (default HEAD, any branch)
 #   scripts/ci.sh logs <run-id> the failed steps' logs (empty for a reusable workflow's jobs,
 #                               "mutants / …": gh 2.46; use `jobs` then `log`)
@@ -68,11 +68,15 @@ case "${1:-}" in
     exit "$failed"
     ;;
   green)
-    # As release.yml's ci-green job, which also accepts a version bump's parent.
-    url=$(gh run list --workflow ci.yml --commit "$(git rev-parse "${2:-HEAD}")" --status success \
-      --json url -q '.[0].url // empty')
-    [ -n "$url" ] || { echo "no green ci run for ${2:-HEAD}" >&2; exit 1; }
-    echo "green $url"
+    # A release needs ci and macos green (D18.1; Windows is optional, D17.0), as release.yml's
+    # ci-green job checks, which also accepts a version bump's parent.
+    rev=$(git rev-parse "${2:-HEAD}")
+    for workflow in ci macos; do
+      url=$(gh run list --workflow "$workflow.yml" --commit "$rev" --status success \
+        --json url -q '.[0].url // empty')
+      [ -n "$url" ] || { echo "no green $workflow run for ${2:-HEAD}" >&2; exit 1; }
+      echo "green $url"
+    done
     ;;
   runs)
     gh run list --commit "$(git rev-parse "${2:-HEAD}")" --json databaseId,workflowName,conclusion,url \

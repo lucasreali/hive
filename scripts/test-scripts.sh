@@ -111,7 +111,15 @@ cat >"$tmp/gh/gh" <<'EOF'
 echo "$*" >>"$FAKE_GH_LOG"
 case "$1 $2" in
   "auth token") echo token ;;
-  "run list") cat "$FAKE_RUNS" ;;
+  "run list")
+    case "$3" in
+      # `--workflow <name>.yml … --status success`: the first green run's url, as `-q` prints it.
+      --workflow) while read -r name id url; do
+          case " $FAKE_FAILED " in *" $id "*) continue ;; esac
+          if [ "$name.yml" = "$4" ]; then echo "$url"; break; fi
+        done <"$FAKE_RUNS" ;;
+      *) cat "$FAKE_RUNS" ;;
+    esac ;;
   "run watch") case " $FAKE_FAILED " in *" $3 "*) exit 1 ;; esac ;;
 esac
 EOF
@@ -154,6 +162,15 @@ check "ci.sh watch: a missing macos run fails, after a bounded wait" \
   'has "$o" "MISSING macos: no run of HEAD" "green u/1" "exit=1" && [ "$(grep -c "^run list" "$tmp/gh.log")" -gt 30 ]'
 o=$(ci "$three" "" watch --other)
 check "ci.sh watch: an unknown option fails" 'has "$o" "usage: scripts/ci.sh watch \[--all\]" "exit=2"'
+# green: a release needs ci and macos green (D18.1); windows does not count.
+o=$(ci "$three" "3" green)
+check "ci.sh green: ci and macos green" 'has "$o" "green u/1" "green u/2" "exit=0"'
+check "ci.sh green: asks for HEAD's runs" \
+  'grep -q "^run list --workflow macos.yml --commit $(git -C "$tmp/ci" rev-parse HEAD) --status success" "$tmp/gh.log"'
+o=$(ci "$three" "2" green)
+check "ci.sh green: a red macos fails" 'has "$o" "green u/1" "no green macos run for HEAD" "exit=1"'
+o=$(ci "macos 2 u/2" "" green task/1.0-test)
+check "ci.sh green: no ci run fails" 'has "$o" "no green ci run for task/1.0-test" "exit=1"'
 
 # --- macos-bundle.sh signing-mode ---------------------------------------------------------------
 secrets="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8"
