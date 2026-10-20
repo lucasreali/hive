@@ -58,6 +58,33 @@ BLOCKED = [
     "mv /tmp/x docs/hive.md && ls",
     "mv docs/hive.md /tmp/x",
     "ln -sf /tmp/x docs/hive.md",
+    # APFS is case-insensitive, and `.` / `//` reach the same file
+    "echo x > docs/HIVE.md",
+    "echo x > DOCS/Hive.md",
+    "echo x > docs//hive.md",
+    "echo x > docs/./hive.md",
+    "cp a docs/Hive.md",
+    "cp a docs/Prototype/x.html",
+    "SED -i 's/a/b/' docs/Hive.md",
+    # package managers, whatever their case and whatever runs them
+    "NPM install",
+    "Npx foo",
+    "env npm i",
+    "env -i FOO=1 npm i",
+    "FOO=1 npm i",
+    "command npx x",
+    "command -p npx x",
+    "bunx npm i",
+    "bunx --bun yarn add x",
+    "bun x pnpm i",
+    "exec npm i",
+    "sudo npm i -g x",
+    "/usr/local/bin/npm i",
+    "echo $(npm bin)",
+    "echo `npm bin`",
+    "cargo test\nnpm i",
+    "GIT push origin main",
+    "Git Rebase main",
     # the rules that were already there
     "npm install",
     "bun install; npx foo",
@@ -91,6 +118,48 @@ ALLOWED = [
     "cp a b\ncat docs/hive.md",
     "bun install --frozen-lockfile",
     "cargo add -p hive serde",
+    "bunx playwright install webkit chromium",
+    "bunx biome check .",
+    "env FOO=1 cargo test",
+    "command -v cargo",
+    "cat npm-debug.log",
+    "grep -rn npm docs/",
+    "echo x > docs/history/stage-17.md",
+    "echo x > docs/HISTORY/stage-17.md",
+    "echo x > docs/hive-notes.md",
+    "cp a docs/Hive.md.bak",
+    "echo x > TODO.md",
+]
+
+EDIT_BLOCKED = [
+    "docs/hive.md",
+    "/r/docs/prototype/a.html",
+    "Cargo.lock",
+    "/r/bun.lock",
+    # APFS is case-insensitive: these are the protected files
+    "DOCS/HIVE.md",
+    "docs/Hive.md",
+    "/r/Docs/Hive.MD",
+    "docs//hive.md",
+    "docs/./hive.md",
+    "/r/docs/x/../hive.md",
+    "Cargo.LOCK",
+    "BUN.lock",
+    "docs/Prototype/x.html",
+]
+
+EDIT_ALLOWED = [
+    "docs/architecture.md",
+    "TODO.md",
+    "/r/TODO.md",
+    "/r/docs/hive.md.bak",
+    "docs/hive-something.md",
+    "docs/history/stage-17.md",
+    "/r/docs/History/Stage-17.md",
+    "docs/prototype-notes.md",
+    "/r/crates/hive/Cargo.toml",
+    "/r/docs/hive/x.md",
+    "",
 ]
 
 
@@ -99,12 +168,18 @@ def main() -> None:
         assert bash(command), f"should block: {command!r}"
     for command in ALLOWED:
         assert bash(command) is None, f"should allow: {command!r} ({bash(command)})"
-    for path in ("docs/hive.md", "/r/docs/prototype/a.html", "Cargo.lock", "/r/bun.lock"):
-        assert edit(path), f"should block editing {path}"
-    for path in ("docs/architecture.md", "TODO.md", "/r/docs/hive.md.bak"):
-        assert edit(path) is None, f"should allow editing {path}"
+    for path in EDIT_BLOCKED:
+        assert edit(path), f"should block editing {path!r}"
+    for path in EDIT_ALLOWED:
+        assert edit(path) is None, f"should allow editing {path!r} ({edit(path)})"
+    notebook = {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "DOCS/Prototype/a.ipynb"}}
+    assert blocked(notebook), "should block a notebook edit under docs/prototype"
+    assert blocked({"tool_name": "Write", "tool_input": {"file_path": "Docs/Hive.md"}})
     assert blocked({"tool_name": "Read", "tool_input": {"file_path": "docs/hive.md"}}) is None
-    print(f"guard: {len(BLOCKED)} blocked and {len(ALLOWED)} allowed command lines ok")
+    print(
+        f"guard: {len(BLOCKED)} blocked and {len(ALLOWED)} allowed command lines,"
+        f" {len(EDIT_BLOCKED)} blocked and {len(EDIT_ALLOWED)} allowed edits ok"
+    )
 
 
 if __name__ == "__main__":
