@@ -413,6 +413,10 @@ mod tests {
         assert_eq!(out, [note("", "seven")]);
         // A terminator with no sequence open is plain output.
         assert_eq!(scanner.feed(b"\x07\x1b\\x"), []);
+        // So is `]` after anything but ESC, and what follows a cancelled sequence.
+        assert_eq!(Scanner::default().feed(b"x]9;plain\x07"), []);
+        assert_eq!(scanner.feed(b"\x1b]9;can\x18\x07\x1b]9;sub\x1a\x07"), []);
+        assert_eq!(scanner.feed(b"\x1b]9;eight\x07"), [note("", "eight")]);
     }
 
     #[test]
