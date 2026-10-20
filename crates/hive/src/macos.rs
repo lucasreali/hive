@@ -52,11 +52,25 @@ fn comm(area: Option<&[u8]>, kernel: &[c_char]) -> Option<String> {
 /// A process's name from its arguments (`argv[0]` first): the last name of `argv[0]` as the
 /// shell that started it wrote it, not the kernel's name, which is the resolved file's (a
 /// native `claude` is a link to `versions/<x.y.z>`); `claude` for a `node` running Claude
-/// Code's npm CLI ([`conpty::comm`]). `None` without arguments.
+/// Code's npm CLI ([`conpty::comm`]). `None` without arguments. Any process of the user sets
+/// its `argv[0]`, and the name reaches the app ("in use by …"): it keeps [`NAME_LIMIT`]
+/// characters at most, without control or bidirectional-override characters.
 fn name(args: &[String]) -> Option<String> {
     let program = args.first()?.rsplit('/').next()?;
+    let program: String = (program.chars())
+        .filter(|&c| !c.is_control() && !bidi(c))
+        .take(NAME_LIMIT)
+        .collect();
     let args: Vec<OsString> = args.iter().map(OsString::from).collect();
-    Some(conpty::comm(program, &args).to_owned())
+    Some(conpty::comm(&program, &args).to_owned())
+}
+
+/// Most characters of a process's name from its `argv[0]`.
+const NAME_LIMIT: usize = 64;
+
+/// A character that changes the direction of the text around it.
+fn bidi(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 /// The process's arguments, `argv[0]` first; `None` when unreadable (another user's process).
@@ -282,6 +296,17 @@ mod tests {
         assert_eq!(name(&["node", cli]).as_deref(), Some("claude"));
         assert_eq!(name(&["node", "x.js"]).as_deref(), Some("node"));
         assert_eq!(name(&[]), None);
+        // Another process's `argv[0]` is untrusted: cut to 64 characters (on a character),
+        // control and direction characters dropped.
+        let long = "é".repeat(100_000);
+        assert_eq!(name(&[&long]), Some("é".repeat(64)));
+        let odd = "/b/cl\u{1b}[2Ja\nu\u{202E}d\u{2066}e\u{200F}\u{061C}\u{200E}\u{2069}\u{7f}";
+        assert_eq!(name(&[odd]).as_deref(), Some("cl[2Jaude"));
+        let edges = "a\u{2029}\u{202A}\u{202D}\u{2067}\u{2068}\u{2065}\u{206A}\u{2029}";
+        assert_eq!(
+            name(&[edges]),
+            Some("a\u{2029}\u{2065}\u{206A}\u{2029}".into())
+        );
     }
 
     /// The tests' stand-in for Claude Code (`tests/fixtures/fake_claude.c`), built at `path`
