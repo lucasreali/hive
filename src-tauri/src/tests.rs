@@ -2271,3 +2271,61 @@ fn a_notification_whose_thread_cannot_start_fails_and_frees_its_wait() {
     assert_eq!(notify("t", "b", Box::new(|| {})), Ok(()));
     assert_eq!(asked.recv_timeout(WAIT), Ok(true), "no wait was kept");
 }
+
+#[test]
+fn the_title_bar_double_click_follows_the_macos_setting() {
+    assert_eq!(double_click_action(Some("Minimize\n")), "minimize");
+    assert_eq!(double_click_action(Some("None")), "none");
+    for zoom in [Some("Maximize"), Some("Fill"), Some("Other"), None] {
+        assert_eq!(double_click_action(zoom), "zoom", "{zoom:?}");
+    }
+}
+
+/// A fake `defaults` in `dir`: checks it is asked for the double-click setting, then runs
+/// `script`.
+fn fake_defaults(dir: &Temp, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let program = dir.0.join("defaults");
+    let check = r#"[ "$*" = "read -g AppleActionOnDoubleClick" ] || exit 9"#;
+    std::fs::write(&program, format!("#!/bin/sh\n{check}\n{script}\n")).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    program
+}
+
+#[test]
+fn the_title_bar_command_reads_the_setting_on_each_click() {
+    let dir = Temp::new("defaults");
+    let setting = dir.0.join("setting");
+    let script = format!("cat '{}'", setting.display());
+    let app = mock_builder()
+        .manage(sh("exit 0").with_defaults(fake_defaults(&dir, &script)))
+        .invoke_handler(tauri::generate_handler![title_bar_action])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let action = || invoke(&webview, "title_bar_action", json!({})).unwrap();
+    // Never set: `defaults` fails.
+    assert_eq!(action(), json!("zoom"));
+    std::fs::write(&setting, "Minimize\n").unwrap();
+    assert_eq!(action(), json!("minimize"));
+    std::fs::write(&setting, "None\n").unwrap();
+    assert_eq!(action(), json!("none"));
+    // Whatever a failing `defaults` prints is no setting.
+    let failing = Temp::new("defaults-failing");
+    let failing = fake_defaults(&failing, "echo Minimize; exit 1");
+    assert_eq!(
+        sh("exit 0").with_defaults(failing).title_bar_action(),
+        "zoom"
+    );
+    // No `defaults` at all (not macOS).
+    assert_eq!(
+        sh("exit 0")
+            .with_defaults("/nonexistent/defaults")
+            .title_bar_action(),
+        "zoom"
+    );
+    // The real one by default, never run here.
+    assert_eq!(sh("exit 0").defaults, "/usr/bin/defaults");
+}

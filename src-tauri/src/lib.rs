@@ -293,6 +293,8 @@ pub struct Hive {
     open: Option<Box<Opener>>,
     /// Shows an OS notification; given by `main.rs` (`with_notify`).
     notify: Option<Box<Notifier>>,
+    /// `defaults`, which reads the title bar's double-click setting (`with_defaults`).
+    defaults: OsString,
 }
 
 /// Runs the installer of a downloaded update.
@@ -383,6 +385,23 @@ fn notification_thread(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
 /// The text without control characters, which a Windows toast's XML refuses.
 fn printable(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// macOS' `defaults`, which reads the user's preferences.
+const DEFAULTS: &str = "/usr/bin/defaults";
+/// How long reading a preference may take: it runs on a double click.
+const DEFAULTS_WAIT: Duration = Duration::from_secs(1);
+
+/// What a double click on the title bar does, from macOS' "Double-click a window's title bar
+/// to" (Desktop & Dock), the global `AppleActionOnDoubleClick`: "Minimize" minimizes, "None"
+/// does nothing; "Maximize" (Zoom), "Fill" and an unset or unknown value zoom, as Tauri's own
+/// drag region does (its maximize is the window's zoom, which fills the screen).
+pub fn double_click_action(setting: Option<&str>) -> &'static str {
+    match setting.map(str::trim) {
+        Some("Minimize") => "minimize",
+        Some("None") => "none",
+        _ => "zoom",
+    }
 }
 
 #[derive(Default)]
@@ -478,7 +497,26 @@ impl Hive {
             install: None,
             open: None,
             notify: None,
+            defaults: DEFAULTS.into(),
         }
+    }
+
+    /// Reads macOS preferences with `program` instead of `/usr/bin/defaults` (tests).
+    pub fn with_defaults(mut self, program: impl Into<OsString>) -> Self {
+        self.defaults = program.into();
+        self
+    }
+
+    /// What a double click on the empty title bar does on macOS ([`double_click_action`]): the
+    /// setting is read on every click, so a change in System Settings counts at once. A
+    /// `defaults` that fails (the key never set) or takes too long counts as unset.
+    pub fn title_bar_action(&self) -> &'static str {
+        let mut read = std::process::Command::new(&self.defaults);
+        read.args(["read", "-g", "AppleActionOnDoubleClick"]);
+        let out = output_within(&mut read, DEFAULTS_WAIT, reader).ok();
+        let out = out.filter(|out| out.status.success());
+        let setting = out.map(|out| String::from_utf8_lossy(&out.stdout).into_owned());
+        double_click_action(setting.as_deref())
     }
 
     /// Shows OS notifications with `notify`, the platform's own (13.5).
@@ -1642,6 +1680,13 @@ pub mod commands {
     #[tauri::command]
     pub fn open_settings_file(hive: State<'_, Hive>) -> Result<(), String> {
         hive.open_settings_file()
+    }
+
+    /// What the UI does on a double click on the empty title bar (macOS): `zoom`, `minimize`
+    /// or `none`.
+    #[tauri::command]
+    pub fn title_bar_action(hive: State<'_, Hive>) -> &'static str {
+        hive.title_bar_action()
     }
 
     #[tauri::command]
