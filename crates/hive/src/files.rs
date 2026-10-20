@@ -304,9 +304,22 @@ struct Filter {
     dirs: BTreeSet<String>,
     /// Untracked folders, of which git names only the top: a change anywhere under one counts.
     trees: BTreeSet<String>,
+    /// The filesystem may name a folder otherwise than git lists it (APFS, macOS's default:
+    /// case-insensitive, and an NFD name is the NFC one git lists): `dirs` and `trees` are kept
+    /// in ASCII lowercase ([`Filter::key`]), and a name that is not ASCII always counts.
+    folded: bool,
 }
 
 impl Filter {
+    /// How `name` (relative, `/`-separated) is compared: ASCII lowercase when `folded`.
+    fn key(&self, name: &str) -> String {
+        if self.folded {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_owned()
+        }
+    }
+
     /// Whether `event` may change what git lists. A watcher error, an event without a path (an
     /// overflow) and a rescan (FSEvents' `MustScanSubDirs`: events were dropped, or coalesced
     /// into a folder) may stand for lost changes: a full re-list is safe.
@@ -329,6 +342,11 @@ impl Filter {
         let Some(rel) = rel.map(|rel| rel.replace(MAIN_SEPARATOR, "/")) else {
             return false;
         };
+        // Its normalization may not be git's: a re-list is safe.
+        if self.folded && !rel.is_ascii() {
+            return true;
+        }
+        let rel = self.key(&rel);
         let parent = rel.rfind('/').map_or("", |end| &rel[..end]);
         if self.dirs.contains(&rel) || self.dirs.contains(parent) {
             return true;
@@ -409,6 +427,7 @@ impl Watcher {
         let root = canonical(root)?;
         let filter = Arc::new(Mutex::new(Filter {
             root: root.clone(),
+            folded: cfg!(target_os = "macos"),
             ..Filter::default()
         }));
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
@@ -517,9 +536,9 @@ impl Watcher {
         {
             let mut filter = lock(&self.filter);
             filter.git_dir.clone_from(&self.git_dir);
-            filter.dirs = wanted.iter().map(|dir| (*dir).to_owned()).collect();
+            filter.dirs = wanted.iter().map(|dir| filter.key(dir)).collect();
             let trees = untracked.iter().filter_map(|dir| dir.strip_suffix('/'));
-            filter.trees = trees.map(str::to_owned).collect();
+            filter.trees = trees.map(|dir| filter.key(dir)).collect();
         }
         // The folders that need a watch of their own. Under the worktree's recursive watch only
         // the open ignored ones get one, which it covers (FSEvents adds no path to its
@@ -603,7 +622,9 @@ impl Watcher {
             .filter(|dir| !own.contains(dir) || self.own.contains(*dir));
         self.dirs = counted.map(str::to_owned).collect();
         // Nor does an open folder whose watch failed or was swapped (15.2) count any longer.
-        lock(&self.filter).dirs.clone_from(&self.dirs);
+        let mut filter = lock(&self.filter);
+        filter.dirs = self.dirs.iter().map(|dir| filter.key(dir)).collect();
+        drop(filter);
         Ok(listing)
     }
 
@@ -1390,8 +1411,14 @@ pub(crate) mod tests {
             git_dir: Some(PathBuf::from("/w/.git")),
             dirs: BTreeSet::from(["".to_owned(), "src".to_owned(), "a/b".to_owned()]),
             trees: BTreeSet::from(["new".to_owned()]),
+            folded: false,
         };
         let counts = |path: &str| filter.counts(&root.join(path));
+        // Names as git lists them: another case or a name that is not ASCII is another folder.
+        assert!(!counts("SRC/a.rs"));
+        assert!(!counts("NEW/x"));
+        assert!(!counts("caf\u{e9}/a.rs"));
+        assert_eq!(filter.key("Src/É"), "Src/É");
         // The folders, and what they hold directly.
         assert!(counts(""));
         assert!(counts("top.rs"));
@@ -1425,6 +1452,28 @@ pub(crate) mod tests {
         assert!(filter.wants(&rescan));
         assert!(filter.wants(&Ok(Event::new(EventKind::Other))));
         assert!(filter.wants(&Err(notify::Error::generic("lost"))));
+    }
+
+    #[test]
+    fn on_apfs_names_count_in_any_case_and_any_unicode_form() {
+        let root = Path::new("/w");
+        let mut filter = Filter {
+            root: root.to_owned(),
+            folded: true,
+            ..Filter::default()
+        };
+        assert_eq!(filter.key("Src/Ab"), "src/ab");
+        filter.dirs = ["", "Src"].iter().map(|dir| filter.key(dir)).collect();
+        filter.trees = BTreeSet::from([filter.key("New")]);
+        let counts = |path: &str| filter.counts(&root.join(path));
+        assert!(counts("src/b.txt"));
+        assert!(counts("SRC/b.txt"));
+        assert!(counts("NEW/deep/x"));
+        assert!(!counts("target/x.o"));
+        assert!(!counts("Src/deep/x.o"));
+        // Not ASCII: NFD on disk, NFC as git lists it; it always counts.
+        assert!(counts("cafe\u{301}/b.txt"));
+        assert!(counts("target/\u{e9}.o"));
     }
 
     #[test]
