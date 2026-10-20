@@ -282,6 +282,8 @@ pub mod power {
             assert_eq!(unsafe { CFGetRetainCount(raw) }, 1);
             // SAFETY: the extra reference, released once.
             unsafe { CFRelease(raw) }
+            // One Core Foundation could not make is never released.
+            drop(CfString(std::ptr::null()));
         }
 
         #[test]
