@@ -266,6 +266,12 @@ pub fn check(settings: &Settings) -> Result<(), String> {
         0,
         100,
     )?;
+    range(
+        "notifications.command_secs",
+        settings.notifications.command_secs,
+        0,
+        3600,
+    )?;
     range("agents.silence_secs", settings.agents.silence_secs, 2, 60)?;
     text("terminal.font_family", &terminal.font_family)?;
     if let Some(base) = &settings.worktrees.default_base {
@@ -536,10 +542,11 @@ mod tests {
     #[test]
     fn every_range_holds_at_its_ends_only() {
         type Field = fn(&mut Settings) -> &mut u32;
-        let fields: [(Field, u32, u32); 4] = [
+        let fields: [(Field, u32, u32); 5] = [
             (|s| &mut s.terminal.font_size, 8, 32),
             (|s| &mut s.terminal.scrollback, 1000, 100_000),
             (|s| &mut s.notifications.volume, 0, 100),
+            (|s| &mut s.notifications.command_secs, 0, 3600),
             (|s| &mut s.agents.silence_secs, 2, 60),
         ];
         for (field, min, max) in fields {
