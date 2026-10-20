@@ -89,6 +89,14 @@ fn main() {
             // webview never leaves the app and never opens another window.
             let window = app.config().app.windows.first().cloned();
             let window = window.ok_or("hive-app: no window in tauri.conf.json")?;
+            // The traffic lights centred in the title bar as this macOS lays them out (18.4);
+            // tao and wry keep them there (each redraw, leaving full screen).
+            #[cfg(target_os = "macos")]
+            let window = tauri::utils::config::WindowConfig {
+                traffic_light_position: hive_lib::macos::traffic_lights(c"NSWindow")
+                    .or(window.traffic_light_position),
+                ..window
+            };
             let dev = tauri::is_dev()
                 .then(|| app.config().build.dev_url.clone())
                 .flatten();
