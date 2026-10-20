@@ -99,6 +99,16 @@ impl Env {
         self.dir.path().join(sub)
     }
 
+    /// A stand-in for Claude Code at `sub` (`tests/fixtures/fake_claude.c`, built with `cc`;
+    /// macOS 26 kills a copied system binary run from another folder): it sleeps 30 s.
+    pub fn fake_claude(&self, sub: &str) -> PathBuf {
+        let path = self.path(sub);
+        let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_claude.c");
+        let cc = Command::new("cc").arg("-o").arg(&path).arg(source).status();
+        assert!(cc.unwrap().success());
+        path
+    }
+
     pub fn socket(&self) -> PathBuf {
         self.path("run/hive/hive.sock")
     }

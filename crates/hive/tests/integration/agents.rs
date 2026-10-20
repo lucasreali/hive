@@ -641,11 +641,9 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
 
     // A `claude` outside Hive that Claude's record names runs its session; a bare one
     // (no record, no arguments) runs none.
-    let fake = repo.env.path("home/claude");
-    std::fs::copy("/bin/dash", &fake).unwrap();
+    let fake = repo.env.fake_claude("home/claude");
     let spawn = || {
         std::process::Command::new(&fake)
-            .args(["-c", "sleep 30; :"])
             .env("XDG_RUNTIME_DIR", repo.env.path("run"))
             .spawn()
             .unwrap()
