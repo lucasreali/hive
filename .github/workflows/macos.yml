@@ -71,6 +71,8 @@ jobs:
       - run: bun test
       # release.sh and the gates' memory watchdog (TODO 17.2), as ci.yml does on Linux.
       - run: scripts/test-scripts.sh
+      # A second launch hands over to the running app and ends (TODO 17.18).
+      - run: cargo build -p hive-app && scripts/second-launch.sh
 
   bundle:
     needs: changes
