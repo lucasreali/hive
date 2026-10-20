@@ -45,7 +45,7 @@ test("shell marks: each prompt's bar, a program's progress and notification", as
   await run(page, "osc-notify make;done");
   await tree.getByRole("button", { name: "refactor-auth" }).click();
   await page.locator(".pending-bell").click();
-  await page.getByRole("menuitem", { name: "make: done" }).click();
+  await page.getByRole("menuitem", { name: "fix-login: make — done" }).click();
   await expect(tab).toHaveAttribute("aria-selected", "true");
 });
 
