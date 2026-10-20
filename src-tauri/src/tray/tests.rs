@@ -10,17 +10,21 @@ fn agent(id: &str, title: &str, state: AgentState, space: Option<&str>) -> Agent
     (id.into(), title.into(), state, space.map(Into::into))
 }
 
+/// An enabled menu item.
 fn item(id: &str, text: &str) -> Entry {
     Entry::Item {
-        id: Some(id.into()),
+        id: id.into(),
         text: text.into(),
+        enabled: true,
     }
 }
 
-fn text(text: &str) -> Entry {
+/// A disabled line of text, its id `note:<name>`.
+fn text(name: &str, text: &str) -> Entry {
     Entry::Item {
-        id: None,
+        id: format!("note:{name}"),
         text: text.into(),
+        enabled: false,
     }
 }
 
@@ -44,8 +48,8 @@ fn the_menu_lists_the_pending_agents_then_the_usage_then_show_hive() {
             item("agent:a1", "fix login — waiting for permission"),
             item("agent:a2", "Claude — Work · waiting for you"),
             Entry::Separator,
-            text("Session 42% · resets 14:30"),
-            text("Week 41% · resets Mon 09:00"),
+            text("usage0", "Session 42% · resets 14:30"),
+            text("usage1", "Week 41% · resets Mon 09:00"),
             Entry::Separator,
             show(),
         ]
@@ -56,13 +60,13 @@ fn the_menu_lists_the_pending_agents_then_the_usage_then_show_hive() {
 fn with_nobody_pending_and_no_usage_the_menu_says_so() {
     assert_eq!(
         entries(&[], &[]),
-        [text("No agent needs you"), Entry::Separator, show()]
+        [text("none", "No agent needs you"), Entry::Separator, show()]
     );
 }
 
 #[test]
 fn the_menu_lists_at_most_max_agents_and_counts_the_rest() {
-    let many: Vec<Agent> = (0..=MAX_AGENTS)
+    let many: Vec<Agent> = (0..MAX_AGENTS + 2)
         .map(|i| agent(&format!("a{i}"), "Claude", AgentState::Error, None))
         .collect();
     let all = entries(&many[..MAX_AGENTS], &[]);
@@ -70,7 +74,7 @@ fn the_menu_lists_at_most_max_agents_and_counts_the_rest() {
     assert_eq!(all[MAX_AGENTS - 1], item("agent:a19", "Claude — error"));
     let cut = entries(&many, &[]);
     assert_eq!(cut.len(), MAX_AGENTS + 3);
-    assert_eq!(cut[MAX_AGENTS], text("1 more in Hive"));
+    assert_eq!(cut[MAX_AGENTS], text("more", "2 more in Hive"));
 }
 
 #[test]
@@ -78,7 +82,7 @@ fn the_menu_shows_at_most_max_usage_lines() {
     let usage: Vec<String> = (0..=MAX_USAGE).map(|i| format!("line {i}")).collect();
     let menu = entries(&[], &usage);
     assert_eq!(menu.len(), 1 + 1 + MAX_USAGE + 2);
-    assert_eq!(menu[1 + MAX_USAGE], text("line 3"));
+    assert_eq!(menu[1 + MAX_USAGE], text("usage3", "line 3"));
 }
 
 #[test]
@@ -101,10 +105,13 @@ fn menu_texts_lose_control_characters_and_long_ones_are_cut() {
         panic!("an item")
     };
     assert_eq!(*cut, format!("{}…", "y".repeat(MAX_TEXT - 1)));
-    assert_eq!(menu[4], text("Session 1%"));
+    assert_eq!(menu[4], text("usage0", "Session 1%"));
     // A text of exactly MAX_TEXT characters is kept whole.
     let whole = "z".repeat(MAX_TEXT);
-    assert_eq!(entries(&[], std::slice::from_ref(&whole))[2], text(&whole));
+    assert_eq!(
+        entries(&[], std::slice::from_ref(&whole))[2],
+        text("usage0", &whole)
+    );
 }
 
 #[test]
@@ -205,7 +212,7 @@ fn the_tooltip_counts_the_pending_agents() {
 }
 
 /// The views a test tray was asked to show.
-type Shown = Arc<Mutex<Vec<Option<View>>>>;
+type Shown = Arc<Mutex<Vec<Tray>>>;
 
 fn with_tray() -> (Hive, Shown) {
     let shown = Shown::default();
@@ -225,11 +232,75 @@ fn set_tray_shows_the_view_or_removes_the_tray_when_the_setting_is_off() {
     assert_eq!(hive.set_tray(true, urgent, &agents, &[]), Ok(()));
     assert_eq!(hive.set_tray(false, urgent, &agents, &[]), Ok(()));
     let shown = shown.lock().unwrap();
-    assert_eq!(*shown, [Some(view(urgent, &agents, &[])), None]);
-    let view = shown[0].as_ref().unwrap();
+    assert_eq!(
+        *shown,
+        [Tray::Show(view(urgent, &agents, &[])), Tray::Remove]
+    );
+    let Tray::Show(view) = &shown[0] else {
+        panic!("shown")
+    };
     assert_eq!(view.tooltip, "Hive — 1 agent needs you");
     assert!(!view.icon.template);
     assert_eq!(view.entries[0], item("agent:a1", "fix login — error"));
+}
+
+#[test]
+fn set_tray_refuses_an_agent_id_longer_than_max_id() {
+    let (hive, shown) = with_tray();
+    let fits = [agent(
+        &"a".repeat(MAX_ID),
+        "Claude",
+        AgentState::Error,
+        None,
+    )];
+    assert_eq!(hive.set_tray(true, None, &fits, &[]), Ok(()));
+    let long = [
+        agent("a1", "Claude", AgentState::Error, None),
+        agent(&"a".repeat(MAX_ID + 1), "Claude", AgentState::Error, None),
+    ];
+    assert_eq!(
+        hive.set_tray(true, None, &long, &[]),
+        Err(format!("an agent id is longer than {MAX_ID} bytes"))
+    );
+    assert_eq!(shown.lock().unwrap().len(), 1, "nothing shown for it");
+}
+
+#[test]
+fn a_view_updates_the_tray_found_or_creates_one() {
+    let view = view(None, &[], &[]);
+    let created = place(
+        None::<u8>,
+        view.clone(),
+        |_, _| Err("updated".into()),
+        |v| Err(format!("created {}", v.tooltip)),
+    );
+    assert_eq!(created, Err("created Hive".into()));
+    let updated = place(
+        Some(7_u8),
+        view,
+        |tray, v| Err(format!("updated {tray} {}", v.tooltip)),
+        |_| Err("created".into()),
+    );
+    assert_eq!(updated, Err("updated 7 Hive".into()));
+}
+
+#[test]
+fn only_the_agents_and_show_hive_can_be_chosen() {
+    let agents = [agent("a1", "Claude", AgentState::Error, None)];
+    let menu = entries(&agents, &["Session 1%".to_owned()]);
+    let enabled: Vec<(&str, bool)> = menu
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Item { id, enabled, .. } => Some((id.as_str(), *enabled)),
+            Entry::Separator => None,
+        })
+        .collect();
+    assert_eq!(
+        enabled,
+        [("agent:a1", true), ("note:usage0", false), ("show", true)]
+    );
+    let none = entries(&[], &[]);
+    assert!(matches!(&none[0], Entry::Item { enabled: false, .. }));
 }
 
 #[test]
@@ -287,13 +358,15 @@ fn the_ui_sets_the_tray_through_its_command() {
     let answer = get_ipc_response(&webview, request).map(|b| b.deserialize::<Value>().unwrap());
     assert_eq!(answer, Ok(Value::Null));
     let shown = shown.lock().unwrap();
-    let view = shown[0].as_ref().unwrap();
+    let Tray::Show(view) = &shown[0] else {
+        panic!("shown")
+    };
     assert_eq!(
         view.entries[..3],
         [
             item("agent:a1", "fix login — Work · waiting for permission"),
             Entry::Separator,
-            text("Session 42% · resets 14:30"),
+            text("usage0", "Session 42% · resets 14:30"),
         ]
     );
 }

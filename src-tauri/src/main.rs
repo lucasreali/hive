@@ -2,7 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use hive_lib::{commands, tray};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::path::BaseDirectory;
+use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Manager;
 
 // Wiring only (excluded from coverage, see COVERAGE_EXCLUSIONS.md): builder, plugins, state and
@@ -222,42 +225,52 @@ fn notifier(
 
 /// The menu bar icon (17.22): shows `hive_lib::tray`'s view, or removes it. Choosing an item
 /// goes to `hive_lib::tray::chosen`.
-fn tray(app: &tauri::App) -> impl Fn(Option<tray::View>) -> Result<(), String> + Send + Sync {
+fn tray(app: &tauri::App) -> impl Fn(tray::Tray) -> Result<(), String> + Send + Sync {
     let app = app.handle().clone();
-    move |view| show_tray(&app, view).map_err(|error| error.to_string())
+    move |wanted| match wanted {
+        tray::Tray::Remove => {
+            app.remove_tray_by_id(tray::TRAY);
+            Ok(())
+        }
+        tray::Tray::Show(view) => tray::place(
+            app.tray_by_id(tray::TRAY),
+            view,
+            |shown, view| update_tray(&app, &shown, view).map_err(|e| e.to_string()),
+            |view| create_tray(&app, view).map_err(|e| e.to_string()),
+        ),
+    }
 }
 
-fn show_tray(app: &tauri::AppHandle, view: Option<tray::View>) -> tauri::Result<()> {
-    use tauri::image::Image;
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-    use tauri::tray::TrayIconBuilder;
-    let Some(view) = view else {
-        app.remove_tray_by_id(tray::TRAY);
-        return Ok(());
-    };
+/// The view's menu: one item per entry, as `hive_lib::tray` made it.
+fn tray_menu(app: &tauri::AppHandle, view: &tray::View) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
     for entry in &view.entries {
         match entry {
-            // Without an id, a disabled line of text.
-            tray::Entry::Item { id, text } => {
-                let item = match id {
-                    Some(id) => MenuItem::with_id(app, id, text, true, None::<&str>)?,
-                    None => MenuItem::new(app, text, false, None::<&str>)?,
-                };
-                menu.append(&item)?;
+            tray::Entry::Item { id, text, enabled } => {
+                menu.append(&MenuItem::with_id(app, id, text, *enabled, None::<&str>)?)?
             }
             tray::Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
         }
     }
-    let icon = Image::new_owned(view.icon.rgba, tray::SIZE, tray::SIZE);
-    if let Some(shown) = app.tray_by_id(tray::TRAY) {
-        shown.set_icon(Some(icon))?;
-        shown.set_icon_as_template(view.icon.template)?;
-        shown.set_tooltip(Some(view.tooltip))?;
-        return shown.set_menu(Some(menu));
-    }
+    Ok(menu)
+}
+
+fn update_tray(app: &tauri::AppHandle, shown: &TrayIcon, view: tray::View) -> tauri::Result<()> {
+    let menu = tray_menu(app, &view)?;
+    shown.set_icon(Some(Image::new_owned(
+        view.icon.rgba,
+        tray::SIZE,
+        tray::SIZE,
+    )))?;
+    shown.set_icon_as_template(view.icon.template)?;
+    shown.set_tooltip(Some(view.tooltip))?;
+    shown.set_menu(Some(menu))
+}
+
+fn create_tray(app: &tauri::AppHandle, view: tray::View) -> tauri::Result<()> {
+    let menu = tray_menu(app, &view)?;
     TrayIconBuilder::with_id(tray::TRAY)
-        .icon(icon)
+        .icon(Image::new_owned(view.icon.rgba, tray::SIZE, tray::SIZE))
         .icon_as_template(view.icon.template)
         .tooltip(view.tooltip)
         .menu(&menu)

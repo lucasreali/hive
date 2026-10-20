@@ -294,7 +294,7 @@ pub struct Hive {
     /// Shows an OS notification; given by `main.rs` (`with_notify`).
     notify: Option<Box<Notifier>>,
     /// Shows the menu bar icon; given by `main.rs` (`with_tray`, 17.22).
-    tray: Option<Box<tray::Show>>,
+    tray: Option<Box<tray::Apply>>,
 }
 
 /// Runs the installer of a downloaded update.

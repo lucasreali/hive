@@ -20,6 +20,8 @@ pub const MAX_AGENTS: usize = 20;
 pub const MAX_USAGE: usize = 4;
 /// The most characters of a menu text (an agent's title, a usage line).
 pub const MAX_TEXT: usize = 80;
+/// The longest agent id accepted, in bytes (the service's are UUIDs).
+pub const MAX_ID: usize = 256;
 /// The icon's side in pixels: 18 points at 2x, the menu bar's height for an icon.
 pub const SIZE: u32 = 36;
 
@@ -30,18 +32,26 @@ pub type Agent = (String, String, AgentState, Option<String>);
 /// One line of the tray's menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
-    /// A menu item: with an `id`, it can be chosen (a pending agent, [`AGENT`] + its id, or
-    /// "Show Hive", [`SHOW`]); without one, it is a disabled line of text.
+    /// A menu item: an enabled one can be chosen (a pending agent, [`AGENT`] + its id, or "Show
+    /// Hive", [`SHOW`]); a disabled one is a line of text ([`NOTE`] + a name for its id).
     Item {
-        id: Option<String>,
+        id: String,
         text: String,
+        enabled: bool,
     },
     Separator,
 }
 
-/// A disabled line of text.
-fn note(text: String) -> Entry {
-    Entry::Item { id: None, text }
+/// The prefix of a disabled line's menu item id; choosing one does nothing.
+pub const NOTE: &str = "note:";
+
+/// A disabled line of text, its id [`NOTE`] + `name`.
+fn note(name: &str, text: String) -> Entry {
+    Entry::Item {
+        id: format!("{NOTE}{name}"),
+        text,
+        enabled: false,
+    }
 }
 
 /// The icon: `SIZE`×`SIZE` RGBA pixels, drawn as a template (the menu bar's own colour) or in
@@ -60,8 +70,29 @@ pub struct View {
     pub entries: Vec<Entry>,
 }
 
-/// Shows the tray's [`View`], or removes the tray (`None`); given by `main.rs` (`with_tray`).
-pub type Show = dyn Fn(Option<View>) -> Result<(), String> + Send + Sync;
+/// What to do with the tray.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tray {
+    /// The setting is off: no icon.
+    Remove,
+    Show(View),
+}
+
+/// Applies a [`Tray`] to the platform's tray; given by `main.rs` (`with_tray`).
+pub type Apply = dyn Fn(Tray) -> Result<(), String> + Send + Sync;
+
+/// Shows `view` on the tray `found` (`update` it in place) or on a new one (`create`).
+pub fn place<T>(
+    found: Option<T>,
+    view: View,
+    update: impl FnOnce(T, View) -> Result<(), String>,
+    create: impl FnOnce(View) -> Result<(), String>,
+) -> Result<(), String> {
+    match found {
+        Some(tray) => update(tray, view),
+        None => create(view),
+    }
+}
 
 /// What a state says in the menu, as the sidebar says it.
 pub fn state_text(state: AgentState) -> &'static str {
@@ -100,21 +131,24 @@ pub fn entries(agents: &[Agent], usage: &[String]) -> Vec<Entry> {
             let what = [space.as_deref(), Some(state_text(*state))];
             let what: Vec<&str> = what.into_iter().flatten().collect();
             Entry::Item {
-                id: Some(format!("{AGENT}{id}")),
+                id: format!("{AGENT}{id}"),
                 text: short(&format!("{title} — {}", what.join(" · "))),
+                enabled: true,
             }
         })
         .collect();
     if agents.is_empty() {
-        entries.push(note("No agent needs you".into()));
+        entries.push(note("none", "No agent needs you".into()));
     }
     if agents.len() > MAX_AGENTS {
-        entries.push(note(format!("{} more in Hive", agents.len() - MAX_AGENTS)));
+        let more = agents.len() - MAX_AGENTS;
+        entries.push(note("more", format!("{more} more in Hive")));
     }
     let usage: Vec<Entry> = usage
         .iter()
         .take(MAX_USAGE)
-        .map(|line| note(short(line)))
+        .enumerate()
+        .map(|(i, line)| note(&format!("usage{i}"), short(line)))
         .collect();
     if !usage.is_empty() {
         entries.push(Entry::Separator);
@@ -122,8 +156,9 @@ pub fn entries(agents: &[Agent], usage: &[String]) -> Vec<Entry> {
     }
     entries.push(Entry::Separator);
     entries.push(Entry::Item {
-        id: Some(SHOW.into()),
+        id: SHOW.into(),
         text: "Show Hive".into(),
+        enabled: true,
     });
     entries
 }
@@ -207,16 +242,17 @@ pub fn view(urgent: Option<(AgentState, bool)>, agents: &[Agent], usage: &[Strin
 }
 
 impl Hive {
-    /// Shows the menu bar icon with `show`, the platform's tray (17.22).
+    /// Shows the menu bar icon with `apply`, the platform's tray (17.22).
     pub fn with_tray(
         mut self,
-        show: impl Fn(Option<View>) -> Result<(), String> + Send + Sync + 'static,
+        apply: impl Fn(Tray) -> Result<(), String> + Send + Sync + 'static,
     ) -> Self {
-        self.tray = Some(Box::new(show));
+        self.tray = Some(Box::new(apply));
         self
     }
 
-    /// Shows the tray for what the UI sent (`shown`: the setting is on), or removes it.
+    /// Shows the tray for what the UI sent (`shown`: the setting is on), or removes it. An
+    /// agent id longer than [`MAX_ID`] bytes refuses the whole message.
     pub fn set_tray(
         &self,
         shown: bool,
@@ -224,8 +260,14 @@ impl Hive {
         agents: &[Agent],
         usage: &[String],
     ) -> Result<(), String> {
-        let show = self.tray.as_ref().ok_or("this app has no menu bar icon")?;
-        show(shown.then(|| view(urgent, agents, usage)))
+        let apply = self.tray.as_ref().ok_or("this app has no menu bar icon")?;
+        if agents.iter().any(|(id, ..)| id.len() > MAX_ID) {
+            return Err(format!("an agent id is longer than {MAX_ID} bytes"));
+        }
+        apply(match shown {
+            true => Tray::Show(view(urgent, agents, usage)),
+            false => Tray::Remove,
+        })
     }
 }
 
