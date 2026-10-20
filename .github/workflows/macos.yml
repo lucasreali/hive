@@ -37,7 +37,7 @@ jobs:
           if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
             # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
             files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
-            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|\.github/workflows/macos\.yml$)' <<< "$files" ||
+            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|scripts/macos-bundle\.sh$|\.github/workflows/macos\.yml$)' <<< "$files" ||
               bundle=false
           fi
           echo "bundle=$bundle" | tee -a "$GITHUB_OUTPUT"
@@ -87,10 +87,15 @@ jobs:
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
           cp target/release/hive src-tauri/resources/hive
+          # Ad-hoc, as the app (D17.1); release.yml signs both with a Developer ID when it has one.
+          scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
       - run: bun install --frozen-lockfile
       # No updater artifacts, so no signing key: that stays in release.yml's `release`
       # environment (#29), out of reach of any branch.
       - run: bun tauri build --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # The bundle validates (`codesign --verify --deep --strict`), the nested `hive` has the
+      # app's signer, the JIT entitlement and the folder prompts' texts are there (TODO 17.11).
+      - run: scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app
       - uses: actions/upload-artifact@v6
         with:
           name: hive-macos

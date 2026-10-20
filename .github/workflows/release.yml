@@ -108,21 +108,78 @@ jobs:
     # Apple Silicon only (#39).
     runs-on: macos-14
     environment: release
+    # Signing (TODO 17.11, D17.1): ad-hoc, unless the `release` environment holds every Developer
+    # ID secret below; then the app and its nested `hive` are signed with that identity under the
+    # hardened runtime, and Tauri notarizes and staples the app (App Store Connect API key).
+    env:
+      CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      DEVELOPER_ID: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      API_KEY: ${{ secrets.APPLE_API_KEY }}
+      API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # All six secrets, or none: a partial set fails rather than shipping ad-hoc by mistake.
+      - id: signing
+        run: |
+          set=0
+          for v in CERTIFICATE CERTIFICATE_PASSWORD DEVELOPER_ID API_ISSUER API_KEY API_KEY_P8; do
+            [ -z "${!v}" ] || set=$((set + 1))
+          done
+          case $set in
+            0) echo "developer_id=false" >> "$GITHUB_OUTPUT"; echo "signing ad-hoc (no Developer ID secrets)" ;;
+            6) echo "developer_id=true" >> "$GITHUB_OUTPUT"; echo "signing with the Developer ID" ;;
+            *) echo "only $set of the 6 Developer ID secrets are set" >&2; exit 1 ;;
+          esac
+      # The certificate in a keychain of this job only, and the API key in a file (Tauri reads a path).
+      - if: steps.signing.outputs.developer_id == 'true'
+        run: |
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(uuidgen)
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+          printf '%s\n' "$API_KEY_P8" > "$RUNNER_TEMP/api-key.p8"
+          echo "KEYCHAIN=$keychain" >> "$GITHUB_ENV"
       - run: |
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
           cp target/release/hive src-tauri/resources/hive
       - run: bun install --frozen-lockfile
-      - run: bun tauri build --config src-tauri/tauri.release.macos.conf.json
+      # The nested `hive` with the identity the app gets (notarization needs every binary signed).
+      # Tauri notarizes only when the APPLE_API_* variables are set, so the ad-hoc path leaves them out.
+      - run: |
+          configs=(--config src-tauri/tauri.release.macos.conf.json)
+          if [ "${{ steps.signing.outputs.developer_id }}" = true ]; then
+            export APPLE_SIGNING_IDENTITY=$DEVELOPER_ID APPLE_API_ISSUER=$API_ISSUER APPLE_API_KEY=$API_KEY
+            export APPLE_API_KEY_PATH=$RUNNER_TEMP/api-key.p8
+            configs+=(--config "$(jq -cn --arg id "$DEVELOPER_ID" '{bundle: {macOS: {signingIdentity: $id}}}')")
+          fi
+          scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
+          bun tauri build "${configs[@]}"
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # codesign --verify --deep --strict, the nested `hive`'s signer, entitlements, Info.plist;
+      # with the Developer ID also `spctl -a` and the stapled ticket.
+      - run: |
+          scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app \
+            ${{ steps.signing.outputs.developer_id == 'true' && '--developer-id' || '' }}
+      - if: always() && steps.signing.outputs.developer_id == 'true'
+        run: |
+          [ -z "${KEYCHAIN:-}" ] || security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/api-key.p8"
       # The asset names tauri-action gave the updater tarball (`Hive_aarch64.app.tar.gz`).
       - run: |
           mkdir out

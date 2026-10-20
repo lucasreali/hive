@@ -227,6 +227,8 @@ git push origin main v0.1.3       # starts release.yml
 
 The release workflow builds the Linux `hive` and bundles it into the Windows NSIS installer, then builds the macOS `.dmg` with the macOS `hive` inside, signs the updater artifacts and publishes them with `latest.json`. It needs the `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) repository secrets; the matching public key is in `src-tauri/tauri.conf.json`.
 
+The macOS app and the `hive` inside it are signed ad-hoc unless the `release` environment holds all six Developer ID secrets, which make the workflow sign both with that identity (hardened runtime), notarize and staple the app, and check it with `spctl`: `APPLE_CERTIFICATE` (the "Developer ID Application" certificate and key, a `.p12` in base64), `APPLE_CERTIFICATE_PASSWORD` (its export password), `APPLE_SIGNING_IDENTITY` (e.g. `Developer ID Application: Name (TEAMID)`), and an App Store Connect API key for the notary service: `APPLE_API_ISSUER` (issuer ID), `APPLE_API_KEY` (key ID) and `APPLE_API_KEY_P8` (the `.p8` file's contents). A partial set fails the release. `scripts/macos-bundle.sh check` is the bundle check `macos.yml` and the release run.
+
 ### Dependencies
 
 Only through the package managers' CLIs, never by editing manifests or lockfiles: `cargo add -p <crate> <dep>` / `cargo remove` for Rust, and **bun only** (`bun add`, `bun add -d`, `bun remove`, `bunx`) for the frontend. No npm, pnpm, yarn or npx.
