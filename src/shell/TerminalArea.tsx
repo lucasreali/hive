@@ -63,6 +63,7 @@ import {
 } from "./icons";
 import { closeFile, FileView } from "./RightPanel";
 import { ResizeHandle } from "./resize";
+import { TerminalSearch } from "./TerminalSearch";
 import { ContextMenu } from "./WorktreeMenu";
 
 /** Screen 1e: shown once the service said there are no projects. */
@@ -292,6 +293,7 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
     <>
       <div className="terminal-host" ref={ref} hidden={hidden} data-split={split || undefined} />
       {split && <ResizeHandle side="split" />}
+      <TerminalSearch />
     </>
   );
 }

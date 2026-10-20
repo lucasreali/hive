@@ -298,6 +298,11 @@ export type HiveState = {
    * any other tab shows alone.
    */
   split: Split | null;
+  /**
+   * The terminal whose search bar is open (17.21): it shows while that terminal is the active
+   * tab, over its pane.
+   */
+  terminalSearch: number | null;
   /** The alerts raised, the newest first (at most `INBOX_LIMIT`), and the newest id seen. */
   inbox: InboxItem[];
   inboxSeen: number;
@@ -429,6 +434,7 @@ export const initialState: HiveState = {
   tabs: [],
   activeTab: null,
   split: null,
+  terminalSearch: null,
   inbox: [],
   inboxSeen: 0,
   pendingSeen: {},
@@ -756,6 +762,16 @@ export const setSplit = (split: Split | null) =>
     activeTab: split ? split.right : s.activeTab,
     fileShown: split ? false : s.fileShown,
   }));
+
+/** Opens the search bar over the terminal shown (its active tab), when one is. */
+export const openTerminalSearch = () =>
+  useHive.setState((s) => (terminalShown(s) ? { terminalSearch: s.activeTab } : {}));
+
+/** Closes the terminal search bar. */
+export const closeTerminalSearch = () => useHive.setState({ terminalSearch: null });
+
+/** Whether a terminal is shown: an active tab, and no file's tab over it. */
+export const terminalShown = (s: HiveState) => s.activeTab !== null && !s.fileShown;
 
 /** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
 export const focusPane = (id: number) =>

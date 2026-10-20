@@ -1,5 +1,6 @@
 import type { Agent } from "./protocol";
 import { closeFile } from "./shell/RightPanel";
+import { findInTerminal } from "./shell/TerminalSearch";
 import {
   activateTab,
   type HiveState,
@@ -15,6 +16,7 @@ import {
   setRightPanel,
   spaceOf,
   spaceProjects,
+  terminalShown,
   useHive,
 } from "./store";
 import { barItems, fileVisible } from "./tabs";
@@ -31,8 +33,8 @@ import { startComment } from "./viewer/review";
 import { commandKey, isMac, keyText } from "./window";
 
 // App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS), Ctrl+, and F8, taken even with
-// the focus in a terminal; on macOS also its own (D17.2, 17.14): ⌘W, ⌘1–9, ⇧⌘[ / ⇧⌘], ⌘= / ⌘- / ⌘0
-// and ⇧⌘J. Every other key goes to the terminal untouched.
+// the focus in a terminal; on macOS also its own (D17.2, 17.14): ⌘W, ⌘1–9, ⇧⌘[ / ⇧⌘], ⌘= / ⌘- / ⌘0,
+// ⇧⌘J and ⌘F (17.21). Every other key goes to the terminal untouched.
 
 /** The selected project, the project of the selected worktree (or agent), else the current space's first. */
 export function currentProject(s: HiveState): string | null {
@@ -199,6 +201,15 @@ export const COMMANDS: readonly Command[] = [
     keys: "F8",
     macKeys: "Ctrl+Shift+J",
     run: nextPending,
+  },
+  {
+    // 17.21: ⌘F on macOS (D17.2); elsewhere Ctrl+F is the shell's, so #35's Ctrl+Shift+F.
+    id: "find-in-terminal",
+    label: "Search the terminal",
+    keys: "Ctrl+Shift+F",
+    macKeys: "Ctrl+F",
+    when: terminalShown,
+    run: findInTerminal,
   },
   {
     // 11.2: VS Code's key, the terminal's paste everywhere but on a Markdown file's tab.
