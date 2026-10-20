@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { type ISearchOptions, SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
@@ -165,7 +166,13 @@ export const ACK_BYTES = 64 * 1024;
 /** How long the host must keep its size before terminals are refitted and the PTY resized. */
 export const RESIZE_DEBOUNCE_MS = 50;
 
-type Entry = { term: Terminal; fit: FitAddon; el: HTMLDivElement; webgl: WebglAddon | null };
+type Entry = {
+  term: Terminal;
+  fit: FitAddon;
+  search: SearchAddon;
+  el: HTMLDivElement;
+  webgl: WebglAddon | null;
+};
 
 const entries = new Map<number, Entry>();
 let host: HTMLElement | null = null;
@@ -238,6 +245,8 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   }
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const search = new SearchAddon();
+  term.loadAddon(search);
   term.onData((data) => {
     if (!useHive.getState().terminals[id]?.exited) void transport.writeTerminal(id, data);
   });
@@ -248,7 +257,7 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   el.hidden = true;
   el.addEventListener("focusin", () => focusPane(id));
   copyOnSelect(term, el);
-  entries.set(id, { term, fit, el, webgl: null });
+  entries.set(id, { term, fit, search, el, webgl: null });
   addTab(id, cwd);
   return id;
 }
@@ -345,6 +354,83 @@ function copyOnSelect(term: Terminal, el: HTMLElement): void {
     { capture: true },
   );
 }
+
+/**
+ * Search matches (17.21), drawn over the text: every match in a soft tint of the theme's yellow
+ * (`--state-permission`), the current one stronger. xterm wants #RRGGBB, so the tints are mixed
+ * over each theme's background.
+ */
+const MATCHES: Record<
+  Settings["appearance"]["theme"],
+  NonNullable<ISearchOptions["decorations"]>
+> = {
+  "one-dark": {
+    matchBackground: "#5f594b",
+    activeMatchBackground: "#958564",
+    activeMatchBorder: "#dec184",
+    matchOverviewRuler: "#dec184",
+    activeMatchColorOverviewRuler: "#e08a5a",
+  },
+  "one-light": {
+    matchBackground: "#eadfc8",
+    activeMatchBackground: "#dac495",
+    activeMatchBorder: "#b08d45",
+    matchOverviewRuler: "#d2b67c",
+    activeMatchColorOverviewRuler: "#e08a5a",
+  },
+};
+
+/** What a search found: the current match (from 0, -1 for none) and how many there are. */
+export type SearchResults = { index: number; count: number };
+
+/**
+ * Searches terminal `id`'s scrollback and screen for `text` (17.21), as terminals do: up, from
+ * the bottom (the newest output) to the oldest match, or down with `newer`. A changed `text`
+ * first tries to keep the current match (typing); `restart` starts again from the bottom.
+ * Every match is highlighted; `onSearchResults` hears the count. No text clears the search.
+ */
+export function searchTerminal(
+  id: number,
+  text: string,
+  options: { caseSensitive: boolean; newer?: boolean; restart?: boolean },
+): void {
+  const entry = entries.get(id);
+  if (!entry) return;
+  if (!text) {
+    entry.search.clearDecorations();
+    return;
+  }
+  if (options.restart) {
+    entry.term.clearSelection();
+    // The addon compares new options with the ones it has just stored, so a changed case alone
+    // would keep the old matches: forgetting the search makes it count them again.
+    entry.search.clearDecorations();
+  }
+  const theme = useHive.getState().settings.appearance.theme;
+  const find = { caseSensitive: options.caseSensitive, decorations: MATCHES[theme] };
+  if (options.newer) entry.search.findNext(text, find);
+  else entry.search.findPrevious(text, find);
+}
+
+/** Calls `listener` with each new result of terminal `id`'s searches. Returns the cleanup. */
+export function onSearchResults(id: number, listener: (results: SearchResults) => void) {
+  const event = entries
+    .get(id)
+    ?.search.onDidChangeResults(({ resultIndex, resultCount }) =>
+      listener({ index: resultIndex, count: resultCount }),
+    );
+  return () => event?.dispose();
+}
+
+/** Ends terminal `id`'s search: no match highlighted, and the keyboard back in the terminal. */
+export function endSearch(id: number): void {
+  const entry = entries.get(id);
+  entry?.search.clearDecorations();
+  entry?.term.focus();
+}
+
+/** The element terminal `id` renders in (the search bar sits over it), once it was opened. */
+export const paneOf = (id: number): HTMLElement | undefined => entries.get(id)?.el;
 
 /** Ends the terminal (unless it already exited), drops its xterm instance and its tab. */
 export function closeTerminal(id: number): void {
