@@ -269,9 +269,9 @@ const BAR: f64 = 34.0;
 const BAR_BORDER: f64 = 1.0;
 /// The close button's distance from the window's left edge (17.15).
 const TRAFFIC_LIGHTS_X: f64 = 10.0;
-/// Titled, closable, miniaturizable, resizable, full-size content view: Hive's window
-/// (`titleBarStyle: Overlay`).
-const WINDOW_STYLE: usize = 1 | 1 << 1 | 1 << 2 | 1 << 3 | 1 << 15;
+/// Titled (bit 0), closable (1), miniaturizable (2), resizable (3) and full-size content view
+/// (15): Hive's window (`titleBarStyle: Overlay`).
+const WINDOW_STYLE: usize = 0x800f;
 /// `NSBackingStoreBuffered`.
 const BUFFERED: usize = 2;
 
