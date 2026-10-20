@@ -7,7 +7,8 @@ import { apply } from "../reduce";
 import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
-import { MOCK_REPOS } from "../transport/mock";
+import { MOCK_ISSUES, MOCK_REPOS } from "../transport/mock";
+import { issueNumber } from "./NewWorktreeDialog";
 
 // Tests run outside Tauri, so the mock service answers every request once connected. It keeps
 // its state for the whole run, so each test creates a worktree with its own name.
@@ -327,4 +328,78 @@ test("close, cancel and Esc close the dialog; it needs a project and a connectio
   render(<App />);
   act(() => openModal("new-worktree"));
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("an issue number is digits only", () => {
+  expect(issueNumber("42")).toBe(42);
+  expect(issueNumber(" 7 ")).toBe(7);
+  expect(issueNumber("999999999999999")).toBe(999999999999999);
+  for (const bad of ["", "0", "07", "-1", "1.5", "#4", "4a", "1e3", "9999999999999999"]) {
+    expect(issueNumber(bad)).toBeNull();
+  }
+});
+
+test("From issue asks the service for the issue's worktree; no claude is started", async () => {
+  const createIssueWorktree = spyOn(transport, "createIssueWorktree");
+  const openTerminal = spyOn(transport, "openTerminal");
+  const write = spyOn(transport, "writeTerminal");
+  open();
+  await waitFor(() => expect(picked()).toBe("main"));
+  const from = screen.getByRole("group", { name: "Start from" });
+  const issueMode = within(from).getByRole("button", { name: "From issue" });
+  expect(issueMode.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(issueMode);
+  expect(issueMode.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByLabelText("Worktree name")).toBeNull();
+  expect(screen.queryByLabelText("Start claude in the terminal")).toBeNull();
+  expect(plan()).toBe("Branch: named from the issue's number and title (from main)");
+  const field = screen.getByLabelText("Issue number") as HTMLInputElement;
+  expect(create().disabled).toBe(true);
+  fireEvent.change(field, { target: { value: "4x" } });
+  expect(screen.getByRole("alert").textContent).toBe("Type the issue's number");
+  expect(create().disabled).toBe(true);
+  fireEvent.submit(create());
+  expect(createIssueWorktree).not.toHaveBeenCalled();
+  fireEvent.change(field, { target: { value: "42" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "develop" }));
+  fireEvent.click(create());
+  expect(createIssueWorktree).toHaveBeenCalledWith(shop.id, 42, "develop");
+  await waitFor(() => expect(useHive.getState().modal).toBeNull());
+  const path = `${shop.path}/.claude/worktrees/${MOCK_ISSUES[42]}`;
+  expect(useHive.getState().selection).toBe(path);
+  expect(openTerminal.mock.calls[0].slice(0, 3)).toEqual([path, 80, 24]);
+  await waitFor(() => expect(useHive.getState().tabs).toHaveLength(1));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Hive only prepares the worktree: the human starts claude.
+  expect(write).not.toHaveBeenCalled();
+  closeTerminal(useHive.getState().tabs[0].id);
+  createIssueWorktree.mockRestore();
+  openTerminal.mockRestore();
+  write.mockRestore();
+});
+
+test("a refused issue is explained under its number until it changes; back to a new branch", async () => {
+  open();
+  fireEvent.click(screen.getByRole("button", { name: "From issue" }));
+  const field = screen.getByLabelText("Issue number") as HTMLInputElement;
+  fireEvent.change(field, { target: { value: "7" } });
+  fireEvent.click(create());
+  const message =
+    "gh issue view failed: GraphQL: Could not resolve to an issue with the number of 7. (repository.issue)";
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(message));
+  expect(create().disabled).toBe(true);
+  // Another project's or another name's refusal is not this one's.
+  act(() => apply({ type: "create_worktree_failed", project: shop.id, name: "7", message: "x" }));
+  // Still on 7: the refusal named "7" (not "#7") is never shown as this issue's.
+  expect(field.value).toBe("7");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(create().disabled).toBe(false);
+  fireEvent.change(field, { target: { value: "8" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(create().disabled).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "New branch" }));
+  expect(screen.getByLabelText("Worktree name")).toBeDefined();
+  expect(screen.getByLabelText("Start claude in the terminal")).toBeDefined();
+  expect(create().disabled).toBe(true);
 });

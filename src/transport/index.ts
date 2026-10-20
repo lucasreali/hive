@@ -122,6 +122,12 @@ export interface Transport {
   /** `hive worktree create`; answered by `worktree_created` or `create_worktree_failed`. */
   createWorktree(project: string, name: string, base: string | null): Promise<void>;
   /**
+   * A worktree for issue `number` of the project's GitHub repository, on a branch the service
+   * names from its number and title, from `base`; answered by `worktree_created` or
+   * `create_worktree_failed` with the name `#<number>`.
+   */
+  createIssueWorktree(project: string, number: number, base: string | null): Promise<void>;
+  /**
    * `git worktree remove` (with `--force` when `force`); the branch stays. Answered by
    * `worktree_removed` or `remove_worktree_failed`.
    */

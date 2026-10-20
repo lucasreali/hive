@@ -948,6 +948,13 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: Some("main".into()),
     };
     assert_eq!(service.control().await, (0, create));
+    hive.create_issue_worktree("/r".into(), 42, None).unwrap();
+    let issue = Control::CreateIssueWorktree {
+        project: "/r".into(),
+        number: 42,
+        base: None,
+    };
+    assert_eq!(service.control().await, (0, issue));
     hive.remove_worktree("/r/w".into(), true).unwrap();
     let remove = Control::RemoveWorktree {
         path: "/r/w".into(),
@@ -1345,6 +1352,10 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(
+        hive.create_issue_worktree("/r".into(), 1, None),
+        not_connected
+    );
+    assert_eq!(
         hive.watch_worktree("/r".into(), DiffBase::Head),
         not_connected
     );
@@ -1609,6 +1620,7 @@ fn commands_reach_the_managed_hive() {
             list_branches,
             validate_worktree_name,
             create_worktree,
+            create_issue_worktree,
             remove_worktree,
             rename_worktree,
             watch_worktree,
@@ -1688,6 +1700,7 @@ fn commands_reach_the_managed_hive() {
     let branches = json!({"project": "/r"});
     let validate = json!({"project": "/r", "name": "x"});
     let create = json!({"project": "/r", "name": "x", "base": null});
+    let issue = json!({"project": "/r", "number": 42, "base": "main"});
     let remove = json!({"path": "/r/w", "force": false});
     let rename = json!({"path": "/r/w", "name": "x"});
     let watch = json!({"path": "/r", "base": "branch"});
@@ -1723,6 +1736,7 @@ fn commands_reach_the_managed_hive() {
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
         ("create_worktree", &create),
+        ("create_issue_worktree", &issue),
         ("remove_worktree", &remove),
         ("rename_worktree", &rename),
         ("watch_worktree", &watch),
@@ -1796,6 +1810,7 @@ fn commands_reach_the_managed_hive() {
         ("list_branches", branches),
         ("validate_worktree_name", validate),
         ("create_worktree", create),
+        ("create_issue_worktree", issue),
         ("remove_worktree", remove),
         ("rename_worktree", rename),
         ("watch_worktree", watch),

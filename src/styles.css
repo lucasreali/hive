@@ -780,6 +780,14 @@ label:has(> input[type="checkbox"]:disabled) {
   opacity: 0.5;
 }
 
+/* The new worktree dialog's "New branch / From issue" choice. */
+.new-worktree-from {
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  width: fit-content;
+}
+
 /* The Changes panel's HEAD / branch toggle, at the end of its summary line. */
 .diff-base {
   flex: none;

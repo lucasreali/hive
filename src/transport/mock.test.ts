@@ -13,6 +13,7 @@ import {
   MOCK_FILES,
   MOCK_GROUP,
   MOCK_IGNORED,
+  MOCK_ISSUES,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_SESSIONS,
@@ -1258,5 +1259,35 @@ test("a project is removed with its settings, never while a terminal works in it
     { type: "project_removed", id: API },
     { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
     { type: "projects", projects: [] },
+  ]);
+});
+
+test("an issue's worktree is named by the service, and a failure by the issue's number", async () => {
+  const { transport, messages } = await connected();
+  const [shop] = MOCK_REPOS;
+  messages.length = 0;
+  await transport.createIssueWorktree(shop.id, 42, "main");
+  await transport.createIssueWorktree(shop.id, 42, null);
+  await transport.createIssueWorktree(shop.id, 7, null);
+  await tick();
+  const name = MOCK_ISSUES[42];
+  const path = `${shop.path}/.claude/worktrees/${name}`;
+  const created = messages[0] as Extract<ServiceMessage, { type: "worktree_created" }>;
+  expect(created.path).toBe(path);
+  expect(created.project.worktrees.at(-1)).toMatchObject({ path, name, branch: name });
+  expect(messages.slice(1)).toEqual([
+    {
+      type: "create_worktree_failed",
+      project: shop.id,
+      name: "#42",
+      message: `worktree "${name}" already exists at ${path}`,
+    },
+    {
+      type: "create_worktree_failed",
+      project: shop.id,
+      name: "#7",
+      message:
+        "gh issue view failed: GraphQL: Could not resolve to an issue with the number of 7. (repository.issue)",
+    },
   ]);
 });
