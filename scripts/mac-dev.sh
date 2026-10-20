@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Runs the macOS app from this checkout (TODO 17.2), beside an installed Hive without sharing its
 # service:
-#   - builds target/debug/hive and points the app's bridge at it (HIVE_BRIDGE)
+#   - builds target/debug/hive and points the app's bridge at it (HIVE_BRIDGE); `tauri dev` also
+#     watches crates/hive and rebuilds it before the app (scripts/mac-dev-runner.sh, TODO 18.14),
+#     so a service edit restarts the app on the new service
 #   - gives that service its own runtime folder (socket, lock) and data folder (wrapper, hooks,
 #     projects), through XDG_RUNTIME_DIR and XDG_DATA_HOME
 #   - runs `bun run tauri dev`, which starts Vite on port 1420 (hot reload) and the debug app,
@@ -30,4 +32,5 @@ mkdir -p -m 700 "$runtime"
 
 export HIVE_BRIDGE="$PWD/target/debug/hive" XDG_DATA_HOME="$data" XDG_RUNTIME_DIR="$runtime"
 echo "mac-dev: data $XDG_DATA_HOME/hive, runtime $XDG_RUNTIME_DIR/hive"
-exec bun run tauri dev
+exec bun run tauri dev --runner "$PWD/scripts/mac-dev-runner.sh" \
+  --additional-watch-folders "$PWD/crates/hive"
