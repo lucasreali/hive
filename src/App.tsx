@@ -26,7 +26,7 @@ import {
 import { WorktreePicker } from "./shell/WorktreePicker";
 import { installShortcuts } from "./shortcuts";
 import { useHive } from "./store";
-import { guardClose } from "./window";
+import { guardClose, nativeTheme } from "./window";
 
 export function App() {
   const rightPanel = useHive((s) => s.rightPanel);
@@ -40,9 +40,10 @@ export function App() {
   // The title bar stays usable, so the window can still be closed.
   useEffect(installShortcuts, []);
   useEffect(() => guardClose(confirmClose), []);
-  // The theme's CSS variables hang off this attribute (src/styles.css).
+  // The theme's CSS variables hang off this attribute (src/styles.css); the window follows.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    nativeTheme(theme);
   }, [theme]);
   // The first run on Windows with WSL asks where the service runs before any starts (12.5.4).
   const asking = useHive((s) => s.appMode?.mode === null);
