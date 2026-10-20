@@ -19,10 +19,10 @@ fn main() {
             let (program, args, bundled) = hive_lib::bridge_command(macos, &var, resource("hive"));
             // Restarting runs the exit events, so the connection ends first (`on_run_event`).
             let handle = app.handle().clone();
-            let exe = std::env::current_exe().unwrap_or_default();
+            let translocated = hive_lib::translocated(macos, std::env::current_exe().ok());
             let hive = hive_lib::Hive::new(program, args)
                 .with_bundled(bundled)
-                .with_translocated(macos && hive_lib::translocated(&exe))
+                .with_translocated(translocated)
                 .with_restart(move || handle.request_restart())
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))
                 .with_open(

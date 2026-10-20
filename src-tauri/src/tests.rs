@@ -2089,18 +2089,21 @@ async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
 
 #[test]
 fn translocation_is_told_from_the_app_path() {
-    let path = std::path::Path::new;
+    let path = |p: &str| Some(std::path::PathBuf::from(p));
     let moved =
         "/private/var/folders/x1/abc/T/AppTranslocation/1F2E-AB/d/Hive.app/Contents/MacOS/hive-app";
-    assert!(translocated(path(moved)));
+    assert!(translocated(true, path(moved)));
     for installed in [
         "/Applications/Hive.app/Contents/MacOS/hive-app",
         "/Users/me/AppTranslocationNotes/Hive.app/Contents/MacOS/hive-app",
         "/Users/me/Downloads/AppTranslocation.app/Contents/MacOS/hive-app",
         "",
     ] {
-        assert!(!translocated(path(installed)), "{installed}");
+        assert!(!translocated(true, path(installed)), "{installed}");
     }
+    // Only macOS translocates; an executable path the OS cannot give is not translocated.
+    assert!(!translocated(false, path(moved)));
+    assert!(!translocated(true, None));
 }
 
 #[tokio::test]

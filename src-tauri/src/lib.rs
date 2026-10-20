@@ -278,9 +278,13 @@ pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool 
 /// Whether the app at `exe` runs translocated (17.10): macOS runs a quarantined app opened
 /// where it was downloaded from a random read-only copy under `…/AppTranslocation/…`, where
 /// the updater cannot replace it. A path check is enough: that folder exists only for this.
-pub fn translocated(exe: &std::path::Path) -> bool {
-    exe.components()
-        .any(|part| part.as_os_str() == "AppTranslocation")
+/// Only on macOS (`main.rs` passes `cfg!(target_os = "macos")`); an unknown `exe` is not.
+pub fn translocated(macos: bool, exe: Option<std::path::PathBuf>) -> bool {
+    macos
+        && exe.is_some_and(|exe| {
+            exe.components()
+                .any(|part| part.as_os_str() == "AppTranslocation")
+        })
 }
 
 /// Why an update does not install while translocated; the UI explains the fix (17.10).
