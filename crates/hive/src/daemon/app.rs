@@ -314,6 +314,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             | Control::OpenPull { .. }
             | Control::ActOnPull { .. }
             | Control::CreatePull { .. }
+            | Control::CreateIssueWorktree { .. }
             | Control::ListRuns { .. }
             | Control::OpenRun { .. }
             | Control::OpenJobLog { .. }

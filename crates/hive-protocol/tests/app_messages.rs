@@ -55,6 +55,7 @@ sort! {
         | ListBranches
         | ValidateWorktreeName
         | CreateWorktree
+        | CreateIssueWorktree
         | RemoveWorktree
         | RenameWorktree
         | WatchWorktree

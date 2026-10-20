@@ -538,6 +538,15 @@ pub enum Control {
         /// Local or remote branch to start from; the main worktree's HEAD when `None`.
         base: Option<String>,
     },
+    /// App → service: a new worktree for issue `number` of a followed project's GitHub
+    /// repository (17.24), on a branch named from its number and title (`<number>-<title>`,
+    /// sanitised), from `base` (as `CreateWorktree`). Answered by `WorktreeCreated` or
+    /// `CreateWorktreeFailed` with the name `#<number>`.
+    CreateIssueWorktree {
+        project: String,
+        number: u64,
+        base: Option<String>,
+    },
     WorktreeCreated {
         /// The project with its updated worktrees.
         project: Project,
@@ -2075,6 +2084,15 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &create).payload[..],
             br#"{"type":"create_worktree","project":"/r","name":"x","base":null}"#
+        );
+        let issue = Control::CreateIssueWorktree {
+            project: "/r".into(),
+            number: 42,
+            base: Some("main".into()),
+        };
+        assert_eq!(
+            &Frame::control(0, &issue).payload[..],
+            br#"{"type":"create_issue_worktree","project":"/r","number":42,"base":"main"}"#
         );
         let branches = Control::Branches {
             project: "/r".into(),

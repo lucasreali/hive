@@ -66,6 +66,7 @@ fn main() {
             commands::list_branches,
             commands::validate_worktree_name,
             commands::create_worktree,
+            commands::create_issue_worktree,
             commands::remove_worktree,
             commands::rename_worktree,
             commands::watch_worktree,

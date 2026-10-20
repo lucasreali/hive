@@ -32,6 +32,8 @@ const OUTPUT_LIMIT: u64 = 67_108_864; // 64 MiB
 /// The longest `git fetch` of a remote base may take before the worktree starts from the
 /// last fetched copy (13.2).
 const FETCH_TIME: Duration = Duration::from_secs(30);
+/// Longest branch name taken from outside Hive (a pull request's, 17.24).
+pub const BRANCH_LIMIT: usize = 255;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
@@ -182,12 +184,42 @@ pub fn list(dir: &Path) -> io::Result<Vec<Worktree>> {
     git::output_within(dir, &args, &[0], git::TIME_LIMIT).map(|out| parse_porcelain(&out))
 }
 
+/// What a new worktree is checked out on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Head<'a> {
+    /// A new branch from `start` (the main worktree's HEAD when `None`).
+    New {
+        branch: &'a str,
+        start: Option<&'a str>,
+    },
+    /// A local branch that already exists, as it is.
+    Existing(&'a str),
+}
+
 /// Creates the worktree `name` for the repository containing `dir` (even from inside a
 /// linked worktree). The CLI and the app's dialog both come here (#33), each after
 /// [`fetch_base`].
 pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created> {
+    let branch = format!("worktree-{name}");
+    create_on(
+        dir,
+        name,
+        Head::New {
+            branch: &branch,
+            start: base,
+        },
+    )
+}
+
+/// [`create`] with the worktree `name` on `head` (17.24: a pull request's or an issue's
+/// branch, checked with [`check_branch`] first).
+pub fn create_on(dir: &Path, name: &str, head: Head) -> io::Result<Created> {
     validate_name(name)?;
-    if let Some(base) = base.filter(|base| base.starts_with('-')) {
+    let (branch, start) = match head {
+        Head::New { branch, start } => (branch, start),
+        Head::Existing(branch) => (branch, None),
+    };
+    if let Some(base) = start.filter(|base| base.starts_with('-')) {
         return Err(io::Error::other(format!("invalid base branch {base:?}")));
     }
     let root = main_root(dir)?;
@@ -201,16 +233,15 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
         })
         .collect();
     let included = included_files(&root)?;
-    let branch = format!("worktree-{name}");
-    // `-b` refuses an existing branch.
-    let mut args = vec![
-        OsStr::new("worktree"),
-        OsStr::new("add"),
-        OsStr::new("-b"),
-        OsStr::new(&branch),
-        path.as_os_str(),
-    ];
-    args.extend(base.map(OsStr::new));
+    let mut args = vec![OsStr::new("worktree"), OsStr::new("add")];
+    match head {
+        // `-b` refuses an existing branch.
+        Head::New { .. } => {
+            args.extend([OsStr::new("-b"), OsStr::new(branch), path.as_os_str()]);
+            args.extend(start.map(OsStr::new));
+        }
+        Head::Existing(_) => args.extend([path.as_os_str(), OsStr::new(branch)]),
+    }
     git::run(&root, &args, &[], &[0], OUTPUT_LIMIT)?;
     match copy_included(&root, &path, &included) {
         Ok(0) => {}
@@ -224,11 +255,34 @@ pub fn create(dir: &Path, name: &str, base: Option<&str>) -> io::Result<Created>
                 path.as_os_str(),
             ];
             let _ = git::run(&root, &remove, &[], &[0], OUTPUT_LIMIT);
-            let _ = git(&root, &["branch", "-D", &branch]);
+            if let Head::New { .. } = head {
+                let _ = git(&root, &["branch", "-D", branch]);
+            }
             return Err(err);
         }
     }
     Ok(Created { path, notes })
+}
+
+/// Refuses a branch name from outside (GitHub's) longer than [`BRANCH_LIMIT`] or one
+/// `git check-ref-format --branch` rejects or rewrites (`@{-1}` names another branch).
+pub fn check_branch(dir: &Path, branch: &str) -> io::Result<()> {
+    let refused = || io::Error::other(format!("{branch:?} is not a branch name git accepts"));
+    if branch.len() > BRANCH_LIMIT {
+        return Err(refused());
+    }
+    let out = git(dir, &["check-ref-format", "--branch", branch]).map_err(|_| refused())?;
+    match out.strip_suffix(b"\n") == Some(branch.as_bytes()) {
+        true => Ok(()),
+        false => Err(refused()),
+    }
+}
+
+/// Whether the repository at `dir` has the local branch `branch`.
+pub fn has_branch(dir: &Path, branch: &str) -> io::Result<bool> {
+    let name = format!("refs/heads/{branch}");
+    let args = ["rev-parse", "--verify", "--quiet", &name];
+    git::output(dir, &args, &[0, 1]).map(|out| !out.is_empty())
 }
 
 /// The remote and branch of `base` when it is `<remote>/<branch>` for one of `remotes` (as
@@ -255,27 +309,16 @@ fn wslenv(current: Option<OsString>) -> OsString {
 }
 
 /// When `base` is a remote-tracking branch of the repository holding `dir`, fetches it so a
-/// worktree made next starts from its latest commit: `git fetch --no-tags` of that one
-/// branch, with `env` (a space's identity and GitHub token, 9.30), never prompting, within
-/// [`FETCH_TIME`]. A failure does not stop the creation: it is a note, and the worktree
-/// starts from the last fetched copy. Run before [`create`], outside any lock.
+/// worktree made next starts from its latest commit ([`fetch`] of that one branch). A
+/// failure does not stop the creation: it is a note, and the worktree starts from the last
+/// fetched copy. Run before [`create`], outside any lock.
 pub fn fetch_base(dir: &Path, base: &str, env: &[(&str, String)]) -> Option<String> {
     let remotes = git(dir, &["remote"]).ok()?;
     let remotes = String::from_utf8_lossy(&remotes);
     let (remote, branch) = remote_branch(&remotes, base)?;
     // Fully named, so the branch is never read as an option, `+` (force) or `^` (negative).
     let refspec = format!("refs/heads/{branch}");
-    let args = ["fetch", "--no-tags", "--", remote, &refspec].map(OsStr::new);
-    let mut command = git::command(dir);
-    command
-        .args(args)
-        .envs(env.iter().cloned())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .env("WSLENV", wslenv(std::env::var_os("WSLENV")));
-    let keep = Stdout::Max(OUTPUT_LIMIT);
-    let fetched = git::limited(command, "git", &args, &[], &[0], keep, Some(FETCH_TIME));
-    let err = fetched.err()?.to_string();
+    let err = fetch(dir, remote, &refspec, env).err()?.to_string();
     // Git's own first line, without the command (no name holds a space).
     let why = err
         .split_once(" failed: ")
@@ -284,6 +327,21 @@ pub fn fetch_base(dir: &Path, base: &str, env: &[(&str, String)]) -> Option<Stri
     Some(format!(
         "could not fetch {base}: {why}; created from the last fetched copy"
     ))
+}
+
+/// `git fetch --no-tags -- <remote> <refspec>` in `dir` with `env` (a space's identity and
+/// GitHub token, 9.30), never prompting, within [`FETCH_TIME`].
+pub fn fetch(dir: &Path, remote: &str, refspec: &str, env: &[(&str, String)]) -> io::Result<()> {
+    let args = ["fetch", "--no-tags", "--", remote, refspec].map(OsStr::new);
+    let mut command = git::command(dir);
+    command
+        .args(args)
+        .envs(env.iter().cloned())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("WSLENV", wslenv(std::env::var_os("WSLENV")));
+    let keep = Stdout::Max(OUTPUT_LIMIT);
+    git::limited(command, "git", &args, &[], &[0], keep, Some(FETCH_TIME)).map(drop)
 }
 
 fn copied_note(copied: usize) -> String {

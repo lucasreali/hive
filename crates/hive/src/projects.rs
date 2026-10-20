@@ -386,6 +386,18 @@ impl Projects {
         Ok((self.project(id), created?))
     }
 
+    /// [`worktree::create_on`] in the followed project `id`, answered as `create_worktree`.
+    pub fn create_worktree_on(
+        &self,
+        id: &str,
+        name: &str,
+        head: worktree::Head,
+    ) -> io::Result<(Project, worktree::Created)> {
+        let created = worktree::create_on(&self.root(id)?, name, head);
+        self.forget();
+        Ok((self.project(id), created?))
+    }
+
     /// Removes the linked worktree `path` of a followed project, with `--force` when `force`;
     /// answers the project with its updated worktrees. Without `force`, a worktree that a
     /// process (as `proc` lists them) works in is kept, as git keeps one with changes.

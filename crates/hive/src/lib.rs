@@ -4,6 +4,7 @@ pub mod actions;
 pub mod adapter;
 pub mod bridge;
 pub mod changes;
+pub mod checkout;
 pub mod cli;
 pub mod daemon;
 pub mod dirs;

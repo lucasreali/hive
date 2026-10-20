@@ -579,10 +579,9 @@ printf '%s\036' "$PWD" >> '{dir}/gh.log'
 case "$1 $2" in
   "api graphql") [ -f '{dir}/fail' ] && {{ cat '{dir}/fail' >&2; exit 1; }}; cat '{SEARCH}' ;;
   "pr view") cat '{VIEW}' ;;
-  "pr checkout") git checkout -q -b feature
-    git config --get core.fsmonitor > '{dir}/git-config'
-    git config --get log.showSignature >> '{dir}/git-config' ;;
-  "pr create") case "$7" in
+  "pr create") git config --get core.fsmonitor > '{dir}/git-config'
+    git config --get log.showSignature >> '{dir}/git-config'
+    case "$7" in
       --title=nolink) ;;
       --title=unpushed) echo 'pull request create failed: GraphQL: Head sha can'"'"'t be blank' >&2; exit 1 ;;
       *) echo 'https://github.com/o/r/pull/42' ;;
@@ -978,82 +977,6 @@ fn details_and_actions_send_the_right_arguments() {
 
 #[cfg(unix)]
 #[test]
-fn checkout_makes_a_worktree_on_the_pull_request_branch() {
-    let setup = setup("https://github.com/o/r");
-    let replies = setup.act(12, PullAction::Checkout);
-    let path = setup.path(".claude/worktrees/pr-12");
-    let Control::WorktreeCreated {
-        project,
-        path: created,
-        notes,
-    } = &replies[0]
-    else {
-        panic!("{replies:?}")
-    };
-    assert_eq!((created.as_str(), notes.len()), (path.to_str().unwrap(), 0));
-    let new = project
-        .worktrees
-        .iter()
-        .find(|w| w.path == *created)
-        .unwrap();
-    assert_eq!(new.branch.as_deref(), Some("feature"));
-    assert!(matches!(&replies[1], Control::Pulls { .. }));
-    assert_eq!(replies.len(), 2);
-    let calls = setup.calls();
-    assert_eq!(
-        calls[0],
-        [
-            "pr",
-            "checkout",
-            "12",
-            "--repo",
-            "github.com/o/r",
-            created.as_str()
-        ]
-    );
-    // The branch the worktree flow made is gone.
-    let branches = git(
-        Path::new(&setup.id),
-        &["branch", "--format=%(refname:short)"],
-    );
-    assert_eq!(branches, "feature\nmain\n");
-    // The git gh runs gets no fsmonitor program and no signature check, as Hive's own.
-    let config = std::fs::read_to_string(setup.tmp.path().join("git-config")).unwrap();
-    assert_eq!(config, "false\nfalse\n");
-
-    // gh refuses: neither the worktree nor its branch is left.
-    let [
-        Control::PullFailed {
-            number: Some(13),
-            message,
-            ..
-        },
-    ] = &setup.act(13, PullAction::Checkout)[..]
-    else {
-        panic!()
-    };
-    assert_eq!(
-        message,
-        "gh pr checkout failed: GraphQL: Pull request is not mergeable"
-    );
-    assert!(!setup.path(".claude/worktrees/pr-13").exists());
-    let branches = git(
-        Path::new(&setup.id),
-        &["branch", "--format=%(refname:short)"],
-    );
-    assert_eq!(branches, "feature\nmain\n");
-    // Its folder taken: the worktree flow's own refusal.
-    let [Control::PullFailed { message, .. }] = &setup.act(12, PullAction::Checkout)[..] else {
-        panic!()
-    };
-    assert!(
-        message.starts_with(r#"worktree "pr-12" already exists"#),
-        "{message}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn a_pull_request_opens_from_the_worktree_branch() {
     let setup = setup("https://github.com/o/r");
     let root = Path::new(&setup.id);
@@ -1080,6 +1003,9 @@ fn a_pull_request_opens_from_the_worktree_branch() {
     };
     assert_eq!(replies[0], done);
     assert!(matches!(&replies[1], Control::Pulls { .. }));
+    // The git gh runs gets no fsmonitor program and no signature check, as Hive's own.
+    let config = std::fs::read_to_string(setup.tmp.path().join("git-config")).unwrap();
+    assert_eq!(config, "false\nfalse\n");
     let calls = setup.calls();
     let args = [
         "pr",

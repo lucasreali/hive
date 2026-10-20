@@ -851,6 +851,21 @@ impl Hive {
         self.link().send(0, &create)
     }
 
+    /// The answer arrives as `worktree_created` or `create_worktree_failed`.
+    pub fn create_issue_worktree(
+        &self,
+        project: String,
+        number: u64,
+        base: Option<String>,
+    ) -> Result<(), String> {
+        let create = Control::CreateIssueWorktree {
+            project,
+            number,
+            base,
+        };
+        self.link().send(0, &create)
+    }
+
     /// The answer arrives as `worktree_removed` or `remove_worktree_failed`.
     pub fn remove_worktree(&self, path: String, force: bool) -> Result<(), String> {
         self.link()
@@ -1394,6 +1409,16 @@ pub mod commands {
         base: Option<String>,
     ) -> Result<(), String> {
         hive.create_worktree(project, name, base)
+    }
+
+    #[tauri::command]
+    pub fn create_issue_worktree(
+        hive: State<'_, Hive>,
+        project: String,
+        number: u64,
+        base: Option<String>,
+    ) -> Result<(), String> {
+        hive.create_issue_worktree(project, number, base)
     }
 
     #[tauri::command]
