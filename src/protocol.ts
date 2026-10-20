@@ -436,7 +436,7 @@ export type Settings = {
   appearance: { theme: "one-dark" | "one-light" };
   /** `volume`: the alert tone's, in percent; 0 mutes it. */
   notifications: { volume: number };
-  agents: { silence_secs: number; confirm_close: boolean };
+  agents: { silence_secs: number; confirm_close: boolean; keep_awake: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */
   projects: Record<string, { scripts: ProjectScripts }>;

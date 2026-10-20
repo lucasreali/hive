@@ -124,6 +124,8 @@ impl Env {
                 cmd.env_remove(key);
             }
         }
+        // The tests' agents never keep this machine awake (17.17).
+        cmd.env(hive::power::OFF, "1");
         // On macOS terminals run `$SHELL`; the tests' shell commands are fish's, as on WSL.
         #[cfg(target_os = "macos")]
         cmd.env("SHELL", "fish");

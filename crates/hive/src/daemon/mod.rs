@@ -33,6 +33,7 @@ use crate::windows::{Listener, accept};
 
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
+use crate::power;
 use crate::projects::{self, Projects};
 use crate::registry::Registry;
 use crate::scripts::{self, Ports};
@@ -89,6 +90,11 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         file: paths.open_sessions(),
         pending: Mutex::new(sessions::take_open(&paths.open_sessions())),
     };
+    // Only macOS keeps the computer awake (17.17); the tests' services never do.
+    #[cfg(target_os = "macos")]
+    let power = crate::macos::power::system(std::env::var_os(crate::power::OFF));
+    #[cfg(not(target_os = "macos"))]
+    let power = None;
     let state = State::new(
         paths.bin_dir(),
         projects,
@@ -96,6 +102,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         settings,
         ports,
         restore,
+        power,
     );
     let state = Arc::new(state);
     let result = serve(listener, &socket, terminated, state).await;
@@ -245,6 +252,8 @@ struct State {
     runs: std::sync::Mutex<crate::pulls::Cache>,
     /// The usage windows `hive statusline` reported (12.1, 15.3), and the ones the app has.
     usage: Mutex<usage::Usage>,
+    /// The power assertion held while agents work (17.17).
+    awake: std::sync::Mutex<power::Awake>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -263,6 +272,7 @@ impl State {
         settings: settings::Store,
         ports: Ports,
         restore: Restore,
+        power: Option<Box<dyn power::Power>>,
     ) -> Self {
         Self {
             app: Mutex::new(None),
@@ -289,6 +299,7 @@ impl State {
             pulls: Default::default(),
             runs: Default::default(),
             usage: Default::default(),
+            awake: std::sync::Mutex::new(power::Awake::new(power)),
         }
     }
 
@@ -837,6 +848,12 @@ fn error(err: io::Error) -> Control {
 
 #[cfg(test)]
 fn test_state(dir: &Path) -> Arc<State> {
+    test_state_with(dir, None)
+}
+
+/// [`test_state`] holding `power` while agents work.
+#[cfg(test)]
+fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<State> {
     let restore = Restore {
         file: dir.join("open-sessions.json"),
         pending: Mutex::new(Vec::new()),
@@ -849,6 +866,7 @@ fn test_state(dir: &Path) -> Arc<State> {
         settings::Store::load(dir.join("settings.json")),
         Ports::new(dir.join("ports.json")),
         restore,
+        power,
     ))
 }
 

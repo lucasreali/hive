@@ -9,6 +9,7 @@ use std::time::Instant;
 use hive_protocol::{AgentEvent, Control, EventKind, OpenSession};
 
 use super::State;
+use crate::power;
 use crate::projects;
 use crate::sessions;
 use crate::states::{self, Agent};
@@ -26,9 +27,11 @@ impl State {
         }
     }
 
-    /// Sends `subagent_worktrees` when the set changed. Called with the agents lock held, so
+    /// Holds the power assertion while an agent works and the setting is on (17.17), and
+    /// sends `subagent_worktrees` when the set changed. Called with the agents lock held, so
     /// the changes go out in order.
     pub(super) async fn owned_changed(&self, agents: &HashMap<String, Agent>) {
+        self.power_changed(agents);
         let worktrees = {
             let terminals = self
                 .terminal_worktrees
@@ -45,6 +48,13 @@ impl State {
         }
         self.to_app(0, &Control::SubagentWorktrees { worktrees })
             .await;
+    }
+
+    /// Holds the power assertion while an agent works and the setting is on, else releases it.
+    fn power_changed(&self, agents: &HashMap<String, Agent>) {
+        let wanted = power::wanted(self.settings.keep_awake(), agents.values());
+        let mut awake = self.awake.lock().unwrap_or_else(PoisonError::into_inner);
+        awake.set(wanted);
     }
 
     /// Tracks agents: a `SessionStart` from one of our terminals marks its `claude` as hooked
@@ -207,10 +217,12 @@ impl State {
 
     /// The agents' half of [`super::terminals::watch_terminals`]'s tick: applies the silence
     /// rule to agents whose terminal went quiet (`last_output`, by channel) and reads the
-    /// transcripts due.
+    /// transcripts due. Then holds or releases the power assertion: a state changed, or the
+    /// setting.
     pub(super) async fn tick_agents(&self, last_output: &HashMap<u32, Instant>, now: Instant) {
         let silence = self.settings.silence();
-        for (id, agent) in self.agents.lock().await.iter_mut() {
+        let mut agents = self.agents.lock().await;
+        for (id, agent) in agents.iter_mut() {
             let output = last_output.get(&agent.channel);
             agent.watched = self.watches(agent.channel);
             if let Some(message) =
@@ -240,6 +252,7 @@ impl State {
                 self.to_app(agent.channel, &message).await;
             }
         }
+        self.power_changed(&agents);
     }
 }
 
@@ -248,5 +261,43 @@ fn agent_id(event: &AgentEvent) -> Option<String> {
     match event.subagent {
         None => event.session_id.clone(),
         Some(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::power::tests::Calls;
+    use hive_protocol::Settings;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_power_assertion_is_held_while_an_agent_works_and_the_setting_is_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = Calls::default();
+        let state = super::super::test_state_with(dir.path(), calls.power());
+        let now = Instant::now();
+        let quiet = HashMap::new();
+        state.tick_agents(&quiet, now).await;
+        assert!(calls.taken().is_empty());
+        let mut agents = state.agents.lock().await;
+        agents.insert("idle".into(), Agent::new(1, now, 0));
+        state.owned_changed(&agents).await;
+        assert!(calls.taken().is_empty());
+        agents.insert("busy".into(), Agent::working(2, now));
+        state.owned_changed(&agents).await;
+        assert_eq!(calls.taken(), vec![true]);
+        drop(agents);
+        // The setting turned off: released on the next tick.
+        let mut off = Settings::default();
+        off.agents.keep_awake = false;
+        state.settings.set(off).unwrap();
+        state.tick_agents(&quiet, now).await;
+        assert_eq!(calls.taken(), vec![true, false]);
+        state.settings.set(Settings::default()).unwrap();
+        state.tick_agents(&quiet, now).await;
+        assert_eq!(calls.taken(), vec![true, false, true]);
+        state.agents.lock().await.remove("busy");
+        state.tick_agents(&quiet, now).await;
+        assert_eq!(calls.taken(), vec![true, false, true, false]);
     }
 }
