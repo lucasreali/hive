@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { version } from "../../package.json";
+import { asMac } from "../../test/mac";
 import { expectClearButton } from "../../test/searchClear";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -87,6 +88,20 @@ test("a checkbox saves the whole settings at once", async () => {
   fireEvent.click(screen.getByLabelText("Confirm closing Hive with agents running"));
   await waitFor(() => expect(settings().agents.confirm_close).toBe(false));
   set.mockRestore();
+});
+
+test("the Dock bounce setting is offered on macOS only, on by default", async () => {
+  open();
+  const bounce = "Bounce the Dock icon when an agent needs an action";
+  section("Notifications");
+  expect(screen.queryByLabelText(bounce)).toBeNull();
+  asMac();
+  section("Agents");
+  section("Notifications");
+  expect(input(bounce).checked).toBe(true);
+  fireEvent.click(screen.getByLabelText(bounce));
+  await waitFor(() => expect(settings().notifications.bounce).toBe(false));
+  expect(input(bounce).checked).toBe(false);
 });
 
 test("numbers and texts are saved once typing pauses; non-numbers are not sent", async () => {

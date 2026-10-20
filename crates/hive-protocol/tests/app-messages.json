@@ -536,7 +536,8 @@
         "theme": "one-dark"
       },
       "notifications": {
-        "volume": 100
+        "volume": 100,
+        "bounce": true
       },
       "agents": {
         "silence_secs": 5,

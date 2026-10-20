@@ -434,8 +434,11 @@ export type Settings = {
     shell: "default" | "cmd" | "git_bash";
   };
   appearance: { theme: "one-dark" | "one-light" };
-  /** `volume`: the alert tone's, in percent; 0 mutes it. */
-  notifications: { volume: number };
+  /**
+   * `volume`: the alert tone's, in percent; 0 mutes it. `bounce`: bounce the Dock icon once when
+   * an agent needs an action while Hive is not focused (17.16).
+   */
+  notifications: { volume: number; bounce: boolean };
   agents: { silence_secs: number; confirm_close: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */
