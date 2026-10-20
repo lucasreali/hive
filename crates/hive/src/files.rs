@@ -1269,7 +1269,13 @@ pub(crate) mod tests {
         }
         let listing = watcher.list().unwrap();
         assert_eq!(listing.ignored.len(), cap);
-        let first = ["huge/", "huge/a/", "huge/e000000", "huge/e000001", "huge/f000000"];
+        let first = [
+            "huge/",
+            "huge/a/",
+            "huge/e000000",
+            "huge/e000001",
+            "huge/f000000",
+        ];
         assert_eq!(listing.ignored[..5], first);
         let last = format!("huge/f{:06}", cap - 5);
         assert_eq!(listing.ignored.last(), Some(&last));
