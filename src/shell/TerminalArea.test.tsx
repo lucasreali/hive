@@ -392,6 +392,8 @@ test("a right click in a terminal opens its menu: Copy, Paste, Clear and Split, 
   expect(paneMenu().querySelectorAll("svg[aria-hidden=true]").length).toBe(4);
   // Nothing selected: Copy is disabled.
   expect((item(/^Copy/) as HTMLButtonElement).disabled).toBe(true);
+  // The focus goes to the first item that can take it, so Esc and the arrows work.
+  expect(document.activeElement).toBe(item(/^Paste/));
   fireEvent.click(item(/^Clear/));
   expect(clear).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("menu")).toBeNull();
