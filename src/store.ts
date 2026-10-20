@@ -27,6 +27,7 @@ import type {
   GhAccounts,
   NameCheck,
   NotificationPermission,
+  ProgressState,
   Project,
   ProjectScripts,
   SearchResults,
@@ -78,6 +79,8 @@ export type Terminal = {
   unhooked: boolean;
   /** Set with `hive badge`; cleared when the terminal exits. */
   badge?: string;
+  /** A program's OSC 9;4 progress (17.25), the tab's hint; none once cleared or exited. */
+  progress?: { state: ProgressState; value: number };
   /**
    * The followed worktree the service placed its cwd in (`terminal_opened`), null outside
    * every project or until the service answered: its tab's place (`tabWorktree`).
@@ -137,8 +140,8 @@ export type WorktreeDialog = {
 };
 
 /**
- * One alert `notify` raised, kept for the bell's inbox (6.5): an agent's, or an offer to remove a
- * worktree whose pull request ended (17.27). `id` grows with each alert.
+ * One alert `notify` raised, kept for the bell's inbox (6.5): an agent's, a terminal's (17.25), or
+ * an offer to remove a worktree whose pull request ended (17.27). `id` grows with each alert.
  */
 export type InboxItem = {
   id: number;
@@ -156,7 +159,12 @@ export type InboxSubject =
   /** A usage alert (17.23), about no agent: clicking the item only closes the inbox. */
   | { agent: null; state: null }
   /** Clicking the item opens the dialog removing the worktree while it is there. */
-  | { offer: RemoveOffer };
+  | { offer: RemoveOffer }
+  /**
+   * A terminal's item (17.25: a long command, a program's notification): clicking it shows that
+   * terminal while it is open. `failed`: a command that ended with a non-zero status.
+   */
+  | { terminal: number; failed: boolean };
 /** A worktree whose pull request merged or closed, as the service said (`pull_ended`). */
 export type RemoveOffer = { worktree: string; number: number; title: string; state: PullState };
 /** At most this many alerts are kept, the newest first. */
@@ -181,7 +189,7 @@ export const DEFAULT_SETTINGS: Settings = {
     shell: "default",
   },
   appearance: { theme: "one-dark" },
-  notifications: { volume: 100, bounce: true, menu_bar: true },
+  notifications: { volume: 100, bounce: true, menu_bar: true, command_secs: 10 },
   agents: { silence_secs: 5, confirm_close: true, keep_awake: true },
   worktrees: { default_base: null },
   projects: {},

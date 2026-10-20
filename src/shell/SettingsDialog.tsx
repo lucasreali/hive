@@ -373,6 +373,25 @@ const FIELDS: Field[] = [
     ),
   },
   {
+    section: "Notifications",
+    label: "Long commands (seconds)",
+    help:
+      "0 to 3600, 0 never: a command that ran this long notifies when it ends, in a terminal " +
+      "with no agent and not in view. Needs a shell that marks its commands (OSC 133), as fish 4 does.",
+    control: (id, label) => (
+      <NumberSetting
+        id={id}
+        label={label}
+        min={0}
+        max={3600}
+        get={(s) => s.notifications.command_secs}
+        set={(s, n) => {
+          s.notifications.command_secs = n;
+        }}
+      />
+    ),
+  },
+  {
     section: "Agents",
     label: "Silence before waiting for you (seconds)",
     help: "2 to 60: how long a working agent's terminal stays quiet before it needs you.",

@@ -48,6 +48,14 @@ export type ServiceMessage =
   | { type: "unhooked_agent"; channel: number }
   // `hive badge` in that terminal; empty clears it.
   | { type: "badge"; channel: number; text: string }
+  // 17.25: a program's OSC 9;4 progress (`value` 0–100), sent when it changes.
+  | { type: "terminal_progress"; channel: number; state: ProgressState; value: number }
+  // 17.25: a shell command longer than `notifications.command_secs` ended in a terminal with
+  // no agent, out of view of the focused window (the service decided).
+  | { type: "command_finished"; channel: number; exit: number | null; secs: number }
+  // 17.25: a program's OSC 9 / 777 notification, cleaned by the service; `notify`: also an
+  // OS notification (out of view).
+  | { type: "terminal_notification"; channel: number; title: string; body: string; notify: boolean }
   | ({ type: "agent_detected"; channel: number } & Omit<Agent, "terminal">)
   | { type: "agent_removed"; channel: number; id: string }
   | { type: "agent_title"; channel: number; id: string; title: string }
@@ -459,6 +467,9 @@ export type AgentUsage = { context_tokens: number; context_limit: number; output
  * Mirrors `hive_protocol::Settings`: the service's settings file, read and saved whole. The
  * service checks the ranges (#37).
  */
+/** A terminal's OSC 9;4 progress state (17.25), ConEmu's 0–4. */
+export type ProgressState = "none" | "normal" | "error" | "indeterminate" | "paused";
+
 export type Settings = {
   terminal: {
     font_family: string;
@@ -476,9 +487,10 @@ export type Settings = {
   /**
    * `volume`: the alert tone's, in percent; 0 mutes it. `bounce`: bounce the Dock icon once when
    * an agent needs an action while Hive is not focused (17.16). `menu_bar`: show the menu bar
-   * icon (17.22).
+   * icon (17.22). `command_secs`: a shell command that ran this long notifies when it ends
+   * (17.25); 0 never.
    */
-  notifications: { volume: number; bounce: boolean; menu_bar: boolean };
+  notifications: { volume: number; bounce: boolean; menu_bar: boolean; command_secs: number };
   agents: { silence_secs: number; confirm_close: boolean; keep_awake: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */

@@ -21,6 +21,7 @@ pub mod login_path;
 pub mod macos;
 pub mod mode;
 pub mod offers;
+pub mod osc;
 pub mod paths;
 pub mod power;
 pub mod procs;

@@ -21,7 +21,7 @@ test("clicking an agent's notification goes to it, in its space; a gone agent ch
   // Muted: the test has no Web Audio.
   await transport.setSettings({
     ...DEFAULT_SETTINGS,
-    notifications: { volume: 0, bounce: true, menu_bar: true },
+    notifications: { volume: 0, bounce: true, menu_bar: true, command_secs: 10 },
   });
   await settle();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];

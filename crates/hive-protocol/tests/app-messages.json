@@ -25,6 +25,22 @@
     "type": "unhooked_agent"
   },
   {
+    "type": "terminal_progress",
+    "state": "normal",
+    "value": 40
+  },
+  {
+    "type": "command_finished",
+    "exit": 1,
+    "secs": 12
+  },
+  {
+    "type": "terminal_notification",
+    "title": "build",
+    "body": "done",
+    "notify": true
+  },
+  {
     "type": "agent_detected",
     "id": "s",
     "project": "/r",
@@ -555,7 +571,8 @@
       "notifications": {
         "volume": 100,
         "bounce": true,
-        "menu_bar": true
+        "menu_bar": true,
+        "command_secs": 10
       },
       "agents": {
         "silence_secs": 5,

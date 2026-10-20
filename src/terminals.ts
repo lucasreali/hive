@@ -3,6 +3,7 @@ import { type ISearchOptions, SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
+import { Marks } from "./marks";
 import type { AccountDir, Settings } from "./protocol";
 import { openLink, safeUrl } from "./shell/Markdown";
 import {
@@ -172,6 +173,8 @@ type Entry = {
   search: SearchAddon;
   el: HTMLDivElement;
   webgl: WebglAddon | null;
+  /** Its prompts (17.25), for ⌘↑ / ⌘↓. */
+  marks: Marks;
 };
 
 const entries = new Map<number, Entry>();
@@ -221,6 +224,8 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
     linkHandler: LINKS,
     ...termOptions(useHive.getState().settings),
   });
+  // Before any output: the first prompt is marked too.
+  const marks = new Marks(term);
   // 0 until the service answers (terminal channels start at 1): output can come first.
   let id = 0;
   let unacked = 0;
@@ -251,14 +256,14 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
     if (!useHive.getState().terminals[id]?.exited) void transport.writeTerminal(id, data);
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
-  term.attachCustomKeyEventHandler((event) => keys(term, event));
+  term.attachCustomKeyEventHandler((event) => keys(term, marks, event));
   const el = document.createElement("div");
   el.className = "terminal-pane";
   el.dataset.terminal = String(id);
   el.hidden = true;
   el.addEventListener("focusin", () => focusPane(id));
   copyOnSelect(term, el);
-  entries.set(id, { term, fit, search, el, webgl: null });
+  entries.set(id, { term, fit, search, el, webgl: null, marks });
   addTab(id, cwd);
   return id;
 }
@@ -296,23 +301,33 @@ const MAC_LINE_KEYS: Record<string, string> = {
   Backspace: "\x15", // delete to the line start (Ctrl+U)
 };
 
+/** macOS' prompt keys (17.25): Cmd + the key jumps to the previous or next prompt. */
+const MAC_JUMP_KEYS: Record<string, -1 | 1> = { ArrowUp: -1, ArrowDown: 1 };
+
 /** The terminal's own macOS keys, for the settings' Shortcuts section. */
 export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
   { label: "Clear the terminal", keys: "⌘K" },
+  { label: "Jump to the previous prompt", keys: "⌘↑" },
+  { label: "Jump to the next prompt", keys: "⌘↓" },
   { label: "Go to the start of the line", keys: "⌘←" },
   { label: "Go to the end of the line", keys: "⌘→" },
   { label: "Delete to the start of the line", keys: "⌘⌫" },
 ];
 
-/** On macOS, Cmd + an arrow or Backspace (`MAC_LINE_KEYS`), or ⌘K (clear): done, never typed. */
-function macKey(term: Terminal, event: KeyboardEvent): boolean {
+/**
+ * On macOS, Cmd + an arrow or Backspace (`MAC_LINE_KEYS`), ⌘K (clear) or ⌘↑ / ⌘↓ (the previous
+ * or next prompt, 17.25): done, never typed.
+ */
+function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
   const plain = commandKey(event) && !event.shiftKey && !event.altKey;
   if (!isMac() || event.type !== "keydown" || !plain) return false;
   const send = MAC_LINE_KEYS[event.key];
+  const jump = MAC_JUMP_KEYS[event.key];
   const clear = event.key.toUpperCase() === "K";
-  if (send === undefined && !clear) return false;
+  if (send === undefined && jump === undefined && !clear) return false;
   event.preventDefault();
-  if (send === undefined) term.clear();
+  if (jump !== undefined) marks.jump(jump);
+  else if (send === undefined) term.clear();
   else term.input(send);
   return true;
 }
@@ -321,8 +336,8 @@ function macKey(term: Terminal, event: KeyboardEvent): boolean {
  * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C and Cmd+V, and
  * Ctrl+C stays the shell's, plus macOS' own keys (`macKey`). Every other key is the shell's.
  */
-function keys(term: Terminal, event: KeyboardEvent): boolean {
-  if (intercept(event) || macKey(term, event)) return false;
+function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
+  if (intercept(event) || macKey(term, marks, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const key = event.key.toUpperCase();
   if (event.type !== "keydown" || !chord || (key !== "C" && key !== "V")) return true;

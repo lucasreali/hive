@@ -1,6 +1,14 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { asMac } from "../test/mac";
-import { alertText, notify, TONE_GAP_MS } from "./notify";
+import {
+  alertText,
+  duration,
+  goToClicked,
+  notify,
+  TONE_GAP_MS,
+  terminalAlertText,
+  terminalName,
+} from "./notify";
 import type { AgentState, Alert } from "./protocol";
 import type { PullState } from "./pulls";
 import { apply } from "./reduce";
@@ -297,4 +305,129 @@ test("a worktree's pull request that ended is an inbox item offering to remove i
   apply({ type: "spaces", spaces, current: "w" });
   notify(ended(fix.id, "merged"), useHive.getState(), clock, 100);
   expect(useHive.getState().inbox[0]?.space).toBe("Home · shop");
+});
+
+// 17.25: whether a terminal's command or program alerts is the service's (`osc.rs`, tested
+// there); here, only what each alert shows.
+
+test("a command's time reads in seconds, minutes or hours", () => {
+  expect([0, 59, 60, 125, 3599, 3600, 7322].map(duration)).toEqual([
+    "0s",
+    "59s",
+    "1m 0s",
+    "2m 5s",
+    "59m 59s",
+    "1h 0m",
+    "2h 2m",
+  ]);
+});
+
+test("a terminal is named by its worktree, else its folder", () => {
+  const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
+  const main = shop.worktrees[0] as (typeof shop.worktrees)[number];
+  apply({ type: "projects", projects: [shop] });
+  useHive.setState({
+    tabs: [
+      { id: 1, cwd: main.path },
+      { id: 2, cwd: "/home/u/notes" },
+      { id: 3, cwd: "/" },
+    ],
+  });
+  apply({ type: "terminal_opened", channel: 1, worktree: main.id });
+  const s = useHive.getState();
+  expect([1, 2, 3, 4].map((id) => terminalName(s, id))).toEqual([
+    main.name,
+    "notes",
+    "Terminal",
+    "Terminal",
+  ]);
+});
+
+test("a long command and a program's notification go to the inbox, with a tone and an OS notification", () => {
+  useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
+  const command = (exit: number | null, secs: number) =>
+    ({ type: "command_finished", channel: 7, exit, secs }) as const;
+  const note = (title: string, body: string, notify: boolean) =>
+    ({ type: "terminal_notification", channel: 7, title, body, notify }) as const;
+  const messages = [
+    command(0, 12),
+    command(2, 75),
+    command(null, 3600),
+    note("make", "done", true),
+    note("", "build ok", false),
+    note("deploy", "", true),
+  ];
+  messages.forEach((m, i) => {
+    notify(m, useHive.getState(), clock + i * 2 * TONE_GAP_MS, 1000 + i);
+  });
+  expect(tones).toBe(6);
+  const inbox = [...useHive.getState().inbox].reverse();
+  expect(inbox.map((i) => ("terminal" in i ? [i.terminal, i.failed, i.at, i.text] : i))).toEqual([
+    [7, false, 1000, "Command finished in api after 12s"],
+    [7, true, 1001, "Command failed (exit 2) in api after 1m 15s"],
+    [7, false, 1002, "Command finished in api after 1h 0m"],
+    [7, false, 1003, "api: make — done"],
+    [7, false, 1004, "api: build ok"],
+    [7, false, 1005, "api: deploy"],
+  ]);
+  // In view of the focused window a program's notification is not an OS one.
+  expect(shown).toEqual([
+    { title: "Command finished in api", body: "after 12s", agent: "terminal:7" },
+    { title: "Command failed (exit 2) in api", body: "after 1m 15s", agent: "terminal:7" },
+    { title: "Command finished in api", body: "after 1h 0m", agent: "terminal:7" },
+    { title: "api", body: "make — done", agent: "terminal:7" },
+    { title: "api", body: "deploy", agent: "terminal:7" },
+  ]);
+});
+
+test("a program's notification never takes over the title: the terminal's name always leads", () => {
+  useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
+  const s = useHive.getState();
+  const forged = "Claude needs your permission";
+  for (const [title, body] of [
+    [forged, ""],
+    [forged, "shop · main"],
+    ["", forged],
+    ["", ""],
+  ]) {
+    const text = terminalAlertText(s, {
+      type: "terminal_notification",
+      channel: 7,
+      title,
+      body,
+      notify: true,
+    });
+    expect(text.title).toBe("api");
+    expect(text.inbox.startsWith("api")).toBe(true);
+    expect(text.inbox).not.toBe(forged);
+    expect(text.agent).toBe("terminal:7");
+  }
+  const text = terminalAlertText(s, {
+    type: "terminal_notification",
+    channel: 7,
+    title: forged,
+    body: "shop · main",
+    notify: true,
+  });
+  expect(text).toEqual({
+    agent: "terminal:7",
+    title: "api",
+    body: `${forged} — shop · main`,
+    inbox: `api: ${forged} — shop · main`,
+  });
+});
+
+test("clicking a terminal's notification shows that terminal while it is open", () => {
+  useHive.setState({
+    tabs: [
+      { id: 7, cwd: "/a" },
+      { id: 8, cwd: "/b" },
+    ],
+    activeTab: 8,
+  });
+  goToClicked("terminal:7");
+  expect(useHive.getState().activeTab).toBe(7);
+  useHive.setState({ activeTab: 8 });
+  for (const id of ["terminal:9", "terminal:", "7", "gone-agent"]) goToClicked(id);
+  expect(useHive.getState().activeTab).toBe(8);
 });

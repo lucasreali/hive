@@ -235,6 +235,29 @@ pub enum Control {
     },
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
+    /// Service → app (17.25): the progress a program in this terminal reports with OSC 9;4
+    /// (ConEmu's, which Claude Code emits), sent when it changes; `value` 0 to 100.
+    TerminalProgress {
+        state: ProgressState,
+        value: u8,
+    },
+    /// Service → app (17.25): a command the shell marked with OSC 133 (`C` … `D;<exit>`) ran
+    /// for at least the `notifications.command_secs` setting and ended in a terminal with no
+    /// agent, out of view of the focused window: an inbox item and an OS notification.
+    /// `exit` is the status the shell reported, `None` when it gave none.
+    CommandFinished {
+        exit: Option<i32>,
+        secs: u64,
+    },
+    /// Service → app (17.25): a program in this terminal, which has no agent, asked for a
+    /// notification (OSC 9 `<body>` or OSC 777 `notify;<title>;<body>`), its text cleaned
+    /// and cut: an inbox item, and an OS notification when `notify` (the terminal is not in
+    /// view of the focused window).
+    TerminalNotification {
+        title: String,
+        body: String,
+        notify: bool,
+    },
     /// An agent started in this terminal (the frame channel is its `HIVE_TERMINAL_ID`). It is
     /// placed by its own `cwd`, not the terminal's (#19): `project` and `worktree` are the ids
     /// of the followed worktree containing `cwd`, or `None` outside every followed project.
@@ -1052,6 +1075,9 @@ pub struct NotificationSettings {
     pub bounce: bool,
     /// Show the menu bar icon with the agents' most urgent state and the pending ones (17.22).
     pub menu_bar: bool,
+    /// A shell command that ran at least this many seconds notifies when it ends (17.25),
+    /// 0 (never) to 3600.
+    pub command_secs: u32,
 }
 
 impl Default for NotificationSettings {
@@ -1060,6 +1086,7 @@ impl Default for NotificationSettings {
             volume: 100,
             bounce: true,
             menu_bar: true,
+            command_secs: 10,
         }
     }
 }
@@ -1750,6 +1777,22 @@ impl AgentState {
                 | AgentState::WaitingAnswer
         )
     }
+}
+
+/// A terminal's progress (OSC 9;4, 17.25): ConEmu's states 0 to 4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressState {
+    /// No progress shown (0).
+    None,
+    /// `value` percent done (1).
+    Normal,
+    /// Failed at `value` percent (2).
+    Error,
+    /// Busy, with no percentage (3).
+    Indeterminate,
+    /// Paused, or a warning, at `value` percent (4).
+    Paused,
 }
 
 /// Why an agent's new state alerts (a tone, an inbox item and, out of view, an OS
@@ -2670,7 +2713,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,

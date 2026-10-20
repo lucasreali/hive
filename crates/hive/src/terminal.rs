@@ -120,6 +120,12 @@ impl Output {
         true
     }
 
+    /// Queues a control message for the app on this terminal's channel, in order with its
+    /// output and without a lock (17.25: its progress).
+    pub fn control(&self, message: &hive_protocol::Control) {
+        let _ = self.frames.send(Frame::control(self.channel, message));
+    }
+
     /// The app wrote `bytes` of this terminal's output to its screen.
     pub fn ack(&self, bytes: u32) {
         let bytes = bytes as usize;

@@ -87,6 +87,9 @@ sort! {
         | TerminalExited
         | Badge
         | UnhookedAgent
+        | TerminalProgress
+        | CommandFinished
+        | TerminalNotification
         | AgentDetected
         | AgentState
         | SubagentWorktrees
@@ -198,6 +201,19 @@ fn samples() -> Vec<Control> {
         TerminalExited { code: Some(0) },
         Badge { text: s("db") },
         UnhookedAgent,
+        TerminalProgress {
+            state: ProgressState::Normal,
+            value: 40,
+        },
+        CommandFinished {
+            exit: Some(1),
+            secs: 12,
+        },
+        TerminalNotification {
+            title: s("build"),
+            body: s("done"),
+            notify: true,
+        },
         AgentDetected {
             id: s("s"),
             project: Some(s("/r")),

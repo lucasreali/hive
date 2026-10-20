@@ -11,6 +11,7 @@ import { spaceName } from "../notify";
 import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
 import {
+  activateTab,
   findWorktree,
   type InboxItem,
   markInboxRead,
@@ -29,6 +30,7 @@ import {
   MinimizeIcon,
   STATE_LABEL,
   StateIcon,
+  TerminalIcon,
   WindowCloseIcon,
 } from "./icons";
 import { elapsed, useNow } from "./Sidebar";
@@ -163,6 +165,7 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   const pending = useHive(useShallow(pendingAgents));
   const inbox = useHive((s) => s.inbox);
   const agents = useHive((s) => s.agents);
+  const tabs = useHive((s) => s.tabs);
   const states = useHive((s) => s.agentStates);
   const titles = useHive((s) => s.agentTitles);
   // Each item names its agent's space when there are several (6.14).
@@ -195,6 +198,28 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
       {inbox.map((item) => {
         if ("offer" in item)
           return <OfferItem key={item.id} item={item} now={now} onClose={onClose} />;
+        if ("terminal" in item) {
+          const tab = tabs.find((t) => t.id === item.terminal);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              disabled={!tab}
+              title={tab ? undefined : "This terminal is closed"}
+              onClick={() => {
+                onClose();
+                if (tab) activateTab(tab);
+              }}
+            >
+              <span className="inbox-terminal" data-failed={item.failed || undefined}>
+                <TerminalIcon />
+              </span>
+              <span className="label">{item.text}</span>
+              <span className="inbox-meta">{`${elapsed(item.at, now)} ago`}</span>
+            </button>
+          );
+        }
         // A usage alert (17.23) is about no agent: choosing it only closes the inbox.
         const usage = item.agent === null;
         const agent = usage ? undefined : agents[item.agent];
