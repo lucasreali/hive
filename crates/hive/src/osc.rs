@@ -374,11 +374,9 @@ mod tests {
         let bidi = "9;\u{202E}evil\u{200B}\x01 text ";
         assert_eq!(parse(bidi.as_bytes()), Some(note("", "evil text")));
         let long = format!("777;notify;{};{}", "t".repeat(150), "b".repeat(400));
-        let Some(Signal::Notification { title, body }) = parse(long.as_bytes()) else {
-            panic!("no notification");
-        };
-        assert_eq!(title, format!("{}…", "t".repeat(MAX_TITLE - 1)));
-        assert_eq!(body, format!("{}…", "b".repeat(MAX_BODY - 1)));
+        let title = format!("{}…", "t".repeat(MAX_TITLE - 1));
+        let body = format!("{}…", "b".repeat(MAX_BODY - 1));
+        assert_eq!(parse(long.as_bytes()), Some(note(&title, &body)));
         for empty in ["9;", "9; \u{200B} ", "777;notify; ;\x07"] {
             assert_eq!(parse(empty.as_bytes()), None, "{empty:?}");
         }

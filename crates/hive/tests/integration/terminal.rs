@@ -516,6 +516,9 @@ async fn shell_marks_progress_and_notifications_reach_the_app() {
         focused: true,
     };
     app.send(0, view(2)).await;
+    // A program's notification where an agent runs: dropped (its alert is checked off the
+    // output's path, so nothing waits for it).
+    app.input(2, "printf '\\e]9;agent\\a'\r").await;
     // Progress, as it changes.
     app.input(1, "printf '\\e]9;4;1;40\\a'\r").await;
     let progress = |state, value| (1, Control::TerminalProgress { state, value });
