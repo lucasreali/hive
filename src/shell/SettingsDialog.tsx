@@ -341,6 +341,22 @@ const FIELDS: Field[] = [
     ),
   },
   {
+    section: "Notifications",
+    label: "Show agents in the menu bar",
+    help: "An icon in the color of the most urgent state; its menu lists the agents that need you.",
+    check: true,
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Show agents in the menu bar"
+        get={(s) => s.notifications.menu_bar}
+        set={(s, on) => {
+          s.notifications.menu_bar = on;
+        }}
+      />
+    ),
+  },
+  {
     section: "Agents",
     label: "Silence before waiting for you (seconds)",
     help: "2 to 60: how long a working agent's terminal stays quiet before it needs you.",

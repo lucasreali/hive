@@ -11,6 +11,7 @@ import type {
 } from "../protocol";
 import type { PullAction } from "../pulls";
 import type { RunAction } from "../runs";
+import type { Tray } from "../tray";
 import { tauriTransport } from "./tauri";
 
 /**
@@ -208,6 +209,11 @@ export interface Transport {
    * window up and is answered by `notification_clicked`.
    */
   showNotification(title: string, body: string, agent: string): Promise<void>;
+  /**
+   * The menu bar icon (17.22), built by the app side from `tray`; choosing a pending agent in
+   * its menu is answered by `tray_clicked`.
+   */
+  setTray(tray: Tray): Promise<void>;
 }
 
 /**

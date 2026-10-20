@@ -18,6 +18,7 @@ import type {
   Worktree,
 } from "../protocol";
 import { DEFAULT_SETTINGS } from "../store";
+import type { Tray } from "../tray";
 import type { Transport } from ".";
 import { createMockPulls } from "./mockPulls";
 import { createMockRuns } from "./mockRuns";
@@ -733,6 +734,8 @@ export function createMockTransport(
   let sessions = MOCK_SESSIONS;
   /** The agent of the last OS notification (13.5). */
   let notified: string | null = null;
+  /** The last menu bar icon sent (17.22). */
+  let tray: Tray | null = null;
   // Kept in memory; the real service checks the ranges and saves them.
   let settings: Settings = DEFAULT_SETTINGS;
   // The typed line stands in for the tool call it is doing.
@@ -957,6 +960,11 @@ export function createMockTransport(
     // the last one.
     async showNotification(_title, _body, agent) {
       notified = agent;
+    },
+    // The browser has no menu bar; `tray-click` typed in a terminal stands in for choosing the
+    // first pending agent in the last tray's menu.
+    async setTray(shown) {
+      tray = shown;
     },
     async addProject(path) {
       // The group (14.1): its repositories come in the list, before it.
@@ -1222,6 +1230,8 @@ export function createMockTransport(
         if (line === "notification-click" && notified) {
           later({ type: "notification_clicked", agent: notified });
         }
+        const chosen = tray?.agents[0]?.[0];
+        if (line === "tray-click" && chosen) later({ type: "tray_clicked", agent: chosen });
         if (line.startsWith("hive badge ")) {
           const text = line.slice(11).trim();
           later({ type: "badge", channel: id, text: text === "--clear" ? "" : text });

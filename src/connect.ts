@@ -14,7 +14,10 @@ function onMessage(message: ServiceMessage): void {
   if (message.type === "session_located") void openLocated(message);
   if (message.type === "restore_sessions") void restore(message.sessions);
   if (message.type === "editor_target") void openTarget(message);
-  if (message.type === "notification_clicked") goToClicked(message.agent);
+  // An OS notification's click (13.5) or a pending agent chosen in the menu bar icon (17.22).
+  if (message.type === "notification_clicked" || message.type === "tray_clicked") {
+    goToClicked(message.agent);
+  }
 }
 
 /** Connects to the service, at startup and on "Reconnect", always with the same handler. */

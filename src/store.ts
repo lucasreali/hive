@@ -169,7 +169,7 @@ export const DEFAULT_SETTINGS: Settings = {
     shell: "default",
   },
   appearance: { theme: "one-dark" },
-  notifications: { volume: 100, bounce: true },
+  notifications: { volume: 100, bounce: true, menu_bar: true },
   agents: { silence_secs: 5, confirm_close: true },
   worktrees: { default_base: null },
   projects: {},

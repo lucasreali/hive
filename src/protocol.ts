@@ -18,6 +18,8 @@ export type ServiceMessage =
   | { type: "update_failed"; error: string }
   // From the app side (Rust): the user clicked the OS notification about `agent` (13.5).
   | { type: "notification_clicked"; agent: string }
+  // From the app side (Rust): the user chose `agent` in the menu bar icon's menu (17.22).
+  | { type: "tray_clicked"; agent: string }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
@@ -439,9 +441,10 @@ export type Settings = {
   appearance: { theme: "one-dark" | "one-light" };
   /**
    * `volume`: the alert tone's, in percent; 0 mutes it. `bounce`: bounce the Dock icon once when
-   * an agent needs an action while Hive is not focused (17.16).
+   * an agent needs an action while Hive is not focused (17.16). `menu_bar`: show the menu bar
+   * icon (17.22).
    */
-  notifications: { volume: number; bounce: boolean };
+  notifications: { volume: number; bounce: boolean; menu_bar: boolean };
   agents: { silence_secs: number; confirm_close: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */

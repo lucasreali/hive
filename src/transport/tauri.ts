@@ -73,4 +73,6 @@ export const tauriTransport: Transport = {
   checkUpdate: () => send("check_update"),
   installUpdate: () => send("install_update"),
   showNotification: (title, body, agent) => send("show_notification", { title, body, agent }),
+  // No toast on a failure: the icon is a hint (`followTray` drops it).
+  setTray: (tray) => invoke("set_tray", tray),
 };
