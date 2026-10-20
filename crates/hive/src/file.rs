@@ -2047,7 +2047,7 @@ mod tests {
 
     #[test]
     fn names_are_diffed_as_git_lists_them_on_a_case_insensitive_filesystem_too() {
-        use crate::files::tests::{NFC, NFD, listed_nfd};
+        use crate::files::tests::{NFC, NFD, listed_nfd, pick};
         use FileStatus::{Deleted, Modified, Untracked};
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2065,26 +2065,25 @@ mod tests {
         std::fs::write(root.join("src/new.txt"), "n\n").unwrap();
         std::fs::write(root.join(NFD).join("f.txt"), "f\ng\n").unwrap();
         let cafe = format!("{}/f.txt", listed_nfd());
+        // A case-insensitive filesystem (macOS) still finds the tracked file under its old
+        // name; elsewhere it is gone and the folder under its new name untracked.
         let insensitive = root.join("SRC").exists();
-        let (src, new) = ("Src/a.txt".to_owned(), "src/new.txt".to_owned());
-        if insensitive {
-            // Git finds the tracked file under its old name.
-            let listed = [(src, Modified), (cafe.clone(), Modified), (new, Untracked)];
-            assert_eq!(changed(root), listed);
-            let read = read(root, "Src/a.txt", None).unwrap();
-            assert_eq!(read, (bytes("a\nb\n"), bytes("a\n")));
-        } else {
-            let moved = ("src/a.txt".to_owned(), Untracked);
-            let listed = [
-                (src, Deleted),
-                (cafe.clone(), Modified),
-                moved,
-                (new, Untracked),
-            ];
-            assert_eq!(changed(root), listed);
-            let read = read(root, "Src/a.txt", None).unwrap();
-            assert_eq!(read, (Side::Missing, bytes("a\n")));
-        }
+        let listed: Vec<(String, FileStatus)> = [
+            Some(("Src/a.txt", pick(insensitive, Modified, Deleted))),
+            Some((cafe.as_str(), Modified)),
+            (!insensitive).then_some(("src/a.txt", Untracked)),
+            Some(("src/new.txt", Untracked)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(path, status)| (path.to_owned(), status))
+        .collect();
+        assert_eq!(changed(root), listed);
+        let on_disk = pick(insensitive, bytes("a\nb\n"), Side::Missing);
+        assert_eq!(
+            read(root, "Src/a.txt", None).unwrap(),
+            (on_disk, bytes("a\n"))
+        );
         let read_cafe = read(root, &cafe, None).unwrap();
         assert_eq!(read_cafe, (bytes("f\ng\n"), bytes("f\n")));
 
@@ -2101,12 +2100,14 @@ mod tests {
         run(root, &["commit", "-q", "-m", "init"]);
         std::fs::write(root.join(NFD).join("f.txt"), "f\ng\n").unwrap();
         let tracked = format!("{NFD}/f.txt");
-        if cfg!(target_os = "macos") {
-            let untracked = (format!("{NFC}/f.txt"), Untracked);
-            assert_eq!(changed(root), [(tracked.clone(), Modified), untracked]);
-        } else {
-            assert_eq!(changed(root), [(tracked.clone(), Modified)]);
-        }
+        let precomposed = (format!("{NFC}/f.txt"), Untracked);
+        let mac = cfg!(target_os = "macos");
+        let listed = [
+            Some((tracked.clone(), Modified)),
+            mac.then_some(precomposed),
+        ];
+        let listed: Vec<_> = listed.into_iter().flatten().collect();
+        assert_eq!(changed(root), listed);
         let read = read(root, &tracked, None).unwrap();
         assert_eq!(read, (bytes("f\ng\n"), bytes("f\n")));
     }

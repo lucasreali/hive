@@ -1108,7 +1108,13 @@ pub(crate) mod tests {
 
     /// The name git lists for a folder made as [`NFD`]: NFC on macOS, as written elsewhere.
     pub fn listed_nfd() -> &'static str {
-        if cfg!(target_os = "macos") { NFC } else { NFD }
+        pick(cfg!(target_os = "macos"), NFC, NFD)
+    }
+
+    /// `yes` if `on`, else `no`, with no branch (each platform's coverage takes one side).
+    pub fn pick<T>(on: bool, yes: T, no: T) -> T {
+        let mut both = [Some(no), Some(yes)];
+        both[usize::from(on)].take().unwrap()
     }
 
     #[tokio::test]
@@ -1151,28 +1157,24 @@ pub(crate) mod tests {
         // A case-insensitive filesystem (macOS) still finds the tracked file under its old
         // name, so git lists only that; elsewhere it is gone and the new folder untracked.
         let insensitive = root.join("SRC").exists();
+        let listed = |mac: Vec<&'static str>, other| pick(insensitive, mac, other);
         let listing = watcher.list().unwrap();
-        if insensitive {
-            assert_eq!(names(&listing), ["Src/a.txt"]);
-        } else {
-            assert_eq!(names(&listing), ["Src/a.txt", "src/a.txt"]);
-        }
+        let other = vec!["Src/a.txt", "src/a.txt"];
+        assert_eq!(names(&listing), listed(vec!["Src/a.txt"], other));
         // A file written in the folder under its new name is seen, listed as git lists it.
         write(&root, "src/b.txt");
         assert!(changes(&mut watcher, SOON).await);
         let listing = watcher.list().unwrap();
-        if insensitive {
-            assert_eq!(names(&listing), ["Src/a.txt", "src/b.txt"]);
-        } else {
-            assert_eq!(names(&listing), ["Src/a.txt", "src/a.txt", "src/b.txt"]);
-        }
-        // And under its old one, which is the same folder there.
-        if insensitive {
-            write(&root, "Src/c.txt");
-            assert!(changes(&mut watcher, SOON).await);
-            let listing = watcher.list().unwrap();
-            assert_eq!(names(&listing), ["Src/a.txt", "src/b.txt", "src/c.txt"]);
-        }
+        let mac = vec!["Src/a.txt", "src/b.txt"];
+        let other = vec!["Src/a.txt", "src/a.txt", "src/b.txt"];
+        assert_eq!(names(&listing), listed(mac, other));
+        // And under its old one: the same folder there, a new one elsewhere.
+        write(&root, "Src/c.txt");
+        assert!(changes(&mut watcher, SOON).await);
+        let listing = watcher.list().unwrap();
+        let mac = vec!["Src/a.txt", "src/b.txt", "src/c.txt"];
+        let other = vec!["Src/a.txt", "Src/c.txt", "src/a.txt", "src/b.txt"];
+        assert_eq!(names(&listing), listed(mac, other));
     }
 
     #[tokio::test]

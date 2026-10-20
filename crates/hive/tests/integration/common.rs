@@ -71,19 +71,16 @@ fn with_var(var: &str) -> Vec<i32> {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut all = Vec::new();
-    let mut found = Vec::new();
-    for line in text.lines() {
+    let ids = |line: &str| -> Option<(i32, i32)> {
         let mut words = line.split_whitespace();
-        let ids = (words.next().map(str::parse), words.next().map(str::parse));
-        let (Some(Ok(pid)), Some(Ok(ppid))) = ids else {
-            continue;
-        };
-        all.push((pid, ppid));
-        if line.split(' ').any(|word| word == var) {
-            found.push(pid);
-        }
-    }
+        Some((words.next()?.parse().ok()?, words.next()?.parse().ok()?))
+    };
+    let all: Vec<(i32, i32)> = text.lines().filter_map(ids).collect();
+    let mut found: Vec<i32> = text
+        .lines()
+        .filter(|line| line.split(' ').any(|word| word == var))
+        .filter_map(|line| Some(ids(line)?.0))
+        .collect();
     // One generation per pass, at most as many passes as processes.
     for _ in 0..all.len() {
         let children: Vec<i32> = all
