@@ -449,7 +449,7 @@ impl Agent {
             alert = if finished {
                 Some(Alert::Finished)
             } else {
-                shown.pending().then_some(Alert::Waiting)
+                Alert::entering(shown)
             }
             .filter(|_| !self.interrupted && !early);
         }
@@ -964,13 +964,13 @@ mod tests {
         assert_eq!(feed("Stop", none.clone()), Some((Some(Finished), false)));
         // Staying there sends nothing, so nothing alerts again.
         assert_eq!(feed("Stop", none.clone()), None);
-        // Entering any other state that waits for the user alerts too.
-        let entered = Some((Some(Waiting), true));
+        // Entering a state that asks for an action alerts as one (17.16).
+        let entered = Some((Some(Action), true));
         assert_eq!(feed("PermissionRequest", none.clone()), entered);
         assert_eq!(feed("PreToolUse", ask), entered);
         assert_eq!(
             feed("StopFailure", none.clone()),
-            Some((Some(Waiting), false))
+            Some((Some(Action), false))
         );
         assert_eq!(feed("SessionStart", none.clone()), Some((None, false)));
         // From idle it did not finish anything.
@@ -1019,7 +1019,7 @@ mod tests {
         assert_eq!(feed(stop_with("Stop", None, &["b"])), quiet);
         // A question of the one at work still alerts; its answer does not.
         let asks = hook("PermissionRequest", Some("b"), json!({"tool_name": "Bash"}));
-        assert_eq!(feed(asks), (Some(Some(Waiting)), true));
+        assert_eq!(feed(asks), (Some(Some(Action)), true));
         assert_eq!(feed(hook("PostToolUse", Some("b"), json!({}))), quiet);
         // The last one ends: the turn it wakes finishes.
         assert_eq!(feed(stop_with("SubagentStop", Some("b"), &[])), quiet);
@@ -1453,21 +1453,21 @@ mod tests {
                 "PermissionRequest",
                 none.clone(),
                 WaitingPermission,
-                Some(Waiting),
+                Some(Action),
             ),
             (
                 "PreToolUse",
                 tool("ExitPlanMode"),
                 WaitingPlan,
-                Some(Waiting),
+                Some(Action),
             ),
             (
                 "PreToolUse",
                 tool("AskUserQuestion"),
                 WaitingAnswer,
-                Some(Waiting),
+                Some(Action),
             ),
-            ("StopFailure", none.clone(), Error, Some(Waiting)),
+            ("StopFailure", none.clone(), Error, Some(Action)),
             ("SessionStart", none, Idle, None),
             ("Notification", idle, WaitingYou, Some(Waiting)),
         ];

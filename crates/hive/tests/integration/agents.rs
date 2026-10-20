@@ -71,7 +71,7 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         urgency: state.urgency(),
         pending: state.pending(),
         interrupted: false,
-        alert: state.pending().then_some(Alert::Waiting),
+        alert: Alert::entering(state),
         notify: state.pending(),
         writing: state.writes(),
         subagents,

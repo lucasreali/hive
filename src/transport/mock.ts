@@ -111,14 +111,16 @@ export const agentStatus = (
 
 /**
  * A stand-in for the alert `states::Agent` decides when the state goes from `before` to
- * `after`: finished (working or with subagents → waiting for you), else waiting when the user
- * is needed; none for the first state or no change.
+ * `after`: finished (working or with subagents → waiting for you), else an action for a state
+ * more urgent than waiting for you, else waiting when the user is needed; none for the first
+ * state or no change.
  */
 export function mockAlert(before: AgentState | undefined, after: AgentState): Alert | null {
   if (before === undefined || before === after) return null;
   if (after === "waiting_you" && (before === "working" || before === "with_subagents")) {
     return "finished";
   }
+  if (URGENCY.indexOf(after) > URGENCY.indexOf("waiting_you")) return "action";
   return agentStatus(after).pending ? "waiting" : null;
 }
 

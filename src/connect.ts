@@ -1,3 +1,4 @@
+import { bounceFor } from "./dock";
 import { goToClicked, notify } from "./notify";
 import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
@@ -9,6 +10,7 @@ import { openTarget } from "./viewer/external";
 /** Every service message: `notify` first (it compares with the state still stored), then the store. */
 function onMessage(message: ServiceMessage): void {
   notify(message);
+  bounceFor(message);
   apply(message);
   if (message.type === "session_located") void openLocated(message);
   if (message.type === "restore_sessions") void restore(message.sessions);

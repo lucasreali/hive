@@ -246,7 +246,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
     urgency: 6,
     pending: true,
     interrupted: false,
-    alert: "waiting",
+    alert: "action",
     notify: true,
     writing: true,
     ...doing,

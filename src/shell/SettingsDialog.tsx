@@ -20,7 +20,7 @@ import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { openSettingsFile } from "../viewer/external";
-import { keyText } from "../window";
+import { isMac, keyText } from "../window";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
 
@@ -197,6 +197,8 @@ type Field = {
   modes?: boolean;
   /** Shown only while the service runs natively on Windows (the app's mode, 12.5.4). */
   windows?: boolean;
+  /** Shown only on macOS (the Dock, 17.16). */
+  mac?: boolean;
   control: (id: string, label: string) => ReactNode;
 };
 
@@ -318,6 +320,22 @@ const FIELDS: Field[] = [
         get={(s) => s.notifications.volume}
         set={(s, n) => {
           s.notifications.volume = n;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Notifications",
+    label: "Bounce the Dock icon when an agent needs an action",
+    help: "Once, while Hive is not focused: permission, plan, question or error.",
+    check: true,
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Bounce the Dock icon when an agent needs an action"
+        get={(s) => s.notifications.bounce}
+        set={(s, on) => {
+          s.notifications.bounce = on;
         }}
       />
     ),
@@ -841,7 +859,9 @@ function Accounts() {
 function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
   const windows = useHive((s) => s.appMode?.mode === "native");
-  const fields = FIELDS.filter((f) => (modes || !f.modes) && (windows || !f.windows));
+  const fields = FIELDS.filter(
+    (f) => (modes || !f.modes) && (windows || !f.windows) && (isMac() || !f.mac),
+  );
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
     if (found.length === 0) return <p className="field-help">No setting matches.</p>;

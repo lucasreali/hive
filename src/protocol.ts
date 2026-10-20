@@ -392,8 +392,11 @@ export type Subagent = {
 /** What an agent or subagent is doing (its current tool call) and since when (ms since the epoch) its state lasts. */
 export type Doing = { activity: string | null; since_ms: number };
 
-/** Mirrors `hive_protocol::Alert`: why a new state alerts (`notify`). */
-export type Alert = "finished" | "waiting";
+/**
+ * Mirrors `hive_protocol::Alert`: why a new state alerts (`notify`): it finished, it asks for an
+ * action (🟡 or 🔴; the Dock bounces, 17.16), or it waits for you otherwise.
+ */
+export type Alert = "finished" | "waiting" | "action";
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins),
@@ -440,8 +443,11 @@ export type Settings = {
     shell: "default" | "cmd" | "git_bash";
   };
   appearance: { theme: "one-dark" | "one-light" };
-  /** `volume`: the alert tone's, in percent; 0 mutes it. */
-  notifications: { volume: number };
+  /**
+   * `volume`: the alert tone's, in percent; 0 mutes it. `bounce`: bounce the Dock icon once when
+   * an agent needs an action while Hive is not focused (17.16).
+   */
+  notifications: { volume: number; bounce: boolean };
   agents: { silence_secs: number; confirm_close: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */

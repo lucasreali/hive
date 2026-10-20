@@ -23,7 +23,7 @@ afterAll(() => useHive.setState(initialState, true));
 test("a quit request asks through the close dialog while an agent works, else quits", async () => {
   await connect();
   // Muted: the test has no Web Audio.
-  await transport.setSettings({ ...DEFAULT_SETTINGS, notifications: { volume: 0 } });
+  await transport.setSettings({ ...DEFAULT_SETTINGS, notifications: { ...DEFAULT_SETTINGS.notifications, volume: 0 } });
   await settle();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
   const shell = await transport.openTerminal(shop.path, 80, 24, () => {});

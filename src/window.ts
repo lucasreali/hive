@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import type { Settings } from "./protocol";
 
 export type WindowAction = "minimize" | "toggleMaximize" | "close";
@@ -57,6 +57,25 @@ export function watchFocus(onChange: (focused: boolean) => void): () => void {
     window.removeEventListener("focus", focus);
     window.removeEventListener("blur", blur);
   };
+}
+
+/**
+ * The number on the Dock icon (17.16), removed at zero. Only in the macOS app: elsewhere there
+ * is no Dock (Windows' taskbar has no badge count). A failure is dropped: the badge is a hint.
+ */
+export function setDockBadge(count: number): void {
+  if (!isTauri() || !isMac()) return;
+  getCurrentWindow()
+    .setBadgeCount(count > 0 ? count : undefined)
+    .catch(() => {});
+}
+
+/** One Dock bounce (`Informational`: once, not until Hive is focused); only in the macOS app. */
+export function bounceDock(): void {
+  if (!isTauri() || !isMac()) return;
+  getCurrentWindow()
+    .requestUserAttention(UserAttentionType.Informational)
+    .catch(() => {});
 }
 
 /** Whether Hive runs on macOS, from the WebView's user agent; asked on every call. */
