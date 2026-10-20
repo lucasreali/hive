@@ -206,10 +206,10 @@ cargo mutants --in-diff <(git diff main -- '*.rs')    # no missed mutants
 bun install --frozen-lockfile
 bun run lint && bun run typecheck
 bun test --coverage     # 100% line threshold in bunfig.toml
-bun run e2e             # Playwright, Chromium and WebKit: Linux only for now (below)
+bun run e2e             # Playwright, Chromium and WebKit, on macOS or Linux (below)
 ```
 
-E2E passes only on Linux for now: in CI, or locally in Playwright's Linux container. Run natively on macOS, specs fail on the Mac's key bindings and ⌘ labels (they press Ctrl); that waits for host-aware keys (TODO 17.14). From the checkout, with Docker (a Linux `node_modules` in a volume, so the Mac's is untouched; `load` and `tree-perf` measure timing and are left to CI):
+E2E runs natively on macOS and on Linux (CI). The specs press the host's keys and expect its labels (`e2e/host.ts`: ⌘ and ⇧⌘O on a Mac, Ctrl elsewhere); off a Mac, WebKit gets a non-Mac user agent so Hive takes the same keys as the host. Screenshot baselines are kept per platform (`*-darwin.png`, `*-linux.png`). To reproduce CI's Linux run on a Mac, use Playwright's Linux container from the checkout, with Docker (a Linux `node_modules` in a volume, so the Mac's is untouched; `load` and `tree-perf` measure timing and are left to CI):
 
 ```sh
 docker volume create hive-e2e-bun && docker volume create hive-e2e-nm

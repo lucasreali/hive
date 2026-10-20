@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mac, mod } from "./host";
 
 // Terminal copy and paste without WebKit's "Paste" bubble (17.8): copy on select copies on
 // mouse-up (a user gesture), and on macOS Cmd+V is the engine's own paste, not a script read.
@@ -58,7 +59,7 @@ test.beforeEach(async ({ context, browserName }) => {
 test("clipboard: copy on select copies what the mouse selected, on release", async ({ page }) => {
   await echoOne(page);
   await page.evaluate(() => navigator.clipboard.writeText("before"));
-  await page.keyboard.press("Control+Comma");
+  await page.keyboard.press(`${mod}+Comma`);
   const dialog = page.getByRole("dialog", { name: "Settings" });
   // Checked once the service has saved the setting and sent it back.
   await dialog.getByLabel("Copy on select").click();
@@ -84,8 +85,9 @@ test.describe("on macOS", () => {
   });
 
   // Cmd+V is left to the engine: in WKWebView the Edit menu's Paste fires a trusted paste event
-  // on xterm's textarea. Linux WebKit has no Cmd+V paste, so the check is in two halves: the
-  // key is neither cancelled nor typed, and the paste event the engine fires reaches the shell.
+  // on xterm's textarea, as a Mac host's WebKit does. Linux WebKit has no Cmd+V paste, so there
+  // the check is in two halves: the key is neither cancelled nor typed, and the paste event the
+  // engine would fire reaches the shell.
   test("clipboard: Cmd+V is the engine's paste, bracketed when the shell asks", async ({
     page,
     browserName,
@@ -98,7 +100,8 @@ test.describe("on macOS", () => {
       const seen = { data: [] as string[], cancelled: [] as boolean[] };
       Object.assign(window, { seen });
       terminal(1).onData((data: string) => seen.data.push(data));
-      terminal(1).write("\x1b[?2004h"); // the shell asks for bracketed paste
+      // The shell asks for bracketed paste.
+      await new Promise((resolve) => terminal(1).write("\x1b[?2004h", resolve));
       window.addEventListener("keydown", (event) => seen.cancelled.push(event.defaultPrevented));
       await navigator.clipboard.writeText("pasted");
     });
@@ -107,17 +110,26 @@ test.describe("on macOS", () => {
         () => (window as unknown as { seen: { data: string[]; cancelled: boolean[] } }).seen,
       );
     await page.keyboard.press("Meta+V");
-    // Meta's keydown and V's: neither cancelled (as a script paste would), nothing typed.
-    expect(await seen()).toEqual({ data: [], cancelled: [false, false] });
-
-    await page.evaluate(async () => {
-      const url = "/src/terminals.ts";
-      const { terminal } = await import(/* @vite-ignore */ url);
-      const clipboardData = new DataTransfer();
-      clipboardData.setData("text/plain", await navigator.clipboard.readText());
-      const paste = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
-      terminal(1).textarea.dispatchEvent(paste);
+    // Meta's keydown and V's: neither cancelled (as a script paste would), nothing typed; on a
+    // Mac the engine's paste follows.
+    expect(await seen()).toEqual({
+      data: mac ? ["\x1b[200~pasted\x1b[201~"] : [],
+      cancelled: [false, false],
     });
+
+    if (!mac)
+      await page.evaluate(async () => {
+        const url = "/src/terminals.ts";
+        const { terminal } = await import(/* @vite-ignore */ url);
+        const clipboardData = new DataTransfer();
+        clipboardData.setData("text/plain", await navigator.clipboard.readText());
+        const paste = new ClipboardEvent("paste", {
+          clipboardData,
+          bubbles: true,
+          cancelable: true,
+        });
+        terminal(1).textarea.dispatchEvent(paste);
+      });
     expect((await seen()).data).toEqual(["\x1b[200~pasted\x1b[201~"]);
     await expect.poll(() => screen(page)).toBe("mock$ echo one\necho one\nmock$ pasted");
   });

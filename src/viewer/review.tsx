@@ -1,7 +1,7 @@
 import { CloseIcon } from "../shell/icons";
 import { type HiveState, type ReviewComment, useHive } from "../store";
 import { pasteToTerminal, showTerminal, terminal } from "../terminals";
-import { keyText } from "../window";
+import { composing, keyText } from "../window";
 import { reference, terminalIn } from "./reference";
 
 // Review comments (6.7): notes on lines of the open file, kept per worktree, then sent to the
@@ -88,6 +88,7 @@ export function CommentInput({ worktree, path }: { worktree: string; path: strin
         autoFocus
         placeholder="Comment for the agent… (Enter saves, Esc cancels)"
         onKeyDown={(event) => {
+          if (composing(event.nativeEvent)) return;
           if (event.key === "Enter") endComment(event.currentTarget.value);
           else if (event.key === "Escape") endComment();
         }}

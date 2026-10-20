@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { mac } from "./host";
 
 // Browser checks against the Vite dev server. Kept out of `bun test` (bunfig.toml root = src).
 // E2E_PORT lets parallel agents (one per worktree) each test their own server.
@@ -16,15 +17,16 @@ export default defineConfig({
     { name: "ui", testIgnore: ["load.e2e.ts", "tree-perf.e2e.ts"] },
     { name: "load", testMatch: "load.e2e.ts", dependencies: ["ui", "webkit"] },
     { name: "tree-perf", testMatch: "tree-perf.e2e.ts", dependencies: ["load"] },
-    // WebKit (17.3), the engine of macOS' WKWebView (close to it, not identical). It tests the
-    // engine with the same keys as Chromium: a non-Mac user agent keeps Ctrl as the command key
-    // (window.ts `isMac`), on a Mac host and on CI's Linux alike.
+    // WebKit (17.3), the engine of macOS' WKWebView (close to it, not identical). Its user agent
+    // says Mac on every host: off a Mac a non-Mac one keeps Hive's keys the host's, as on
+    // Chromium (window.ts `isMac`; the specs press the host's keys, `keys.ts`).
     {
       name: "webkit",
       use: {
         browserName: "webkit",
-        userAgent:
-          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        userAgent: mac
+          ? undefined
+          : "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
       },
       testIgnore: ["load.e2e.ts", "tree-perf.e2e.ts"],
     },

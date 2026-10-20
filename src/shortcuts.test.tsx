@@ -423,3 +423,121 @@ test("Ctrl+Shift+V (Cmd+Shift+V on macOS) toggles a Markdown file's tab, elsewhe
   expect(press({ key: "v", metaKey: true, shiftKey: true })).toBe(true);
   expect(renderedShown(useHive.getState())).toBe(true);
 });
+
+test("on macOS ⇧⌘J goes to the next pending agent too (F8 is Play/Pause there); elsewhere it is the terminal's", () => {
+  app();
+  expect(shortcut(new KeyboardEvent("keydown", ctrlShift("J")))).toBeNull();
+  expect(shortcut(new KeyboardEvent("keydown", { key: "F8" }))).toBe(nextPending);
+  asMac();
+  expect(shortcut(new KeyboardEvent("keydown", { key: "j", metaKey: true, shiftKey: true }))).toBe(
+    nextPending,
+  );
+  expect(shortcut(new KeyboardEvent("keydown", { key: "F8" }))).toBe(nextPending);
+  expect(shortcut(new KeyboardEvent("keydown", ctrlShift("J")))).toBeNull();
+  expect(shortcut(new KeyboardEvent("keydown", { key: "j", metaKey: true }))).toBeNull();
+});
+
+/** Two terminals and a file open in fix-login: the bar holds them in that order. */
+async function threeTabs(): Promise<number[]> {
+  app();
+  const worktree = shop.worktrees[1].path;
+  const ids: number[] = [];
+  await act(async () => {
+    ids.push(await openTerminal(worktree), await openTerminal(worktree));
+  });
+  act(() => setOpenFile({ worktree, path: "src/a.ts" }));
+  return ids;
+}
+
+const shownTab = () => {
+  const s = useHive.getState();
+  return s.fileShown ? s.openFile?.path : s.activeTab;
+};
+
+test("macOS' tab keys: ⌘1–9 show a tab, ⇧⌘] and ⇧⌘[ the next and previous, wrapping; not elsewhere", async () => {
+  const [one, two] = await threeTabs();
+  for (const keys of [
+    { key: "1", ctrlKey: true },
+    { key: "}", ctrlKey: true, shiftKey: true },
+    { key: "w", ctrlKey: true },
+    { key: "=", ctrlKey: true },
+  ]) {
+    expect(press(keys)).toBe(false);
+  }
+  expect(shownTab()).toBe("src/a.ts");
+
+  asMac();
+  expect(press({ key: "1", metaKey: true })).toBe(true);
+  expect(shownTab()).toBe(one);
+  expect(press({ key: "3", metaKey: true })).toBe(true);
+  expect(shownTab()).toBe("src/a.ts");
+  // A layout whose digits need Shift (AZERTY's "&" is 1): the key's place counts.
+  expect(press({ key: "&", code: "Digit2", metaKey: true } as Keys)).toBe(true);
+  expect(shownTab()).toBe(two);
+  // No fourth tab: taken, nothing changes.
+  expect(press({ key: "4", metaKey: true })).toBe(true);
+  expect(shownTab()).toBe(two);
+  // ⇧⌘] types "}" on a US layout: matched by its place too.
+  expect(press({ key: "}", code: "BracketRight", metaKey: true, shiftKey: true } as Keys)).toBe(
+    true,
+  );
+  expect(shownTab()).toBe("src/a.ts");
+  press({ key: "]", metaKey: true, shiftKey: true });
+  expect(shownTab()).toBe(one);
+  press({ key: "{", code: "BracketLeft", metaKey: true, shiftKey: true } as Keys);
+  expect(shownTab()).toBe("src/a.ts");
+  press({ key: "[", metaKey: true, shiftKey: true });
+  expect(shownTab()).toBe(two);
+  // Without Shift, ⌘] is not a tab key.
+  expect(press({ key: "]", code: "BracketRight", metaKey: true } as Keys)).toBe(false);
+});
+
+test("⇧⌘] with no tab does nothing", () => {
+  asMac();
+  app();
+  const before = useHive.getState();
+  expect(press({ key: "]", metaKey: true, shiftKey: true })).toBe(true);
+  expect(useHive.getState()).toBe(before);
+});
+
+test("⌘W closes the tab shown: a file, then a terminal; with none, nothing", async () => {
+  const close = spyOn(transport, "closeTerminal");
+  const [one, two] = await threeTabs();
+  asMac();
+  expect(press({ key: "w", metaKey: true })).toBe(true);
+  expect(useHive.getState().openFiles).toEqual([]);
+  expect(shownTab()).toBe(two);
+  press({ key: "w", metaKey: true });
+  expect(close.mock.calls).toEqual([[two as number]]);
+  expect(useHive.getState().tabs.map((t) => t.id)).toEqual([one as number]);
+  press({ key: "w", metaKey: true });
+  expect(useHive.getState().tabs).toEqual([]);
+  const before = useHive.getState();
+  press({ key: "w", metaKey: true });
+  expect(useHive.getState()).toBe(before);
+  close.mockRestore();
+});
+
+test("⌘W leaves a file of another worktree alone when the bar does not show it", async () => {
+  const [one] = await threeTabs();
+  asMac();
+  // Another worktree selected: its bar holds neither the file nor the terminals.
+  act(() => select(shop.path));
+  const before = useHive.getState();
+  press({ key: "w", metaKey: true });
+  expect(useHive.getState().openFiles).toEqual(before.openFiles);
+  expect(useHive.getState().tabs.map((t) => t.id)).toContain(one as number);
+});
+
+test("⌘= and ⌘- change every terminal's font size, ⌘0 gives back the settings' one", async () => {
+  const [one, two] = await threeTabs();
+  asMac();
+  const sizes = () => [one, two].map((id) => terminal(id as number)?.options.fontSize);
+  expect(press({ key: "=", metaKey: true })).toBe(true);
+  expect(sizes()).toEqual([14, 14]);
+  press({ key: "-", metaKey: true });
+  press({ key: "-", metaKey: true });
+  expect(sizes()).toEqual([12, 12]);
+  press({ key: "0", metaKey: true });
+  expect(sizes()).toEqual([13, 13]);
+});

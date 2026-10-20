@@ -105,7 +105,7 @@ function UpdateButton() {
 /**
  * The bell, with the number of pending agents not seen yet (8.5). A click opens the inbox (6.5)
  * and marks every alert read and the pending agents seen, clearing the badge; an agent counts
- * again on a new alert. F8 still goes to the next pending agent.
+ * again on a new alert. F8 (⇧⌘J on macOS) still goes to the next pending agent.
  */
 function PendingBell() {
   const count = useHive(unseenPending);
@@ -125,7 +125,7 @@ function PendingBell() {
         type="button"
         className="pending-bell"
         data-pending={count > 0}
-        title={`${label} (F8: next pending)`}
+        title={`${label} (${isMac() ? "⇧⌘J" : "F8"}: next pending)`}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}

@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** The text of a terminal's buffer, read from the page's own terminal manager. */
 function screen(page: Page, id: number): Promise<string> {
@@ -37,7 +38,7 @@ test("split: Ctrl+Shift+D shows two terminals side by side, a click focuses one,
   await expect.poll(() => screen(page, 1)).toBe("mock$");
 
   // Alone in its worktree, the terminal splits beside a new one there, which takes the focus.
-  await page.keyboard.press("Control+Shift+D");
+  await page.keyboard.press(`${mod}+Shift+D`);
   await expect(tabs.getByRole("tab")).toHaveCount(2);
   const panes = page.locator(".terminal-pane:visible");
   await expect(panes).toHaveCount(2);
@@ -73,7 +74,7 @@ test("split: Ctrl+Shift+D shows two terminals side by side, a click focuses one,
   await expect.poll(async () => (await left.boundingBox())?.width ?? 0).toBeLessThan(before - 100);
 
   // Pressed again, the split ends; the focused terminal stays shown.
-  await page.keyboard.press("Control+Shift+D");
+  await page.keyboard.press(`${mod}+Shift+D`);
   await expect(panes).toHaveCount(1);
   await expect(divider).toHaveCount(0);
   await expect(page.locator(".terminal-pane:visible canvas").first()).toBeAttached();

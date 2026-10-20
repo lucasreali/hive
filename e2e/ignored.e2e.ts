@@ -1,4 +1,5 @@
 import { expect, type Locator, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** The folder `name` of the files tree. */
 const folder = (files: Locator, name: string) =>
@@ -42,11 +43,11 @@ test("ignored: what git ignores shows dimmed, an ignored folder lists what it ho
   await env.click();
   const view = page.getByRole("region", { name: ".env" });
   await view.locator(".cm-line").first().click();
-  await page.keyboard.press("Control+Home");
+  await page.keyboard.press(`${mod}+Home`);
   await page.keyboard.type("API_KEY=dev\n");
   const unsaved = page.getByRole("button", { name: "Close file .env (unsaved changes)" });
   await expect(unsaved).toBeVisible();
-  await page.keyboard.press("Control+s");
+  await page.keyboard.press(`${mod}+s`);
   await expect(unsaved).toBeHidden();
   await expect(view.locator(".cm-content")).toContainText("API_KEY=dev");
 });

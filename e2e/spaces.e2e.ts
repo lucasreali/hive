@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { mod } from "./host";
 
 test("a new space starts empty, takes new projects, and F8 goes back to another space's agent", async ({
   page,
@@ -22,7 +23,7 @@ test("a new space starts empty, takes new projects, and F8 goes back to another 
   await expect(tree).toContainText("No projects");
 
   // Its projects only; a project of another space is refused.
-  await page.keyboard.press("Control+Shift+O");
+  await page.keyboard.press(`${mod}+Shift+O`);
   const add = page.getByRole("dialog", { name: "Add project" });
   const field = add.getByLabel("Folder", { exact: true });
   await field.fill("/home/user/projects/shop");
@@ -83,7 +84,7 @@ test("switching space shows the place last selected there, with its tabs", async
   await dialog.getByLabel("Name", { exact: true }).press("Enter");
   await expect(space).toHaveText("Work");
   await expect(tabs.getByRole("tab")).toHaveCount(0);
-  await page.keyboard.press("Control+Shift+O");
+  await page.keyboard.press(`${mod}+Shift+O`);
   const add = page.getByRole("dialog", { name: "Add project" });
   await add.getByLabel("Folder", { exact: true }).fill("/home/user/dotfiles");
   await expect(add.getByRole("button", { name: /^Add project/ })).toBeEnabled();

@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { notice } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
@@ -214,4 +215,11 @@ test("an update failure without an offered update only says why", () => {
     update: null,
     notices: [{ kind: "error", text: "Update failed: no update to install" }],
   });
+});
+
+test("on macOS the bell names ⇧⌘J for the next pending agent (F8 is Play/Pause there)", () => {
+  asMac();
+  render(<App />);
+  const bell = document.querySelector(".pending-bell") as HTMLButtonElement;
+  expect(bell.title).toBe("Notifications (⇧⌘J: next pending)");
 });

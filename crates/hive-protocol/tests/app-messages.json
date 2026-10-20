@@ -530,6 +530,7 @@
         "cursor_style": "block",
         "cursor_blink": false,
         "copy_on_select": false,
+        "option_as_meta": false,
         "shell": "default"
       },
       "appearance": {

@@ -71,8 +71,10 @@ test("the long remote branch list scrolls with the arrow keys", async ({ page })
   await page.getByRole("menuitem", { name: /^New worktree…/ }).click();
   const filter = page.getByLabel("Base branch");
   await filter.fill("renovate");
-  for (let i = 0; i < 40; i++) await filter.press("ArrowDown");
   const pressed = page.locator(".branch-row[aria-pressed=true]");
+  // The branches arrive from the service: an arrow before them moves nothing.
+  await expect(pressed).toHaveText("origin/renovate/dependency-1");
+  for (let i = 0; i < 40; i++) await filter.press("ArrowDown");
   await expect(pressed).toHaveText("origin/renovate/dependency-41");
   await expect(pressed).toBeInViewport();
   await page.keyboard.press("Escape");

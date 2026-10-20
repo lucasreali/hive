@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { keyLabel, mod } from "./host";
 
 test("markdown: the eye and Ctrl+Shift+V show a Markdown file rendered; Ctrl+S shows the text (11.2)", async ({
   page,
@@ -18,9 +19,9 @@ test("markdown: the eye and Ctrl+Shift+V show a Markdown file rendered; Ctrl+S s
   const view = page.getByRole("region", { name: "README.md" });
   const eye = view.getByRole("button", { name: "Show rendered Markdown" });
   await expect(eye).toHaveAttribute("aria-pressed", "false");
-  await expect(eye).toHaveAttribute("title", "Show rendered (Ctrl+Shift+V)");
+  await expect(eye).toHaveAttribute("title", keyLabel("Show rendered (Ctrl+Shift+V)"));
   await view.locator(".cm-line").first().click();
-  await page.keyboard.press("Control+Home");
+  await page.keyboard.press(`${mod}+Home`);
   await page.keyboard.type("# Hello\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n");
 
   // The unsaved text, rendered.
@@ -32,14 +33,14 @@ test("markdown: the eye and Ctrl+Shift+V show a Markdown file rendered; Ctrl+S s
   await expect(view.locator(".cm-editor")).toHaveCount(0);
   await page.screenshot({ path: "target/e2e/markdown.png" });
 
-  await page.keyboard.press("Control+Shift+V");
+  await page.keyboard.press(`${mod}+Shift+V`);
   await expect(eye).toHaveAttribute("aria-pressed", "false");
   await expect(view.locator(".cm-content")).toContainText("# Hello");
-  await page.keyboard.press("Control+Shift+V");
+  await page.keyboard.press(`${mod}+Shift+V`);
   await expect(rendered).toBeVisible();
 
   // Ctrl+S saves and shows the text again.
-  await page.keyboard.press("Control+s");
+  await page.keyboard.press(`${mod}+s`);
   await expect(eye).toHaveAttribute("aria-pressed", "false");
   await expect(view.getByRole("button", { name: "Save" })).toBeDisabled();
   await expect(view.locator(".cm-content")).toContainText("# Hello");
@@ -97,7 +98,7 @@ test("markdown: the preview's document style in light and dark (14.6)", async ({
     .click();
   const view = page.getByRole("region", { name: "README.md" });
   await view.locator(".cm-line").first().click();
-  await page.keyboard.press("Control+a");
+  await page.keyboard.press(`${mod}+a`);
   await page.keyboard.insertText(DOCUMENT);
   await view.getByRole("button", { name: "Show rendered Markdown" }).click();
   const rendered = view.locator(".markdown-view");

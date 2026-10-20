@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** The colour on screen at a 1×1 px point, as [r, g, b]. */
 async function pixel(page: Page, x: number, y: number): Promise<number[]> {
@@ -101,7 +102,7 @@ for (const theme of ["one-dark", "one-light"]) {
     const lines = view.locator(".cm-line");
     await expect(view.locator(".cm-changeGutter .cm-change-modified").first()).toBeVisible();
     await lines.first().click();
-    await page.keyboard.press("Control+Home");
+    await page.keyboard.press(`${mod}+Home`);
     for (let i = 0; i < 2; i++) await page.keyboard.press("Shift+ArrowDown");
     await page.keyboard.press("Shift+End");
     await expect(lines.nth(2)).toHaveClass(/cm-activeLine/);
