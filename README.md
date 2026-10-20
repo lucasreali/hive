@@ -198,8 +198,20 @@ cargo mutants --in-diff <(git diff main -- '*.rs')    # no missed mutants
 bun install --frozen-lockfile
 bun run lint && bun run typecheck
 bun test --coverage     # 100% line threshold in bunfig.toml
-bun run e2e             # Playwright; on Linux needs libnss3 and libnspr4
+bun run e2e             # Playwright, Chromium and WebKit: Linux only for now (below)
 ```
+
+E2E passes only on Linux for now: in CI, or locally in Playwright's Linux container. Run natively on macOS, specs fail on the Mac's key bindings and ⌘ labels (they press Ctrl); that waits for host-aware keys (TODO 17.14). From the checkout, with Docker (a Linux `node_modules` in a volume, so the Mac's is untouched; `load` and `tree-perf` measure timing and are left to CI):
+
+```sh
+docker volume create hive-e2e-bun && docker volume create hive-e2e-nm
+docker run --rm -v hive-e2e-bun:/opt/bun --entrypoint cp oven/bun:1.4.3 /usr/local/bin/bun /opt/bun/bun
+docker run --rm --ipc=host -v "$PWD":/work -v hive-e2e-nm:/work/node_modules -v hive-e2e-bun:/opt/bun \
+  -w /work -e E2E_PORT=1777 mcr.microsoft.com/playwright:v1.63.0-noble \
+  bash -c 'export PATH=/opt/bun:$PATH; bun install --frozen-lockfile && xvfb-run -a bun run e2e --project ui --project webkit'
+```
+
+On a Linux host whose Chromium lacks `libnss3`/`libnspr4`, prefix `LD_LIBRARY_PATH` with a folder holding them.
 
 - 100% line coverage in Rust and in the frontend, plus mutation testing on the changed code. Excluded files are listed with their reasons in [`COVERAGE_EXCLUSIONS.md`](COVERAGE_EXCLUSIONS.md).
 - Integration tests run the real `hive` with a temporary `HOME`/`XDG_*` and a stand-in `claude`; they never touch your environment.
