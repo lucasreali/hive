@@ -73,23 +73,6 @@ jobs:
       - run: bun install --frozen-lockfile
       # `tauri::generate_context!` needs the built frontend.
       - run: bun run build
-      # TEMPORARY (TODO 18.11): stress the Stage 17 flakes 50x each; removed before merging.
-      - run: |
-          cargo test -p hive --test integration --no-run
-          bin=$(ls -t target/debug/deps/integration-* | grep -v '\.d$' | head -1)
-          for t in spaces::a_terminal_gets_the_space_of_the_project_its_folder_resolves_into \
-            projects::the_menu_removes_and_renames_worktrees \
-            projects::worktrees_carry_their_health projects::worktrees_carry_their_health \
-            daemon::the_users_shell_runs_only_once_its_path_is_needed; do
-            (
-              fail=0 log=$(mktemp)
-              for i in $(seq 50); do
-                "$bin" --exact "$t" > "$log" 2>&1 || { fail=$((fail + 1)); echo "FAILED $t #$i"; cat "$log"; }
-              done
-              echo "STRESS $t: $fail failed of 50"
-            ) &
-          done
-          wait
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Runs `cargo test --workspace` instrumented.
       - run: cargo llvm-cov --workspace --no-fail-fast --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
