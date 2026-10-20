@@ -2,6 +2,8 @@
 //! Linux; covered (llvm-cov and mutants) by `macos.yml`.
 //!
 //! - ⌘Q, the Dock's "Quit" and logging out ask first (17.7).
+//! - Files dropped from Finder on a terminal (18.1) and the files copied in Finder, which ⌘V
+//!   pastes (18.3): their paths, read from the drag's pasteboard and from the clipboard.
 //! - Asking the notification center (`UNUserNotificationCenter`) whether Hive may notify
 //!   (17.19). The notifications themselves still go through `mac-notification-sys` (`main.rs`).
 //!   Tested against stand-in classes: a test process is no app bundle, and the real center
@@ -270,6 +272,14 @@ unsafe extern "C" {
 unsafe extern "C" {
     /// The pasteboard type of a drag's file paths: an array of strings (what wry reads too).
     static NSFilenamesPboardType: Id;
+    /// The clipboard's name: the general pasteboard, which Finder's Copy fills.
+    static NSPasteboardNameGeneral: Id;
+}
+
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn objc_autoreleasePoolPush() -> *mut c_void;
+    fn objc_autoreleasePoolPop(pool: *mut c_void);
 }
 
 /// `objc_msgSend` as a function of type `F`, an `unsafe extern "C" fn` pointer with the
@@ -487,6 +497,53 @@ unsafe fn file_paths(pasteboard: Id) -> Vec<String> {
         }
     }
     paths
+}
+
+/// A pasteboard the files copied in Finder are read from (18.3, [`crate::Clipboard`]): the
+/// clipboard, or (tests) the pasteboard with that name.
+pub struct Pasteboard(Option<std::ffi::CString>);
+
+impl Pasteboard {
+    /// The clipboard (the general pasteboard).
+    pub fn general() -> Self {
+        Self(None)
+    }
+
+    /// The pasteboard's name, an `NSString`.
+    ///
+    /// # Safety
+    /// Inside an autorelease pool, which keeps the name it makes.
+    unsafe fn name(&self) -> Id {
+        let Some(name) = &self.0 else {
+            // SAFETY: AppKit's constant, read only.
+            return unsafe { NSPasteboardNameGeneral };
+        };
+        // SAFETY: `+[NSString stringWithUTF8String:]` with a C string; autoreleased.
+        unsafe {
+            let make = message::<unsafe extern "C" fn(Id, Sel, *const c_char) -> Id>();
+            let class = objc_getClass(c"NSString".as_ptr());
+            make(class, selector(c"stringWithUTF8String:"), name.as_ptr())
+        }
+    }
+}
+
+impl crate::Clipboard for Pasteboard {
+    /// Its files' paths as a drop's are read (`NSFilenamesPboardType`, which macOS also gives
+    /// for the file URLs Finder copies): at most [`DROP_LIMIT`] of at most [`PATH_LIMIT`]
+    /// bytes. Inside an autorelease pool of its own: the objects it gets are freed on return.
+    fn file_paths(&self) -> Vec<String> {
+        // SAFETY: `+[NSPasteboard pasteboardWithName:]` with an `NSString`; the pool is pushed
+        // and popped around every object it makes, and the paths are copied out before the pop.
+        unsafe {
+            let pool = objc_autoreleasePoolPush();
+            let named = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+            let class = objc_getClass(c"NSPasteboard".as_ptr());
+            let board = named(class, selector(c"pasteboardWithName:"), self.name());
+            let paths = file_paths(board);
+            objc_autoreleasePoolPop(pool);
+            paths
+        }
+    }
 }
 
 #[cfg(test)]
@@ -907,5 +964,81 @@ mod tests {
         LIST.store(array(&paths) as usize, SeqCst);
         PANIC.store(1, SeqCst);
         own(info);
+    }
+
+    /// A pasteboard of this test's own (never the clipboard), and the pasteboard object.
+    fn own_pasteboard(name: &str) -> (Pasteboard, Id) {
+        let name = std::ffi::CString::new(format!("{name}-{}", std::process::id())).unwrap();
+        let board = Pasteboard(Some(name));
+        // SAFETY: `+[NSPasteboard pasteboardWithName:]`, then `clearContents`.
+        unsafe {
+            let named = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+            let class = objc_getClass(c"NSPasteboard".as_ptr());
+            let object = named(class, selector(c"pasteboardWithName:"), board.name());
+            clear(object);
+            (board, object)
+        }
+    }
+
+    /// Empties `board`.
+    fn clear(board: Id) {
+        // SAFETY: `-[NSPasteboard clearContents]`.
+        unsafe {
+            let clear = message::<unsafe extern "C" fn(Id, Sel) -> isize>();
+            clear(board, selector(c"clearContents"));
+        }
+    }
+
+    /// Writes `objects` on `board` as Finder's Copy does (`writeObjects:`).
+    fn write(board: Id, objects: &[Id]) {
+        // SAFETY: `-[NSPasteboard writeObjects:]` with an array of writable objects.
+        unsafe {
+            let put = message::<unsafe extern "C" fn(Id, Sel, Id) -> bool>();
+            assert!(put(board, selector(c"writeObjects:"), array(objects)));
+        }
+    }
+
+    /// A file URL for `path`.
+    fn file_url(path: &str) -> Id {
+        // SAFETY: `+[NSURL fileURLWithPath:]` with an `NSString`.
+        unsafe {
+            let make = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+            let class = objc_getClass(c"NSURL".as_ptr());
+            make(class, selector(c"fileURLWithPath:"), string(path))
+        }
+    }
+
+    #[test]
+    fn the_files_copied_on_a_pasteboard_are_read_as_paths() {
+        use crate::Clipboard;
+        let (pasteboard, board) = own_pasteboard("HiveCopiedFiles");
+        // Nothing on it: no files.
+        assert_eq!(pasteboard.file_paths(), Vec::<String>::new());
+        let paths = [
+            "/Users/me/My Shots/a (1).png",
+            "/tmp/日本語 \u{202f}x",
+            "/tmp/folder",
+        ];
+        let urls: Vec<Id> = paths.iter().map(|path| file_url(path)).collect();
+        write(board, &urls);
+        assert_eq!(pasteboard.file_paths(), paths);
+        // Text only (copied in an editor): no files.
+        clear(board);
+        write(board, &[string("/tmp/a.png")]);
+        assert_eq!(pasteboard.file_paths(), Vec::<String>::new());
+        // SAFETY: `-[NSPasteboard releaseGlobally]`: the test's pasteboard goes away.
+        unsafe {
+            let release = message::<unsafe extern "C" fn(Id, Sel)>();
+            release(board, selector(c"releaseGlobally"));
+        }
+    }
+
+    #[test]
+    fn the_clipboard_is_the_general_pasteboard() {
+        // Only its name is compared: a test never reads the user's clipboard.
+        // SAFETY: AppKit's constant, read only.
+        unsafe {
+            assert_eq!(Pasteboard::general().name(), NSPasteboardNameGeneral);
+        }
     }
 }

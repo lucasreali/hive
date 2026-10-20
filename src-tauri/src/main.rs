@@ -67,7 +67,9 @@ fn main() {
                 .with_tone(
                     app.path().app_cache_dir()?,
                     hive_lib::afplay("/usr/bin/afplay".into()),
-                );
+                )
+                // ⌘V pastes the paths of the files copied in Finder (18.3).
+                .with_clipboard(hive_lib::macos::Pasteboard::general());
             // WSL or Windows (12.5.4), only on Windows.
             #[cfg(windows)]
             let hive = hive.with_modes(hive_lib::Modes::new(
@@ -177,6 +179,7 @@ fn main() {
             commands::open_notification_settings,
             commands::play_tone,
             commands::set_tray,
+            commands::pasted_files,
         ])
         .build(context);
     match result {

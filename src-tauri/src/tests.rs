@@ -3010,3 +3010,39 @@ fn files_dropped_on_the_window_go_to_the_ui_as_typed_paths() {
     let bare = mock_builder().build(mock_context(noop_assets())).unwrap();
     assert!(!files_dropped(bare.handle(), &paths, 1.0, 1.0));
 }
+
+/// A clipboard holding `paths` (18.3).
+struct Copied(Vec<String>);
+
+impl Clipboard for Copied {
+    fn file_paths(&self) -> Vec<String> {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn pasting_copied_files_types_their_quoted_paths() {
+    let copied = |paths: &[&str]| {
+        let paths = paths.iter().map(|path| path.to_string()).collect();
+        hive().with_clipboard(Copied(paths))
+    };
+    let app = mock_builder()
+        .manage(copied(&["/Users/me/My Shots/a (1).png", "/tmp/b"]))
+        .invoke_handler(tauri::generate_handler![pasted_files])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    assert_eq!(
+        invoke(&webview, "pasted_files", json!({})),
+        Ok(json!(r"/Users/me/My\ Shots/a\ \(1\).png /tmp/b "))
+    );
+    // No files (text, an image): nothing, and the UI pastes the text.
+    assert_eq!(copied(&[]).pasted_files(), "");
+    // A path with a control character is left out: an escape could end a bracketed paste.
+    let tricky = copied(&["/tmp/a\x1b[201~b", "/tmp/c\nd", "/tmp/ok", "/tmp/\u{85}"]);
+    assert_eq!(tricky.pasted_files(), "/tmp/ok ");
+    // An app that cannot read the clipboard (not macOS) pastes no files.
+    assert_eq!(hive().pasted_files(), "");
+}

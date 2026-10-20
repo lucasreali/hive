@@ -330,6 +330,18 @@ pub struct Hive {
     translocated: bool,
     /// Shows the menu bar icon; given by `main.rs` (`with_tray`, 17.22).
     tray: Option<Box<tray::Apply>>,
+    /// Reads the files copied to the clipboard; given by `main.rs` on macOS (`with_clipboard`,
+    /// 18.3).
+    clipboard: Option<Box<dyn Clipboard>>,
+}
+
+/// The clipboard's copied files (18.3), which WebKit shows a page only by name: read by the app
+/// side (`macos::Pasteboard` on macOS), behind this trait so [`Hive::pasted_files`] is tested
+/// without AppKit.
+pub trait Clipboard: Send + Sync {
+    /// The paths of the files on the clipboard (copied in Finder), in order; none when it holds
+    /// no files.
+    fn file_paths(&self) -> Vec<String>;
 }
 
 /// Runs the installer of a downloaded update.
@@ -744,6 +756,7 @@ impl Hive {
             defaults: (DEFAULTS.into(), Vec::new()),
             translocated: false,
             tray: None,
+            clipboard: None,
         }
     }
 
@@ -891,6 +904,29 @@ impl Hive {
         drop(link);
         let open = self.open.as_ref().ok_or("this app cannot open paths")?;
         open(&path, reveal)
+    }
+
+    /// Reads the files copied to the clipboard from `clipboard` (18.3).
+    pub fn with_clipboard(mut self, clipboard: impl Clipboard + 'static) -> Self {
+        self.clipboard = Some(Box::new(clipboard));
+        self
+    }
+
+    /// What pasting the files copied in Finder types (18.3): their paths, quoted as a drop's
+    /// ([`quote::typed`]); empty when the clipboard holds no files or the app cannot read it, and
+    /// the UI then pastes the clipboard's text. A path with a control character is left out: a
+    /// paste is bracketed for the program in the terminal, and an escape in it could end the
+    /// paste early and type the rest as keys (no name Finder gives a file has one).
+    pub fn pasted_files(&self) -> String {
+        let paths = self
+            .clipboard
+            .as_ref()
+            .map_or_else(Vec::new, |clipboard| clipboard.file_paths());
+        let plain: Vec<String> = paths
+            .into_iter()
+            .filter(|path| !path.chars().any(char::is_control))
+            .collect();
+        quote::typed(&plain)
     }
 
     /// Tells the UI the bridge runs the installer's `hive` (see `bridge_command`).
@@ -2189,6 +2225,13 @@ pub mod commands {
     #[tauri::command]
     pub fn play_tone(hive: State<'_, Hive>, volume: u8) -> Result<(), String> {
         hive.play_tone(volume)
+    }
+
+    /// The files copied in Finder as pasting them types them (18.3): their quoted paths, empty
+    /// for none. Sync, so it runs on the main thread, where AppKit is used.
+    #[tauri::command]
+    pub fn pasted_files(hive: State<'_, Hive>) -> String {
+        hive.pasted_files()
     }
 
     /// The menu bar icon (17.22) for what the UI sent: `shown` (the setting), the most urgent
