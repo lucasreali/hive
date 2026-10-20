@@ -15,10 +15,17 @@ const close = () => openModal(null);
 
 type Row = { head: string } | { branch: string };
 
+/** An issue number as typed: digits only, no leading zero; `null` otherwise. */
+export function issueNumber(text: string): number | null {
+  return /^[1-9][0-9]{0,14}$/.test(text.trim()) ? Number(text.trim()) : null;
+}
+
 /**
  * Screens 1c/1d. Every rule is the service's (#33, #37): it validates the name as the user
  * types and again on create, lists the branches and creates the worktree with the CLI's code.
- * The dialog only filters the branch list and shows the answers.
+ * The dialog only filters the branch list and shows the answers. "From issue" (17.24) asks
+ * for an issue number instead of a name: the service names the branch from the issue, and
+ * Hive only prepares the worktree (no "Start claude": the human starts it).
  */
 export function NewWorktreeDialog() {
   const projects = Object.values(useHive((s) => s.projects) ?? {});
@@ -26,6 +33,8 @@ export function NewWorktreeDialog() {
   const { branches, nameChecks, created, createFailure } = useHive((s) => s.worktreeDialog);
   const [project, setProject] = useState(initial ?? projects[0]?.id ?? "");
   const [name, setName] = useState("");
+  const [fromIssue, setFromIssue] = useState(false);
+  const [issue, setIssue] = useState("");
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [openTerminal, setOpenTerminal] = useState(true);
@@ -37,8 +46,11 @@ export function NewWorktreeDialog() {
   // Answers for another project or name (the user kept typing) are ignored.
   const list = branches?.project === project ? branches : null;
   const check = nameChecks[name]?.project === project ? nameChecks[name] : null;
-  const failed = createFailure?.project === project && createFailure.name === name;
-  const error = failed ? createFailure.message : name && check?.error;
+  const number = issueNumber(issue);
+  const asked = fromIssue ? `#${number}` : name;
+  const failed = createFailure?.project === project && createFailure.name === asked;
+  const typed = fromIssue ? issue && !number && "Type the issue's number" : name && check?.error;
+  const error = failed ? createFailure.message : typed;
 
   const q = query.toLowerCase();
   const match = (b: string) => b.toLowerCase().includes(q);
@@ -71,10 +83,11 @@ export function NewWorktreeDialog() {
     handled.current = created;
     const setup = scriptsOf(useHive.getState().settings, created.project).setup;
     if (setup) showOpenFailure(openWith(created.path, setup));
-    if (openTerminal) showOpenFailure((startClaude ? openClaude : openTerminalIn)(created.path));
+    const claude = startClaude && !fromIssue;
+    if (openTerminal) showOpenFailure((claude ? openClaude : openTerminalIn)(created.path));
     select(created.path);
     if (created.notes.length === 0) close();
-  }, [created, openTerminal, startClaude]);
+  }, [created, openTerminal, startClaude, fromIssue]);
 
   const move = (step: number) => {
     const next = shown[Math.max(0, Math.min(shown.length - 1, shown.indexOf(base ?? "") + step))];
@@ -83,7 +96,9 @@ export function NewWorktreeDialog() {
     virtual.scrollToIndex(rows.findIndex((r) => "branch" in r && r.branch === next));
   };
 
-  const canCreate = name !== "" && check?.error === null && !failed;
+  const canCreate = fromIssue
+    ? number !== null && !failed
+    : name !== "" && check?.error === null && !failed;
 
   return (
     // A native modal dialog: the page behind is inert and Esc closes it.
@@ -102,6 +117,8 @@ export function NewWorktreeDialog() {
         onSubmit={(e) => {
           e.preventDefault();
           if (created) close();
+          else if (canCreate && fromIssue)
+            void transport.createIssueWorktree(project, number as number, base);
           else if (canCreate) void transport.createWorktree(project, name, base);
         }}
       >
@@ -124,6 +141,18 @@ export function NewWorktreeDialog() {
           </div>
         ) : (
           <div className="dialog-body wide">
+            <fieldset className="segmented new-worktree-from" aria-label="Start from">
+              {[false, true].map((issueMode) => (
+                <button
+                  type="button"
+                  key={String(issueMode)}
+                  aria-pressed={fromIssue === issueMode}
+                  onClick={() => setFromIssue(issueMode)}
+                >
+                  {issueMode ? "From issue" : "New branch"}
+                </button>
+              ))}
+            </fieldset>
             <div className="field">
               <span id="new-worktree-project">Project</span>
               <Select
@@ -138,17 +167,36 @@ export function NewWorktreeDialog() {
               />
             </div>
             <div className="field">
-              <label htmlFor="new-worktree-name">Worktree name</label>
-              <input
-                id="new-worktree-name"
-                name="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. fix-cart"
-                spellCheck={false}
-                autoComplete="off"
-                aria-invalid={Boolean(error)}
-              />
+              {fromIssue ? (
+                <>
+                  <label htmlFor="new-worktree-issue">Issue number</label>
+                  <input
+                    id="new-worktree-issue"
+                    name="issue"
+                    value={issue}
+                    onChange={(e) => setIssue(e.target.value)}
+                    placeholder="e.g. 42"
+                    inputMode="numeric"
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-invalid={Boolean(error)}
+                  />
+                </>
+              ) : (
+                <>
+                  <label htmlFor="new-worktree-name">Worktree name</label>
+                  <input
+                    id="new-worktree-name"
+                    name="name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. fix-cart"
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-invalid={Boolean(error)}
+                  />
+                </>
+              )}
               {error && (
                 <span className="field-error" role="alert">
                   {error}
@@ -219,25 +267,37 @@ export function NewWorktreeDialog() {
               />
               Open a terminal in the new worktree
             </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={openTerminal && startClaude}
-                disabled={!openTerminal}
-                onChange={(e) => setStartClaude(e.target.checked)}
-              />
-              Start claude in the terminal
-            </label>
+            {!fromIssue && (
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={openTerminal && startClaude}
+                  disabled={!openTerminal}
+                  onChange={(e) => setStartClaude(e.target.checked)}
+                />
+                Start claude in the terminal
+              </label>
+            )}
             <div className="plan">
-              <div>
-                <span className="plan-label">Folder: </span>
-                {check?.folder}
-              </div>
-              <div>
-                <span className="plan-label">Branch: </span>
-                {check?.branch}
-                {base && <span className="plan-label"> (from {base})</span>}
-              </div>
+              {fromIssue ? (
+                <div>
+                  <span className="plan-label">Branch: </span>
+                  named from the issue's number and title
+                  {base && <span className="plan-label"> (from {base})</span>}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <span className="plan-label">Folder: </span>
+                    {check?.folder}
+                  </div>
+                  <div>
+                    <span className="plan-label">Branch: </span>
+                    {check?.branch}
+                    {base && <span className="plan-label"> (from {base})</span>}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

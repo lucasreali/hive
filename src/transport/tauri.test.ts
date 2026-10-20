@@ -68,6 +68,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
   await tauriTransport.createWorktree("/r", "x", null);
+  await tauriTransport.createIssueWorktree("/r", 42, "main");
   await tauriTransport.removeWorktree("/r/w", true);
   await tauriTransport.renameWorktree("/r/w", "y");
   await tauriTransport.watchWorktree("/r", "branch");
@@ -113,6 +114,7 @@ test("terminal and project actions call their commands", async () => {
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],
     ["create_worktree", { project: "/r", name: "x", base: null }],
+    ["create_issue_worktree", { project: "/r", number: 42, base: "main" }],
     ["remove_worktree", { path: "/r/w", force: true }],
     ["rename_worktree", { path: "/r/w", name: "y" }],
     ["watch_worktree", { path: "/r", base: "branch" }],

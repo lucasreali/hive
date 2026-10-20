@@ -46,6 +46,8 @@ export const tauriTransport: Transport = {
   listBranches: (project) => send("list_branches", { project }),
   validateWorktreeName: (project, name) => send("validate_worktree_name", { project, name }),
   createWorktree: (project, name, base) => send("create_worktree", { project, name, base }),
+  createIssueWorktree: (project, number, base) =>
+    send("create_issue_worktree", { project, number, base }),
   removeWorktree: (path, force) => send("remove_worktree", { path, force }),
   renameWorktree: (path, name) => send("rename_worktree", { path, name }),
   watchWorktree: (path, base) => send("watch_worktree", { path, base }),

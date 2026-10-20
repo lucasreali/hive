@@ -423,6 +423,12 @@ export const MOCK_SESSIONS: Session[] = [
   ),
 ];
 
+/** The fake GitHub issues, by number: the worktree (and branch) the service names for each. */
+export const MOCK_ISSUES: Record<number, string> = {
+  42: "42-fix-the-login-crash",
+  57: "57-coupon-codes-at-checkout",
+};
+
 /** The fake repositories' branches; shop has enough remote ones to need scrolling. */
 export const MOCK_BRANCHES: Record<string, { local: string[]; remote: string[] }> = {
   "/home/user/projects/shop": {
@@ -1046,6 +1052,25 @@ export function createMockTransport(
       projects[projects.indexOf(project)] = updated;
       const path = worktree(id, name).path;
       later({ type: "worktree_created", project: updated, path, notes: [] });
+    },
+    async createIssueWorktree(id, number) {
+      const name = MOCK_ISSUES[number];
+      const project = find(id) as Project;
+      const message = name
+        ? nameError(project, name)
+        : `gh issue view failed: GraphQL: Could not resolve to an issue with the number of ${number}. (repository.issue)`;
+      if (message) {
+        return void later({
+          type: "create_worktree_failed",
+          project: id,
+          name: `#${number}`,
+          message,
+        });
+      }
+      const made = { ...worktree(id, name), branch: name };
+      const updated = { ...project, worktrees: [...project.worktrees, made] };
+      projects[projects.indexOf(project)] = updated;
+      later({ type: "worktree_created", project: updated, path: made.path, notes: [] });
     },
     async removeWorktree(path, force) {
       const failed = (message: string) =>

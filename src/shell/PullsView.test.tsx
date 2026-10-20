@@ -311,7 +311,7 @@ test("a draft is made ready; a checkout runs the setup script and selects the ne
   expect(act_).toHaveBeenLastCalledWith(shop.id, 9, { kind: "ready" });
   act(() => apply({ type: "pull_done", project: shop.id, number: 9, message: "ready" }));
 
-  fireEvent.click(within(body).getByRole("button", { name: "Check out" }));
+  fireEvent.click(within(body).getByRole("button", { name: "Check out in a new worktree" }));
   expect(act_).toHaveBeenLastCalledWith(shop.id, 9, { kind: "checkout" });
   // Another worktree created meanwhile is not this checkout's.
   const path = `${shop.path}/.claude/worktrees/pr-9`;
