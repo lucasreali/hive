@@ -14,7 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH=$HOME/.cargo/bin:$PATH
-[ "$(uname -s)" = Darwin ] || { echo "mac-dev: macOS only (from WSL: scripts/win-dev.sh)" >&2; exit 1; }
+[ "$(uname -s)" = Darwin ] || { echo "mac-dev: macOS only (README: Development, Running)" >&2; exit 1; }
 
 cargo build -p hive
 

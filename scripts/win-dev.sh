@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds the Windows app inside WSL and runs it on Windows (TODO 1.0).
+# Builds the Windows app inside WSL and runs it on Windows (TODO 1.0). Windows is frozen (D17.0):
+# kept for a Windows machine with WSL, not run on the Mac (README: "Windows (frozen, D17.0)").
 #   - cross-compiles src-tauri for x86_64-pc-windows-msvc with cargo-xwin
 #   - copies the .exe to %LOCALAPPDATA%\hive-dev (Windows cannot run it from \\wsl$ reliably)
 #   - builds target/debug/hive and points the app's bridge at it (HIVE_BRIDGE, HIVE_WSL_DISTRO)

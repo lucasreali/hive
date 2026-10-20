@@ -155,14 +155,13 @@ Details: [`docs/architecture.md`](docs/architecture.md). Decisions: [`docs/hive.
 | `src-tauri` | The Tauri app (`hive-app`): spawns the bridge, relays frames to the UI, updater |
 | `src` | React + TypeScript UI; `src/transport/mock.ts` is an in-browser fake service |
 | `e2e` | Playwright specs against the mock transport |
-| `scripts` | `win-dev.sh`, `mac-dev.sh`, `gates.sh`, `release.sh` |
+| `scripts` | `mac-dev.sh`, `gates.sh`, `ci.sh`, `release.sh`; `win-dev.sh` (Windows, frozen) |
 | `docs` | Decisions, architecture, UI reference, prototype |
 
 ### Prerequisites
 
 - Rust stable (`rustup`), [bun](https://bun.sh) and git.
 - For the gates: `cargo-llvm-cov` (with the `llvm-tools-preview` component), `cargo-mutants`, `cargo-nextest` (mutants run under it), `cargo-deny`, `cargo-machete`.
-- To build the Windows app from WSL: `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin --locked`. Windows is otherwise verified by CI ([`windows.yml`](.github/workflows/windows.yml)).
 
 ### macOS setup
 
@@ -182,10 +181,13 @@ Code behind a Linux-only `cfg` is checked by [`ci.yml`](.github/workflows/ci.yml
 
 ### Running
 
-- **Windows app from WSL:** `scripts/win-dev.sh` cross-compiles the app with `cargo xwin`, builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`, `HIVE_WSL_DISTRO`), starts Vite on port 1420 (hot reload) and launches the app through PowerShell.
 - **macOS app:** `scripts/mac-dev.sh` builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`) and runs `bun run tauri dev` (Vite on port 1420, hot reload). The dev service gets its own data folder (`~/.local/share/hive-dev`, or `HIVE_DEV_DIR`) and runtime folder (under `$TMPDIR`), through `XDG_DATA_HOME` and `XDG_RUNTIME_DIR`, so it runs beside an installed Hive without sharing its service, projects or hooks. Its terminals inherit both variables; settings (`XDG_CONFIG_HOME`) are shared with the installed app.
 - **UI in a browser:** `bun run dev`, then open `http://localhost:1420`. Outside Tauri the mock transport stands in for the service. Scenarios: `?mock=empty`, `?mock=states` (every agent state), `?mock=mismatch`, `?mock=disconnected`, `?mock=update`, `?mock=load` (20-terminal load test).
 - **Service only:** `cargo build -p hive` gives `target/debug/hive`.
+
+### Windows (frozen, D17.0)
+
+Windows keeps building and its tests run in CI ([`windows.yml`](.github/workflows/windows.yml)), but no Windows-only work is added. Building and running the Windows app by hand needs a Windows machine with WSL, which this Mac setup does not cover. `scripts/win-dev.sh` is kept for that case: from WSL it cross-compiles the app with `cargo xwin`, builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`, `HIVE_WSL_DISTRO`), starts Vite on port 1420 (hot reload) and launches the app through PowerShell. It needs, in WSL, `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc` and `cargo install cargo-xwin --locked`.
 
 ### Tests and quality gates
 
@@ -242,7 +244,7 @@ Only through the package managers' CLIs, never by editing manifests or lockfiles
 
 ## Status
 
-A personal project, at v0.4.x: expect rough edges.
+A personal project in active development (see the [releases](https://github.com/lucasreali/hive/releases)): expect rough edges.
 
 ## License
 
