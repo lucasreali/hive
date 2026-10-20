@@ -43,9 +43,14 @@ export function installUpdate(): void {
   transport.installUpdate().catch(() => installing(false));
 }
 
-/** The update button: restarting ends agents as closing does, so it asks the same way. */
+/**
+ * The update button: restarting ends agents as closing does, so it asks the same way. A
+ * translocated app cannot replace itself (17.10): it explains how to move it instead.
+ */
 export function requestUpdate(): void {
-  if (agentsAtRisk(useHive.getState()).length === 0) installUpdate();
+  const s = useHive.getState();
+  if (s.translocated) openModal("translocated");
+  else if (agentsAtRisk(s).length === 0) installUpdate();
   else openModal("update-app");
 }
 

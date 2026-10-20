@@ -16,6 +16,7 @@ import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
 import { Toasts } from "./shell/Toasts";
+import { TranslocatedDialog } from "./shell/TranslocatedDialog";
 import {
   ProjectMenu,
   RemoveMergedDialog,
@@ -71,6 +72,7 @@ export function App() {
         {modal === "new-pull" && !blocked && <NewPullDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
+        {modal === "translocated" && <TranslocatedDialog />}
         {!blocked && <WorktreeMenu />}
         {!blocked && <ProjectMenu />}
         {!blocked && <SessionMenu />}

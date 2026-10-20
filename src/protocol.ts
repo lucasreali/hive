@@ -16,6 +16,9 @@ export type ServiceMessage =
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
+  // From the app side (Rust): macOS runs the app translocated (17.10), so updates cannot
+  // install; `notice` on the first UI of the run only.
+  | { type: "translocated"; notice: boolean }
   // From the app side (Rust): the user clicked the OS notification about `agent` (13.5).
   | { type: "notification_clicked"; agent: string }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).

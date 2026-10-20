@@ -2475,6 +2475,16 @@ button.chevron:hover {
   overflow-wrap: anywhere;
 }
 
+/* Steps, as in the translocation notice (17.10). */
+.dialog-body ol {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
 /* Notices (10.3): toasts in the bottom-right corner, above the status bar, as menus look. */
 .toasts {
   position: fixed;
