@@ -269,7 +269,9 @@ pub fn create_on(dir: &Path, name: &str, head: Head) -> io::Result<Created> {
 pub fn check_branch(dir: &Path, branch: &str) -> io::Result<()> {
     let refused = || io::Error::other(format!("{branch:?} is not a branch name git accepts"));
     if branch.len() > BRANCH_LIMIT {
-        return Err(refused());
+        // Not shown: it may be as long as `gh`'s whole answer.
+        let message = format!("A branch name over {BRANCH_LIMIT} bytes is not accepted");
+        return Err(io::Error::other(message));
     }
     let out = git(dir, &["check-ref-format", "--branch", branch]).map_err(|_| refused())?;
     match out.strip_suffix(b"\n") == Some(branch.as_bytes()) {

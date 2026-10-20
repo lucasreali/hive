@@ -143,9 +143,8 @@ fn branch_names_from_github_are_checked_by_git() {
     for good in ["feature", "feat/login-2", "é", longest.as_str()] {
         worktree::check_branch(dir, good).unwrap();
     }
-    let too_long = format!("{longest}b");
     for bad in [
-        "", "-x", "--help", "a b", "a..b", "x.lock", "a:b", "HEAD", "@{-1}", &too_long,
+        "", "-x", "--help", "a b", "a..b", "x.lock", "a:b", "HEAD", "@{-1}",
     ] {
         let err = worktree::check_branch(dir, bad).unwrap_err();
         assert_eq!(
@@ -153,6 +152,12 @@ fn branch_names_from_github_are_checked_by_git() {
             format!("{bad:?} is not a branch name git accepts")
         );
     }
+    // Too long: refused without being repeated.
+    let err = worktree::check_branch(dir, &format!("{longest}b")).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "A branch name over 255 bytes is not accepted"
+    );
     assert!(!worktree::has_branch(dir, "main").unwrap());
     git(dir, &["commit", "-q", "--allow-empty", "-m", "x"]);
     git(dir, &["branch", "-M", "main"]);

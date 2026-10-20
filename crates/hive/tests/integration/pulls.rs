@@ -38,13 +38,22 @@ fn fake_gh(repo: &Repo, answer: &str) -> PathBuf {
 #[tokio::test]
 async fn the_pull_requests_view_runs_gh_off_the_frame_loop() {
     let repo = Repo::new();
-    // The recorded list, and a checkout onto the branch `feature`.
+    // The recorded list, pull request 5 on the branch `feature` and issue 9.
+    let pull = r#"{"number":5,"headRefName":"feature","headRefOid":"","isCrossRepository":false}"#;
+    let issue = r#"{"number":9,"title":"Fix it"}"#;
     let log = fake_gh(
         &repo,
         &format!(
-            "  \"api graphql\") cat '{SEARCH}' ;;\n  \"pr checkout\") git checkout -q -b feature ;;"
+            "  \"api graphql\") cat '{SEARCH}' ;;\n  \"pr view\") echo '{pull}' ;;\n  \"issue view\") echo '{issue}' ;;"
         ),
     );
+    // GitHub is a bare repository beside it, holding `feature`.
+    let bare = repo.env.path("bare.git");
+    let bare = bare.to_str().unwrap();
+    repo.git(&["init", "-q", "--bare", bare]);
+    repo.git(&["push", "-q", bare, "main:refs/heads/feature"]);
+    let instead = format!("url.{bare}.insteadOf");
+    repo.git(&["config", &instead, "https://github.com/o/r.git"]);
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     let root = repo.root.display().to_string();
@@ -103,8 +112,22 @@ async fn the_pull_requests_view_runs_gh_off_the_frame_loop() {
     let calls = std::fs::read_to_string(&log).unwrap();
     assert_eq!(
         calls,
-        "api graphql --hostname\npr checkout 5\napi graphql --hostname\n"
+        "api graphql --hostname\npr view 5\napi graphql --hostname\n"
     );
+
+    // An issue's worktree, on a branch named from it.
+    let issue = Control::CreateIssueWorktree {
+        project: root.clone(),
+        number: 9,
+        base: None,
+    };
+    app.send(0, issue).await;
+    let Control::WorktreeCreated { project, path, .. } = app.control().await.1 else {
+        panic!("expected the issue's worktree")
+    };
+    let created = project.worktrees.iter().find(|w| w.path == path).unwrap();
+    assert_eq!(created.branch.as_deref(), Some("9-fix-it"));
+    assert!(created.status.is_some());
     drop(app);
     assert!(daemon.wait_exit().success());
 }
