@@ -92,6 +92,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.openSettingsFile();
   await tauriTransport.getDiagnostics();
   await tauriTransport.checkUpdate();
+  await tauriTransport.checkUpdate(true);
   await tauriTransport.installUpdate();
   await tauriTransport.showNotification("fix login finished", "shop", "a");
   await tauriTransport.checkNotifications();
@@ -139,7 +140,8 @@ test("terminal and project actions call their commands", async () => {
     ["set_settings", { settings: DEFAULT_SETTINGS }],
     ["open_settings_file", {}],
     ["get_diagnostics", {}],
-    ["check_update", {}],
+    ["check_update", { manual: false }],
+    ["check_update", { manual: true }],
     ["install_update", {}],
     ["show_notification", { title: "fix login finished", body: "shop", agent: "a" }],
     ["check_notifications", {}],

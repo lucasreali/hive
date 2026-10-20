@@ -26,6 +26,10 @@ export type ServiceMessage =
   | { type: "quit_requested" }
   // From the app side (Rust): whether the OS lets Hive show notifications (17.19).
   | { type: "notification_permission"; permission: NotificationPermission }
+  // From the app side (Rust): a click on one of the app menu's own items (17.13, `menu.ts`).
+  | { type: "menu"; item: string }
+  // From the app side (Rust): a check the user asked for found no update; `error` null: up to date.
+  | { type: "update_checked"; error: string | null }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {

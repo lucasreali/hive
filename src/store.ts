@@ -262,6 +262,8 @@ export type HiveState = {
   /** Whether the OS lets Hive notify (17.19), as the app last said (`notification_permission`). */
   notificationPermission: NotificationPermission;
   rightPanel: RightPanel;
+  /** Whether the left sidebar shows (the View menu hides it, 17.13). */
+  sidebarShown: boolean;
   /** What the right panel shows, for the shown worktree. */
   panelView: PanelView;
   /** The left sidebar's and the right panel's widths, in pixels (see `shell/resize.tsx`). */
@@ -425,6 +427,7 @@ export const initialState: HiveState = {
   translocated: false,
   notificationPermission: "unknown",
   rightPanel: "files",
+  sidebarShown: true,
   panelView: "files",
   sidebarWidth: 264,
   panelWidth: 380,
@@ -636,6 +639,7 @@ export const showFailure = <T>(action: Promise<T>, what = ""): Promise<T> => {
 };
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
+export const toggleSidebar = () => useHive.setState((s) => ({ sidebarShown: !s.sidebarShown }));
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });
 /**
  * Opens a file in its own tab (8.21), the preview tab (11.1), and shows it, as editable text

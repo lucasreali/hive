@@ -981,6 +981,11 @@ test("?mock=update offers an update whose install fails; otherwise none is offer
   await transport.checkUpdate();
   await tick();
   expect(messages.some((m) => m.type === "update_ready")).toBe(false);
+  expect(messages.some((m) => m.type === "update_checked")).toBe(false);
+  // Asked from the menu: up to date.
+  await transport.checkUpdate(true);
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "update_checked", error: null });
 
   const update = createMockTransport("update");
   const offered: ServiceMessage[] = [];

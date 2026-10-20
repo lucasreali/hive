@@ -1490,12 +1490,38 @@ impl Hive {
 impl Hive {
     /// Asks the release endpoint for a newer version (4.19) and downloads it at once. No newer
     /// version, or a failed check (offline, GitHub down), sends nothing: it is not worth a notice.
-    pub async fn check_update(&self, updater: tauri_plugin_updater::Result<Updater>) {
-        let Ok(Some(update)) = async { updater?.check().await }.await else {
+    /// A `manual` check (the menu's "Check for Updates…", 17.13) answers those too
+    /// (`update_checked`), and offers again an update already downloaded.
+    pub async fn check_update(&self, updater: tauri_plugin_updater::Result<Updater>, manual: bool) {
+        let ready = self
+            .link()
+            .update
+            .as_ref()
+            .map(|(update, _)| update.version.clone());
+        if let Some(version) = ready.filter(|_| manual) {
+            self.link()
+                .to_ui(json!({"type": "update_ready", "version": version}));
             return;
+        }
+        let update = match async { updater?.check().await }.await {
+            Ok(Some(update)) => update,
+            checked => return self.checked(manual, checked.err().map(|e| e.to_string())),
         };
         let bytes = update.download(|_, _| {}, || {}).await;
-        self.downloaded(update, bytes.map_err(|error| error.to_string()));
+        let bytes = bytes.map_err(|error| error.to_string());
+        if let Err(error) = &bytes {
+            self.checked(manual, Some(error.clone()));
+        }
+        self.downloaded(update, bytes);
+    }
+
+    /// A check that found nothing to offer: `update_checked {error}` (null: up to date) when the
+    /// user asked for it (`manual`); nothing for the check at start, which the next start repeats.
+    fn checked(&self, manual: bool, error: Option<String>) {
+        if manual {
+            self.link()
+                .to_ui(json!({"type": "update_checked", "error": error}));
+        }
     }
 
     /// A downloaded update, its signature checked, waits for `install_update` or the app's exit
@@ -1696,12 +1722,16 @@ pub mod commands {
     }
 
     /// Sync like `connect`: the check runs on Tauri's runtime and answers on the UI channel.
+    /// `manual`: the user asked, so "up to date" and a failure are answered too.
     #[tauri::command]
-    pub fn check_update<R: Runtime>(app: AppHandle<R>) {
+    pub fn check_update<R: Runtime>(app: AppHandle<R>, manual: Option<bool>) {
         use tauri_plugin_updater::UpdaterExt;
+        let manual = manual == Some(true);
         tauri::async_runtime::spawn(async move {
-            // Only a newer release, downloaded and signed, reaches the UI (`update_ready`).
-            app.state::<Hive>().check_update(app.updater()).await;
+            // Only a newer release, downloaded and signed, is offered (`update_ready`).
+            app.state::<Hive>()
+                .check_update(app.updater(), manual)
+                .await;
         });
     }
 
@@ -2119,6 +2149,7 @@ pub mod commands {
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod menu;
 
 #[cfg(test)]
 mod tests;

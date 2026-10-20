@@ -2025,7 +2025,7 @@ async fn an_unsigned_release_is_neither_offered_nor_installed() {
         .build()
         .unwrap();
     use tauri_plugin_updater::UpdaterExt;
-    app.state::<Hive>().check_update(app.updater()).await;
+    app.state::<Hive>().check_update(app.updater(), false).await;
     // Downloaded at once, but its signature fails the check.
     assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(invoke(&webview, "check_update", json!({})), Ok(Value::Null));
@@ -2053,14 +2053,24 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
     let (hive, mut rx) = hive_with_ui();
     let endpoint = release_server("0.0.1");
     let app = updater_app(&endpoint, hive_with_ui().0);
-    hive.check_update(app.updater()).await;
+    hive.check_update(app.updater(), false).await;
+    // Asked from the menu, it says so.
+    hive.check_update(app.updater(), true).await;
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_checked", "error": null})
+    );
     // Anything but `/latest.json` answers the installer, which is not JSON: the check fails.
     let broken = vec![endpoint
         .replace("latest.json", "broken.json")
         .parse()
         .unwrap()];
-    let updater = app.updater_builder().endpoints(broken).unwrap().build();
-    hive.check_update(updater).await;
+    let builder = || app.updater_builder().endpoints(broken.clone()).unwrap();
+    hive.check_update(builder().build(), false).await;
+    hive.check_update(builder().build(), true).await;
+    let failed = next(&mut rx).await;
+    assert_eq!(failed["type"], "update_checked");
+    assert!(failed["error"].as_str().is_some_and(|e| !e.is_empty()));
     hive.install_update().await;
     assert_eq!(
         next(&mut rx).await,
@@ -2802,4 +2812,157 @@ fn afplay_gets_the_volume_and_the_file_as_separate_arguments() {
     let missing = afplay(root.join("missing"))(&file, 1.0).unwrap_err();
     assert!(missing.starts_with("cannot play the tone: "), "{missing}");
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_check_from_the_menu_answers_a_failed_download() {
+    let (hive, mut rx) = hive_with_ui();
+    let (endpoint, _downloads) = counted_release_server("99.0.0");
+    let app = updater_app(&endpoint, hive);
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let manual = json!({"manual": true});
+    assert_eq!(invoke(&webview, "check_update", manual), Ok(Value::Null));
+    // Its signature fails the check.
+    let failed = next(&mut rx).await;
+    assert_eq!(failed["type"], "update_checked");
+    assert!(failed["error"].as_str().is_some_and(|e| !e.is_empty()));
+}
+
+#[tokio::test]
+async fn a_check_from_the_menu_offers_a_downloaded_update_again() {
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_updater::UpdaterExt;
+    let (hive, mut rx, _installed) = hive_installing(Ok(()));
+    let (endpoint, downloads) = counted_release_server("99.0.0");
+    let app = updater_app(&endpoint, hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    let ready = json!({"type": "update_ready", "version": "99.0.0"});
+    assert_eq!(next(&mut rx).await, ready);
+    hive.check_update(app.updater(), true).await;
+    assert_eq!(next(&mut rx).await, ready);
+    assert_eq!(downloads.load(Ordering::SeqCst), 0);
+    // The check at start looks again (this release's signature fails: nothing said) and keeps it.
+    hive.check_update(app.updater(), false).await;
+    assert_eq!(downloads.load(Ordering::SeqCst), 1);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(hive.install_pending(), Some(Ok(())));
+}
+
+#[test]
+fn the_menu_bar_has_hives_menus_and_the_native_editing_items() {
+    use menu::{Item, Native::*, Role, MENUS};
+    let titles: Vec<_> = MENUS.iter().map(|menu| menu.title).collect();
+    assert_eq!(titles, ["Hive", "Edit", "View", "Window", "Help"]);
+    let roles: Vec<_> = MENUS.iter().map(|menu| menu.role).collect();
+    use Role::{Help, Plain, Window};
+    assert_eq!(roles, [Plain, Plain, Plain, Window, Help]);
+    let natives = |menu: usize| -> Vec<_> {
+        let items = MENUS[menu].items.iter();
+        items
+            .filter_map(|item| match item {
+                Item::Native(native) => Some(*native),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(natives(0), [About, Services, Hide, HideOthers, ShowAll]);
+    // WKWebView's ⌘C/⌘V in text fields, the editor and the terminal need these (17.8).
+    assert_eq!(natives(1), [Undo, Redo, Cut, Copy, Paste, SelectAll]);
+    assert_eq!(natives(2), [Fullscreen]);
+    assert_eq!(natives(3), [Minimize, Zoom]);
+    assert_eq!(natives(4), []);
+    let own = |menu: usize| -> Vec<_> {
+        let items = MENUS[menu].items.iter();
+        items
+            .filter_map(|item| match item {
+                Item::Own { id, text, keys } => Some((*id, *text, *keys)),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        own(0),
+        [
+            ("settings", "Settings…", Some("CmdOrCtrl+,")),
+            ("check-updates", "Check for Updates…", None),
+            ("quit", "Quit Hive", Some("CmdOrCtrl+Q")),
+        ]
+    );
+    assert_eq!(own(1), []);
+    assert_eq!(
+        own(2),
+        [
+            ("toggle-sidebar", "Toggle Sidebar", None),
+            (
+                "toggle-panel",
+                "Toggle Right Panel",
+                Some("CmdOrCtrl+Shift+B")
+            ),
+        ]
+    );
+    assert_eq!(own(3), [("close-tab", "Close Tab", Some("CmdOrCtrl+W"))]);
+    assert_eq!(
+        own(4),
+        [
+            ("help", "Hive Help", None),
+            ("report-issue", "Report an Issue…", None),
+        ]
+    );
+    // About first, Quit last, in the app's menu.
+    assert_eq!(MENUS[0].items.first(), Some(&Item::Native(About)));
+    assert!(matches!(
+        MENUS[0].items.last(),
+        Some(Item::Own { id: "quit", .. })
+    ));
+}
+
+#[test]
+fn only_hives_own_menu_items_have_an_action() {
+    use menu::{action, Action};
+    assert_eq!(action(menu::QUIT), Action::Quit);
+    let ui = [
+        "settings",
+        "check-updates",
+        "toggle-sidebar",
+        "toggle-panel",
+        "close-tab",
+        "help",
+        "report-issue",
+    ];
+    for id in ui {
+        assert_eq!(action(id), Action::Ui(id), "{id}");
+    }
+    for id in ["", "about", "Settings…", "settings ", "1"] {
+        assert_eq!(action(id), Action::None, "{id:?}");
+    }
+}
+
+#[test]
+fn a_menu_click_goes_to_the_ui_and_quit_quits() {
+    let (hive, mut rx) = hive_with_ui();
+    let (tx, exits) = std::sync::mpsc::channel();
+    let hive = hive.with_exit(move || tx.send(()).unwrap());
+    let app = mock_builder()
+        .manage(hive)
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    menu::on_menu(app.handle(), "settings");
+    let item = |item: &str| json!({"type": "menu", "item": item});
+    assert_eq!(rx.try_recv(), Ok(item("settings")));
+    menu::on_menu(app.handle(), "close-tab");
+    assert_eq!(rx.try_recv(), Ok(item("close-tab")));
+    // A native item's event: nothing.
+    menu::on_menu(app.handle(), "about");
+    assert!(rx.try_recv().is_err());
+    assert!(exits.try_recv().is_err());
+    // Nothing at risk: Quit quits at once (17.7 asks the UI otherwise).
+    menu::on_menu(app.handle(), "quit");
+    assert_eq!(exits.try_recv(), Ok(()));
+    assert!(rx.try_recv().is_err());
+    // An app without its `Hive` does nothing.
+    let bare = mock_builder().build(mock_context(noop_assets())).unwrap();
+    menu::on_menu(bare.handle(), "quit");
+    assert!(exits.try_recv().is_err());
 }
