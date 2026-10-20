@@ -131,13 +131,27 @@ mod tests {
         assert!(log.is_empty());
     }
 
+    /// This process's soft limit, as a child shell sees it.
+    fn shell_soft() -> String {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", "ulimit -n"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    }
+
     #[test]
     fn this_process_limit_is_raised() {
+        let (soft, hard) = Process.get().unwrap();
+        let most = hard.min(MOST);
+        // One below what it can be, as a child sees.
+        Process.set(most - 1, hard).unwrap();
+        assert_eq!(Process.get().unwrap(), (most - 1, hard));
+        assert_eq!(shell_soft(), (most - 1).to_string());
         raise_at_start(&Process, &mut io::stderr());
-        let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
-        assert!(soft >= hard.min(MOST), "{soft} of {hard}");
-        // Set to what it is: read back unchanged.
-        Process.set(soft, hard).unwrap();
-        assert_eq!(Process.get().unwrap(), (soft, hard));
+        assert_eq!(Process.get().unwrap(), (most, hard));
+        assert_eq!(shell_soft(), most.to_string());
+        // Never lower than it was.
+        Process.set(soft.max(most), hard).unwrap();
     }
 }
