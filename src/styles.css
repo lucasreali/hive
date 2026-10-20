@@ -2582,10 +2582,12 @@ button.chevron:hover {
   font-size: var(--fs-small);
 }
 
-/* 14.5: the WebView's own clear button is blue; `SearchField` draws the app's instead. */
+/* 14.5: the WebView's own clear button is blue; `SearchField` draws the app's instead.
+   WebKitGTK still draws its icon with no appearance (17.3), so it is not displayed at all. */
 .files-search-field input::-webkit-search-cancel-button {
   -webkit-appearance: none;
   appearance: none;
+  display: none;
 }
 
 .settings-nav .files-search-field {
