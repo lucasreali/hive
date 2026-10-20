@@ -81,4 +81,6 @@ export const tauriTransport: Transport = {
   playTone: (volume) => invoke<void>("play_tone", { volume }),
   // No toast on a failure: the icon is a hint (`followTray` drops it).
   setTray: (tray) => invoke("set_tray", tray),
+  // No toast: a paste with no files read pastes the clipboard's text (`terminals.ts`).
+  pastedFiles: () => invoke<string>("pasted_files"),
 };

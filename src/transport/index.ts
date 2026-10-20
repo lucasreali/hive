@@ -236,6 +236,12 @@ export interface Transport {
    * its menu is answered by `tray_clicked`.
    */
   setTray(tray: Tray): Promise<void>;
+  /**
+   * The files copied in Finder as pasting them types them (18.3, macOS): their paths, shell-quoted,
+   * each followed by a space; empty when the clipboard holds none. Rejects where the app cannot
+   * read the clipboard.
+   */
+  pastedFiles(): Promise<string>;
 }
 
 /**

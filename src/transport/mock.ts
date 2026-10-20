@@ -762,6 +762,8 @@ export function createMockTransport(
   let notified: string | null = null;
   /** The last menu bar icon sent (17.22). */
   let tray: Tray | null = null;
+  /** The files copied in Finder, as the app side reads them (18.3): `copy-files <text>`. */
+  let copied = "";
   // Kept in memory; the real service checks the ranges and saves them.
   let settings: Settings = DEFAULT_SETTINGS;
   // The typed line stands in for the tool call it is doing.
@@ -1002,6 +1004,9 @@ export function createMockTransport(
     // first pending agent in the last tray's menu.
     async setTray(shown) {
       tray = shown;
+    },
+    async pastedFiles() {
+      return copied;
     },
     async addProject(path) {
       // The group (14.1): its repositories come in the list, before it.
@@ -1297,6 +1302,9 @@ export function createMockTransport(
           const [, x, y, text] = drop as unknown as [string, string, string, string];
           later({ type: "files_dropped", text, x: Number(x), y: Number(y) });
         }
+        // Stands in for files copied in Finder (18.3): `copy-files <text>`, the text as the app
+        // side reads it (already quoted); `copy-files` alone empties the clipboard of files.
+        if (line === "copy-files" || line.startsWith("copy-files ")) copied = line.slice(11);
         const chosen = tray?.agents[0]?.[0];
         if (line === "tray-click" && chosen) later({ type: "tray_clicked", agent: chosen });
         if (line.startsWith("hive badge ")) {

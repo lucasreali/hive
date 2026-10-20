@@ -561,6 +561,94 @@ test("on macOS Cmd+C copies or interrupts and Cmd+V is WebKit's paste, and Ctrl+
   write.mockRestore();
 });
 
+/**
+ * WebKit's paste event on `term`'s textarea for a clipboard holding `text` and, with `file`, a
+ * file as WebKit shows one (type `Files`: its name only).
+ */
+function pasteEvent(term: Terminal, text: string, file?: string): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  const data = new DataTransfer();
+  if (text) data.setData("text/plain", text);
+  if (file) data.items.add(new File([], file, { type: "image/png" }));
+  Object.defineProperty(event, "clipboardData", { value: data });
+  term.textarea?.dispatchEvent(event);
+  return event;
+}
+
+test("on macOS ⌘V pastes each kind of clipboard: text, files copied in Finder, an image (18.3)", async () => {
+  asMac();
+  const write = spyOn(transport, "writeTerminal");
+  const files = spyOn(transport, "pastedFiles").mockResolvedValue("");
+  const { id, term } = await open();
+  showTerminal(id);
+  // Claude Code (or the shell) asked for bracketed paste.
+  await new Promise<void>((resolve) => term.write("\x1b[?2004h", resolve));
+  const pasted = async () => {
+    await settle();
+    const calls = write.mock.calls.map(([to, data]) => [to, data]);
+    write.mockClear();
+    return calls;
+  };
+
+  // Text, several lines (rich text reaches the page as its plain text): pasted by xterm,
+  // bracketed, lines ended by CR; WebKit's insertion into the textarea is cancelled.
+  const text = pasteEvent(term, "one\ntwo\r\nthree");
+  expect(text.defaultPrevented).toBe(true);
+  expect(await pasted()).toEqual([[id, "\x1b[200~one\rtwo\rthree\x1b[201~"]]);
+  expect(files).not.toHaveBeenCalled();
+  expect(term.textarea?.value).toBe("");
+
+  // Files copied in Finder: their paths from the app side, once, bracketed, no Enter.
+  files.mockResolvedValueOnce("/Users/me/My\\ Shots/a.png /tmp/b ");
+  expect(pasteEvent(term, "", "a.png").defaultPrevented).toBe(true);
+  expect(await pasted()).toEqual([[id, "\x1b[200~/Users/me/My\\ Shots/a.png /tmp/b \x1b[201~"]]);
+  expect(files).toHaveBeenCalledTimes(1);
+
+  // An image (a screenshot sent to the clipboard): no files, no text, so an empty paste, which
+  // Claude Code answers by reading the clipboard's image itself.
+  pasteEvent(term, "", "image.png");
+  expect(await pasted()).toEqual([[id, "\x1b[200~\x1b[201~"]]);
+  // An app that cannot read the clipboard: the event's text.
+  files.mockRejectedValueOnce("no clipboard");
+  pasteEvent(term, "a.png", "a.png");
+  expect(await pasted()).toEqual([[id, "\x1b[200~a.png\x1b[201~"]]);
+  expect(files).toHaveBeenCalledTimes(3);
+  files.mockRestore();
+  write.mockRestore();
+});
+
+test("off macOS a paste is xterm's alone, files never asked for", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const files = spyOn(transport, "pastedFiles").mockResolvedValue("/tmp/b ");
+  const { id, term } = await open();
+  showTerminal(id);
+  expect(pasteEvent(term, "a.png", "a.png").defaultPrevented).toBe(true);
+  await settle();
+  expect(write.mock.calls).toEqual([[id, "a.png"]]);
+  expect(files).not.toHaveBeenCalled();
+  files.mockRestore();
+  write.mockRestore();
+});
+
+test("on macOS the terminal menu's Paste pastes copied files' paths too, else the text", async () => {
+  asMac();
+  const write = spyOn(transport, "writeTerminal");
+  const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("a.png");
+  const files = spyOn(transport, "pastedFiles").mockResolvedValue("/tmp/a.png ");
+  const { id } = await open();
+  showTerminal(id);
+  terminalAction(id, "paste");
+  await settle();
+  expect(write.mock.calls).toEqual([[id, "/tmp/a.png "]]);
+  files.mockResolvedValue("");
+  terminalAction(id, "paste");
+  await settle();
+  expect(write.mock.calls.at(-1)).toEqual([id, "a.png"]);
+  files.mockRestore();
+  read.mockRestore();
+  write.mockRestore();
+});
+
 test("on macOS ⌘← ⌘→ ⌘⌫ send line start, end and kill to the shell, ⌘K clears; nothing else does", async () => {
   const write = spyOn(transport, "writeTerminal");
   const { id, term } = await open();

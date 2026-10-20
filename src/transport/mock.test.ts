@@ -237,6 +237,15 @@ test("the mock shell marks its prompts and commands; false fails", async () => {
   expect(output()).toBe(`${A}mock$ false\r\n${C}false\r\n${D(1)}${A}mock$ `);
 });
 
+test("`copy-files` stands in for files copied in Finder, as the app side reads them (18.3)", async () => {
+  const { transport, id } = await opened();
+  expect(await transport.pastedFiles()).toBe("");
+  await transport.writeTerminal(id, "copy-files /tmp/My\\ Shot.png /tmp/b \r");
+  expect(await transport.pastedFiles()).toBe("/tmp/My\\ Shot.png /tmp/b ");
+  await transport.writeTerminal(id, "copy-files\r");
+  expect(await transport.pastedFiles()).toBe("");
+});
+
 test("typed stand-ins send a terminal's progress, long command and notification", async () => {
   const { transport, messages, id } = await opened();
   const typed = ["progress normal 40", "progress indeterminate", "long-command 2 75"];

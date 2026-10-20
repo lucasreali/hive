@@ -189,7 +189,7 @@ test("a command that fails shows why as an error toast, and rejects already hand
     throw "the hive link is down";
   });
   // Every command but these: a new one sent with a bare `invoke` fails here.
-  const own = ["connect", "openTerminal", "saveFile", "playTone", "setTray"];
+  const own = ["connect", "openTerminal", "saveFile", "playTone", "setTray", "pastedFiles"];
   const methods = Object.entries(tauriTransport).filter(([name]) => !own.includes(name));
   expect(methods.length).toBe(Object.keys(tauriTransport).length - own.length);
   for (const [name, method] of methods) {
@@ -216,5 +216,13 @@ test("a command that fails shows why as an error toast, and rejects already hand
   // The menu bar icon is a hint: `followTray` drops its failure, without a toast.
   const tray = { shown: false, urgent: null, agents: [], usage: [] };
   await expect(tauriTransport.setTray(tray)).rejects.toBe("the hive link is down");
+  // A paste whose files cannot be read pastes the clipboard's text (`terminals.ts`).
+  await expect(tauriTransport.pastedFiles()).rejects.toBe("the hive link is down");
   expect(notice()).toBeNull();
+});
+
+test("the files copied in Finder are read by the app side (18.3)", async () => {
+  const calls = record("/tmp/a.png ");
+  expect(await tauriTransport.pastedFiles()).toBe("/tmp/a.png ");
+  expect(calls).toEqual([["pasted_files", {}]]);
 });

@@ -262,6 +262,8 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   el.dataset.terminal = String(id);
   el.hidden = true;
   el.addEventListener("focusin", () => focusPane(id));
+  // Before xterm's own listener, on its textarea inside the pane.
+  el.addEventListener("paste", (event) => onPaste(term, event), { capture: true });
   copyOnSelect(term, el);
   entries.set(id, { term, fit, search, el, webgl: null, marks });
   addTab(id, cwd);
@@ -367,7 +369,8 @@ const CLIPBOARD_KEYS = new Map<string, (term: Terminal, event: KeyboardEvent) =>
     (term, event) => {
       // 17.8: on macOS Cmd+V is left to WebKit, whose paste (the Edit menu's) reaches xterm's
       // textarea as a paste event, bracketed paste kept; reading the clipboard from script
-      // would show WebKit's "Paste" bubble whenever another app filled it.
+      // would show WebKit's "Paste" bubble whenever another app filled it. `onPaste` takes
+      // that event first, for files copied in Finder (18.3).
       if (isMac()) return;
       // The browser's own paste (Ctrl+Shift+V) would paste a second time.
       event.preventDefault();
@@ -384,13 +387,46 @@ function copy(term: Terminal): void {
 /**
  * Pastes the clipboard as Ctrl+Shift+V does, bracketed when the shell asked. It is read from
  * script: WebKit asks first, with its "Paste" bubble, when another app filled the clipboard,
- * and a refused read pastes nothing.
+ * and a refused read pastes nothing. On macOS files copied in Finder paste their paths, as
+ * ⌘V's do (`onPaste`, 18.3).
  */
 function paste(term: Terminal): void {
+  // Both asked at once: the read must start inside the click or key that asked for it.
+  const files = isMac() ? copiedFiles() : Promise.resolve("");
   void navigator.clipboard.readText().then(
-    (text) => term.paste(text),
+    async (text) => term.paste((await files) || text),
     () => {},
   );
+}
+
+/**
+ * The files copied in Finder as pasting them types them (18.3): their quoted paths, each
+ * followed by a space, read by the app side; empty when there are none or where the app cannot
+ * read the clipboard (the browser).
+ */
+const copiedFiles = () => transport.pastedFiles().catch(() => "");
+
+/**
+ * The paste event of WebKit's own paste (⌘V on macOS, 17.8), seen before xterm's listener.
+ *
+ * - WebKit would also insert the text into xterm's hidden textarea after xterm pasted it, where
+ *   it stayed until the next paste: cancelled, xterm pastes it alone.
+ * - Files copied in Finder (18.3): WebKit gives a page only their names (`files` without a
+ *   path, no text), so xterm pasted an empty paste, which Claude Code takes as "read the clipboard's
+ *   image" (Finder puts the file's icon there) and a shell shows as nothing. On macOS their
+ *   paths, read by the app side, are pasted instead, bracketed when the program asked, never
+ *   with Enter. Without any (an image copied, or a screenshot sent to the clipboard) the
+ *   event's own text is pasted, empty for an image: Claude Code then reads the image itself,
+ *   as after its own Ctrl+V or Terminal.app's ⌘V.
+ */
+function onPaste(term: Terminal, event: ClipboardEvent): void {
+  event.preventDefault();
+  const data = event.clipboardData;
+  if (!isMac() || !data?.files.length) return;
+  event.stopPropagation();
+  // Read now: the event's data is gone once it was handled.
+  const text = data.getData("text/plain");
+  void copiedFiles().then((files) => term.paste(files || text));
 }
 
 /**
