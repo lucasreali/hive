@@ -475,8 +475,10 @@ test("Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes, nothing reaches
   showTerminal(id);
   await new Promise<void>((resolve) => term.write("hello world", resolve));
 
-  press(term, "C"); // nothing selected: nothing copied
+  // Nothing selected: nothing copied, and off macOS nothing typed either (18.2 is macOS' only).
+  expect(press(term, "C").defaultPrevented).toBe(true);
   expect(copy).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
   term.select(0, 0, 5);
   expect(press(term, "C").defaultPrevented).toBe(true);
   expect(copy).toHaveBeenCalledWith("hello");
@@ -512,7 +514,7 @@ test("other keys go to the shell unless an app shortcut takes them first", async
   write.mockRestore();
 });
 
-test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
+test("on macOS Cmd+C copies or interrupts and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
   asMac();
   const write = spyOn(transport, "writeTerminal");
   const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
@@ -526,6 +528,7 @@ test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shi
 
   expect(press(term, "c", cmd).defaultPrevented).toBe(true);
   expect(copy).toHaveBeenCalledWith("hello");
+  expect(write).not.toHaveBeenCalled(); // a selection: copied, never interrupted
   // Cmd+V: not read from script (WebKit's "Paste" bubble), not typed; the native paste event
   // that follows reaches the shell, bracketed.
   expect(press(term, "v", cmd).defaultPrevented).toBe(false);
@@ -545,6 +548,14 @@ test("on macOS Cmd+C copies and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shi
   press(term, "C", { ...cmd, shiftKey: true }); // Cmd+Shift+C: not the copy chord
   expect(copy).toHaveBeenCalledTimes(1);
   expect(read).not.toHaveBeenCalled();
+
+  // 18.2: Cmd+C with nothing selected interrupts as Ctrl+C does, and copies nothing.
+  term.clearSelection();
+  write.mockClear();
+  expect(press(term, "c", cmd).defaultPrevented).toBe(true);
+  press(term, "c", cmd, "keyup");
+  expect(write.mock.calls).toEqual([[id, "\x03"]]);
+  expect(copy).toHaveBeenCalledTimes(1);
   copy.mockRestore();
   read.mockRestore();
   write.mockRestore();
