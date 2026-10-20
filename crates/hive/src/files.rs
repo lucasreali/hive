@@ -572,7 +572,7 @@ fn git(root: &Path, args: &[&str], limit: u64) -> io::Result<(Vec<u8>, bool)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn names(listing: &Listing) -> Vec<&str> {
@@ -1099,6 +1099,80 @@ mod tests {
         assert_eq!(listing.ignored.last(), Some(&last));
         assert!(listing.truncated);
         assert_eq!(watched(&watcher), ["", "huge"]);
+    }
+
+    /// `café` as macOS's file APIs used to write it: `e` and a combining acute accent (NFD).
+    pub const NFD: &str = "cafe\u{301}";
+    /// The same name precomposed (NFC), as git on macOS lists it (`core.precomposeUnicode`).
+    pub const NFC: &str = "caf\u{e9}";
+
+    /// The name git lists for a folder made as [`NFD`]: NFC on macOS, as written elsewhere.
+    pub fn listed_nfd() -> &'static str {
+        if cfg!(target_os = "macos") { NFC } else { NFD }
+    }
+
+    #[tokio::test]
+    async fn a_folder_named_in_nfd_is_listed_watched_and_made_again() {
+        let (_dir, root) = repo();
+        write(&root, &format!("{NFD}/a.txt"));
+        let mut watcher = Watcher::new(&root).unwrap();
+        let name = listed_nfd();
+        let listed = |file: &str| format!("{name}/{file}");
+        assert_eq!(names(&watcher.list().unwrap()), [listed("a.txt")]);
+        assert_eq!(watched(&watcher), ["", name]);
+        changes(&mut watcher, NEVER).await;
+        // A file written in it (by either name) is seen.
+        write(&root, &format!("{NFD}/b.txt"));
+        assert!(changes(&mut watcher, SOON).await);
+        let both = [listed("a.txt"), listed("b.txt")];
+        assert_eq!(names(&watcher.list().unwrap()), both);
+        // Removed and made again within one burst, it is watched again.
+        std::fs::remove_dir_all(root.join(NFD)).unwrap();
+        write(&root, &format!("{NFD}/c.txt"));
+        assert!(changes(&mut watcher, SOON).await);
+        assert_eq!(names(&watcher.list().unwrap()), [listed("c.txt")]);
+        assert_eq!(watched(&watcher), ["", name]);
+        write(&root, &format!("{NFD}/d.txt"));
+        assert!(changes(&mut watcher, SOON).await);
+        let both = [listed("c.txt"), listed("d.txt")];
+        assert_eq!(names(&watcher.list().unwrap()), both);
+    }
+
+    #[tokio::test]
+    async fn a_folder_renamed_by_case_alone_is_listed_as_git_sees_it_and_watched() {
+        let (_dir, root) = repo();
+        write(&root, "Src/a.txt");
+        run_git(&root, &["add", "-A"]);
+        let mut watcher = Watcher::new(&root).unwrap();
+        assert_eq!(names(&watcher.list().unwrap()), ["Src/a.txt"]);
+        changes(&mut watcher, NEVER).await;
+        std::fs::rename(root.join("Src"), root.join("src")).unwrap();
+        assert!(changes(&mut watcher, SOON).await);
+        // A case-insensitive filesystem (macOS) still finds the tracked file under its old
+        // name, so git lists only that; elsewhere it is gone and the new folder untracked.
+        let insensitive = root.join("SRC").exists();
+        let listing = watcher.list().unwrap();
+        if insensitive {
+            assert_eq!(names(&listing), ["Src/a.txt"]);
+        } else {
+            assert_eq!(names(&listing), ["Src/a.txt", "src/a.txt"]);
+        }
+        // A file written in the folder under its new name is seen, listed as git lists it.
+        write(&root, "src/b.txt");
+        assert!(changes(&mut watcher, SOON).await);
+        let listing = watcher.list().unwrap();
+        if insensitive {
+            assert_eq!(names(&listing), ["Src/a.txt", "src/b.txt"]);
+        } else {
+            assert_eq!(names(&listing), ["Src/a.txt", "src/a.txt", "src/b.txt"]);
+        }
+        // And under its old one, which is the same folder there.
+        if insensitive {
+            write(&root, "Src/c.txt");
+            assert!(changes(&mut watcher, SOON).await);
+            let listing = watcher.list().unwrap();
+            assert_eq!(names(&listing), ["Src/a.txt", "src/b.txt", "src/c.txt"]);
+        }
     }
 
     #[tokio::test]

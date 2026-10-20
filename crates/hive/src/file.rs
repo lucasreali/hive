@@ -878,9 +878,12 @@ fn at_base(dir: &Path, path: &str, commit: Option<&str>) -> io::Result<Side> {
     git::output(dir, &["cat-file", "blob", &oid], &[0]).map(Side::Bytes)
 }
 
-/// The id and size of the blob at `path` in `rev`.
+/// The id and size of the blob at `path` in `rev`. `path` is taken byte for byte, as git
+/// listed it: git on macOS would precompose it (NFC) and miss a name committed in NFD.
 fn blob(dir: &Path, rev: &str, path: &str) -> io::Result<Option<(String, u64)>> {
     let args = [
+        "-c",
+        "core.precomposeUnicode=false",
         "--literal-pathspecs",
         "ls-tree",
         "-l",
@@ -2034,6 +2037,78 @@ mod tests {
         let over = read(root, "big", base).unwrap();
         assert_eq!(over, (Side::TooLarge, Side::Missing));
         assert_eq!(read(root, "big", None).unwrap().1, Side::TooLarge);
+    }
+
+    /// The changed files' paths and states.
+    fn changed(root: &Path) -> Vec<(String, FileStatus)> {
+        let files = changes::list(root, None).unwrap().files;
+        files.into_iter().map(|f| (f.path, f.status)).collect()
+    }
+
+    #[test]
+    fn names_are_diffed_as_git_lists_them_on_a_case_insensitive_filesystem_too() {
+        use crate::files::tests::{NFC, NFD, listed_nfd};
+        use FileStatus::{Deleted, Modified, Untracked};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        run(root, &["init", "-q", "-b", "main"]);
+        std::fs::create_dir_all(root.join("Src")).unwrap();
+        std::fs::create_dir_all(root.join(NFD)).unwrap();
+        std::fs::write(root.join("Src/a.txt"), "a\n").unwrap();
+        std::fs::write(root.join(NFD).join("f.txt"), "f\n").unwrap();
+        run(root, &["add", "-A"]);
+        run(root, &["commit", "-q", "-m", "init"]);
+        // A folder renamed by case alone, a file added and one changed in it; a file changed
+        // in a folder named in NFD.
+        std::fs::rename(root.join("Src"), root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.txt"), "a\nb\n").unwrap();
+        std::fs::write(root.join("src/new.txt"), "n\n").unwrap();
+        std::fs::write(root.join(NFD).join("f.txt"), "f\ng\n").unwrap();
+        let cafe = format!("{}/f.txt", listed_nfd());
+        let insensitive = root.join("SRC").exists();
+        let (src, new) = ("Src/a.txt".to_owned(), "src/new.txt".to_owned());
+        if insensitive {
+            // Git finds the tracked file under its old name.
+            let listed = [(src, Modified), (cafe.clone(), Modified), (new, Untracked)];
+            assert_eq!(changed(root), listed);
+            let read = read(root, "Src/a.txt", None).unwrap();
+            assert_eq!(read, (bytes("a\nb\n"), bytes("a\n")));
+        } else {
+            let moved = ("src/a.txt".to_owned(), Untracked);
+            let listed = [
+                (src, Deleted),
+                (cafe.clone(), Modified),
+                moved,
+                (new, Untracked),
+            ];
+            assert_eq!(changed(root), listed);
+            let read = read(root, "Src/a.txt", None).unwrap();
+            assert_eq!(read, (Side::Missing, bytes("a\n")));
+        }
+        let read_cafe = read(root, &cafe, None).unwrap();
+        assert_eq!(read_cafe, (bytes("f\ng\n"), bytes("f\n")));
+
+        // A name committed in NFD (where git keeps names as given): git on macOS lists the
+        // tracked file in NFD and the same file on disk, precomposed, as untracked. The tracked
+        // one is diffed against its committed text.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        run(root, &["init", "-q", "-b", "main"]);
+        std::fs::create_dir_all(root.join(NFD)).unwrap();
+        std::fs::write(root.join(NFD).join("f.txt"), "f\n").unwrap();
+        let as_given = ["-c", "core.precomposeUnicode=false"];
+        run(root, &[&as_given[..], &["add", "-A"]].concat());
+        run(root, &["commit", "-q", "-m", "init"]);
+        std::fs::write(root.join(NFD).join("f.txt"), "f\ng\n").unwrap();
+        let tracked = format!("{NFD}/f.txt");
+        if cfg!(target_os = "macos") {
+            let untracked = (format!("{NFC}/f.txt"), Untracked);
+            assert_eq!(changed(root), [(tracked.clone(), Modified), untracked]);
+        } else {
+            assert_eq!(changed(root), [(tracked.clone(), Modified)]);
+        }
+        let read = read(root, &tracked, None).unwrap();
+        assert_eq!(read, (bytes("f\ng\n"), bytes("f\n")));
     }
 
     #[test]
