@@ -12,11 +12,25 @@ function screen(page: Page, id: number): Promise<string> {
   }, id);
 }
 
+/** The bundled terminal faces with their load status, as `document.fonts` reports them. */
+const fonts = (page: Page) =>
+  page.evaluate(() =>
+    [...document.fonts]
+      .filter((face) => /Hive Mono|Symbols Nerd Font/.test(face.family))
+      .map((face) => `${face.family.replaceAll('"', "")} ${face.weight} ${face.status}`)
+      .sort(),
+  );
+const LOADED = ["Hive Mono 400 loaded", "Hive Mono 700 loaded", "Symbols Nerd Font 100 900 loaded"];
+
 test("terminals: tabs, typing, switching, copy and paste, exit and close", async ({
   page,
   context,
+  browserName,
 }) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  // WebKit knows only clipboard-read; it lets a page write the clipboard without a permission.
+  await context.grantPermissions(
+    browserName === "webkit" ? ["clipboard-read"] : ["clipboard-read", "clipboard-write"],
+  );
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
@@ -24,6 +38,8 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   await expect(tree.getByRole("button", { name: "fix-login" })).toBeVisible();
   // Nothing selected, so there is no worktree to open a terminal in.
   await expect(plus).toBeDisabled();
+  // Hive Mono (regular and bold) and the Nerd Font symbols are loaded before a terminal is made.
+  await expect.poll(() => fonts(page)).toEqual(LOADED);
 
   await tree.getByRole("button", { name: "fix-login" }).click();
   await plus.click();
@@ -59,15 +75,9 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
       return terminal(2).cols;
     }),
   ).toBeGreaterThan(80);
-  // Hive Mono (regular and bold) and the Nerd Font symbols are loaded before a terminal is made.
-  expect(
-    await page.evaluate(() =>
-      [...document.fonts]
-        .filter((face) => /Hive Mono|Symbols Nerd Font/.test(face.family))
-        .map((face) => `${face.family.replaceAll('"', "")} ${face.weight} ${face.status}`)
-        .sort(),
-    ),
-  ).toEqual(["Hive Mono 400 loaded", "Hive Mono 700 loaded", "Symbols Nerd Font 100 900 loaded"]);
+  // Still loaded once terminals are made. Not on WebKit: a terminal's styles make it build the
+  // stylesheet's faces again, reported "unloaded" while their glyphs still draw (17.3).
+  if (browserName !== "webkit") expect(await fonts(page)).toEqual(LOADED);
   await page.screenshot({ path: "target/e2e/terminals.png" });
 
   // Tabs belong to their worktree: only refactor-auth's shows now.
