@@ -109,8 +109,8 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         ports,
         crate::offers::Offers::new(paths.offers()),
         restore,
-        power,
-    );
+    )
+    .with_power(power);
     let state = Arc::new(state);
     serve(listener, hold, terminated, state).await
 }
@@ -298,7 +298,6 @@ impl State {
         ports: Ports,
         offers: crate::offers::Offers,
         restore: Restore,
-        power: Option<Box<dyn power::Power>>,
     ) -> Self {
         Self {
             app: Mutex::new(None),
@@ -326,8 +325,14 @@ impl State {
             pulls: Default::default(),
             runs: Default::default(),
             usage: Default::default(),
-            awake: std::sync::Mutex::new(power::Awake::new(power)),
+            awake: std::sync::Mutex::new(power::Awake::new(None)),
         }
+    }
+
+    /// Holds `power`'s assertion while agents work (17.17); none without it.
+    fn with_power(mut self, power: Option<Box<dyn power::Power>>) -> Self {
+        self.awake = std::sync::Mutex::new(power::Awake::new(power));
+        self
     }
 
     /// Asks for the user's `PATH` in the background, unless it is already being asked for.
@@ -907,16 +912,18 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
         pending: Mutex::new(Vec::new()),
     };
     let projects = Projects::load(dir.join("spaces.json"), &dir.join("projects.json"));
-    Arc::new(State::new(
-        dir.into(),
-        projects,
-        Sessions::new(None),
-        settings::Store::load(dir.join("settings.json")),
-        Ports::new(dir.join("ports.json")),
-        crate::offers::Offers::new(dir.join("offered-pulls.json")),
-        restore,
-        power,
-    ))
+    Arc::new(
+        State::new(
+            dir.into(),
+            projects,
+            Sessions::new(None),
+            settings::Store::load(dir.join("settings.json")),
+            Ports::new(dir.join("ports.json")),
+            crate::offers::Offers::new(dir.join("offered-pulls.json")),
+            restore,
+        )
+        .with_power(power),
+    )
 }
 
 #[cfg(test)]
