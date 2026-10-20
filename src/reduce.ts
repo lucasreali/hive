@@ -107,6 +107,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         update: s.update && { ...s.update, installing: false },
         ...withNotice(s, "error", `Update failed: ${m.error}`),
       };
+    case "update_checked":
+      return m.error === null
+        ? withNotice(s, "info", "Hive is up to date.")
+        : withNotice(s, "error", `Cannot check for updates: ${m.error}`);
     case "version_mismatch": {
       const { type: _, ...versions } = m;
       return { connection: { status: "version_mismatch", ...versions } };
@@ -437,6 +441,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "editor_target":
     case "notification_clicked":
     case "quit_requested":
+    case "menu":
       // Answered where they were asked (see `ServiceMessage`), not stored.
       return {};
     default:

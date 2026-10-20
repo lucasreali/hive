@@ -945,8 +945,9 @@ export function createMockTransport(
     async getDiagnostics() {
       later({ type: "diagnostics", ...MOCK_DIAGNOSTICS });
     },
-    async checkUpdate() {
+    async checkUpdate(manual) {
       if (scenario === "update") later({ type: "update_ready", version: "9.9.9" });
+      else if (manual) later({ type: "update_checked", error: null });
     },
     async installUpdate() {
       later({ type: "update_failed", error: "mock: nothing to install" });
@@ -1219,6 +1220,8 @@ export function createMockTransport(
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
         // Stands in for ⌘Q, which the app side passes on only while agents would end (D17.3).
         if (line === "quit-app") later({ type: "quit_requested" });
+        // Stands in for a click on the app menu's item (17.13), e.g. `menu settings`.
+        if (line.startsWith("menu ")) later({ type: "menu", item: line.slice(5) });
         if (line === "notification-click" && notified) {
           later({ type: "notification_clicked", agent: notified });
         }

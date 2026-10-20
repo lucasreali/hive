@@ -30,6 +30,7 @@ import { guardClose, nativeTheme } from "./window";
 
 export function App() {
   const rightPanel = useHive((s) => s.rightPanel);
+  const sidebarShown = useHive((s) => s.sidebarShown);
   const status = useHive((s) => s.connection.status);
   const modal = useHive((s) => s.modal);
   // A question asked from a dialog keeps that dialog open underneath, edits and all.
@@ -53,7 +54,7 @@ export function App() {
       <TitleBar />
       <div className="workspace">
         <main className="main" inert={blocked}>
-          <Sidebar />
+          {sidebarShown && <Sidebar />}
           <TerminalArea />
           {rightPanel === "files" && <RightPanel />}
         </main>

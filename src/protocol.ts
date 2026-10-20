@@ -21,6 +21,10 @@ export type ServiceMessage =
   // From the app side (Rust): ⌘Q, the Dock's Quit or logging out while agents would end
   // (D17.3); the UI asks as the window's Close button does.
   | { type: "quit_requested" }
+  // From the app side (Rust): a click on one of the app menu's own items (17.13, `menu.ts`).
+  | { type: "menu"; item: string }
+  // From the app side (Rust): a check the user asked for found no update; `error` null: up to date.
+  | { type: "update_checked"; error: string | null }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {

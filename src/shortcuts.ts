@@ -287,16 +287,21 @@ function presses(keys: string, event: KeyboardEvent): boolean {
 const pressesCommand = (c: Command, event: KeyboardEvent) =>
   presses(c.keys, event) || (isMac() && !!c.macKeys && presses(c.macKeys, event));
 
+/**
+ * Whether no app command may run now: under the connection block nothing works, and with a
+ * dialog open its keys are its own. A dialog closed by Esc clears `modal` only on its `close`
+ * event, which the browser sends in a later task: it counts closed as soon as it is.
+ */
+export function commandsBlocked(s: HiveState): boolean {
+  const blocked =
+    s.connection.status === "version_mismatch" || s.connection.status === "disconnected";
+  return blocked || (s.modal !== null && document.querySelector("dialog[open]") !== null);
+}
+
 /** What `event` does as an app shortcut, or null when it is not one (or nothing may run). */
 export function shortcut(event: KeyboardEvent): (() => void) | null {
   const s = useHive.getState();
-  const blocked =
-    s.connection.status === "version_mismatch" || s.connection.status === "disconnected";
-  // Under the connection block nothing works; with a dialog open its keys are its own. A dialog
-  // closed by Esc clears `modal` only on its `close` event, which the browser sends in a later
-  // task: the shortcuts count it closed as soon as it is.
-  const dialog = s.modal !== null && document.querySelector("dialog[open]") !== null;
-  if (blocked || dialog) return null;
+  if (commandsBlocked(s)) return null;
   const command = platformCommands().find((c) => pressesCommand(c, event) && (c.when?.(s) ?? true));
   return command?.run ?? null;
 }

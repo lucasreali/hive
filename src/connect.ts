@@ -1,3 +1,4 @@
+import { runMenuItem } from "./menu";
 import { goToClicked, notify } from "./notify";
 import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
@@ -15,6 +16,7 @@ function onMessage(message: ServiceMessage): void {
   if (message.type === "editor_target") void openTarget(message);
   if (message.type === "notification_clicked") goToClicked(message.agent);
   if (message.type === "quit_requested") requestQuit();
+  if (message.type === "menu") runMenuItem(message.item);
 }
 
 /** Connects to the service, at startup and on "Reconnect", always with the same handler. */

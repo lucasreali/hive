@@ -12,7 +12,10 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_menu_event(|app, event| hive_lib::menu::on_menu(app, event.id().as_ref()))
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_menu(app_menu(app.handle())?)?;
             let resource = |name: &str| app.path().resolve(name, BaseDirectory::Resource).ok();
             let var = |key: &str| std::env::var_os(key);
             let macos = cfg!(target_os = "macos");
@@ -240,4 +243,50 @@ fn notifier(
         let builder = app.notification().builder().title(title).body(body);
         builder.show().map_err(|error| error.to_string())
     }
+}
+
+/// `hive_lib::menu::MENUS` as Tauri's menu (17.13): item for item, in order.
+#[cfg(target_os = "macos")]
+fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use hive_lib::menu::{Item, Native, Role, MENUS};
+    use tauri::menu::{
+        AboutMetadata, IsMenuItem, Menu, MenuItem, PredefinedMenuItem as P, Submenu,
+    };
+    let menu = Menu::new(app)?;
+    for spec in MENUS {
+        let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::new();
+        for item in spec.items {
+            items.push(match *item {
+                Item::Own { id, text, keys } => {
+                    Box::new(MenuItem::with_id(app, id, text, true, keys)?)
+                }
+                Item::Separator => Box::new(P::separator(app)?),
+                Item::Native(native) => Box::new(match native {
+                    Native::About => P::about(app, None, Some(AboutMetadata::default()))?,
+                    Native::Services => P::services(app, None)?,
+                    Native::Hide => P::hide(app, None)?,
+                    Native::HideOthers => P::hide_others(app, None)?,
+                    Native::ShowAll => P::show_all(app, None)?,
+                    Native::Undo => P::undo(app, None)?,
+                    Native::Redo => P::redo(app, None)?,
+                    Native::Cut => P::cut(app, None)?,
+                    Native::Copy => P::copy(app, None)?,
+                    Native::Paste => P::paste(app, None)?,
+                    Native::SelectAll => P::select_all(app, None)?,
+                    Native::Fullscreen => P::fullscreen(app, None)?,
+                    Native::Minimize => P::minimize(app, None)?,
+                    Native::Zoom => P::maximize(app, None)?,
+                }),
+            });
+        }
+        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|item| &**item).collect();
+        let submenu = Submenu::with_items(app, spec.title, true, &refs)?;
+        match spec.role {
+            Role::Window => submenu.set_as_windows_menu_for_nsapp()?,
+            Role::Help => submenu.set_as_help_menu_for_nsapp()?,
+            Role::Plain => {}
+        }
+        menu.append(&submenu)?;
+    }
+    Ok(menu)
 }

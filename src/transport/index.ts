@@ -199,8 +199,12 @@ export interface Transport {
   openSettingsFile(): Promise<void>;
   /** What the settings' About section shows; answered by `diagnostics`. */
   getDiagnostics(): Promise<void>;
-  /** Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is downloaded. */
-  checkUpdate(): Promise<void>;
+  /**
+   * Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is
+   * downloaded. `manual` (the menu's "Check for Updates…") also answers "up to date" and a failed
+   * check (`update_checked`), and offers again an update already downloaded.
+   */
+  checkUpdate(manual?: boolean): Promise<void>;
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */
   installUpdate(): Promise<void>;
   /**
