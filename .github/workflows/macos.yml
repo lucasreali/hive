@@ -77,8 +77,10 @@ jobs:
       - run: |
           cargo test -p hive --test integration --no-run
           bin=$(ls -t target/debug/deps/integration-* | grep -v '\.d$' | head -1)
-          for t in projects::worktrees_carry_their_health projects::worktrees_carry_their_health \
-            projects::the_menu_removes_and_renames_worktrees; do
+          for t in spaces::a_terminal_gets_the_space_of_the_project_its_folder_resolves_into \
+            projects::the_menu_removes_and_renames_worktrees \
+            projects::worktrees_carry_their_health projects::worktrees_carry_their_health \
+            daemon::the_users_shell_runs_only_once_its_path_is_needed; do
             (
               fail=0 log=$(mktemp)
               for i in $(seq 50); do
