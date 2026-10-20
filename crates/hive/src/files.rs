@@ -337,6 +337,20 @@ impl Filter {
     }
 }
 
+/// Queues `event` for [`Watcher::changed`] when it may count; runs on the watcher's thread.
+fn forward(
+    event: notify::Result<Event>,
+    filter: &Mutex<Filter>,
+    tx: &mpsc::Sender<notify::Result<Event>>,
+) {
+    // Git reads the worktree on every re-list: reads never count.
+    let read = matches!(&event, Ok(event) if event.kind.is_access());
+    if !read && lock(filter).wants(&event) {
+        // Full: a burst is already waiting to be seen.
+        let _ = tx.try_send(event);
+    }
+}
+
 /// The filter, whoever panicked holding it: it is only ever replaced whole.
 fn lock(filter: &Mutex<Filter>) -> MutexGuard<'_, Filter> {
     filter.lock().unwrap_or_else(PoisonError::into_inner)
@@ -389,14 +403,7 @@ impl Watcher {
         }));
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
         let shared = filter.clone();
-        let handler = move |event: notify::Result<Event>| {
-            // Git reads the worktree on every re-list: reads never count.
-            let read = matches!(&event, Ok(event) if event.kind.is_access());
-            if !read && lock(&shared).wants(&event) {
-                // Full: a burst is already waiting to be seen.
-                let _ = tx.try_send(event);
-            }
-        };
+        let handler = move |event| forward(event, &shared, &tx);
         // A recursive watch never walks into a link (inotify; FSEvents never does).
         let config = notify::Config::default().with_follow_symlinks(false);
         let mut watcher = RecommendedWatcher::new(handler, config).map_err(io::Error::other)?;
@@ -584,6 +591,8 @@ impl Watcher {
             .into_iter()
             .filter(|dir| !own.contains(dir) || self.own.contains(*dir));
         self.dirs = counted.map(str::to_owned).collect();
+        // Nor does an open folder whose watch failed or was swapped (15.2) count any longer.
+        lock(&self.filter).dirs.clone_from(&self.dirs);
         Ok(listing)
     }
 
@@ -1328,6 +1337,25 @@ mod tests {
     }
 
     #[test]
+    fn only_what_counts_is_queued() {
+        let filter = Mutex::new(Filter {
+            root: PathBuf::from("/w"),
+            dirs: BTreeSet::from(["".to_owned()]),
+            ..Filter::default()
+        });
+        let (tx, mut rx) = mpsc::channel(4);
+        let event = |kind, path: &str| Ok(Event::new(kind).add_path(PathBuf::from(path)));
+        let read = EventKind::Access(notify::event::AccessKind::Any);
+        let create = EventKind::Create(notify::event::CreateKind::File);
+        forward(event(read, "/w/a"), &filter, &tx);
+        forward(event(create, "/w/target/x"), &filter, &tx);
+        assert!(rx.try_recv().is_err());
+        forward(event(create, "/w/a"), &filter, &tx);
+        let got = rx.try_recv().unwrap().unwrap();
+        assert_eq!(got.paths, [PathBuf::from("/w/a")]);
+    }
+
+    #[test]
     fn an_empty_batch_leaves_the_watcher_alone() {
         let calls = std::cell::Cell::new(0);
         let apply = |_| -> Result<(), Box<notify::UpdatePathsError>> {
@@ -1383,6 +1411,11 @@ mod tests {
             watcher.open(["ignored".to_owned()]);
             watcher.list().unwrap();
             assert!(watcher.own.contains("ignored"), "{strategy:?}");
+            // A re-list keeps the watch it has.
+            watcher.list().unwrap();
+            let keys = watcher.watcher.watched_paths().unwrap();
+            let ignored = root.join("ignored");
+            assert!(keys.iter().any(|(path, _)| *path == ignored), "{keys:?}");
             watcher.open([]);
             watcher.list().unwrap();
             assert!(!watcher.own.contains("ignored"), "{strategy:?}");

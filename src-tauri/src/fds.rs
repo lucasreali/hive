@@ -14,7 +14,7 @@ pub trait Limit {
     fn set(&self, soft: u64, hard: u64) -> io::Result<()>;
 }
 
-/// `struct rlimit` (`rlim_t` is 64 bits on both systems).
+/// `struct rlimit` (`rlim_t` is 64 bits on both systems' 64-bit targets, the only ones built).
 #[repr(C)]
 struct Rlimit {
     cur: u64,

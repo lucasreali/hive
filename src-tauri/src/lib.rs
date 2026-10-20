@@ -29,7 +29,7 @@ use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 /// The app's descriptor limit (17.6).
-#[cfg(unix)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod fds;
 
 /// App version, compared with the `hive` binary's in the handshake (#29).
