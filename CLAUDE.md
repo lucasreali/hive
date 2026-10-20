@@ -1,6 +1,6 @@
 # Hive — Agent Rules
 
-Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with embedded terminals, and a Rust service inside WSL that owns the PTYs, manages git worktrees and receives Claude Code hook events. Hive only **observes** agents; it never starts, controls or talks to them.
+Hive is a desktop companion for Claude Code agents: a Tauri app (macOS, the main platform; Windows with the service in WSL or native) with embedded terminals, and a Rust service that owns the PTYs, manages git worktrees and receives Claude Code hook events. Hive only **observes** agents; it never starts, controls or talks to them.
 
 **Where logic lives (#37):** all domain logic is Rust — protocol, PTYs, worktrees, git, hooks, agent states, file watching, saving files. The frontend (React + TypeScript) only presents: it renders what the service sends, keeps UI state (selection, open panels, dialogs, tabs) and sends user actions back. Bun is the frontend's package manager, script runner and test runner only; the shipped app has no Bun or Node runtime.
 
@@ -36,7 +36,7 @@ Hive is a desktop companion for Claude Code agents: a Tauri app on Windows with 
 
 ## Quality gates (every task, before ticking it)
 
-**Where they run (human decision 2026-09-25, TODO 5.11):** heavy gates (llvm-cov, mutants, e2e) run on GitHub Actions (`.github/workflows/ci.yml`, `macos.yml`), triggered by pushing the task branch; running them locally in parallel has restarted the WSL VM. Locally run only the fast checks (fmt, clippy, `cargo test` of the crate you touched, `bun` lint/typecheck/test). A task merges into `main` only when CI is green on its branch tip. `scripts/gates.sh` stays as the optional local equivalent, one at a time.
+**Where they run (human decisions 2026-09-25, TODO 5.11, and 2026-10-19, D17.6):** GitHub Actions is the authority: every gate runs there (`.github/workflows/ci.yml` on Linux, `macos.yml`, `windows.yml`), triggered by pushing the task branch, and a task merges into `main` only when CI is green on its branch tip. The host is an Apple Silicon Mac with 24 GB: locally, builds use every core, and `cargo llvm-cov` / `cargo mutants` may run too (mutants with modest parallelism, e.g. `-j 4`); `scripts/gates.sh` is the local equivalent of the whole set. Code behind a Linux-only `cfg` is verified only by `ci.yml`, Windows only by `windows.yml` (it keeps building, but no Windows-only work is added, D17.0).
 
 **Mutation testing (TODO 7.1):** CI tests every mutant of the branch's diff in shards (`.github/workflows/mutants.yml`: about one shard per 25 mutants, 1–20, so a large change takes about as long as a small one); the nightly `mutants-full.yml` tests every mutant of `main` and opens an issue for the survivors. Both use `.cargo/mutants.toml` (nextest, `[profile.mutants]`), so a local run needs `cargo-nextest`.
 
@@ -49,7 +49,7 @@ cargo test --workspace
 cargo check --workspace --locked
 cargo deny check
 cargo machete
-cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs|crates/hive/src/windows[^/]*\.rs'   # exclusions: COVERAGE_EXCLUSIONS.md
+cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs|crates/hive/src/macos\.rs|crates/hive/src/windows[^/]*\.rs'   # ci.yml's (Linux) regex; macos.yml covers macos.rs. Exclusions: COVERAGE_EXCLUSIONS.md
 cargo mutants --in-diff <(git diff main -- '*.rs')     # no "missed" or "timeout" mutants (CI: sharded)
 ```
 
@@ -79,12 +79,12 @@ Report: what was done, branch and commits, every gate with its result, anything 
 ## Working notes
 
 - **State:** every task branch starts from the current `main`; see `TODO.md` for the stage in progress.
-- **Toolchain:** agent shells need `export PATH=$HOME/.cargo/bin:$PATH` (the human's shell is fish). `cargo fuzz` needs `+nightly --target x86_64-unknown-linux-gnu`.
+- **Toolchain:** the host is an Apple Silicon Mac (macOS 26, the human's shell is fish); setup steps in `README.md` (Development → macOS setup). Agent shells need `export PATH=$HOME/.cargo/bin:$PATH`. Hooks run on the stock `/usr/bin/python3` 3.9: keep them 3.9-compatible (`from __future__ import annotations`, no `match`); `python3 .claude/hooks/test_guard.py` tests the guard. macOS has no `flock` or GNU `timeout`, and its `sed -i` needs `''`: keep scripts portable. `cargo fuzz` needs `+nightly` (on Linux also `--target x86_64-unknown-linux-gnu`).
 - **Gates:** `scripts/gates.sh` runs every Rust gate. Use `BASE=<previous task branch>` to limit mutants to your diff, and `MUTANTS=0` to skip them.
-  - It builds with `CARGO_BUILD_JOBS=3` and runs one mutant at a time with a memory watchdog: wider builds or a runaway mutant have taken the whole WSL VM down, with the human's terminals. Write loops that a mutated helper cannot make endless (bound them by the input).
-  - `/tmp` is a small tmpfs, so mutant trees go to `/var/tmp/hive-mutants`. Never put a `TMPDIR` inside this repository: git in the tests would find this repo by walking up.
+  - It sizes the build from the machine's cores and keeps a memory watchdog on the mutants, so a runaway mutant cannot exhaust the machine. Write loops that a mutated helper cannot make endless (bound them by the input).
+  - Mutant trees go to `/var/tmp/hive-mutants`: outside the repository, and a short path, since the Unix socket paths the tests create there must fit in 104 bytes on macOS. Never put a `TMPDIR` inside this repository: git in the tests would find this repo by walking up.
 - **Integration tests:** they live in one binary, `crates/hive/tests/integration/`. `common::Env` gives a temporary `HOME`/`XDG_*`; on drop it kills any process still carrying that environment.
   - Coverage of a spawned `hive` is recorded only when it exits normally: stop daemons with `common::stop` (SIGTERM) or by dropping the app connection, never SIGKILL.
-- **Never run the real `claude`**, not even to test a launcher: `script -c` and `fish -C` load the human's shell config, which puts the real `claude` first on `PATH`. For a process named `claude`, copy `/usr/bin/dash` (coreutils here is multicall and refuses to run under another name).
+- **Never run the real `claude`**, not even to test a launcher: `fish -C`, an interactive zsh and `script` (BSD `script` has no `-c` and runs your login shell; util-linux `script -c` on Linux) load the human's shell config, which puts the real `claude` first on `PATH`. For a process named `claude`, copy `/bin/dash` (present on macOS and Linux; Linux coreutils is multicall and refuses to run under another name).
 - **Push denied (403, `Permission to lucasreali/hive.git denied to lucasreali-visusai`):** `gh` is the git credential helper and has two accounts; the active one is the work account. Never switch accounts (other repos use the work one); `scripts/ci.sh push | watch | logs <run-id>` passes the personal token to each command. `main` and tags are pushed by the human: `gh auth switch -u lucasreali; git push origin main <tag>` (Hive switches the account back, so do not remind the human to).
 - **Background waits:** `pgrep -f <pattern>` matches the waiting shell's own command line; do not use it to wait for a process to finish.
