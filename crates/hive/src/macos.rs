@@ -338,7 +338,7 @@ mod tests {
         // `npm` opens its log once started.
         let opened = (0..500).any(|_| {
             std::thread::sleep(std::time::Duration::from_millis(10));
-            open_files(npm_pid, 4).contains(&log)
+            open_files(npm_pid, 64).contains(&log)
         });
         assert!(opened, "the log was never opened");
 
@@ -355,11 +355,11 @@ mod tests {
         assert!(sessions.contains(native_id), "{sessions:?}");
         assert!(sessions.contains(npm_id), "{sessions:?}");
 
-        // Its first descriptors are the null device's, then the log's; a pipe is no file.
+        // Its first three descriptors are the null device's (more may be inherited from a test
+        // runner, e.g. a jobserver's pipe, before the log).
         let null = PathBuf::from("/dev/null");
         let three = vec![null.clone(), null.clone(), null];
         assert_eq!(open_files(npm_pid, 3), three);
-        assert_eq!(open_files(npm_pid, 4), [three, vec![log]].concat());
         assert_eq!(open_files(npm_pid, 0), Vec::<PathBuf>::new());
         assert_eq!(open_files(-1, 4), Vec::<PathBuf>::new());
         assert_eq!(vnode_path(npm_pid, 99), None);
