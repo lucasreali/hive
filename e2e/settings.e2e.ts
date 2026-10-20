@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** Terminal 1's font size and columns, read from the page's own terminal manager. */
 function terminal(page: Page): Promise<{ fontSize: number; cols: number }> {
@@ -23,7 +24,7 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   const before = await terminal(page);
 
   // Taken even with the focus in the terminal.
-  await page.keyboard.press("Control+Comma");
+  await page.keyboard.press(`${mod}+Comma`);
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Font size", { exact: true }).fill("19");

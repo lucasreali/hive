@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { COPY, PASTE } from "./host";
 
 /** The text of a terminal's buffer, read from the page's own terminal manager. */
 function screen(page: Page, id: number): Promise<string> {
@@ -61,6 +62,7 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
     "aria-selected",
     "true",
   );
+  await expect.poll(() => screen(page, 2)).toBe("mock$");
   await page.keyboard.type("two");
   await expect.poll(() => screen(page, 2)).toBe("mock$ two");
   // Only the shown terminal renders, with WebGL; the hidden one keeps no renderer canvas.
@@ -91,15 +93,15 @@ test("terminals: tabs, typing, switching, copy and paste, exit and close", async
   );
   expect(await screen(page, 1)).toBe("mock$ echo one\necho one\nmock$");
 
-  // Ctrl+Shift+C copies the selection; Ctrl+Shift+V pastes it into the terminal.
+  // Ctrl+Shift+C copies the selection; Ctrl+Shift+V pastes it into the terminal (⌘C / ⌘V).
   await page.evaluate(async () => {
     const url = "/src/terminals.ts";
     const { terminal } = await import(/* @vite-ignore */ url);
     terminal(1).select(0, 1, 8); // "echo one" on the second line
   });
-  await page.keyboard.press("Control+Shift+C");
+  await page.keyboard.press(COPY);
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("echo one");
-  await page.keyboard.press("Control+Shift+V");
+  await page.keyboard.press(PASTE);
   await expect.poll(() => screen(page, 1)).toBe("mock$ echo one\necho one\nmock$ echo one");
 
   // `exit` ends the shell: the tab stays, marked exited, until it is closed.

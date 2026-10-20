@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { END, mod } from "./host";
 
 // 8.19: a placeholder is never selected. The selection API does not report a placeholder (it lives
 // in the input's shadow tree), so the check is what shows: the field looks the same before and
@@ -37,7 +38,7 @@ test("placeholders are never selected; typed text still is", async ({ page }) =>
   const idle = await look(page, search);
 
   // Ctrl+A with the focus outside any field selects the page, never a placeholder.
-  await page.keyboard.press("Control+a");
+  await page.keyboard.press(`${mod}+a`);
   expect(await page.evaluate(() => getSelection()?.type)).toBe("Range");
   expect(await look(page, search)).toEqual(idle);
 
@@ -60,8 +61,8 @@ test("placeholders are never selected; typed text still is", async ({ page }) =>
     [box.x + box.width - 4, box.y + box.height / 2],
   );
   expect(await selected()).toBe("hello world");
-  await search.press("End");
+  await search.press(END);
   expect(await selected()).toBe("");
-  await search.press("Control+a");
+  await search.press(`${mod}+a`);
   expect(await selected()).toBe("hello world");
 });

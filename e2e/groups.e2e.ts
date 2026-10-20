@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { keyLabel } from "./host";
 
 test("a folder of repositories is a group: its agents, then its projects one level in", async ({
   page,
@@ -8,7 +9,7 @@ test("a folder of repositories is a group: its agents, then its projects one lev
   const rows = () => tree.locator(".tree-row").allTextContents();
 
   // Added as any project: the fake service follows it as a group of its two repositories.
-  await page.getByTitle("Add project (Ctrl+Shift+O)").click();
+  await page.getByTitle(keyLabel("Add project (Ctrl+Shift+O)")).click();
   const dialog = page.getByRole("dialog", { name: "Add project" });
   const field = dialog.getByLabel("Folder", { exact: true });
   await field.fill("/home/user/work");

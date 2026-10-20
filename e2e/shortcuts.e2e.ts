@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mac, mod } from "./host";
 
 /** Records every write the page's terminals send to the (mock) service. */
 async function recordWrites(page: Page): Promise<() => Promise<string[]>> {
@@ -26,7 +27,7 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
   const writes = await recordWrites(page);
 
   // Ctrl+Shift+T with nothing focused: the picker; filter, arrows, Enter.
-  await page.keyboard.press("Control+Shift+T");
+  await page.keyboard.press(`${mod}+Shift+T`);
   const picker = page.getByRole("dialog", { name: "Open a terminal in worktree" });
   await expect(picker).toBeVisible();
   await expect(picker.getByPlaceholder("Open a terminal in worktree…")).toBeFocused();
@@ -42,20 +43,22 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
   const input = page.locator(".terminal-pane:visible textarea");
   await expect(input).toBeFocused();
 
-  // Plain keys, Ctrl+O and Alt+B go to the terminal.
+  // Plain keys, Ctrl+O and Alt+B go to the terminal. On macOS Option types a character (none
+  // here: the OS composes it) unless "Option as Meta" is on (17.14).
   await page.keyboard.type("ab");
   await page.keyboard.press("Control+O");
   await page.keyboard.press("Alt+B");
   await page.keyboard.press("Control+T");
-  await expect.poll(writes).toEqual(["a", "b", "\x0f", "\x1bb", "\x14"]);
+  const typed = mac ? ["a", "b", "\x0f", "\x14"] : ["a", "b", "\x0f", "\x1bb", "\x14"];
+  await expect.poll(writes).toEqual(typed);
 
   // Ctrl+Shift+B toggles the side panel (open by default), and never reaches the terminal.
   const panel = page.getByRole("complementary", { name: "Side panel" });
   await expect(panel).toBeVisible();
-  await page.keyboard.press("Control+Shift+B");
+  await page.keyboard.press(`${mod}+Shift+B`);
   await expect(panel).toBeHidden();
   await input.focus();
-  await page.keyboard.press("Control+Shift+B");
+  await page.keyboard.press(`${mod}+Shift+B`);
   await expect(panel).toBeVisible();
 
   // F8: no agent is pending, so nothing happens and nothing reaches the shell.
@@ -64,7 +67,7 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
 
   // Ctrl+Shift+N: the new worktree dialog for the selected worktree's project.
   await input.focus();
-  await page.keyboard.press("Control+Shift+N");
+  await page.keyboard.press(`${mod}+Shift+N`);
   const dialog = page.getByRole("dialog", { name: "New worktree" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("combobox", { name: "Project" })).toHaveText("shop");
@@ -73,10 +76,10 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
 
   // Ctrl+Shift+O: add project.
   await input.focus();
-  await page.keyboard.press("Control+Shift+O");
+  await page.keyboard.press(`${mod}+Shift+O`);
   await expect(page.getByRole("dialog", { name: "Add project" })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  expect(await writes()).toEqual(["a", "b", "\x0f", "\x1bb", "\x14"]);
+  expect(await writes()).toEqual(typed);
   await expect(tabs.getByRole("tab")).toHaveCount(1);
 });

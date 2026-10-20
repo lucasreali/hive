@@ -1,4 +1,5 @@
 import { expect, type Locator, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** The folder `name` of the files tree (a closed folder's accessible name has its counts). */
 const folder = (files: Locator, name: string) =>
@@ -60,11 +61,11 @@ test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles i
   await expect(tab).toBeVisible();
   await tree.getByRole("button", { name: "fix-login" }).click();
 
-  await page.keyboard.press("Control+Shift+B");
+  await page.keyboard.press(`${mod}+Shift+B`);
   await expect(panel).toBeHidden();
 
   // Files: every file of the worktree, unchanged ones without a letter.
-  await page.keyboard.press("Control+Shift+B");
+  await page.keyboard.press(`${mod}+Shift+B`);
   await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Files" }).click();
   const all = panel.getByRole("region", { name: "Files" });
   const readme = all.getByRole("treeitem", { name: "README.md" });

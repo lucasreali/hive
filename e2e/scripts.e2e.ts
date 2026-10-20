@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** What terminal `id` shows, read from the page's own terminal manager. */
 function screenText(page: Page, id: number): Promise<string> {
@@ -18,7 +19,7 @@ test("project scripts: a run script set in the settings runs from the worktree's
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login", exact: true }).click();
-  await page.keyboard.press("Control+Comma");
+  await page.keyboard.press(`${mod}+Comma`);
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await dialog.getByRole("button", { name: "Projects" }).click();
   await expect(dialog.getByRole("combobox", { name: "Project" })).toHaveText("shop");

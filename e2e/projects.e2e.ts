@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { keyLabel } from "./host";
 
 test("add a project from the empty state and see its worktrees", async ({ page }) => {
   await page.goto("/?mock=empty");
@@ -44,7 +45,7 @@ test("add a project from the empty state and see its worktrees", async ({ page }
 
 test("Esc closes the add-project dialog", async ({ page }) => {
   await page.goto("/");
-  await page.getByTitle("Add project (Ctrl+Shift+O)").click();
+  await page.getByTitle(keyLabel("Add project (Ctrl+Shift+O)")).click();
   const dialog = page.getByRole("dialog", { name: "Add project" });
   await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
@@ -53,7 +54,7 @@ test("Esc closes the add-project dialog", async ({ page }) => {
 
 test("the folder kind select opens the app's own list over the dialog", async ({ page }) => {
   await page.goto("/");
-  await page.getByTitle("Add project (Ctrl+Shift+O)").click();
+  await page.getByTitle(keyLabel("Add project (Ctrl+Shift+O)")).click();
   const dialog = page.getByRole("dialog", { name: "Add project" });
   const kind = dialog.getByRole("combobox", { name: "Folder kind" });
   await expect(kind).toHaveText("WSL");
@@ -101,7 +102,7 @@ test("with the service on Windows, the folder browser takes Windows paths", asyn
   await page.goto("/?mock=choose");
   await page.getByRole("alertdialog").getByRole("button", { name: "Windows" }).click();
   await expect(page.getByTitle("Service connection")).toHaveText("Windowsconnected");
-  await page.getByTitle("Add project (Ctrl+Shift+O)").click();
+  await page.getByTitle(keyLabel("Add project (Ctrl+Shift+O)")).click();
   const dialog = page.getByRole("dialog", { name: "Add project" });
   const field = dialog.getByLabel("Folder", { exact: true });
   const folders = dialog.getByRole("list", { name: "Folders" });

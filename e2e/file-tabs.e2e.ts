@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** The names of the tab bar's tabs, left to right. */
 const names = (page: Page) =>
@@ -63,11 +64,11 @@ test("file tabs: each file keeps its edits; tabs reorder by drag, remembered aft
   // Two files, each in its own tab, each with its own unsaved edits.
   const readme = await openFile(page, "README.md");
   await readme.locator(".cm-line").first().click();
-  await page.keyboard.press("Control+Home");
+  await page.keyboard.press(`${mod}+Home`);
   await page.keyboard.type("// readme\n");
   const pkg = await openFile(page, "package.json");
   await pkg.locator(".cm-line").first().click();
-  await page.keyboard.press("Control+Home");
+  await page.keyboard.press(`${mod}+Home`);
   await page.keyboard.type("// pkg\n");
   await expect.poll(() => names(page)).toEqual(["README.md", "package.json"]);
   await page.getByRole("tab", { name: "README.md" }).click();
