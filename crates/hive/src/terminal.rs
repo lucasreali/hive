@@ -228,22 +228,14 @@ fn locale_env() -> &'static [(&'static str, String)] {
     ENV.get_or_init(|| {
         let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
         let exists = locale::listed(Path::new(locale::LOCALE_DIR));
-        locale::terminal_env(system_locale().as_deref(), exists, set, LOCALE_FALLBACK)
+        #[cfg(target_os = "macos")]
+        let (system, fallback) = (crate::macos::system_locale(), locale::MAC_FALLBACK);
+        // Linux has no system locale besides the environment's.
+        #[cfg(target_os = "linux")]
+        let (system, fallback) = (None::<String>, locale::LINUX_FALLBACK);
+        locale::terminal_env(system.as_deref(), exists, set, fallback)
     })
 }
-
-#[cfg(target_os = "macos")]
-use crate::macos::system_locale;
-#[cfg(target_os = "macos")]
-const LOCALE_FALLBACK: &str = locale::MAC_FALLBACK;
-
-/// Linux has no system locale besides the environment's: a shell without one gets the fallback.
-#[cfg(target_os = "linux")]
-fn system_locale() -> Option<String> {
-    None
-}
-#[cfg(target_os = "linux")]
-const LOCALE_FALLBACK: &str = locale::LINUX_FALLBACK;
 
 /// fish, with `bin_dir` put first on `PATH` after the user's config (WSL).
 #[cfg(target_os = "linux")]
