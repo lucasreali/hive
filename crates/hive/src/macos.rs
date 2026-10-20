@@ -225,6 +225,26 @@ pub fn path_shell() -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
     (shell.program, vec!["-l".into(), "-c".into(), print.into()])
 }
 
+/// The system locale (D18.2), `AppleLocale` in the global preferences (e.g. `en_BR`), as
+/// `defaults read -g AppleLocale` prints it.
+pub fn system_locale() -> Option<String> {
+    let mut defaults = std::process::Command::new("/usr/bin/defaults");
+    defaults.args(["read", "-g", "AppleLocale"]);
+    read_locale(defaults)
+}
+
+/// What `command` prints, trimmed, when it succeeds with something printed.
+fn read_locale(mut command: std::process::Command) -> Option<String> {
+    let out = command
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    let text = text.trim();
+    (out.status.success() && !text.is_empty()).then(|| text.to_owned())
+}
+
 /// The app runs beside the service: it opens `path` itself.
 pub fn native_path(path: &Path, _wslpath: &OsStr) -> io::Result<String> {
     Ok(path.to_string_lossy().into_owned())
@@ -451,6 +471,25 @@ pub mod power {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_system_locale_is_what_the_command_prints() {
+        let sh = |script: &str| {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", script]);
+            read_locale(command)
+        };
+        assert_eq!(sh("echo ' pt_BR'").as_deref(), Some("pt_BR"));
+        assert_eq!(sh("echo"), None);
+        assert_eq!(sh("echo pt_BR; exit 1"), None);
+        assert_eq!(sh(r"printf '\377'"), None);
+        let missing = std::process::Command::new("/nonexistent/defaults");
+        assert_eq!(read_locale(missing), None);
+        // The real one: a locale name, when the user has one.
+        if let Some(locale) = system_locale() {
+            assert!(!locale.contains(char::is_whitespace), "{locale:?}");
+        }
+    }
 
     #[test]
     fn this_process_is_listed_with_its_group_session_and_folder() {

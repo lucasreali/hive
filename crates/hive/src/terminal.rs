@@ -24,6 +24,8 @@ pub use tokio::process::Child;
 use tokio::sync::{mpsc, watch};
 
 #[cfg(unix)]
+use crate::locale;
+#[cfg(unix)]
 use crate::procs;
 use crate::watch::Watch;
 #[cfg(windows)]
@@ -190,6 +192,7 @@ fn spawn_on(
         let child = shell(bin_dir)
             .env("HIVE_TERMINAL_ID", id.to_string())
             .env("TERM", "xterm-256color")
+            .envs(locale_env().iter().cloned())
             .envs(env.iter().cloned())
             .current_dir(cwd)
             .spawn(pts)?;
@@ -216,6 +219,31 @@ fn spawn_on(
         child,
     ))
 }
+
+/// The locale and name variables every terminal gets (D18.2), worked out once: neither the
+/// service's environment nor the system locale changes while it runs.
+#[cfg(unix)]
+fn locale_env() -> &'static [(&'static str, String)] {
+    static ENV: std::sync::OnceLock<Vec<(&'static str, String)>> = std::sync::OnceLock::new();
+    ENV.get_or_init(|| {
+        let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+        let exists = locale::listed(Path::new(locale::LOCALE_DIR));
+        locale::terminal_env(system_locale().as_deref(), exists, set, LOCALE_FALLBACK)
+    })
+}
+
+#[cfg(target_os = "macos")]
+use crate::macos::system_locale;
+#[cfg(target_os = "macos")]
+const LOCALE_FALLBACK: &str = locale::MAC_FALLBACK;
+
+/// Linux has no system locale besides the environment's: a shell without one gets the fallback.
+#[cfg(target_os = "linux")]
+fn system_locale() -> Option<String> {
+    None
+}
+#[cfg(target_os = "linux")]
+const LOCALE_FALLBACK: &str = locale::LINUX_FALLBACK;
 
 /// fish, with `bin_dir` put first on `PATH` after the user's config (WSL).
 #[cfg(target_os = "linux")]
