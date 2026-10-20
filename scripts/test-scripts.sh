@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests the portable scripts on this OS, Linux or macOS (TODO 17.2):
 #   - release.sh in a scratch repository holding a copy of the manifests (a fake `cargo`)
+#   - gates-lib.sh: a failing gate or mutants run is reported and counted (a fake `cargo`)
 #   - memwatch.sh reads the available memory, stops a process below its threshold, and leaves it
 #     alone above
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
@@ -10,8 +11,8 @@ repo=$PWD
 tmp=$(mktemp -d)
 probe=hive-memprobe
 trap 'pkill -x $probe 2>/dev/null; rm -rf "$tmp"' EXIT
-failures=0
-check() { if eval "$2"; then echo "ok    $1"; else echo "FAIL  $1"; failures=$((failures + 1)); fi; }
+bad=0
+check() { if eval "$2"; then echo "ok    $1"; else echo "FAIL  $1"; bad=$((bad + 1)); fi; }
 
 # --- release.sh ---------------------------------------------------------------------------------
 export HOME=$tmp/home GIT_CONFIG_NOSYSTEM=1
@@ -48,9 +49,10 @@ export MEMWATCH_INTERVAL=0.2
 "$tmp/$probe" &
 low=$!
 scripts/memwatch.sh $probe 999999999999 "$tmp/low.log"
+fired=$?
 wait $low 2>/dev/null
 low_status=$?
-check "memwatch: stops below the threshold" '[ $low_status = 143 ]'  # 128 + SIGTERM
+check "memwatch: stops below the threshold" '[ $low_status = 143 ] && [ $fired = 3 ]'  # 128 + SIGTERM
 check "memwatch: logs the stop" 'grep -q "memory low" "$tmp/low.log"'
 # Above it: left running; the watchdog exits once the process is gone.
 "$tmp/$probe" &
@@ -65,4 +67,35 @@ wait $watch
 watch_status=$?
 check "memwatch: exits with the process" '[ $watch_status = 0 ] && [ ! -s "$tmp/high.log" ]'
 
-[ $failures = 0 ]
+# --- gates-lib.sh -------------------------------------------------------------------------------
+# gates.sh's accounting with a fake `cargo` that exits with $FAKE_STATUS: a failed gate or mutants
+# run prints FAIL with its reason and is counted, so gates.sh exits non-zero.
+mkdir -p "$tmp/bin" "$tmp/out"
+printf '#!/bin/sh\nexit "${FAKE_STATUS:-0}"\n' >"$tmp/bin/cargo"
+chmod +x "$tmp/bin/cargo"
+gates() {  # gates <cargo status> <function and args…>: its output, then "failures=<n>"
+  ( FAKE_STATUS=$1; export FAKE_STATUS; shift
+    PATH=$tmp/bin:$PATH out=$tmp/out
+    source scripts/gates-lib.sh
+    "$@"
+    echo "failures=$failures" )
+}
+# has <output> <line regex>…: every regex matches a whole line (no pipe into `grep -q`, whose early
+# exit would fail the pipeline under pipefail).
+has() { local text=$1; shift; for re in "$@"; do grep -qx -- "$re" <<<"$text" || return 1; done; }
+o=$(gates 0 run fmt cargo fmt)
+check "gates: a passing gate" 'has "$o" "ok    fmt" "failures=0"'
+o=$(gates 1 run fmt cargo fmt)
+check "gates: a failing gate counts" 'has "$o" "FAIL  fmt .*" "failures=1"'
+o=$(gates 0 mutants m)
+check "gates: mutants pass" 'has "$o" "ok    m" "failures=0"'
+for case in "2:missed mutants" "3:timeouts" "4:baseline failed" "1:cargo-mutants exited 1"; do
+  o=$(gates "${case%%:*}" mutants m)
+  check "gates: mutants exit ${case%%:*} fails" 'has "$o" "FAIL  m (${case#*:}, .*" "failures=1"'
+done
+o=$(gates 0 mutants_verdict m 0 3)
+check "gates: the watchdog's stop fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
+o=$(gates 0 mutants_verdict m 0 1)
+check "gates: an unreadable memory fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
+
+[ $bad = 0 ]

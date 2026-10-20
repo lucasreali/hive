@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # CI is the authoritative gate run (.github/workflows/ci.yml and macos.yml, TODO 5.11): a task
 # merges only with green CI on its branch tip. This script is for optional local use, on Linux or
-# macOS; each runs what its CI workflow runs (TODO 17.2): on Linux ci.yml's coverage and diff
-# mutants, on macOS also macos.yml's (coverage with macos.rs counted, mutants of macos.rs).
-# Runs every Rust quality gate from CLAUDE.md and prints one line per gate.
-#   BASE=<rev>              diff base for cargo mutants (default: main)
+# macOS (TODO 17.2). On Linux, llvm-cov and the diff mutants run as ci.yml / mutants.yml do. On
+# macOS (Darwin), llvm-cov uses macos.yml's exclusion regex instead of ci.yml's (macos.rs is counted),
+# the mutants of macos.rs run as macos.yml does, and the diff mutants cannot test Linux-only `cfg`
+# code (it is not compiled there): CI's mutants.yml on Linux stays the authority for those.
+# Runs every Rust quality gate from CLAUDE.md, prints one line per gate, exits non-zero when any
+# gate failed.
+#   BASE=<rev>              diff base for cargo mutants (default: the merge base with main)
 #   MUTANTS=0               skip mutation testing
 #   MUTANTS_JOBS=<n>        mutants tested at a time (default 1)
 #   CARGO_BUILD_JOBS=<n>    build jobs (default: every core)
@@ -17,7 +20,7 @@ if [ "$os" = Darwin ]; then cores=$(sysctl -n hw.ncpu); else cores=$(nproc); fi
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$cores}
 mkdir -p target
 out=$(mktemp -d -p target gates-XXXXXX)
-run() { local name=$1; shift; if "$@" >"$out/$name.log" 2>&1; then echo "ok    $name"; else echo "FAIL  $name ($out/$name.log)"; fi; }
+source scripts/gates-lib.sh  # run, mutants: one line per gate, failures counted
 run fmt cargo fmt --all --check
 run clippy cargo clippy --workspace --all-targets -- -D warnings
 run test cargo test --workspace
@@ -35,27 +38,20 @@ fi
 run llvm-cov cargo llvm-cov --workspace --fail-under-lines 100 --ignore-filename-regex "$ignore"
 grep -E '^\S+\.rs|^TOTAL' "$out/llvm-cov.log" | awk '$10 != "100.00%" || /TOTAL/ {print "      " $1, "lines missed:", $9, $10}'
 
-# One cargo-mutants run, logged to $out/<log>.log, with the memory watchdog (scripts/memwatch.sh):
-# a runaway mutant must not take the machine (and every Hive terminal) down.
-mutants() {
-  local log=$out/$1.log watch=$out/$1-memwatch.log; shift
-  # Its own log: cargo-mutants writes at its own offset and would overwrite a line appended to its.
-  scripts/memwatch.sh cargo-mutants "${GATES_MEM_MIN_KIB:-1500000}" "$watch" &
-  TMPDIR=/var/tmp/hive-mutants cargo mutants --gitignore true -j "${MUTANTS_JOBS:-1}" "$@" >"$log" 2>&1
-  wait
-  sed 's/^/      /' "$watch" 2>/dev/null
-  grep -E '^(MISSED|TIMEOUT|ERROR)|mutants tested' "$log" | sed 's/^/      /'
-}
 if [ "${MUTANTS:-1}" = 1 ]; then
   git add -N . 2>/dev/null  # untracked files must show up in the diff
   # The mutant trees must live outside the repository (worktree tests would otherwise find this
   # repo by walking up).
   mkdir -p /var/tmp/hive-mutants
-  git diff "${BASE:-main}" -- '*.rs' > "$out/diff.patch"
+  # As mutants.yml: the diff since the branch left `main` (its merge base), so commits that reached
+  # `main` meanwhile are not mutated.
+  git diff "${BASE:-$(git merge-base main HEAD)}" -- '*.rs' > "$out/diff.patch"
   # Same setup as CI (.cargo/mutants.toml: nextest, `mutants` profile; needs cargo-nextest) in
   # one shard, with the baseline run here: it sets the automatic test timeout.
   mutants mutants --in-diff "$out/diff.patch"
   # As macos.yml: `--no-config`, since `.cargo/mutants.toml` excludes this file for Linux.
-  [ "$os" = Darwin ] && mutants mutants-macos --no-config -f crates/hive/src/macos.rs --timeout 120
+  if [ "$os" = Darwin ]; then
+    mutants mutants-macos --no-config -f crates/hive/src/macos.rs --timeout 120
+  fi
 fi
-exit 0
+[ "$failures" = 0 ] || { echo "gates: $failures failed"; exit 1; }

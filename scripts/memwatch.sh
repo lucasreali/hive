@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Memory watchdog for scripts/gates.sh: stops every process named <name> (exact name) when the
 # available memory falls below <min-kib>, and appends why to <log>. Exits once no such process is
-# left. Checks every MEMWATCH_INTERVAL seconds (default 2).
+# left. Checks every MEMWATCH_INTERVAL seconds (default 2). Exits 0 when the process ended by
+# itself, 3 when it stopped it for low memory, 1 when it stopped it because memory could not be read.
 #   memwatch.sh <name> <min-kib> <log>
 #   memwatch.sh --available        prints the available memory in KiB
 # Linux: MemAvailable from /proc/meminfo. macOS: free, inactive and speculative pages from vm_stat
@@ -40,6 +41,6 @@ while sleep "${MEMWATCH_INTERVAL:-2}"; do
   if [ "$kib" -lt "$min" ]; then
     echo "gates: memory low (${kib} KiB available), $name stopped" >>"$log"
     pkill -x "$name"
-    exit 0
+    exit 3
   fi
 done
