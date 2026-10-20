@@ -73,10 +73,21 @@ fn text(buf: &[c_char]) -> Option<String> {
 /// shell (nix-shell sets its own) does not move the service's socket away from `hive hook`.
 pub fn user_temp_dir() -> Option<PathBuf> {
     let mut buf: [c_char; PATH_MAX] = [0; PATH_MAX];
-    // SAFETY: `confstr` writes at most `buf.len()` bytes, NUL-terminated; on failure it writes
-    // nothing and the buffer stays an empty string.
-    unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buf.as_mut_ptr(), buf.len()) };
-    text(&buf).filter(|dir| !dir.is_empty()).map(PathBuf::from)
+    // SAFETY: `confstr` writes at most `buf.len()` bytes, NUL-terminated.
+    let len = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buf.as_mut_ptr(), buf.len()) };
+    confstr_path(len, &buf)
+}
+
+/// The path `confstr` answered in `buf`, `len` bytes with its NUL: none when it failed (0),
+/// when the answer did not fit (more than `buf`: truncated), or when it is empty.
+fn confstr_path(len: usize, buf: &[c_char]) -> Option<PathBuf> {
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    let bytes: Vec<u8> = buf[..len].iter().map(|&c| c as u8).collect();
+    let text = CStr::from_bytes_until_nul(&bytes).ok()?;
+    let path = PathBuf::from(OsStr::from_bytes(text.to_bytes()));
+    (!path.as_os_str().is_empty()).then_some(path)
 }
 
 /// The user's login shell (`$SHELL`), started as [`crate::terminal::login::launch`] says.
@@ -178,6 +189,20 @@ mod tests {
         assert!(dir.is_absolute() && meta.is_dir(), "{dir:?}");
         assert_eq!(meta.uid(), nix::unistd::getuid().as_raw(), "{dir:?}");
         assert_eq!(meta.mode() & 0o077, 0, "{dir:?}");
+    }
+
+    #[test]
+    fn a_failed_or_truncated_confstr_answer_is_no_path() {
+        let c = |text: &[u8]| text.iter().map(|&b| b as c_char).collect::<Vec<_>>();
+        let buf = c(b"/T/\0");
+        assert_eq!(confstr_path(4, &buf), Some(PathBuf::from("/T/")));
+        assert_eq!(confstr_path(0, &buf), None);
+        assert_eq!(confstr_path(5, &buf), None);
+        assert_eq!(confstr_path(1, &c(b"\0")), None);
+        assert_eq!(confstr_path(3, &c(b"/T/")), None);
+        // Not UTF-8: kept byte for byte.
+        let odd = confstr_path(3, &c(b"/\xff\0")).unwrap();
+        assert_eq!(odd.as_os_str().as_bytes(), b"/\xff");
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! start one. Every [`super::CLAIM_CHECK`] the service puts back what is missing; if another
 //! service took the lock meanwhile, this one stops instead.
 
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
@@ -17,6 +17,14 @@ use crate::paths::Paths;
 
 /// A file's identity, (device, inode): a file put back at the same path is another file.
 type Id = (u64, u64);
+
+/// Why the runtime folder could not be kept in place.
+enum Problem {
+    /// The service must stop: another one holds the lock, or the folder is not safe.
+    Lost(io::Error),
+    /// Tried again at the next check.
+    Passing(io::Error),
+}
 
 pub struct Claim {
     paths: Paths,
@@ -41,20 +49,39 @@ impl Claim {
     }
 
     /// Puts back the runtime folder, lock and socket if any is gone or replaced: a new
-    /// listener when the socket was. Fails when another service holds the new lock.
+    /// listener when the socket was. Fails only when the service must stop: another service
+    /// holds the new lock, or the folder is no longer safe. Anything else that goes wrong
+    /// (a folder that cannot be made, a socket that cannot be bound) is logged and tried
+    /// again at the next check, so a passing failure does not end every terminal.
     pub fn keep(&mut self) -> io::Result<Option<UnixListener>> {
-        self.paths.prepare_runtime()?;
+        match self.put_back() {
+            Ok(listener) => Ok(listener),
+            Err(Problem::Lost(err)) => Err(err),
+            Err(Problem::Passing(err)) => {
+                eprintln!("hive: cannot keep the runtime folder in place ({err}); trying again");
+                Ok(None)
+            }
+        }
+    }
+
+    fn put_back(&mut self) -> Result<Option<UnixListener>, Problem> {
+        self.paths.make_runtime().map_err(Problem::Passing)?;
+        self.paths.check_runtime().map_err(Problem::Lost)?;
         if path_id(&self.paths.lock()) != Some(self.lock_id) {
-            let lock = super::open_lock(&self.paths)?;
-            lock.try_lock()
-                .map_err(|err| super::lock_error(&self.paths, err))?;
-            self.lock_id = id(&lock.metadata()?);
+            let lock = super::open_lock(&self.paths).map_err(Problem::Passing)?;
+            let taken = lock.try_lock();
+            if let Err(TryLockError::WouldBlock) = taken {
+                let err = super::lock_error(&self.paths, TryLockError::WouldBlock);
+                return Err(Problem::Lost(err));
+            }
+            taken.map_err(|err| Problem::Passing(err.into()))?;
+            self.lock_id = id(&lock.metadata().map_err(Problem::Passing)?);
             self.lock = lock;
         }
         if path_id(&self.paths.socket()) == Some(self.socket_id) {
             return Ok(None);
         }
-        let (listener, socket_id) = bind(&self.paths.socket())?;
+        let (listener, socket_id) = bind(&self.paths.socket()).map_err(Problem::Passing)?;
         self.socket_id = socket_id;
         Ok(Some(listener))
     }
@@ -175,6 +202,34 @@ mod tests {
         let listener = claim.keep().unwrap().unwrap();
         assert!(locked(&paths));
         reaches(&listener, &paths).await;
+    }
+
+    #[tokio::test]
+    async fn a_passing_failure_is_tried_again_at_the_next_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths_in(tmp.path());
+        let (mut claim, _old) = claim(&paths).await;
+        // The folder cannot be made: a file in its place.
+        std::fs::remove_dir_all(&paths.runtime).unwrap();
+        std::fs::write(&paths.runtime, "").unwrap();
+        assert!(claim.keep().unwrap().is_none());
+        std::fs::remove_file(&paths.runtime).unwrap();
+        paths.make_runtime().unwrap();
+        // The lock cannot be opened: a folder in its place.
+        std::fs::create_dir(paths.lock()).unwrap();
+        assert!(claim.keep().unwrap().is_none());
+        assert!(!paths.socket().exists());
+        std::fs::remove_dir(paths.lock()).unwrap();
+        // The socket cannot be bound: a folder in its place.
+        std::fs::create_dir(paths.socket()).unwrap();
+        assert!(claim.keep().unwrap().is_none());
+        assert!(locked(&paths));
+        assert!(paths.socket().is_dir());
+        std::fs::remove_dir(paths.socket()).unwrap();
+        // Each one is put back once it can be.
+        let listener = claim.keep().unwrap().unwrap();
+        reaches(&listener, &paths).await;
+        assert!(claim.keep().unwrap().is_none());
     }
 
     #[tokio::test]
