@@ -69,8 +69,9 @@ impl Source<'_> {
             }
             #[cfg(target_os = "linux")]
             Source::System => Source::Dir(Path::new("/proc")).args(pid),
-            // macOS: only Claude's record tells (arguments would need `KERN_PROCARGS2`).
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            Source::System => crate::macos::args(pid),
+            #[cfg(windows)]
             Source::System => None,
         }
     }
@@ -86,7 +87,9 @@ impl Source<'_> {
                 .collect(),
             #[cfg(target_os = "linux")]
             Source::System => Source::Dir(Path::new("/proc")).open_files(pid),
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            Source::System => crate::macos::open_files(pid, FD_LIMIT),
+            #[cfg(windows)]
             Source::System => Vec::new(),
         }
     }
@@ -445,13 +448,9 @@ mod tests {
         let me = std::process::id() as i32;
         let log = tempfile::NamedTempFile::new().unwrap();
         let (args, files) = (Source::System.args(me), Source::System.open_files(me));
-        #[cfg(target_os = "linux")]
-        {
-            assert_eq!(args, Some(std::env::args().collect()));
-            assert!(files.iter().any(|f| f == log.path()), "{files:?}");
-        }
-        // macOS: only Claude's record tells.
-        #[cfg(target_os = "macos")]
-        assert_eq!((args, files, log.path().exists()), (None, vec![], true));
+        assert_eq!(args, Some(std::env::args().collect()));
+        // macOS names the temporary folder through its `/private` link.
+        let log = log.path().canonicalize().unwrap();
+        assert!(files.contains(&log), "{files:?}");
     }
 }
