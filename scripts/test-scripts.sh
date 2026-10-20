@@ -162,6 +162,13 @@ check "ci.sh watch: a missing macos run fails, after a bounded wait" \
   'has "$o" "MISSING macos: no run of HEAD" "green u/1" "exit=1" && [ "$(grep -c "^run list" "$tmp/gh.log")" -gt 30 ]'
 o=$(ci "$three" "" watch --other)
 check "ci.sh watch: an unknown option fails" 'has "$o" "usage: scripts/ci.sh watch \[--all\]" "exit=2"'
+o=$(ci "" "" dispatch release.yml)
+check "ci.sh dispatch: on this task branch" \
+  'has "$o" "exit=0" && grep -qx "workflow run release.yml --ref task/1.0-test" "$tmp/gh.log"'
+git -C "$tmp/ci" switch -q -c other
+o=$(ci "" "" dispatch release.yml)
+check "ci.sh dispatch: only task branches" 'has "$o" "ci.sh: only task/\* branches (on other)" "exit=2"'
+git -C "$tmp/ci" switch -q task/1.0-test
 # green: a release needs ci and macos green (D18.1); windows does not count.
 o=$(ci "$three" "3" green)
 check "ci.sh green: ci and macos green" 'has "$o" "green u/1" "green u/2" "exit=0"'

@@ -1,12 +1,15 @@
 #!/bin/sh
 # Push the current task branch and follow its CI, with the personal account's token (CLAUDE.md
-# rule 4): the active gh account is the work one and is never switched. Push and watch only
-# on task/* branches.
+# rule 4): the active gh account is the work one and is never switched. Push, watch and dispatch
+# only on task/* branches.
 #   scripts/ci.sh push          push the branch (sets upstream)
 #   scripts/ci.sh watch [--all] wait for HEAD's ci and macos runs, the two a merge needs (Windows
 #                               is frozen, D17.0; --all adds windows); exit 1 if one failed
 #   scripts/ci.sh green [<rev>] print the green `ci` and `macos` runs of a commit (default HEAD,
 #                               any branch: /release checks main's HEAD); exit 1 if one is missing
+#   scripts/ci.sh dispatch <workflow file>  a manual run of a workflow on this branch's pushed tip
+#                               (e.g. release.yml's dry run, which stops at ci-green unless ci and
+#                               macos are green there)
 #   scripts/ci.sh runs [<rev>]  every run of a commit (default HEAD, any branch)
 #   scripts/ci.sh logs <run-id> the failed steps' logs (empty for a reusable workflow's jobs,
 #                               "mutants / …": gh 2.46; use `jobs` then `log`)
@@ -18,8 +21,8 @@
 set -eu
 branch=$(git rev-parse --abbrev-ref HEAD)
 case "${1:-}:$branch" in
-  push:task/* | watch:task/*) ;;
-  push:* | watch:*) echo "ci.sh: only task/* branches (on $branch)" >&2; exit 2 ;;
+  push:task/* | watch:task/* | dispatch:task/*) ;;
+  push:* | watch:* | dispatch:*) echo "ci.sh: only task/* branches (on $branch)" >&2; exit 2 ;;
 esac
 GH_TOKEN=$(gh auth token -u lucasreali)
 export GH_TOKEN
@@ -78,6 +81,7 @@ case "${1:-}" in
       echo "green $url"
     done
     ;;
+  dispatch) gh workflow run "${2:?workflow file}" --ref "$branch" ;;
   runs)
     gh run list --commit "$(git rev-parse "${2:-HEAD}")" --json databaseId,workflowName,conclusion,url \
       -q '.[] | "\(.databaseId) \(.workflowName) \(.conclusion) \(.url)"'
@@ -99,5 +103,5 @@ case "${1:-}" in
     # --json: gh 2.46's plain view asks for the retired Projects (classic) and fails.
     [ -z "$n" ] || gh issue view "$n" --json url,body,comments -q '.url, .body, (.comments[] | .body)'
     ;;
-  *) echo "usage: scripts/ci.sh push | watch [--all] | green [<rev>] | runs [<rev>] | logs <run-id> | cancel <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
+  *) echo "usage: scripts/ci.sh push | watch [--all] | green [<rev>] | dispatch <workflow file> | runs [<rev>] | logs <run-id> | cancel <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
 esac
