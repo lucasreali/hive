@@ -2271,3 +2271,53 @@ fn a_notification_whose_thread_cannot_start_fails_and_frees_its_wait() {
     assert_eq!(notify("t", "b", Box::new(|| {})), Ok(()));
     assert_eq!(asked.recv_timeout(WAIT), Ok(true), "no wait was kept");
 }
+
+#[test]
+fn the_title_bar_double_click_follows_the_macos_setting() {
+    assert_eq!(double_click_action(Some("Minimize\n")), "minimize");
+    assert_eq!(double_click_action(Some("None")), "none");
+    for zoom in [Some("Maximize"), Some("Fill"), Some("Other"), None] {
+        assert_eq!(double_click_action(zoom), "zoom", "{zoom:?}");
+    }
+}
+
+/// A `Hive` whose `defaults` is `sh -c`: it checks it is asked for the double-click setting,
+/// then runs `script`.
+fn reading(script: &str) -> Hive {
+    let script = format!(r#"[ "$*" = "read -g AppleActionOnDoubleClick" ] || exit 9; {script}"#);
+    sh("exit 0").with_defaults("sh", &["-c", &script, "defaults"])
+}
+
+#[test]
+fn the_title_bar_command_reads_the_setting_on_each_click() {
+    let dir = Temp::new("defaults");
+    let setting = dir.0.join("setting");
+    let app = mock_builder()
+        .manage(reading(&format!("cat '{}'", setting.display())))
+        .invoke_handler(tauri::generate_handler![title_bar_action])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let action = || invoke(&webview, "title_bar_action", json!({})).unwrap();
+    // Never set: `defaults` fails.
+    assert_eq!(action(), json!("zoom"));
+    std::fs::write(&setting, "Minimize\n").unwrap();
+    assert_eq!(action(), json!("minimize"));
+    std::fs::write(&setting, "None\n").unwrap();
+    assert_eq!(action(), json!("none"));
+    // Whatever a failing `defaults` prints is no setting.
+    let failing = reading("echo Minimize; exit 1");
+    assert_eq!(failing.title_bar_action(), "zoom");
+    // Asked anything else, the stand-in fails.
+    assert_eq!(reading("echo Minimize").title_bar_action(), "minimize");
+    let asked = sh("exit 0").with_defaults("sh", &["-c", "echo Minimize; [ $# = 0 ]", "x"]);
+    assert_eq!(asked.title_bar_action(), "zoom");
+    // No `defaults` at all (not macOS).
+    let missing = sh("exit 0").with_defaults("/nonexistent/defaults", &[]);
+    assert_eq!(missing.title_bar_action(), "zoom");
+    // The real one by default, never run here.
+    let (program, args) = sh("exit 0").defaults;
+    assert_eq!((program, args), ("/usr/bin/defaults".into(), vec![]));
+}

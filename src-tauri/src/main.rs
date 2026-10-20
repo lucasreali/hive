@@ -106,6 +106,7 @@ fn main() {
             commands::act_on_run,
             commands::open_settings_file,
             commands::get_diagnostics,
+            commands::title_bar_action,
             commands::show_notification,
         ])
         .build(tauri::generate_context!());
