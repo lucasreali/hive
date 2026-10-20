@@ -104,7 +104,9 @@ check "gates: an unreadable memory fails" 'has "$o" "FAIL  m (stopped by the mem
 
 # --- ci.sh --------------------------------------------------------------------------------------
 # In a scratch repository on a task branch, with a fake `gh`: it logs each call, lists the runs
-# in $tmp/ci-runs ("workflow id url" per line), fails `run watch` for the ids in $FAKE_FAILED.
+# in $tmp/ci-runs ("workflow id url" per line); `run view` reports the ids in $FAKE_FAILED failed and
+# the others succeeded, after one look per line of $tmp/ci-later-<id> ("in_progress", or "error":
+# gh fails).
 mkdir -p "$tmp/gh" "$tmp/ci"
 cat >"$tmp/gh/gh" <<'EOF'
 #!/bin/sh
@@ -120,7 +122,14 @@ case "$1 $2" in
         done <"$FAKE_RUNS" ;;
       *) cat "$FAKE_RUNS" ;;
     esac ;;
-  "run watch") case " $FAKE_FAILED " in *" $3 "*) exit 1 ;; esac ;;
+  "run view")
+    later=$(dirname "$FAKE_RUNS")/ci-later-$3
+    if [ -s "$later" ]; then
+      look=$(head -n 1 "$later"); sed -i.bak 1d "$later"
+      if [ "$look" = error ]; then exit 1; fi
+      echo "in_progress "; exit 0
+    fi
+    case " $FAKE_FAILED " in *" $3 "*) echo "completed failure" ;; *) echo "completed success" ;; esac ;;
 esac
 EOF
 chmod +x "$tmp/gh/gh"
@@ -134,7 +143,7 @@ git -C "$tmp/ci" switch -q -c task/1.0-test
 ci() {
   printf '%s\n' "$1" | sed '/^$/d' >"$tmp/ci-runs"
   : >"$tmp/gh.log"
-  ( cd "$tmp/ci" && FAKE_RUNS=$tmp/ci-runs FAKE_FAILED=$2 FAKE_GH_LOG=$tmp/gh.log CI_SH_WAIT=0 \
+  ( cd "$tmp/ci" && FAKE_RUNS=$tmp/ci-runs FAKE_FAILED=$2 FAKE_GH_LOG=$tmp/gh.log CI_SH_WAIT=0 CI_SH_POLL=0 \
       PATH=$tmp/gh:$PATH "$repo/scripts/ci.sh" "${@:3}" 2>&1; echo "exit=$?" )
 }
 three="ci 1 u/1
@@ -142,7 +151,20 @@ macos 2 u/2
 windows 3 u/3"
 o=$(ci "$three" "" watch)
 check "ci.sh watch: ci and macos green" 'has "$o" "green u/1" "green u/2" "exit=0"'
-check "ci.sh watch: windows not waited for" '! grep -q "run watch 3 " "$tmp/gh.log"'
+check "ci.sh watch: windows not waited for" '! grep -q "^run view 3 " "$tmp/gh.log"'
+# A run still going, then a failed gh call: polled until it ends.
+printf 'in_progress\nerror\nin_progress\n' >"$tmp/ci-later-2"
+o=$(ci "$three" "" watch)
+check "ci.sh watch: polls a running run until it ends" \
+  'has "$o" "green u/2" "exit=0" && [ "$(grep -c "^run view 2 " "$tmp/gh.log")" = 4 ]'
+printf 'in_progress\n' >"$tmp/ci-later-2"
+o=$(ci "$three" "2" watch)
+check "ci.sh watch: a run that ends red fails" 'has "$o" "FAILED u/2 (scripts/ci.sh logs 2)" "exit=1"'
+# The poll is bounded: 240 looks (8 h at the real 2 min) and it gives up.
+for _ in $(seq 241); do echo in_progress; done >"$tmp/ci-later-1"
+o=$(ci "$three" "" watch)
+check "ci.sh watch: gives up on a run that never ends" 'has "$o" "STILL RUNNING u/1 after 8 h" "exit=1"'
+rm -f "$tmp/ci-later-1"
 o=$(ci "ci 1 u/1
 macos 2 u/2" "" watch)
 # No wait for windows: a handful of listings, not the 30 tries of the wait.

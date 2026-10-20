@@ -59,14 +59,32 @@ case "${1:-}" in
     for name in $want; do
       wanted | grep -q "^$name " || { echo "MISSING $name: no run of HEAD"; failed=1; }
     done
+    # finished <run id>: 0 once it succeeded, 1 once it ended otherwise, 2 while it runs (or gh
+    # failed: polled again). Not `gh run watch`: with gh 2.102 it kept polling a finished `ci`
+    # run (its reusable `mutants` workflow) for 40+ min.
+    finished() {
+      state=$(gh run view "$1" --json status,conclusion -q '"\(.status) \(.conclusion)"') || state=""
+      case $state in
+        "completed success") return 0 ;;
+        completed*) return 1 ;;
+        *) return 2 ;;
+      esac
+    }
     wanted | while read -r name id url; do
-      # Poll every 2 min: the gh API quota is shared with the human's other work.
-      if gh run watch "$id" --interval 120 --exit-status >/dev/null; then
-        echo "green $url"
-      else
-        echo "FAILED $url (scripts/ci.sh logs $id)"
-        exit 1
-      fi
+      # Poll every 2 min (the gh API quota is shared with the human's other work), at most 8 h.
+      polls=0 result=2
+      while [ "$polls" -lt 240 ]; do
+        result=0
+        finished "$id" || result=$?
+        [ "$result" = 2 ] || break
+        polls=$((polls + 1))
+        sleep "${CI_SH_POLL:-120}"
+      done
+      case $result in
+        0) echo "green $url" ;;
+        1) echo "FAILED $url (scripts/ci.sh logs $id)"; exit 1 ;;
+        *) echo "STILL RUNNING $url after 8 h"; exit 1 ;;
+      esac
     done || failed=1
     exit "$failed"
     ;;
