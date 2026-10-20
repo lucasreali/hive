@@ -5,7 +5,7 @@
 //! plus a `channel` field. Terminal output goes, as raw bytes, to the `Channel` given for that
 //! terminal by `open_terminal`. No Tauri events are used.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::Read as _;
@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AccountDir, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction,
-    Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
+    PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -287,6 +287,8 @@ pub struct Hive {
     reconnecting: tokio::sync::Mutex<()>,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
     restart: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Ends the app (Tauri's `exit`); given by `main.rs` (`with_exit`).
+    exit: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs a downloaded update's installer; given by `main.rs` (`with_install`).
     install: Option<Box<Installer>>,
     /// Opens a path, or shows it in the file manager; given by `main.rs` (`with_open`).
@@ -409,6 +411,10 @@ struct Link {
     bundled: bool,
     /// The mode chosen (`Modes`), `None` until the user chooses one.
     mode: Option<Mode>,
+    /// The agents whose last state makes quitting ask first (`at_risk`), by id.
+    at_risk: HashSet<String>,
+    /// The `confirm_close` setting the service last sent; `None` before any (its default: on).
+    confirm_close: Option<bool>,
 }
 
 impl Link {
@@ -418,6 +424,33 @@ impl Link {
             self.approved.pop_front();
         }
         self.approved.push_back(path);
+    }
+
+    /// Follows what quitting asks about (D17.3) in a service message: an agent's state, an
+    /// agent gone, the `confirm_close` setting.
+    fn follow(&mut self, message: &Value) {
+        let id = message["id"].as_str().map(str::to_owned);
+        match (message["type"].as_str(), id) {
+            (Some("agent_state"), Some(id)) => {
+                let state = serde_json::from_value(message["state"].clone()).ok();
+                if state.is_some_and(at_risk) {
+                    self.at_risk.insert(id);
+                } else {
+                    self.at_risk.remove(&id);
+                }
+            }
+            (Some("agent_removed"), Some(id)) => drop(self.at_risk.remove(&id)),
+            (Some("settings"), _) => {
+                self.confirm_close = message["settings"]["agents"]["confirm_close"].as_bool();
+            }
+            _ => {}
+        }
+    }
+
+    /// The exit decision for what this link knows now.
+    fn quit(&self) -> Quit {
+        let confirm = self.confirm_close.unwrap_or(true);
+        quit_decision(self.ui.is_some(), confirm, self.at_risk.len())
     }
 
     fn to_ui(&self, message: Value) {
@@ -475,6 +508,7 @@ impl Hive {
             link: Arc::default(),
             reconnecting: tokio::sync::Mutex::default(),
             restart: None,
+            exit: None,
             install: None,
             open: None,
             notify: None,
@@ -506,11 +540,7 @@ impl Hive {
             .ok_or("this app cannot show notifications")?;
         let (app, link) = (app.clone(), Arc::clone(&self.link));
         let click = move || {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            show_window(&app);
             lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
         };
         notify(&printable(title), &printable(body), Box::new(click))
@@ -590,6 +620,41 @@ impl Hive {
     pub fn with_restart(mut self, restart: impl Fn() + Send + Sync + 'static) -> Self {
         self.restart = Some(Box::new(restart));
         self
+    }
+
+    /// How `request_quit` ends the app.
+    pub fn with_exit(mut self, exit: impl Fn() + Send + Sync + 'static) -> Self {
+        self.exit = Some(Box::new(exit));
+        self
+    }
+
+    /// Whether the app may quit now (D17.3, #47): ⌘Q, the Dock's "Quit" and logging out ask
+    /// this first on macOS (`applicationShouldTerminate:`, wired in `main.rs`), and
+    /// `request_quit` too. When agents would end with the app and the `confirm_close` setting
+    /// is on, the answer is no: the window comes up and the UI gets `quit_requested`, which
+    /// shows the same close dialog as the window's Close button; confirming it closes the
+    /// window, which quits.
+    pub fn should_quit<R: Runtime>(&self, app: &AppHandle<R>) -> bool {
+        let link = self.link();
+        match link.quit() {
+            Quit::Now => true,
+            Quit::Ask => {
+                drop(link);
+                show_window(app);
+                self.link().to_ui(json!({"type": "quit_requested"}));
+                false
+            }
+        }
+    }
+
+    /// Quits the app from inside it (the app menu's Quit, 17.13): at once, or after the UI's
+    /// confirmation (`should_quit`).
+    pub fn request_quit<R: Runtime>(&self, app: &AppHandle<R>) {
+        if self.should_quit(app) {
+            if let Some(exit) = &self.exit {
+                exit();
+            }
+        }
     }
 
     pub fn with_install(
@@ -1207,7 +1272,7 @@ async fn pump<R: AsyncRead + Unpin>(
                     link.approve(path.to_owned());
                 }
             }
-            _ => {}
+            _ => link.follow(&value),
         }
         link.to_ui(value);
     }
@@ -1218,12 +1283,48 @@ async fn pump<R: AsyncRead + Unpin>(
 fn disconnected(link: &mut Link, reason: String) {
     link.frames = None;
     link.welcome = None;
+    // The agents end with the connection; a new one sends the live ones' states again.
+    link.at_risk.clear();
     // A path from an ended connection never opens.
     link.approved.clear();
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
     link.to_ui(json!({"type": "disconnected", "reason": reason, "bundled": link.bundled}));
+}
+
+/// What a request to quit does (D17.3): quit now, or ask the UI first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quit {
+    Now,
+    Ask,
+}
+
+/// The exit decision (D17.3, #47): ask first only when a UI is there to ask, the
+/// `confirm_close` setting is on and `at_risk` agents would end with the app.
+fn quit_decision(ui: bool, confirm_close: bool, at_risk: usize) -> Quit {
+    if ui && confirm_close && at_risk > 0 {
+        Quit::Ask
+    } else {
+        Quit::Now
+    }
+}
+
+/// The states that make quitting ask first (#18), as the UI's `agentsAtRisk`: working, with
+/// subagents, waiting for permission, a plan or an answer, or waiting for you.
+fn at_risk(state: AgentState) -> bool {
+    state.writes() || state == AgentState::WaitingYou
+}
+
+/// Brings the main window to the front, restored and focused; false when there is none.
+pub fn show_window<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
 }
 
 /// Handles the app's run events: on exit the connection ends before the process does.
