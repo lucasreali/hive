@@ -115,16 +115,26 @@ async fn the_pull_requests_view_runs_gh_off_the_frame_loop() {
         "api graphql --hostname\npr view 5\napi graphql --hostname\n"
     );
 
-    // An issue's worktree, on a branch named from it.
+    // An issue's worktree, on the branch named from it, kept from earlier: as it is.
+    repo.git(&["branch", "9-fix-it"]);
     let issue = Control::CreateIssueWorktree {
         project: root.clone(),
         number: 9,
         base: None,
     };
     app.send(0, issue).await;
-    let Control::WorktreeCreated { project, path, .. } = app.control().await.1 else {
+    let Control::WorktreeCreated {
+        project,
+        path,
+        notes,
+    } = app.control().await.1
+    else {
         panic!("expected the issue's worktree")
     };
+    assert_eq!(
+        notes,
+        ["branch 9-fix-it already existed: checked out as it is"]
+    );
     let created = project.worktrees.iter().find(|w| w.path == path).unwrap();
     assert_eq!(created.branch.as_deref(), Some("9-fix-it"));
     assert!(created.status.is_some());
