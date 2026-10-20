@@ -29,7 +29,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
 
 #[cfg(windows)]
-use crate::windows::{Listener, accept};
+use crate::windows::{Claim, Listener, accept};
 
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
@@ -78,7 +78,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     #[cfg(windows)]
     let (hold, listener) = (
         Claim {
-            _lock: lock,
+            lock,
             socket: paths.socket(),
         },
         Listener::bind(paths)?,
@@ -102,25 +102,6 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     );
     let state = Arc::new(state);
     serve(listener, hold, terminated, state).await
-}
-
-/// On Windows the lock, and the file naming the service's pipe, removed once the service ends.
-#[cfg(windows)]
-struct Claim {
-    _lock: File,
-    socket: PathBuf,
-}
-
-#[cfg(windows)]
-impl Claim {
-    /// A pipe has no file to lose.
-    fn keep(&mut self) -> io::Result<Option<Listener>> {
-        Ok(None)
-    }
-
-    fn release(&self) {
-        let _ = std::fs::remove_file(&self.socket);
-    }
 }
 
 /// Single-instance guard: an exclusive lock held for the daemon's whole life. A service that
