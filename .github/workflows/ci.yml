@@ -85,13 +85,6 @@ jobs:
       # SwiftShader, which the spec rejects as unrepresentative.
       - run: sudo apt-get install -y libegl1 libegl-mesa0 libgl1-mesa-dri xvfb
       - run: xvfb-run -a bun run e2e
-      # One-off (TODO 17.3): WebKit's Linux baselines were made on arm64; should x86-64 draw them
-      # otherwise, print what it drew, to take from the log (`scripts/ci.sh log <job-id>`).
-      - if: failure()
-        run: |
-          for f in target/e2e/markdown-*-webkit/*-actual.png; do
-            [ -f "$f" ] && { echo "ACTUAL $f"; base64 -w0 "$f"; echo; }
-          done
       - if: failure()
         uses: actions/upload-artifact@v6
         with:
