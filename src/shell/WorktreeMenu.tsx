@@ -51,7 +51,7 @@ function moveInMenu(event: KeyboardEvent<HTMLElement>, onClose: () => void): voi
 }
 
 /**
- * A context menu at `at` (kept inside the window), focused on its first item. It closes
+ * A context menu at `at` (kept inside the window), focused on its first enabled item. It closes
  * (`onClose`, which must not change between renders) on a click outside it and its `anchor`
  * (the button that toggles it, if any), Esc, Tab, scrolling outside it, resizing or the window
  * losing focus.
@@ -96,7 +96,8 @@ export function ContextMenu(props: {
     const el = ref.current as HTMLDivElement;
     el.style.left = `${Math.max(0, Math.min(at.x, window.innerWidth - el.offsetWidth))}px`;
     el.style.top = `${Math.max(0, Math.min(at.y, window.innerHeight - el.offsetHeight))}px`;
-    el.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    // A disabled item cannot take the focus (the terminal menu's Copy with no selection).
+    el.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)")?.focus();
   }, [at]);
   return (
     <div

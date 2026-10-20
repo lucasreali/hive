@@ -41,7 +41,17 @@ for (const theme of ["one-dark", "one-light"]) {
         clip: { x: box.x + box.width - 24, y: box.y, width: 24, height: box.height },
       });
     };
-    const empty = await end();
+    // The empty field once it stopped changing (two shots alike): the panel may still be laying
+    // out (a CI flake on Chromium, 17.20's run).
+    let empty = await end();
+    await expect
+      .poll(async () => {
+        const now = await end();
+        const same = now.equals(empty);
+        empty = now;
+        return same;
+      })
+      .toBe(true);
     await search.fill("session");
     expect(await end()).toEqual(empty);
 

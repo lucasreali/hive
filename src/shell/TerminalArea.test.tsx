@@ -1,9 +1,11 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { Terminal } from "@xterm/xterm";
+import { asMac } from "../../test/mac";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { addTab, initialState, select, setEdit, setOpenFile, useHive } from "../store";
-import { closeTerminal } from "../terminals";
+import { closeTerminal, terminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
 import { toText } from "../viewer/buffer";
@@ -348,4 +350,83 @@ test("the right panel's toggle keeps aria-pressed but opts out of the pressed lo
   expect(toggle.classList.contains("unpressed-look")).toBe(true);
   fireEvent.click(toggle);
   expect(toggle.getAttribute("aria-pressed")).toBe("false");
+});
+
+/** Opens a terminal in fix-login from the + menu; returns its id and xterm instance. */
+async function openShown() {
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "fix-login" }));
+  newTab("Terminal");
+  await waitFor(() => expect(tab("fix-login").getAttribute("aria-selected")).toBe("true"));
+  const id = useHive.getState().activeTab as number;
+  const inside = document.querySelector(`[data-terminal="${id}"] .xterm-screen`) as HTMLElement;
+  return { id, term: terminal(id) as Terminal, inside };
+}
+
+const paneMenu = () => screen.getByRole("menu", { name: "Terminal" });
+const paneItems = () =>
+  within(paneMenu())
+    .getAllByRole("menuitem")
+    .map((i) => i.textContent);
+
+test("a right click in a terminal opens its menu: Copy, Paste, Clear and Split, with their keys", async () => {
+  const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("pasted");
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term, inside } = await openShown();
+  const clear = spyOn(term, "clear");
+  const host = document.querySelector(".terminal-host") as HTMLElement;
+  const item = (name: RegExp) => within(paneMenu()).getByRole("menuitem", { name });
+
+  // The host around the panes has no menu (the window's handler blocks the WebView's).
+  fireEvent.contextMenu(host);
+  expect(screen.queryByRole("menu")).toBeNull();
+
+  expect(fireEvent.contextMenu(inside, { clientX: 40, clientY: 50 })).toBe(false);
+  expect(paneItems()).toEqual([
+    "Copy Ctrl+Shift+C",
+    "Paste Ctrl+Shift+V",
+    "Clear",
+    "Split right Ctrl+Shift+D",
+  ]);
+  expect(paneMenu().querySelectorAll("svg[aria-hidden=true]").length).toBe(4);
+  // Nothing selected: Copy is disabled.
+  expect((item(/^Copy/) as HTMLButtonElement).disabled).toBe(true);
+  // The focus goes to the first item that can take it, so Esc and the arrows work.
+  expect(document.activeElement).toBe(item(/^Paste/));
+  fireEvent.click(item(/^Clear/));
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("menu")).toBeNull();
+
+  await new Promise<void>((resolve) => term.write("\r\nhello world", resolve));
+  const row = term.buffer.active.cursorY;
+  term.select(0, row, 5);
+  fireEvent.contextMenu(inside);
+  fireEvent.click(item(/^Copy/));
+  expect(copy.mock.calls).toEqual([["hello"]]);
+
+  fireEvent.contextMenu(inside);
+  fireEvent.click(item(/^Paste/));
+  await waitFor(() => expect(write).toHaveBeenCalledWith(id, "pasted"));
+  expect(read).toHaveBeenCalledTimes(1);
+
+  fireEvent.contextMenu(inside);
+  fireEvent.click(item(/^Split right/));
+  await waitFor(() => expect(useHive.getState().split).toMatchObject({ left: id }));
+  fireEvent.contextMenu(inside);
+  expect(item(/^Unsplit/)).toBeDefined();
+  // Esc closes it without doing anything.
+  fireEvent.keyDown(paneMenu(), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(clear).toHaveBeenCalledTimes(1);
+  copy.mockRestore();
+  read.mockRestore();
+  write.mockRestore();
+});
+
+test("on macOS the terminal menu shows the Mac keys, ⌘K for Clear", async () => {
+  asMac();
+  const { inside } = await openShown();
+  fireEvent.contextMenu(inside);
+  expect(paneItems()).toEqual(["Copy ⌘C", "Paste ⌘V", "Clear ⌘K", "Split right ⇧⌘D"]);
 });

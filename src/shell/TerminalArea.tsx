@@ -1,4 +1,7 @@
 import {
+  ClipboardTextIcon,
+  CopyIcon,
+  EraserIcon,
   FilePlusIcon,
   SquareSplitHorizontalIcon,
   TerminalWindowIcon,
@@ -48,6 +51,8 @@ import {
   showOpenFailure,
   showTerminals,
   splitTerminal,
+  terminalAction,
+  terminalAt,
 } from "../terminals";
 import { isDirty, isFor } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
@@ -247,43 +252,127 @@ function FileTab({ file, drag }: { file: FileTabData; drag: Drag }) {
 
 type TabMenu = { tab: number; x: number; y: number };
 
-/** A terminal tab's context menu (right click): split it, or close it. */
-function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void }) {
+/** A menu item that closes the menu, then runs `action`. */
+function MenuItem(props: {
+  onClose: () => void;
+  action: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={props.disabled}
+      onClick={() => {
+        props.onClose();
+        props.action();
+      }}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+/** A menu item's key, after its label; nothing without one. */
+const Keys = ({ keys }: { keys?: string }) =>
+  keys ? (
+    <>
+      {" "}
+      <kbd>{keys}</kbd>
+    </>
+  ) : null;
+
+/**
+ * "Split right" for terminal `tab`, or "Unsplit" when it is a shown pane (6.11); with its key
+ * when `keys`.
+ */
+function SplitItem(props: { tab: number; onClose: () => void; keys?: boolean }) {
+  const { tab, onClose } = props;
   const split = useHive((s) => {
     const shown = shownSplit(s);
-    return !!shown && (shown.left === menu.tab || shown.right === menu.tab);
+    return !!shown && (shown.left === tab || shown.right === tab);
   });
-  const act = (action: () => void) => () => {
-    onClose();
-    action();
-  };
+  return (
+    <MenuItem onClose={onClose} action={() => showOpenFailure(splitTerminal(tab))}>
+      <SquareSplitHorizontalIcon {...ICON} />
+      {split ? "Unsplit" : "Split right"}
+      <Keys keys={props.keys ? keyText("Ctrl+Shift+D") : undefined} />
+    </MenuItem>
+  );
+}
+
+/** A terminal tab's context menu (right click): split it, or close it. */
+function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void }) {
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={act(() => showOpenFailure(splitTerminal(menu.tab)))}
-      >
-        <SquareSplitHorizontalIcon {...ICON} />
-        {split ? "Unsplit" : "Split right"}
-      </button>
-      <button type="button" role="menuitem" onClick={act(() => closeTerminal(menu.tab))}>
+      <SplitItem tab={menu.tab} onClose={onClose} />
+      <MenuItem onClose={onClose} action={() => closeTerminal(menu.tab)}>
         <XIcon {...ICON} />
         Close terminal
-      </button>
+      </MenuItem>
+    </ContextMenu>
+  );
+}
+
+type PaneMenu = TabMenu & { selection: boolean };
+
+/**
+ * The menu of a terminal itself (17.20, right click or a two-finger tap in it): an app menu,
+ * never the WebView's (#53). Copy, Paste and Clear do what their keys do.
+ */
+function TerminalPaneMenu({ menu, onClose }: { menu: PaneMenu; onClose: () => void }) {
+  const mac = isMac();
+  const run = (action: "copy" | "paste" | "clear") => () => terminalAction(menu.tab, action);
+  return (
+    <ContextMenu at={menu} label="Terminal" onClose={onClose}>
+      <MenuItem onClose={onClose} action={run("copy")} disabled={!menu.selection}>
+        <CopyIcon {...ICON} />
+        Copy
+        <Keys keys={mac ? "⌘C" : "Ctrl+Shift+C"} />
+      </MenuItem>
+      <MenuItem onClose={onClose} action={run("paste")}>
+        <ClipboardTextIcon {...ICON} />
+        Paste
+        <Keys keys={mac ? "⌘V" : "Ctrl+Shift+V"} />
+      </MenuItem>
+      <MenuItem onClose={onClose} action={run("clear")}>
+        <EraserIcon {...ICON} />
+        Clear
+        <Keys keys={mac ? "⌘K" : undefined} />
+      </MenuItem>
+      <hr />
+      <SplitItem tab={menu.tab} onClose={onClose} keys />
     </ContextMenu>
   );
 }
 
 /**
  * Where xterm.js renders; the terminal manager owns everything inside it. Split, the two panes
- * sit side by side with a divider between them (its position is a UI preference).
+ * sit side by side with a divider between them (its position is a UI preference). A right
+ * click in a terminal opens its menu.
  */
 function TerminalHost({ hidden }: { hidden: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const active = useHive((s) => s.activeTab);
   const panes = useHive(useShallow(shownTerminals));
-  useEffect(() => mountTerminals(ref.current as HTMLDivElement), []);
+  const [menu, setMenu] = useState<PaneMenu | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  useEffect(() => {
+    const host = ref.current as HTMLDivElement;
+    const onMenu = (event: globalThis.MouseEvent) => {
+      const at = terminalAt(event.target);
+      if (!at) return;
+      event.preventDefault();
+      setMenu({ tab: at.id, selection: at.selection, x: event.clientX, y: event.clientY });
+    };
+    host.addEventListener("contextmenu", onMenu);
+    const unmount = mountTerminals(host);
+    return () => {
+      host.removeEventListener("contextmenu", onMenu);
+      unmount();
+    };
+  }, []);
   // Shown again after the file's tab: the focused terminal takes the focus back.
   useEffect(() => {
     if (!hidden) showTerminals(panes, active);
@@ -294,6 +383,7 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
       <div className="terminal-host" ref={ref} hidden={hidden} data-split={split || undefined} />
       {split && <ResizeHandle side="split" />}
       <TerminalSearch />
+      {menu && <TerminalPaneMenu menu={menu} onClose={closeMenu} />}
     </>
   );
 }

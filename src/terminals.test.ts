@@ -72,6 +72,8 @@ const {
   showTerminals,
   splitTerminal,
   terminal,
+  terminalAction,
+  terminalAt,
   zoomTerminals,
 } = await import("./terminals");
 
@@ -582,6 +584,68 @@ test("on macOS ⌘← ⌘→ ⌘⌫ send line start, end and kill to the shell, 
   press(term, "ArrowUp", cmd);
   expect(clear).toHaveBeenCalledTimes(1);
   clear.mockRestore();
+  write.mockRestore();
+});
+
+test("the terminal menu finds the right-clicked terminal and whether it has a selection", async () => {
+  const { id, term } = await open();
+  const other = await open();
+  showTerminals([id, other.id], id);
+  await new Promise<void>((resolve) => term.write("hello world", resolve));
+  const inside = term.element?.querySelector(".xterm-screen") as Element;
+  expect(terminalAt(inside)).toEqual({ id, selection: false });
+  term.select(0, 0, 5);
+  expect(terminalAt(inside)).toEqual({ id, selection: true });
+  expect(terminalAt(other.term.textarea as Element)).toEqual({ id: other.id, selection: false });
+  // Outside every pane, the host itself, or no element at all.
+  expect(terminalAt(host)).toBeNull();
+  expect(terminalAt(document.body)).toBeNull();
+  expect(terminalAt(null)).toBeNull();
+  expect(terminalAt(window)).toBeNull();
+  // A pane whose terminal was closed.
+  const pane = inside.closest(".terminal-pane") as HTMLElement;
+  closeTerminal(id);
+  expect(terminalAt(pane)).toBeNull();
+});
+
+test("the terminal menu copies, pastes (bracketed when asked) and clears, then focuses the terminal", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("pasted");
+  const { id, term } = await open();
+  const other = await open();
+  showTerminals([id, other.id], other.id);
+  const clear = spyOn(term, "clear");
+  const focus = spyOn(term, "focus");
+  await new Promise<void>((resolve) => term.write("hello world\x1b[?2004h", resolve));
+
+  terminalAction(id, "copy"); // nothing selected: nothing copied
+  expect(copy).not.toHaveBeenCalled();
+  term.select(0, 0, 5);
+  terminalAction(id, "copy");
+  expect(copy.mock.calls).toEqual([["hello"]]);
+  expect(focus).toHaveBeenCalledTimes(2);
+
+  terminalAction(id, "paste");
+  await settle();
+  expect(write.mock.calls).toEqual([[id, "\x1b[200~pasted\x1b[201~"]]);
+  // Refused (WebKit's "Paste" bubble dismissed): nothing pasted, no unhandled rejection.
+  read.mockRejectedValueOnce(new DOMException("Not allowed", "NotAllowedError"));
+  terminalAction(id, "paste");
+  await settle();
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(write).toHaveBeenCalledTimes(1);
+
+  expect(clear).not.toHaveBeenCalled();
+  terminalAction(id, "clear");
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(focus).toHaveBeenCalledTimes(5);
+  // Only that terminal; an unknown one is ignored.
+  expect(write.mock.calls.every(([to]) => to === id)).toBe(true);
+  terminalAction(999, "clear");
+  expect(focus).toHaveBeenCalledTimes(5);
+  copy.mockRestore();
+  read.mockRestore();
   write.mockRestore();
 });
 

@@ -254,6 +254,7 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   term.attachCustomKeyEventHandler((event) => keys(term, event));
   const el = document.createElement("div");
   el.className = "terminal-pane";
+  el.dataset.terminal = String(id);
   el.hidden = true;
   el.addEventListener("focusin", () => focusPane(id));
   copyOnSelect(term, el);
@@ -331,12 +332,50 @@ function keys(term: Terminal, event: KeyboardEvent): boolean {
   if (key === "V" && isMac()) return false;
   // The browser's own paste (Ctrl+Shift+V) would paste a second time.
   event.preventDefault();
-  if (key === "C") {
-    if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
-  } else {
-    void navigator.clipboard.readText().then((text) => term.paste(text));
-  }
+  if (key === "C") copy(term);
+  else paste(term);
   return false;
+}
+
+/** Copies the terminal's selection, if any (Ctrl+Shift+C, ⌘C, the terminal menu's Copy). */
+function copy(term: Terminal): void {
+  if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
+}
+
+/**
+ * Pastes the clipboard as Ctrl+Shift+V does, bracketed when the shell asked. It is read from
+ * script: WebKit asks first, with its "Paste" bubble, when another app filled the clipboard,
+ * and a refused read pastes nothing.
+ */
+function paste(term: Terminal): void {
+  void navigator.clipboard.readText().then(
+    (text) => term.paste(text),
+    () => {},
+  );
+}
+
+/**
+ * The terminal menu (17.20): the terminal whose pane holds `target` (what was right-clicked)
+ * and whether it has a selection to copy; null outside every pane.
+ */
+export function terminalAt(target: EventTarget | null): { id: number; selection: boolean } | null {
+  const pane = target instanceof Element ? target.closest<HTMLElement>(".terminal-pane") : null;
+  const id = Number(pane?.dataset.terminal);
+  const term = terminal(id);
+  return term ? { id, selection: term.hasSelection() } : null;
+}
+
+/**
+ * The terminal menu's Copy, Paste and Clear (17.20), as their keys do (Clear as ⌘K); the
+ * terminal keeps the keyboard.
+ */
+export function terminalAction(id: number, action: "copy" | "paste" | "clear"): void {
+  const term = terminal(id);
+  if (!term) return;
+  if (action === "copy") copy(term);
+  else if (action === "paste") paste(term);
+  else term.clear();
+  term.focus();
 }
 
 /**
