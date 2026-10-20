@@ -90,7 +90,7 @@ jobs:
       - run: bunx playwright install --with-deps chromium webkit
       # The load spec renders WebGL through ANGLE on the system GL (Mesa; llvmpipe here, the
       # runner has no GPU). Without Mesa's EGL and a display Chromium falls back to
-      # SwiftShader, which the spec rejects as unrepresentative.
+      # SwiftShader, and the spec fails: its renderer must not be SwiftShader.
       - run: sudo apt-get install -y libegl1 libegl-mesa0 libgl1-mesa-dri xvfb
       - run: xvfb-run -a bun run e2e
       - if: failure()
