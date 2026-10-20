@@ -1,5 +1,7 @@
 # Hooks spike (TODO 0.12)
 
+**Linux only** (WSL or Linux): the scripts use util-linux `script` (`-O`, `-T`, `-c`), which the BSD `script` on macOS does not have.
+
 These scripts run real Claude Code sessions in a scratch repository under `/tmp/hive-spike`.
 The model is `haiku` and `--strict-mcp-config` is on. Hooks come from `--settings`, so `~/.claude/settings.json` is never touched.
 Every hook call is recorded with `hive hook --record` in `/tmp/hive-spike/records/*.jsonl`.
