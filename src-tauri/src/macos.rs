@@ -438,9 +438,10 @@ pub const DROP_LIMIT: usize = 1000;
 /// The longest path (in bytes) a drop types; a longer one is left out (macOS' own limit is
 /// 1024).
 pub const PATH_LIMIT: usize = 4096;
-/// The largest list of paths (its serialized bytes) a drop or a paste reads: room for
-/// [`DROP_LIMIT`] paths of [`PATH_LIMIT`] bytes and their markup. Anything bigger is not parsed,
-/// so another app filling the clipboard cannot make the app parse a huge list (18.3).
+/// The largest list of paths (its serialized bytes) a drop or a paste parses: room for
+/// [`DROP_LIMIT`] paths of [`PATH_LIMIT`] bytes and their markup. It bounds the parsing only:
+/// `dataForType:` has already copied the bytes another app put on the clipboard, but a bigger
+/// list is never parsed into objects (18.3).
 pub const LIST_LIMIT: usize = DROP_LIMIT * (PATH_LIMIT + 64);
 
 /// Gets the paths of the files dropped from another app and where (`take_file_drops`).
@@ -564,8 +565,8 @@ unsafe fn take_drop(view: Id, info: Id) -> bool {
 
 /// The file paths on `pasteboard` (`NSFilenamesPboardType`): of the first [`DROP_LIMIT`]
 /// strings, those of at most [`PATH_LIMIT`] bytes that may be typed (`quote::usable`:
-/// absolute, no control character); none when it has none or its list is over [`LIST_LIMIT`]
-/// bytes.
+/// absolute, no control character); none when it has none or its serialized list is over
+/// [`LIST_LIMIT`] bytes. The list parsed is the very data measured.
 ///
 /// # Safety
 /// `pasteboard` is an `NSPasteboard` (or nil).
@@ -575,16 +576,24 @@ unsafe fn file_paths(pasteboard: Id) -> Vec<String> {
     // each object is checked to be of its class first. nil answers nil, 0 and NO.
     unsafe {
         let object = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
-        // Measured before it is parsed (nil data has no length).
+        // The serialized list, measured, then parsed itself: never fetched a second time, which
+        // another app could have replaced by then.
         let data = object(pasteboard, selector(c"dataForType:"), NSFilenamesPboardType);
         let length = message::<unsafe extern "C" fn(Id, Sel) -> usize>();
-        if length(data, selector(c"length")) > LIST_LIMIT {
+        if data.is_null() || length(data, selector(c"length")) > LIST_LIMIT {
             return paths;
         }
-        let list = object(
-            pasteboard,
-            selector(c"propertyListForType:"),
-            NSFilenamesPboardType,
+        let parse =
+            message::<unsafe extern "C" fn(Id, Sel, Id, usize, *mut usize, *mut Id) -> Id>();
+        let serialization = objc_getClass(c"NSPropertyListSerialization".as_ptr());
+        // `NSPropertyListImmutable`; a broken list answers nil (its error not asked for).
+        let list = parse(
+            serialization,
+            selector(c"propertyListWithData:options:format:error:"),
+            data,
+            0,
+            null_mut(),
+            null_mut(),
         );
         let is = |object: Id, class: &CStr| {
             let is = message::<unsafe extern "C" fn(Id, Sel, Id) -> Bool>();
@@ -880,7 +889,7 @@ mod tests {
     // What the stand-in view and dragging info answer, and what they were asked.
     /// The info's `draggingSource` (an address, 0 for nil: a drag from another app).
     static SOURCE: AtomicUsize = AtomicUsize::new(0);
-    /// The info's pasteboard's `propertyListForType:` answer (an address, 0 for nil).
+    /// The list on the info's pasteboard, serialized by `dataForType:` (an address, 0 for nil).
     static LIST: AtomicUsize = AtomicUsize::new(0);
     /// The type the pasteboard was last asked for.
     static ASKED_TYPE: AtomicUsize = AtomicUsize::new(0);
@@ -919,13 +928,16 @@ mod tests {
     extern "C" fn source(_: Id, _: Sel) -> Id {
         SOURCE.load(SeqCst) as Id
     }
-    extern "C" fn list(_: Id, _: Sel, kind: Id) -> Id {
+    /// The stand-in pasteboard's serialized list: `LIST`, as a binary property list (nil for
+    /// none).
+    extern "C" fn data_for(_: Id, _: Sel, kind: Id) -> Id {
         ASKED_TYPE.store(kind as usize, SeqCst);
-        LIST.load(SeqCst) as Id
+        serialized(LIST.load(SeqCst) as Id)
     }
-    /// The stand-in pasteboard's serialized list: none (nil, no length).
-    extern "C" fn no_data(_: Id, _: Sel, _: Id) -> Id {
-        null_mut()
+    /// Its `propertyListForType:`: another list, as if another app had replaced the data once it
+    /// was measured. Never what is read.
+    extern "C" fn swapped(_: Id, _: Sel, _: Id) -> Id {
+        array(&[string("/tmp/swapped")])
     }
     extern "C" fn location(_: Id, _: Sel) -> Pair {
         Pair { x: 110.0, y: 520.0 }
@@ -974,6 +986,33 @@ mod tests {
         }
     }
 
+    /// A Foundation number.
+    fn number(value: i64) -> Id {
+        // SAFETY: `+[NSNumber numberWithLongLong:]`.
+        unsafe {
+            let make = message::<unsafe extern "C" fn(Id, Sel, i64) -> Id>();
+            let class = objc_getClass(c"NSNumber".as_ptr());
+            make(class, selector(c"numberWithLongLong:"), value)
+        }
+    }
+
+    /// `list` as a binary property list's data; nil for nil.
+    fn serialized(list: Id) -> Id {
+        if list.is_null() {
+            return null_mut();
+        }
+        // SAFETY: `+[NSPropertyListSerialization dataWithPropertyList:format:options:error:]`,
+        // binary (200), on a list of strings, numbers and arrays.
+        unsafe {
+            let make = message::<unsafe extern "C" fn(Id, Sel, Id, usize, usize, *mut Id) -> Id>();
+            let class = objc_getClass(c"NSPropertyListSerialization".as_ptr());
+            let name = selector(c"dataWithPropertyList:format:options:error:");
+            let data = make(class, name, list, 200, 0, null_mut());
+            assert!(!data.is_null(), "a list that serializes");
+            data
+        }
+    }
+
     fn frame(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {
             x,
@@ -1009,8 +1048,8 @@ mod tests {
                 (c"draggingSource", source as *const c_void, c"@@:"),
                 // The info is its own pasteboard.
                 (c"draggingPasteboard", itself as *const c_void, c"@@:"),
-                (c"propertyListForType:", list as *const c_void, c"@@:@"),
-                (c"dataForType:", no_data as *const c_void, c"@@:@"),
+                (c"propertyListForType:", swapped as *const c_void, c"@@:@"),
+                (c"dataForType:", data_for as *const c_void, c"@@:@"),
                 (
                     c"draggingLocation",
                     location as *const c_void,
@@ -1046,7 +1085,7 @@ mod tests {
         let paths = [
             string("/Users/me/My Shots/a.png"),
             // Not a string: left out.
-            no_drops,
+            number(7),
             string(&long),
             // One byte too long: left out.
             string(&format!("{long}y")),
@@ -1065,7 +1104,8 @@ mod tests {
             long,
             "/tmp/日本語".into(),
         ];
-        // The window's (110, 520) is the view's (100, 500), 100 from its top.
+        // The window's (110, 520) is the view's (100, 500), 100 from its top. Only the data
+        // measured is read: never the list the pasteboard would give later (`swapped`).
         assert_eq!(dropped(), [(expected.clone(), 100.0, 100.0)]);
         assert_eq!(counts(), (0, 1));
         // A flipped view counts from its top already.
@@ -1076,6 +1116,15 @@ mod tests {
         // SAFETY: AppKit's constant, read only.
         let paths_type = unsafe { NSFilenamesPboardType } as usize;
         assert_eq!(ASKED_TYPE.load(SeqCst), paths_type, "asked for file paths");
+        // The pasteboard would now answer another list of paths, never read.
+        // SAFETY: the stand-in's `propertyListForType:` and `-[NSArray count]`.
+        let later = unsafe {
+            let object = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+            let list = object(info, selector(c"propertyListForType:"), paths_type as Id);
+            let count = message::<unsafe extern "C" fn(Id, Sel) -> usize>();
+            count(list, selector(c"count"))
+        };
+        assert_eq!(later, 1);
 
         // Past the limit, the first ones.
         let many: Vec<Id> = (0..=DROP_LIMIT).map(|i| string(&format!("/{i}"))).collect();
@@ -1100,7 +1149,7 @@ mod tests {
             null_mut(),
             string("/tmp/a"),
             array(&[]),
-            array(&[no_drops]),
+            array(&[number(1)]),
             array(&paths[5..]),
         ] {
             LIST.store(list as usize, SeqCst);
