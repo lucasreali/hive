@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { keyLabel, mod } from "./host";
 
 test("palette: Ctrl+Shift+P runs commands, goes to worktrees and opens files", async ({ page }) => {
   await page.goto("/");
@@ -8,9 +9,11 @@ test("palette: Ctrl+Shift+P runs commands, goes to worktrees and opens files", a
   const field = palette.getByRole("textbox", { name: /Search commands/ });
 
   // A command, with its shortcut shown, run with Enter.
-  await page.keyboard.press("Control+Shift+P");
+  await page.keyboard.press(`${mod}+Shift+P`);
   await expect(field).toBeFocused();
-  await expect(palette.getByRole("button", { name: /Open settings/ })).toContainText("Ctrl+,");
+  await expect(palette.getByRole("button", { name: /Open settings/ })).toContainText(
+    keyLabel("Ctrl+,"),
+  );
   await page.screenshot({ path: "target/e2e/palette.png" });
   await page.keyboard.type("opset");
   await page.keyboard.press("Enter");
@@ -21,7 +24,7 @@ test("palette: Ctrl+Shift+P runs commands, goes to worktrees and opens files", a
   await page.keyboard.press("Escape");
 
   // A worktree: Enter selects it.
-  await page.keyboard.press("Control+Shift+P");
+  await page.keyboard.press(`${mod}+Shift+P`);
   await page.keyboard.type("fix-login");
   await expect(palette.getByRole("region", { name: "Agents and worktrees" })).toBeVisible();
   await page.keyboard.press("Enter");
@@ -32,7 +35,7 @@ test("palette: Ctrl+Shift+P runs commands, goes to worktrees and opens files", a
   );
 
   // Text in the selected worktree's files: a click opens the file at that line.
-  await page.keyboard.press("Control+Shift+P");
+  await page.keyboard.press(`${mod}+Shift+P`);
   await page.keyboard.type("rememberMe");
   const files = palette.getByRole("region", { name: "Files" });
   await files
@@ -46,7 +49,7 @@ test("palette: Ctrl+Shift+P runs commands, goes to worktrees and opens files", a
   );
 
   // Nothing matches: said so; Esc closes.
-  await page.keyboard.press("Control+Shift+P");
+  await page.keyboard.press(`${mod}+Shift+P`);
   await page.keyboard.type("zzzqqqxxx");
   await expect(palette.getByText("No matches")).toBeVisible();
   await page.keyboard.press("Escape");

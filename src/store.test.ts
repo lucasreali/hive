@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test";
 import { renderHook } from "@testing-library/react";
 import { notice, noticeKind } from "../test/notice";
-import type { ServiceMessage, Subagent } from "./protocol";
+import type { AgentState, ServiceMessage, Subagent } from "./protocol";
 import { apply } from "./reduce";
 import {
   activateTab,
@@ -14,6 +14,7 @@ import {
   openFileDialog,
   openFileMenu,
   openModal,
+  paneAttention,
   panelWorktree,
   pinFile,
   removeTab,
@@ -30,7 +31,7 @@ import {
   useTerminal,
 } from "./store";
 import { fileVisible, tabsPlace, visibleTabs } from "./tabs";
-import { MOCK_GROUP, MOCK_REPOS, MOCK_SESSIONS } from "./transport/mock";
+import { agentStatus, MOCK_GROUP, MOCK_REPOS, MOCK_SESSIONS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";
 
 beforeEach(() => useHive.setState(initialState, true));
@@ -246,7 +247,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
     urgency: 6,
     pending: true,
     interrupted: false,
-    alert: "waiting",
+    alert: "action",
     notify: true,
     writing: true,
     ...doing,
@@ -637,6 +638,41 @@ test("an agent is working in a worktree while it (or its subagent there) may wri
   expect(working()).toBe(false);
   state("b", false, [sub(worktree, true)]);
   expect(working()).toBe(true);
+});
+
+test("a pane is outlined for its agent pending on a dialog or an error, by the service's fields (17.26)", () => {
+  const attention = () => paneAttention(useHive.getState(), 7);
+  const detect = (id: string, channel: number) =>
+    apply({ type: "agent_detected", channel, id, project: null, worktree: null, cwd: null });
+  const state = (id: string, s: AgentState, pending?: boolean) =>
+    apply({
+      type: "agent_state",
+      id,
+      ...agentStatus(s),
+      ...(pending === undefined ? {} : { pending }),
+      subagents: [],
+    });
+  expect(attention()).toBeNull(); // No agent in it.
+  detect("a", 7);
+  expect(attention()).toBeNull(); // No state yet.
+  for (const s of ["waiting_permission", "waiting_plan", "waiting_answer", "error"] as const) {
+    state("a", s);
+    expect(attention()).toBe(s);
+  }
+  // Only pending ones: an error the service no longer counts, a pending 🟠, working.
+  state("a", "error", false);
+  expect(attention()).toBeNull();
+  state("a", "waiting_you");
+  expect(attention()).toBeNull();
+  state("a", "working");
+  expect(attention()).toBeNull();
+  // The most urgent of the terminal's agents counts; another terminal's never does.
+  detect("b", 8);
+  state("b", "error");
+  expect(attention()).toBeNull();
+  detect("c", 7);
+  state("c", "waiting_answer");
+  expect(attention()).toBe("waiting_answer");
 });
 
 test("sessions are stored as listed; a deleted one leaves, a refused delete says why", () => {

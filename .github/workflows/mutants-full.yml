@@ -1,6 +1,8 @@
 # Every mutant of the workspace, nightly on `main` (TODO 7.1). Does not block anything: it covers
 # the blind spot of the per-branch `--in-diff` run (a change can leave code outside its diff
-# untested). Surviving mutants open a GitHub issue, or comment on the one still open.
+# untested), and of the macOS and Windows files, whose branch runs test only their diff (macos.yml,
+# windows.yml). Surviving mutants open a GitHub issue, or comment on the one still open; a night
+# with none closes it.
 name: mutants-full
 
 on:
@@ -41,8 +43,70 @@ jobs:
     with:
       in-diff: false
 
+  # Every mutant of the macOS files, as macos.yml's `test` sets them up (one run per crate,
+  # `[profile.mutants]` and nextest passed since `--no-config` drops `.cargo/mutants.toml`).
+  macos:
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
+    runs-on: macos-26
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: brew install fish
+      - run: bun install --frozen-lockfile && bun run build
+      # `-o` creates only its last folder.
+      - run: mkdir -p out/hive out/app
+      - run: cargo mutants --no-config --profile mutants --test-tool nextest -f crates/hive/src/macos.rs -j 2 --minimum-test-timeout 120 -o out/hive
+      - if: ${{ !cancelled() }}
+        run: cargo mutants --no-config --profile mutants --test-tool nextest -f src-tauri/src/macos.rs -j 2 --minimum-test-timeout 120 -o out/app
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutants-macos
+          path: out
+          retention-days: 7
+
+  # Every mutant of the Windows files, as windows.yml's `test` sets them up.
+  windows:
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      # The protocol tests compare files byte for byte: keep LF (windows.yml).
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: mkdir -p out/windows
+      - run: cargo mutants --no-config --profile mutants --test-tool nextest -p hive -f 'crates/hive/src/windows*.rs' -j 2 --minimum-test-timeout 120 -o out/windows
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutants-windows
+          path: out
+          retention-days: 7
+
   report:
-    needs: mutants
+    needs: [mutants, macos, windows]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
@@ -53,6 +117,23 @@ jobs:
           name: mutants-out
           path: mutants.out
         continue-on-error: true
+      # Each into its own folder; their survivors join the workspace's in the issue.
+      - uses: actions/download-artifact@v6
+        with:
+          name: mutants-macos
+          path: platforms/macos
+        continue-on-error: true
+      - uses: actions/download-artifact@v6
+        with:
+          name: mutants-windows
+          path: platforms/windows
+        continue-on-error: true
+      - run: |
+          mkdir -p platforms mutants.out
+          for f in missed timeout; do
+            found=$(find platforms -name "$f.txt")
+            if [ -n "$found" ]; then cat $found | tr -d '\r' >> "mutants.out/$f.txt"; fi
+          done
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -71,3 +152,20 @@ jobs:
           else
             gh issue create --title "$title" --body-file body.md
           fi
+
+  # No survivors anywhere: the issue still open is resolved (TODO 18.11). Not on a skipped night.
+  resolved:
+    needs: [mutants, macos, windows]
+    if: needs.mutants.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Nightly mutation testing: surviving mutants"
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$open" ]; then gh issue close "$open" --comment "No surviving mutants on $RUN"; fi

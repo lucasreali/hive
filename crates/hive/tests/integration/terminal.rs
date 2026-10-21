@@ -475,3 +475,95 @@ async fn a_terminal_echoes_within_the_load_test_bounds_while_another_floods() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+/// The next message about a terminal's shell marks (17.25), skipping every other one; panics
+/// after [`TIMEOUT`] with what was skipped (an agent's messages would otherwise keep it waiting).
+async fn next_mark(app: &mut crate::common::Conn) -> (u32, Control) {
+    let mut skipped = Vec::new();
+    let find = async {
+        loop {
+            let next = app.control().await;
+            if matches!(
+                next.1,
+                Control::TerminalProgress { .. }
+                    | Control::CommandFinished { .. }
+                    | Control::TerminalNotification { .. }
+            ) {
+                return next;
+            }
+            skipped.push(next);
+        }
+    };
+    let found = tokio::time::timeout(crate::common::TIMEOUT, find).await;
+    found.unwrap_or_else(|_| panic!("no shell mark message; skipped {skipped:?}"))
+}
+
+#[tokio::test]
+async fn shell_marks_progress_and_notifications_reach_the_app() {
+    use hive_protocol::ProgressState;
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let mut settings = hive_protocol::Settings::default();
+    settings.notifications.command_secs = 1;
+    let set = Control::SetSettings {
+        settings: settings.clone(),
+    };
+    app.send(0, set).await;
+    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    app.open_terminal(1, &repo.root).await;
+    app.open_terminal(2, &repo.root).await;
+    // An agent runs in terminal 2, which is in view of the focused window: terminal 1's
+    // alerts still come.
+    let cwd = repo.root.display().to_string();
+    let start = serde_json::json!({"session_id": "s", "cwd": cwd});
+    crate::agents::hook(&repo, &mut app, "2", "SessionStart", start).await;
+    let view = |terminal| Control::View {
+        terminal: Some(terminal),
+        focused: true,
+    };
+    app.send(0, view(2)).await;
+    // A program's notification where an agent runs: dropped (its alert is checked off the
+    // output's path, so nothing waits for it).
+    app.input(2, "printf '\\x1b]9;agent\\a'\r").await;
+    // Progress, as it changes.
+    app.input(1, "printf '\\x1b]9;4;1;40\\a'\r").await;
+    let progress = |state, value| (1, Control::TerminalProgress { state, value });
+    assert_eq!(
+        next_mark(&mut app).await,
+        progress(ProgressState::Normal, 40)
+    );
+    app.input(1, "printf '\\x1b]9;4;1;40\\a\\x1b]9;4;3\\a'\r")
+        .await;
+    let busy = progress(ProgressState::Indeterminate, 0);
+    assert_eq!(next_mark(&mut app).await, busy);
+    // A program's notification, out of view: an OS notification too.
+    app.input(1, "printf '\\x1b]777;notify;make;done\\a'\r")
+        .await;
+    let note = |title: &str, body: &str, notify| {
+        let (title, body) = (title.into(), body.into());
+        (
+            1,
+            Control::TerminalNotification {
+                title,
+                body,
+                notify,
+            },
+        )
+    };
+    assert_eq!(next_mark(&mut app).await, note("make", "done", true));
+    // A command longer than the setting, marked by the shell (fish 4 marks its own too).
+    let long = "printf '\\x1b]133;C\\a'; sleep 1.2; printf '\\x1b]133;D;3\\a'\r";
+    app.input(1, long).await;
+    let finished = Control::CommandFinished {
+        exit: Some(3),
+        secs: 1,
+    };
+    assert_eq!(next_mark(&mut app).await, (1, finished));
+    // In view of the focused window: only the inbox.
+    app.send(0, view(1)).await;
+    app.input(1, "printf '\\x1b]9;seen\\a'\r").await;
+    assert_eq!(next_mark(&mut app).await, note("", "seen", false));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

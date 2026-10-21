@@ -4,19 +4,28 @@ pub mod actions;
 pub mod adapter;
 pub mod bridge;
 pub mod changes;
+pub mod checkout;
 pub mod cli;
 pub mod daemon;
 pub mod dirs;
+#[cfg(unix)]
+pub mod fds;
 pub mod file;
 pub mod files;
 pub mod gh;
 pub mod git;
 pub mod health;
 pub mod hook;
+#[cfg(unix)]
+pub mod locale;
+pub mod login_path;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mode;
+pub mod offers;
+pub mod osc;
 pub mod paths;
+pub mod power;
 pub mod procs;
 pub mod projects;
 pub mod pulls;

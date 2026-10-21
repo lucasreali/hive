@@ -4,10 +4,13 @@ import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
 import { notice } from "../test/notice";
 import LIGATURES from "./assets/fonts/ligatures.json";
+import { Marks } from "./marks";
+import type { AgentState } from "./protocol";
 import { apply } from "./reduce";
 import { DEFAULT_SETTINGS, initialState, setWidth, useHive } from "./store";
 import { shownTerminals } from "./tabs";
 import { transport } from "./transport";
+import { agentStatus } from "./transport/mock";
 
 // happy-dom has no WebGL: a fake addon records what the manager does with the renderer.
 let webglFails = false;
@@ -62,6 +65,7 @@ afterAll(() => Reflect.deleteProperty(document, "fonts"));
 const {
   ACK_BYTES,
   closeTerminal,
+  dropFiles,
   interceptKeys,
   ligatureRanges,
   mountTerminals,
@@ -70,6 +74,9 @@ const {
   showTerminals,
   splitTerminal,
   terminal,
+  terminalAction,
+  terminalAt,
+  zoomTerminals,
 } = await import("./terminals");
 
 const written = (term: Terminal) =>
@@ -98,6 +105,7 @@ afterEach(async () => {
   unmount();
   host.remove();
   interceptKeys(() => false);
+  zoomTerminals(0);
   // The mock's answers to `connect` (welcome, projects) arrive on later ticks: let them land
   // now, then reset, so none leaks into the next test file.
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -180,6 +188,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
     cursor_style: "bar",
     cursor_blink: true,
     copy_on_select: false,
+    option_as_meta: true,
     shell: "default",
   };
   settings.appearance.theme = "one-light";
@@ -191,6 +200,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
       scrollback: 1234,
       cursorStyle: "bar",
       cursorBlink: true,
+      macOptionIsMeta: true,
     });
     expect(t.options.theme?.background).toBe("#fafafa");
   }
@@ -213,21 +223,39 @@ test("new settings apply at once to open terminals, and the shown one refits", a
   unmount = mountTerminals(host);
 });
 
-test("copy on select copies a new selection, only when set", async () => {
+test("copy on select copies the selection when the mouse button is released, only when set", async () => {
   const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const { id, term } = await open();
   showTerminal(id);
   term.write("hello");
   await written(term);
-  term.selectAll();
+  const pane = term.element?.parentElement as HTMLElement;
+  const release = (target: EventTarget = document.body) =>
+    target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  const drag = (select: () => void, target?: EventTarget) => {
+    pane.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    select();
+    release(target);
+  };
+  drag(() => term.selectAll());
   expect(copy).not.toHaveBeenCalled();
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.terminal.copy_on_select = true;
   apply({ type: "settings", settings });
+  // A selection change alone (no mouse gesture) copies nothing.
   term.clearSelection();
-  expect(copy).not.toHaveBeenCalled();
   term.selectAll();
-  expect(copy).toHaveBeenCalledWith(term.getSelection());
+  expect(copy).not.toHaveBeenCalled();
+  // Released outside the terminal too; a click that leaves nothing selected copies nothing.
+  drag(() => term.select(0, 0, 4), window);
+  expect(copy.mock.calls).toEqual([["hell"]]);
+  drag(() => term.clearSelection());
+  // Only the press that started in the terminal counts, once.
+  release();
+  term.selectAll();
+  release();
+  expect(copy).toHaveBeenCalledTimes(1);
+  apply({ type: "settings", settings: DEFAULT_SETTINGS });
   copy.mockRestore();
 });
 
@@ -447,8 +475,10 @@ test("Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes, nothing reaches
   showTerminal(id);
   await new Promise<void>((resolve) => term.write("hello world", resolve));
 
-  press(term, "C"); // nothing selected: nothing copied
+  // Nothing selected: nothing copied, and off macOS nothing typed either (18.2 is macOS' only).
+  expect(press(term, "C").defaultPrevented).toBe(true);
   expect(copy).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
   term.select(0, 0, 5);
   expect(press(term, "C").defaultPrevented).toBe(true);
   expect(copy).toHaveBeenCalledWith("hello");
@@ -484,32 +514,360 @@ test("other keys go to the shell unless an app shortcut takes them first", async
   write.mockRestore();
 });
 
-test("on macOS Cmd+C copies and Cmd+V pastes, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
+test("on macOS Cmd+C copies or interrupts and Cmd+V is WebKit's paste, and Ctrl+C and Ctrl+Shift+V reach the shell", async () => {
   asMac();
   const write = spyOn(transport, "writeTerminal");
   const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("pasted");
   const { id, term } = await open();
   showTerminal(id);
-  await new Promise<void>((resolve) => term.write("hello world", resolve));
+  // The shell asked for bracketed paste.
+  await new Promise<void>((resolve) => term.write("hello world\x1b[?2004h", resolve));
   term.select(0, 0, 5);
   const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
 
   expect(press(term, "c", cmd).defaultPrevented).toBe(true);
   expect(copy).toHaveBeenCalledWith("hello");
-  expect(press(term, "v", cmd).defaultPrevented).toBe(true);
+  expect(write).not.toHaveBeenCalled(); // a selection: copied, never interrupted
+  // Cmd+V: not read from script (WebKit's "Paste" bubble), not typed; the native paste event
+  // that follows reaches the shell, bracketed.
+  expect(press(term, "v", cmd).defaultPrevented).toBe(false);
   await settle();
-  expect(write.mock.calls).toEqual([[id, "pasted"]]);
+  expect(read).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
+  const paste = new Event("paste", { bubbles: true, cancelable: true });
+  const data = new DataTransfer();
+  data.setData("text/plain", "pasted");
+  Object.defineProperty(paste, "clipboardData", { value: data });
+  term.textarea?.dispatchEvent(paste);
+  expect(write.mock.calls).toEqual([[id, "\x1b[200~pasted\x1b[201~"]]);
 
   press(term, "c", { shiftKey: false, keyCode: 67 }); // Ctrl+C
   expect(write).toHaveBeenLastCalledWith(id, "\x03");
   expect(press(term, "V", { keyCode: 86 }).defaultPrevented).toBe(false); // Ctrl+Shift+V
   press(term, "C", { ...cmd, shiftKey: true }); // Cmd+Shift+C: not the copy chord
   expect(copy).toHaveBeenCalledTimes(1);
-  expect(read).toHaveBeenCalledTimes(1);
+  expect(read).not.toHaveBeenCalled();
+
+  // 18.2: Cmd+C with nothing selected interrupts as Ctrl+C does, and copies nothing.
+  term.clearSelection();
+  write.mockClear();
+  expect(press(term, "c", cmd).defaultPrevented).toBe(true);
+  press(term, "c", cmd, "keyup");
+  expect(write.mock.calls).toEqual([[id, "\x03"]]);
+  expect(copy).toHaveBeenCalledTimes(1);
   copy.mockRestore();
   read.mockRestore();
   write.mockRestore();
+});
+
+/**
+ * WebKit's paste event on `term`'s textarea for a clipboard holding `text` and, with `file`, a
+ * file as WebKit shows one (type `Files`: its name only).
+ */
+function pasteEvent(term: Terminal, text: string, file?: string): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  const data = new DataTransfer();
+  if (text) data.setData("text/plain", text);
+  if (file) data.items.add(new File([], file, { type: "image/png" }));
+  Object.defineProperty(event, "clipboardData", { value: data });
+  term.textarea?.dispatchEvent(event);
+  return event;
+}
+
+test("on macOS ⌘V pastes each kind of clipboard: text, files copied in Finder, an image (18.3)", async () => {
+  asMac();
+  const write = spyOn(transport, "writeTerminal");
+  const files = spyOn(transport, "pastedFiles").mockResolvedValue("");
+  const { id, term } = await open();
+  showTerminal(id);
+  // Claude Code (or the shell) asked for bracketed paste.
+  await new Promise<void>((resolve) => term.write("\x1b[?2004h", resolve));
+  const pasted = async () => {
+    await settle();
+    const calls = write.mock.calls.map(([to, data]) => [to, data]);
+    write.mockClear();
+    return calls;
+  };
+
+  // Text, several lines (rich text reaches the page as its plain text): pasted by xterm,
+  // bracketed, lines ended by CR; WebKit's insertion into the textarea is cancelled.
+  const text = pasteEvent(term, "one\ntwo\r\nthree");
+  expect(text.defaultPrevented).toBe(true);
+  expect(await pasted()).toEqual([[id, "\x1b[200~one\rtwo\rthree\x1b[201~"]]);
+  expect(files).not.toHaveBeenCalled();
+  expect(term.textarea?.value).toBe("");
+
+  // Files copied in Finder: their paths from the app side, once, bracketed, no Enter.
+  files.mockResolvedValueOnce("/Users/me/My\\ Shots/a.png /tmp/b ");
+  expect(pasteEvent(term, "", "a.png").defaultPrevented).toBe(true);
+  expect(await pasted()).toEqual([[id, "\x1b[200~/Users/me/My\\ Shots/a.png /tmp/b \x1b[201~"]]);
+  expect(files).toHaveBeenCalledTimes(1);
+
+  // An image (a screenshot sent to the clipboard): no files, no text, so an empty paste, which
+  // Claude Code answers by reading the clipboard's image itself.
+  pasteEvent(term, "", "image.png");
+  expect(await pasted()).toEqual([[id, "\x1b[200~\x1b[201~"]]);
+  // An app that cannot read the clipboard: the event's text.
+  files.mockRejectedValueOnce("no clipboard");
+  pasteEvent(term, "a.png", "a.png");
+  expect(await pasted()).toEqual([[id, "\x1b[200~a.png\x1b[201~"]]);
+  expect(files).toHaveBeenCalledTimes(3);
+  files.mockRestore();
+  write.mockRestore();
+});
+
+test("off macOS a paste is xterm's alone, files never asked for", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const files = spyOn(transport, "pastedFiles").mockResolvedValue("/tmp/b ");
+  const { id, term } = await open();
+  showTerminal(id);
+  expect(pasteEvent(term, "a.png", "a.png").defaultPrevented).toBe(true);
+  await settle();
+  expect(write.mock.calls).toEqual([[id, "a.png"]]);
+  expect(files).not.toHaveBeenCalled();
+  files.mockRestore();
+  write.mockRestore();
+});
+
+test("on macOS the terminal menu's Paste pastes copied files' paths too, else the text", async () => {
+  asMac();
+  const write = spyOn(transport, "writeTerminal");
+  const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("a.png");
+  const files = spyOn(transport, "pastedFiles").mockResolvedValue("/tmp/a.png ");
+  const { id } = await open();
+  showTerminal(id);
+  terminalAction(id, "paste");
+  await settle();
+  expect(write.mock.calls).toEqual([[id, "/tmp/a.png "]]);
+  files.mockResolvedValue("");
+  terminalAction(id, "paste");
+  await settle();
+  expect(write.mock.calls.at(-1)).toEqual([id, "a.png"]);
+  files.mockRestore();
+  read.mockRestore();
+  write.mockRestore();
+});
+
+test("on macOS ⌘← ⌘→ ⌘⌫ send line start, end and kill to the shell, ⌘K clears; nothing else does", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  const clear = spyOn(term, "clear");
+  const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
+  const sent = () => write.mock.calls.map(([, data]) => data);
+  // Not on macOS: Cmd is no command key there, and Ctrl+← is the shell's own.
+  press(term, "ArrowLeft", cmd);
+  press(term, "k", cmd);
+  press(term, "ArrowLeft", { shiftKey: false });
+  expect(sent()).not.toContain("\x01");
+  expect(clear).not.toHaveBeenCalled();
+  write.mockClear();
+
+  asMac();
+  expect(press(term, "ArrowLeft", cmd).defaultPrevented).toBe(true);
+  press(term, "ArrowRight", cmd);
+  press(term, "Backspace", cmd);
+  expect(sent()).toEqual(["\x01", "\x05", "\x15"]);
+  expect(press(term, "k", cmd).defaultPrevented).toBe(true);
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(sent()).toHaveLength(3);
+  // With Shift or Option, on key up, or with Ctrl (the shell's): not these keys.
+  press(term, "ArrowLeft", { ...cmd, shiftKey: true });
+  press(term, "ArrowLeft", { ...cmd, altKey: true });
+  press(term, "ArrowLeft", cmd, "keyup");
+  press(term, "K", { ...cmd, shiftKey: true });
+  press(term, "k", { shiftKey: false, keyCode: 75 }); // Ctrl+K: the shell's kill-line
+  expect(sent().filter((d) => ["\x01", "\x05", "\x15"].includes(d))).toHaveLength(3);
+  expect(sent()).toContain("\x0b");
+  expect(clear).toHaveBeenCalledTimes(1);
+  // Cmd + another key is not one of them either.
+  press(term, "Home", cmd);
+  expect(clear).toHaveBeenCalledTimes(1);
+  clear.mockRestore();
+  write.mockRestore();
+});
+
+test("the terminal menu finds the right-clicked terminal and whether it has a selection", async () => {
+  const { id, term } = await open();
+  const other = await open();
+  showTerminals([id, other.id], id);
+  await new Promise<void>((resolve) => term.write("hello world", resolve));
+  const inside = term.element?.querySelector(".xterm-screen") as Element;
+  expect(terminalAt(inside)).toEqual({ id, selection: false });
+  term.select(0, 0, 5);
+  expect(terminalAt(inside)).toEqual({ id, selection: true });
+  expect(terminalAt(other.term.textarea as Element)).toEqual({ id: other.id, selection: false });
+  // Outside every pane, the host itself, or no element at all.
+  expect(terminalAt(host)).toBeNull();
+  expect(terminalAt(document.body)).toBeNull();
+  expect(terminalAt(null)).toBeNull();
+  expect(terminalAt(window)).toBeNull();
+  // A pane whose terminal was closed.
+  const pane = inside.closest(".terminal-pane") as HTMLElement;
+  closeTerminal(id);
+  expect(terminalAt(pane)).toBeNull();
+});
+
+test("the terminal menu copies, pastes (bracketed when asked) and clears, then focuses the terminal", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const copy = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const read = spyOn(navigator.clipboard, "readText").mockResolvedValue("pasted");
+  const { id, term } = await open();
+  const other = await open();
+  showTerminals([id, other.id], other.id);
+  const clear = spyOn(term, "clear");
+  const focus = spyOn(term, "focus");
+  await new Promise<void>((resolve) => term.write("hello world\x1b[?2004h", resolve));
+
+  terminalAction(id, "copy"); // nothing selected: nothing copied
+  expect(copy).not.toHaveBeenCalled();
+  term.select(0, 0, 5);
+  terminalAction(id, "copy");
+  expect(copy.mock.calls).toEqual([["hello"]]);
+  expect(focus).toHaveBeenCalledTimes(2);
+
+  terminalAction(id, "paste");
+  await settle();
+  expect(write.mock.calls).toEqual([[id, "\x1b[200~pasted\x1b[201~"]]);
+  // Refused (WebKit's "Paste" bubble dismissed): nothing pasted, no unhandled rejection.
+  read.mockRejectedValueOnce(new DOMException("Not allowed", "NotAllowedError"));
+  terminalAction(id, "paste");
+  await settle();
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(write).toHaveBeenCalledTimes(1);
+
+  expect(clear).not.toHaveBeenCalled();
+  terminalAction(id, "clear");
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(focus).toHaveBeenCalledTimes(5);
+  // Only that terminal; an unknown one is ignored.
+  expect(write.mock.calls.every(([to]) => to === id)).toBe(true);
+  terminalAction(999, "clear");
+  expect(focus).toHaveBeenCalledTimes(5);
+  copy.mockRestore();
+  read.mockRestore();
+});
+
+test("files dropped on a pane are typed into that terminal, bracketed when asked, never with Enter", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  const other = await open();
+  showTerminals([id, other.id], id);
+  const focus = spyOn(other.term, "focus");
+  // The second terminal's program (Claude Code, a shell) asked for bracketed paste.
+  await new Promise<void>((resolve) => other.term.write("\x1b[?2004h", resolve));
+  const inside = (term: Terminal) => term.element?.querySelector(".xterm-screen") as Element;
+  // What is at each point of the window: each pane, the host around them, nothing.
+  const points: Record<string, Element | null> = {
+    "10,10": inside(term),
+    "500,10": inside(other.term),
+    "1,1": host,
+    "2,2": document.body,
+    "3,3": null,
+  };
+  const at = spyOn(document, "elementFromPoint").mockImplementation(
+    (x, y) => points[`${x},${y}`] ?? null,
+  );
+  const text = "/Users/me/My\\ Shots/a.png /tmp/b ";
+  await settle();
+  write.mockClear();
+
+  expect(dropFiles(text, 10, 10)).toBe(true);
+  expect(write.mock.calls).toEqual([[id, text]]);
+  expect(dropFiles(text, 500, 10)).toBe(true);
+  expect(write.mock.calls.at(-1)).toEqual([other.id, `\x1b[200~${text}\x1b[201~`]);
+  expect(focus).toHaveBeenCalledTimes(1);
+  // Outside every pane: ignored.
+  for (const [x, y] of [
+    [1, 1],
+    [2, 2],
+    [3, 3],
+  ] as const) {
+    expect(dropFiles(text, x, y)).toBe(false);
+  }
+  expect(write).toHaveBeenCalledTimes(2);
+  // A text with a control character is refused: it would act as keys (end the bracketed
+  // paste, erase the line, press Enter). Non-ASCII past the C1 range is typed.
+  for (const hostile of [
+    "/tmp/a\x1b[201~\x15touch ~/PWNED\n ",
+    "/tmp/a\nb ",
+    "/tmp/a\rb ",
+    "/tmp/a\x15b ",
+    "/tmp/a\x00 ",
+    "/tmp/a\x1f ",
+    "/tmp/a\x7f ",
+    "/tmp/\x9b201~ ",
+    "/tmp/a\x85 ",
+  ]) {
+    expect(dropFiles(hostile, 500, 10)).toBe(false);
+  }
+  expect(write).toHaveBeenCalledTimes(2);
+  expect(dropFiles("/tmp/\xa0é ", 500, 10)).toBe(true);
+  expect(write.mock.calls.at(-1)).toEqual([other.id, "\x1b[200~/tmp/\xa0é \x1b[201~"]);
+  at.mockRestore();
+  write.mockRestore();
+});
+
+test("on macOS ⌘↑ and ⌘↓ jump to the shell's previous and next prompt, never typed", async () => {
+  // The jumps themselves are `marks.test.ts`'s: happy-dom does not scroll an opened xterm.
+  const jump = spyOn(Marks.prototype, "jump");
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
+  // Not on macOS: no jump.
+  press(term, "ArrowUp", cmd);
+  expect(jump).not.toHaveBeenCalled();
+  write.mockClear();
+  asMac();
+  expect(press(term, "ArrowUp", cmd).defaultPrevented).toBe(true);
+  expect(press(term, "ArrowDown", cmd).defaultPrevented).toBe(true);
+  expect(jump.mock.calls).toEqual([[-1], [1]]);
+  // With Shift (a selection key) it is not a jump.
+  press(term, "ArrowUp", { ...cmd, shiftKey: true });
+  expect(jump).toHaveBeenCalledTimes(2);
+  expect(write).not.toHaveBeenCalled();
+  jump.mockRestore();
+  write.mockRestore();
+});
+
+test("Option-click selects in a program that takes the mouse; Option as Meta follows the setting", async () => {
+  const { term } = await open();
+  expect(term.options.macOptionClickForcesSelection).toBe(true);
+  expect(term.options.macOptionIsMeta).toBe(false);
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.option_as_meta = true;
+  apply({ type: "settings", settings });
+  expect(term.options.macOptionIsMeta).toBe(true);
+  expect((await open()).term.options.macOptionIsMeta).toBe(true);
+});
+
+test("the font zoom stays within the settings' sizes and follows a new size", async () => {
+  const { term } = await open();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.font_size = 31;
+  apply({ type: "settings", settings });
+  zoomTerminals(1);
+  zoomTerminals(1);
+  expect(term.options.fontSize).toBe(32);
+  // At the top already: one step down is visible at once.
+  zoomTerminals(-1);
+  expect(term.options.fontSize).toBe(31);
+  zoomTerminals(1);
+  // A new size keeps the zoom (+1), and a new terminal gets it too.
+  settings.terminal.font_size = 20;
+  apply({ type: "settings", settings: structuredClone(settings) });
+  expect(term.options.fontSize).toBe(21);
+  expect((await open()).term.options.fontSize).toBe(21);
+  settings.terminal.font_size = 9;
+  apply({ type: "settings", settings: structuredClone(settings) });
+  for (let i = 0; i < 5; i++) zoomTerminals(-1);
+  expect(term.options.fontSize).toBe(8);
+  zoomTerminals(1);
+  expect(term.options.fontSize).toBe(9);
+  zoomTerminals(0);
+  expect(term.options.fontSize).toBe(9);
 });
 
 test("closing ends a running terminal, drops it and its tab; an exited one is just dropped", async () => {
@@ -546,6 +904,46 @@ test("split terminals both render with WebGL, left then right; showing one alone
   expect(pane(two.term).hidden).toBe(true);
   // The one still shown keeps its renderer.
   expect(addons.map((a) => a.disposed)).toEqual([true, false]);
+});
+
+test("a shown pane whose agent is pending on a dialog or an error is marked with its state (17.26)", async () => {
+  const one = await open();
+  const two = await open();
+  const pane = (t: Terminal) => t.element?.parentElement as HTMLElement;
+  const state = (id: string, s: AgentState) =>
+    apply({ type: "agent_state", id, ...agentStatus(s), subagents: [] });
+  // Known before its pane shows: marked when shown.
+  apply({
+    type: "agent_detected",
+    channel: one.id,
+    id: "a",
+    project: null,
+    worktree: null,
+    cwd: null,
+  });
+  state("a", "waiting_permission");
+  showTerminals([one.id, two.id], one.id);
+  expect(pane(one.term).dataset.attention).toBe("waiting_permission");
+  expect(pane(two.term).dataset.attention).toBeUndefined();
+  // Follows the service's states while shown: an error, then a pending 🟠 that only finished.
+  apply({
+    type: "agent_detected",
+    channel: two.id,
+    id: "b",
+    project: null,
+    worktree: null,
+    cwd: null,
+  });
+  state("b", "error");
+  expect(pane(two.term).dataset.attention).toBe("error");
+  state("a", "waiting_you");
+  expect(pane(one.term).dataset.attention).toBeUndefined();
+  // A hidden pane is not updated; it is when shown again.
+  showTerminal(two.id);
+  state("a", "waiting_answer");
+  expect(pane(one.term).dataset.attention).toBeUndefined();
+  showTerminals([one.id, two.id], one.id);
+  expect(pane(one.term).dataset.attention).toBe("waiting_answer");
 });
 
 test("Ctrl+Shift+D splits with the next tab of the worktree, again un-splits; a click focuses a pane", async () => {

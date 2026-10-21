@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { HOME, mod } from "./host";
 
 /** The text of a terminal's buffer, read from the page's own terminal manager. */
 function screen(page: Page, id: number): Promise<string> {
@@ -38,10 +39,10 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   // the last; the removed line above them is not part of the selection.
   const added = view.locator(".cm-changedLine");
   await added.nth(1).click();
-  await page.keyboard.press("Home");
+  await page.keyboard.press(HOME);
   await added.nth(3).click({ modifiers: ["Shift"] });
   await expect(send).toBeEnabled();
-  await page.keyboard.press("Control+Shift+L");
+  await page.keyboard.press(`${mod}+Shift+L`);
   // Written as input, no Enter, and the terminal has the focus: typing goes on after it.
   await page.keyboard.type("why?");
   await expect.poll(() => screen(page, 1)).toBe("mock$ @src/auth/session.ts (lines 39–41) why?");
@@ -49,7 +50,7 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   // Sending showed the terminal; the file's tab is still there. One line, with the button.
   await page.getByRole("tab", { name: "session.ts" }).click();
   await added.nth(1).click();
-  await page.keyboard.press("Shift+Home");
+  await page.keyboard.press(`Shift+${HOME}`);
   await send.click();
   await expect
     .poll(() => screen(page, 1))
@@ -68,7 +69,7 @@ test("selected lines of the diff go to the terminal as a reference", async ({ pa
   await panel.getByRole("treeitem", { name: /token\.ts/ }).click();
   const other = page.getByRole("region", { name: "src/auth/token.ts" });
   await other.locator(".cm-line").first().click();
-  await page.keyboard.press("Shift+Home");
+  await page.keyboard.press(`Shift+${HOME}`);
   const blocked = other.getByRole("button", { name: "Send to terminal" });
   await expect(blocked).toBeDisabled();
   await expect(blocked).toHaveAttribute("title", "No terminal open");

@@ -14,8 +14,8 @@ inputs:
 runs:
   using: composite
   steps:
-    # Tauri (src-tauri) links WebKitGTK; the integration tests' terminals run fish 4, as on
-    # the human's WSL (Ubuntu's own fish is 3.x).
+    # Tauri (src-tauri) links WebKitGTK; the integration tests' terminals run fish 4, as
+    # Homebrew's on the human's Mac (Ubuntu's own fish is 3.x).
     - shell: bash
       run: |
         sudo add-apt-repository -y ppa:fish-shell/release-4

@@ -1,13 +1,29 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+import { CONNECTION, mac } from "./host";
 
 // Outside Tauri a close that went through marks the page (`closeWindow` in window.ts).
-const closed = (page: import("@playwright/test").Page) =>
+const closed = (page: Page) =>
   page.evaluate(() => document.documentElement.dataset.closed !== undefined);
+
+/**
+ * The title bar's Close. On macOS the native traffic lights replace it: their close request is
+ * the one the button sends (`windowAction`).
+ */
+const closeButton = (page: Page) => ({
+  click: () =>
+    mac
+      ? page.evaluate(async () => {
+          const url = "/src/window.ts";
+          const { windowAction } = await import(/* @vite-ignore */ url);
+          windowAction("close");
+        })
+      : page.getByTitle("Close", { exact: true }).click(),
+});
 
 test("closing with no agent closes at once", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByTitle("WSL connection")).toHaveAttribute("data-status", "connected");
-  await page.getByTitle("Close", { exact: true }).click();
+  await expect(page.getByTitle(CONNECTION)).toHaveAttribute("data-status", "connected");
+  await closeButton(page).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(await closed(page)).toBe(true);
 });
@@ -25,7 +41,7 @@ test("closing with a working agent asks first: cancel keeps the app, confirm clo
   await expect(tree.getByRole("img", { name: "idle" })).toHaveCount(1);
 
   // An idle agent loses nothing: the app closes at once (#18).
-  const close = page.getByTitle("Close", { exact: true });
+  const close = closeButton(page);
   const dialog = page.getByRole("dialog", { name: "Close Hive?" });
   await close.click();
   await expect(dialog).toHaveCount(0);

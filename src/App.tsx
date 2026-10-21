@@ -16,6 +16,7 @@ import { StatusBar } from "./shell/StatusBar";
 import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
 import { Toasts } from "./shell/Toasts";
+import { TranslocatedDialog } from "./shell/TranslocatedDialog";
 import {
   ProjectMenu,
   RemoveMergedDialog,
@@ -26,10 +27,11 @@ import {
 import { WorktreePicker } from "./shell/WorktreePicker";
 import { installShortcuts } from "./shortcuts";
 import { useHive } from "./store";
-import { guardClose } from "./window";
+import { guardClose, nativeTheme } from "./window";
 
 export function App() {
   const rightPanel = useHive((s) => s.rightPanel);
+  const sidebarShown = useHive((s) => s.sidebarShown);
   const status = useHive((s) => s.connection.status);
   const modal = useHive((s) => s.modal);
   // A question asked from a dialog keeps that dialog open underneath, edits and all.
@@ -40,9 +42,10 @@ export function App() {
   // The title bar stays usable, so the window can still be closed.
   useEffect(installShortcuts, []);
   useEffect(() => guardClose(confirmClose), []);
-  // The theme's CSS variables hang off this attribute (src/styles.css).
+  // The theme's CSS variables hang off this attribute (src/styles.css); the window follows.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    nativeTheme(theme);
   }, [theme]);
   // The first run on Windows with WSL asks where the service runs before any starts (12.5.4).
   const asking = useHive((s) => s.appMode?.mode === null);
@@ -52,7 +55,7 @@ export function App() {
       <TitleBar />
       <div className="workspace">
         <main className="main" inert={blocked}>
-          <Sidebar />
+          {sidebarShown && <Sidebar />}
           <TerminalArea />
           {rightPanel === "files" && <RightPanel />}
         </main>
@@ -71,6 +74,7 @@ export function App() {
         {modal === "new-pull" && !blocked && <NewPullDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
+        {modal === "translocated" && <TranslocatedDialog />}
         {!blocked && <WorktreeMenu />}
         {!blocked && <ProjectMenu />}
         {!blocked && <SessionMenu />}

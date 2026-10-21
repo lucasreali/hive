@@ -68,6 +68,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
   await tauriTransport.createWorktree("/r", "x", null);
+  await tauriTransport.createIssueWorktree("/r", 42, "main");
   await tauriTransport.removeWorktree("/r/w", true);
   await tauriTransport.renameWorktree("/r/w", "y");
   await tauriTransport.watchWorktree("/r", "branch");
@@ -92,8 +93,12 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.openSettingsFile();
   await tauriTransport.getDiagnostics();
   await tauriTransport.checkUpdate();
+  await tauriTransport.checkUpdate(true);
   await tauriTransport.installUpdate();
   await tauriTransport.showNotification("fix login finished", "shop", "a");
+  await tauriTransport.checkNotifications();
+  await tauriTransport.openNotificationSettings();
+  await tauriTransport.playTone(40);
   await tauriTransport.setMode("native");
   expect(calls).toEqual([
     ["write_terminal", { id: 7, data: "ls\r" }],
@@ -113,6 +118,7 @@ test("terminal and project actions call their commands", async () => {
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],
     ["create_worktree", { project: "/r", name: "x", base: null }],
+    ["create_issue_worktree", { project: "/r", number: 42, base: "main" }],
     ["remove_worktree", { path: "/r/w", force: true }],
     ["rename_worktree", { path: "/r/w", name: "y" }],
     ["watch_worktree", { path: "/r", base: "branch" }],
@@ -136,9 +142,13 @@ test("terminal and project actions call their commands", async () => {
     ["set_settings", { settings: DEFAULT_SETTINGS }],
     ["open_settings_file", {}],
     ["get_diagnostics", {}],
-    ["check_update", {}],
+    ["check_update", { manual: false }],
+    ["check_update", { manual: true }],
     ["install_update", {}],
     ["show_notification", { title: "fix login finished", body: "shop", agent: "a" }],
+    ["check_notifications", {}],
+    ["open_notification_settings", {}],
+    ["play_tone", { volume: 40 }],
     ["set_mode", { mode: "native" }],
   ]);
 });
@@ -178,8 +188,8 @@ test("a command that fails shows why as an error toast, and rejects already hand
   mockIPC(() => {
     throw "the hive link is down";
   });
-  // Every command but these three: a new one sent with a bare `invoke` fails here.
-  const own = ["connect", "openTerminal", "saveFile"];
+  // Every command but these: a new one sent with a bare `invoke` fails here.
+  const own = ["connect", "openTerminal", "saveFile", "playTone", "setTray", "pastedFiles"];
   const methods = Object.entries(tauriTransport).filter(([name]) => !own.includes(name));
   expect(methods.length).toBe(Object.keys(tauriTransport).length - own.length);
   for (const [name, method] of methods) {
@@ -201,5 +211,18 @@ test("a command that fails shows why as an error toast, and rejects already hand
     "the hive link is down",
   );
   await expect(tauriTransport.saveFile("/w", "a", "", null)).rejects.toBe("the hive link is down");
+  // A tone the app cannot play falls back to the webview's (`notify.ts`).
+  await expect(tauriTransport.playTone(40)).rejects.toBe("the hive link is down");
+  // The menu bar icon is a hint: `followTray` drops its failure, without a toast.
+  const tray = { shown: false, urgent: null, agents: [], usage: [] };
+  await expect(tauriTransport.setTray(tray)).rejects.toBe("the hive link is down");
+  // A paste whose files cannot be read pastes the clipboard's text (`terminals.ts`).
+  await expect(tauriTransport.pastedFiles()).rejects.toBe("the hive link is down");
   expect(notice()).toBeNull();
+});
+
+test("the files copied in Finder are read by the app side (18.3)", async () => {
+  const calls = record("/tmp/a.png ");
+  expect(await tauriTransport.pastedFiles()).toBe("/tmp/a.png ");
+  expect(calls).toEqual([["pasted_files", {}]]);
 });

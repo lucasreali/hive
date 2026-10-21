@@ -213,14 +213,51 @@ pub enum Control {
     /// The current account's 5-hour window (12.1), `None` when none came yet or it is past its
     /// reset, and its 7-day window (15.3), only alongside a 5-hour one and until its own reset
     /// (absent from an older service). Sent when either changes, and after the app's `Welcome`
-    /// when there is one.
+    /// when there is one. `limit_at` and `week_limit_at` (17.23; absent from an older service)
+    /// are when each window reaches 100% at its pace so far (Unix seconds, whole minutes),
+    /// `None` when it would not before its reset.
     SessionUsage {
         usage: Option<SessionWindow>,
         #[serde(default)]
         week: Option<SessionWindow>,
+        #[serde(default)]
+        limit_at: Option<u64>,
+        #[serde(default)]
+        week_limit_at: Option<u64>,
+    },
+    /// The current account's `window` reached `threshold` percent (80 or 95, 17.23): sent once
+    /// per threshold and window (a jump past both sends 95 alone). The app adds it to the inbox
+    /// and shows an OS notification.
+    UsageAlert {
+        window: UsageWindow,
+        threshold: u8,
+        resets_at: u64,
     },
     /// A `claude` runs in this terminal without Hive's hooks: its state is not observed.
     UnhookedAgent,
+    /// Service → app (17.25): the progress a program in this terminal reports with OSC 9;4
+    /// (ConEmu's, which Claude Code emits), sent when it changes; `value` 0 to 100.
+    TerminalProgress {
+        state: ProgressState,
+        value: u8,
+    },
+    /// Service → app (17.25): a command the shell marked with OSC 133 (`C` … `D;<exit>`) ran
+    /// for at least the `notifications.command_secs` setting and ended in a terminal with no
+    /// agent, out of view of the focused window: an inbox item and an OS notification.
+    /// `exit` is the status the shell reported, `None` when it gave none.
+    CommandFinished {
+        exit: Option<i32>,
+        secs: u64,
+    },
+    /// Service → app (17.25): a program in this terminal, which has no agent, asked for a
+    /// notification (OSC 9 `<body>` or OSC 777 `notify;<title>;<body>`), its text cleaned
+    /// and cut: an inbox item, and an OS notification when `notify` (the terminal is not in
+    /// view of the focused window).
+    TerminalNotification {
+        title: String,
+        body: String,
+        notify: bool,
+    },
     /// An agent started in this terminal (the frame channel is its `HIVE_TERMINAL_ID`). It is
     /// placed by its own `cwd`, not the terminal's (#19): `project` and `worktree` are the ids
     /// of the followed worktree containing `cwd`, or `None` outside every followed project.
@@ -437,6 +474,17 @@ pub enum Control {
         number: Option<u64>,
         message: String,
     },
+    /// The pull request `number` of the project's worktree `worktree` (its id) merged or
+    /// closed (`state`), as a `Pulls` list showed (17.27): the app offers to remove the
+    /// worktree. Sent once per pull request (again only after it was reopened), never with
+    /// another open one on the worktree's branch, never for the main worktree.
+    PullEnded {
+        project: String,
+        worktree: String,
+        number: u64,
+        title: String,
+        state: PullState,
+    },
     /// App → service: the latest workflow runs of a followed project's GitHub repository
     /// (9.32), on `branch` only when given; answered by `Runs`. Fetched from GitHub as
     /// `ListPulls` is: at most once per 2 minutes for a project, branch and account unless
@@ -536,6 +584,15 @@ pub enum Control {
         project: String,
         name: String,
         /// Local or remote branch to start from; the main worktree's HEAD when `None`.
+        base: Option<String>,
+    },
+    /// App → service: a new worktree for issue `number` of a followed project's GitHub
+    /// repository (17.24), on a branch named from its number and title (`<number>-<title>`,
+    /// sanitised), from `base` (as `CreateWorktree`). Answered by `WorktreeCreated` or
+    /// `CreateWorktreeFailed` with the name `#<number>`.
+    CreateIssueWorktree {
+        project: String,
+        number: u64,
         base: Option<String>,
     },
     WorktreeCreated {
@@ -952,6 +1009,8 @@ pub struct TerminalSettings {
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
     pub copy_on_select: bool,
+    /// macOS: Option sends Meta (Esc + key) instead of typing accents (17.14).
+    pub option_as_meta: bool,
     /// The shell of new terminals when the service runs natively on Windows (12.5.3);
     /// ignored elsewhere.
     pub shell: TerminalShell,
@@ -966,6 +1025,7 @@ impl Default for TerminalSettings {
             cursor_style: CursorStyle::Block,
             cursor_blink: false,
             copy_on_select: false,
+            option_as_meta: false,
             shell: TerminalShell::Default,
         }
     }
@@ -1011,11 +1071,23 @@ pub enum Theme {
 pub struct NotificationSettings {
     /// The alert tone's volume in percent, 0 (mute) to 100.
     pub volume: u32,
+    /// Bounce the Dock icon once when an agent needs an action while Hive is not focused (17.16).
+    pub bounce: bool,
+    /// Show the menu bar icon with the agents' most urgent state and the pending ones (17.22).
+    pub menu_bar: bool,
+    /// A shell command that ran at least this many seconds notifies when it ends (17.25),
+    /// 0 (never) to 3600.
+    pub command_secs: u32,
 }
 
 impl Default for NotificationSettings {
     fn default() -> Self {
-        Self { volume: 100 }
+        Self {
+            volume: 100,
+            bounce: true,
+            menu_bar: true,
+            command_secs: 10,
+        }
     }
 }
 
@@ -1026,6 +1098,9 @@ pub struct AgentSettings {
     pub silence_secs: u32,
     /// Closing the app asks first while agents run.
     pub confirm_close: bool,
+    /// The service keeps the computer from sleeping while idle as long as an agent works or
+    /// has subagents at work (17.17; macOS only).
+    pub keep_awake: bool,
 }
 
 impl Default for AgentSettings {
@@ -1033,6 +1108,7 @@ impl Default for AgentSettings {
         Self {
             silence_secs: 5,
             confirm_close: true,
+            keep_awake: true,
         }
     }
 }
@@ -1440,6 +1516,16 @@ pub struct SessionWindow {
     pub resets_at: u64,
 }
 
+/// Which usage window a `UsageAlert` is about (17.23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageWindow {
+    /// The 5-hour window.
+    Session,
+    /// The 7-day window.
+    Week,
+}
+
 /// A Claude session that ran in a Hive terminal, the folder it ran in and its terminal's Claude
 /// config folder (`None`: the default account, 12.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1674,6 +1760,12 @@ impl AgentState {
         self >= AgentState::WaitingYou
     }
 
+    /// Asks the user for an action (🟡 waiting for permission, a plan or an answer; 🔴 error):
+    /// pending and more urgent than waiting for you.
+    pub fn asks_action(self) -> bool {
+        self > AgentState::WaitingYou
+    }
+
     /// May be writing files: working, with subagents, or on a dialog about to go on.
     pub fn writes(self) -> bool {
         matches!(
@@ -1687,15 +1779,45 @@ impl AgentState {
     }
 }
 
+/// A terminal's progress (OSC 9;4, 17.25): ConEmu's states 0 to 4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressState {
+    /// No progress shown (0).
+    None,
+    /// `value` percent done (1).
+    Normal,
+    /// Failed at `value` percent (2).
+    Error,
+    /// Busy, with no percentage (3).
+    Indeterminate,
+    /// Paused, or a warning, at `value` percent (4).
+    Paused,
+}
+
 /// Why an agent's new state alerts (a tone, an inbox item and, out of view, an OS
-/// notification): it `Finished` (working or with subagents, then waiting for you), or entered
-/// another state that is `Waiting` for the user (`AgentState::pending`). An interrupt never
-/// alerts: the user caused it.
+/// notification): it `Finished` (working or with subagents, then waiting for you), entered a
+/// state that asks the user for an `Action` (waiting for permission, a plan or an answer, or
+/// error: [`AgentState::asks_action`]; the Dock bounces, 17.16), or is `Waiting` for you
+/// otherwise. An interrupt never alerts: the user caused it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Alert {
     Finished,
     Waiting,
+    Action,
+}
+
+impl Alert {
+    /// The alert of entering `state` other than by finishing: `Action` for a state that asks
+    /// for an action, `Waiting` for waiting for you, none for a state that is not pending.
+    pub fn entering(state: AgentState) -> Option<Alert> {
+        if state.asks_action() {
+            Some(Alert::Action)
+        } else {
+            state.pending().then_some(Alert::Waiting)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1798,6 +1920,8 @@ mod tests {
         let usage_only = Control::SessionUsage {
             usage: Some(usage),
             week: None,
+            limit_at: None,
+            week_limit_at: None,
         };
         assert_eq!(decode(old), usage_only);
         let old = br#"{"type":"statusline_usage","claude_dir":"/c","usage":{"used_percentage":7,"resets_at":9}}"#;
@@ -1811,8 +1935,29 @@ mod tests {
         let both = Control::SessionUsage {
             usage: Some(usage),
             week: Some(usage),
+            limit_at: Some(60),
+            week_limit_at: None,
         };
         assert_eq!(Frame::control(0, &both).to_control().unwrap(), both);
+        // The pace (17.23) and its alerts.
+        let paced = br#"{"type":"session_usage","usage":{"used_percentage":7,"resets_at":9},"week":null,"limit_at":60,"week_limit_at":120}"#;
+        assert_eq!(
+            decode(paced),
+            Control::SessionUsage {
+                usage: Some(usage),
+                week: None,
+                limit_at: Some(60),
+                week_limit_at: Some(120),
+            }
+        );
+        let alert = Control::UsageAlert {
+            window: UsageWindow::Week,
+            threshold: 95,
+            resets_at: 9,
+        };
+        let json = br#"{"type":"usage_alert","window":"week","threshold":95,"resets_at":9}"#;
+        assert_eq!(decode(json), alert);
+        assert_eq!(Frame::control(0, &alert).to_control().unwrap(), alert);
     }
 
     #[test]
@@ -1839,7 +1984,7 @@ mod tests {
             urgency: 8,
             pending: true,
             interrupted: false,
-            alert: Some(Alert::Waiting),
+            alert: Some(Alert::Action),
             notify: true,
             writing: true,
             subagents: vec![SubagentState {
@@ -1856,11 +2001,28 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"waiting","notify":true,"writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
-        let finished = serde_json::to_string(&[Some(Alert::Finished), None]).unwrap();
-        assert_eq!(finished, r#"["finished",null]"#);
+        let alerts = [Some(Alert::Finished), Some(Alert::Waiting), None];
+        let alerts = serde_json::to_string(&alerts).unwrap();
+        assert_eq!(alerts, r#"["finished","waiting",null]"#);
+        // Entering a state: an action for 🟡 and 🔴, waiting for 🟠, none when not pending.
+        let entering = [
+            (AgentState::WaitingPermission, Some(Alert::Action)),
+            (AgentState::WaitingPlan, Some(Alert::Action)),
+            (AgentState::WaitingAnswer, Some(Alert::Action)),
+            (AgentState::Error, Some(Alert::Action)),
+            (AgentState::WaitingYou, Some(Alert::Waiting)),
+            (AgentState::WithSubagents, None),
+            (AgentState::Working, None),
+            (AgentState::Idle, None),
+            (AgentState::Ended, None),
+        ];
+        for (state, alert) in entering {
+            assert_eq!((state, Alert::entering(state)), (state, alert));
+            assert_eq!(state.asks_action(), alert == Some(Alert::Action));
+        }
     }
 
     #[test]
@@ -2075,6 +2237,15 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &create).payload[..],
             br#"{"type":"create_worktree","project":"/r","name":"x","base":null}"#
+        );
+        let issue = Control::CreateIssueWorktree {
+            project: "/r".into(),
+            number: 42,
+            base: Some("main".into()),
+        };
+        assert_eq!(
+            &Frame::control(0, &issue).payload[..],
+            br#"{"type":"create_issue_worktree","project":"/r","number":42,"base":"main"}"#
         );
         let branches = Control::Branches {
             project: "/r".into(),
@@ -2542,7 +2713,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100},"agents":{"silence_secs":5,"confirm_close":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,
@@ -2738,6 +2909,17 @@ mod tests {
             serde_json::to_string(&pulls).unwrap(),
             r#"{"type":"pulls","project":"/r","repo":{"name":"o/r","url":"https://github.com/o/r","merge_methods":["squash"],"default_merge":null},"mine":[{"number":7,"title":"T","url":"https://github.com/o/r/pull/7","state":"draft","branch":"b","base":"main","author":"me","review":"changes_requested","checks":"running","updated_at":"2026-09-25T08:18:47Z","worktree":null}],"review":[],"fetched_ms":1,"error":null}"#
         );
+        let ended = Control::PullEnded {
+            project: "/r".into(),
+            worktree: "/r/w".into(),
+            number: 7,
+            title: "T".into(),
+            state: PullState::Closed,
+        };
+        assert_eq!(
+            serde_json::to_string(&ended).unwrap(),
+            r#"{"type":"pull_ended","project":"/r","worktree":"/r/w","number":7,"title":"T","state":"closed"}"#
+        );
         let merge: Control = serde_json::from_str(
             r#"{"type":"act_on_pull","project":"/r","number":7,"action":{"kind":"merge","method":"rebase","head":"abc"}}"#,
         )
@@ -2815,6 +2997,13 @@ mod tests {
                 project: "/r".into(),
                 number: None,
                 message: "m".into(),
+            },
+            Control::PullEnded {
+                project: "/r".into(),
+                worktree: "/r/.claude/worktrees/a".into(),
+                number: 1,
+                title: "t".into(),
+                state: PullState::Merged,
             },
         ] {
             assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);

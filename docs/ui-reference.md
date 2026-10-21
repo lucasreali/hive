@@ -250,14 +250,30 @@ Terminal content in the prototype (Claude Code output, sample code) is sample da
 
 | Action | Shortcut | Prototype had |
 |---|---|---|
-| Next pending agent | F8 | F8 |
+| Next pending agent | F8 (macOS: ⇧⌘J or F8, which is Play/Pause on a Mac's keyboard) | F8 |
 | Command palette | Ctrl+Shift+P | — |
 | Worktree picker → new terminal | Ctrl+Shift+T | Alt+T |
 | Split terminal | Ctrl+Shift+D | — |
+| Search the focused terminal (17.21) | Ctrl+Shift+F (macOS: ⌘F or ⇧⌘F) | — |
 | New worktree | Ctrl+Shift+N | Alt+N |
 | Files and diff panel | Ctrl+Shift+B | Alt+B |
 | Add project | Ctrl+Shift+O | Ctrl+O |
 | Copy / paste in the terminal | Ctrl+Shift+C / Ctrl+Shift+V (macOS: ⌘C / ⌘V) | — |
 | Move in the tree | ↑ ↓ ← → Enter | same |
 
-Tooltips show the shortcut in parentheses, e.g. "Files and diff (Ctrl+Shift+B)"; buttons show it as a kbd chip (e.g. "Ctrl+Shift+O"). On macOS every Ctrl+Shift+letter is Cmd+Shift+letter, shown as "⇧⌘O", and Ctrl+S is "⌘S".
+macOS only (D17.2, 17.14), none reaching the shell as typed:
+
+| Action | Shortcut |
+|---|---|
+| Close the tab shown (a file with unsaved edits asks) | ⌘W |
+| Show tab 1–9 of the bar | ⌘1 … ⌘9 |
+| Next / previous tab (wrapping) | ⇧⌘] / ⇧⌘[ |
+| Terminal font bigger / smaller / the settings' size (every terminal, until restart) | ⌘= / ⌘- / ⌘0 |
+| Clear the focused terminal | ⌘K |
+| Line start / line end / delete to the line start (sends Ctrl+A / Ctrl+E / Ctrl+U) | ⌘← / ⌘→ / ⌘⌫ |
+
+The terminal's search bar sits at the top right of the pane it searches: a field, the count ("3 of 12", "No results", "1000+" past the highlight limit), "Match case" (Aa), next / previous and close. It searches up from the newest output, as iTerm2 and Ghostty do: typing finds the newest match, Enter (next, the up arrow) the older one, Shift+Enter (previous, the down arrow) the newer one; Esc closes it and gives the keyboard back to the terminal, leaving the current match selected. Matches are tinted with the theme's yellow, the current one stronger and outlined.
+
+Option-drag selects text even inside a program that takes the mouse. Option types accents unless the Terminal setting "Option as Meta" (macOS only, off by default) is on. Enter (and Esc in the review comment) that ends a composition (a dead key such as ´ ~ ^, or an IME) is the composition's, never the field's action.
+
+Tooltips show the shortcut in parentheses, e.g. "Files and diff (Ctrl+Shift+B)"; buttons show it as a kbd chip (e.g. "Ctrl+Shift+O"). On macOS every Ctrl+Shift+letter is Cmd+Shift+letter, shown as "⇧⌘O", and Ctrl+S is "⌘S". The settings' Shortcuts section lists the platform's commands (on macOS with the table above).

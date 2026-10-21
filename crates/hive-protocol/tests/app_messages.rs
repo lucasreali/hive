@@ -55,6 +55,7 @@ sort! {
         | ListBranches
         | ValidateWorktreeName
         | CreateWorktree
+        | CreateIssueWorktree
         | RemoveWorktree
         | RenameWorktree
         | WatchWorktree
@@ -86,12 +87,16 @@ sort! {
         | TerminalExited
         | Badge
         | UnhookedAgent
+        | TerminalProgress
+        | CommandFinished
+        | TerminalNotification
         | AgentDetected
         | AgentState
         | SubagentWorktrees
         | AgentTitle
         | AgentUsage
         | SessionUsage
+        | UsageAlert
         | AgentRemoved
         | Projects
         | ProjectAdded
@@ -106,6 +111,7 @@ sort! {
         | Pull
         | PullDone
         | PullFailed
+        | PullEnded
         | Runs
         | Run
         | JobLog
@@ -195,6 +201,19 @@ fn samples() -> Vec<Control> {
         TerminalExited { code: Some(0) },
         Badge { text: s("db") },
         UnhookedAgent,
+        TerminalProgress {
+            state: ProgressState::Normal,
+            value: 40,
+        },
+        CommandFinished {
+            exit: Some(1),
+            secs: 12,
+        },
+        TerminalNotification {
+            title: s("build"),
+            body: s("done"),
+            notify: true,
+        },
         AgentDetected {
             id: s("s"),
             project: Some(s("/r")),
@@ -242,6 +261,13 @@ fn samples() -> Vec<Control> {
                 used_percentage: 41,
                 resets_at: 1_738_857_600,
             }),
+            limit_at: Some(1_738_420_200),
+            week_limit_at: None,
+        },
+        UsageAlert {
+            window: UsageWindow::Session,
+            threshold: 80,
+            resets_at: 1_738_425_600,
         },
         AgentRemoved { id: s("s") },
         Projects {
@@ -298,6 +324,13 @@ fn samples() -> Vec<Control> {
             project: s("/r"),
             number: None,
             message: m(),
+        },
+        PullEnded {
+            project: s("/r"),
+            worktree: s("/r/.claude/worktrees/a"),
+            number: 1,
+            title: s("Fix the login"),
+            state: PullState::Merged,
         },
         Runs {
             project: s("/r"),

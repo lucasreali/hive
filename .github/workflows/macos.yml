@@ -1,6 +1,7 @@
 # The only place the macOS-only code runs (#39, TODO 5.3): the Rust and frontend tests,
-# coverage and mutants of `crates/hive/src/macos.rs` (excluded from the Linux gates, see
-# COVERAGE_EXCLUSIONS.md), and the release bundle built without publishing it.
+# coverage and the diff's mutants of `crates/hive/src/macos.rs` and `src-tauri/src/macos.rs`
+# (excluded from the Linux gates, see COVERAGE_EXCLUSIONS.md; every one of their mutants runs
+# nightly, mutants-full.yml), and the release bundle built without publishing it.
 name: macos
 
 on:
@@ -18,12 +19,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Whether this push can change the bundle (TODO 9.5): the branch's diff since it left `main`
-  # (merge base with origin/main, as ci.yml's `changes`); always on `main` and on a manual run.
-  # A job skipped by its `if` still leaves the run green.
+  # Whether this push can change the tests (`code`, as ci.yml's) or the bundle (TODO 9.5): the
+  # branch's diff since it left `main` (merge base with origin/main, as ci.yml's `changes`);
+  # always on `main` and on a manual run. A job skipped by its `if` still leaves the run green.
   changes:
     runs-on: ubuntu-latest
     outputs:
+      code: ${{ steps.diff.outputs.code }}
       bundle: ${{ steps.diff.outputs.bundle }}
     steps:
       - uses: actions/checkout@v6
@@ -33,32 +35,43 @@ jobs:
       # package.json; macos.yml itself, so a change to the job runs it.
       - id: diff
         run: |
-          bundle=true
+          code=true bundle=true
           if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
             # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
             files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
-            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|\.github/workflows/macos\.yml$)' <<< "$files" ||
+            grep -qvE '\.md$|^docs/|^\.claude/(skills|agents)/' <<< "$files" ||
+              grep -qx 'docs/architecture\.md' <<< "$files" ||
+              code=false
+            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|scripts/macos-bundle\.sh$|\.github/workflows/macos\.yml$)' <<< "$files" ||
               bundle=false
           fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
           echo "bundle=$bundle" | tee -a "$GITHUB_OUTPUT"
 
   test:
-    runs-on: macos-14
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # The newest arm64 macOS (TODO 18.13): the one the human runs, where the traffic lights,
+    # notifications and FSEvents were measured. The bundle stays on macos-14 (below).
+    runs-on: macos-26
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
           components: llvm-tools-preview, clippy
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
-          tool: cargo-llvm-cov,cargo-mutants
+          tool: cargo-llvm-cov,cargo-mutants,cargo-nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      # The integration tests' terminals run fish, as on WSL (`common::Env`).
+      # The integration tests' terminals run fish 4 (`common::Env`), from Homebrew as on the
+      # human's Mac.
       - run: brew install fish
       - run: bun install --frozen-lockfile
       # `tauri::generate_context!` needs the built frontend.
@@ -66,13 +79,37 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Runs `cargo test --workspace` instrumented.
       - run: cargo llvm-cov --workspace --no-fail-fast --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
-      # `--no-config`: `.cargo/mutants.toml` excludes this file for Linux.
-      - run: cargo mutants --no-config -f crates/hive/src/macos.rs -j 2 --timeout 120
+      # The diff's mutants (D2, D6), as mutants.yml on Linux: a file the branch did not change
+      # runs none, and nothing runs on `main` (its commits come from tested branches); every
+      # mutant runs nightly (mutants-full.yml). `--no-config`: `.cargo/mutants.toml` excludes
+      # these files for Linux, so its `[profile.mutants]` build and nextest (fails fast: the
+      # first failing test ends the mutant's run) are passed here. One run per crate: a run's
+      # unmutated baseline tests every package it mutates. The baseline has no time limit; each
+      # mutant's is cargo-mutants' own, sized from the baseline, at least 120 s
+      # (`--minimum-test-timeout`), and a mutant that times out still fails the job. A fixed
+      # `--timeout` also limited the baseline, which `hive`'s suite outgrew (18.18).
+      - run: |
+          if [ "$GITHUB_REF" = refs/heads/main ]; then echo "on main: nothing to test"; exit 0; fi
+          base=$(git merge-base origin/main HEAD)
+          for f in crates/hive/src/macos.rs src-tauri/src/macos.rs; do
+            git diff "$base" -- "$f" > diff.patch
+            if [ -s diff.patch ]; then
+              cargo mutants --no-config --profile mutants --test-tool nextest -f "$f" --in-diff diff.patch -j 2 --minimum-test-timeout 120
+            else
+              echo "$f: unchanged, no mutants"
+            fi
+          done
       - run: bun test
+      # release.sh and the gates' memory watchdog (TODO 17.2), as ci.yml does on Linux.
+      - run: scripts/test-scripts.sh
+      # A second launch hands over to the running app and ends (TODO 17.18).
+      - run: cargo build -p hive-app && scripts/second-launch.sh
 
   bundle:
     needs: changes
     if: needs.changes.outputs.bundle == 'true'
+    # As release.yml builds the shipped app: the SDK an app links against decides some of its
+    # AppKit behaviour (macOS 26 SDK: the new window style), so moving it is the release's call.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
@@ -86,9 +123,17 @@ jobs:
           mkdir -p src-tauri/resources
           cp target/release/hive src-tauri/resources/hive
       - run: bun install --frozen-lockfile
+      # Built, then bundled, as release.yml does (its signing secrets reach only the bundling).
       # No updater artifacts, so no signing key: that stays in release.yml's `release`
       # environment (#29), out of reach of any branch.
-      - run: bun tauri build --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - run: bun tauri build --no-bundle --config src-tauri/tauri.release.macos.conf.json
+      # Ad-hoc, as the app (D17.1); release.yml signs both with a Developer ID when it has one.
+      - run: |
+          scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
+          bun tauri bundle --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # The bundle validates (`codesign --verify --deep --strict`), the nested `hive` has the
+      # app's signer, the JIT entitlement and the folder prompts' texts are there (TODO 17.11).
+      - run: scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app
       - uses: actions/upload-artifact@v6
         with:
           name: hive-macos

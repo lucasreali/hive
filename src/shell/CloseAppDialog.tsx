@@ -33,6 +33,14 @@ export function confirmClose(): boolean {
   return true;
 }
 
+/**
+ * ⌘Q, the Dock's Quit or logging out (D17.3): the app side asks only while agents would end, so
+ * this asks through the same guard as closing the window, and quits when it has nothing to ask.
+ */
+export function requestQuit(): void {
+  if (!confirmClose()) closeWindow();
+}
+
 /** Installs the update found at startup (4.19); the app restarts, or says why it could not. */
 export function installUpdate(): void {
   openModal(null);
@@ -43,9 +51,14 @@ export function installUpdate(): void {
   transport.installUpdate().catch(() => installing(false));
 }
 
-/** The update button: restarting ends agents as closing does, so it asks the same way. */
+/**
+ * The update button: restarting ends agents as closing does, so it asks the same way. A
+ * translocated app cannot replace itself (17.10): it explains how to move it instead.
+ */
 export function requestUpdate(): void {
-  if (agentsAtRisk(useHive.getState()).length === 0) installUpdate();
+  const s = useHive.getState();
+  if (s.translocated) openModal("translocated");
+  else if (agentsAtRisk(s).length === 0) installUpdate();
   else openModal("update-app");
 }
 

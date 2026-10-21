@@ -25,6 +25,22 @@
     "type": "unhooked_agent"
   },
   {
+    "type": "terminal_progress",
+    "state": "normal",
+    "value": 40
+  },
+  {
+    "type": "command_finished",
+    "exit": 1,
+    "secs": 12
+  },
+  {
+    "type": "terminal_notification",
+    "title": "build",
+    "body": "done",
+    "notify": true
+  },
+  {
     "type": "agent_detected",
     "id": "s",
     "project": "/r",
@@ -80,7 +96,15 @@
     "week": {
       "used_percentage": 41,
       "resets_at": 1738857600
-    }
+    },
+    "limit_at": 1738420200,
+    "week_limit_at": null
+  },
+  {
+    "type": "usage_alert",
+    "window": "session",
+    "threshold": 80,
+    "resets_at": 1738425600
   },
   {
     "type": "agent_removed",
@@ -227,6 +251,14 @@
     "project": "/r",
     "number": null,
     "message": "m"
+  },
+  {
+    "type": "pull_ended",
+    "project": "/r",
+    "worktree": "/r/.claude/worktrees/a",
+    "number": 1,
+    "title": "Fix the login",
+    "state": "merged"
   },
   {
     "type": "runs",
@@ -530,17 +562,22 @@
         "cursor_style": "block",
         "cursor_blink": false,
         "copy_on_select": false,
+        "option_as_meta": false,
         "shell": "default"
       },
       "appearance": {
         "theme": "one-dark"
       },
       "notifications": {
-        "volume": 100
+        "volume": 100,
+        "bounce": true,
+        "menu_bar": true,
+        "command_secs": 10
       },
       "agents": {
         "silence_secs": 5,
-        "confirm_close": true
+        "confirm_close": true,
+        "keep_awake": true
       },
       "worktrees": {
         "default_base": null

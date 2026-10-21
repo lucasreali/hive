@@ -5,28 +5,33 @@
 //! plus a `channel` field. Terminal output goes, as raw bytes, to the `Channel` given for that
 //! terminal by `open_terminal`. No Tauri events are used.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::Read as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
-    AccountDir, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount, PullAction,
-    Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
+    PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 use tauri_plugin_updater::{Update, Updater};
+use tauri_plugin_window_state::StateFlags;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
+
+/// The app's descriptor limit (17.6).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub mod fds;
 
 /// App version, compared with the `hive` binary's in the handshake (#29).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -275,6 +280,22 @@ pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool 
     bundled || dev.is_some_and(|dev| dev.origin() == url.origin())
 }
 
+/// Whether the app at `exe` runs translocated (17.10): macOS runs a quarantined app opened
+/// where it was downloaded from a random read-only copy under `…/AppTranslocation/…`, where
+/// the updater cannot replace it. A path check is enough: that folder exists only for this.
+/// Only on macOS (`main.rs` passes `cfg!(target_os = "macos")`); an unknown `exe` is not.
+pub fn translocated(macos: bool, exe: Option<std::path::PathBuf>) -> bool {
+    macos
+        && exe.is_some_and(|exe| {
+            exe.components()
+                .any(|part| part.as_os_str() == "AppTranslocation")
+        })
+}
+
+/// Why an update does not install while translocated; the UI explains the fix (17.10).
+pub const TRANSLOCATED: &str =
+    "Hive runs from a temporary read-only copy; move it to Applications to update";
+
 /// Tauri state: the bridge command and the live link to the service.
 pub struct Hive {
     /// `hive bridge` through WSL, or natively on macOS (`bridge_command`).
@@ -287,18 +308,52 @@ pub struct Hive {
     reconnecting: tokio::sync::Mutex<()>,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
     restart: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Ends the app (Tauri's `exit`); given by `main.rs` (`with_exit`).
+    exit: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs a downloaded update's installer; given by `main.rs` (`with_install`).
     install: Option<Box<Installer>>,
     /// Opens a path, or shows it in the file manager; given by `main.rs` (`with_open`).
     open: Option<Box<Opener>>,
     /// Shows an OS notification; given by `main.rs` (`with_notify`).
     notify: Option<Box<Notifier>>,
+    /// Whether the OS lets Hive show notifications (17.19); given by `main.rs` on macOS
+    /// (`with_permission`).
+    permission: Option<Arc<Permissions>>,
+    /// Plays the alert tone (17.19); given by `main.rs` on macOS (`with_tone`).
+    tone: Option<Tone>,
+    /// Opens a URL with the system (`with_url`).
+    url: Option<Box<UrlOpener>>,
+    /// `defaults` and arguments before its own, which read the title bar's double-click
+    /// setting (`with_defaults`).
+    defaults: (OsString, Vec<OsString>),
+    /// The app runs translocated (`translocated`); given by `main.rs` (`with_translocated`).
+    translocated: bool,
+    /// Shows the menu bar icon; given by `main.rs` (`with_tray`, 17.22).
+    tray: Option<Box<tray::Apply>>,
+    /// Reads the files copied to the clipboard; given by `main.rs` on macOS (`with_clipboard`,
+    /// 18.3).
+    clipboard: Option<Box<dyn Clipboard>>,
+}
+
+/// The clipboard's copied files (18.3), which WebKit shows a page only by name: read by the app
+/// side (`macos::Pasteboard` on macOS), behind this trait so [`Hive::pasted_files`] is tested
+/// without AppKit.
+pub trait Clipboard: Send + Sync {
+    /// The paths of the files on the clipboard (copied in Finder), in order; none when it holds
+    /// no files.
+    fn file_paths(&self) -> Vec<String>;
 }
 
 /// Runs the installer of a downloaded update.
 type Installer = dyn Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync;
 /// Opens `path` with the system's default app, or shows it in the file manager when `reveal`.
 type Opener = dyn Fn(&str, bool) -> Result<(), String> + Send + Sync;
+/// Opens a URL with the system's handler for it.
+type UrlOpener = dyn Fn(&str) -> Result<(), String> + Send + Sync;
+/// Asks the OS whether Hive may show notifications; it may wait a moment for the answer.
+type Permissions = dyn Fn() -> Permission + Send + Sync;
+/// Plays a sound file at a volume from 0 to 1.
+type Player = dyn Fn(&Path, f32) -> Result<(), String> + Send + Sync;
 /// What a click on an OS notification does (13.5).
 pub type Click = Box<dyn Fn() + Send + Sync>;
 /// Shows an OS notification with a title and a body; a click on it runs the [`Click`].
@@ -313,6 +368,41 @@ pub fn notifier<'a>(dev: bool, identifier: &'a str, stand_in: &'a str) -> &'a st
     } else {
         identifier
     }
+}
+
+/// The identifier the app runs under (17.18): the installed app's `identifier`, or, for a
+/// development build, that with `.dev` after it. The single-instance plugin keys the running
+/// instance on it (a socket in `/tmp` on macOS, a D-Bus name on Linux, a mutex on Windows) and
+/// the window-state plugin keeps its file in the app config folder named after it, so a
+/// development run neither focuses the installed app (nor is focused by it) nor moves its window.
+pub fn instance_identifier(dev: bool, identifier: &str) -> String {
+    if dev {
+        format!("{identifier}.dev")
+    } else {
+        identifier.to_owned()
+    }
+}
+
+/// What the window-state plugin saves and restores (17.18): size, position, maximised and full
+/// screen. Not its decorations (each platform's config sets them) nor whether it is visible (the
+/// app always opens its window).
+pub const WINDOW_STATE: StateFlags = StateFlags::SIZE
+    .union(StateFlags::POSITION)
+    .union(StateFlags::MAXIMIZED)
+    .union(StateFlags::FULLSCREEN);
+
+/// Brings the main window up, minimised or hidden, restored and focused: a click on a
+/// notification (13.5), a second launch of the app (17.18), a Dock click with no window shown
+/// ([`reopen`]), a quit that asks first (D17.3) or an agent chosen in the menu bar icon's menu
+/// (17.22). Answers whether there was a window to bring up.
+pub fn bring_up<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
 }
 
 /// How many notifications wait for their click at once (`waiting_notifier`); later ones show
@@ -385,6 +475,151 @@ fn printable(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// Whether the OS lets Hive show notifications (17.19), as `notification_permission` tells
+/// the UI: `unknown` where Hive cannot ask (a development build, a platform without a check) or
+/// before the user answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    Granted,
+    Denied,
+    Unknown,
+}
+
+impl Permission {
+    /// Its name in `notification_permission`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Granted => "granted",
+            Self::Denied => "denied",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// macOS's System Settings on its Notifications pane (17.19).
+pub const NOTIFICATION_SETTINGS: &str =
+    "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+
+/// Whether `exe` runs from an app bundle (`Hive.app/Contents/MacOS/hive-app`): macOS's
+/// notification center serves only a bundled app and raises an exception for any other process
+/// (17.19), so a development build never asks it.
+pub fn in_app_bundle(exe: &Path) -> bool {
+    let mut up = exe.ancestors().skip(1).map(Path::file_name);
+    let (macos, contents, app) = (
+        up.next().flatten(),
+        up.next().flatten(),
+        up.next().flatten(),
+    );
+    let bundle = app.and_then(|name| Path::new(name).extension());
+    macos == Some("MacOS".as_ref())
+        && contents == Some("Contents".as_ref())
+        && bundle == Some("app".as_ref())
+}
+
+/// The alert tone's sample rate, length and frequency, as `src/notify.ts` synthesizes it.
+const TONE_RATE: u32 = 44_100;
+const TONE_SECS: f64 = 0.2;
+const TONE_HZ: f64 = 880.0;
+/// Its gain at full volume, falling exponentially to `TONE_END` (Web Audio's ramp).
+const TONE_GAIN: f64 = 0.15;
+const TONE_END: f64 = 0.001;
+/// The file the tone is written to, in the folder given to `with_tone`.
+const TONE_FILE: &str = "alert-tone.wav";
+
+/// The alert tone (17.19) as a 16-bit mono WAV file: the beep `src/notify.ts` synthesizes with
+/// Web Audio, at full volume (the player scales it).
+pub fn tone_wav() -> Vec<u8> {
+    let samples = (f64::from(TONE_RATE) * TONE_SECS) as u32;
+    let data = samples * 2;
+    let mut wav = Vec::with_capacity(44 + data as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes()); // the format chunk's size
+    wav.extend_from_slice(&1_u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1_u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&TONE_RATE.to_le_bytes());
+    wav.extend_from_slice(&(TONE_RATE * 2).to_le_bytes()); // bytes per second
+    wav.extend_from_slice(&2_u16.to_le_bytes()); // bytes per sample
+    wav.extend_from_slice(&16_u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data.to_le_bytes());
+    for i in 0..samples {
+        let t = f64::from(i) / f64::from(TONE_RATE);
+        let gain = TONE_GAIN * (TONE_END / TONE_GAIN).powf(t / TONE_SECS);
+        let sample = gain * (std::f64::consts::TAU * TONE_HZ * t).sin();
+        wav.extend_from_slice(&((sample * f64::from(i16::MAX)) as i16).to_le_bytes());
+    }
+    wav
+}
+
+/// Plays a sound file with `program` (macOS's `afplay`) as `program -v <volume> <file>`, each a
+/// separate argument; a thread of its own waits for it to end.
+pub fn afplay(program: PathBuf) -> impl Fn(&Path, f32) -> Result<(), String> + Send + Sync {
+    move |file: &Path, volume: f32| {
+        let mut child = std::process::Command::new(&program)
+            .arg("-v")
+            .arg(volume.to_string())
+            .arg(file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(tone_failed)?;
+        let thread = std::thread::Builder::new().name("tone".into());
+        let waiting = thread.spawn(move || child.wait().map(drop));
+        waiting.map(drop).map_err(tone_failed)
+    }
+}
+
+fn tone_failed(error: std::io::Error) -> String {
+    format!("cannot play the tone: {error}")
+}
+
+/// The alert tone played by the app (17.19): its folder, whether its file was written in this
+/// run, and the player.
+struct Tone {
+    dir: PathBuf,
+    written: Mutex<bool>,
+    play: Box<Player>,
+}
+
+impl Tone {
+    /// Writes the tone's file once a run (through a temporary file renamed over it, so a tone
+    /// still playing keeps its file), then plays it at `volume` percent.
+    fn play(&self, volume: u8) -> Result<(), String> {
+        let file = self.dir.join(TONE_FILE);
+        let mut written = self.written.lock().unwrap_or_else(PoisonError::into_inner);
+        if !*written {
+            let temporary = self.dir.join(format!("{TONE_FILE}.tmp"));
+            std::fs::create_dir_all(&self.dir)
+                .and_then(|()| std::fs::write(&temporary, tone_wav()))
+                .and_then(|()| std::fs::rename(&temporary, &file))
+                .map_err(|error| format!("cannot write the tone: {error}"))?;
+            *written = true;
+        }
+        drop(written);
+        (self.play)(&file, f32::from(volume) / 100.0)
+    }
+}
+
+/// macOS' `defaults`, which reads the user's preferences.
+const DEFAULTS: &str = "/usr/bin/defaults";
+/// How long reading a preference may take: it runs on a double click.
+const DEFAULTS_WAIT: Duration = Duration::from_secs(2);
+
+/// What a double click on the title bar does, from macOS' "Double-click a window's title bar
+/// to" (Desktop & Dock), the global `AppleActionOnDoubleClick`: "Minimize" minimizes, "None"
+/// does nothing; "Maximize" (Zoom), "Fill" and an unset or unknown value zoom, as Tauri's own
+/// drag region does (its maximize is the window's zoom, which fills the screen).
+pub fn double_click_action(setting: Option<&str>) -> &'static str {
+    match setting.map(str::trim) {
+        Some("Minimize") => "minimize",
+        Some("None") => "none",
+        _ => "zoom",
+    }
+}
+
 #[derive(Default)]
 struct Link {
     /// Control messages to the UI.
@@ -403,12 +638,21 @@ struct Link {
     update: Option<(Update, Vec<u8>)>,
     /// The paths the service sent for the app to open, oldest first, each for one `open_path`.
     approved: VecDeque<String>,
+    /// Whether the UI was already told to move a translocated app (`connect`): the notice
+    /// opens once per run, not again on a reload.
+    translocation_told: bool,
     /// Whether the bridge runs the installer's `hive` (`Bridge`); sent with
     /// `version_mismatch` and `disconnected`, so the UI shows only fixes an installed app's
     /// user can apply (12.4).
     bundled: bool,
     /// The mode chosen (`Modes`), `None` until the user chooses one.
     mode: Option<Mode>,
+    /// The agents whose last state makes quitting ask first (`at_risk`), by id.
+    at_risk: HashSet<String>,
+    /// The `confirm_close` setting the service last sent; `None` before any (its default: on).
+    confirm_close: Option<bool>,
+    /// When the UI was last asked to confirm a quit (`quit_requested`).
+    asked: Option<Instant>,
 }
 
 impl Link {
@@ -420,10 +664,37 @@ impl Link {
         self.approved.push_back(path);
     }
 
-    fn to_ui(&self, message: Value) {
-        if let Some(ui) = &self.ui {
-            let _ = ui.send(message);
+    /// Follows what quitting asks about (D17.3) in a service message: an agent's state, an
+    /// agent gone, the `confirm_close` setting.
+    fn follow(&mut self, message: &Value) {
+        let id = message["id"].as_str().map(str::to_owned);
+        match (message["type"].as_str(), id) {
+            (Some("agent_state"), Some(id)) => {
+                let state = serde_json::from_value(message["state"].clone()).ok();
+                if state.is_some_and(at_risk) {
+                    self.at_risk.insert(id);
+                } else {
+                    self.at_risk.remove(&id);
+                }
+            }
+            (Some("agent_removed"), Some(id)) => drop(self.at_risk.remove(&id)),
+            (Some("settings"), _) => {
+                self.confirm_close = message["settings"]["agents"]["confirm_close"].as_bool();
+            }
+            _ => {}
         }
+    }
+
+    /// The exit decision for what this link knows at `now`.
+    fn quit(&self, now: Instant) -> Quit {
+        let confirm = self.confirm_close.unwrap_or(true);
+        let asked = self.asked.map(|asked| now.saturating_duration_since(asked));
+        quit_decision(self.ui.is_some(), confirm, self.at_risk.len(), asked)
+    }
+
+    /// Sends `message` to the UI; false when there is none or the send failed.
+    fn to_ui(&self, message: Value) -> bool {
+        (self.ui.as_ref()).is_some_and(|ui| ui.send(message).is_ok())
     }
 
     fn frame(&self, frame: Frame) -> Result<(), String> {
@@ -475,10 +746,46 @@ impl Hive {
             link: Arc::default(),
             reconnecting: tokio::sync::Mutex::default(),
             restart: None,
+            exit: None,
             install: None,
             open: None,
             notify: None,
+            permission: None,
+            tone: None,
+            url: None,
+            defaults: (DEFAULTS.into(), Vec::new()),
+            translocated: false,
+            tray: None,
+            clipboard: None,
         }
+    }
+
+    /// Reads macOS preferences with `program` and its first `args` instead of
+    /// `/usr/bin/defaults` (tests).
+    pub fn with_defaults(mut self, program: &str, args: &[&str]) -> Self {
+        self.defaults = (program.into(), args.iter().map(OsString::from).collect());
+        self
+    }
+
+    /// What a double click on the empty title bar does on macOS ([`double_click_action`]): the
+    /// setting is read on every click, so a change in System Settings counts at once. A
+    /// `defaults` that fails (the key never set) or takes too long counts as unset.
+    pub fn title_bar_action(&self) -> &'static str {
+        let (program, args) = &self.defaults;
+        let mut read = std::process::Command::new(program);
+        read.args(args)
+            .args(["read", "-g", "AppleActionOnDoubleClick"]);
+        let out = output_within(&mut read, DEFAULTS_WAIT, reader).ok();
+        let out = out.filter(|out| out.status.success());
+        let setting = out.map(|out| String::from_utf8_lossy(&out.stdout).into_owned());
+        double_click_action(setting.as_deref())
+    }
+
+    /// Tells the UI the app runs translocated (17.10): `connect` sends `translocated`, and an
+    /// update is not installed.
+    pub fn with_translocated(mut self, translocated: bool) -> Self {
+        self.translocated = translocated;
+        self
     }
 
     /// Shows OS notifications with `notify`, the platform's own (13.5).
@@ -506,14 +813,68 @@ impl Hive {
             .ok_or("this app cannot show notifications")?;
         let (app, link) = (app.clone(), Arc::clone(&self.link));
         let click = move || {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            bring_up(&app);
             lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
         };
         notify(&printable(title), &printable(body), Box::new(click))
+    }
+
+    /// Asks the OS with `check` whether Hive may show notifications (17.19).
+    pub fn with_permission(
+        mut self,
+        check: impl Fn() -> Permission + Send + Sync + 'static,
+    ) -> Self {
+        self.permission = Some(Arc::new(check));
+        self
+    }
+
+    /// Asks the OS whether Hive may show notifications, on Tauri's blocking threads (the answer
+    /// may take a moment); the answer goes to the UI as `notification_permission {permission}`,
+    /// `unknown` where the app cannot ask.
+    pub fn check_notifications(&self) {
+        let check = self.permission.clone();
+        let link = Arc::clone(&self.link);
+        let answer = move || {
+            let permission = check.map_or(Permission::Unknown, |check| check()).name();
+            let message = json!({"type": "notification_permission", "permission": permission});
+            lock(&link).to_ui(message);
+        };
+        tauri::async_runtime::spawn_blocking(answer);
+    }
+
+    /// Opens URLs with `open` (the system's handler).
+    pub fn with_url(
+        mut self,
+        open: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.url = Some(Box::new(open));
+        self
+    }
+
+    /// Opens macOS's notification settings (17.19), where the user lets Hive notify again.
+    pub fn open_notification_settings(&self) -> Result<(), String> {
+        let open = self.url.as_ref().ok_or("this app cannot open URLs")?;
+        open(NOTIFICATION_SETTINGS)
+    }
+
+    /// Plays the alert tone from the app (17.19), its file written in `dir`, with `play`.
+    pub fn with_tone(
+        mut self,
+        dir: PathBuf,
+        play: impl Fn(&Path, f32) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        let (written, play) = (Mutex::new(false), Box::new(play));
+        self.tone = Some(Tone { dir, written, play });
+        self
+    }
+
+    /// Plays the alert tone at `volume` percent (at most 100; 0 plays none).
+    pub fn play_tone(&self, volume: u8) -> Result<(), String> {
+        let tone = self.tone.as_ref().ok_or("this app plays no tone")?;
+        match volume.min(100) {
+            0 => Ok(()),
+            volume => tone.play(volume),
+        }
     }
 
     /// Opens paths with `open` (the system's default app), or `reveal` (the file manager).
@@ -543,6 +904,24 @@ impl Hive {
         drop(link);
         let open = self.open.as_ref().ok_or("this app cannot open paths")?;
         open(&path, reveal)
+    }
+
+    /// Reads the files copied to the clipboard from `clipboard` (18.3).
+    pub fn with_clipboard(mut self, clipboard: impl Clipboard + 'static) -> Self {
+        self.clipboard = Some(Box::new(clipboard));
+        self
+    }
+
+    /// What pasting the files copied in Finder types (18.3): their paths, quoted as a drop's
+    /// ([`quote::typed`], which leaves out a path with a control character: an escape could end
+    /// the bracketed paste early and type the rest as keys); empty when the clipboard holds no
+    /// usable files or the app cannot read it, and the UI then pastes the clipboard's text.
+    pub fn pasted_files(&self) -> String {
+        let paths = self
+            .clipboard
+            .as_ref()
+            .map_or_else(Vec::new, |clipboard| clipboard.file_paths());
+        quote::typed(&paths)
     }
 
     /// Tells the UI the bridge runs the installer's `hive` (see `bridge_command`).
@@ -592,6 +971,43 @@ impl Hive {
         self
     }
 
+    /// How `request_quit` ends the app.
+    pub fn with_exit(mut self, exit: impl Fn() + Send + Sync + 'static) -> Self {
+        self.exit = Some(Box::new(exit));
+        self
+    }
+
+    /// Whether the app may quit now (D17.3, #47): ⌘Q, the Dock's "Quit" and logging out ask
+    /// this first on macOS (`macos::ask_before_terminating`), and `request_quit` too. When
+    /// agents would end with the app and the `confirm_close` setting is on, the answer is no:
+    /// the window comes up and the UI gets `quit_requested`, which shows the same close dialog
+    /// as the window's Close button; confirming it closes the window, which quits. A UI that
+    /// cannot get the message (gone, stale) is forgotten and the app quits; so does a second
+    /// request within [`ASK_AGAIN`] of the last one, so a hung UI never keeps the app.
+    pub fn should_quit<R: Runtime>(&self, app: &AppHandle<R>) -> bool {
+        if self.link().quit(Instant::now()) == Quit::Now {
+            return true;
+        }
+        bring_up(app);
+        let mut link = self.link();
+        if !link.to_ui(json!({"type": "quit_requested"})) {
+            link.ui = None;
+            return true;
+        }
+        link.asked = Some(Instant::now());
+        false
+    }
+
+    /// Quits the app from inside it (the app menu's Quit, 17.13): at once, or after the UI's
+    /// confirmation (`should_quit`).
+    pub fn request_quit<R: Runtime>(&self, app: &AppHandle<R>) {
+        if self.should_quit(app) {
+            if let Some(exit) = &self.exit {
+                exit();
+            }
+        }
+    }
+
     pub fn with_install(
         mut self,
         install: impl Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync + 'static,
@@ -604,6 +1020,17 @@ impl Hive {
         lock(&self.link)
     }
 
+    /// Files dropped from Finder on the window (18.1), at (`x`, `y`) in points from its top
+    /// left: the UI gets `files_dropped` with their paths as one shell-quoted text
+    /// ([`quote::typed`]: paths that may not be typed are left out), which it types into the
+    /// terminal whose pane is there, if any. False when there is nothing to type or no UI to
+    /// send it to.
+    pub fn files_dropped(&self, paths: &[String], x: f64, y: f64) -> bool {
+        let text = quote::typed(paths);
+        let message = json!({"type": "files_dropped", "text": text, "x": x, "y": y});
+        !text.is_empty() && self.link().to_ui(message)
+    }
+
     /// Sends every service message to `ui`, starting the bridge unless a connection is up.
     /// A reloaded UI calls this again: its old terminals are closed and `welcome` is replayed.
     /// With the choice of WSL or Windows, the UI first gets `app_mode`, and nothing starts
@@ -611,6 +1038,11 @@ impl Hive {
     pub fn connect(&self, ui: Channel<Value>) {
         let mut link = self.link();
         link.ui = Some(ui);
+        if self.translocated {
+            // Every UI learns it (the update button explains it); only the first opens the notice.
+            let notice = !std::mem::replace(&mut link.translocation_told, true);
+            link.to_ui(json!({"type": "translocated", "notice": notice}));
+        }
         for id in std::mem::take(&mut link.terminals).into_keys() {
             let _ = link.send(id, &Control::CloseTerminal);
         }
@@ -804,6 +1236,21 @@ impl Hive {
         let create = Control::CreateWorktree {
             project,
             name,
+            base,
+        };
+        self.link().send(0, &create)
+    }
+
+    /// The answer arrives as `worktree_created` or `create_worktree_failed`.
+    pub fn create_issue_worktree(
+        &self,
+        project: String,
+        number: u64,
+        base: Option<String>,
+    ) -> Result<(), String> {
+        let create = Control::CreateIssueWorktree {
+            project,
+            number,
             base,
         };
         self.link().send(0, &create)
@@ -1104,12 +1551,38 @@ impl Hive {
 impl Hive {
     /// Asks the release endpoint for a newer version (4.19) and downloads it at once. No newer
     /// version, or a failed check (offline, GitHub down), sends nothing: it is not worth a notice.
-    pub async fn check_update(&self, updater: tauri_plugin_updater::Result<Updater>) {
-        let Ok(Some(update)) = async { updater?.check().await }.await else {
+    /// A `manual` check (the menu's "Check for Updates…", 17.13) answers those too
+    /// (`update_checked`), and offers again an update already downloaded.
+    pub async fn check_update(&self, updater: tauri_plugin_updater::Result<Updater>, manual: bool) {
+        let ready = self
+            .link()
+            .update
+            .as_ref()
+            .map(|(update, _)| update.version.clone());
+        if let Some(version) = ready.filter(|_| manual) {
+            self.link()
+                .to_ui(json!({"type": "update_ready", "version": version}));
             return;
+        }
+        let update = match async { updater?.check().await }.await {
+            Ok(Some(update)) => update,
+            checked => return self.checked(manual, checked.err().map(|e| e.to_string())),
         };
         let bytes = update.download(|_, _| {}, || {}).await;
-        self.downloaded(update, bytes.map_err(|error| error.to_string()));
+        let bytes = bytes.map_err(|error| error.to_string());
+        if let Err(error) = &bytes {
+            self.checked(manual, Some(error.clone()));
+        }
+        self.downloaded(update, bytes);
+    }
+
+    /// A check that found nothing to offer: `update_checked {error}` (null: up to date) when the
+    /// user asked for it (`manual`); nothing for the check at start, which the next start repeats.
+    fn checked(&self, manual: bool, error: Option<String>) {
+        if manual {
+            self.link()
+                .to_ui(json!({"type": "update_checked", "error": error}));
+        }
     }
 
     /// A downloaded update, its signature checked, waits for `install_update` or the app's exit
@@ -1132,9 +1605,13 @@ impl Hive {
     }
 
     /// Installs the downloaded update, if any, so the next start runs it. Taken once: the exit
-    /// that follows `install_update`'s restart does not install it again.
+    /// that follows `install_update`'s restart does not install it again. A translocated app
+    /// cannot replace itself, so it says why instead of running the installer (17.10).
     pub fn install_pending(&self) -> Option<Result<(), String>> {
         let (update, bytes) = self.link().update.take()?;
+        if self.translocated {
+            return Some(Err(TRANSLOCATED.to_owned()));
+        }
         let install = self.install.as_ref()?;
         Some(install(&update, &bytes))
     }
@@ -1143,9 +1620,10 @@ impl Hive {
     fn installed(&self, result: Result<(), String>) {
         match result {
             Ok(()) => self.restart.iter().for_each(|restart| restart()),
-            Err(error) => self
-                .link()
-                .to_ui(json!({"type": "update_failed", "error": error})),
+            Err(error) => {
+                self.link()
+                    .to_ui(json!({"type": "update_failed", "error": error}));
+            }
         }
     }
 }
@@ -1207,7 +1685,7 @@ async fn pump<R: AsyncRead + Unpin>(
                     link.approve(path.to_owned());
                 }
             }
-            _ => {}
+            _ => link.follow(&value),
         }
         link.to_ui(value);
     }
@@ -1218,12 +1696,62 @@ async fn pump<R: AsyncRead + Unpin>(
 fn disconnected(link: &mut Link, reason: String) {
     link.frames = None;
     link.welcome = None;
+    // The agents end with the connection; a new one sends the live ones' states again.
+    link.at_risk.clear();
     // A path from an ended connection never opens.
     link.approved.clear();
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
     link.to_ui(json!({"type": "disconnected", "reason": reason, "bundled": link.bundled}));
+}
+
+/// What a request to quit does (D17.3): quit now, or ask the UI first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quit {
+    Now,
+    Ask,
+}
+
+/// How long after asking the UI another request to quit quits at once (17.7's escape hatch:
+/// ⌘Q twice quits even with a hung UI).
+const ASK_AGAIN: Duration = Duration::from_secs(5);
+
+/// The exit decision (D17.3, #47): ask first only when a UI is there to ask, the
+/// `confirm_close` setting is on and `at_risk` agents would end with the app, unless the UI
+/// was `asked` less than [`ASK_AGAIN`] ago.
+fn quit_decision(ui: bool, confirm_close: bool, at_risk: usize, asked: Option<Duration>) -> Quit {
+    let again = asked.is_some_and(|ago| ago < ASK_AGAIN);
+    if ui && confirm_close && at_risk > 0 && !again {
+        Quit::Ask
+    } else {
+        Quit::Now
+    }
+}
+
+/// The states that make quitting ask first (#18), as the UI's `agentsAtRisk`: working, with
+/// subagents, waiting for permission, a plan or an answer, or waiting for you.
+fn at_risk(state: AgentState) -> bool {
+    state.writes() || state == AgentState::WaitingYou
+}
+
+/// [`Hive::should_quit`] for the app's `Hive`; an app without one quits.
+pub fn should_quit<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<Hive>()
+        .is_none_or(|hive| hive.should_quit(app))
+}
+
+/// Files dropped from another app (Finder) on the window, at (`x`, `y`) in points from the
+/// window's top left (18.1): [`Hive::files_dropped`] for the app's `Hive`. False without one.
+pub fn files_dropped<R: Runtime>(app: &AppHandle<R>, paths: &[String], x: f64, y: f64) -> bool {
+    app.try_state::<Hive>()
+        .is_some_and(|hive| hive.files_dropped(paths, x, y))
+}
+
+/// A click on the Dock icon (`RunEvent::Reopen`): with no visible window (minimized, hidden)
+/// the window comes back. True when it did.
+pub fn reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) -> bool {
+    !has_visible_windows && bring_up(app)
 }
 
 /// Handles the app's run events: on exit the connection ends before the process does.
@@ -1262,12 +1790,16 @@ pub mod commands {
     }
 
     /// Sync like `connect`: the check runs on Tauri's runtime and answers on the UI channel.
+    /// `manual`: the user asked, so "up to date" and a failure are answered too.
     #[tauri::command]
-    pub fn check_update<R: Runtime>(app: AppHandle<R>) {
+    pub fn check_update<R: Runtime>(app: AppHandle<R>, manual: Option<bool>) {
         use tauri_plugin_updater::UpdaterExt;
+        let manual = manual == Some(true);
         tauri::async_runtime::spawn(async move {
-            // Only a newer release, downloaded and signed, reaches the UI (`update_ready`).
-            app.state::<Hive>().check_update(app.updater()).await;
+            // Only a newer release, downloaded and signed, is offered (`update_ready`).
+            app.state::<Hive>()
+                .check_update(app.updater(), manual)
+                .await;
         });
     }
 
@@ -1352,6 +1884,16 @@ pub mod commands {
         base: Option<String>,
     ) -> Result<(), String> {
         hive.create_worktree(project, name, base)
+    }
+
+    #[tauri::command]
+    pub fn create_issue_worktree(
+        hive: State<'_, Hive>,
+        project: String,
+        number: u64,
+        base: Option<String>,
+    ) -> Result<(), String> {
+        hive.create_issue_worktree(project, number, base)
     }
 
     #[tauri::command]
@@ -1644,6 +2186,13 @@ pub mod commands {
         hive.open_settings_file()
     }
 
+    /// What the UI does on a double click on the empty title bar (macOS): `zoom`, `minimize`
+    /// or `none`.
+    #[tauri::command]
+    pub fn title_bar_action(hive: State<'_, Hive>) -> &'static str {
+        hive.title_bar_action()
+    }
+
     #[tauri::command]
     pub fn get_diagnostics(hive: State<'_, Hive>) -> Result<(), String> {
         hive.get_diagnostics()
@@ -1659,7 +2208,48 @@ pub mod commands {
     ) -> Result<(), String> {
         hive.show_notification(&app, &title, &body, agent)
     }
+
+    #[tauri::command]
+    pub fn check_notifications(hive: State<'_, Hive>) {
+        hive.check_notifications();
+    }
+
+    #[tauri::command]
+    pub fn open_notification_settings(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.open_notification_settings()
+    }
+
+    #[tauri::command]
+    pub fn play_tone(hive: State<'_, Hive>, volume: u8) -> Result<(), String> {
+        hive.play_tone(volume)
+    }
+
+    /// The files copied in Finder as pasting them types them (18.3): their quoted paths, empty
+    /// for none. Sync, so it runs on the main thread, where AppKit is used.
+    #[tauri::command]
+    pub fn pasted_files(hive: State<'_, Hive>) -> String {
+        hive.pasted_files()
+    }
+
+    /// The menu bar icon (17.22) for what the UI sent: `shown` (the setting), the most urgent
+    /// state (and whether it is pending), the pending agents and the usage ring's lines.
+    #[tauri::command]
+    pub fn set_tray(
+        hive: State<'_, Hive>,
+        shown: bool,
+        urgent: Option<(AgentState, bool)>,
+        agents: Vec<tray::Agent>,
+        usage: Vec<String>,
+    ) -> Result<(), String> {
+        hive.set_tray(shown, urgent, &agents, &usage)
+    }
 }
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+pub mod menu;
+pub mod quote;
+pub mod tray;
 
 #[cfg(test)]
 mod tests;

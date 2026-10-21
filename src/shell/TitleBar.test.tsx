@@ -1,12 +1,15 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { notice } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { addToInbox, initialState, pendingAgents, useHive } from "../store";
 import { transport } from "../transport";
-import { agentStatus } from "../transport/mock";
+import { agentStatus, MOCK_REPOS } from "../transport/mock";
+import { TitleBar } from "./TitleBar";
+import { RemoveWorktreeDialog } from "./WorktreeMenu";
 
 afterEach(() => {
   cleanup();
@@ -72,6 +75,24 @@ test("with agents running the update asks first, like closing", () => {
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(button()?.textContent).toBe("Restarting…");
   install.mockRestore();
+});
+
+test("a usage alert in the inbox is about no agent: choosing it only closes the inbox (17.23)", () => {
+  render(<App />);
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    useHive.setState({ selection: "x" });
+    addToInbox({ agent: null, state: null, at: Date.now() - 5_000, text: "Session usage at 80%" });
+  });
+  fireEvent.click(document.querySelector(".pending-bell") as HTMLButtonElement);
+  const item = screen.getByRole("menuitem", { name: /Session usage at 80%/ });
+  expect(item.textContent).toBe("Session usage at 80%5s ago");
+  expect((item as HTMLButtonElement).disabled).toBe(false);
+  expect(item.title).toBe("");
+  expect(item.querySelector(".usage-alert-icon")?.getAttribute("aria-label")).toBe("Usage");
+  fireEvent.click(item);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(useHive.getState().selection).toBe("x");
 });
 
 test("the bell's inbox: pending agents, then the alerts; going to an agent", () => {
@@ -148,6 +169,35 @@ test("the bell's inbox: pending agents, then the alerts; going to an agent", () 
   expect(useHive.getState().selection).toBe("a");
 });
 
+test("a terminal's inbox item shows that terminal while it is open (17.25)", () => {
+  render(<App />);
+  const items = () => screen.getAllByRole("menuitem");
+  const now = Date.now();
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    useHive.setState({
+      tabs: [
+        { id: 3, cwd: "/w" },
+        { id: 4, cwd: "/v" },
+      ],
+      activeTab: 4,
+    });
+    addToInbox({ terminal: 9, failed: false, at: now - 60_000, text: "make: done" });
+    addToInbox({ terminal: 3, failed: true, at: now - 5_000, text: "Command failed (exit 2)" });
+  });
+  fireEvent.click(document.querySelector(".pending-bell") as HTMLButtonElement);
+  expect(items().map((i) => [i.textContent, (i as HTMLButtonElement).disabled])).toEqual([
+    ["Command failed (exit 2)5s ago", false],
+    ["make: done1m ago", true],
+  ]);
+  expect(items()[1]?.title).toBe("This terminal is closed");
+  const icons = document.querySelectorAll(".inbox-terminal");
+  expect([...icons].map((i) => i.getAttribute("data-failed"))).toEqual(["true", null]);
+  fireEvent.click(items()[0] as HTMLElement);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(useHive.getState().activeTab).toBe(3);
+});
+
 test("the badge counts pending agents not seen yet; opening the bell clears it (8.5)", () => {
   render(<App />);
   const bell = () => document.querySelector(".pending-bell") as HTMLButtonElement;
@@ -208,10 +258,56 @@ test("the badge counts pending agents not seen yet; opening the bell clears it (
   expect(useHive.getState().pendingSeen).toEqual({ a: "waiting_permission", c: "error" });
 });
 
+test("an offer to remove a worktree opens its remove dialog; never removes by itself (17.27)", () => {
+  const [shop] = MOCK_REPOS;
+  const fix = shop.worktrees[1];
+  const remove = spyOn(transport, "removeWorktree").mockResolvedValue();
+  // Without the rest of the app, which would ask the mock service for the project's data.
+  render(
+    <>
+      <TitleBar />
+      <RemoveWorktreeDialog />
+    </>,
+  );
+  const bell = () => document.querySelector(".pending-bell") as HTMLButtonElement;
+  const items = () => screen.getAllByRole("menuitem") as HTMLButtonElement[];
+  const offer = (worktree: string, state: "merged" | "closed", text: string) =>
+    addToInbox({
+      offer: { worktree, number: 12, title: "Fix the login", state },
+      at: Date.now() - 60_000,
+      text,
+      space: "shop",
+    });
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    apply({ type: "projects", projects: [shop] });
+    offer("/gone", "closed", "#12 closed: remove its worktree?");
+    offer(fix.id, "merged", `#12 merged: remove ${fix.name}?`);
+  });
+  fireEvent.click(bell());
+  expect(items().map((i) => [i.textContent, i.disabled, i.title])).toEqual([
+    [`#12 merged: remove ${fix.name}?shop · 1m ago`, false, "Fix the login\nRemove the worktree…"],
+    ["#12 closed: remove its worktree?shop · 1m ago", true, "This worktree is gone"],
+  ]);
+  fireEvent.click(items()[0] as HTMLElement);
+  expect(screen.queryByRole("menu")).toBeNull();
+  const dialog = screen.getByRole("dialog", { name: "Delete worktree" });
+  expect(dialog.textContent).toContain(fix.path);
+  expect(remove).not.toHaveBeenCalled();
+  remove.mockRestore();
+});
+
 test("an update failure without an offered update only says why", () => {
   apply({ type: "update_failed", error: "no update to install" });
   expect(useHive.getState()).toMatchObject({
     update: null,
     notices: [{ kind: "error", text: "Update failed: no update to install" }],
   });
+});
+
+test("on macOS the bell names ⇧⌘J for the next pending agent (F8 is Play/Pause there)", () => {
+  asMac();
+  render(<App />);
+  const bell = document.querySelector(".pending-bell") as HTMLButtonElement;
+  expect(bell.title).toBe("Notifications (⇧⌘J: next pending)");
 });

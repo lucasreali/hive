@@ -24,6 +24,8 @@ pub use tokio::process::Child;
 use tokio::sync::{mpsc, watch};
 
 #[cfg(unix)]
+use crate::locale;
+#[cfg(unix)]
 use crate::procs;
 use crate::watch::Watch;
 #[cfg(windows)]
@@ -120,6 +122,12 @@ impl Output {
         true
     }
 
+    /// Queues a control message for the app on this terminal's channel, in order with its
+    /// output and without a lock (17.25: its progress).
+    pub fn control(&self, message: &hive_protocol::Control) {
+        let _ = self.frames.send(Frame::control(self.channel, message));
+    }
+
     /// The app wrote `bytes` of this terminal's output to its screen.
     pub fn ack(&self, bytes: u32) {
         let bytes = bytes as usize;
@@ -130,10 +138,46 @@ impl Output {
 /// Starts the shell (see [`shell`]) on a new PTY in `cwd`, with `bin_dir` first on `PATH`
 /// and `HIVE_TERMINAL_ID` set, plus `env` (its space's, 6.14, and its worktree's `HIVE_*`,
 /// 6.8). Returns the registry entry, its input queue (typing and resizes; it ends once
-/// every sender is dropped), the output side and the child. `_shell` is the native Windows
+/// every sender is dropped), the output side and the child. `shell` is the native Windows
 /// setting (12.5.3): Unix terminals always run the shell above.
 #[cfg(unix)]
 pub fn spawn(
+    id: u32,
+    cwd: &str,
+    size: (u16, u16),
+    bin_dir: &Path,
+    env: &[(&'static str, String)],
+    shell: hive_protocol::TerminalShell,
+) -> Result<(Terminal, mpsc::UnboundedSender<Input>, Pty, Child), String> {
+    spawn_on(pty_process::open, id, cwd, size, bin_dir, env, shell)
+}
+
+/// What runs out when opening a PTY fails with `ENXIO`.
+#[cfg(target_os = "macos")]
+const NO_PTY: &str = "no pseudo-terminal is left: macOS has kern.tty.ptmx_max of them \
+    (511 by default) for every app together; close terminals in Hive or in other apps, or \
+    raise it with `sudo sysctl -w kern.tty.ptmx_max=<n>`";
+#[cfg(all(unix, not(target_os = "macos")))]
+const NO_PTY: &str = "no pseudo-terminal is left: the system's limit is reached; close \
+    terminals in Hive or in other apps";
+
+/// Why opening a PTY failed: `ENXIO` means none is left (17.6).
+#[cfg(unix)]
+fn open_failed(err: &pty_process::Error) -> String {
+    // An OS error reads the same whichever layer reported it (std, or rustix's `Errno`, which
+    // is displayed as the `io::Error` it converts to).
+    let enxio = std::io::Error::from_raw_os_error(nix::libc::ENXIO);
+    let err = err.to_string();
+    if err == enxio.to_string() {
+        return NO_PTY.to_owned();
+    }
+    err
+}
+
+/// [`spawn`] on the PTY that `open` gives.
+#[cfg(unix)]
+fn spawn_on(
+    open: impl FnOnce() -> pty_process::Result<(pty_process::Pty, pty_process::Pts)>,
     id: u32,
     cwd: &str,
     (cols, rows): (u16, u16),
@@ -141,12 +185,14 @@ pub fn spawn(
     env: &[(&'static str, String)],
     _shell: hive_protocol::TerminalShell,
 ) -> Result<(Terminal, mpsc::UnboundedSender<Input>, Pty, Child), String> {
+    let failed = |why: String| format!("cannot start a terminal in {cwd}: {why}");
+    let (pty, pts) = open().map_err(|err| failed(open_failed(&err)))?;
     let start = || -> pty_process::Result<_> {
-        let (pty, pts) = pty_process::open()?;
         pty.resize(Size::new(rows, cols))?;
         let child = shell(bin_dir)
             .env("HIVE_TERMINAL_ID", id.to_string())
             .env("TERM", "xterm-256color")
+            .envs(locale_env().iter().cloned())
             .envs(env.iter().cloned())
             .current_dir(cwd)
             .spawn(pts)?;
@@ -155,10 +201,9 @@ pub fn spawn(
         let pid = child
             .id()
             .ok_or(std::io::Error::other("the shell has no pid"))?;
-        Ok((pty, child, pid))
+        Ok((child, pid))
     };
-    let (pty, child, pid) =
-        start().map_err(|err| format!("cannot start a terminal in {cwd}: {err}"))?;
+    let (child, pid) = start().map_err(|err| failed(err.to_string()))?;
     let (output, writer) = pty.into_split();
     let (input, input_rx) = mpsc::unbounded_channel();
     tokio::spawn(feed(writer, input_rx));
@@ -173,6 +218,28 @@ pub fn spawn(
         output,
         child,
     ))
+}
+
+/// The locale and name variables every terminal gets (D18.2), worked out once: neither the
+/// service's environment nor the system locale changes while it runs. The daemon asks for it
+/// at start, off any lock, and again before it locks the terminals to open one, so a slow
+/// `defaults` (at most [`crate::macos::LOCALE_TIMEOUT`]) never holds the other terminals.
+#[cfg(unix)]
+pub fn locale_env() -> &'static [(&'static str, String)] {
+    static ENV: std::sync::OnceLock<Vec<(&'static str, String)>> = std::sync::OnceLock::new();
+    ENV.get_or_init(|| {
+        let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+        let exists = locale::listed(Path::new(locale::LOCALE_DIR));
+        #[cfg(target_os = "macos")]
+        let (system, fallback) = (
+            crate::macos::system_locale(crate::macos::apple_locale(), crate::macos::LOCALE_TIMEOUT),
+            locale::MAC_FALLBACK,
+        );
+        // Linux has no system locale besides the environment's.
+        #[cfg(target_os = "linux")]
+        let (system, fallback) = (None::<String>, locale::LINUX_FALLBACK);
+        locale::terminal_env(system.as_deref(), exists, set, fallback)
+    })
 }
 
 /// fish, with `bin_dir` put first on `PATH` after the user's config (WSL).
@@ -852,6 +919,25 @@ mod tests {
         pump.touch();
         assert!(last.get() >= started + Duration::from_millis(5));
         assert!(last.get() <= Instant::now());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pty_shortage_is_named() {
+        let fail = |code| {
+            let open = move || Err(std::io::Error::from_raw_os_error(code).into());
+            let shell = hive_protocol::TerminalShell::Default;
+            spawn_on(open, 1, "/w", (80, 24), Path::new("/b"), &[], shell).err()
+        };
+        let err = fail(nix::libc::ENXIO).unwrap();
+        let want = "cannot start a terminal in /w: no pseudo-terminal is left: ";
+        assert!(err.starts_with(want), "{err}");
+        #[cfg(target_os = "macos")]
+        assert!(err.contains("kern.tty.ptmx_max"), "{err}");
+        // Any other error as it is.
+        let emfile = std::io::Error::from_raw_os_error(nix::libc::EMFILE);
+        let err = fail(nix::libc::EMFILE).unwrap();
+        assert_eq!(err, format!("cannot start a terminal in /w: {emfile}"));
     }
 
     /// Whether `send` is still waiting for acknowledgements.

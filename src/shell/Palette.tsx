@@ -1,6 +1,6 @@
 import { FileTextIcon, GitBranchIcon, type Icon, LightningIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
-import { COMMANDS, currentProject, goToAgent } from "../shortcuts";
+import { commandKeys, currentProject, goToAgent, platformCommands } from "../shortcuts";
 import {
   type HiveState,
   openModal,
@@ -14,7 +14,7 @@ import {
 import { openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
-import { keyText } from "../window";
+import { composing } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
 import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
@@ -97,7 +97,10 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
     }
   }
   if (!("why" in reviewTarget(s))) extra.push({ label: "Send review", run: sendReview });
-  return [...COMMANDS.filter((c) => c.id !== "palette" && (c.when?.(s) ?? true)), ...extra];
+  const commands = platformCommands()
+    .filter((c) => c.id !== "palette" && (c.when?.(s) ?? true))
+    .map((c) => ({ label: c.label, keys: commandKeys(c), run: c.run }));
+  return [...commands, ...extra];
 }
 
 /** Agents in tree order (of every space), then the current space's worktrees: Enter selects and shows it. */
@@ -186,7 +189,7 @@ export function Palette() {
       onKeyDown={(e) => {
         if (e.key === "ArrowDown") setIndex(Math.min(items.length - 1, index + 1));
         else if (e.key === "ArrowUp") setIndex(Math.max(0, index - 1));
-        else if (e.key === "Enter") run(items[index]);
+        else if (e.key === "Enter" && !composing(e.nativeEvent)) run(items[index]);
         else return;
         e.preventDefault();
       }}
@@ -226,7 +229,7 @@ export function Palette() {
                 >
                   <span className="picker-name">{item.label}</span>
                   <span className="picker-path">{item.detail}</span>
-                  {item.keys && <kbd>{keyText(item.keys)}</kbd>}
+                  {item.keys && <kbd>{item.keys}</kbd>}
                 </button>
               );
             })}

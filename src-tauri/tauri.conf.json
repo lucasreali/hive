@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hive",
-  "version": "0.13.0",
+  "version": "0.15.0",
   "identifier": "com.lucas.hive",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -16,7 +16,10 @@
         "create": false,
         "width": 1440,
         "height": 900,
+        "minWidth": 800,
+        "minHeight": 500,
         "decorations": false,
+        "backgroundColor": "#282c33",
         "dragDropEnabled": false
       }
     ],

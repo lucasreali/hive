@@ -146,7 +146,12 @@ test("inbox items name their agent's space when there are several", () => {
   });
   act(() => apply(status("working")));
   // Muted: no tone in the test DOM.
-  useHive.setState((s) => ({ settings: { ...s.settings, notifications: { volume: 0 } } }));
+  useHive.setState((s) => ({
+    settings: {
+      ...s.settings,
+      notifications: { volume: 0, bounce: true, menu_bar: true, command_secs: 10 },
+    },
+  }));
   act(() => {
     notify(status("waiting_permission"));
     apply(status("waiting_permission"));

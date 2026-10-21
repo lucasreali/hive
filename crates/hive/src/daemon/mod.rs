@@ -7,6 +7,8 @@
 
 mod agents;
 mod app;
+#[cfg(unix)]
+mod claim;
 mod terminals;
 mod usage;
 
@@ -14,8 +16,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{File, TryLockError};
 use std::io;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -29,10 +29,11 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
 
 #[cfg(windows)]
-use crate::windows::{Listener, accept};
+use crate::windows::{Claim, Listener, accept};
 
 use crate::files::{Listing, Watcher};
 use crate::paths::Paths;
+use crate::power;
 use crate::projects::{self, Projects};
 use crate::registry::Registry;
 use crate::scripts::{self, Ports};
@@ -43,10 +44,15 @@ use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
 use crate::{bridge, changes, health, hook, procs, wrapper};
 use app::connection;
+#[cfg(unix)]
+use claim::Claim;
 use terminals::watch_terminals;
 
 /// How often a service waiting for the lock tries it again.
 const LOCK_RETRY: Duration = Duration::from_millis(20);
+
+/// How often the service checks that its lock and socket are still in place ([`Claim::keep`]).
+const CLAIM_CHECK: Duration = Duration::from_secs(2);
 
 pub async fn run(paths: &Paths) -> io::Result<()> {
     // Started by `hive bridge`: leave its session, so the service outlives nothing but the
@@ -57,8 +63,11 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // Its console is every program's it runs (16.4): a Ctrl+Break from one must not end it.
     #[cfg(windows)]
     crate::windows::ignore_ctrl()?;
+    // Before any terminal, watch or socket: a GUI app's 256 runs out (17.6).
+    #[cfg(unix)]
+    crate::fds::raise_at_start(&crate::fds::Process, &mut io::stderr());
     paths.prepare_runtime()?;
-    let _lock = lock(paths).await?;
+    let lock = lock(paths).await?;
     wrapper::install(paths, &std::env::current_exe()?)?;
     // Handle SIGTERM before anyone can connect, so an early one still cleans up.
     #[cfg(unix)]
@@ -70,19 +79,20 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // Nothing signals a service started detached: it ends with the app connection.
     #[cfg(windows)]
     let terminated = std::future::pending();
-    // On Windows this file names the service's pipe: removed too, once the service ends.
-    let socket = paths.socket();
     #[cfg(unix)]
-    let listener = {
-        // A socket left by a crashed daemon; the lock proves nobody is serving it.
-        let _ = std::fs::remove_file(&socket);
-        let listener = Listener::bind(&socket)?;
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
-        listener
-    };
+    let (hold, listener) = Claim::take(paths, lock)?;
     // A new pipe, named in the runtime folder.
     #[cfg(windows)]
-    let listener = Listener::bind(paths)?;
+    let (hold, listener) = (
+        Claim {
+            lock,
+            socket: paths.socket(),
+        },
+        Listener::bind(paths)?,
+    );
+    // The terminals' locale (D18.2), read once now, in the background: `defaults` may be slow.
+    #[cfg(unix)]
+    std::thread::spawn(crate::terminal::locale_env);
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
@@ -92,26 +102,30 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         file: paths.open_sessions(),
         pending: Mutex::new(sessions::take_open(&paths.open_sessions())),
     };
+    // Only macOS keeps the computer awake (17.17); the tests' services never do.
+    #[cfg(target_os = "macos")]
+    let power = crate::macos::power::system(std::env::var_os(crate::power::OFF));
+    #[cfg(not(target_os = "macos"))]
+    let power = None;
     let state = State::new(
         paths.bin_dir(),
         projects,
         sessions,
         settings,
         ports,
+        crate::offers::Offers::new(paths.offers()),
         restore,
-    );
+    )
+    .with_power(power);
     let state = Arc::new(state);
-    let result = serve(listener, &socket, terminated, state).await;
-    let _ = std::fs::remove_file(&socket);
-    result
+    serve(listener, hold, terminated, state).await
 }
 
 /// Single-instance guard: an exclusive lock held for the daemon's whole life. A service that
 /// is still ending holds it for up to its grace period, so the lock is tried again for as long
 /// as the bridge waits for a new service.
 async fn lock(paths: &Paths) -> io::Result<File> {
-    let file = crate::mode::private(File::options().create(true).truncate(false).write(true))
-        .open(paths.lock())?;
+    let file = open_lock(paths)?;
     let retry = async {
         loop {
             match file.try_lock() {
@@ -123,13 +137,21 @@ async fn lock(paths: &Paths) -> io::Result<File> {
     let locked = tokio::time::timeout(bridge::START_TIMEOUT, retry)
         .await
         .unwrap_or_else(|_| file.try_lock());
-    locked.map_err(|err| {
-        io::Error::other(format!(
-            "cannot lock {}: {err}; is another hive daemon running?",
-            paths.lock().display()
-        ))
-    })?;
+    locked.map_err(|err| lock_error(paths, err))?;
     Ok(file)
+}
+
+/// The lockfile, created private, not yet locked.
+fn open_lock(paths: &Paths) -> io::Result<File> {
+    crate::mode::private(File::options().create(true).truncate(false).write(true))
+        .open(paths.lock())
+}
+
+fn lock_error(paths: &Paths, err: TryLockError) -> io::Error {
+    io::Error::other(format!(
+        "cannot lock {}: {err}; is another hive daemon running?",
+        paths.lock().display()
+    ))
 }
 
 /// The next connection to the service.
@@ -138,9 +160,11 @@ async fn accept(listener: &mut Listener) -> io::Result<UnixStream> {
     listener.accept().await.map(|(stream, _)| stream)
 }
 
+/// Serves until the app connection ends, a SIGTERM, or a failure: accepting, or keeping the
+/// lock and socket in place ([`Claim::keep`]). Ends the terminals whatever the reason.
 async fn serve(
     mut listener: Listener,
-    socket: &Path,
+    mut hold: Claim,
     terminated: impl Future<Output = ()>,
     state: Arc<State>,
 ) -> io::Result<()> {
@@ -148,20 +172,27 @@ async fn serve(
     let watcher = tokio::spawn(watch_terminals(state.clone()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
+    let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
-    loop {
-        tokio::select! {
-            accepted = accept(&mut listener) => {
-                tokio::spawn(connection(accepted?, state.clone(), app_gone.clone()));
+    let ended = async {
+        loop {
+            tokio::select! {
+                accepted = accept(&mut listener) => {
+                    tokio::spawn(connection(accepted?, state.clone(), app_gone.clone()));
+                }
+                _ = check.tick() => if let Some(bound) = hold.keep()? {
+                    listener = bound;
+                },
+                _ = app_gone_rx.recv() => return Ok(()),
+                () = &mut terminated => return Ok(()),
             }
-            _ = app_gone_rx.recv() => break,
-            () = &mut terminated => break,
         }
     }
+    .await;
     // Released before the terminals end: an app started again meanwhile gets a new service
     // (waiting for the lock) instead of a listen queue nobody accepts.
     drop(listener);
-    let _ = std::fs::remove_file(socket);
+    hold.release();
     let files = state.watching.lock().await.take().map(|files| files.task);
     for task in [watcher, health, registry].into_iter().chain(files) {
         stop(task).await;
@@ -176,7 +207,8 @@ async fn serve(
         .map(|t| t.session)
         .collect();
     terminal::end_sessions(&sessions).await;
-    Ok(())
+    // The lock goes last, with `hold`.
+    ended
 }
 
 /// Stops a background task and waits until it has. One caught in blocking work
@@ -223,6 +255,8 @@ struct State {
     sessions: Sessions,
     settings: settings::Store,
     ports: Ports,
+    /// The pull requests already offered for removing their worktree (17.27).
+    offers: crate::offers::Offers,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -239,6 +273,7 @@ struct State {
     changing: Mutex<()>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for when first needed (diagnostics,
     /// `gh`), never at start (9.20), and again, in the background, while no `claude` is on it.
+    /// Once known, git and the scripts get it too ([`crate::login_path`], 17.5).
     user_path: tokio::sync::watch::Sender<Option<OsString>>,
     /// Whether the user's `PATH` is being asked for.
     asking_path: std::sync::atomic::AtomicBool,
@@ -248,6 +283,8 @@ struct State {
     runs: std::sync::Mutex<crate::pulls::Cache>,
     /// The usage windows `hive statusline` reported (12.1, 15.3), and the ones the app has.
     usage: Mutex<usage::Usage>,
+    /// The power assertion held while agents work (17.17).
+    awake: std::sync::Mutex<power::Awake>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -265,6 +302,7 @@ impl State {
         sessions: Sessions,
         settings: settings::Store,
         ports: Ports,
+        offers: crate::offers::Offers,
         restore: Restore,
     ) -> Self {
         Self {
@@ -280,6 +318,7 @@ impl State {
             sessions,
             settings,
             ports,
+            offers,
             restore,
             sent: Default::default(),
             listed: Default::default(),
@@ -292,7 +331,14 @@ impl State {
             pulls: Default::default(),
             runs: Default::default(),
             usage: Default::default(),
+            awake: std::sync::Mutex::new(power::Awake::new(None)),
         }
+    }
+
+    /// Holds `power`'s assertion while agents work (17.17); none without it.
+    fn with_power(mut self, power: Option<Box<dyn power::Power>>) -> Self {
+        self.awake = std::sync::Mutex::new(power::Awake::new(power));
+        self
     }
 
     /// Asks for the user's `PATH` in the background, unless it is already being asked for.
@@ -312,6 +358,8 @@ impl State {
             let path = wrapper::user_path(shell, var("PATH"), home, timeout).await;
             // Done before the answer wakes anyone waiting for it.
             state.asking_path.store(false, Ordering::SeqCst);
+            // Every program the service starts from now on gets it (17.5).
+            crate::login_path::set(path.clone());
             state.user_path.send_replace(Some(path));
         });
     }
@@ -589,12 +637,13 @@ impl State {
     }
 
     /// Sends the current account's windows (5-hour, 7-day) when they are not the ones the app
-    /// has: after a report, and every second for their resets and an account switch.
+    /// has: after a report, and every second for their resets, their pace and an account switch;
+    /// then any alert they raise (17.23).
     async fn send_usage(&self) {
         let account = self.account();
         let mut usage = self.usage.lock().await;
         let now = hook::now_ms() / 1000;
-        if let Some(message) = usage.changed(account.as_deref(), now) {
+        for message in usage.changed(account.as_deref(), now) {
             self.to_app(0, &message).await;
         }
     }
@@ -630,10 +679,12 @@ impl State {
     fn github(self: &Arc<Self>, request: Control) {
         let state = self.clone();
         tokio::spawn(async move {
-            // A checkout makes a worktree: in turn with the registry watch, as
+            // A checkout or an issue makes a worktree: in turn with the registry watch, as
             // `change_worktrees`.
             let _turn = match request {
-                Control::ActOnPull { .. } => Some(state.changing.lock().await),
+                Control::ActOnPull { .. } | Control::CreateIssueWorktree { .. } => {
+                    Some(state.changing.lock().await)
+                }
                 _ => None,
             };
             let gh = state.gh().await;
@@ -651,12 +702,30 @@ impl State {
                 replies
                     .iter_mut()
                     .for_each(|reply| state.with_health(reply));
-                replies
+                // The offers a list raised (17.27), before the replies.
+                let offers = replies.iter().flat_map(|reply| state.offers_of(reply));
+                let mut offers: Vec<Control> = offers.collect();
+                offers.append(&mut replies);
+                offers
             });
             for reply in replies {
                 state.to_app(0, &reply).await;
             }
         });
+    }
+
+    /// The offers to remove a worktree a `pulls` reply raises (17.27), against the project's
+    /// worktrees as they are now (none when it is no longer followed). Blocks (git).
+    fn offers_of(&self, reply: &Control) -> Vec<Control> {
+        let Control::Pulls { project, .. } = reply else {
+            return Vec::new();
+        };
+        let followed = self.projects.followed(project);
+        let worktrees = followed.map(|p| p.worktrees).unwrap_or_default();
+        self.offers.raised(reply, &worktrees).unwrap_or_else(|err| {
+            eprintln!("hive: warning: cannot keep the pull requests offered: {err}");
+            Vec::new()
+        })
     }
 
     /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
@@ -840,19 +909,29 @@ fn error(err: io::Error) -> Control {
 
 #[cfg(test)]
 fn test_state(dir: &Path) -> Arc<State> {
+    test_state_with(dir, None)
+}
+
+/// [`test_state`] holding `power` while agents work.
+#[cfg(test)]
+fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<State> {
     let restore = Restore {
         file: dir.join("open-sessions.json"),
         pending: Mutex::new(Vec::new()),
     };
     let projects = Projects::load(dir.join("spaces.json"), &dir.join("projects.json"));
-    Arc::new(State::new(
-        dir.into(),
-        projects,
-        Sessions::new(None),
-        settings::Store::load(dir.join("settings.json")),
-        Ports::new(dir.join("ports.json")),
-        restore,
-    ))
+    Arc::new(
+        State::new(
+            dir.into(),
+            projects,
+            Sessions::new(None),
+            settings::Store::load(dir.join("settings.json")),
+            Ports::new(dir.join("ports.json")),
+            crate::offers::Offers::new(dir.join("offered-pulls.json")),
+            restore,
+        )
+        .with_power(power),
+    )
 }
 
 #[cfg(test)]

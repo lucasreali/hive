@@ -17,11 +17,11 @@ use hive_protocol::{
 use serde_json::Value;
 
 use crate::adapter::{clip, invisible};
+use crate::checkout;
 use crate::gh::Gh;
 use crate::git::{self, Stdout};
 use crate::hook::now_ms;
 use crate::projects::Projects;
-use crate::worktree;
 
 /// How often the list may be fetched from GitHub without `force`.
 pub const INTERVAL: Duration = Duration::from_secs(120);
@@ -44,7 +44,7 @@ const BODY_LIMIT: usize = 64 << 10;
 const NOTE_LIMIT: usize = 16 << 10;
 const URL_LIMIT: usize = 2048;
 /// Most bytes of an error from `gh`.
-const ERROR_LIMIT: usize = 4 << 10;
+pub(crate) const ERROR_LIMIT: usize = 4 << 10;
 /// Most reviews and comments (the newest), checks and files in the details.
 const NOTES_LIMIT: usize = 50;
 const CHECKS_LIMIT: usize = 100;
@@ -117,6 +117,19 @@ pub fn answer(
                 }],
             }
         }
+        Control::CreateIssueWorktree {
+            project,
+            number,
+            base,
+        } => vec![
+            checkout::issue(gh, projects, &project, number, base.as_deref()).unwrap_or_else(
+                |message| Control::CreateWorktreeFailed {
+                    project,
+                    name: format!("#{number}"),
+                    message,
+                },
+            ),
+        ],
         _ => Vec::new(),
     }
 }
@@ -244,7 +257,9 @@ fn act(
                 args.extend([merge_flag(*method), "--match-head-commit", head]);
                 (args, format!("Merged pull request #{number}"))
             }
-            PullAction::Checkout => return checkout(gh, projects, &env, &repo, &project, number),
+            PullAction::Checkout => {
+                return checkout::pull(gh, projects, &env, &repo, &project, number);
+            }
         };
         run(gh, &env, Path::new(&project.path), &args, ACTION_OUTPUT)?;
         Ok(Control::PullDone {
@@ -267,38 +282,6 @@ fn act(
     let pull = matches!(done, Control::PullDone { .. }).then(|| open(gh, projects, &id, number));
     let listed = list(gh, projects, cache, id, true);
     [Some(done), pull, listed].into_iter().flatten().collect()
-}
-
-/// Checks pull request `number` out into a new worktree `pr-<number>` (4.x's worktree flow,
-/// then `gh pr checkout` in it, on the pull request's own branch). The `worktree-pr-<number>`
-/// branch the flow made goes; so does the worktree when `gh` fails.
-fn checkout(
-    gh: &Gh,
-    projects: &Projects,
-    env: &SpaceEnv,
-    repo: &Repo,
-    project: &Project,
-    number: u64,
-) -> Result<Control, String> {
-    let name = format!("pr-{number}");
-    let created = projects.create_worktree(&project.id, &name, None);
-    let (made, created) = created.map_err(|err| err.to_string())?;
-    let root = Path::new(&project.path);
-    let args = ["pr", "checkout", &number.to_string(), "--repo", &repo.arg()];
-    let checked = run(gh, env, &created.path, &args, ACTION_OUTPUT);
-    if checked.is_err() {
-        let _ = worktree::remove_path(root, &created.path, true);
-    }
-    let _ = git::output(root, &["branch", "-D", &format!("worktree-{name}")], &[0]);
-    // Its branch changed, or it is gone.
-    projects.forget();
-    checked?;
-    Ok(Control::WorktreeCreated {
-        // On the pull request's branch now (the project as made, should it be unfollowed).
-        project: projects.followed(&project.id).unwrap_or(made),
-        path: created.path.to_string_lossy().into_owned(),
-        notes: created.notes,
-    })
 }
 
 /// What `create_pull` asks for.
@@ -431,7 +414,7 @@ fn pick_remote(config: &str, host: &str) -> Option<Repo> {
 
 /// The repository a remote URL names on `host`: `https://[user@]host/owner/name[.git]`,
 /// `ssh://`, `git://`, or `[user@]host:owner/name[.git]`.
-fn parse_url(url: &str, host: &str) -> Option<Repo> {
+pub(crate) fn parse_url(url: &str, host: &str) -> Option<Repo> {
     let (authority, path) = match url.split_once("://") {
         Some((scheme, rest)) => {
             let known = ["https", "http", "ssh", "git", "git+ssh", "ssh+git"];
@@ -483,7 +466,7 @@ pub(crate) fn line(value: &Value, pointer: &str) -> String {
 
 /// Untrusted text to show (Markdown, `gh`'s errors): its lines and tabs kept, other control and invisible
 /// characters dropped, cut at `max` bytes (then ending with "…").
-fn multiline(text: &str, max: usize) -> String {
+pub(crate) fn multiline(text: &str, max: usize) -> String {
     let keep = |c: &char| matches!(c, '\n' | '\t') || !invisible(*c);
     let mut clean: String = text.chars().filter(keep).collect();
     if clean.len() > max {
@@ -696,7 +679,7 @@ fn note(item: &Value, at: &str, review: Option<ReviewState>) -> PullNote {
 }
 
 /// A head commit as the app got it: 40 (SHA-1) or 64 (SHA-256) hexadecimal digits.
-fn check_head(head: &str) -> Result<(), String> {
+pub(crate) fn check_head(head: &str) -> Result<(), String> {
     let hex = head.bytes().all(|b| b.is_ascii_hexdigit());
     match hex && matches!(head.len(), 40 | 64) {
         true => Ok(()),

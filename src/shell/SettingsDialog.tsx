@@ -13,14 +13,14 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
 import type { AppMode, ProjectScripts, Settings } from "../protocol";
-import { COMMANDS } from "../shortcuts";
+import { commandKeys, platformCommands } from "../shortcuts";
 import { ask, openModal, panelWorktree, scriptsOf, useHive } from "../store";
-import { openClaude, showOpenFailure } from "../terminals";
+import { MAC_TERMINAL_KEYS, openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { openSettingsFile } from "../viewer/external";
-import { keyText } from "../window";
+import { isMac } from "../window";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
 
@@ -197,6 +197,8 @@ type Field = {
   modes?: boolean;
   /** Shown only while the service runs natively on Windows (the app's mode, 12.5.4). */
   windows?: boolean;
+  /** Shown only on macOS (the Dock, 17.16; Option as Meta, 17.14; the power assertion, 17.17). */
+  mac?: boolean;
   control: (id: string, label: string) => ReactNode;
 };
 
@@ -298,6 +300,22 @@ const FIELDS: Field[] = [
   },
   {
     section: "Terminal",
+    label: "Option as Meta",
+    check: true,
+    help: "Option+key sends Esc and the key (Claude Code's Option+P and Option+T need it) instead of typing accents and symbols.",
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Option as Meta"
+        get={(s) => s.terminal.option_as_meta}
+        set={(s, on) => {
+          s.terminal.option_as_meta = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Terminal",
     label: "Shell",
     help: "PowerShell is pwsh when installed, else Windows PowerShell. For new terminals.",
     windows: true,
@@ -318,6 +336,57 @@ const FIELDS: Field[] = [
         get={(s) => s.notifications.volume}
         set={(s, n) => {
           s.notifications.volume = n;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Notifications",
+    label: "Bounce the Dock icon when an agent needs an action",
+    help: "Once, while Hive is not focused: permission, plan, question or error.",
+    check: true,
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Bounce the Dock icon when an agent needs an action"
+        get={(s) => s.notifications.bounce}
+        set={(s, on) => {
+          s.notifications.bounce = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Notifications",
+    label: "Show agents in the menu bar",
+    help: "An icon in the color of the most urgent state; its menu lists the agents that need you.",
+    check: true,
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Show agents in the menu bar"
+        get={(s) => s.notifications.menu_bar}
+        set={(s, on) => {
+          s.notifications.menu_bar = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Notifications",
+    label: "Long commands (seconds)",
+    help:
+      "0 to 3600, 0 never: a command that ran this long notifies when it ends, in a terminal " +
+      "with no agent and not in view. Needs a shell that marks its commands (OSC 133), as fish 4 does.",
+    control: (id, label) => (
+      <NumberSetting
+        id={id}
+        label={label}
+        min={0}
+        max={3600}
+        get={(s) => s.notifications.command_secs}
+        set={(s, n) => {
+          s.notifications.command_secs = n;
         }}
       />
     ),
@@ -349,6 +418,22 @@ const FIELDS: Field[] = [
         get={(s) => s.agents.confirm_close}
         set={(s, on) => {
           s.agents.confirm_close = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Agents",
+    label: "Keep the Mac awake while agents work",
+    help: "While an agent is working or has subagents at work, the Mac does not sleep when idle. The display still sleeps, and closing the lid on battery still sleeps the Mac.",
+    check: true,
+    mac: true,
+    control: () => (
+      <Toggle
+        label="Keep the Mac awake while agents work"
+        get={(s) => s.agents.keep_awake}
+        set={(s, on) => {
+          s.agents.keep_awake = on;
         }}
       />
     ),
@@ -484,16 +569,20 @@ function Fields({ fields }: { fields: Field[] }) {
   });
 }
 
-/** Read-only: the command table `shortcut()` runs. */
+/** Read-only: the command table `shortcut()` runs and, on macOS, the terminal's own keys. */
 function Shortcuts() {
+  const rows = [
+    ...platformCommands().map((c) => ({ id: c.id, label: c.label, keys: commandKeys(c) })),
+    ...(isMac() ? MAC_TERMINAL_KEYS.map((k) => ({ ...k, id: k.keys })) : []),
+  ];
   return (
     <table className="settings-keys">
       <tbody>
-        {COMMANDS.map((c) => (
-          <tr key={c.id}>
-            <td>{c.label}</td>
+        {rows.map((row) => (
+          <tr key={row.id}>
+            <td>{row.label}</td>
             <td>
-              <kbd>{keyText(c.keys)}</kbd>
+              <kbd>{row.keys}</kbd>
             </td>
           </tr>
         ))}
@@ -838,10 +927,41 @@ function Accounts() {
   );
 }
 
+/**
+ * A hint while the OS keeps Hive from notifying (17.19: macOS's settings say "denied"), with a
+ * link to them. Asked when the section opens and whenever the window comes back to the front,
+ * as from System Settings.
+ */
+function NotificationsOff() {
+  const denied = useHive((s) => s.notificationPermission === "denied");
+  useEffect(() => {
+    const check = () => void transport.checkNotifications();
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, []);
+  if (!denied) return null;
+  return (
+    <p className="field-help notifications-off" role="note">
+      Notifications from Hive are turned off in System Settings: alerts show only in the inbox.{" "}
+      <button
+        type="button"
+        className="link"
+        onClick={() => void transport.openNotificationSettings()}
+      >
+        Open System Settings
+      </button>
+    </p>
+  );
+}
+
 function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
   const windows = useHive((s) => s.appMode?.mode === "native");
-  const fields = FIELDS.filter((f) => (modes || !f.modes) && (windows || !f.windows));
+  const mac = isMac();
+  const fields = FIELDS.filter(
+    (f) => (modes || !f.modes) && (windows || !f.windows) && (mac || !f.mac),
+  );
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
     if (found.length === 0) return <p className="field-help">No setting matches.</p>;
@@ -851,7 +971,14 @@ function Content({ section, query }: { section: Section; query: string }) {
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
   if (section === "Accounts") return <Accounts />;
-  return <Fields fields={fields.filter((f) => f.section === section)} />;
+  const shown = <Fields fields={fields.filter((f) => f.section === section)} />;
+  if (section !== "Notifications") return shown;
+  return (
+    <>
+      <NotificationsOff />
+      {shown}
+    </>
+  );
 }
 
 /**

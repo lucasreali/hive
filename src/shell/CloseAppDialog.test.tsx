@@ -5,6 +5,7 @@ import type { AgentState } from "../protocol";
 import { apply } from "../reduce";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { agentStatus } from "../transport/mock";
+import { requestQuit } from "./CloseAppDialog";
 
 afterEach(() => {
   cleanup();
@@ -102,4 +103,14 @@ test("only working, with-subagents and waiting agents ask; a state change counts
   fireEvent.click(screen.getByTitle("Close"));
   expect(closed()).toBe(false);
   expect(dialog().textContent).toContain("3 agents are running.");
+});
+
+test("a quit request (⌘Q) shows the same dialog while agents run; confirming quits", () => {
+  render(<App />);
+  act(() => agent("a"));
+  act(() => requestQuit());
+  expect(dialog().open).toBe(true);
+  expect(closed()).toBe(false);
+  fireEvent.click(confirm());
+  expect(closed()).toBe(true);
 });

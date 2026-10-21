@@ -64,7 +64,8 @@ test("lists every command with its keys but itself, then agents and worktrees", 
     "Commands",
     [
       // No Markdown file shown: its toggle (11.2) is not offered.
-      ...COMMANDS.filter((c) => c.id !== "palette" && !c.when).map((c) => c.label),
+      // Nor macOS' own commands, off macOS.
+      ...COMMANDS.filter((c) => c.id !== "palette" && !c.when && !c.mac).map((c) => c.label),
       "Remove merged worktrees…",
       "Remove project…",
     ],
@@ -93,6 +94,17 @@ test("filters as typed, arrows move across groups, Enter runs the row", () => {
   expect(picked()).toBe(document.querySelectorAll(".picker-row .picker-name")[rows - 1] ?? null);
   key("Tab");
   type("open settings");
+  key("Enter");
+  expect(useHive.getState().modal).toBe("settings");
+});
+
+test("an Enter that ends a composition (a dead key, an IME) runs nothing (17.14)", () => {
+  open();
+  type("open settings");
+  fireEvent.keyDown(field(), { key: "Enter", isComposing: true });
+  // WebKit: the Enter after `compositionend`, marked only by keyCode 229.
+  fireEvent.keyDown(field(), { key: "Enter", keyCode: 229 });
+  expect(useHive.getState().modal).toBe("palette");
   key("Enter");
   expect(useHive.getState().modal).toBe("settings");
 });

@@ -46,6 +46,8 @@ export const tauriTransport: Transport = {
   listBranches: (project) => send("list_branches", { project }),
   validateWorktreeName: (project, name) => send("validate_worktree_name", { project, name }),
   createWorktree: (project, name, base) => send("create_worktree", { project, name, base }),
+  createIssueWorktree: (project, number, base) =>
+    send("create_issue_worktree", { project, number, base }),
   removeWorktree: (path, force) => send("remove_worktree", { path, force }),
   renameWorktree: (path, name) => send("rename_worktree", { path, name }),
   watchWorktree: (path, base) => send("watch_worktree", { path, base }),
@@ -70,7 +72,15 @@ export const tauriTransport: Transport = {
   setSettings: (settings) => send("set_settings", { settings }),
   openSettingsFile: () => send("open_settings_file"),
   getDiagnostics: () => send("get_diagnostics"),
-  checkUpdate: () => send("check_update"),
+  checkUpdate: (manual = false) => send("check_update", { manual }),
   installUpdate: () => send("install_update"),
   showNotification: (title, body, agent) => send("show_notification", { title, body, agent }),
+  checkNotifications: () => send("check_notifications"),
+  openNotificationSettings: () => send("open_notification_settings"),
+  // No toast: the caller falls back to the webview's tone.
+  playTone: (volume) => invoke<void>("play_tone", { volume }),
+  // No toast on a failure: the icon is a hint (`followTray` drops it).
+  setTray: (tray) => invoke("set_tray", tray),
+  // No toast: a paste with no files read pastes the clipboard's text (`terminals.ts`).
+  pastedFiles: () => invoke<string>("pasted_files"),
 };

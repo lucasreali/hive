@@ -1,4 +1,4 @@
-import type { PullDetail, Pulls } from "./pulls";
+import type { PullDetail, PullState, Pulls } from "./pulls";
 import type { JobLog, RunDetail, Runs } from "./runs";
 
 // The service's messages to the app and what they carry: `hive_protocol::Control` as the app
@@ -16,8 +16,25 @@ export type ServiceMessage =
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
+  // From the app side (Rust): macOS runs the app translocated (17.10), so updates cannot
+  // install; `notice` on the first UI of the run only.
+  | { type: "translocated"; notice: boolean }
   // From the app side (Rust): the user clicked the OS notification about `agent` (13.5).
   | { type: "notification_clicked"; agent: string }
+  // From the app side (Rust): ⌘Q, the Dock's Quit or logging out while agents would end
+  // (D17.3); the UI asks as the window's Close button does.
+  | { type: "quit_requested" }
+  // From the app side (Rust): whether the OS lets Hive show notifications (17.19).
+  | { type: "notification_permission"; permission: NotificationPermission }
+  // From the app side (Rust): a click on one of the app menu's own items (17.13, `menu.ts`).
+  | { type: "menu"; item: string }
+  // From the app side (Rust): a check the user asked for found no update; `error` null: up to date.
+  | { type: "update_checked"; error: string | null }
+  // From the app side (Rust): the user chose `agent` in the menu bar icon's menu (17.22).
+  | { type: "tray_clicked"; agent: string }
+  // From the app side (Rust, macOS): files dropped from Finder at (`x`, `y`), CSS pixels from
+  // the window's top left (18.1); `text` is their paths, shell-quoted, each followed by a space.
+  | { type: "files_dropped"; text: string; x: number; y: number }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
@@ -34,14 +51,31 @@ export type ServiceMessage =
   | { type: "unhooked_agent"; channel: number }
   // `hive badge` in that terminal; empty clears it.
   | { type: "badge"; channel: number; text: string }
+  // 17.25: a program's OSC 9;4 progress (`value` 0–100), sent when it changes.
+  | { type: "terminal_progress"; channel: number; state: ProgressState; value: number }
+  // 17.25: a shell command longer than `notifications.command_secs` ended in a terminal with
+  // no agent, out of view of the focused window (the service decided).
+  | { type: "command_finished"; channel: number; exit: number | null; secs: number }
+  // 17.25: a program's OSC 9 / 777 notification, cleaned by the service; `notify`: also an
+  // OS notification (out of view).
+  | { type: "terminal_notification"; channel: number; title: string; body: string; notify: boolean }
   | ({ type: "agent_detected"; channel: number } & Omit<Agent, "terminal">)
   | { type: "agent_removed"; channel: number; id: string }
   | { type: "agent_title"; channel: number; id: string; title: string }
   | ({ type: "agent_state"; id: string } & AgentStatus)
   | ({ type: "agent_usage"; id: string } & AgentUsage)
   // The current account's 5-hour window (12.1); null when none came yet or it reset.
-  // `week` (15.3) is absent from an older service.
-  | { type: "session_usage"; usage: SessionWindow | null; week?: SessionWindow | null }
+  // `week` (15.3) is absent from an older service, and so are the pace's `limit_at` and
+  // `week_limit_at` (17.23: when each reaches 100% at its pace, Unix s; null when it lasts).
+  | {
+      type: "session_usage";
+      usage: SessionWindow | null;
+      week?: SessionWindow | null;
+      limit_at?: number | null;
+      week_limit_at?: number | null;
+    }
+  // A window of the current account reached 80% or 95%, once per window (17.23).
+  | { type: "usage_alert"; window: UsageWindow; threshold: number; resets_at: number }
   | { type: "subagent_worktrees"; worktrees: string[] }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
@@ -56,6 +90,15 @@ export type ServiceMessage =
   | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
   | { type: "pull_done"; project: string; number: number; message: string }
   | { type: "pull_failed"; project: string; number: number | null; message: string }
+  // A worktree's pull request merged or closed (17.27): the inbox offers to remove the worktree.
+  | {
+      type: "pull_ended";
+      project: string;
+      worktree: string;
+      number: number;
+      title: string;
+      state: PullState;
+    }
   | ({ type: "runs" } & Runs)
   | { type: "run"; project: string; run: number; detail: RunDetail | null; error: string | null }
   | ({ type: "job_log" } & JobLog)
@@ -386,8 +429,11 @@ export type Subagent = {
 /** What an agent or subagent is doing (its current tool call) and since when (ms since the epoch) its state lasts. */
 export type Doing = { activity: string | null; since_ms: number };
 
-/** Mirrors `hive_protocol::Alert`: why a new state alerts (`notify`). */
-export type Alert = "finished" | "waiting";
+/**
+ * Mirrors `hive_protocol::Alert`: why a new state alerts (`notify`): it finished, it asks for an
+ * action (🟡 or 🔴; the Dock bounces, 17.16), or it waits for you otherwise.
+ */
+export type Alert = "finished" | "waiting" | "action";
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins),
@@ -415,6 +461,8 @@ export type AgentStatus = {
  */
 /** A Claude account's 5-hour or 7-day usage window: the percentage used and when it resets (Unix s). */
 export type SessionWindow = { used_percentage: number; resets_at: number };
+/** Which window a `usage_alert` is about: the 5-hour one or the 7-day one. */
+export type UsageWindow = "session" | "week";
 
 export type AgentUsage = { context_tokens: number; context_limit: number; output_tokens: number };
 
@@ -422,6 +470,9 @@ export type AgentUsage = { context_tokens: number; context_limit: number; output
  * Mirrors `hive_protocol::Settings`: the service's settings file, read and saved whole. The
  * service checks the ranges (#37).
  */
+/** A terminal's OSC 9;4 progress state (17.25), ConEmu's 0–4. */
+export type ProgressState = "none" | "normal" | "error" | "indeterminate" | "paused";
+
 export type Settings = {
   terminal: {
     font_family: string;
@@ -430,13 +481,20 @@ export type Settings = {
     cursor_style: "block" | "bar" | "underline";
     cursor_blink: boolean;
     copy_on_select: boolean;
+    /** macOS: Option is Meta (Esc + key) rather than the key that types accents (17.14). */
+    option_as_meta: boolean;
     /** New terminals' shell when the service runs natively on Windows; ignored elsewhere. */
     shell: "default" | "cmd" | "git_bash";
   };
   appearance: { theme: "one-dark" | "one-light" };
-  /** `volume`: the alert tone's, in percent; 0 mutes it. */
-  notifications: { volume: number };
-  agents: { silence_secs: number; confirm_close: boolean };
+  /**
+   * `volume`: the alert tone's, in percent; 0 mutes it. `bounce`: bounce the Dock icon once when
+   * an agent needs an action while Hive is not focused (17.16). `menu_bar`: show the menu bar
+   * icon (17.22). `command_secs`: a shell command that ran this long notifies when it ends
+   * (17.25); 0 never.
+   */
+  notifications: { volume: number; bounce: boolean; menu_bar: boolean; command_secs: number };
+  agents: { silence_secs: number; confirm_close: boolean; keep_awake: boolean };
   worktrees: { default_base: string | null };
   /** By project id. */
   projects: Record<string, { scripts: ProjectScripts }>;
@@ -465,6 +523,12 @@ export type ProjectScripts = {
   /** Run by the service before it removes a worktree. */
   archive: string | null;
 };
+
+/**
+ * Whether the OS lets Hive show notifications (17.19): `unknown` where the app cannot ask (a
+ * development build, a platform without a check) or before the user answered.
+ */
+export type NotificationPermission = "granted" | "denied" | "unknown";
 
 /** What the settings' About section shows (the service's `diagnostics`). */
 export type Diagnostics = {

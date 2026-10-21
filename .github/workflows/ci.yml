@@ -1,7 +1,7 @@
-# Every quality gate of CLAUDE.md, run on GitHub instead of the human's WSL machine (TODO
-# 5.11): heavy local builds have taken the WSL VM down. A task merges into `main` only when
-# this workflow (and macos.yml) is green on its branch tip. scripts/gates.sh is the optional
-# local equivalent of the Rust jobs.
+# Every quality gate of CLAUDE.md on Linux. GitHub Actions is the authority (TODO 5.11, D17.6):
+# a task merges into `main` only when this workflow and macos.yml are green on its branch tip,
+# and Linux-only code is verified only here. scripts/gates.sh is the local equivalent of the Rust
+# jobs on the human's Mac.
 name: ci
 
 on:
@@ -29,6 +29,8 @@ env:
 
 jobs:
   rust:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -44,8 +46,12 @@ jobs:
       - run: cargo deny check
       - run: cargo machete
       - run: python3 .claude/hooks/test_guard.py
+      # release.sh and the gates' memory watchdog (TODO 17.2); macos.yml runs it on macOS.
+      - run: scripts/test-scripts.sh
 
   coverage:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -58,12 +64,16 @@ jobs:
   # The diff's mutants, sharded by their number (mutants.yml, TODO 7.1). `mutants-base` re-runs
   # them for another range (e.g. to measure a change to the mutants setup).
   mutants:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/mutants.yml
     with:
       in-diff: true
       base: ${{ inputs.mutants-base }}
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -76,10 +86,11 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun test --coverage
-      - run: bunx playwright install --with-deps chromium
+      # WebKit (TODO 17.3): the engine of macOS' WKWebView, where Hive runs on a Mac.
+      - run: bunx playwright install --with-deps chromium webkit
       # The load spec renders WebGL through ANGLE on the system GL (Mesa; llvmpipe here, the
       # runner has no GPU). Without Mesa's EGL and a display Chromium falls back to
-      # SwiftShader, which the spec rejects as unrepresentative.
+      # SwiftShader, and the spec fails: its renderer must not be SwiftShader.
       - run: sudo apt-get install -y libegl1 libegl-mesa0 libgl1-mesa-dri xvfb
       - run: xvfb-run -a bun run e2e
       - if: failure()
@@ -89,27 +100,35 @@ jobs:
           path: target/e2e
           retention-days: 7
 
-  # Whether this push can change what compiles on Windows (TODO 9.4): the branch's diff since it
-  # left `main` (merge base with origin/main, as mutants.yml), or always on `main`. A job skipped
-  # by its `if` still leaves the run green, so `scripts/ci.sh watch` waits for nothing more.
+  # What this push can change, from the branch's diff since it left `main` (merge base with
+  # origin/main, as mutants.yml); everything on `main` and on a manual run. `code`: anything but
+  # docs (Markdown, docs/, the agents' skills), so a docs-only push runs no gate; except
+  # docs/architecture.md, whose message catalog a protocol test reads. `windows` (TODO 9.4): what
+  # compiles on Windows; hive-protocol is compiled into the app; ci.yml itself, so a change to
+  # the job runs it. A job skipped by its `if` still leaves the run green, so
+  # `scripts/ci.sh watch` waits for nothing more.
   changes:
     runs-on: ubuntu-latest
     outputs:
+      code: ${{ steps.diff.outputs.code }}
       windows: ${{ steps.diff.outputs.windows }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      # hive-protocol is compiled into the app; ci.yml itself, so a change to the job runs it.
       - id: diff
         run: |
-          windows=true
-          if [ "$GITHUB_REF" != refs/heads/main ]; then
-            # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
+          code=true windows=true
+          if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
             files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
+            # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
+            grep -qvE '\.md$|^docs/|^\.claude/(skills|agents)/' <<< "$files" ||
+              grep -qx 'docs/architecture\.md' <<< "$files" ||
+              code=false
             grep -qE '^(src-tauri/|crates/hive-protocol/|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|\.github/workflows/ci\.yml$)' <<< "$files" ||
               windows=false
           fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
           echo "windows=$windows" | tee -a "$GITHUB_OUTPUT"
 
   # The Linux `hive` the Windows installer carries, as release.yml's `linux` job builds it.

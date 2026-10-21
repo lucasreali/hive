@@ -13,6 +13,7 @@ import {
   MOCK_FILES,
   MOCK_GROUP,
   MOCK_IGNORED,
+  MOCK_ISSUES,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_SESSIONS,
@@ -225,13 +226,49 @@ test("projects are added from the fake repositories only", async () => {
   ]);
 });
 
+// The mock shell's OSC 133 marks (17.25): its prompt, a command's start and end.
+const A = "\x1b]133;A\x07";
+const C = "\x1b]133;C\x07";
+const D = (exit: number) => `\x1b]133;D;${exit}\x07`;
+
+test("the mock shell marks its prompts and commands; false fails", async () => {
+  const { transport, id, output } = await opened();
+  await transport.writeTerminal(id, "false\r");
+  expect(output()).toBe(`${A}mock$ false\r\n${C}false\r\n${D(1)}${A}mock$ `);
+});
+
+test("`copy-files` stands in for files copied in Finder, as the app side reads them (18.3)", async () => {
+  const { transport, id } = await opened();
+  expect(await transport.pastedFiles()).toBe("");
+  await transport.writeTerminal(id, "copy-files /tmp/My\\ Shot.png /tmp/b \r");
+  expect(await transport.pastedFiles()).toBe("/tmp/My\\ Shot.png /tmp/b ");
+  await transport.writeTerminal(id, "copy-files\r");
+  expect(await transport.pastedFiles()).toBe("");
+});
+
+test("typed stand-ins send a terminal's progress, long command and notification", async () => {
+  const { transport, messages, id } = await opened();
+  const typed = ["progress normal 40", "progress indeterminate", "long-command 2 75"];
+  for (const line of [...typed, "osc-notify make;done", "osc-notify bare"]) {
+    await transport.writeTerminal(id, `${line}\r`);
+  }
+  await tick();
+  expect(messages.slice(-5)).toEqual([
+    { type: "terminal_progress", channel: id, state: "normal", value: 40 },
+    { type: "terminal_progress", channel: id, state: "indeterminate", value: 0 },
+    { type: "command_finished", channel: id, exit: 2, secs: 75 },
+    { type: "terminal_notification", channel: id, title: "make", body: "done", notify: true },
+    { type: "terminal_notification", channel: id, title: "bare", body: "", notify: true },
+  ]);
+});
+
 test("a terminal prints a prompt, echoes input and repeats the line", async () => {
   const { transport, messages, id, output } = await opened();
   expect(id).toBe(1);
   expect(messages.at(-1)).toEqual({ type: "terminal_opened", channel: 1, worktree: null });
-  expect(output()).toBe("mock$ ");
+  expect(output()).toBe(`${A}mock$ `);
   await transport.writeTerminal(id, "hi\r\r");
-  expect(output()).toBe("mock$ hi\r\nhi\r\nmock$ \r\nmock$ ");
+  expect(output()).toBe(`${A}mock$ hi\r\n${C}hi\r\n${D(0)}${A}mock$ \r\n${A}mock$ `);
   await transport.resizeTerminal(id, 100, 30);
   expect(await transport.openTerminal("/", 1, 1, () => {})).toBe(2);
 });
@@ -241,7 +278,7 @@ test("exit ends the terminal with code 0 and close with no code", async () => {
   await transport.writeTerminal(id, "exit\rignored");
   await tick();
   expect(messages.at(-1)).toEqual({ type: "terminal_exited", channel: id, code: 0 });
-  expect(output()).toBe("mock$ exit");
+  expect(output()).toBe(`${A}mock$ exit`);
 
   const second = await transport.openTerminal("/", 1, 1, () => {});
   await transport.closeTerminal(second);
@@ -290,7 +327,7 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   const alerts = messages.slice(-5).map((m) => m.type === "agent_state" && [m.state, m.alert]);
   expect(alerts).toEqual([
     ["working", null],
-    ["error", "waiting"],
+    ["error", "action"],
     ["working", null],
     ["working", null],
     ["waiting_you", "finished"],
@@ -452,7 +489,7 @@ test("?mock=load replays a recording into each terminal and marks every echo", a
     await wait(LOAD_START_MS + b * LOAD_STAGGER_MS + 20);
     await transport.closeTerminal(b);
     await wait(100);
-    expect(out).toEqual([`x${ECHO_MARK}mock$ one two`, "mock$ one "]);
+    expect(out).toEqual([`x${ECHO_MARK}${A}mock$ one two`, `${A}mock$ one `]);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -981,6 +1018,11 @@ test("?mock=update offers an update whose install fails; otherwise none is offer
   await transport.checkUpdate();
   await tick();
   expect(messages.some((m) => m.type === "update_ready")).toBe(false);
+  expect(messages.some((m) => m.type === "update_checked")).toBe(false);
+  // Asked from the menu: up to date.
+  await transport.checkUpdate(true);
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "update_checked", error: null });
 
   const update = createMockTransport("update");
   const offered: ServiceMessage[] = [];
@@ -992,6 +1034,22 @@ test("?mock=update offers an update whose install fails; otherwise none is offer
     { type: "update_ready", version: "9.9.9" },
     { type: "update_failed", error: "mock: nothing to install" },
   ]);
+});
+
+test("?mock=denied says notifications are off; the browser plays its own tone", async () => {
+  const { transport, messages } = await connected();
+  await transport.checkNotifications();
+  await transport.openNotificationSettings();
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "notification_permission", permission: "granted" });
+  expect(transport.playTone(50)).rejects.toThrow("mock: no app to play the tone");
+
+  const denied = createMockTransport("denied");
+  const said: ServiceMessage[] = [];
+  await denied.connect((m) => said.push(m));
+  await denied.checkNotifications();
+  await tick();
+  expect(said.at(-1)).toEqual({ type: "notification_permission", permission: "denied" });
 });
 
 test("folders are browsed on both sides of the fake machine", async () => {
@@ -1237,5 +1295,35 @@ test("a project is removed with its settings, never while a terminal works in it
     { type: "project_removed", id: API },
     { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
     { type: "projects", projects: [] },
+  ]);
+});
+
+test("an issue's worktree is named by the service, and a failure by the issue's number", async () => {
+  const { transport, messages } = await connected();
+  const [shop] = MOCK_REPOS;
+  messages.length = 0;
+  await transport.createIssueWorktree(shop.id, 42, "main");
+  await transport.createIssueWorktree(shop.id, 42, null);
+  await transport.createIssueWorktree(shop.id, 7, null);
+  await tick();
+  const name = MOCK_ISSUES[42];
+  const path = `${shop.path}/.claude/worktrees/${name}`;
+  const created = messages[0] as Extract<ServiceMessage, { type: "worktree_created" }>;
+  expect(created.path).toBe(path);
+  expect(created.project.worktrees.at(-1)).toMatchObject({ path, name, branch: name });
+  expect(messages.slice(1)).toEqual([
+    {
+      type: "create_worktree_failed",
+      project: shop.id,
+      name: "#42",
+      message: `worktree "${name}" already exists at ${path}`,
+    },
+    {
+      type: "create_worktree_failed",
+      project: shop.id,
+      name: "#7",
+      message:
+        "gh issue view failed: GraphQL: Could not resolve to an issue with the number of 7. (repository.issue)",
+    },
   ]);
 });

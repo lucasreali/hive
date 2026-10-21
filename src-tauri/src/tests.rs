@@ -948,6 +948,13 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: Some("main".into()),
     };
     assert_eq!(service.control().await, (0, create));
+    hive.create_issue_worktree("/r".into(), 42, None).unwrap();
+    let issue = Control::CreateIssueWorktree {
+        project: "/r".into(),
+        number: 42,
+        base: None,
+    };
+    assert_eq!(service.control().await, (0, issue));
     hive.remove_worktree("/r/w".into(), true).unwrap();
     let remove = Control::RemoveWorktree {
         path: "/r/w".into(),
@@ -1345,6 +1352,10 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(
+        hive.create_issue_worktree("/r".into(), 1, None),
+        not_connected
+    );
+    assert_eq!(
         hive.watch_worktree("/r".into(), DiffBase::Head),
         not_connected
     );
@@ -1609,6 +1620,7 @@ fn commands_reach_the_managed_hive() {
             list_branches,
             validate_worktree_name,
             create_worktree,
+            create_issue_worktree,
             remove_worktree,
             rename_worktree,
             watch_worktree,
@@ -1688,6 +1700,7 @@ fn commands_reach_the_managed_hive() {
     let branches = json!({"project": "/r"});
     let validate = json!({"project": "/r", "name": "x"});
     let create = json!({"project": "/r", "name": "x", "base": null});
+    let issue = json!({"project": "/r", "number": 42, "base": "main"});
     let remove = json!({"path": "/r/w", "force": false});
     let rename = json!({"path": "/r/w", "name": "x"});
     let watch = json!({"path": "/r", "base": "branch"});
@@ -1723,6 +1736,7 @@ fn commands_reach_the_managed_hive() {
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
         ("create_worktree", &create),
+        ("create_issue_worktree", &issue),
         ("remove_worktree", &remove),
         ("rename_worktree", &rename),
         ("watch_worktree", &watch),
@@ -1796,6 +1810,7 @@ fn commands_reach_the_managed_hive() {
         ("list_branches", branches),
         ("validate_worktree_name", validate),
         ("create_worktree", create),
+        ("create_issue_worktree", issue),
         ("remove_worktree", remove),
         ("rename_worktree", rename),
         ("watch_worktree", watch),
@@ -2025,7 +2040,7 @@ async fn an_unsigned_release_is_neither_offered_nor_installed() {
         .build()
         .unwrap();
     use tauri_plugin_updater::UpdaterExt;
-    app.state::<Hive>().check_update(app.updater()).await;
+    app.state::<Hive>().check_update(app.updater(), false).await;
     // Downloaded at once, but its signature fails the check.
     assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(invoke(&webview, "check_update", json!({})), Ok(Value::Null));
@@ -2053,14 +2068,24 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
     let (hive, mut rx) = hive_with_ui();
     let endpoint = release_server("0.0.1");
     let app = updater_app(&endpoint, hive_with_ui().0);
-    hive.check_update(app.updater()).await;
+    hive.check_update(app.updater(), false).await;
+    // Asked from the menu, it says so.
+    hive.check_update(app.updater(), true).await;
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_checked", "error": null})
+    );
     // Anything but `/latest.json` answers the installer, which is not JSON: the check fails.
     let broken = vec![endpoint
         .replace("latest.json", "broken.json")
         .parse()
         .unwrap()];
-    let updater = app.updater_builder().endpoints(broken).unwrap().build();
-    hive.check_update(updater).await;
+    let builder = || app.updater_builder().endpoints(broken.clone()).unwrap();
+    hive.check_update(builder().build(), false).await;
+    hive.check_update(builder().build(), true).await;
+    let failed = next(&mut rx).await;
+    assert_eq!(failed["type"], "update_checked");
+    assert!(failed["error"].as_str().is_some_and(|e| !e.is_empty()));
     hive.install_update().await;
     assert_eq!(
         next(&mut rx).await,
@@ -2085,6 +2110,58 @@ async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
     // The exit after the restart has nothing left to install.
     assert_eq!(hive.install_pending(), None);
     assert!(installed.try_recv().is_err());
+}
+
+#[test]
+fn translocation_is_told_from_the_app_path() {
+    let path = |p: &str| Some(std::path::PathBuf::from(p));
+    let moved =
+        "/private/var/folders/x1/abc/T/AppTranslocation/1F2E-AB/d/Hive.app/Contents/MacOS/hive-app";
+    assert!(translocated(true, path(moved)));
+    for installed in [
+        "/Applications/Hive.app/Contents/MacOS/hive-app",
+        "/Users/me/AppTranslocationNotes/Hive.app/Contents/MacOS/hive-app",
+        "/Users/me/Downloads/AppTranslocation.app/Contents/MacOS/hive-app",
+        "",
+    ] {
+        assert!(!translocated(true, path(installed)), "{installed}");
+    }
+    // Only macOS translocates; an executable path the OS cannot give is not translocated.
+    assert!(!translocated(false, path(moved)));
+    assert!(!translocated(true, None));
+}
+
+#[tokio::test]
+async fn a_translocated_app_tells_every_ui_and_opens_the_notice_once() {
+    let hive = sh("exit 3").with_translocated(true);
+    for notice in [true, false] {
+        let (channel, mut rx) = ui();
+        hive.connect(channel);
+        let told = json!({"type": "translocated", "notice": notice});
+        assert_eq!(next(&mut rx).await, told);
+        assert_eq!(next(&mut rx).await["type"], "disconnected");
+    }
+    // An app that is not translocated says nothing about it.
+    let (channel, mut rx) = ui();
+    sh("exit 3").connect(channel);
+    assert_eq!(next(&mut rx).await["type"], "disconnected");
+}
+
+#[tokio::test]
+async fn a_translocated_app_does_not_run_the_installer() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let (tx, restarted) = std::sync::mpsc::channel();
+    let hive = hive
+        .with_translocated(true)
+        .with_restart(move || tx.send(()).unwrap());
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    next(&mut rx).await;
+    hive.install_update().await;
+    let failed = json!({"type": "update_failed", "error": TRANSLOCATED});
+    assert_eq!(next(&mut rx).await, failed);
+    assert!(installed.try_recv().is_err());
+    assert!(restarted.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -2270,4 +2347,709 @@ fn a_notification_whose_thread_cannot_start_fails_and_frees_its_wait() {
     NO_THREADS.store(false, SeqCst);
     assert_eq!(notify("t", "b", Box::new(|| {})), Ok(()));
     assert_eq!(asked.recv_timeout(WAIT), Ok(true), "no wait was kept");
+}
+
+#[test]
+fn the_title_bar_double_click_follows_the_macos_setting() {
+    assert_eq!(double_click_action(Some("Minimize\n")), "minimize");
+    assert_eq!(double_click_action(Some("None")), "none");
+    for zoom in [Some("Maximize"), Some("Fill"), Some("Other"), None] {
+        assert_eq!(double_click_action(zoom), "zoom", "{zoom:?}");
+    }
+}
+
+/// A `Hive` whose `defaults` is `sh -c`: it checks it is asked for the double-click setting,
+/// then runs `script`.
+fn reading(script: &str) -> Hive {
+    let script = format!(r#"[ "$*" = "read -g AppleActionOnDoubleClick" ] || exit 9; {script}"#);
+    sh("exit 0").with_defaults("sh", &["-c", &script, "defaults"])
+}
+
+#[test]
+fn the_title_bar_command_reads_the_setting_on_each_click() {
+    let dir = Temp::new("defaults");
+    let setting = dir.0.join("setting");
+    let app = mock_builder()
+        .manage(reading(&format!("cat '{}'", setting.display())))
+        .invoke_handler(tauri::generate_handler![title_bar_action])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let action = || invoke(&webview, "title_bar_action", json!({})).unwrap();
+    // Never set: `defaults` fails.
+    assert_eq!(action(), json!("zoom"));
+    std::fs::write(&setting, "Minimize\n").unwrap();
+    assert_eq!(action(), json!("minimize"));
+    std::fs::write(&setting, "None\n").unwrap();
+    assert_eq!(action(), json!("none"));
+    // Whatever a failing `defaults` prints is no setting.
+    let failing = reading("echo Minimize; exit 1");
+    assert_eq!(failing.title_bar_action(), "zoom");
+    // Asked anything else, the stand-in fails.
+    assert_eq!(reading("echo Minimize").title_bar_action(), "minimize");
+    let asked = sh("exit 0").with_defaults("sh", &["-c", "echo Minimize; [ $# = 0 ]", "x"]);
+    assert_eq!(asked.title_bar_action(), "zoom");
+    // No `defaults` at all (not macOS).
+    let missing = sh("exit 0").with_defaults("/nonexistent/defaults", &[]);
+    assert_eq!(missing.title_bar_action(), "zoom");
+    // The real one by default, never run here.
+    let (program, args) = sh("exit 0").defaults;
+    assert_eq!((program, args), ("/usr/bin/defaults".into(), vec![]));
+}
+
+#[test]
+fn quitting_asks_only_with_a_ui_the_setting_on_and_agents_at_risk() {
+    assert_eq!(quit_decision(true, true, 1, None), Quit::Ask);
+    assert_eq!(quit_decision(true, true, 3, None), Quit::Ask);
+    assert_eq!(quit_decision(true, true, 0, None), Quit::Now);
+    assert_eq!(quit_decision(true, false, 2, None), Quit::Now);
+    assert_eq!(quit_decision(false, true, 2, None), Quit::Now);
+    // Asked again within ASK_AGAIN: it quits (a hung UI never keeps the app); later it asks.
+    let ago = |secs| Some(Duration::from_millis(secs));
+    assert_eq!(quit_decision(true, true, 1, ago(0)), Quit::Now);
+    assert_eq!(quit_decision(true, true, 1, ago(4_999)), Quit::Now);
+    assert_eq!(quit_decision(true, true, 1, ago(5_000)), Quit::Ask);
+}
+
+#[test]
+fn agents_at_risk_are_the_close_dialogs() {
+    use AgentState::*;
+    let risky = [
+        Working,
+        WithSubagents,
+        WaitingYou,
+        WaitingAnswer,
+        WaitingPlan,
+        WaitingPermission,
+    ];
+    for state in risky {
+        assert!(at_risk(state), "{state:?}");
+    }
+    for state in [Ended, Idle, Error] {
+        assert!(!at_risk(state), "{state:?}");
+    }
+}
+
+#[test]
+fn the_window_comes_up_when_there_is_one() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(!bring_up(app.handle()));
+    assert!(!reopen(app.handle(), false));
+    let _window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    assert!(bring_up(app.handle()));
+    // A Dock click brings it back only when no window shows.
+    assert!(reopen(app.handle(), false));
+    assert!(!reopen(app.handle(), true));
+}
+
+/// Sends `message` from the service on `channel` and waits for the UI to get it.
+async fn relay(
+    service: &mut Service,
+    rx: &mut mpsc::UnboundedReceiver<Value>,
+    channel: u32,
+    message: Value,
+) {
+    let frame = Frame {
+        kind: FrameType::Control,
+        channel,
+        payload: message.to_string().into_bytes().into(),
+    };
+    service.writer.send(frame).await.unwrap();
+    assert_eq!(next(rx).await["type"], message["type"]);
+}
+
+#[tokio::test]
+async fn quitting_asks_the_ui_while_agents_would_end_with_the_app() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (hive, mut service, mut rx) = welcomed().await;
+    let exits = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&exits);
+    let hive = hive.with_exit(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    let exited = || exits.load(Ordering::SeqCst);
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let app = app.handle();
+    hive.link().terminals.insert(5, output().0);
+    // Each question long after the last (`ASK_AGAIN` is tested on its own).
+    let quits = |hive: &Hive| {
+        hive.link().asked = None;
+        hive.should_quit(app)
+    };
+    let state = |id: &str, state: &str| json!({"type": "agent_state", "id": id, "state": state});
+    let confirm =
+        |on: bool| json!({"type": "settings", "settings": {"agents": {"confirm_close": on}}});
+
+    // Nothing at risk: it quits.
+    assert!(quits(&hive));
+    hive.link().asked = None;
+    hive.request_quit(app);
+    assert_eq!(exited(), 1);
+    relay(&mut service, &mut rx, 5, state("a1", "idle")).await;
+    assert!(quits(&hive));
+
+    // A working agent: the UI asks, nothing quits.
+    relay(&mut service, &mut rx, 5, state("a1", "working")).await;
+    hive.link().asked = None;
+    hive.request_quit(app);
+    assert_eq!(exited(), 1);
+    assert_eq!(next(&mut rx).await, json!({"type": "quit_requested"}));
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await, json!({"type": "quit_requested"}));
+
+    // The setting off quits; on again asks.
+    relay(&mut service, &mut rx, 0, confirm(false)).await;
+    assert!(quits(&hive));
+    relay(&mut service, &mut rx, 0, confirm(true)).await;
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await["type"], "quit_requested");
+
+    // Its state leaves the risky ones, or it goes.
+    relay(&mut service, &mut rx, 5, state("a1", "error")).await;
+    assert!(quits(&hive));
+    relay(&mut service, &mut rx, 5, state("a1", "waiting_you")).await;
+    relay(
+        &mut service,
+        &mut rx,
+        5,
+        state("a2", "from a newer service"),
+    )
+    .await;
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await["type"], "quit_requested");
+    let removed = json!({"type": "agent_removed", "id": "a1"});
+    relay(&mut service, &mut rx, 5, removed).await;
+    assert!(quits(&hive));
+
+    // Agents end with the connection.
+    relay(&mut service, &mut rx, 5, state("a3", "waiting_permission")).await;
+    assert!(!quits(&hive));
+    assert_eq!(next(&mut rx).await["type"], "quit_requested");
+    drop(service);
+    while next(&mut rx).await["type"] != "disconnected" {}
+    assert!(quits(&hive));
+    hive.link().asked = None;
+    hive.request_quit(app);
+    assert_eq!(exited(), 2);
+}
+
+#[test]
+fn without_a_ui_quitting_never_asks() {
+    let hive = hive();
+    hive.link().at_risk.insert("a1".into());
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(hive.should_quit(app.handle()));
+    // Nothing to end the app with: nothing happens.
+    hive.request_quit(app.handle());
+}
+
+/// A connected `Hive` with an agent at risk, its app, and a UI asked a moment ago (`asked`).
+fn asking(
+    asked: Option<Duration>,
+) -> (
+    Hive,
+    tauri::App<tauri::test::MockRuntime>,
+    mpsc::UnboundedReceiver<Value>,
+) {
+    let (hive, rx) = hive_with_ui();
+    {
+        let mut link = hive.link();
+        link.at_risk.insert("a1".into());
+        link.asked = asked.map(|ago| Instant::now().checked_sub(ago).unwrap());
+    }
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    (hive, app, rx)
+}
+
+#[test]
+fn a_second_quit_soon_after_asking_quits() {
+    let (hive, app, mut rx) = asking(None);
+    assert!(!hive.should_quit(app.handle()));
+    assert_eq!(rx.try_recv().unwrap()["type"], "quit_requested");
+    // ⌘Q again with the dialog up (or a hung UI): it quits.
+    assert!(hive.should_quit(app.handle()));
+    assert!(rx.try_recv().is_err());
+    // Long after the last question it asks again.
+    let (hive, app, mut rx) = asking(Some(Duration::from_secs(6)));
+    assert!(!hive.should_quit(app.handle()));
+    assert_eq!(rx.try_recv().unwrap()["type"], "quit_requested");
+}
+
+#[test]
+fn a_ui_that_cannot_get_the_question_lets_the_app_quit() {
+    let (hive, app, _rx) = asking(None);
+    hive.link().ui = Some(Channel::new(|_| Err(tauri::Error::FailedToReceiveMessage)));
+    assert!(hive.should_quit(app.handle()));
+    // The stale UI is forgotten.
+    assert!(hive.link().ui.is_none());
+    assert!(hive.link().asked.is_none());
+}
+
+#[test]
+fn the_app_asks_its_hive_and_quits_without_one() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(should_quit(app.handle()));
+    let (hive, _, mut rx) = asking(None);
+    let app = mock_builder()
+        .manage(hive)
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    assert!(!should_quit(app.handle()));
+    assert_eq!(rx.try_recv().unwrap()["type"], "quit_requested");
+}
+
+#[test]
+fn a_development_build_runs_under_its_own_identifier() {
+    assert_eq!(
+        instance_identifier(false, "com.lucas.hive"),
+        "com.lucas.hive"
+    );
+    assert_eq!(
+        instance_identifier(true, "com.lucas.hive"),
+        "com.lucas.hive.dev"
+    );
+}
+
+#[test]
+fn the_window_keeps_its_size_position_maximised_and_full_screen_only() {
+    let kept = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED;
+    assert_eq!(WINDOW_STATE.bits(), (kept | StateFlags::FULLSCREEN).bits());
+    assert!(!WINDOW_STATE.intersects(StateFlags::VISIBLE | StateFlags::DECORATIONS));
+}
+
+#[test]
+fn a_second_launch_brings_the_window_up_when_there_is_one() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(!bring_up(app.handle()), "no window yet");
+    tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    // The mock runtime keeps no window state: unminimised, shown and focused cannot be checked.
+    assert!(bring_up(app.handle()));
+}
+
+/// A folder of its own for `name` under the system's temporary folder, empty.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("hive-app-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn only_an_app_bundle_can_ask_the_notification_center() {
+    let bundled = [
+        "/Applications/Hive.app/Contents/MacOS/hive-app",
+        "/x/a b.app/Contents/MacOS/h",
+    ];
+    for exe in bundled {
+        assert!(in_app_bundle(Path::new(exe)), "{exe}");
+    }
+    let other = [
+        "/src/hive/target/debug/hive-app",
+        "/Applications/Hive/Contents/MacOS/hive-app",
+        "/Applications/Hive.app/Contents/Other/hive-app",
+        "/Applications/Hive.app/Other/MacOS/hive-app",
+        "Contents/MacOS/hive-app",
+        "MacOS/hive-app",
+        "hive-app",
+        "",
+    ];
+    for exe in other {
+        assert!(!in_app_bundle(Path::new(exe)), "{exe}");
+    }
+}
+
+#[test]
+fn the_notification_permission_goes_to_the_ui() {
+    let (channel, mut rx) = ui();
+    let hive = hive().with_permission(|| Permission::Denied);
+    hive.link().ui = Some(channel);
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![check_notifications])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let checking = invoke(&webview, "check_notifications", json!({}));
+    assert_eq!(checking, Ok(Value::Null));
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let answer = json!({"type": "notification_permission", "permission": "denied"});
+    assert_eq!(runtime.block_on(next(&mut rx)), answer);
+    // An app that cannot ask says so.
+    let (channel, mut rx) = ui();
+    let unknown = self::hive();
+    unknown.link().ui = Some(channel);
+    unknown.check_notifications();
+    let answer = json!({"type": "notification_permission", "permission": "unknown"});
+    assert_eq!(runtime.block_on(next(&mut rx)), answer);
+    let all = [Permission::Granted, Permission::Denied, Permission::Unknown];
+    assert_eq!(all.map(Permission::name), ["granted", "denied", "unknown"]);
+}
+
+#[test]
+fn the_notification_settings_open_at_their_pane() {
+    let (tx, opened) = std::sync::mpsc::channel::<String>();
+    let hive = hive().with_url(move |url: &str| {
+        tx.send(url.into()).unwrap();
+        Ok(())
+    });
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![open_notification_settings])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let opening = invoke(&webview, "open_notification_settings", json!({}));
+    assert_eq!(opening, Ok(Value::Null));
+    let pane = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+    assert_eq!(opened.try_recv().unwrap(), pane);
+    let none = self::hive().open_notification_settings();
+    assert_eq!(none, Err("this app cannot open URLs".into()));
+    let refused = self::hive().with_url(|_: &str| Err("no handler".into()));
+    assert_eq!(
+        refused.open_notification_settings(),
+        Err("no handler".into())
+    );
+}
+
+#[test]
+fn the_tone_is_the_web_audio_beep_as_a_wav_file() {
+    let wav = tone_wav();
+    let word = |at: usize| u32::from_le_bytes(wav[at..at + 4].try_into().unwrap());
+    let half = |at: usize| u16::from_le_bytes(wav[at..at + 2].try_into().unwrap());
+    let samples = 8820; // 0.2 s at 44.1 kHz
+    assert_eq!(wav.len(), 44 + samples * 2);
+    assert_eq!(&wav[..4], b"RIFF");
+    assert_eq!(word(4) as usize, wav.len() - 8);
+    assert_eq!(&wav[8..16], b"WAVEfmt ");
+    assert_eq!((word(16), half(20), half(22)), (16, 1, 1), "PCM, mono");
+    assert_eq!((word(24), word(28)), (44_100, 88_200));
+    assert_eq!((half(32), half(34)), (2, 16), "16-bit samples");
+    assert_eq!(&wav[36..40], b"data");
+    assert_eq!(word(40) as usize, samples * 2);
+    let sample = |i: usize| i16::from_le_bytes([wav[44 + 2 * i], wav[45 + 2 * i]]);
+    let peak =
+        |range: std::ops::Range<usize>| range.map(|i| sample(i).unsigned_abs()).max().unwrap();
+    // 880 Hz at 0.15 of full scale, fading to 0.001 (Web Audio's exponential ramp).
+    assert_eq!(sample(0), 0);
+    let start = peak(0..100);
+    assert!((4800..=4916).contains(&start), "{start}");
+    let middle = peak(4360..4460); // 0.1 s in: about 0.0122
+    assert!((380..=410).contains(&middle), "{middle}");
+    let end = peak(samples - 100..samples);
+    assert!((30..=40).contains(&end), "{end}");
+}
+
+#[test]
+fn the_tone_is_written_once_and_played_at_the_volume() {
+    let dir = scratch("tone").join("cache");
+    let (tx, played) = std::sync::mpsc::channel::<(PathBuf, f32)>();
+    let hive = hive().with_tone(dir.clone(), move |file: &Path, volume: f32| {
+        tx.send((file.to_owned(), volume)).unwrap();
+        Ok(())
+    });
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![play_tone])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let playing = invoke(&webview, "play_tone", json!({"volume": 50}));
+    assert_eq!(playing, Ok(Value::Null));
+    let file = dir.join("alert-tone.wav");
+    assert_eq!(played.try_recv().unwrap(), (file.clone(), 0.5));
+    assert_eq!(std::fs::read(&file).unwrap(), tone_wav());
+    assert!(!dir.join("alert-tone.wav.tmp").exists());
+    // Written once a run: the next tone plays the same file.
+    std::fs::remove_file(&file).unwrap();
+    let hive = app.state::<Hive>();
+    assert_eq!(hive.play_tone(255), Ok(()));
+    assert_eq!(
+        played.try_recv().unwrap(),
+        (file.clone(), 1.0),
+        "at most 100"
+    );
+    assert!(!file.exists());
+    // 0 plays nothing.
+    assert_eq!(hive.play_tone(0), Ok(()));
+    assert!(played.try_recv().is_err());
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+}
+
+#[test]
+fn a_tone_fails_without_a_player_or_a_folder() {
+    assert_eq!(hive().play_tone(50), Err("this app plays no tone".into()));
+    let root = scratch("tone-fails");
+    let file = root.join("file");
+    std::fs::write(&file, "").unwrap();
+    let blocked = hive().with_tone(file.join("cache"), |_: &Path, _: f32| Ok(()));
+    let failed = blocked.play_tone(50).unwrap_err();
+    assert!(failed.starts_with("cannot write the tone: "), "{failed}");
+    let refused = hive().with_tone(root.clone(), |_: &Path, _: f32| Err("no audio".into()));
+    assert_eq!(refused.play_tone(50), Err("no audio".into()));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// A shell script stands in for `afplay` (macOS; the Linux CI runs it too).
+#[cfg(unix)]
+#[test]
+fn afplay_gets_the_volume_and_the_file_as_separate_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch("afplay");
+    let program = root.join("afplay");
+    let args = root.join("args");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{0}.tmp'\nmv '{0}.tmp' '{0}'\n",
+        args.display()
+    );
+    std::fs::write(&program, script).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let play = afplay(program.clone());
+    let file = root.join("a tone; echo x.wav");
+    assert_eq!(play(&file, 0.25), Ok(()));
+    let deadline = std::time::Instant::now() + WAIT;
+    while !args.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let written = std::fs::read_to_string(&args).unwrap();
+    assert_eq!(written, format!("-v\n0.25\n{}\n", file.display()));
+    let missing = afplay(root.join("missing"))(&file, 1.0).unwrap_err();
+    assert!(missing.starts_with("cannot play the tone: "), "{missing}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_check_from_the_menu_answers_a_failed_download() {
+    let (hive, mut rx) = hive_with_ui();
+    let (endpoint, _downloads) = counted_release_server("99.0.0");
+    let app = updater_app(&endpoint, hive);
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let manual = json!({"manual": true});
+    assert_eq!(invoke(&webview, "check_update", manual), Ok(Value::Null));
+    // Its signature fails the check.
+    let failed = next(&mut rx).await;
+    assert_eq!(failed["type"], "update_checked");
+    assert!(failed["error"].as_str().is_some_and(|e| !e.is_empty()));
+}
+
+#[tokio::test]
+async fn a_check_from_the_menu_offers_a_downloaded_update_again() {
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_updater::UpdaterExt;
+    let (hive, mut rx, _installed) = hive_installing(Ok(()));
+    let (endpoint, downloads) = counted_release_server("99.0.0");
+    let app = updater_app(&endpoint, hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    let ready = json!({"type": "update_ready", "version": "99.0.0"});
+    assert_eq!(next(&mut rx).await, ready);
+    hive.check_update(app.updater(), true).await;
+    assert_eq!(next(&mut rx).await, ready);
+    assert_eq!(downloads.load(Ordering::SeqCst), 0);
+    // The check at start looks again (this release's signature fails: nothing said) and keeps it.
+    hive.check_update(app.updater(), false).await;
+    assert_eq!(downloads.load(Ordering::SeqCst), 1);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(hive.install_pending(), Some(Ok(())));
+}
+
+#[test]
+fn the_menu_bar_has_hives_menus_and_the_native_editing_items() {
+    use menu::{Item, Native::*, Role, MENUS};
+    let titles: Vec<_> = MENUS.iter().map(|menu| menu.title).collect();
+    assert_eq!(titles, ["Hive", "Edit", "View", "Window", "Help"]);
+    let roles: Vec<_> = MENUS.iter().map(|menu| menu.role).collect();
+    use Role::{Help, Plain, Window};
+    assert_eq!(roles, [Plain, Plain, Plain, Window, Help]);
+    let natives = |menu: usize| -> Vec<_> {
+        let items = MENUS[menu].items.iter();
+        items
+            .filter_map(|item| match item {
+                Item::Native(native) => Some(*native),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(natives(0), [About, Services, Hide, HideOthers, ShowAll]);
+    // WKWebView's ⌘C/⌘V in text fields, the editor and the terminal need these (17.8).
+    assert_eq!(natives(1), [Undo, Redo, Cut, Copy, Paste, SelectAll]);
+    assert_eq!(natives(2), [Fullscreen]);
+    assert_eq!(natives(3), [Minimize, Zoom]);
+    assert_eq!(natives(4), []);
+    let own = |menu: usize| -> Vec<_> {
+        let items = MENUS[menu].items.iter();
+        items
+            .filter_map(|item| match item {
+                Item::Own { id, text, keys } => Some((*id, *text, *keys)),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        own(0),
+        [
+            ("settings", "Settings…", Some("CmdOrCtrl+,")),
+            ("check-updates", "Check for Updates…", None),
+            ("quit", "Quit Hive", Some("CmdOrCtrl+Q")),
+        ]
+    );
+    assert_eq!(own(1), []);
+    assert_eq!(
+        own(2),
+        [
+            ("toggle-sidebar", "Toggle Sidebar", None),
+            (
+                "toggle-panel",
+                "Toggle Right Panel",
+                Some("CmdOrCtrl+Shift+B")
+            ),
+        ]
+    );
+    assert_eq!(own(3), [("close-tab", "Close Tab", Some("CmdOrCtrl+W"))]);
+    assert_eq!(
+        own(4),
+        [
+            ("help", "Hive Help", None),
+            ("report-issue", "Report an Issue…", None),
+        ]
+    );
+    // About first, Quit last, in the app's menu.
+    assert_eq!(MENUS[0].items.first(), Some(&Item::Native(About)));
+    assert!(matches!(
+        MENUS[0].items.last(),
+        Some(Item::Own { id: "quit", .. })
+    ));
+}
+
+#[test]
+fn only_hives_own_menu_items_have_an_action() {
+    use menu::{action, Action};
+    assert_eq!(action(menu::QUIT), Action::Quit);
+    let ui = [
+        "settings",
+        "check-updates",
+        "toggle-sidebar",
+        "toggle-panel",
+        "close-tab",
+        "help",
+        "report-issue",
+    ];
+    for id in ui {
+        assert_eq!(action(id), Action::Ui(id), "{id}");
+    }
+    for id in ["", "about", "Settings…", "settings ", "1"] {
+        assert_eq!(action(id), Action::None, "{id:?}");
+    }
+}
+
+#[test]
+fn a_menu_click_goes_to_the_ui_and_quit_quits() {
+    let (hive, mut rx) = hive_with_ui();
+    let (tx, exits) = std::sync::mpsc::channel();
+    let hive = hive.with_exit(move || tx.send(()).unwrap());
+    let app = mock_builder()
+        .manage(hive)
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    menu::on_menu(app.handle(), "settings");
+    let item = |item: &str| json!({"type": "menu", "item": item});
+    assert_eq!(rx.try_recv(), Ok(item("settings")));
+    menu::on_menu(app.handle(), "close-tab");
+    assert_eq!(rx.try_recv(), Ok(item("close-tab")));
+    // A native item's event: nothing.
+    menu::on_menu(app.handle(), "about");
+    assert!(rx.try_recv().is_err());
+    assert!(exits.try_recv().is_err());
+    // Nothing at risk: Quit quits at once (17.7 asks the UI otherwise).
+    menu::on_menu(app.handle(), "quit");
+    assert_eq!(exits.try_recv(), Ok(()));
+    assert!(rx.try_recv().is_err());
+    // An app without its `Hive` does nothing.
+    let bare = mock_builder().build(mock_context(noop_assets())).unwrap();
+    menu::on_menu(bare.handle(), "quit");
+    assert!(exits.try_recv().is_err());
+}
+
+#[test]
+fn files_dropped_on_the_window_go_to_the_ui_as_typed_paths() {
+    let (hive, mut rx) = hive_with_ui();
+    let app = mock_builder()
+        .manage(hive)
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let paths = ["/Users/me/My Shots/a.png".to_owned(), "/tmp/b".to_owned()];
+    assert!(files_dropped(app.handle(), &paths, 120.5, 64.0));
+    assert_eq!(
+        rx.try_recv(),
+        Ok(json!({
+            "type": "files_dropped",
+            "text": r"/Users/me/My\ Shots/a.png /tmp/b ",
+            "x": 120.5,
+            "y": 64.0,
+        }))
+    );
+    // Nothing dropped: nothing sent.
+    assert!(!files_dropped(app.handle(), &[], 1.0, 1.0));
+    assert!(rx.try_recv().is_err());
+    // Only paths that may not be typed (a control character, not absolute): nothing sent.
+    let hostile = [
+        "/tmp/a\x1b[201~\x15touch x\n".to_owned(),
+        "a.png".to_owned(),
+    ];
+    assert!(!files_dropped(app.handle(), &hostile, 1.0, 1.0));
+    assert!(rx.try_recv().is_err());
+    // No UI to send it to.
+    app.state::<Hive>().link().ui = None;
+    assert!(!files_dropped(app.handle(), &paths, 1.0, 1.0));
+    // An app without its `Hive` sends nothing.
+    let bare = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(!files_dropped(bare.handle(), &paths, 1.0, 1.0));
+}
+
+/// A clipboard holding `paths` (18.3).
+struct Copied(Vec<String>);
+
+impl Clipboard for Copied {
+    fn file_paths(&self) -> Vec<String> {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn pasting_copied_files_types_their_quoted_paths() {
+    let copied = |paths: &[&str]| {
+        let paths = paths.iter().map(|path| path.to_string()).collect();
+        hive().with_clipboard(Copied(paths))
+    };
+    let app = mock_builder()
+        .manage(copied(&["/Users/me/My Shots/a (1).png", "/tmp/b"]))
+        .invoke_handler(tauri::generate_handler![pasted_files])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    assert_eq!(
+        invoke(&webview, "pasted_files", json!({})),
+        Ok(json!(r"/Users/me/My\ Shots/a\ \(1\).png /tmp/b "))
+    );
+    // No files (text, an image): nothing, and the UI pastes the text.
+    assert_eq!(copied(&[]).pasted_files(), "");
+    // A path with a control character is left out: an escape could end a bracketed paste.
+    let tricky = copied(&["/tmp/a\x1b[201~b", "/tmp/c\nd", "/tmp/ok", "/tmp/\u{85}"]);
+    assert_eq!(tricky.pasted_files(), "/tmp/ok ");
+    // An app that cannot read the clipboard (not macOS) pastes no files.
+    assert_eq!(hive().pasted_files(), "");
 }

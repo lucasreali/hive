@@ -8,6 +8,7 @@ import type {
   FileStatus,
   FileText,
   GhLogin,
+  ProgressState,
   Project,
   SaveError,
   ServiceMessage,
@@ -18,12 +19,14 @@ import type {
   Worktree,
 } from "../protocol";
 import { DEFAULT_SETTINGS } from "../store";
+import type { Tray } from "../tray";
 import type { Transport } from ".";
 import { createMockPulls } from "./mockPulls";
 import { createMockRuns } from "./mockRuns";
 import { loadReplay, type ReplayEvent } from "./replay";
 
-const PROMPT = "mock$ ";
+/** The mock shell's prompt, marked as fish 4 marks it (OSC 133 `A`, 17.25). */
+const PROMPT = "\x1b]133;A\x07mock$ ";
 /** With `?mock=load`, sent after every echo so the load test can time it; xterm ignores it. */
 export const ECHO_MARK = "\x1b]7777;echo\x07";
 
@@ -111,14 +114,16 @@ export const agentStatus = (
 
 /**
  * A stand-in for the alert `states::Agent` decides when the state goes from `before` to
- * `after`: finished (working or with subagents → waiting for you), else waiting when the user
- * is needed; none for the first state or no change.
+ * `after`: finished (working or with subagents → waiting for you), else an action for a state
+ * more urgent than waiting for you, else waiting when the user is needed; none for the first
+ * state or no change.
  */
 export function mockAlert(before: AgentState | undefined, after: AgentState): Alert | null {
   if (before === undefined || before === after) return null;
   if (after === "waiting_you" && (before === "working" || before === "with_subagents")) {
     return "finished";
   }
+  if (URGENCY.indexOf(after) > URGENCY.indexOf("waiting_you")) return "action";
   return agentStatus(after).pending ? "waiting" : null;
 }
 
@@ -423,6 +428,12 @@ export const MOCK_SESSIONS: Session[] = [
   ),
 ];
 
+/** The fake GitHub issues, by number: the worktree (and branch) the service names for each. */
+export const MOCK_ISSUES: Record<number, string> = {
+  42: "42-fix-the-login-crash",
+  57: "57-coupon-codes-at-checkout",
+};
+
 /** The fake repositories' branches; shop has enough remote ones to need scrolling. */
 export const MOCK_BRANCHES: Record<string, { local: string[]; remote: string[] }> = {
   "/home/user/projects/shop": {
@@ -674,6 +685,24 @@ export function createMockTransport(
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
+  /**
+   * Stand-ins for what the service reads from a terminal's OSC sequences (17.25), typed in a
+   * terminal: `progress <state> <value>`, `long-command <exit> <secs>` (a long command ended)
+   * and `osc-notify <title>;<body>` (a program's notification, out of view).
+   */
+  const shellMarks = (channel: number, line: string) => {
+    const [word, ...rest] = line.split(" ");
+    const args = rest.join(" ");
+    const [first = "", second = ""] = args.split(word === "osc-notify" ? ";" : " ");
+    if (word === "progress") {
+      const state = first as ProgressState;
+      later({ type: "terminal_progress", channel, state, value: Number(second) || 0 });
+    } else if (word === "long-command") {
+      later({ type: "command_finished", channel, exit: Number(first), secs: Number(second) });
+    } else if (word === "osc-notify") {
+      later({ type: "terminal_notification", channel, title: first, body: second, notify: true });
+    }
+  };
   let recording: Promise<ReplayEvent[]> | undefined;
   const replay = async (id: number) => {
     recording ??= loadReplay(cast);
@@ -731,6 +760,10 @@ export function createMockTransport(
   let sessions = MOCK_SESSIONS;
   /** The agent of the last OS notification (13.5). */
   let notified: string | null = null;
+  /** The last menu bar icon sent (17.22). */
+  let tray: Tray | null = null;
+  /** The files copied in Finder, as the app side reads them (18.3): `copy-files <text>`. */
+  let copied = "";
   // Kept in memory; the real service checks the ranges and saves them.
   let settings: Settings = DEFAULT_SETTINGS;
   // The typed line stands in for the tool call it is doing.
@@ -945,8 +978,9 @@ export function createMockTransport(
     async getDiagnostics() {
       later({ type: "diagnostics", ...MOCK_DIAGNOSTICS });
     },
-    async checkUpdate() {
+    async checkUpdate(manual) {
       if (scenario === "update") later({ type: "update_ready", version: "9.9.9" });
+      else if (manual) later({ type: "update_checked", error: null });
     },
     async installUpdate() {
       later({ type: "update_failed", error: "mock: nothing to install" });
@@ -955,6 +989,24 @@ export function createMockTransport(
     // the last one.
     async showNotification(_title, _body, agent) {
       notified = agent;
+    },
+    // `?mock=denied`: notifications are turned off, as macOS's settings can say.
+    async checkNotifications() {
+      const permission = scenario === "denied" ? "denied" : "granted";
+      later({ type: "notification_permission", permission });
+    },
+    async openNotificationSettings() {},
+    // The browser plays the tone itself.
+    async playTone() {
+      throw new Error("mock: no app to play the tone");
+    },
+    // The browser has no menu bar; `tray-click` typed in a terminal stands in for choosing the
+    // first pending agent in the last tray's menu.
+    async setTray(shown) {
+      tray = shown;
+    },
+    async pastedFiles() {
+      return copied;
     },
     async addProject(path) {
       // The group (14.1): its repositories come in the list, before it.
@@ -1046,6 +1098,25 @@ export function createMockTransport(
       projects[projects.indexOf(project)] = updated;
       const path = worktree(id, name).path;
       later({ type: "worktree_created", project: updated, path, notes: [] });
+    },
+    async createIssueWorktree(id, number) {
+      const name = MOCK_ISSUES[number];
+      const project = find(id) as Project;
+      const message = name
+        ? nameError(project, name)
+        : `gh issue view failed: GraphQL: Could not resolve to an issue with the number of ${number}. (repository.issue)`;
+      if (message) {
+        return void later({
+          type: "create_worktree_failed",
+          project: id,
+          name: `#${number}`,
+          message,
+        });
+      }
+      const made = { ...worktree(id, name), branch: name };
+      const updated = { ...project, worktrees: [...project.worktrees, made] };
+      projects[projects.indexOf(project)] = updated;
+      later({ type: "worktree_created", project: updated, path: made.path, notes: [] });
     },
     async removeWorktree(path, force) {
       const failed = (message: string) =>
@@ -1217,9 +1288,25 @@ export function createMockTransport(
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));
+        // Stands in for ⌘Q, which the app side passes on only while agents would end (D17.3).
+        if (line === "quit-app") later({ type: "quit_requested" });
+        // Stands in for a click on the app menu's item (17.13), e.g. `menu settings`.
+        if (line.startsWith("menu ")) later({ type: "menu", item: line.slice(5) });
         if (line === "notification-click" && notified) {
           later({ type: "notification_clicked", agent: notified });
         }
+        // Stands in for files dropped from Finder (18.1): `drop-files <x> <y> <text>`, the text
+        // as the app side sends it (already quoted).
+        const drop = /^drop-files (\S+) (\S+) (.+)$/.exec(line);
+        if (drop) {
+          const [, x, y, text] = drop as unknown as [string, string, string, string];
+          later({ type: "files_dropped", text, x: Number(x), y: Number(y) });
+        }
+        // Stands in for files copied in Finder (18.3): `copy-files <text>`, the text as the app
+        // side reads it (already quoted); `copy-files` alone empties the clipboard of files.
+        if (line === "copy-files" || line.startsWith("copy-files ")) copied = line.slice(11);
+        const chosen = tray?.agents[0]?.[0];
+        if (line === "tray-click" && chosen) later({ type: "tray_clicked", agent: chosen });
         if (line.startsWith("hive badge ")) {
           const text = line.slice(11).trim();
           later({ type: "badge", channel: id, text: text === "--clear" ? "" : text });
@@ -1229,7 +1316,12 @@ export function createMockTransport(
           const dir = line.slice(3);
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;
         }
-        print(id, `\r\n${line ? `${line}\r\n` : ""}${PROMPT}`);
+        shellMarks(id, line);
+        // A command runs between OSC 133 `C` and `D;<exit>`; `false` fails.
+        const ran = line
+          ? `\x1b]133;C\x07${line}\r\n\x1b]133;D;${line === "false" ? 1 : 0}\x07`
+          : "";
+        print(id, `\r\n${ran}${PROMPT}`);
       }
       if (scenario === "load") print(id, ECHO_MARK);
     },

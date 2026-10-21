@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { HOME, mod } from "./host";
 
 /** Records what the page writes into terminals; returns a reader of those writes. */
 async function recordWrites(page: Page): Promise<() => Promise<string[]>> {
@@ -47,9 +48,9 @@ test("review comments on the diff are pasted into the terminal as one text", asy
   // Lines 39–41 (the added ones), then Ctrl+Shift+M, a comment and Enter.
   const added = view.locator(".cm-changedLine");
   await added.nth(1).click();
-  await page.keyboard.press("Home");
+  await page.keyboard.press(HOME);
   await added.nth(3).click({ modifiers: ["Shift"] });
-  await page.keyboard.press("Control+Shift+M");
+  await page.keyboard.press(`${mod}+Shift+M`);
   const input = view.getByLabel("Lines 39–41");
   await expect(input).toBeFocused();
   await page.keyboard.type("handle the expired token");
@@ -59,12 +60,12 @@ test("review comments on the diff are pasted into the terminal as one text", asy
 
   // One line, with the button; Escape drops a comment being written.
   await added.nth(1).click();
-  await page.keyboard.press("Shift+Home");
+  await page.keyboard.press(`Shift+${HOME}`);
   await comment.click();
   await page.keyboard.type("dropped");
   await page.keyboard.press("Escape");
   await added.nth(1).click();
-  await page.keyboard.press("Shift+Home");
+  await page.keyboard.press(`Shift+${HOME}`);
   await comment.click();
   await page.keyboard.type("rename this");
   await page.keyboard.press("Enter");

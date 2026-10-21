@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use super::State;
 use crate::terminal::{self, Child, Input};
-use crate::{procs, projects, watch};
+use crate::{osc, procs, projects, watch};
 
 impl State {
     /// Queues input or a resize; ignored once the terminal is gone.
@@ -72,6 +72,10 @@ impl State {
         let worktree = place.as_ref().map(|(_, worktree)| worktree.clone());
         env.extend(tokio::task::block_in_place(|| self.hive_env(place)));
         let shell = self.settings.get().0.terminal.shell;
+        // The locale's variables (D18.2), read at start; still being read, waited for here,
+        // never under the lock below.
+        #[cfg(unix)]
+        tokio::task::block_in_place(terminal::locale_env);
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {
@@ -184,7 +188,7 @@ async fn pump(
     output: terminal::Output,
     last_output: terminal::LastOutput,
 ) {
-    let copy = copy(&mut pty, &output, &last_output);
+    let copy = copy(&state, channel, &mut pty, &output, &last_output);
     tokio::pin!(copy);
     let status = tokio::select! {
         () = &mut copy => child.wait().await,
@@ -217,17 +221,49 @@ async fn pump(
 }
 
 /// Copies PTY output to the app until the PTY closes or the app is gone. While the app is
-/// behind, the PTY is not read, so the program in it waits (9.19).
+/// behind, the PTY is not read, so the program in it waits (9.19). The OSC sequences the
+/// service acts on (17.25, [`osc`]) are read on the way, each after the output holding it.
 async fn copy(
+    state: &Arc<State>,
+    channel: u32,
     pty: &mut terminal::Pty,
     output: &terminal::Output,
     last_output: &terminal::LastOutput,
 ) {
     let mut buf = vec![0; 64 * 1024];
+    let (mut scanner, mut shell) = (osc::Scanner::default(), osc::Shell::default());
     while let Ok(n @ 1..) = pty.read(&mut buf).await {
         last_output.touch();
+        let signals = scanner.feed(&buf[..n]);
         if !output.send(&buf[..n]).await {
             break;
         }
+        let (progress, alerts) = shell.read(signals, Instant::now());
+        if let Some(progress) = progress {
+            output.control(&progress);
+        }
+        for alert in alerts {
+            state.alert(channel, alert);
+        }
+    }
+}
+
+impl State {
+    /// Sends what `alert` of terminal `channel` amounts to ([`osc::message`]), off the
+    /// output's path: whether an agent runs there takes the agents lock (9.13).
+    fn alert(self: &Arc<Self>, channel: u32, alert: osc::Alert) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let agent = state
+                .agents
+                .lock()
+                .await
+                .values()
+                .any(|a| a.channel == channel);
+            let secs = state.settings.get().0.notifications.command_secs;
+            if let Some(message) = osc::message(alert, secs, agent, state.watches(channel)) {
+                state.to_app(channel, &message).await;
+            }
+        });
     }
 }

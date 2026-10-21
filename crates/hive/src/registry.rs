@@ -180,9 +180,11 @@ fn subfolders(group: &Path) -> Vec<PathBuf> {
 }
 
 /// The common git dir of the repository at `root` (the main worktree's `.git`, even from a
-/// linked worktree), canonical; `None` when git cannot tell.
+/// linked worktree), canonical; `None` when git cannot tell, or hangs past
+/// [`git::TIME_LIMIT`] (a hung git would stop the watch, and the service from exiting).
 fn common_dir(root: &Path) -> Option<PathBuf> {
-    let out = git::output(root, &["rev-parse", "--git-common-dir"], &[0]).ok()?;
+    let args = ["rev-parse", "--git-common-dir"];
+    let out = git::output_within(root, &args, &[0], git::TIME_LIMIT).ok()?;
     let dir = String::from_utf8_lossy(&out);
     // Relative to `root` unless git gives an absolute path.
     canonical(&root.join(dir.trim_end_matches('\n'))).ok()
@@ -253,6 +255,26 @@ mod tests {
         // A project no longer followed is no longer watched.
         registry.follow(&roots(&[&b]), &[]);
         assert_eq!(registry.watched, BTreeSet::from([git(&b)]));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_repository_whose_git_hangs_is_skipped_once_git_is_killed() {
+        let (_a, a) = repo();
+        let (_b, b) = repo();
+        // Git reads `b`'s config, which includes a pipe nobody writes to (a hung drive).
+        let git_dir = b.join(".git");
+        nix::unistd::mkfifo(&git_dir.join("hang"), nix::sys::stat::Mode::S_IRWXU).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(git_dir.join("config"))
+            .unwrap();
+        std::io::Write::write_all(&mut config, b"[include]\n\tpath = hang\n").unwrap();
+        let mut registry = Registry::new().unwrap();
+        let started = std::time::Instant::now();
+        registry.follow(&roots(&[&b, &a]), &[]);
+        assert!(started.elapsed() < git::TIME_LIMIT * 2, "not killed");
+        assert_eq!(registry.watched, BTreeSet::from([a.join(".git")]));
     }
 
     #[tokio::test]

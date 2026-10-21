@@ -84,6 +84,33 @@ test("the ring's tooltip adds the weekly window when the service sends one (15.3
   expect(useHive.getState().weekUsage).toBeNull();
 });
 
+test("the ring's tooltip adds the pace the service forecasts (17.23)", () => {
+  render(<StatusBar />);
+  const time = (day: number, hour: number, minute = 0) =>
+    new Date(2026, 8, day, hour, minute).getTime() / 1000;
+  const usage = { used_percentage: 60, resets_at: time(28, 14, 30) };
+  const week = { used_percentage: 70, resets_at: time(28, 9) };
+  const paced = { limit_at: time(28, 13, 50), week_limit_at: time(27, 18) };
+  act(() => apply({ type: "session_usage", usage, week, ...paced }));
+  const lines = [
+    "Session 60% · resets 14:30",
+    "At this pace: limit at 13:50",
+    "Week 70% · resets Mon 09:00",
+    "At this pace: limit Sun 18:00",
+  ];
+  const ring = screen.getByRole("button", { name: lines.join(", ") });
+  const tip = () => [...(ring.querySelector(".usage-tip")?.children ?? [])];
+  expect(tip().map((line) => line.textContent)).toEqual(lines);
+  // Lasting until the reset (or an older service): no pace; a service that is gone, none.
+  act(() => apply({ type: "session_usage", usage, week, limit_at: null }));
+  expect(tip().map((line) => line.textContent)).toEqual([lines[0], lines[2]]);
+  act(() => {
+    apply({ type: "session_usage", usage, week, ...paced });
+    apply({ type: "disconnected", reason: "gone", bundled: false });
+  });
+  expect(useHive.getState().usageLimits).toEqual({ session: null, week: null });
+});
+
 test("holds no message:a failure or a confirmation shows elsewhere, as a toast (10.3)", () => {
   render(<StatusBar />);
   act(() => {

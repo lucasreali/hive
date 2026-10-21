@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use hive_protocol::{Control, PullAction, Role, RunAction};
+use hive_protocol::{Control, PullAction, PullState, Role, RunAction};
 
 use crate::worktree::Repo;
 
@@ -38,13 +38,22 @@ fn fake_gh(repo: &Repo, answer: &str) -> PathBuf {
 #[tokio::test]
 async fn the_pull_requests_view_runs_gh_off_the_frame_loop() {
     let repo = Repo::new();
-    // The recorded list, and a checkout onto the branch `feature`.
+    // The recorded list, pull request 5 on the branch `feature` and issue 9.
+    let pull = r#"{"number":5,"headRefName":"feature","headRefOid":"","isCrossRepository":false}"#;
+    let issue = r#"{"number":9,"title":"Fix it"}"#;
     let log = fake_gh(
         &repo,
         &format!(
-            "  \"api graphql\") cat '{SEARCH}' ;;\n  \"pr checkout\") git checkout -q -b feature ;;"
+            "  \"api graphql\") cat '{SEARCH}' ;;\n  \"pr view\") echo '{pull}' ;;\n  \"issue view\") echo '{issue}' ;;"
         ),
     );
+    // GitHub is a bare repository beside it, holding `feature`.
+    let bare = repo.env.path("bare.git");
+    let bare = bare.to_str().unwrap();
+    repo.git(&["init", "-q", "--bare", bare]);
+    repo.git(&["push", "-q", bare, "main:refs/heads/feature"]);
+    let instead = format!("url.{bare}.insteadOf");
+    repo.git(&["config", &instead, "https://github.com/o/r.git"]);
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     let root = repo.root.display().to_string();
@@ -103,8 +112,32 @@ async fn the_pull_requests_view_runs_gh_off_the_frame_loop() {
     let calls = std::fs::read_to_string(&log).unwrap();
     assert_eq!(
         calls,
-        "api graphql --hostname\npr checkout 5\napi graphql --hostname\n"
+        "api graphql --hostname\npr view 5\napi graphql --hostname\n"
     );
+
+    // An issue's worktree, on the branch named from it, kept from earlier: as it is.
+    repo.git(&["branch", "9-fix-it"]);
+    let issue = Control::CreateIssueWorktree {
+        project: root.clone(),
+        number: 9,
+        base: None,
+    };
+    app.send(0, issue).await;
+    let Control::WorktreeCreated {
+        project,
+        path,
+        notes,
+    } = app.control().await.1
+    else {
+        panic!("expected the issue's worktree")
+    };
+    assert_eq!(
+        notes,
+        ["branch 9-fix-it already existed: checked out as it is"]
+    );
+    let created = project.worktrees.iter().find(|w| w.path == path).unwrap();
+    assert_eq!(created.branch.as_deref(), Some("9-fix-it"));
+    assert!(created.status.is_some());
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -168,6 +201,83 @@ async fn the_actions_view_runs_gh_off_the_frame_loop() {
         calls,
         "run list --repo\nrun cancel 7\nrun view 7\nrun list --repo\n"
     );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+/// What a list of `project` from GitHub raised: the messages before it.
+async fn listed(app: &mut crate::common::Conn, project: &str) -> Vec<Control> {
+    let list = Control::ListPulls {
+        project: project.into(),
+        force: true,
+    };
+    app.send(0, list).await;
+    let mut got = Vec::new();
+    loop {
+        match app.control().await.1 {
+            Control::Pulls { error: None, .. } => return got,
+            other => got.push(other),
+        }
+    }
+}
+
+/// A repository whose worktree `seo` is on the branch of the recorded #14517, merged.
+fn merged_worktree() -> Repo {
+    let repo = Repo::new();
+    fake_gh(&repo, &format!("  \"api graphql\") cat '{SEARCH}' ;;"));
+    let seo = repo.root.join(".claude/worktrees/seo");
+    let seo = seo.display().to_string();
+    repo.git(&["worktree", "add", "-q", "-b", "bagtoad/readme-seo", &seo]);
+    repo
+}
+
+#[tokio::test]
+async fn a_worktrees_merged_pull_request_is_offered_once_across_restarts() {
+    let repo = merged_worktree();
+    let daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let root = repo.root.display().to_string();
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    let Control::ProjectAdded { project } = app.control().await.1 else {
+        panic!("expected the project")
+    };
+    let worktree = project.worktrees.iter().find(|w| !w.main).unwrap();
+    let offer = Control::PullEnded {
+        project: root.clone(),
+        worktree: worktree.id.clone(),
+        number: 14517,
+        title: "Mention gh CLI in the README intro".into(),
+        state: PullState::Merged,
+    };
+    assert_eq!(listed(&mut app, &root).await, [offer]);
+    assert_eq!(listed(&mut app, &root).await, []);
+    drop(app);
+    crate::common::stop(daemon);
+
+    // A new service remembers it.
+    let daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    assert_eq!(listed(&mut app, &root).await, []);
+    drop(app);
+    crate::common::stop(daemon);
+}
+
+#[tokio::test]
+async fn offers_that_cannot_be_kept_are_not_made() {
+    let repo = merged_worktree();
+    // Where the offers are kept is a folder.
+    std::fs::create_dir_all(repo.env.path("data/hive/offered-pulls.json")).unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let root = repo.root.display().to_string();
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await.1,
+        Control::ProjectAdded { .. }
+    ));
+    assert_eq!(listed(&mut app, &root).await, []);
     drop(app);
     assert!(daemon.wait_exit().success());
 }

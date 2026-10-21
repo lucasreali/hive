@@ -128,7 +128,12 @@ test("the input saves on Enter and cancels on Escape, only for its own file", ()
   expect(document.activeElement).toBe(input);
   fireEvent.change(input, { target: { value: "why?" } });
   fireEvent.keyDown(input, { key: "a" });
+  // Enter and Esc ending a composition (a dead key, an IME; 17.14) are the composition's.
+  fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+  fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
   expect(useHive.getState().comments).toEqual({});
+  expect(useHive.getState().commenting).not.toBeNull();
   fireEvent.keyDown(input, { key: "Enter" });
   expect(useHive.getState()).toMatchObject({ commenting: null, comments: { [wt]: [a] } });
 

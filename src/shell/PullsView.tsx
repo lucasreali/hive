@@ -300,10 +300,10 @@ function PullDetails({ open, repo }: { open: OpenPull; repo: PullRepo | null }) 
                 type="button"
                 className="secondary"
                 disabled={busy}
-                title="In a new worktree on its branch"
+                title="On its branch, fetched from GitHub (a fork's onto pr-<number>-<branch>)"
                 onClick={() => act({ kind: "checkout" })}
               >
-                Check out
+                Check out in a new worktree
               </button>
             )
           )}

@@ -44,6 +44,8 @@ pub fn command(dir: &Path) -> Command {
         .env_remove("GIT_INDEX_FILE")
         // Reads must not rewrite the index: the files watcher would see it as a change.
         .env("GIT_OPTIONAL_LOCKS", "0");
+    // The user's git, and what its hooks and filters run (17.5).
+    crate::login_path::apply(&mut command);
     command
 }
 

@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mod } from "./host";
 
 const cssVar = (page: Page, name: string) =>
   page.evaluate((name) => getComputedStyle(document.documentElement).getPropertyValue(name), name);
@@ -37,7 +38,7 @@ test("the editor marks added, modified and deleted lines in its gutter, in dark 
 
   // A new first line, then line 10 removed: typed, not saved.
   await view.locator(".cm-line").first().click();
-  await page.keyboard.press("Control+Home");
+  await page.keyboard.press(`${mod}+Home`);
   await page.keyboard.type("// new\n");
   for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Shift+ArrowDown");

@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mod } from "./host";
 
 /** Opens the right panel's Files on fix-login with README.md (no changes): editable text. */
 async function openReadme(page: Page) {
@@ -45,7 +46,7 @@ test("editing: a file without changes is edited and saved with Ctrl+S", async ({
   await expect(unsaved).toBeHidden();
 
   await view.locator(".cm-line").first().click();
-  await page.keyboard.press("Control+Home");
+  await page.keyboard.press(`${mod}+Home`);
   await page.keyboard.type("// edited\n");
   await expect(unsaved).toBeVisible();
   await expect(unsaved.locator(".dirty")).toBeVisible();
@@ -55,7 +56,7 @@ test("editing: a file without changes is edited and saved with Ctrl+S", async ({
   await expect(unsaved.locator("svg")).toBeVisible();
   await view.locator(".cm-line").first().hover();
   await page.screenshot({ path: "target/e2e/editing.png" });
-  await page.keyboard.press("Control+s");
+  await page.keyboard.press(`${mod}+s`);
   await expect(unsaved).toBeHidden();
   await expect(view.getByRole("button", { name: "Save" })).toBeDisabled();
 

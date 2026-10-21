@@ -248,6 +248,24 @@ impl Listener {
     }
 }
 
+/// The service's hold on its runtime folder (`daemon::claim` on Unix): the lock, held until
+/// this is dropped, and the file naming its pipe, removed once the service ends.
+pub struct Claim {
+    pub lock: File,
+    pub socket: PathBuf,
+}
+
+impl Claim {
+    /// A pipe has no file to lose: nothing is put back.
+    pub fn keep(&mut self) -> io::Result<Option<Listener>> {
+        Ok(None)
+    }
+
+    pub fn release(&self) {
+        let _ = std::fs::remove_file(&self.socket);
+    }
+}
+
 /// The next client of `listener`; a new instance then waits for the one after.
 pub async fn accept(listener: &mut Listener) -> io::Result<NamedPipeServer> {
     listener.next.connect().await?;

@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Worktree } from "../protocol";
 import { openModal, useHive } from "../store";
 import { openTerminal, showOpenFailure } from "../terminals";
+import { composing } from "../window";
 import { BranchIcon, SearchIcon } from "./icons";
 
 const close = () => openModal(null);
@@ -39,7 +40,7 @@ export function WorktreePicker() {
       onKeyDown={(e) => {
         if (e.key === "ArrowDown") setIndex(Math.min(items.length - 1, index + 1));
         else if (e.key === "ArrowUp") setIndex(Math.max(0, index - 1));
-        else if (e.key === "Enter") pick(items[index]?.worktree);
+        else if (e.key === "Enter" && !composing(e.nativeEvent)) pick(items[index]?.worktree);
         else return;
         e.preventDefault();
       }}

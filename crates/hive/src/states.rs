@@ -345,6 +345,15 @@ impl Agent {
         matches!(shown, AgentState::Working | AgentState::WithSubagents) || dialog(shown)
     }
 
+    /// Working or with subagents at work (🔵, 🟣), as shown: the computer is kept awake
+    /// meanwhile (17.17).
+    pub fn works(&self) -> bool {
+        matches!(
+            self.displayed(),
+            AgentState::Working | AgentState::WithSubagents
+        )
+    }
+
     /// The agent and its subagents (not those waiting on a background task) in a state `hit`
     /// accepts wait for you; the tool call they were on is over.
     fn settle(&mut self, hit: impl Fn(AgentState) -> bool) {
@@ -449,7 +458,7 @@ impl Agent {
             alert = if finished {
                 Some(Alert::Finished)
             } else {
-                shown.pending().then_some(Alert::Waiting)
+                Alert::entering(shown)
             }
             .filter(|_| !self.interrupted && !early);
         }
@@ -583,6 +592,16 @@ fn state_of(kind: &EventKind, current: AgentState) -> Option<AgentState> {
 }
 
 #[cfg(test)]
+impl Agent {
+    /// A working agent on `channel`, for other modules' tests.
+    pub fn working(channel: u32, now: Instant) -> Self {
+        let mut agent = Self::new(channel, now, 0);
+        agent.state = AgentState::Working;
+        agent
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapter::{Adapter, ClaudeCode};
@@ -667,6 +686,29 @@ mod tests {
         for (kind, state) in notifications {
             assert_eq!(after(&notification(kind)), state, "{kind}");
         }
+    }
+
+    #[test]
+    fn it_works_while_shown_working_or_with_subagents() {
+        let now = Instant::now();
+        let works = |events: &[AgentEvent]| {
+            let mut agent = Agent::new(1, now, 0);
+            for event in events {
+                agent.feed("s", event, now);
+            }
+            agent.works()
+        };
+        let prompt = hook("UserPromptSubmit", None, json!({}));
+        let start = hook("SubagentStart", Some("a"), json!({}));
+        let ask = hook("PermissionRequest", None, json!({"tool_name": "Bash"}));
+        let stop = hook("Stop", None, json!({}));
+        assert!(!works(&[]));
+        assert!(works(std::slice::from_ref(&prompt)));
+        assert!(works(&[prompt.clone(), start.clone()]));
+        assert!(!works(&[start.clone(), stop.clone()]));
+        assert!(!works(&[prompt.clone(), start, ask]));
+        assert!(!works(&[prompt, stop]));
+        assert!(Agent::working(1, now).works());
     }
 
     /// A tool call as Claude Code sends it (hooks reference), from the agent itself.
@@ -964,13 +1006,13 @@ mod tests {
         assert_eq!(feed("Stop", none.clone()), Some((Some(Finished), false)));
         // Staying there sends nothing, so nothing alerts again.
         assert_eq!(feed("Stop", none.clone()), None);
-        // Entering any other state that waits for the user alerts too.
-        let entered = Some((Some(Waiting), true));
+        // Entering a state that asks for an action alerts as one (17.16).
+        let entered = Some((Some(Action), true));
         assert_eq!(feed("PermissionRequest", none.clone()), entered);
         assert_eq!(feed("PreToolUse", ask), entered);
         assert_eq!(
             feed("StopFailure", none.clone()),
-            Some((Some(Waiting), false))
+            Some((Some(Action), false))
         );
         assert_eq!(feed("SessionStart", none.clone()), Some((None, false)));
         // From idle it did not finish anything.
@@ -1019,7 +1061,7 @@ mod tests {
         assert_eq!(feed(stop_with("Stop", None, &["b"])), quiet);
         // A question of the one at work still alerts; its answer does not.
         let asks = hook("PermissionRequest", Some("b"), json!({"tool_name": "Bash"}));
-        assert_eq!(feed(asks), (Some(Some(Waiting)), true));
+        assert_eq!(feed(asks), (Some(Some(Action)), true));
         assert_eq!(feed(hook("PostToolUse", Some("b"), json!({}))), quiet);
         // The last one ends: the turn it wakes finishes.
         assert_eq!(feed(stop_with("SubagentStop", Some("b"), &[])), quiet);
@@ -1453,21 +1495,21 @@ mod tests {
                 "PermissionRequest",
                 none.clone(),
                 WaitingPermission,
-                Some(Waiting),
+                Some(Action),
             ),
             (
                 "PreToolUse",
                 tool("ExitPlanMode"),
                 WaitingPlan,
-                Some(Waiting),
+                Some(Action),
             ),
             (
                 "PreToolUse",
                 tool("AskUserQuestion"),
                 WaitingAnswer,
-                Some(Waiting),
+                Some(Action),
             ),
-            ("StopFailure", none.clone(), Error, Some(Waiting)),
+            ("StopFailure", none.clone(), Error, Some(Action)),
             ("SessionStart", none, Idle, None),
             ("Notification", idle, WaitingYou, Some(Waiting)),
         ];

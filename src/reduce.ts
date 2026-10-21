@@ -100,13 +100,21 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...diagnostics } = m;
       return { diagnostics };
     }
+    case "notification_permission":
+      return { notificationPermission: m.permission };
     case "update_ready":
       return { update: { version: m.version, installing: false } };
+    case "translocated":
+      return { translocated: true, ...(m.notice ? { modal: "translocated" as const } : {}) };
     case "update_failed":
       return {
         update: s.update && { ...s.update, installing: false },
         ...withNotice(s, "error", `Update failed: ${m.error}`),
       };
+    case "update_checked":
+      return m.error === null
+        ? withNotice(s, "info", "Hive is up to date.")
+        : withNotice(s, "error", `Cannot check for updates: ${m.error}`);
     case "version_mismatch": {
       const { type: _, ...versions } = m;
       return { connection: { status: "version_mismatch", ...versions } };
@@ -119,7 +127,16 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { ...patchTerminal(s, m.channel, opened), ...moved };
     }
     case "terminal_exited":
-      return patchTerminal(s, m.channel, { exited: true, code: m.code, badge: "" });
+      return patchTerminal(s, m.channel, {
+        exited: true,
+        code: m.code,
+        badge: "",
+        progress: undefined,
+      });
+    case "terminal_progress": {
+      const progress = m.state === "none" ? undefined : { state: m.state, value: m.value };
+      return patchTerminal(s, m.channel, { progress });
+    }
     case "unhooked_agent":
       return patchTerminal(s, m.channel, { unhooked: true });
     case "badge":
@@ -139,7 +156,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
     case "session_usage":
-      return { sessionUsage: m.usage, weekUsage: m.week ?? null };
+      return {
+        sessionUsage: m.usage,
+        weekUsage: m.week ?? null,
+        usageLimits: { session: m.limit_at ?? null, week: m.week_limit_at ?? null },
+      };
     case "agent_usage": {
       const { type: _, id, ...usage } = m;
       return { agentUsage: { ...s.agentUsage, [id]: usage } };
@@ -426,6 +447,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         connection: { status: "disconnected", reason: m.reason, bundled: m.bundled },
         sessionUsage: null,
         weekUsage: null,
+        usageLimits: { session: null, week: null },
         agents: {},
         agentStates: {},
         subagentWorktrees: [],
@@ -436,7 +458,18 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "restore_sessions":
     case "editor_target":
     case "notification_clicked":
-      // Answered where they were asked (see `ServiceMessage`), not stored.
+    case "quit_requested":
+    case "menu":
+    case "tray_clicked":
+    case "files_dropped":
+    // Kept in the inbox by `notify`.
+    case "pull_ended":
+    case "command_finished":
+    case "terminal_notification":
+      // Answered where they were asked (see `ServiceMessage`), or presented by `notify`.
+      return {};
+    case "usage_alert":
+      // An inbox item and a notification (`notify`), nothing else.
       return {};
     default:
       // Every known type has its case: a new one fails the typecheck here, and a type the app

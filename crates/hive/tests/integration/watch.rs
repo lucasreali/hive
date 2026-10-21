@@ -6,13 +6,10 @@ use hive_protocol::{Control, Role};
 
 use crate::common::{Env, TIMEOUT};
 
-/// Command line running a stand-in named `claude` (a copy of `dash` that sleeps; the
-/// trailing `:` keeps dash from replacing itself with `sleep`, as macOS's does),
-/// so no real Claude Code runs.
+/// Command line running a stand-in named `claude` ([`Env::fake_claude`]), so no real Claude
+/// Code runs.
 fn fake_claude(env: &Env) -> String {
-    let path = env.path("home/claude");
-    std::fs::copy("/bin/dash", &path).unwrap();
-    format!("{} -c 'sleep 30; :'\r", path.display())
+    format!("{}\r", env.fake_claude("home/claude").display())
 }
 
 #[tokio::test]

@@ -1,10 +1,20 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { type ISearchOptions, SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
+import { Marks } from "./marks";
 import type { AccountDir, Settings } from "./protocol";
 import { openLink, safeUrl } from "./shell/Markdown";
-import { addTab, focusPane, removeTab, setSplit, showFailure, useHive } from "./store";
+import {
+  addTab,
+  focusPane,
+  paneAttention,
+  removeTab,
+  setSplit,
+  showFailure,
+  useHive,
+} from "./store";
 import { inBarOrder, shownSplit, tabWorktree } from "./tabs";
 import { transport } from "./transport";
 import { commandKey, isMac } from "./window";
@@ -70,16 +80,39 @@ const ONE_LIGHT: ITheme = {
   brightWhite: "#ffffff",
 };
 
+/** The font sizes the settings allow (`terminal.font_size`), which ⌘= / ⌘- stay within. */
+const FONT_MIN = 8;
+const FONT_MAX = 32;
+
+/**
+ * Pixels ⌘= / ⌘- (macOS, 17.14) add to the settings' font size, for every terminal until ⌘0 or
+ * a restart: a view's zoom, not a setting.
+ */
+let zoom = 0;
+const zoomed = (size: number) => Math.min(FONT_MAX, Math.max(FONT_MIN, size + zoom));
+
 /** The xterm options the settings give (6.2): used by new terminals and live by open ones. */
 export function termOptions({ terminal: t, appearance }: Settings): ITerminalOptions {
   return {
     fontFamily: t.font_family,
-    fontSize: t.font_size,
+    fontSize: zoomed(t.font_size),
     scrollback: t.scrollback,
     cursorStyle: t.cursor_style,
     cursorBlink: t.cursor_blink,
+    macOptionIsMeta: t.option_as_meta,
     theme: appearance.theme === "one-light" ? ONE_LIGHT : ONE_DARK,
   };
+}
+
+/**
+ * ⌘= (1) and ⌘- (-1) make every terminal's font a pixel bigger or smaller, within the
+ * settings' limits; ⌘0 (0) gives back the settings' size.
+ */
+export function zoomTerminals(step: -1 | 0 | 1): void {
+  const settings = useHive.getState().settings;
+  const size = settings.terminal.font_size;
+  zoom = step === 0 ? 0 : zoomed(size + step) - size;
+  applySettings(settings);
 }
 
 /**
@@ -134,7 +167,15 @@ export const ACK_BYTES = 64 * 1024;
 /** How long the host must keep its size before terminals are refitted and the PTY resized. */
 export const RESIZE_DEBOUNCE_MS = 50;
 
-type Entry = { term: Terminal; fit: FitAddon; el: HTMLDivElement; webgl: WebglAddon | null };
+type Entry = {
+  term: Terminal;
+  fit: FitAddon;
+  search: SearchAddon;
+  el: HTMLDivElement;
+  webgl: WebglAddon | null;
+  /** Its prompts (17.25), for ⌘↑ / ⌘↓. */
+  marks: Marks;
+};
 
 const entries = new Map<number, Entry>();
 let host: HTMLElement | null = null;
@@ -178,9 +219,13 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   const term = new Terminal({
     lineHeight: 1.2,
     allowProposedApi: true, // registerCharacterJoiner
+    // macOS: Option-drag selects even inside a program that takes the mouse (a TUI).
+    macOptionClickForcesSelection: true,
     linkHandler: LINKS,
     ...termOptions(useHive.getState().settings),
   });
+  // Before any output: the first prompt is marked too.
+  const marks = new Marks(term);
   // 0 until the service answers (terminal channels start at 1): output can come first.
   let id = 0;
   let unacked = 0;
@@ -205,20 +250,22 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
   }
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const search = new SearchAddon();
+  term.loadAddon(search);
   term.onData((data) => {
     if (!useHive.getState().terminals[id]?.exited) void transport.writeTerminal(id, data);
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
-  term.attachCustomKeyEventHandler((event) => keys(term, event));
-  term.onSelectionChange(() => {
-    const copy = useHive.getState().settings.terminal.copy_on_select;
-    if (copy && term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
-  });
+  term.attachCustomKeyEventHandler((event) => keys(term, marks, event));
   const el = document.createElement("div");
   el.className = "terminal-pane";
+  el.dataset.terminal = String(id);
   el.hidden = true;
   el.addEventListener("focusin", () => focusPane(id));
-  entries.set(id, { term, fit, el, webgl: null });
+  // Before xterm's own listener, on its textarea inside the pane.
+  el.addEventListener("paste", (event) => onPaste(term, event), { capture: true });
+  copyOnSelect(term, el);
+  entries.set(id, { term, fit, search, el, webgl: null, marks });
   addTab(id, cwd);
   return id;
 }
@@ -249,24 +296,279 @@ export async function openWith(
   return id;
 }
 
+/** macOS' line keys (17.14, D17.2): Cmd + the key sends the shell this. */
+const MAC_LINE_KEYS: Record<string, string> = {
+  ArrowLeft: "\x01", // line start (Ctrl+A)
+  ArrowRight: "\x05", // line end (Ctrl+E)
+  Backspace: "\x15", // delete to the line start (Ctrl+U)
+};
+
+/** macOS' prompt keys (17.25): Cmd + the key jumps to the previous or next prompt. */
+const MAC_JUMP_KEYS: Record<string, -1 | 1> = { ArrowUp: -1, ArrowDown: 1 };
+
+/** The terminal's own macOS keys, for the settings' Shortcuts section. */
+export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
+  { label: "Clear the terminal", keys: "⌘K" },
+  { label: "Jump to the previous prompt", keys: "⌘↑" },
+  { label: "Jump to the next prompt", keys: "⌘↓" },
+  { label: "Go to the start of the line", keys: "⌘←" },
+  { label: "Go to the end of the line", keys: "⌘→" },
+  { label: "Delete to the start of the line", keys: "⌘⌫" },
+];
+
 /**
- * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C and Cmd+V, and
- * Ctrl+C stays the shell's. Every other key is the shell's.
+ * On macOS, Cmd + an arrow or Backspace (`MAC_LINE_KEYS`), ⌘K (clear) or ⌘↑ / ⌘↓ (the previous
+ * or next prompt, 17.25): done, never typed.
  */
-function keys(term: Terminal, event: KeyboardEvent): boolean {
-  if (intercept(event)) return false;
-  const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
-  const key = event.key.toUpperCase();
-  if (event.type !== "keydown" || !chord || (key !== "C" && key !== "V")) return true;
-  // The browser's own paste (Ctrl+Shift+V, Cmd+V) would paste a second time.
+function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
+  const plain = commandKey(event) && !event.shiftKey && !event.altKey;
+  if (!isMac() || event.type !== "keydown" || !plain) return false;
+  const send = MAC_LINE_KEYS[event.key];
+  const jump = MAC_JUMP_KEYS[event.key];
+  const clear = event.key.toUpperCase() === "K";
+  if (send === undefined && jump === undefined && !clear) return false;
   event.preventDefault();
-  if (key === "C") {
-    if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
-  } else {
-    void navigator.clipboard.readText().then((text) => term.paste(text));
-  }
+  if (jump !== undefined) marks.jump(jump);
+  else if (send === undefined) term.clear();
+  else term.input(send);
+  return true;
+}
+
+/**
+ * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C (Ctrl+C's
+ * interrupt with nothing selected, 18.2) and Cmd+V, and Ctrl+C stays the shell's, plus macOS'
+ * own keys (`macKey`). Every other key is the shell's.
+ */
+function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
+  if (intercept(event) || macKey(term, marks, event)) return false;
+  const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
+  const clipboard = CLIPBOARD_KEYS.get(event.key.toUpperCase());
+  if (event.type !== "keydown" || !chord || !clipboard) return true;
+  clipboard(term, event);
   return false;
 }
+
+/**
+ * The clipboard chords of `keys`, by key: Ctrl+Shift+C / Ctrl+Shift+V, ⌘C / ⌘V on macOS. The
+ * terminal never types them.
+ */
+const CLIPBOARD_KEYS = new Map<string, (term: Terminal, event: KeyboardEvent) => void>([
+  [
+    "C",
+    (term, event) => {
+      // Nothing else copies: neither the Edit menu's Copy nor the browser's.
+      event.preventDefault();
+      // 18.2: on macOS ⌘C with nothing selected interrupts, as Ctrl+C does (iTerm2, Ghostty);
+      // it never both copies and interrupts.
+      if (isMac() && !term.hasSelection()) term.input("\x03");
+      else copy(term);
+    },
+  ],
+  [
+    "V",
+    (term, event) => {
+      // 17.8: on macOS Cmd+V is left to WebKit, whose paste (the Edit menu's) reaches xterm's
+      // textarea as a paste event, bracketed paste kept; reading the clipboard from script
+      // would show WebKit's "Paste" bubble whenever another app filled it. `onPaste` takes
+      // that event first, for files copied in Finder (18.3).
+      if (isMac()) return;
+      // The browser's own paste (Ctrl+Shift+V) would paste a second time.
+      event.preventDefault();
+      paste(term);
+    },
+  ],
+]);
+
+/** Copies the terminal's selection, if any (Ctrl+Shift+C, ⌘C, the terminal menu's Copy). */
+function copy(term: Terminal): void {
+  if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
+}
+
+/**
+ * Pastes the clipboard as Ctrl+Shift+V does, bracketed when the shell asked. It is read from
+ * script: WebKit asks first, with its "Paste" bubble, when another app filled the clipboard,
+ * and a refused read pastes nothing. On macOS files copied in Finder paste their paths, as
+ * ⌘V's do (`onPaste`, 18.3).
+ */
+function paste(term: Terminal): void {
+  // Both asked at once: the read must start inside the click or key that asked for it.
+  const files = isMac() ? copiedFiles() : Promise.resolve("");
+  void navigator.clipboard.readText().then(
+    async (text) => term.paste((await files) || text),
+    () => {},
+  );
+}
+
+/**
+ * The files copied in Finder as pasting them types them (18.3): their quoted paths, each
+ * followed by a space, read by the app side; empty when there are none or where the app cannot
+ * read the clipboard (the browser).
+ */
+const copiedFiles = () => transport.pastedFiles().catch(() => "");
+
+/**
+ * The paste event of WebKit's own paste (⌘V on macOS, 17.8), seen before xterm's listener.
+ *
+ * - WebKit would also insert the text into xterm's hidden textarea after xterm pasted it, where
+ *   it stayed until the next paste: cancelled, xterm pastes it alone.
+ * - Files copied in Finder (18.3): WebKit gives a page only their names (`files` without a
+ *   path, no text), so xterm pasted an empty paste, which Claude Code takes as "read the clipboard's
+ *   image" (Finder puts the file's icon there) and a shell shows as nothing. On macOS their
+ *   paths, read by the app side, are pasted instead, bracketed when the program asked, never
+ *   with Enter. Without any (an image copied, or a screenshot sent to the clipboard) the
+ *   event's own text is pasted, empty for an image: Claude Code then reads the image itself,
+ *   as after its own Ctrl+V or Terminal.app's ⌘V.
+ */
+function onPaste(term: Terminal, event: ClipboardEvent): void {
+  event.preventDefault();
+  const data = event.clipboardData;
+  if (!isMac() || !data?.files.length) return;
+  event.stopPropagation();
+  // Read now: the event's data is gone once it was handled.
+  const text = data.getData("text/plain");
+  void copiedFiles().then((files) => term.paste(files || text));
+}
+
+/**
+ * The terminal menu (17.20): the terminal whose pane holds `target` (what was right-clicked)
+ * and whether it has a selection to copy; null outside every pane.
+ */
+export function terminalAt(target: EventTarget | null): { id: number; selection: boolean } | null {
+  const pane = target instanceof Element ? target.closest<HTMLElement>(".terminal-pane") : null;
+  const id = Number(pane?.dataset.terminal);
+  const term = terminal(id);
+  return term ? { id, selection: term.hasSelection() } : null;
+}
+
+/** Whether `c` is a C0 or C1 control character or DEL (Rust's `char::is_control`). */
+const control = (c: string) => {
+  const code = c.charCodeAt(0);
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+};
+
+/**
+ * Files dropped from Finder (18.1): `text`, their shell-quoted paths, is pasted into the
+ * terminal whose pane is at (`x`, `y`), found as the terminal menu finds it, bracketed when
+ * the program asked and never with Enter; that terminal takes the keyboard. A drop anywhere
+ * else (the sidebar, a dialog over the pane, a file tab) is ignored. True when it was typed.
+ * A text with a control character is refused: the program would read it as keys (an escape
+ * ending the bracketed paste, Enter); the app side never sends one.
+ */
+export function dropFiles(text: string, x: number, y: number): boolean {
+  if ([...text].some(control)) return false;
+  const at = terminalAt(document.elementFromPoint(x, y));
+  const term = at && terminal(at.id);
+  if (!term) return false;
+  term.paste(text);
+  term.focus();
+  return true;
+}
+
+/**
+ * The terminal menu's Copy, Paste and Clear (17.20), as their keys do (Clear as ⌘K); the
+ * terminal keeps the keyboard.
+ */
+export function terminalAction(id: number, action: "copy" | "paste" | "clear"): void {
+  const term = terminal(id);
+  if (!term) return;
+  if (action === "copy") copy(term);
+  else if (action === "paste") paste(term);
+  else term.clear();
+  term.focus();
+}
+
+/**
+ * Copy on select (6.2) copies when the mouse button that made the selection is released,
+ * wherever that is: a user gesture, without which WebKit may refuse `writeText` (17.8).
+ */
+function copyOnSelect(term: Terminal, el: HTMLElement): void {
+  const copy = () => {
+    const on = useHive.getState().settings.terminal.copy_on_select;
+    if (on && term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
+  };
+  el.addEventListener(
+    "mousedown",
+    () => window.addEventListener("mouseup", copy, { capture: true, once: true }),
+    { capture: true },
+  );
+}
+
+/**
+ * Search matches (17.21), drawn over the text: every match in a soft tint of the theme's yellow
+ * (`--state-permission`), the current one stronger. xterm wants #RRGGBB, so the tints are mixed
+ * over each theme's background.
+ */
+const MATCHES: Record<
+  Settings["appearance"]["theme"],
+  NonNullable<ISearchOptions["decorations"]>
+> = {
+  "one-dark": {
+    matchBackground: "#5f594b",
+    activeMatchBackground: "#958564",
+    activeMatchBorder: "#dec184",
+    matchOverviewRuler: "#dec184",
+    activeMatchColorOverviewRuler: "#e08a5a",
+  },
+  "one-light": {
+    matchBackground: "#eadfc8",
+    activeMatchBackground: "#dac495",
+    activeMatchBorder: "#b08d45",
+    matchOverviewRuler: "#d2b67c",
+    activeMatchColorOverviewRuler: "#e08a5a",
+  },
+};
+
+/** What a search found: the current match (from 0, -1 for none) and how many there are. */
+export type SearchResults = { index: number; count: number };
+
+/**
+ * Searches terminal `id`'s scrollback and screen for `text` (17.21), as terminals do: up, from
+ * the bottom (the newest output) to the oldest match, or down with `newer`. A changed `text`
+ * first tries to keep the current match (typing); `restart` starts again from the bottom.
+ * Every match is highlighted; `onSearchResults` hears the count. No text clears the search.
+ */
+export function searchTerminal(
+  id: number,
+  text: string,
+  options: { caseSensitive: boolean; newer?: boolean; restart?: boolean },
+): void {
+  const entry = entries.get(id);
+  if (!entry) return;
+  if (!text) {
+    entry.search.clearDecorations();
+    return;
+  }
+  if (options.restart) {
+    entry.term.clearSelection();
+    // The addon compares new options with the ones it has just stored, so a changed case alone
+    // would keep the old matches: forgetting the search makes it count them again.
+    entry.search.clearDecorations();
+  }
+  const theme = useHive.getState().settings.appearance.theme;
+  const find = { caseSensitive: options.caseSensitive, decorations: MATCHES[theme] };
+  if (options.newer) entry.search.findNext(text, find);
+  else entry.search.findPrevious(text, find);
+}
+
+/** Calls `listener` with each new result of terminal `id`'s searches. Returns the cleanup. */
+export function onSearchResults(id: number, listener: (results: SearchResults) => void) {
+  const event = entries
+    .get(id)
+    ?.search.onDidChangeResults(({ resultIndex, resultCount }) =>
+      listener({ index: resultIndex, count: resultCount }),
+    );
+  return () => event?.dispose();
+}
+
+/** Ends terminal `id`'s search: no match highlighted, and the keyboard back in the terminal. */
+export function endSearch(id: number): void {
+  const entry = entries.get(id);
+  entry?.search.clearDecorations();
+  entry?.term.focus();
+}
+
+/** The element terminal `id` renders in (the search bar sits over it), once it was opened. */
+export const paneOf = (id: number): HTMLElement | undefined => entries.get(id)?.el;
 
 /** Ends the terminal (unless it already exited), drops its xterm instance and its tab. */
 export function closeTerminal(id: number): void {
@@ -306,7 +608,23 @@ export function showTerminals(ids: number[], focus: number | null): void {
     if (!entry.webgl) entry.webgl = webgl(entry);
     entry.fit.fit();
   }
+  outline();
   if (focus !== null) entries.get(focus)?.term.focus();
+}
+
+/**
+ * Marks each shown pane whose agent needs the user (17.26) with that agent's state; the
+ * stylesheet outlines it in the state's colour while the terminals are split.
+ */
+function outline(): void {
+  const s = useHive.getState();
+  for (const id of shown) {
+    const el = entries.get(id)?.el;
+    if (!el) continue;
+    const state = paneAttention(s, id);
+    if (state) el.dataset.attention = state;
+    else delete el.dataset.attention;
+  }
 }
 
 /** Refits every shown terminal to its pane. */
@@ -377,6 +695,7 @@ export function mountTerminals(element: HTMLElement): () => void {
   const unsubscribe = useHive.subscribe((s, prev) => {
     if (s.settings !== prev.settings) applySettings(s.settings);
     if (s.splitPercent !== prev.splitPercent) refit();
+    if (s.agents !== prev.agents || s.agentStates !== prev.agentStates) outline();
   });
   const observer = new ResizeObserver(refit);
   observer.observe(element);

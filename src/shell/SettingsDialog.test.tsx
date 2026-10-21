@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { version } from "../../package.json";
+import { asMac } from "../../test/mac";
 import { expectClearButton } from "../../test/searchClear";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -8,6 +9,7 @@ import { COMMANDS } from "../shortcuts";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_DIAGNOSTICS, MOCK_REPOS } from "../transport/mock";
+import { isMac } from "../window";
 import { SECTIONS } from "./SettingsDialog";
 
 beforeAll(async () => {
@@ -27,7 +29,7 @@ function open() {
   render(<App />);
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS }));
-  fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
+  fireEvent.keyDown(document.body, { key: ",", ctrlKey: !isMac(), metaKey: isMac() });
   return screen.getByRole("dialog", { name: "Settings" }) as HTMLDialogElement;
 }
 
@@ -89,6 +91,34 @@ test("a checkbox saves the whole settings at once", async () => {
   set.mockRestore();
 });
 
+test("the Dock bounce setting is offered on macOS only, on by default", async () => {
+  open();
+  const bounce = "Bounce the Dock icon when an agent needs an action";
+  section("Notifications");
+  expect(screen.queryByLabelText(bounce)).toBeNull();
+  asMac();
+  section("Agents");
+  section("Notifications");
+  expect(input(bounce).checked).toBe(true);
+  fireEvent.click(screen.getByLabelText(bounce));
+  await waitFor(() => expect(settings().notifications.bounce).toBe(false));
+  expect(input(bounce).checked).toBe(false);
+});
+
+test("the menu bar icon setting is offered on macOS only, on by default", async () => {
+  open();
+  const menuBar = "Show agents in the menu bar";
+  section("Notifications");
+  expect(screen.queryByLabelText(menuBar)).toBeNull();
+  asMac();
+  section("Agents");
+  section("Notifications");
+  expect(input(menuBar).checked).toBe(true);
+  fireEvent.click(screen.getByLabelText(menuBar));
+  await waitFor(() => expect(settings().notifications.menu_bar).toBe(false));
+  expect(input(menuBar).checked).toBe(false);
+});
+
 test("numbers and texts are saved once typing pauses; non-numbers are not sent", async () => {
   open();
   const set = spyOn(transport, "setSettings");
@@ -108,6 +138,8 @@ test("numbers and texts are saved once typing pauses; non-numbers are not sent",
   section("Notifications");
   fireEvent.change(input("Alert volume"), { target: { value: "0" } });
   await waitFor(() => expect(settings().notifications.volume).toBe(0));
+  fireEvent.change(input("Long commands (seconds)"), { target: { value: "30" } });
+  await waitFor(() => expect(settings().notifications.command_secs).toBe(30));
   section("Agents");
   fireEvent.change(input("Silence before waiting for you (seconds)"), { target: { value: "9" } });
   await waitFor(() => expect(settings().agents.silence_secs).toBe(9));
@@ -186,6 +218,31 @@ test("the shell is a setting only when the service runs natively on Windows", as
   // Back on WSL: gone again.
   act(() => apply({ type: "app_mode", mode: "wsl", wsl: true }));
   expect(screen.queryByRole("combobox", { name: "Shell" })).toBeNull();
+});
+
+test("keeping the Mac awake is a setting on a Mac only, which says the lid still sleeps it (17.17)", async () => {
+  const label = "Keep the Mac awake while agents work";
+  open();
+  section("Agents");
+  expect(screen.queryByLabelText(label)).toBeNull();
+  cleanup();
+  useHive.setState(initialState, true);
+  const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+  Object.defineProperty(navigator, "userAgent", { value: mac, configurable: true });
+  try {
+    render(<App />);
+    act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+    act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS }));
+    fireEvent.keyDown(document.body, { key: ",", metaKey: true });
+    section("Agents");
+    expect(input(label).checked).toBe(true);
+    expect(labels().join()).toContain("closing the lid on battery still sleeps the Mac");
+    fireEvent.click(input(label));
+    await waitFor(() => expect(settings().agents.keep_awake).toBe(false));
+  } finally {
+    Reflect.deleteProperty(navigator, "userAgent");
+  }
+  expect(navigator.userAgent).not.toContain("Mac");
 });
 
 test("the archive script's help names the shell it runs in", () => {
@@ -278,7 +335,7 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   typed.mockRestore();
 
   // Removed, its folder stays on disk.
-  fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
+  fireEvent.keyDown(document.body, { key: ",", ctrlKey: !isMac(), metaKey: isMac() });
   section("Accounts");
   fireEvent.click(screen.getByTitle("Remove Job"));
   await waitFor(() => expect(accounts()).toEqual([]));
@@ -361,11 +418,48 @@ test("the search lists every matching field across sections", () => {
   expect(labels()).toHaveLength(2);
 });
 
-test("shortcuts are the command table, read-only", () => {
+const shortcutRows = () =>
+  [...document.querySelectorAll(".settings-keys tr")].map((r) => r.textContent);
+
+test("shortcuts are the command table, read-only, without macOS' own", () => {
   open();
   section("Shortcuts");
-  const rows = [...document.querySelectorAll(".settings-keys tr")].map((r) => r.textContent);
-  expect(rows).toEqual(COMMANDS.map((c) => `${c.label}${c.keys}`));
+  expect(shortcutRows()).toEqual(COMMANDS.filter((c) => !c.mac).map((c) => `${c.label}${c.keys}`));
+  expect(shortcutRows()).toContain("Go to the next pending agentF8");
+});
+
+test("on macOS the shortcuts are named with ⌘, with macOS' own and the terminal's keys", () => {
+  asMac();
+  open();
+  section("Shortcuts");
+  const rows = shortcutRows();
+  expect(rows).toHaveLength(COMMANDS.length + 6);
+  expect(rows).toContain("Command palette⇧⌘P");
+  expect(rows).toContain("Go to the next pending agent⇧⌘J or F8");
+  expect(rows).toContain("Close the tab⌘W");
+  expect(rows).toContain("Show the previous tab⇧⌘[");
+  expect(rows).toContain("Show tab 9⌘9");
+  expect(rows).toContain("Make the terminal font smaller⌘-");
+  expect(rows.slice(-6)).toEqual([
+    "Clear the terminal⌘K",
+    "Jump to the previous prompt⌘↑",
+    "Jump to the next prompt⌘↓",
+    "Go to the start of the line⌘←",
+    "Go to the end of the line⌘→",
+    "Delete to the start of the line⌘⌫",
+  ]);
+});
+
+test("Option as Meta is a macOS setting, off by default", async () => {
+  open();
+  expect(screen.queryByLabelText("Option as Meta")).toBeNull();
+  cleanup();
+  asMac();
+  open();
+  expect(input("Option as Meta").checked).toBe(false);
+  fireEvent.click(input("Option as Meta"));
+  await waitFor(() => expect(settings().terminal.option_as_meta).toBe(true));
+  expect(input("Option as Meta").checked).toBe(true);
 });
 
 test("about shows both versions, the service's diagnostics and terminals without hooks", async () => {
@@ -412,4 +506,38 @@ test("Open settings file asks the service, whose answer opens it", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Open settings file" }));
   expect(ask).toHaveBeenCalledTimes(1);
   ask.mockRestore();
+});
+
+test("Notifications says when the OS keeps Hive from notifying, with a link to its settings", async () => {
+  let permission: "granted" | "denied" = "denied";
+  const check = spyOn(transport, "checkNotifications").mockImplementation(async () => {
+    apply({ type: "notification_permission", permission });
+  });
+  const openPane = spyOn(transport, "openNotificationSettings").mockResolvedValue();
+  try {
+    open();
+    expect(check).not.toHaveBeenCalled();
+    section("Notifications");
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toBe(
+      "Notifications from Hive are turned off in System Settings: alerts show only in the inbox. Open System Settings",
+    );
+    fireEvent.click(within(note).getByRole("button", { name: "Open System Settings" }));
+    expect(openPane).toHaveBeenCalledTimes(1);
+    // Back from System Settings: the window's focus asks again.
+    permission = "granted";
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(screen.queryByRole("note")).toBeNull());
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(input("Alert volume").value).toBe("100");
+    // Another section asks nothing and listens no more.
+    section("Agents");
+    window.dispatchEvent(new Event("focus"));
+    expect(check).toHaveBeenCalledTimes(2);
+  } finally {
+    check.mockRestore();
+    openPane.mockRestore();
+  }
 });

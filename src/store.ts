@@ -26,6 +26,8 @@ import type {
   FileText,
   GhAccounts,
   NameCheck,
+  NotificationPermission,
+  ProgressState,
   Project,
   ProjectScripts,
   SearchResults,
@@ -36,7 +38,7 @@ import type {
   Worktree,
   WorktreeFiles,
 } from "./protocol";
-import type { OpenPull, PullBusy, PullError, Pulls } from "./pulls";
+import type { OpenPull, PullBusy, PullError, PullState, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
 import type { JobLog, OpenRun, RunBusy, RunError, Runs } from "./runs";
 import {
@@ -77,6 +79,8 @@ export type Terminal = {
   unhooked: boolean;
   /** Set with `hive badge`; cleared when the terminal exits. */
   badge?: string;
+  /** A program's OSC 9;4 progress (17.25), the tab's hint; none once cleared or exited. */
+  progress?: { state: ProgressState; value: number };
   /**
    * The followed worktree the service placed its cwd in (`terminal_opened`), null outside
    * every project or until the service answered: its tab's place (`tabWorktree`).
@@ -135,19 +139,34 @@ export type WorktreeDialog = {
   removeFailures: Record<string, string>;
 };
 
-/** One alert `notify` raised, kept for the bell's inbox (6.5). `id` grows with each alert. */
+/**
+ * One alert `notify` raised, kept for the bell's inbox (6.5): an agent's, a terminal's (17.25), or
+ * an offer to remove a worktree whose pull request ended (17.27). `id` grows with each alert.
+ */
 export type InboxItem = {
   id: number;
-  /** The agent's session id: clicking the item goes to it while it runs. */
-  agent: string;
-  state: AgentState;
   /** Wall clock, ms since the epoch. */
   at: number;
   /** E.g. "fix login is waiting for permission". */
   text: string;
-  /** The agent's space, once the store knows spaces (6.14): the item names it. */
+  /** The agent's (or worktree's) space, once the store knows spaces (6.14): the item names it. */
   space?: string;
-};
+} & InboxSubject;
+/** What an inbox item is about. */
+export type InboxSubject =
+  /** The agent's session id: clicking the item goes to it while it runs. */
+  | { agent: string; state: AgentState }
+  /** A usage alert (17.23), about no agent: clicking the item only closes the inbox. */
+  | { agent: null; state: null }
+  /** Clicking the item opens the dialog removing the worktree while it is there. */
+  | { offer: RemoveOffer }
+  /**
+   * A terminal's item (17.25: a long command, a program's notification): clicking it shows that
+   * terminal while it is open. `failed`: a command that ended with a non-zero status.
+   */
+  | { terminal: number; failed: boolean };
+/** A worktree whose pull request merged or closed, as the service said (`pull_ended`). */
+export type RemoveOffer = { worktree: string; number: number; title: string; state: PullState };
 /** At most this many alerts are kept, the newest first. */
 export const INBOX_LIMIT = 100;
 
@@ -166,11 +185,12 @@ export const DEFAULT_SETTINGS: Settings = {
     cursor_style: "block",
     cursor_blink: false,
     copy_on_select: false,
+    option_as_meta: false,
     shell: "default",
   },
   appearance: { theme: "one-dark" },
-  notifications: { volume: 100 },
-  agents: { silence_secs: 5, confirm_close: true },
+  notifications: { volume: 100, bounce: true, menu_bar: true, command_secs: 10 },
+  agents: { silence_secs: 5, confirm_close: true, keep_awake: true },
   worktrees: { default_base: null },
   projects: {},
   claude: { accounts: [], account: null },
@@ -187,6 +207,7 @@ export type Modal =
   | "worktree-picker"
   | "close-app"
   | "update-app"
+  | "translocated"
   | "remove-worktree"
   | "rename-worktree"
   | "new-space"
@@ -250,7 +271,13 @@ export type HiveState = {
   notices: Notice[];
   /** A downloaded release, shown as the title bar's restart button; `installing` once clicked. */
   update: { version: string; installing: boolean } | null;
+  /** macOS runs Hive from a read-only copy (17.10): the update button explains the fix instead. */
+  translocated: boolean;
+  /** Whether the OS lets Hive notify (17.19), as the app last said (`notification_permission`). */
+  notificationPermission: NotificationPermission;
   rightPanel: RightPanel;
+  /** Whether the left sidebar shows (the View menu hides it, 17.13). */
+  sidebarShown: boolean;
   /** What the right panel shows, for the shown worktree. */
   panelView: PanelView;
   /** The left sidebar's and the right panel's widths, in pixels (see `shell/resize.tsx`). */
@@ -297,6 +324,11 @@ export type HiveState = {
    * any other tab shows alone.
    */
   split: Split | null;
+  /**
+   * The terminal whose search bar is open (17.21): it shows while that terminal is the active
+   * tab, over its pane.
+   */
+  terminalSearch: number | null;
   /** The alerts raised, the newest first (at most `INBOX_LIMIT`), and the newest id seen. */
   inbox: InboxItem[];
   inboxSeen: number;
@@ -319,6 +351,8 @@ export type HiveState = {
   sessionUsage: SessionWindow | null;
   /** Its 7-day window (15.3), only alongside the 5-hour one. */
   weekUsage: SessionWindow | null;
+  /** When each window reaches 100% at its pace (17.23, Unix s), null when it lasts. */
+  usageLimits: { session: number | null; week: number | null };
   /** The service's settings (the defaults until they arrive). */
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
@@ -409,7 +443,10 @@ export const initialState: HiveState = {
   question: null,
   notices: [],
   update: null,
+  translocated: false,
+  notificationPermission: "unknown",
   rightPanel: "files",
+  sidebarShown: true,
   panelView: "files",
   sidebarWidth: 264,
   panelWidth: 380,
@@ -428,6 +465,7 @@ export const initialState: HiveState = {
   tabs: [],
   activeTab: null,
   split: null,
+  terminalSearch: null,
   inbox: [],
   inboxSeen: 0,
   pendingSeen: {},
@@ -436,6 +474,7 @@ export const initialState: HiveState = {
   appMode: null,
   sessionUsage: null,
   weekUsage: null,
+  usageLimits: { session: null, week: null },
   settings: DEFAULT_SETTINGS,
   settingsError: null,
   settingsPending: false,
@@ -586,7 +625,7 @@ export const openFileDialog = (target: FileTarget, kind: FileDialogKind = "file"
 /** Asks `question` in the confirm dialog (`ConfirmDialog`). */
 export const ask = (question: Question) => useHive.setState({ modal: "confirm", question });
 /** Keeps an alert in the inbox, the newest first. */
-export const addToInbox = (item: Omit<InboxItem, "id">) =>
+export const addToInbox = (item: { at: number; text: string; space?: string } & InboxSubject) =>
   useHive.setState((s) => ({
     inbox: [{ ...item, id: (s.inbox[0]?.id ?? 0) + 1 }, ...s.inbox].slice(0, INBOX_LIMIT),
   }));
@@ -620,6 +659,7 @@ export const showFailure = <T>(action: Promise<T>, what = ""): Promise<T> => {
 };
 export const clearAddProjectError = () => useHive.setState({ addProjectError: null });
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
+export const toggleSidebar = () => useHive.setState((s) => ({ sidebarShown: !s.sidebarShown }));
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });
 /**
  * Opens a file in its own tab (8.21), the preview tab (11.1), and shows it, as editable text
@@ -755,6 +795,16 @@ export const setSplit = (split: Split | null) =>
     activeTab: split ? split.right : s.activeTab,
     fileShown: split ? false : s.fileShown,
   }));
+
+/** Opens the search bar over the terminal shown (its active tab), when one is. */
+export const openTerminalSearch = () =>
+  useHive.setState((s) => (terminalShown(s) ? { terminalSearch: s.activeTab } : {}));
+
+/** Closes the terminal search bar. */
+export const closeTerminalSearch = () => useHive.setState({ terminalSearch: null });
+
+/** Whether a terminal is shown: an active tab, and no file's tab over it. */
+export const terminalShown = (s: HiveState) => s.activeTab !== null && !s.fileShown;
 
 /** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
 export const focusPane = (id: number) =>
@@ -912,6 +962,19 @@ export function mostUrgent(s: HiveState, agents: Agent[]): AgentStatus | null {
 /** Waiting for you yet not pending (seen, interrupted, 13.3's quiet 🟠): drawn muted (15.6). */
 export const muted = (status: AgentStatus | null | undefined): boolean =>
   status?.state === "waiting_you" && !status.pending;
+
+/**
+ * What outlines terminal `id`'s pane in a split (17.26): its agent's state while the service
+ * says it is pending on a dialog or an error (🟡, 🔴); a pending 🟠 only finished its turn, so
+ * its pane stays plain. Null otherwise.
+ */
+export function paneAttention(s: HiveState, id: number): AgentState | null {
+  const status = mostUrgent(
+    s,
+    Object.values(s.agents).filter((a) => a.terminal === id),
+  );
+  return status?.pending && status.state !== "waiting_you" ? status.state : null;
+}
 
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
 

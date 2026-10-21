@@ -11,6 +11,7 @@ import type {
 } from "../protocol";
 import type { PullAction } from "../pulls";
 import type { RunAction } from "../runs";
+import type { Tray } from "../tray";
 import { tauriTransport } from "./tauri";
 
 /**
@@ -121,6 +122,12 @@ export interface Transport {
   /** `hive worktree create`; answered by `worktree_created` or `create_worktree_failed`. */
   createWorktree(project: string, name: string, base: string | null): Promise<void>;
   /**
+   * A worktree for issue `number` of the project's GitHub repository, on a branch the service
+   * names from its number and title, from `base`; answered by `worktree_created` or
+   * `create_worktree_failed` with the name `#<number>`.
+   */
+  createIssueWorktree(project: string, number: number, base: string | null): Promise<void>;
+  /**
    * `git worktree remove` (with `--force` when `force`); the branch stays. Answered by
    * `worktree_removed` or `remove_worktree_failed`.
    */
@@ -199,8 +206,12 @@ export interface Transport {
   openSettingsFile(): Promise<void>;
   /** What the settings' About section shows; answered by `diagnostics`. */
   getDiagnostics(): Promise<void>;
-  /** Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is downloaded. */
-  checkUpdate(): Promise<void>;
+  /**
+   * Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is
+   * downloaded. `manual` (the menu's "Check for Updates…") also answers "up to date" and a failed
+   * check (`update_checked`), and offers again an update already downloaded.
+   */
+  checkUpdate(manual?: boolean): Promise<void>;
   /** Installs the downloaded release and restarts the app; answered by `update_failed` on a failure. */
   installUpdate(): Promise<void>;
   /**
@@ -208,6 +219,29 @@ export interface Transport {
    * window up and is answered by `notification_clicked`.
    */
   showNotification(title: string, body: string, agent: string): Promise<void>;
+  /**
+   * Whether the OS lets Hive show notifications (17.19); answered by `notification_permission`
+   * (`unknown` where the app cannot ask).
+   */
+  checkNotifications(): Promise<void>;
+  /** Opens macOS's notification settings, where the user lets Hive notify again (17.19). */
+  openNotificationSettings(): Promise<void>;
+  /**
+   * Plays the alert tone from the app at `volume` percent (17.19: macOS, where a hidden
+   * webview's audio can be throttled); rejects where the app plays none.
+   */
+  playTone(volume: number): Promise<void>;
+  /**
+   * The menu bar icon (17.22), built by the app side from `tray`; choosing a pending agent in
+   * its menu is answered by `tray_clicked`.
+   */
+  setTray(tray: Tray): Promise<void>;
+  /**
+   * The files copied in Finder as pasting them types them (18.3, macOS): their paths, shell-quoted,
+   * each followed by a space; empty when the clipboard holds none. Rejects where the app cannot
+   * read the clipboard.
+   */
+  pastedFiles(): Promise<string>;
 }
 
 /**

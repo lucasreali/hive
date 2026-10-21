@@ -87,12 +87,19 @@ taskkill /F /IM hive.exe
 
 ### macOS
 
-1. Download the `.dmg` and drag Hive to Applications.
-2. The app is ad-hoc signed (no Apple Developer account), so macOS blocks the first open. Go to **System Settings → Privacy & Security** and click **Open Anyway**.
+1. Download the `.dmg`, open it and drag Hive to **Applications**. Open Hive from Applications, not from the `.dmg` or Downloads.
+2. The app is ad-hoc signed (no Apple Developer account), so on macOS 15 and 26 the first open is blocked ("Hive" cannot be opened / Apple could not verify it; Control-click → Open no longer bypasses it). Click **Done**, then go to **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to the message about Hive, confirm with **Open Anyway** and your password (or Touch ID). macOS remembers the choice; later opens and updates need nothing.
+3. If Hive says it runs from a temporary read-only copy, macOS "translocated" it: it was opened where it was downloaded, and updates cannot install there. Quit Hive, move it to Applications and run, in Terminal:
+
+   ```
+   xattr -dr com.apple.quarantine /Applications/Hive.app
+   ```
+
+   then open it from Applications. The same command usually fixes a Hive that macOS reports as "damaged".
 
 ### Updates
 
-When a newer release exists, click **Update to vX** in the title bar. Hive asks first if agents are running (they end with the restart), installs the update and restarts.
+When a newer release exists, click **Update to vX** in the title bar. Hive asks first if agents are running (they end with the restart), installs the update and restarts. On macOS the update installs only when Hive runs from Applications (step 3 above); otherwise the button explains the move.
 
 ## Quick start
 
@@ -148,24 +155,39 @@ Details: [`docs/architecture.md`](docs/architecture.md). Decisions: [`docs/hive.
 | `src-tauri` | The Tauri app (`hive-app`): spawns the bridge, relays frames to the UI, updater |
 | `src` | React + TypeScript UI; `src/transport/mock.ts` is an in-browser fake service |
 | `e2e` | Playwright specs against the mock transport |
-| `scripts` | `win-dev.sh`, `gates.sh`, `release.sh` |
+| `scripts` | `mac-dev.sh` (and its `mac-dev-runner.sh`), `gates.sh`, `ci.sh`, `release.sh`; `win-dev.sh` (Windows, frozen) |
 | `docs` | Decisions, architecture, UI reference, prototype |
 
 ### Prerequisites
 
-- Rust stable (`rustup`), [bun](https://bun.sh), fish and git.
-- To build the Windows app from WSL: `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin --locked`.
-- For the gates: `cargo-llvm-cov`, `cargo-mutants`, `cargo-nextest` (mutants run under it), `cargo-deny`, `cargo-machete`.
+- Rust stable (`rustup`), [bun](https://bun.sh) and git.
+- For the gates: `cargo-llvm-cov` (with the `llvm-tools-preview` component), `cargo-mutants`, `cargo-nextest` (mutants run under it), `cargo-deny`, `cargo-machete`.
+
+### macOS setup
+
+The main development host is an Apple Silicon Mac. With [Homebrew](https://brew.sh) and [bun](https://bun.sh) installed, from the repository:
 
 ```sh
-bun install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path   # --no-modify-path: add ~/.cargo/bin to PATH yourself
+export PATH=$HOME/.cargo/bin:$PATH                       # fish: fish_add_path ~/.cargo/bin
+rustup component add llvm-tools-preview                  # for cargo llvm-cov
+cargo install --locked cargo-llvm-cov cargo-mutants cargo-nextest cargo-deny cargo-machete
+bun install --frozen-lockfile
+bunx playwright install webkit chromium                  # e2e browsers
+brew install fontforge                                   # only for scripts/build-terminal-font.sh
 ```
+
+Code behind a Linux-only `cfg` is checked by [`ci.yml`](.github/workflows/ci.yml) and Windows code by [`windows.yml`](.github/workflows/windows.yml), not on the Mac.
 
 ### Running
 
-- **Windows app from WSL:** `scripts/win-dev.sh` cross-compiles the app with `cargo xwin`, builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`, `HIVE_WSL_DISTRO`), starts Vite on port 1420 (hot reload) and launches the app through PowerShell.
+- **macOS app:** `scripts/mac-dev.sh` builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`) and runs `bun run tauri dev` (Vite on port 1420, hot reload); an edit under `crates/hive` rebuilds the service and restarts the app on it (`scripts/mac-dev-runner.sh`, the `--runner` of `tauri dev`). The dev service gets its own data folder (`~/.local/share/hive-dev`, or `HIVE_DEV_DIR`) and runtime folder (under `$TMPDIR`), through `XDG_DATA_HOME` and `XDG_RUNTIME_DIR`, so it runs beside an installed Hive without sharing its service, projects or hooks. Its terminals inherit both variables; settings (`XDG_CONFIG_HOME`) are shared with the installed app.
 - **UI in a browser:** `bun run dev`, then open `http://localhost:1420`. Outside Tauri the mock transport stands in for the service. Scenarios: `?mock=empty`, `?mock=states` (every agent state), `?mock=mismatch`, `?mock=disconnected`, `?mock=update`, `?mock=load` (20-terminal load test).
 - **Service only:** `cargo build -p hive` gives `target/debug/hive`.
+
+### Windows (frozen, D17.0)
+
+Windows keeps building and its tests run in CI ([`windows.yml`](.github/workflows/windows.yml)), but no Windows-only work is added. Building and running the Windows app by hand needs a Windows machine with WSL, which this Mac setup does not cover. `scripts/win-dev.sh` is kept for that case: from WSL it cross-compiles the app with `cargo xwin`, builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`, `HIVE_WSL_DISTRO`), starts Vite on port 1420 (hot reload) and launches the app through PowerShell. It needs, in WSL, `sudo apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc` and `cargo install cargo-xwin --locked`.
 
 ### Tests and quality gates
 
@@ -186,8 +208,20 @@ cargo mutants --in-diff <(git diff main -- '*.rs')    # no missed mutants
 bun install --frozen-lockfile
 bun run lint && bun run typecheck
 bun test --coverage     # 100% line threshold in bunfig.toml
-bun run e2e             # Playwright; needs libnss3 and libnspr4
+bun run e2e             # Playwright, Chromium and WebKit, on macOS or Linux (below)
 ```
+
+E2E runs natively on macOS and on Linux (CI). The specs press the host's keys and expect its labels (`e2e/host.ts`: ⌘ and ⇧⌘O on a Mac, Ctrl elsewhere); off a Mac, WebKit gets a non-Mac user agent so Hive takes the same keys as the host. Screenshot baselines are kept per platform (`*-darwin.png`, `*-linux.png`). To reproduce CI's Linux run on a Mac, use Playwright's Linux container from the checkout, with Docker (a Linux `node_modules` in a volume, so the Mac's is untouched; `load` and `tree-perf` measure timing and are left to CI):
+
+```sh
+docker volume create hive-e2e-bun && docker volume create hive-e2e-nm
+docker run --rm -v hive-e2e-bun:/opt/bun --entrypoint cp oven/bun:1.4.3 /usr/local/bin/bun /opt/bun/bun
+docker run --rm --ipc=host -v "$PWD":/work -v hive-e2e-nm:/work/node_modules -v hive-e2e-bun:/opt/bun \
+  -w /work -e E2E_PORT=1777 mcr.microsoft.com/playwright:v1.63.0-noble \
+  bash -c 'export PATH=/opt/bun:$PATH; bun install --frozen-lockfile && xvfb-run -a bun run e2e --project ui --project webkit'
+```
+
+On a Linux host whose Chromium lacks `libnss3`/`libnspr4`, prefix `LD_LIBRARY_PATH` with a folder holding them.
 
 - 100% line coverage in Rust and in the frontend, plus mutation testing on the changed code. Excluded files are listed with their reasons in [`COVERAGE_EXCLUSIONS.md`](COVERAGE_EXCLUSIONS.md).
 - Integration tests run the real `hive` with a temporary `HOME`/`XDG_*` and a stand-in `claude`; they never touch your environment.
@@ -200,7 +234,9 @@ scripts/release.sh 0.1.3          # bumps every manifest, commits and tags v0.1.
 git push origin main v0.1.3       # starts release.yml
 ```
 
-The release workflow builds the Linux `hive` and bundles it into the Windows NSIS installer, then builds the macOS `.dmg` with the macOS `hive` inside, signs the updater artifacts and publishes them with `latest.json`. It needs the `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) repository secrets; the matching public key is in `src-tauri/tauri.conf.json`.
+The release workflow first checks that the `ci` and `macos` runs of the tagged commit (or of its parent, for the version bump) are green (`scripts/ci.sh green main` checks the same before tagging; `windows` is optional). It then builds the Linux `hive` and bundles it into the Windows NSIS installer, then builds the macOS `.dmg` with the macOS `hive` inside, signs the updater artifacts and publishes them with `latest.json`. It needs the `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) repository secrets; the matching public key is in `src-tauri/tauri.conf.json`.
+
+The macOS app and the `hive` inside it are signed ad-hoc unless the `release` environment holds all six Developer ID secrets, which make the workflow sign both with that identity (hardened runtime), notarize and staple the app, and check it with `spctl`: `APPLE_CERTIFICATE` (the "Developer ID Application" certificate and key, a `.p12` in base64), `APPLE_CERTIFICATE_PASSWORD` (its export password), `APPLE_SIGNING_IDENTITY` (e.g. `Developer ID Application: Name (TEAMID)`), and an App Store Connect API key for the notary service: `APPLE_API_ISSUER` (issuer ID), `APPLE_API_KEY` (key ID) and `APPLE_API_KEY_P8` (the `.p8` file's contents). A partial set fails the release. `scripts/macos-bundle.sh check` is the bundle check `macos.yml` and the release run.
 
 ### Dependencies
 
@@ -208,7 +244,7 @@ Only through the package managers' CLIs, never by editing manifests or lockfiles
 
 ## Status
 
-A personal project, at v0.4.x: expect rough edges.
+A personal project in active development (see the [releases](https://github.com/lucasreali/hive/releases)): expect rough edges.
 
 ## License
 

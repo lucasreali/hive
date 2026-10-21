@@ -177,7 +177,7 @@ pub use crate::macos::path_shell;
 /// [`path_shell`]) prints, else the service's `path` (started through `wsl.exe`, it lacks what
 /// the user's config adds; on Windows, with no shell to ask, it is the user's, inherited from
 /// the app), then `~/.local/bin` and `~/.claude/local`, where Claude Code installs itself.
-/// Empty entries are dropped.
+/// Only absolute entries are kept, in their order.
 pub async fn user_path(
     shell: Option<(OsString, Vec<OsString>)>,
     path: Option<OsString>,
@@ -193,10 +193,15 @@ pub async fn user_path(
         let local = home.join(".local").join("bin");
         [local, home.join(".claude").join("local")]
     });
-    let dirs = std::env::split_paths(&path)
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .chain(installs);
-    std::env::join_paths(dirs).unwrap_or(path)
+    // Only absolute folders: git and the scripts run in a worktree (17.5), where `.`, an empty
+    // entry or `node_modules/.bin` would run programs committed to the repository.
+    let absolute = |dir: &PathBuf| dir.is_absolute();
+    let found: Vec<PathBuf> = std::env::split_paths(&path).filter(absolute).collect();
+    let dirs = found.iter().cloned().chain(installs.filter(absolute));
+    // A home that cannot go on a `PATH` (it holds the separator): without the install dirs.
+    std::env::join_paths(dirs)
+        .or_else(|_| std::env::join_paths(found))
+        .unwrap_or_default()
 }
 
 /// The last line `program` prints with `args` (stdin and stderr closed), when it exits
@@ -282,6 +287,25 @@ mod portable_tests {
         assert_eq!(found, std::env::join_paths(dirs).unwrap());
         assert_eq!(user_path(None, None, None, SHELL_TIMEOUT).await, "");
     }
+
+    #[tokio::test]
+    async fn relative_and_empty_entries_are_dropped_absolute_ones_keep_their_order() {
+        #[cfg(windows)]
+        let (a, b) = (r"C:\a", r"C:\b");
+        #[cfg(unix)]
+        let (a, b) = ("/a", "/b");
+        let rel = Path::new("rel").join("bin");
+        let entries = [
+            Path::new("."),
+            Path::new(b),
+            Path::new(""),
+            &rel,
+            Path::new(a),
+        ];
+        let path = std::env::join_paths(entries).unwrap();
+        let found = user_path(None, Some(path), Some("home".into()), SHELL_TIMEOUT).await;
+        assert_eq!(found, std::env::join_paths([b, a]).unwrap());
+    }
 }
 
 // The wrapper is a `sh` script on Unix; see `crate::windows` for its Windows form.
@@ -330,12 +354,13 @@ mod tests {
         let sh = ("sh".into(), args[args.len() - 2..].to_vec());
         let printed = user_path(Some(sh), None, None, SHELL_TIMEOUT).await;
         let expected: Vec<_> = std::env::split_paths(&service)
-            .filter(|dir| !dir.as_os_str().is_empty())
+            .filter(|dir| dir.is_absolute())
             .collect();
         assert_eq!(printed, std::env::join_paths(expected).unwrap());
         // Exactly the most it may print.
-        let full = "head -c 65535 /dev/zero | tr '\\0' a; echo";
-        assert_eq!(sh_path(full, "/s", None, 5000).await, *"a".repeat(65535));
+        let full = "printf /; head -c 65534 /dev/zero | tr '\\0' a; echo";
+        let long = format!("/{}", "a".repeat(65534));
+        assert_eq!(sh_path(full, "/s", None, 5000).await, *long);
     }
 
     #[tokio::test]

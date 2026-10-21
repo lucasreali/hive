@@ -13,12 +13,12 @@ You implement **one** task of `TODO.md`, launched by the orchestrator (`.claude/
 - E2E: pick a free port and always set it, e.g. `E2E_PORT=$((1430 + RANDOM % 500))`; the Playwright config reuses any server already on its port, so the default 1420 may be another worktree's server.
 
 ## Gates (all green before ticking)
-Heavy gates run in CI, not on this machine (parallel local builds have restarted the WSL VM).
-- Local, fast only: `cargo fmt --all --check`, `CARGO_BUILD_JOBS=3 cargo clippy --workspace --all-targets -- -D warnings`, `CARGO_BUILD_JOBS=3 cargo test -p <crate you touched>`. Agent shells need `export PATH=$HOME/.cargo/bin:$PATH`. Never run `scripts/gates.sh`, `cargo llvm-cov` or `cargo mutants` locally.
-- CI, from your worktree on your task branch: `scripts/ci.sh push`, then `scripts/ci.sh watch` (waits for `ci` — Rust fmt/clippy/test/deny/machete/llvm-cov 100%/mutants on the diff, frontend, e2e — and `macos` on your tip; prints each run's URL). On a failure `scripts/ci.sh logs <run-id>`, fix, push again. Use only this script for pushing and gh (it carries the personal token; a raw `git push` or `GH_TOKEN=…` is denied). Report the green run URLs.
+CI is the authority: a task merges only when CI is green on its branch tip. The host is an Apple Silicon Mac (D17.6): local builds use every core. Run only the gates of what you touched; CI does the same (a docs-only diff runs no gate job, a platform's mutants run only for its changed files).
+- Local, while working: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p <crate you touched>`. Agent shells need `export PATH=$HOME/.cargo/bin:$PATH`. `cargo mutants --in-diff` on your diff (modest parallelism, e.g. `-j 4`, mutant trees under `/var/tmp/hive-mutants`) only when you changed Rust logic; `scripts/gates.sh` is for the end, not each step. Code behind a Linux-only `cfg` is verified only by `ci.yml`.
+- CI, **once**, when the task is finished and `main` is merged in (Finishing, below): `scripts/ci.sh push`, then `scripts/ci.sh watch` (waits for `ci` and `macos` on your tip, the two a merge needs, and prints each run's URL; `watch --all` also waits for `windows`, frozen and not required, D17.0). Never push to try things out: each push is a full run. On a failure `scripts/ci.sh logs <run-id>`, fix, push again. Use only this script for pushing and gh (it carries the personal token; a raw `git push` or `GH_TOKEN=…` is denied). Report the green run URLs.
 - Frontend: `bun install --frozen-lockfile && bun run lint && bun run typecheck && bun test --coverage` (100% lines). Bun only counts files some test imports: **every new TS file needs its own test**.
-- E2E (CI runs it; locally only the specs you touch): `E2E_PORT=<port> bun run e2e`. If Chromium lacks `libnss3`/`libnspr4` (not installed system-wide), prefix `LD_LIBRARY_PATH=/var/tmp/hive-e2e-libs/root/usr/lib/x86_64-linux-gnu`.
-- If you changed `src-tauri`: `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C target-feature=+crt-static" cargo xwin build -p hive-app --target x86_64-pc-windows-msvc`. Never launch the Windows GUI.
+- E2E (CI runs it; locally only the specs you touch): `E2E_PORT=<port> bun run e2e` (Chromium and WebKit, installed by `bunx playwright install webkit chromium`). It runs natively on the Mac (the specs press the host's keys, `e2e/host.ts`); Playwright's Linux container (`mcr.microsoft.com/playwright:v1.63.0-noble`, the command in the README's "Frontend" gates) reproduces CI's Linux run. On a Linux host whose Chromium lacks `libnss3`/`libnspr4`, prefix `LD_LIBRARY_PATH` with a folder holding them; the CI runner has them.
+- If you changed `src-tauri`: `cargo clippy -p hive-app --all-targets -- -D warnings` (native macOS build). Windows is verified by `windows.yml`; no Windows-only work is added (D17.0). Never launch the installed Hive app.
 - Parallel gates load the machine: re-run a timing failure before concluding it is real, and report flaky tests.
 - Never weaken a gate; no new coverage exclusions without the human.
 
@@ -30,7 +30,7 @@ Heavy gates run in CI, not on this machine (parallel local builds have restarted
 
 ## Finishing (CLAUDE.md rule 4: you own your work, conflicts included)
 1. Tick the task in `TODO.md` (branch name + a short italic note, same style as earlier entries; each default you took also gets a `pending` row in its "Defaults ledger") and commit (small Conventional Commits throughout).
-2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, and run the fast checks, push and wait for green CI again.
+2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, run the fast checks, then push and wait for green CI (Gates, above).
 3. Leave the worktree clean on your branch and report. You cannot run git in the main checkout; the orchestrator fast-forwards `main` to your branch. If `main` moved meanwhile, it sends you back to step 2.
 
 ## Stop instead of guessing

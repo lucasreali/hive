@@ -1,32 +1,66 @@
-import { ArrowCircleUpIcon, BellIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import {
+  ArrowCircleUpIcon,
+  BellIcon,
+  GaugeIcon,
+  GitMergeIcon,
+  GitPullRequestIcon,
+} from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { spaceName } from "../notify";
 import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
-import { markInboxRead, pendingAgents, unseenPending, useHive } from "../store";
-import { isMac, windowAction } from "../window";
+import {
+  activateTab,
+  findWorktree,
+  type InboxItem,
+  markInboxRead,
+  openModal,
+  pendingAgents,
+  type RemoveOffer,
+  unseenPending,
+  useHive,
+} from "../store";
+import { isMac, titleBarDoubleClick, watchFullscreen, windowAction } from "../window";
 import { requestUpdate } from "./CloseAppDialog";
 import {
   HiveIcon,
+  ICON,
   MaximizeIcon,
   MinimizeIcon,
   STATE_LABEL,
   StateIcon,
+  TerminalIcon,
   WindowCloseIcon,
 } from "./icons";
 import { elapsed, useNow } from "./Sidebar";
 import { ContextMenu } from "./WorktreeMenu";
 
 // On Windows the window has no native decorations; this bar drags it and holds the window
-// buttons. On macOS it lies under the native traffic lights (`tauri.macos.conf.json`), which
-// replace the buttons and get room on the left.
+// buttons. On macOS it lies under the native traffic lights (`tauri.macos.conf.json`, centred
+// in the bar), which replace the buttons and get room on the left, except in full screen,
+// where they are hidden. Its whole empty part drags the window (Tauri's drag region: the bar
+// itself and anything inside the brand); its buttons do not.
 // ponytail: no "project / worktree" breadcrumb yet; it shows the active tab once tabs exist (1.7).
 export function TitleBar() {
   const mac = isMac();
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => watchFullscreen(setFullscreen), []);
+  const [bar, setBar] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!mac || !bar) return;
+    bar.addEventListener("mouseup", doubleClick);
+    return () => bar.removeEventListener("mouseup", doubleClick);
+  }, [mac, bar]);
   return (
-    <header className="titlebar" data-mac={mac || undefined}>
-      <div className="titlebar-brand" data-tauri-drag-region>
+    <header
+      ref={setBar}
+      className="titlebar"
+      data-mac={mac || undefined}
+      data-fullscreen={fullscreen || undefined}
+      data-tauri-drag-region
+    >
+      <div className="titlebar-brand" data-tauri-drag-region="deep">
         <HiveIcon />
         <span>Hive</span>
       </div>
@@ -35,6 +69,18 @@ export function TitleBar() {
       {!mac && <WindowControls />}
     </header>
   );
+}
+
+/**
+ * macOS: a double click on the empty bar follows the system's setting (`titleBarDoubleClick`)
+ * instead of Tauri's drag region, which always zooms on the second mouse-up: that mouse-up is
+ * stopped here, before it reaches Tauri's listener on the document.
+ */
+function doubleClick(e: MouseEvent) {
+  const target = e.target as Element;
+  if (e.button !== 0 || e.detail !== 2 || target.closest("button, [role='menu']")) return;
+  e.stopPropagation();
+  void titleBarDoubleClick();
 }
 
 function WindowControls() {
@@ -56,12 +102,15 @@ function WindowControls() {
 /** A newer release, downloaded at startup (4.19): a click installs it and restarts Hive. */
 function UpdateButton() {
   const update = useHive((s) => s.update);
+  const translocated = useHive((s) => s.translocated);
   if (!update) return null;
   return (
     <button
       type="button"
       className="update-button"
-      title="Restart Hive to finish the update"
+      title={
+        translocated ? "Move Hive to Applications to update" : "Restart Hive to finish the update"
+      }
       disabled={update.installing}
       onClick={requestUpdate}
     >
@@ -74,7 +123,7 @@ function UpdateButton() {
 /**
  * The bell, with the number of pending agents not seen yet (8.5). A click opens the inbox (6.5)
  * and marks every alert read and the pending agents seen, clearing the badge; an agent counts
- * again on a new alert. F8 still goes to the next pending agent.
+ * again on a new alert. F8 (⇧⌘J on macOS) still goes to the next pending agent.
  */
 function PendingBell() {
   const count = useHive(unseenPending);
@@ -94,7 +143,7 @@ function PendingBell() {
         type="button"
         className="pending-bell"
         data-pending={count > 0}
-        title={`${label} (F8: next pending)`}
+        title={`${label} (${isMac() ? "⇧⌘J" : "F8"}: next pending)`}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -116,6 +165,7 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   const pending = useHive(useShallow(pendingAgents));
   const inbox = useHive((s) => s.inbox);
   const agents = useHive((s) => s.agents);
+  const tabs = useHive((s) => s.tabs);
   const states = useHive((s) => s.agentStates);
   const titles = useHive((s) => s.agentTitles);
   // Each item names its agent's space when there are several (6.14).
@@ -146,17 +196,53 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
       })}
       {pending.length > 0 && inbox.length > 0 && <hr />}
       {inbox.map((item) => {
-        const agent = agents[item.agent];
+        if ("offer" in item)
+          return <OfferItem key={item.id} item={item} now={now} onClose={onClose} />;
+        if ("terminal" in item) {
+          const tab = tabs.find((t) => t.id === item.terminal);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              disabled={!tab}
+              title={tab ? undefined : "This terminal is closed"}
+              onClick={() => {
+                onClose();
+                if (tab) activateTab(tab);
+              }}
+            >
+              <span className="inbox-terminal" data-failed={item.failed || undefined}>
+                <TerminalIcon />
+              </span>
+              <span className="label">{item.text}</span>
+              <span className="inbox-meta">{`${elapsed(item.at, now)} ago`}</span>
+            </button>
+          );
+        }
+        // A usage alert (17.23) is about no agent: choosing it only closes the inbox.
+        const usage = item.agent === null;
+        const agent = usage ? undefined : agents[item.agent];
         return (
           <button
             key={item.id}
             type="button"
             role="menuitem"
-            disabled={!agent}
-            title={agent ? undefined : "This agent has ended"}
+            disabled={!(agent || usage)}
+            title={agent || usage ? undefined : "This agent has ended"}
             onClick={go(agent)}
           >
-            <StateIcon state={item.state} />
+            {item.state === null ? (
+              <GaugeIcon
+                className="usage-alert-icon"
+                size={14}
+                weight="bold"
+                role="img"
+                aria-label="Usage"
+              />
+            ) : (
+              <StateIcon state={item.state} />
+            )}
             <span className="label">{item.text}</span>
             <span className="inbox-meta">
               {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}
@@ -170,5 +256,42 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
         </button>
       )}
     </ContextMenu>
+  );
+}
+
+/**
+ * An offer to remove a worktree whose pull request merged or closed (17.27): a click opens the
+ * usual remove dialog (its archive script and health as from the worktree's menu); nothing is
+ * removed until the user confirms there. Disabled once the worktree is gone.
+ */
+function OfferItem({
+  item,
+  now,
+  onClose,
+}: {
+  item: InboxItem & { offer: RemoveOffer };
+  now: number;
+  onClose: () => void;
+}) {
+  const { worktree, title, state } = item.offer;
+  const there = useHive((s) => findWorktree(s.projects, worktree) !== undefined);
+  const Icon = state === "merged" ? GitMergeIcon : GitPullRequestIcon;
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={!there}
+      title={there ? `${title}\nRemove the worktree…` : "This worktree is gone"}
+      onClick={() => {
+        onClose();
+        openModal("remove-worktree", null, worktree);
+      }}
+    >
+      <Icon {...ICON} />
+      <span className="label">{item.text}</span>
+      <span className="inbox-meta">
+        {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}
+      </span>
+    </button>
   );
 }

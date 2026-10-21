@@ -159,6 +159,11 @@ impl Store {
         Duration::from_secs(self.current().0.agents.silence_secs.into())
     }
 
+    /// Whether the computer is kept awake while agents work (17.17).
+    pub fn keep_awake(&self) -> bool {
+        self.current().0.agents.keep_awake
+    }
+
     /// Drops the settings of the project `id` (9.28): the settings then in use, or `None` when
     /// it had none (nothing is written). Under one lock, so a save meanwhile is not undone.
     pub fn forget(&self, id: &str) -> Result<Option<Settings>, String> {
@@ -266,6 +271,12 @@ pub fn check(settings: &Settings) -> Result<(), String> {
         0,
         100,
     )?;
+    range(
+        "notifications.command_secs",
+        settings.notifications.command_secs,
+        0,
+        3600,
+    )?;
     range("agents.silence_secs", settings.agents.silence_secs, 2, 60)?;
     text("terminal.font_family", &terminal.font_family)?;
     if let Some(base) = &settings.worktrees.default_base {
@@ -347,6 +358,7 @@ mod tests {
         let (_tmp, store) = store();
         assert_eq!(store.get(), (Settings::default(), None));
         assert_eq!(store.silence(), Duration::from_secs(5));
+        assert!(store.keep_awake());
     }
 
     #[test]
@@ -354,10 +366,12 @@ mod tests {
         let (tmp, store) = store();
         let mut settings = Settings::default();
         settings.agents.silence_secs = 12;
+        settings.agents.keep_awake = false;
         settings.worktrees.default_base = Some("dev".into());
         assert_eq!(store.set(settings.clone()), Ok(settings.clone()));
         assert_eq!(store.get(), (settings.clone(), None));
         assert_eq!(store.silence(), Duration::from_secs(12));
+        assert!(!store.keep_awake());
         let file = tmp.path().join("hive/settings.json");
         #[cfg(unix)]
         assert_eq!(
@@ -536,10 +550,11 @@ mod tests {
     #[test]
     fn every_range_holds_at_its_ends_only() {
         type Field = fn(&mut Settings) -> &mut u32;
-        let fields: [(Field, u32, u32); 4] = [
+        let fields: [(Field, u32, u32); 5] = [
             (|s| &mut s.terminal.font_size, 8, 32),
             (|s| &mut s.terminal.scrollback, 1000, 100_000),
             (|s| &mut s.notifications.volume, 0, 100),
+            (|s| &mut s.notifications.command_secs, 0, 3600),
             (|s| &mut s.agents.silence_secs, 2, 60),
         ];
         for (field, min, max) in fields {
