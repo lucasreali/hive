@@ -1,7 +1,7 @@
-# Every quality gate of CLAUDE.md, run on GitHub instead of the human's WSL machine (TODO
-# 5.11): heavy local builds have taken the WSL VM down. A task merges into `main` only when
-# this workflow (and macos.yml) is green on its branch tip. scripts/gates.sh is the optional
-# local equivalent of the Rust jobs.
+# Every quality gate of CLAUDE.md on Linux. GitHub Actions is the authority (TODO 5.11, D17.6):
+# a task merges into `main` only when this workflow and macos.yml are green on its branch tip,
+# and Linux-only code is verified only here. scripts/gates.sh is the local equivalent of the Rust
+# jobs on the human's Mac.
 name: ci
 
 on:

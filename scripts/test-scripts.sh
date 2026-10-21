@@ -2,6 +2,8 @@
 # Tests the portable scripts on this OS, Linux or macOS (TODO 17.2):
 #   - release.sh in a scratch repository holding a copy of the manifests (a fake `cargo`)
 #   - gates-lib.sh: a failing gate or mutants run is reported and counted (a fake `cargo`)
+#   - ci.sh with a fake `gh`: watch waits for ci and macos (--all adds windows), green asks for
+#     both (D18.1)
 #   - memwatch.sh reads the available memory, stops a process below its threshold, and leaves it
 #     alone above
 #   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
@@ -99,6 +101,105 @@ o=$(gates 0 mutants_verdict m 0 3)
 check "gates: the watchdog's stop fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
 o=$(gates 0 mutants_verdict m 0 1)
 check "gates: an unreadable memory fails" 'has "$o" "FAIL  m (stopped by the memory watchdog, .*" "failures=1"'
+
+# --- ci.sh --------------------------------------------------------------------------------------
+# In a scratch repository on a task branch, with a fake `gh`: it logs each call, lists the runs
+# in $tmp/ci-runs ("workflow id url" per line); `run view` reports the ids in $FAKE_FAILED failed and
+# the others succeeded, after one look per line of $tmp/ci-later-<id> ("in_progress", or "error":
+# gh fails).
+mkdir -p "$tmp/gh" "$tmp/ci"
+cat >"$tmp/gh/gh" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$FAKE_GH_LOG"
+case "$1 $2" in
+  "auth token") echo token ;;
+  "run list")
+    case "$3" in
+      # `--workflow <name>.yml … --status success`: the first green run's url, as `-q` prints it.
+      --workflow) while read -r name id url; do
+          case " $FAKE_FAILED " in *" $id "*) continue ;; esac
+          if [ "$name.yml" = "$4" ]; then echo "$url"; break; fi
+        done <"$FAKE_RUNS" ;;
+      *) cat "$FAKE_RUNS" ;;
+    esac ;;
+  "run view")
+    later=$(dirname "$FAKE_RUNS")/ci-later-$3
+    if [ -s "$later" ]; then
+      look=$(head -n 1 "$later"); sed -i.bak 1d "$later"
+      if [ "$look" = error ]; then exit 1; fi
+      echo "in_progress "; exit 0
+    fi
+    case " $FAKE_FAILED " in *" $3 "*) echo "completed failure" ;; *) echo "completed success" ;; esac ;;
+esac
+EOF
+chmod +x "$tmp/gh/gh"
+git -C "$tmp/ci" init -q
+git -C "$tmp/ci" config user.name test
+git -C "$tmp/ci" config user.email test@example.invalid
+git -C "$tmp/ci" commit -q --allow-empty -m base
+git -C "$tmp/ci" switch -q -c task/1.0-test
+# ci <runs> <failed ids> <args…>: ci.sh's output and exit code, "exit=<n>"; the gh calls in
+# $tmp/gh.log.
+ci() {
+  printf '%s\n' "$1" | sed '/^$/d' >"$tmp/ci-runs"
+  : >"$tmp/gh.log"
+  ( cd "$tmp/ci" && FAKE_RUNS=$tmp/ci-runs FAKE_FAILED=$2 FAKE_GH_LOG=$tmp/gh.log CI_SH_WAIT=0 CI_SH_POLL=0 \
+      PATH=$tmp/gh:$PATH "$repo/scripts/ci.sh" "${@:3}" 2>&1; echo "exit=$?" )
+}
+three="ci 1 u/1
+macos 2 u/2
+windows 3 u/3"
+o=$(ci "$three" "" watch)
+check "ci.sh watch: ci and macos green" 'has "$o" "green u/1" "green u/2" "exit=0"'
+check "ci.sh watch: windows not waited for" '! grep -q "^run view 3 " "$tmp/gh.log"'
+# A run still going, then a failed gh call: polled until it ends.
+printf 'in_progress\nerror\nin_progress\n' >"$tmp/ci-later-2"
+o=$(ci "$three" "" watch)
+check "ci.sh watch: polls a running run until it ends" \
+  'has "$o" "green u/2" "exit=0" && [ "$(grep -c "^run view 2 " "$tmp/gh.log")" = 4 ]'
+printf 'in_progress\n' >"$tmp/ci-later-2"
+o=$(ci "$three" "2" watch)
+check "ci.sh watch: a run that ends red fails" 'has "$o" "FAILED u/2 (scripts/ci.sh logs 2)" "exit=1"'
+# The poll is bounded: 240 looks (8 h at the real 2 min) and it gives up.
+for _ in $(seq 241); do echo in_progress; done >"$tmp/ci-later-1"
+o=$(ci "$three" "" watch)
+check "ci.sh watch: gives up on a run that never ends" 'has "$o" "STILL RUNNING u/1 after 8 h" "exit=1"'
+rm -f "$tmp/ci-later-1"
+o=$(ci "ci 1 u/1
+macos 2 u/2" "" watch)
+# No wait for windows: a handful of listings, not the 30 tries of the wait.
+check "ci.sh watch: no windows run, no wait" \
+  'has "$o" "exit=0" && [ "$(grep -c "^run list" "$tmp/gh.log")" -lt 10 ]'
+o=$(ci "$three" "" watch --all)
+check "ci.sh watch --all: windows too" 'has "$o" "green u/1" "green u/2" "green u/3" "exit=0"'
+o=$(ci "$three" "2" watch)
+check "ci.sh watch: a red macos fails" 'has "$o" "FAILED u/2 (scripts/ci.sh logs 2)" "exit=1"'
+o=$(ci "$three" "3" watch)
+check "ci.sh watch: a red windows does not count" 'has "$o" "exit=0"'
+o=$(ci "$three" "3" watch --all)
+check "ci.sh watch --all: a red windows fails" 'has "$o" "FAILED u/3 .*" "exit=1"'
+# A missing macos run: the wait is bounded (30 tries, CI_SH_WAIT=0 here), then it fails.
+o=$(ci "ci 1 u/1" "" watch)
+check "ci.sh watch: a missing macos run fails, after a bounded wait" \
+  'has "$o" "MISSING macos: no run of HEAD" "green u/1" "exit=1" && [ "$(grep -c "^run list" "$tmp/gh.log")" -gt 30 ]'
+o=$(ci "$three" "" watch --other)
+check "ci.sh watch: an unknown option fails" 'has "$o" "usage: scripts/ci.sh watch \[--all\]" "exit=2"'
+o=$(ci "" "" dispatch release.yml)
+check "ci.sh dispatch: on this task branch" \
+  'has "$o" "exit=0" && grep -qx "workflow run release.yml --ref task/1.0-test" "$tmp/gh.log"'
+git -C "$tmp/ci" switch -q -c other
+o=$(ci "" "" dispatch release.yml)
+check "ci.sh dispatch: only task branches" 'has "$o" "ci.sh: only task/\* branches (on other)" "exit=2"'
+git -C "$tmp/ci" switch -q task/1.0-test
+# green: a release needs ci and macos green (D18.1); windows does not count.
+o=$(ci "$three" "3" green)
+check "ci.sh green: ci and macos green" 'has "$o" "green u/1" "green u/2" "exit=0"'
+check "ci.sh green: asks for HEAD's runs" \
+  'grep -q "^run list --workflow macos.yml --commit $(git -C "$tmp/ci" rev-parse HEAD) --status success" "$tmp/gh.log"'
+o=$(ci "$three" "2" green)
+check "ci.sh green: a red macos fails" 'has "$o" "green u/1" "no green macos run for HEAD" "exit=1"'
+o=$(ci "macos 2 u/2" "" green task/1.0-test)
+check "ci.sh green: no ci run fails" 'has "$o" "no green ci run for task/1.0-test" "exit=1"'
 
 # --- macos-bundle.sh signing-mode ---------------------------------------------------------------
 secrets="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8"
