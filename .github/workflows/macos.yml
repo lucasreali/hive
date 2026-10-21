@@ -84,15 +84,17 @@ jobs:
       # mutant runs nightly (mutants-full.yml). `--no-config`: `.cargo/mutants.toml` excludes
       # these files for Linux, so its `[profile.mutants]` build and nextest (fails fast: the
       # first failing test ends the mutant's run) are passed here. One run per crate: a run's
-      # unmutated baseline tests every package it mutates, and both suites in a row no longer fit
-      # the timeout.
+      # unmutated baseline tests every package it mutates. The baseline has no time limit; each
+      # mutant's is cargo-mutants' own, sized from the baseline, at least 120 s
+      # (`--minimum-test-timeout`), and a mutant that times out still fails the job. A fixed
+      # `--timeout` also limited the baseline, which `hive`'s suite outgrew (18.18).
       - run: |
           if [ "$GITHUB_REF" = refs/heads/main ]; then echo "on main: nothing to test"; exit 0; fi
           base=$(git merge-base origin/main HEAD)
           for f in crates/hive/src/macos.rs src-tauri/src/macos.rs; do
             git diff "$base" -- "$f" > diff.patch
             if [ -s diff.patch ]; then
-              cargo mutants --no-config --profile mutants --test-tool nextest -f "$f" --in-diff diff.patch -j 2 --timeout 120
+              cargo mutants --no-config --profile mutants --test-tool nextest -f "$f" --in-diff diff.patch -j 2 --minimum-test-timeout 120
             else
               echo "$f: unchanged, no mutants"
             fi

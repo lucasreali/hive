@@ -65,9 +65,9 @@ jobs:
       - run: bun install --frozen-lockfile && bun run build
       # `-o` creates only its last folder.
       - run: mkdir -p out/hive out/app
-      - run: cargo mutants --no-config --profile mutants --test-tool nextest -f crates/hive/src/macos.rs -j 2 --timeout 120 -o out/hive
+      - run: cargo mutants --no-config --profile mutants --test-tool nextest -f crates/hive/src/macos.rs -j 2 --minimum-test-timeout 120 -o out/hive
       - if: ${{ !cancelled() }}
-        run: cargo mutants --no-config --profile mutants --test-tool nextest -f src-tauri/src/macos.rs -j 2 --timeout 120 -o out/app
+        run: cargo mutants --no-config --profile mutants --test-tool nextest -f src-tauri/src/macos.rs -j 2 --minimum-test-timeout 120 -o out/app
       - if: always()
         uses: actions/upload-artifact@v6
         with:
@@ -97,7 +97,7 @@ jobs:
           tool: cargo-mutants,cargo-nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mkdir -p out/windows
-      - run: cargo mutants --no-config --profile mutants --test-tool nextest -p hive -f 'crates/hive/src/windows*.rs' -j 2 --timeout 120 -o out/windows
+      - run: cargo mutants --no-config --profile mutants --test-tool nextest -p hive -f 'crates/hive/src/windows*.rs' -j 2 --minimum-test-timeout 120 -o out/windows
       - if: always()
         uses: actions/upload-artifact@v6
         with:

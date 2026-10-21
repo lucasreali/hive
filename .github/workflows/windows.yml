@@ -76,12 +76,13 @@ jobs:
       # The diff's mutants, as macos.yml: none when the branch left these files unchanged and
       # none on `main`; every mutant runs nightly (mutants-full.yml). `--no-config`:
       # `.cargo/mutants.toml` excludes these files for Linux, so its `[profile.mutants]` build
-      # and nextest (fails fast) are passed here.
+      # and nextest (fails fast) are passed here, and the same timeout: sized from the baseline,
+      # at least 120 s (`--minimum-test-timeout`), the baseline itself never limited.
       - run: |
           if [ "$GITHUB_REF" = refs/heads/main ]; then echo "on main: nothing to test"; exit 0; fi
           git diff "$(git merge-base origin/main HEAD)" -- 'crates/hive/src/windows*.rs' > diff.patch
           if [ -s diff.patch ]; then
-            cargo mutants --no-config --profile mutants --test-tool nextest -p hive -f 'crates/hive/src/windows*.rs' --in-diff diff.patch -j 2 --timeout 120
+            cargo mutants --no-config --profile mutants --test-tool nextest -p hive -f 'crates/hive/src/windows*.rs' --in-diff diff.patch -j 2 --minimum-test-timeout 120
           else
             echo "crates/hive/src/windows*.rs: unchanged, no mutants"
           fi

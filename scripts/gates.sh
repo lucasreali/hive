@@ -51,8 +51,8 @@ if [ "${MUTANTS:-1}" = 1 ]; then
   mutants mutants --in-diff "$out/diff.patch"
   # As macos.yml: `--no-config`, since `.cargo/mutants.toml` excludes this file for Linux.
   if [ "$os" = Darwin ]; then
-    mutants mutants-macos --no-config -f crates/hive/src/macos.rs --timeout 120
-    mutants mutants-macos-app --no-config -f src-tauri/src/macos.rs --timeout 120
+    mutants mutants-macos --no-config -f crates/hive/src/macos.rs --minimum-test-timeout 120
+    mutants mutants-macos-app --no-config -f src-tauri/src/macos.rs --minimum-test-timeout 120
   fi
 fi
 [ "$failures" = 0 ] || { echo "gates: $failures failed"; exit 1; }
