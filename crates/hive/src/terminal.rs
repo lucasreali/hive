@@ -221,16 +221,18 @@ fn spawn_on(
 }
 
 /// The locale and name variables every terminal gets (D18.2), worked out once: neither the
-/// service's environment nor the system locale changes while it runs.
+/// service's environment nor the system locale changes while it runs. The daemon asks for it
+/// at start, off any lock, and again before it locks the terminals to open one, so a slow
+/// `defaults` (at most [`crate::macos::LOCALE_TIMEOUT`]) never holds the other terminals.
 #[cfg(unix)]
-fn locale_env() -> &'static [(&'static str, String)] {
+pub fn locale_env() -> &'static [(&'static str, String)] {
     static ENV: std::sync::OnceLock<Vec<(&'static str, String)>> = std::sync::OnceLock::new();
     ENV.get_or_init(|| {
         let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
         let exists = locale::listed(Path::new(locale::LOCALE_DIR));
         #[cfg(target_os = "macos")]
         let (system, fallback) = (
-            crate::macos::system_locale(crate::macos::apple_locale()),
+            crate::macos::system_locale(crate::macos::apple_locale(), crate::macos::LOCALE_TIMEOUT),
             locale::MAC_FALLBACK,
         );
         // Linux has no system locale besides the environment's.

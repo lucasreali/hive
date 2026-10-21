@@ -72,6 +72,10 @@ impl State {
         let worktree = place.as_ref().map(|(_, worktree)| worktree.clone());
         env.extend(tokio::task::block_in_place(|| self.hive_env(place)));
         let shell = self.settings.get().0.terminal.shell;
+        // The locale's variables (D18.2), read at start; still being read, waited for here,
+        // never under the lock below.
+        #[cfg(unix)]
+        tokio::task::block_in_place(terminal::locale_env);
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {

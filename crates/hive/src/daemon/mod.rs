@@ -87,6 +87,9 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         },
         Listener::bind(paths)?,
     );
+    // The terminals' locale (D18.2), read once now, in the background: `defaults` may be slow.
+    #[cfg(unix)]
+    std::thread::spawn(crate::terminal::locale_env);
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());

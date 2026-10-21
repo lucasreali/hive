@@ -22,7 +22,7 @@ fn without_locale(env: &Env) -> Command {
 fn fallback_lang() -> String {
     #[cfg(target_os = "macos")]
     let (system, fallback) = (
-        hive::macos::system_locale(hive::macos::apple_locale()),
+        hive::macos::system_locale(hive::macos::apple_locale(), hive::macos::LOCALE_TIMEOUT),
         hive::locale::MAC_FALLBACK,
     );
     #[cfg(target_os = "linux")]
@@ -93,9 +93,15 @@ async fn a_dropped_file_name_typed_into_bash_runs_nothing() {
     let mut app = env.connect(Role::App).await;
     let home = env.path("home");
     app.open_terminal(1, &home).await;
-    // The prompt's quotes keep the command's echo from matching it.
-    app.input(1, "env PS1='rd''y> ' bash --norc --noprofile -i\r")
-        .await;
+    // The prompt's quotes keep the command's echo from matching it. On macOS the system's bash
+    // 3.2 by its path: a newer one first on `PATH` (Homebrew's) would not reproduce it.
+    let bash = if cfg!(target_os = "macos") {
+        "/bin/bash"
+    } else {
+        "bash"
+    };
+    let start = format!("env PS1='rd''y> ' {bash} --norc --noprofile -i\r");
+    app.input(1, &start).await;
     app.output_until(1, "rdy> ").await;
     // As 18.1's `quote::typed` writes the path: backslash-escaped, no Enter.
     app.input(1, "/tmp/\\$\\(touch\\ PWNED\\)ÅÅ ").await;

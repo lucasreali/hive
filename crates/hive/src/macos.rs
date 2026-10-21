@@ -233,17 +233,20 @@ pub fn apple_locale() -> std::process::Command {
     defaults
 }
 
+/// How long `defaults` may take to print the system locale; past that there is none.
+pub const LOCALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// The most `defaults` may print for it (a locale name is a few bytes); more is none.
+pub const LOCALE_LIMIT: u64 = 256;
+
 /// The system locale as `command` ([`apple_locale`]) prints it, trimmed, when it succeeds
-/// with something printed.
-pub fn system_locale(mut command: std::process::Command) -> Option<String> {
-    let out = command
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let text = String::from_utf8(out.stdout).ok()?;
+/// within `time` with something printed, at most [`LOCALE_LIMIT`] bytes. A command that takes
+/// longer is killed, with all it started.
+pub fn system_locale(command: std::process::Command, time: std::time::Duration) -> Option<String> {
+    let keep = crate::git::Stdout::Max(LOCALE_LIMIT);
+    let out = crate::git::limited(command, "defaults", &[], &[], &[0], keep, Some(time)).ok()?;
+    let text = String::from_utf8(out).ok()?;
     let text = text.trim();
-    (out.status.success() && !text.is_empty()).then(|| text.to_owned())
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// The app runs beside the service: it opens `path` itself.
@@ -478,18 +481,29 @@ mod tests {
         let sh = |script: &str| {
             let mut command = std::process::Command::new("/bin/sh");
             command.args(["-c", script]);
-            system_locale(command)
+            system_locale(command, LOCALE_TIMEOUT)
         };
         assert_eq!(sh("echo ' pt_BR'").as_deref(), Some("pt_BR"));
         assert_eq!(sh("echo"), None);
         assert_eq!(sh("echo pt_BR; exit 1"), None);
         assert_eq!(sh(r"printf '\377'"), None);
         let missing = std::process::Command::new("/nonexistent/defaults");
-        assert_eq!(system_locale(missing), None);
-        // The real one: a locale name, when the user has one.
-        let real = system_locale(apple_locale());
-        let name = |locale: &String| !locale.contains(char::is_whitespace);
-        assert!(real.as_ref().is_none_or(name), "{real:?}");
+        assert_eq!(system_locale(missing, LOCALE_TIMEOUT), None);
+        // At most `LOCALE_LIMIT` bytes: more is none.
+        let fits = format!("printf '%{LOCALE_LIMIT}s' x");
+        assert_eq!(sh(&fits).map(|text| text.len()), Some(1));
+        assert_eq!(sh(&format!("printf '%{}s' x", LOCALE_LIMIT + 1)), None);
+    }
+
+    #[test]
+    fn a_locale_command_that_hangs_is_none_in_time() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "echo pt_BR; sleep 30"]);
+        let start = std::time::Instant::now();
+        let time = std::time::Duration::from_millis(200);
+        assert_eq!(system_locale(command, time), None);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(LOCALE_TIMEOUT, std::time::Duration::from_secs(2));
     }
 
     #[test]
