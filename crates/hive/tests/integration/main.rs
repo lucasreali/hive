@@ -33,6 +33,9 @@ mod groups;
 mod hook;
 #[cfg(unix)]
 #[cfg(test)]
+mod locale;
+#[cfg(unix)]
+#[cfg(test)]
 mod projects;
 #[cfg(unix)]
 #[cfg(test)]

@@ -225,6 +225,27 @@ pub fn path_shell() -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
     (shell.program, vec!["-l".into(), "-c".into(), print.into()])
 }
 
+/// The command that prints the system locale (D18.2), `AppleLocale` in the global
+/// preferences (e.g. `en_BR`): `defaults read -g AppleLocale`.
+pub fn apple_locale() -> std::process::Command {
+    let mut defaults = std::process::Command::new("/usr/bin/defaults");
+    defaults.args(["read", "-g", "AppleLocale"]);
+    defaults
+}
+
+/// The system locale as `command` ([`apple_locale`]) prints it, trimmed, when it succeeds
+/// with something printed.
+pub fn system_locale(mut command: std::process::Command) -> Option<String> {
+    let out = command
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    let text = text.trim();
+    (out.status.success() && !text.is_empty()).then(|| text.to_owned())
+}
+
 /// The app runs beside the service: it opens `path` itself.
 pub fn native_path(path: &Path, _wslpath: &OsStr) -> io::Result<String> {
     Ok(path.to_string_lossy().into_owned())
@@ -451,6 +472,33 @@ pub mod power {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_system_locale_is_what_the_command_prints() {
+        let sh = |script: &str| {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", script]);
+            system_locale(command)
+        };
+        assert_eq!(sh("echo ' pt_BR'").as_deref(), Some("pt_BR"));
+        assert_eq!(sh("echo"), None);
+        assert_eq!(sh("echo pt_BR; exit 1"), None);
+        assert_eq!(sh(r"printf '\377'"), None);
+        let missing = std::process::Command::new("/nonexistent/defaults");
+        assert_eq!(system_locale(missing), None);
+        // The real one: a locale name, when the user has one.
+        let real = system_locale(apple_locale());
+        let name = |locale: &String| !locale.contains(char::is_whitespace);
+        assert!(real.as_ref().is_none_or(name), "{real:?}");
+    }
+
+    #[test]
+    fn the_system_locale_is_apples_global_preference() {
+        let command = apple_locale();
+        assert_eq!(command.get_program(), "/usr/bin/defaults");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["read", "-g", "AppleLocale"]);
+    }
 
     #[test]
     fn this_process_is_listed_with_its_group_session_and_folder() {
