@@ -8,6 +8,7 @@ import {
   bounceDock,
   closeWindow,
   guardClose,
+  homeText,
   isMac,
   keyText,
   nativeTheme,
@@ -41,6 +42,17 @@ test("shortcut texts use Ctrl, or macOS' symbols there", () => {
   asMac();
   expect(isMac()).toBe(true);
   expect(keyText(send)).toBe("Send (⇧⌘L), save (⌘S)");
+  // Enter and Esc as macOS names them (18.25); words that only contain them are kept.
+  expect(keyText("older (Enter), newer (Shift+Enter), close (Esc), Enterprise Escape")).toBe(
+    "older (↩), newer (⇧↩), close (esc), Enterprise Escape",
+  );
+});
+
+test("example home paths are macOS' there (18.25)", () => {
+  expect(homeText("/home/you/.claude-work")).toBe("/home/you/.claude-work");
+  asMac();
+  expect(homeText("/home/you/.claude-work")).toBe("/Users/you/.claude-work");
+  expect(homeText("you@work.example")).toBe("you@work.example");
 });
 const closed = () => document.documentElement.dataset.closed !== undefined;
 

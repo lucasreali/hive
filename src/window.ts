@@ -85,9 +85,22 @@ export const isMac = () => navigator.userAgent.includes("Mac");
 export const commandKey = (event: KeyboardEvent) =>
   isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 
-/** A text naming Ctrl shortcuts, with macOS' symbols there: "Ctrl+Shift+O" becomes "⇧⌘O". */
+/**
+ * A text naming keys, with macOS' symbols and names there (18.25): "Ctrl+Shift+O" becomes "⇧⌘O",
+ * "Shift+Enter" "⇧↩", "Enter" "↩" and "Esc" "esc".
+ */
 export const keyText = (text: string) =>
-  isMac() ? text.replaceAll("Ctrl+Shift+", "⇧⌘").replaceAll("Ctrl+", "⌘") : text;
+  isMac()
+    ? text
+        .replaceAll("Ctrl+Shift+", "⇧⌘")
+        .replaceAll("Ctrl+", "⌘")
+        .replace(/\bShift\+Enter\b/g, "⇧↩")
+        .replace(/\bEnter\b/g, "↩")
+        .replace(/\bEsc\b/g, "esc")
+    : text;
+
+/** An example path in the user's home, as macOS writes it there: "/home/you" is "/Users/you". */
+export const homeText = (path: string) => (isMac() ? path.replace(/^\/home\//, "/Users/") : path);
 
 /**
  * Whether a key belongs to a composition (an IME, or a dead key: ´ ~ ^ on a pt-BR layout,

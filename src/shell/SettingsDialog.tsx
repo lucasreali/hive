@@ -20,7 +20,7 @@ import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { openSettingsFile } from "../viewer/external";
-import { isMac } from "../window";
+import { homeText, isMac } from "../window";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
 
@@ -908,7 +908,7 @@ function Accounts() {
         />
         <input
           aria-label="New account folder"
-          placeholder="/home/you/.claude-work"
+          placeholder={homeText("/home/you/.claude-work")}
           spellCheck={false}
           value={dir}
           onChange={(e) => setDir(e.target.value)}

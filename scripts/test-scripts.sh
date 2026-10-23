@@ -244,6 +244,11 @@ if [ "$(uname)" = Darwin ]; then
   check "bundle: an unknown option fails" '! bundle_check --other'
   seal
   check "bundle: no JIT entitlement fails" '! bundle_check'
+  # plutil key paths split on dots, so the JIT-only entitlements are written out.
+  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict>' \
+    '<key>com.apple.security.cs.allow-jit</key><true/>' '</dict></plist>' >"$tmp/jit-only.plist"
+  seal --entitlements "$tmp/jit-only.plist"
+  check "bundle: no Apple Events entitlement fails" '! bundle_check'
   new_hive
   seal --entitlements src-tauri/Entitlements.plist
   check "bundle: a linker-signed hive fails" '! bundle_check'
@@ -253,7 +258,8 @@ if [ "$(uname)" = Darwin ]; then
   new_hive
   scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
   for key in NSDocumentsFolderUsageDescription NSDesktopFolderUsageDescription \
-    NSDownloadsFolderUsageDescription NSRemovableVolumesUsageDescription; do
+    NSDownloadsFolderUsageDescription NSRemovableVolumesUsageDescription \
+    NSAppleEventsUsageDescription NSLocalNetworkUsageDescription; do
     cp "$app/Contents/Info.plist" "$tmp/Info.plist"
     plutil -remove "$key" "$app/Contents/Info.plist"
     seal --entitlements src-tauri/Entitlements.plist
