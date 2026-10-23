@@ -29,12 +29,11 @@ pub fn path(home: Option<OsString>, dev: bool) -> Option<PathBuf> {
 /// kept as `<path>.1` and any older one dropped. Appends: should the rename fail, the previous
 /// log is kept in place.
 pub fn open(path: &Path) -> io::Result<File> {
-    if let Some(folder) = path.parent() {
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(folder)?;
-    }
+    let folder = path.parent().unwrap_or(Path::new("."));
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(folder)?;
     let mut previous = path.as_os_str().to_owned();
     previous.push(".1");
     // A missing log (first launch) or a failed rename only means nothing is rotated.
