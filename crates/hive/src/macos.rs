@@ -300,7 +300,8 @@ pub fn remote(path: &Path, home: Option<&Path>, volume: Option<&Volume>) -> Opti
 
 /// [`remote`] for the folder at `path`, a link judged by where it leads (e.g. to iCloud Drive).
 pub fn folder_warning(path: &Path, home: Option<&Path>) -> Option<String> {
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    // The listed folder exists; one gone meanwhile has nothing to warn about.
+    let path = std::fs::canonicalize(path).ok()?;
     remote(&path, home, volume(&path).ok().as_ref())
 }
 
@@ -554,6 +555,7 @@ mod tests {
         assert_eq!(kind, "apfs");
         assert!(volume(Path::new("/nonexistent/hive")).is_err());
         assert!(volume(Path::new("/a\0b")).is_err());
+        assert_eq!(folder_warning(Path::new("/nonexistent/hive"), None), None);
     }
 
     #[test]
