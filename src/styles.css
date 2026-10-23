@@ -2013,6 +2013,14 @@ button.chevron:hover {
   color: var(--text-3);
 }
 
+/* A network or cloud folder at Add project (D18.9): the warning colour. */
+.field-warning {
+  margin: 0;
+  font-size: var(--fs-small);
+  color: var(--state-permission);
+  overflow-wrap: anywhere;
+}
+
 .dialog footer {
   display: flex;
   justify-content: flex-end;

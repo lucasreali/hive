@@ -266,6 +266,44 @@ pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// What `statfs` says of a folder's volume: its mount flags and its file system type.
+pub type Volume = (u32, String);
+
+/// The volume holding `path` (`statfs`).
+pub fn volume(path: &Path) -> io::Result<Volume> {
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    // SAFETY: an all-zero `statfs` is valid; it is only written by the call.
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `path` is NUL-terminated and `stat` lives until the call returns.
+    match unsafe { libc::statfs(path.as_ptr(), &mut stat) } {
+        0 => Ok((stat.f_flags, text(&stat.f_fstypename).unwrap_or_default())),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+/// Why a project in `path` would be followed badly (D18.9), or none: a network volume
+/// (`statfs` without `MNT_LOCAL`, or `smbfs`/`nfs`/`webdav`) or a cloud folder (iCloud Drive,
+/// `~/Library/CloudStorage`), where FSEvents misses changes made elsewhere and git can hit its
+/// time limit. Hive still adds it; the app shows this as a warning.
+pub fn remote(path: &Path, home: Option<&Path>, volume: Option<&Volume>) -> Option<String> {
+    const CLOUD: [&str; 2] = ["Library/Mobile Documents", "Library/CloudStorage"];
+    const WHY: &str = "Hive may miss changes made elsewhere, and git may be slow";
+    let cloud = home.is_some_and(|home| CLOUD.iter().any(|dir| path.starts_with(home.join(dir))));
+    if cloud {
+        return Some(format!("This folder is in cloud storage: {WHY}."));
+    }
+    let (flags, kind) = volume?;
+    let network = ["smbfs", "nfs", "webdav"].contains(&kind.as_str());
+    (network || flags & libc::MNT_LOCAL as u32 == 0)
+        .then(|| format!("This folder is on a network volume ({kind}): {WHY}."))
+}
+
+/// [`remote`] for the folder at `path`, a link judged by where it leads (e.g. to iCloud Drive).
+pub fn folder_warning(path: &Path, home: Option<&Path>) -> Option<String> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    remote(&path, home, volume(&path).ok().as_ref())
+}
+
 /// The power assertion that keeps the Mac awake while agents work (17.17), as `caffeinate -i`:
 /// `IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep)`. The display
 /// may still sleep, and closing the lid on battery still sleeps the Mac.
@@ -475,6 +513,48 @@ pub mod power {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_and_cloud_folders_get_a_warning() {
+        let home = Path::new("/Users/me");
+        let local = (libc::MNT_LOCAL as u32 | 1, "apfs".to_owned());
+        let at = |path: &str, volume: Option<&Volume>| remote(Path::new(path), Some(home), volume);
+        assert_eq!(at("/Users/me/src/shop", Some(&local)), None);
+        assert_eq!(at("/Users/me/src/shop", None), None);
+        for kind in ["smbfs", "nfs", "webdav"] {
+            // Named a network type even if it claimed to be local.
+            let volume = (libc::MNT_LOCAL as u32, kind.to_owned());
+            let warning = at("/Volumes/share/shop", Some(&volume)).unwrap();
+            assert!(
+                warning.contains(&format!("network volume ({kind})")),
+                "{warning}"
+            );
+        }
+        let fuse = (0, "macfuse".to_owned());
+        assert!(at("/Volumes/x", Some(&fuse)).unwrap().contains("(macfuse)"));
+        for cloud in [
+            "/Users/me/Library/Mobile Documents/com~apple~CloudDocs/shop",
+            "/Users/me/Library/CloudStorage/Dropbox/shop",
+        ] {
+            let warning = at(cloud, Some(&local)).unwrap();
+            assert!(warning.contains("cloud storage"), "{warning}");
+            assert!(warning.contains("may miss changes"), "{warning}");
+        }
+        // Another user's, or with no home known: only the volume says.
+        let theirs = "/Users/other/Library/CloudStorage/Dropbox";
+        assert_eq!(at(theirs, Some(&local)), None);
+        let cloud = "/Users/me/Library/CloudStorage/Dropbox";
+        assert_eq!(remote(Path::new(cloud), None, Some(&local)), None);
+    }
+
+    #[test]
+    fn the_volume_is_what_statfs_says() {
+        let (flags, kind) = volume(Path::new("/")).unwrap();
+        assert_ne!(flags & libc::MNT_LOCAL as u32, 0);
+        assert_eq!(kind, "apfs");
+        assert!(volume(Path::new("/nonexistent/hive")).is_err());
+        assert!(volume(Path::new("/a\0b")).is_err());
+    }
 
     #[test]
     fn the_system_locale_is_what_the_command_prints() {

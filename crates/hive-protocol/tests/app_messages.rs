@@ -454,6 +454,7 @@ fn samples() -> Vec<Control> {
             parent: None,
             dirs: vec![],
             error: None,
+            warning: Some(m()),
         },
         File {
             worktree: s("/r"),

@@ -493,7 +493,8 @@
     "linux_path": "/",
     "parent": null,
     "dirs": [],
-    "error": null
+    "error": null,
+    "warning": "m"
   },
   {
     "type": "file",

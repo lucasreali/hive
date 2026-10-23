@@ -34,14 +34,24 @@ pub const HOME: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 /// path, and the subfolders of the folder it ends in, or of the one holding its last name.
 pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windows) -> Control {
     match list(&path, windows, home, programs) {
-        Ok((path, linux, parent, dirs)) => Control::Dirs {
-            path,
-            windows,
-            linux_path: linux,
-            parent,
-            dirs,
-            error: None,
-        },
+        Ok((path, linux, parent, dirs)) => {
+            // Only macOS checks for network and cloud folders (D18.9).
+            #[cfg(target_os = "macos")]
+            let warning = linux
+                .as_deref()
+                .and_then(|linux| crate::macos::folder_warning(Path::new(linux), home));
+            #[cfg(not(target_os = "macos"))]
+            let warning = None;
+            Control::Dirs {
+                path,
+                windows,
+                linux_path: linux,
+                parent,
+                dirs,
+                error: None,
+                warning,
+            }
+        }
         Err(err) => Control::Dirs {
             path,
             windows,
@@ -49,6 +59,7 @@ pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windo
             parent: None,
             dirs: Vec::new(),
             error: Some(err.to_string()),
+            warning: None,
         },
     }
 }
@@ -200,6 +211,8 @@ mod tests {
             (&got["type"], &got["windows"]),
             (&"dirs".into(), &windows.into())
         );
+        // Only a folder on a network or cloud volume has one; tests list local ones.
+        assert_eq!(got["warning"], serde_json::Value::Null);
         let field = |key: &str| got[key].clone();
         (
             serde_json::from_value(field("path")).unwrap(),
@@ -223,6 +236,22 @@ mod tests {
             .unwrap();
         assert!(written.success());
         path.display().to_string()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_cloud_folder_or_a_link_to_one_comes_with_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(tmp.path()).unwrap();
+        let cloud = home.join("Library/CloudStorage/Dropbox/shop");
+        fs::create_dir_all(&cloud).unwrap();
+        std::os::unix::fs::symlink(&cloud, home.join("shop")).unwrap();
+        for typed in [cloud.clone(), home.join("shop")] {
+            let typed = format!("{}/", typed.display());
+            let got = serde_json::to_value(answer(typed, false, Some(&home), &WINDOWS)).unwrap();
+            let warning = got["warning"].as_str().unwrap();
+            assert!(warning.contains("cloud storage"), "{warning}");
+        }
     }
 
     #[test]

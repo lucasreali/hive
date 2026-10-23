@@ -6,7 +6,7 @@ import { App } from "../App";
 import { apply } from "../reduce";
 import { initialState, openModal, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_REPOS } from "../transport/mock";
+import { MOCK_REPOS, MOCK_SHARE, MOCK_SHARE_WARNING } from "../transport/mock";
 import { savedWindows } from "./AddProjectDialog";
 
 beforeAll(async () => {
@@ -59,6 +59,18 @@ test("the dialog opens focused on the field, which shows the home folder once li
   expect(submit().disabled).toBe(false);
   expect(dialog.textContent).toContain("A git repository, or any folder inside one");
   expect(dialog.textContent).not.toContain("Windows folders are slower");
+});
+
+test("a folder on a network volume shows the service's warning and can still be added", async () => {
+  open();
+  await waitFor(() => expect(field().value).toBe("/home/user/"));
+  type(`${MOCK_SHARE}/`);
+  await waitFor(() => expect(screen.getByText(MOCK_SHARE_WARNING)).toBeDefined());
+  expect(screen.getByText(MOCK_SHARE_WARNING).className).toBe("field-warning");
+  expect(submit().disabled).toBe(false);
+  // Gone once the field leaves it.
+  type("/home/user/");
+  await waitFor(() => expect(screen.queryByText(MOCK_SHARE_WARNING)).toBeNull());
 });
 
 test("typing filters the typed folder's subfolders; a click enters one and ↑ goes up", async () => {
