@@ -43,6 +43,16 @@ test("each terminal gets its own byte channel", async () => {
   expect(calls[1]?.[1]).toMatchObject({ cwd: "/w", account: { config_dir: "/c" } });
 });
 
+test("a page reloaded after a WebContent crash takes a kept terminal's bytes (18.21)", async () => {
+  const calls = record();
+  const received: Uint8Array[] = [];
+  await tauriTransport.attachTerminal(7, (b) => received.push(b));
+  const [[cmd, { onData, ...args }]] = calls;
+  expect([cmd, args]).toEqual(["attach_terminal", { id: 7 }]);
+  (onData as Channel<ArrayBuffer>).onmessage(new Uint8Array([33]).buffer);
+  expect(received).toEqual([new Uint8Array([33])]);
+});
+
 test("terminal and project actions call their commands", async () => {
   const calls = record();
   await tauriTransport.writeTerminal(7, "ls\r");
@@ -189,7 +199,15 @@ test("a command that fails shows why as an error toast, and rejects already hand
     throw "the hive link is down";
   });
   // Every command but these: a new one sent with a bare `invoke` fails here.
-  const own = ["connect", "openTerminal", "saveFile", "playTone", "setTray", "pastedFiles"];
+  const own = [
+    "connect",
+    "openTerminal",
+    "attachTerminal",
+    "saveFile",
+    "playTone",
+    "setTray",
+    "pastedFiles",
+  ];
   const methods = Object.entries(tauriTransport).filter(([name]) => !own.includes(name));
   expect(methods.length).toBe(Object.keys(tauriTransport).length - own.length);
   for (const [name, method] of methods) {
@@ -210,6 +228,7 @@ test("a command that fails shows why as an error toast, and rejects already hand
   await expect(tauriTransport.openTerminal("/w", 80, 24, () => {})).rejects.toBe(
     "the hive link is down",
   );
+  await expect(tauriTransport.attachTerminal(7, () => {})).rejects.toBe("the hive link is down");
   await expect(tauriTransport.saveFile("/w", "a", "", null)).rejects.toBe("the hive link is down");
   // A tone the app cannot play falls back to the webview's (`notify.ts`).
   await expect(tauriTransport.playTone(40)).rejects.toBe("the hive link is down");

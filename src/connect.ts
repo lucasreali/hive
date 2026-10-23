@@ -5,7 +5,7 @@ import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
 import { openLocated, restore } from "./sessions";
 import { requestQuit } from "./shell/CloseAppDialog";
-import { dropFiles } from "./terminals";
+import { dropFiles, reattachTerminal, showOpenFailure } from "./terminals";
 import { transport } from "./transport";
 import { openTarget } from "./viewer/external";
 
@@ -24,6 +24,9 @@ function onMessage(message: ServiceMessage): void {
   if (message.type === "quit_requested") requestQuit();
   if (message.type === "menu") runMenuItem(message.item);
   if (message.type === "files_dropped") dropFiles(message.text, message.x, message.y);
+  if (message.type === "terminal_kept") {
+    showOpenFailure(reattachTerminal(message.channel, message.cwd));
+  }
 }
 
 /** Connects to the service, at startup and on "Reconnect", always with the same handler. */
