@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { notice } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
@@ -46,6 +47,16 @@ const folders = () =>
     (li) => li.textContent,
   );
 const type = (value: string) => fireEvent.change(field(), { target: { value } });
+
+test("the field's example is a home folder of the platform (18.25)", () => {
+  open();
+  expect(field().placeholder).toBe("/home/you/projects/shop");
+  cleanup();
+  asMac();
+  render(<App />);
+  act(() => openModal("add-project"));
+  expect(field().placeholder).toBe("/Users/you/projects/shop");
+});
 
 test("the dialog opens focused on the field, which shows the home folder once listed", async () => {
   const dialog = open();

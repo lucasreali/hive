@@ -4,6 +4,7 @@ import { safeStorage } from "../persist";
 import { clearAddProjectError, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
+import { homeText } from "../window";
 import { CloseIcon, FolderIcon, ICON } from "./icons";
 
 const close = () => openModal(null);
@@ -135,7 +136,9 @@ export function AddProjectDialog() {
                     clearAddProjectError();
                   }}
                   placeholder={
-                    backslash ? "C:\\Users\\you\\projects\\shop" : "/home/you/projects/shop"
+                    backslash
+                      ? "C:\\Users\\you\\projects\\shop"
+                      : homeText("/home/you/projects/shop")
                   }
                   spellCheck={false}
                   autoComplete="off"

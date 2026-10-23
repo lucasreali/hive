@@ -112,6 +112,10 @@ test("⌘F on macOS; pressed again it selects the text to type a new search", as
   // Ctrl+F stays the shell's (forward a character).
   expect(shortcut(new KeyboardEvent("keydown", { key: "f", ctrlKey: true }))).toBeNull();
   act(() => shortcut(cmdF)?.());
+  expect(screen.getByRole("button", { name: "Next match" }).title).toBe("Next match, older (↩)");
+  expect(screen.getByRole("button", { name: "Previous match" }).title).toBe(
+    "Previous match, newer (⇧↩)",
+  );
   type("two");
   await waitFor(() => expect(count()).toBe("1 of 1"));
   const other = document.createElement("button");

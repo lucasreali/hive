@@ -9,7 +9,7 @@ import {
   type SearchResults,
   searchTerminal,
 } from "../terminals";
-import { composing } from "../window";
+import { composing, keyText } from "../window";
 import { ICON } from "./icons";
 
 // 17.21: the terminal's search bar (⌘F on macOS, Ctrl+Shift+F elsewhere), over the focused
@@ -104,7 +104,7 @@ function SearchBar({ id }: { id: number }) {
       <button
         type="button"
         className="ghost"
-        title="Next match, older (Enter)"
+        title={keyText("Next match, older (Enter)")}
         aria-label="Next match"
         disabled={!text}
         onClick={() => find()}
@@ -114,7 +114,7 @@ function SearchBar({ id }: { id: number }) {
       <button
         type="button"
         className="ghost"
-        title="Previous match, newer (Shift+Enter)"
+        title={keyText("Previous match, newer (Shift+Enter)")}
         aria-label="Previous match"
         disabled={!text}
         onClick={() => find({ newer: true })}
