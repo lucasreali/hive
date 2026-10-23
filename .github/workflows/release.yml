@@ -89,6 +89,9 @@ jobs:
         # Pinned: a newer bun counts comment-only lines as uncovered.
         with:
           bun-version-file: .bun-version
+        # Pinned: a newer bun counts comment-only lines as uncovered.
+        with:
+          bun-version-file: .bun-version
       - uses: actions/download-artifact@v7
         with:
           name: hive-linux
@@ -127,6 +130,9 @@ jobs:
         with:
           toolchain: stable
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        # Pinned: a newer bun counts comment-only lines as uncovered.
+        with:
+          bun-version-file: .bun-version
         # Pinned: a newer bun counts comment-only lines as uncovered.
         with:
           bun-version-file: .bun-version

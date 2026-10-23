@@ -64,6 +64,9 @@ jobs:
         # Pinned: a newer bun counts comment-only lines as uncovered.
         with:
           bun-version-file: .bun-version
+        # Pinned: a newer bun counts comment-only lines as uncovered.
+        with:
+          bun-version-file: .bun-version
       - run: brew install fish
       - run: bun install --frozen-lockfile && bun run build
       # `-o` creates only its last folder.
