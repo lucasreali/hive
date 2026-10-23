@@ -13,6 +13,10 @@
 #       (not only linker-signed) with the app's identity; the app's entitlements allow the
 #       WebView's JIT; the Info.plist names Hive in the folder prompts. With --developer-id also
 #       Gatekeeper's verdict (`spctl -a`) and the stapled notarization ticket.
+#   macos-bundle.sh dsyms <Hive.app> <folder>
+#       The app's binary and its nested `hive` each have a dSYM in <folder> (`hive-app.dSYM`,
+#       `hive.dSYM`, as cargo makes them with `split-debuginfo = "packed"`) whose UUIDs are the
+#       binary's (`dwarfdump --uuid`), so a crash report of that release can be symbolicated.
 set -euo pipefail
 
 die() { echo "macos-bundle: $*" >&2; exit 1; }
@@ -74,6 +78,29 @@ check() {
   echo "ok    $app"
 }
 
+# uuids <path>: its Mach-O UUIDs, one per line.
+uuids() { dwarfdump --uuid "$1" | awk '/^UUID: / {print $2}' | sort; }
+
+# dsym <binary> <dSYM>
+dsym() {
+  local bin=$1 dsym=$2 want got
+  [ -f "$bin" ] || die "no such binary: $bin"
+  [ -d "$dsym" ] || die "no dSYM: $dsym"
+  want=$(uuids "$bin")
+  got=$(uuids "$dsym")
+  [ -n "$want" ] && [ "$want" = "$got" ] || die "$dsym (${got:-no UUID}) does not match $bin (${want:-no UUID})"
+  echo "ok    $dsym $want"
+}
+
+dsyms() {
+  local app=$1 folder=$2 exe
+  [ -d "$app" ] || die "no such bundle: $app"
+  exe=$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist") ||
+    die "no CFBundleExecutable in $app"
+  dsym "$app/Contents/MacOS/$exe" "$folder/hive-app.dSYM"
+  dsym "$app/Contents/Resources/hive" "$folder/hive.dSYM"
+}
+
 # Which signing the release does: "developer-id" with all six secrets (release.yml passes them under
 # their own names), "adhoc" with none; a partial set fails rather than ship ad-hoc by mistake.
 signing_mode() {
@@ -91,6 +118,7 @@ APPLE_API_KEY APPLE_API_KEY_P8"
 case ${1:-} in
   signing-mode) [ $# = 1 ] || die "usage: $0 signing-mode"; signing_mode ;;
   sign-hive) [ $# = 2 ] || die "usage: $0 sign-hive <hive binary>"; sign_hive "$2" ;;
+  dsyms) [ $# = 3 ] || die "usage: $0 dsyms <Hive.app> <folder>"; dsyms "$2" "$3" ;;
   check) [ $# -ge 2 ] && [ $# -le 3 ] || die "usage: $0 check <Hive.app> [--developer-id]"; check "$2" "${3:-}" ;;
-  *) die "usage: $0 signing-mode | sign-hive <hive binary> | check <Hive.app> [--developer-id]" ;;
+  *) die "usage: $0 signing-mode | sign-hive <hive binary> | check <Hive.app> [--developer-id] | dsyms <Hive.app> <folder>" ;;
 esac
