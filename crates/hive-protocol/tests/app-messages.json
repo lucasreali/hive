@@ -597,7 +597,8 @@
     "type": "diagnostics",
     "settings_file": "/h/.config/hive/settings.json",
     "wrapper": "/h/.local/share/hive/bin/claude",
-    "claude": null
+    "claude": null,
+    "git_error": "m"
   },
   {
     "type": "error",

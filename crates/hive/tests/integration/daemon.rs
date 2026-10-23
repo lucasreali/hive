@@ -390,6 +390,8 @@ async fn diagnostics_find_a_claude_installed_after_none_was_found() {
         settings_file: env.path("config/hive/settings.json").display().to_string(),
         wrapper: env.path("data/hive/bin/claude").display().to_string(),
         claude,
+        // This machine runs git.
+        git_error: None,
     };
     app.send(0, Control::GetDiagnostics).await;
     assert_eq!(app.control().await, (0, diagnostics(None)));
@@ -494,6 +496,7 @@ async fn the_settings_file_is_written_to_be_opened_and_diagnostics_name_it() {
         settings_file: file.display().to_string(),
         wrapper: env.path("data/hive/bin/claude").display().to_string(),
         claude: Some(tools.join("claude").display().to_string()),
+        git_error: None,
     };
     assert_eq!(app.control().await, (0, diagnostics));
     // No directory for the file: why it cannot be opened.

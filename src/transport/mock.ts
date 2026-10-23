@@ -49,6 +49,7 @@ export const MOCK_DIAGNOSTICS = {
   settings_file: "/home/mock/.config/hive/settings.json",
   wrapper: "/home/mock/.local/share/hive/bin/claude",
   claude: "/home/mock/.local/bin/claude",
+  git_error: null,
 };
 
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };

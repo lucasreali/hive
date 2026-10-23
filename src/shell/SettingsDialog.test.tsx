@@ -481,8 +481,12 @@ test("about shows both versions, the service's diagnostics and terminals without
   await waitFor(() => expect(about()).toContain(`Settings file${MOCK_DIAGNOSTICS.settings_file}`));
   expect(about()).toContain(`claude wrapper${MOCK_DIAGNOSTICS.wrapper}`);
   expect(about()).toContain(`claude it runs${MOCK_DIAGNOSTICS.claude}`);
-  act(() => apply({ type: "diagnostics", settings_file: "/s", wrapper: "/w", claude: null }));
+  expect(about()).not.toContain("git");
+  const diagnostics = { settings_file: "/s", wrapper: "/w", claude: null, git_error: null };
+  act(() => apply({ type: "diagnostics", ...diagnostics }));
   expect(about()).toContain("claude it runsnot found on PATH");
+  act(() => apply({ type: "diagnostics", ...diagnostics, git_error: "No tools." }));
+  expect(about()).toContain("gitNo tools.");
   act(() => apply({ type: "terminal_exited", channel: 3, code: 0 }));
   expect(about()).toContain("Terminals without hooksnone");
   ask.mockRestore();

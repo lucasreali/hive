@@ -236,6 +236,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 settings_file: state.settings.file().display().to_string(),
                 wrapper: state.bin_dir.join("claude").display().to_string(),
                 claude: claude.map(|c| c.display().to_string()),
+                // Waits for the resolution at start, if still running (at most 2 s).
+                git_error: tokio::task::block_in_place(crate::git::problem),
             };
             state.to_app(0, &diagnostics).await;
         }

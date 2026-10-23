@@ -14,7 +14,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   welcome: { version: true, distro: true },
   settings: { settings: true },
   settings_failed: { message: true },
-  diagnostics: { settings_file: true, wrapper: true, claude: true },
+  diagnostics: { settings_file: true, wrapper: true, claude: true, git_error: true },
   update_ready: { version: true },
   update_failed: { error: true },
   translocated: { notice: true },

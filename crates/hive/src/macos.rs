@@ -12,6 +12,7 @@ use libproc::proc_pid::{PIDInfo, PidInfoFlavor, pidinfo};
 use libproc::processes::{ProcFilter, pids_by_type};
 use nix::unistd::{Pid, getsid};
 
+use crate::git::Resolved;
 use crate::procs::Proc;
 use crate::terminal::{conpty, login};
 
@@ -247,6 +248,50 @@ pub fn system_locale(command: std::process::Command, time: std::time::Duration) 
     let text = String::from_utf8(out).ok()?;
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// The command that prints where Apple's git is (D18.3): `xcrun -f git`, what the
+/// `/usr/bin/git` stub asks at each call.
+pub fn xcrun_git() -> std::process::Command {
+    let mut xcrun = std::process::Command::new("/usr/bin/xcrun");
+    xcrun.args(["-f", "git"]);
+    xcrun
+}
+
+/// How long `xcrun` may take to find git; past that git is looked for on `PATH`.
+pub const XCRUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// The most `xcrun` may print for it (a path).
+pub const XCRUN_LIMIT: u64 = 4096;
+
+/// What xcrun prints when the Command Line Tools (or Xcode) are missing.
+const NO_TOOLS: [&str; 2] = [
+    "invalid active developer path",
+    "no developer tools were found",
+];
+
+/// The git `command` ([`xcrun_git`]) finds within `time`: the absolute path it prints;
+/// [`Resolved::Missing`] when it fails saying Apple's tools are missing; otherwise (any other
+/// failure, a relative path, more than [`XCRUN_LIMIT`] bytes) `git` on `PATH`, as before.
+pub fn apple_git(command: std::process::Command, time: std::time::Duration) -> Resolved {
+    let keep = crate::git::Stdout::Max(XCRUN_LIMIT);
+    match crate::git::limited(command, "xcrun", &[], &[], &[0], keep, Some(time)) {
+        Ok(out) => {
+            let git = PathBuf::from(OsStr::from_bytes(out.trim_ascii()));
+            if git.is_absolute() {
+                Resolved::Apple(git)
+            } else {
+                Resolved::OnPath
+            }
+        }
+        Err(err) => {
+            let err = err.to_string().to_lowercase();
+            if NO_TOOLS.iter().any(|no| err.contains(no)) {
+                Resolved::Missing
+            } else {
+                Resolved::OnPath
+            }
+        }
+    }
 }
 
 /// The app runs beside the service: it opens `path` itself.
@@ -504,6 +549,64 @@ mod tests {
         assert_eq!(system_locale(command, time), None);
         assert!(start.elapsed() < std::time::Duration::from_secs(10));
         assert_eq!(LOCALE_TIMEOUT, std::time::Duration::from_secs(2));
+    }
+
+    /// [`apple_git`] of a shell `script` standing for `xcrun -f git`.
+    fn xcrun(script: &str) -> Resolved {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", script]);
+        apple_git(command, XCRUN_TIMEOUT)
+    }
+
+    #[test]
+    fn xcrun_names_the_git_to_run() {
+        let tools = "/Library/Developer/CommandLineTools/usr/bin/git";
+        let found = Resolved::Apple(PathBuf::from(tools));
+        assert_eq!(xcrun(&format!("echo ' {tools}'")), found);
+        // Anything but an absolute path, or a failure other than missing tools: git on `PATH`.
+        assert_eq!(xcrun("echo git"), Resolved::OnPath);
+        assert_eq!(xcrun("echo /x/git; exit 1"), Resolved::OnPath);
+        assert_eq!(
+            xcrun("echo 'xcrun: error: unable to find utility' >&2; exit 72"),
+            Resolved::OnPath
+        );
+        let fits = format!("printf '/%{}s' x", XCRUN_LIMIT - 1);
+        assert!(matches!(xcrun(&fits), Resolved::Apple(_)));
+        let over = format!("printf '/%{}s' x", XCRUN_LIMIT);
+        assert_eq!(xcrun(&over), Resolved::OnPath);
+        let missing = std::process::Command::new("/nonexistent/xcrun");
+        assert_eq!(apple_git(missing, XCRUN_TIMEOUT), Resolved::OnPath);
+    }
+
+    #[test]
+    fn xcrun_without_the_tools_means_no_git() {
+        // What xcrun prints on a Mac without the Command Line Tools.
+        let error = "xcrun: error: invalid active developer path \
+            (/Library/Developer/CommandLineTools), missing xcrun at: \
+            /Library/Developer/CommandLineTools/usr/bin/xcrun";
+        assert_eq!(
+            xcrun(&format!("echo '{error}' >&2; exit 1")),
+            Resolved::Missing
+        );
+        let note = "xcode-select: note: No developer tools were found, requesting install.";
+        assert_eq!(
+            xcrun(&format!("echo '{note}' >&2; exit 1")),
+            Resolved::Missing
+        );
+    }
+
+    #[test]
+    fn xcrun_that_hangs_is_given_up_in_time() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "echo /x/git; sleep 30"]);
+        let start = std::time::Instant::now();
+        let time = std::time::Duration::from_millis(200);
+        assert_eq!(apple_git(command, time), Resolved::OnPath);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(XCRUN_TIMEOUT, std::time::Duration::from_secs(2));
+        let command = xcrun_git();
+        assert_eq!(command.get_program(), "/usr/bin/xcrun");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["-f", "git"]);
     }
 
     #[test]

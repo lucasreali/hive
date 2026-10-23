@@ -337,7 +337,7 @@ pub fn fetch_base(dir: &Path, base: &str, env: &[(&str, String)]) -> Option<Stri
 /// GitHub token, 9.30), never prompting, within [`FETCH_TIME`].
 pub fn fetch(dir: &Path, remote: &str, refspec: &str, env: &[(&str, String)]) -> io::Result<()> {
     let args = ["fetch", "--no-tags", "--", remote, refspec].map(OsStr::new);
-    let mut command = git::command(dir);
+    let mut command = git::command(dir)?;
     command
         .args(args)
         .envs(env.iter().cloned())

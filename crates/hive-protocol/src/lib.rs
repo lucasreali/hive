@@ -942,6 +942,9 @@ pub enum Control {
         wrapper: String,
         /// The `claude` the wrapper runs, as found on the service's `PATH`; `None` when none is.
         claude: Option<String>,
+        /// Why the service runs no git (Apple's Command Line Tools missing, D18.3); `None`
+        /// when git runs.
+        git_error: Option<String>,
     },
     Error {
         message: String,
@@ -2750,10 +2753,11 @@ mod tests {
             settings_file: "/c/settings.json".into(),
             wrapper: "/d/bin/claude".into(),
             claude: None,
+            git_error: Some("no tools".into()),
         };
         assert_eq!(
             &Frame::control(0, &diagnostics).payload[..],
-            br#"{"type":"diagnostics","settings_file":"/c/settings.json","wrapper":"/d/bin/claude","claude":null}"#
+            br#"{"type":"diagnostics","settings_file":"/c/settings.json","wrapper":"/d/bin/claude","claude":null,"git_error":"no tools"}"#
         );
         let underline: CursorStyle = serde_json::from_str(r#""underline""#).unwrap();
         assert_eq!(underline, CursorStyle::Underline);

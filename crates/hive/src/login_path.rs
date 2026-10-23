@@ -18,11 +18,15 @@ pub fn set(path: OsString) {
     *KNOWN.write().unwrap_or_else(PoisonError::into_inner) = Some(path);
 }
 
+/// The user's `PATH`, once known.
+pub fn known() -> Option<OsString> {
+    KNOWN.read().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
 /// `command` with the user's `PATH` once it is known (the service's own until then). A
 /// `PATH` set on a `Command` is also where its program is looked for.
 pub fn apply(command: &mut Command) -> &mut Command {
-    let known = KNOWN.read().unwrap_or_else(PoisonError::into_inner);
-    with_path(command, known.as_deref())
+    with_path(command, known().as_deref())
 }
 
 /// `command` with `path` as its `PATH`, unless there is none or it is empty (which would find

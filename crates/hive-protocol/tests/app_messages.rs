@@ -511,6 +511,7 @@ fn samples() -> Vec<Control> {
             settings_file: s("/h/.config/hive/settings.json"),
             wrapper: s("/h/.local/share/hive/bin/claude"),
             claude: None,
+            git_error: Some(m()),
         },
         Error { message: m() },
     ]

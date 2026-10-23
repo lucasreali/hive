@@ -607,6 +607,7 @@ function About() {
     ["Settings file", diagnostics?.settings_file ?? "…"],
     ["claude wrapper", diagnostics?.wrapper ?? "…"],
     ["claude it runs", diagnostics ? (diagnostics.claude ?? "not found on PATH") : "…"],
+    ...(diagnostics?.git_error ? [["git", diagnostics.git_error] as [string, string]] : []),
     ["Terminals without hooks", unhooked || "none"],
   ];
   return (

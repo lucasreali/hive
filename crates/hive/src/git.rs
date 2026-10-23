@@ -1,10 +1,10 @@
 //! Git always runs as the `git` executable with separate arguments, output size-limited.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
@@ -23,9 +23,82 @@ const TAIL_BLOCK: u64 = 65_536;
 /// The longest a git command that only reads may take (e.g. on a hung network drive).
 pub const TIME_LIMIT: Duration = Duration::from_secs(10);
 
-/// `git -C <dir>`, ready for its arguments.
-pub fn command(dir: &Path) -> Command {
-    let mut command = Command::new("git");
+/// Which git the service runs (D18.3), worked out once at start by [`resolved`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolved {
+    /// `git` as found on `PATH` (every system but macOS).
+    OnPath,
+    /// The git Apple's `/usr/bin/git` stub runs (`xcrun -f git`), run directly in the stub's
+    /// place: the stub costs about 5 ms a call.
+    Apple(PathBuf),
+    /// Apple's Command Line Tools are missing: the stub would ask to install them at every call.
+    Missing,
+}
+
+/// Apple's git stub, which looks for the Command Line Tools at each call.
+pub const STUB: &str = "/usr/bin/git";
+
+/// Why no git runs while Apple's tools are missing (Diagnostics shows it).
+pub const MISSING: &str = "Hive runs no git: Apple's Command Line Tools are not installed. \
+    Install them (xcode-select --install in a terminal), then restart Hive's service.";
+
+/// The git resolved at start, or now on first need (the CLI). The daemon asks at start, on a
+/// thread of its own: `xcrun` may be slow (at most [`crate::macos::XCRUN_TIMEOUT`]).
+pub fn resolved() -> &'static Resolved {
+    static RESOLVED: std::sync::OnceLock<Resolved> = std::sync::OnceLock::new();
+    RESOLVED.get_or_init(|| {
+        #[cfg(target_os = "macos")]
+        let resolved =
+            crate::macos::apple_git(crate::macos::xcrun_git(), crate::macos::XCRUN_TIMEOUT);
+        #[cfg(not(target_os = "macos"))]
+        let resolved = Resolved::OnPath;
+        resolved
+    })
+}
+
+/// The program a git call runs with `path` as its `PATH`: `git` on `path`, unless that is
+/// Apple's `stub`, then the git `resolved` names, or an error when Apple's tools are missing.
+/// The user's own git (Homebrew's, 17.5) first on `path` is always run.
+fn program(resolved: &Resolved, path: Option<&OsStr>, stub: &Path) -> io::Result<OsString> {
+    let found = || {
+        std::env::split_paths(path?)
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| dir.join("git"))
+            .find(|git| {
+                git.metadata()
+                    .is_ok_and(|m| m.is_file() && crate::mode::executable(&m))
+            })
+    };
+    match resolved {
+        Resolved::OnPath => Ok("git".into()),
+        _ if found().as_deref() != Some(stub) => Ok("git".into()),
+        Resolved::Apple(git) => Ok(git.clone().into_os_string()),
+        Resolved::Missing => Err(io::Error::new(io::ErrorKind::NotFound, MISSING)),
+    }
+}
+
+/// The `PATH` git calls get: the user's once known (17.5), else the service's.
+fn git_path() -> Option<OsString> {
+    crate::login_path::known().or_else(|| std::env::var_os("PATH"))
+}
+
+/// Why git cannot run, for Diagnostics; `None` when it can.
+pub fn problem() -> Option<String> {
+    let path = git_path();
+    let program = program(resolved(), path.as_deref(), Path::new(STUB));
+    program.err().map(|err| err.to_string())
+}
+
+/// `git -C <dir>`, ready for its arguments; an error, and nothing run, when no git can run
+/// ([`Resolved::Missing`]).
+pub fn command(dir: &Path) -> io::Result<Command> {
+    let path = git_path();
+    command_with(dir, program(resolved(), path.as_deref(), Path::new(STUB))?)
+}
+
+/// `git -C <dir>` run as `program`.
+fn command_with(dir: &Path, program: OsString) -> io::Result<Command> {
+    let mut command = Command::new(program);
     command
         .arg("-C")
         .arg(dir)
@@ -46,7 +119,7 @@ pub fn command(dir: &Path) -> Command {
         .env("GIT_OPTIONAL_LOCKS", "0");
     // The user's git, and what its hooks and filters run (17.5).
     crate::login_path::apply(&mut command);
-    command
+    Ok(command)
 }
 
 /// Runs `git -C <dir> <args>` with `input` on stdin; any exit code outside `ok` is an error
@@ -72,7 +145,7 @@ fn run_within(
     limit: u64,
     time: Option<Duration>,
 ) -> io::Result<Vec<u8>> {
-    let mut command = command(dir);
+    let mut command = command(dir)?;
     command.args(args);
     limited(command, "git", args, input, ok, Stdout::Max(limit), time)
 }
@@ -269,6 +342,7 @@ mod tests {
         assert!(!tmp.path().join("ran").exists());
         // Every git command carries the flags, `git::command` used directly too.
         let args: Vec<_> = command(tmp.path())
+            .unwrap()
             .get_args()
             .map(OsStr::to_owned)
             .collect();
@@ -305,6 +379,84 @@ mod tests {
         git(&["config", "log.showSignature", "true"]);
         git(&["log", "-1", "--format=%ct", "HEAD", "--"]);
         assert!(!dir.join("gpg.ran").exists());
+    }
+
+    /// A folder holding an executable `git` that marks each run with a file beside it.
+    #[cfg(unix)]
+    fn fake_git(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let git = dir.join("git");
+        std::fs::write(&git, "#!/bin/sh\ntouch \"$0.ran\"\n").unwrap();
+        std::fs::set_permissions(&git, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        git
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_tools_stop_every_call_through_the_stub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = fake_git(&tmp.path().join("usr/bin"));
+        let path = std::env::join_paths([tmp.path().join("usr/bin")]).unwrap();
+        let program = program(&Resolved::Missing, Some(&path), &stub);
+        let err = program.unwrap_err();
+        assert_eq!(
+            (err.kind(), err.to_string()),
+            (io::ErrorKind::NotFound, MISSING.to_owned())
+        );
+        // A folder or a file that cannot run before it is no git: the stub is still first.
+        let skipped = tmp.path().join("skipped");
+        std::fs::create_dir_all(skipped.join("git")).unwrap();
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("git"), "").unwrap();
+        let path = std::env::join_paths([skipped, plain, tmp.path().join("usr/bin")]).unwrap();
+        let err = super::program(&Resolved::Missing, Some(&path), &stub).unwrap_err();
+        assert_eq!(err.to_string(), MISSING);
+        assert!(!tmp.path().join("usr/bin/git.ran").exists());
+        // No git on `PATH` at all: `git`, which fails to start as before.
+        let none = super::program(&Resolved::Missing, None, &stub).unwrap();
+        assert_eq!(none, "git");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_resolved_git_replaces_the_stub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = fake_git(&tmp.path().join("usr/bin"));
+        let tools = fake_git(&tmp.path().join("tools"));
+        let apple = Resolved::Apple(tools.clone());
+        // The stub first on `PATH` (a relative folder before it is skipped).
+        let path = std::env::join_paths([PathBuf::from("rel"), tmp.path().join("usr/bin")]);
+        let path = path.unwrap();
+        let program = program(&apple, Some(&path), &stub).unwrap();
+        assert_eq!(program, tools.as_os_str());
+        let mut command = command_with(tmp.path(), program).unwrap();
+        assert!(command.status().unwrap().success());
+        assert!(tmp.path().join("tools/git.ran").exists());
+        assert!(!tmp.path().join("usr/bin/git.ran").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_users_own_git_first_on_path_is_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = fake_git(&tmp.path().join("usr/bin"));
+        fake_git(&tmp.path().join("brew"));
+        let path = std::env::join_paths([tmp.path().join("brew"), tmp.path().join("usr/bin")]);
+        let path = path.unwrap();
+        for resolved in [Resolved::Missing, Resolved::Apple(tmp.path().join("x"))] {
+            assert_eq!(program(&resolved, Some(&path), &stub).unwrap(), "git");
+        }
+        // Off macOS, `git` on `PATH` without looking.
+        assert_eq!(program(&Resolved::OnPath, None, &stub).unwrap(), "git");
+    }
+
+    #[test]
+    fn this_machine_runs_git() {
+        assert_eq!(problem(), None);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(resolved(), &Resolved::OnPath);
     }
 
     #[test]

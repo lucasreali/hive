@@ -537,4 +537,6 @@ export type Diagnostics = {
   wrapper: string;
   /** The `claude` it runs, as found on the service's `PATH`; null when none is. */
   claude: string | null;
+  /** Why the service runs no git (Apple's Command Line Tools missing); null when git runs. */
+  git_error: string | null;
 };

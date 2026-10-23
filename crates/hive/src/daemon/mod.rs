@@ -90,6 +90,8 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // The terminals' locale (D18.2), read once now, in the background: `defaults` may be slow.
     #[cfg(unix)]
     std::thread::spawn(crate::terminal::locale_env);
+    // The git to run (D18.3), resolved once now, in the background: `xcrun` may be slow.
+    std::thread::spawn(crate::git::resolved);
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());

@@ -142,6 +142,7 @@ mod tests {
     fn a_repository_is_searched() {
         let dir = tempfile::tempdir().unwrap();
         let init = git::command(dir.path())
+            .unwrap()
             .args(["init", "-q"])
             .status()
             .unwrap();
