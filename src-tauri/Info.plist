@@ -2,7 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Merged by Tauri into Hive.app's Info.plist (TODO 17.11): the texts macOS shows when Hive's
      terminals, the agents in them or its file views first reach these folders. The service
-     (`hive`) is a child of Hive.app, so these prompts and their grants cover it too. -->
+     (`hive`) is a child of Hive.app, so these prompts and their grants cover it too. The Apple
+     Events and local network texts are for programs run in the terminals (TODO 18.20, D18.4). -->
 <plist version="1.0">
 <dict>
 	<key>NSDocumentsFolderUsageDescription</key>
@@ -13,5 +14,9 @@
 	<string>Hive opens terminals, lists files and shows changes in the projects you keep in your Downloads folder.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
 	<string>Hive opens terminals, lists files and shows changes in the projects you keep on removable drives.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Programs you run in Hive's terminals, such as osascript, can control other apps when you allow it.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Programs you run in Hive's terminals, such as dev servers and ssh, can reach devices on your local network.</string>
 </dict>
 </plist>
