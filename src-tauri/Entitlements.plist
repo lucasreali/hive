@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Hive.app's hardened runtime (TODO 17.11): the WebView's JavaScript JIT. -->
+<!-- Hive.app's hardened runtime (TODO 17.11): the WebView's JavaScript JIT, and Apple Events
+     sent by programs in the terminals (TODO 18.20, D18.4). -->
 <plist version="1.0">
 <dict>
 	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 </dict>
 </plist>
