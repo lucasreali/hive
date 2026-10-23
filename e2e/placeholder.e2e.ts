@@ -37,9 +37,10 @@ test("placeholders are never selected; typed text still is", async ({ page }) =>
   await blur(page);
   const idle = await look(page, search);
 
-  // Ctrl+A with the focus outside any field selects the page, never a placeholder.
+  // Ctrl+A with the focus outside any field selects nothing of the chrome (18.24), never a
+  // placeholder.
   await page.keyboard.press(`${mod}+a`);
-  expect(await page.evaluate(() => getSelection()?.type)).toBe("Range");
+  expect(await page.evaluate(() => getSelection()?.type)).toBe("None");
   expect(await look(page, search)).toEqual(idle);
 
   // Nor does a drag or a double-click inside it.
