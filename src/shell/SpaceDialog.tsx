@@ -3,6 +3,7 @@ import type { GhAccount, SpaceEnv } from "../protocol";
 import { ask, currentSpace, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
+import { homeText } from "../window";
 import { CloseIcon } from "./icons";
 
 const close = () => openModal(null);
@@ -171,7 +172,7 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
                 value={env[f.key] ?? ""}
                 onChange={(e) => setEnv({ ...env, [f.key]: e.target.value || null })}
                 onBlur={f.key === "gh_config_dir" ? () => listGh(env.gh_config_dir) : undefined}
-                placeholder={f.placeholder}
+                placeholder={homeText(f.placeholder)}
                 spellCheck={false}
                 autoComplete="off"
               />

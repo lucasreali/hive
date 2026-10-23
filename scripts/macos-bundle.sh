@@ -23,7 +23,8 @@ die() { echo "macos-bundle: $*" >&2; exit 1; }
 
 # The keys of the prompts terminals and watchers trigger (src-tauri/Info.plist).
 USAGE_KEYS="NSDocumentsFolderUsageDescription NSDesktopFolderUsageDescription
-NSDownloadsFolderUsageDescription NSRemovableVolumesUsageDescription"
+NSDownloadsFolderUsageDescription NSRemovableVolumesUsageDescription
+NSAppleEventsUsageDescription NSLocalNetworkUsageDescription"
 
 sign_hive() {
   local bin=$1 identity=${APPLE_SIGNING_IDENTITY:--}
@@ -63,6 +64,8 @@ check() {
   entitlements=$(codesign -d --entitlements - --xml "$app" 2>/dev/null) || die "no entitlements"
   grep -q '<key>com.apple.security.cs.allow-jit</key><true/>' <<<"${entitlements//[$'\t\n ']/}" ||
     die "the entitlements do not allow the WebView's JIT"
+  grep -q '<key>com.apple.security.automation.apple-events</key><true/>' <<<"${entitlements//[$'\t\n ']/}" ||
+    die "the entitlements do not allow the terminals' Apple Events"
 
   local key text
   for key in $USAGE_KEYS; do
