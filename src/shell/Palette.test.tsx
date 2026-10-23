@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { App } from "../App";
 import type { Project } from "../protocol";
 import { apply } from "../reduce";
@@ -77,6 +78,9 @@ test("lists every command with its keys but itself, then agents and worktrees", 
   expect(document.querySelector(".picker-row kbd")?.textContent).toBe("Ctrl+,");
   expect(picked()?.textContent).toBe("Open settings");
   expect(dialog.querySelector("footer")?.textContent).toBe("↑↓navigateEnterrunEscclose");
+  cleanup();
+  asMac();
+  expect(open().querySelector("footer")?.textContent).toBe("↑↓navigate↩runescclose");
 });
 
 test("filters as typed, arrows move across groups, Enter runs the row", () => {

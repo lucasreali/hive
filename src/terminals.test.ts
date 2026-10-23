@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  expect,
+  mock,
+  setSystemTime,
+  spyOn,
+  test,
+} from "bun:test";
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
@@ -423,6 +432,56 @@ test("a lost WebGL context falls back to the DOM renderer; no WebGL at all is fi
   const other = await open();
   showTerminal(other.id);
   expect(other.term.element).toBeDefined();
+  expect(addons).toHaveLength(2);
+});
+
+const frame = () => new Promise((done) => requestAnimationFrame(done));
+
+test("a shown terminal gets WebGL back on the next frame after a loss, a few times in a row", async () => {
+  const { id } = await open();
+  showTerminal(id);
+  for (const n of [1, 2, 3]) {
+    addons[n - 1].lose();
+    expect(addons[n - 1].disposed).toBe(true);
+    expect(addons).toHaveLength(n);
+    await frame();
+    expect(addons).toHaveLength(n + 1);
+    expect(addons[n].disposed).toBe(false);
+  }
+  // A fourth loss in a row: the GPU keeps losing it, so it stays on DOM.
+  addons[3].lose();
+  await frame();
+  expect(addons).toHaveLength(4);
+  // Shown again, it tries WebGL again with every retry.
+  showTerminal(null);
+  showTerminal(id);
+  expect(addons).toHaveLength(5);
+  // A renderer that lived a minute lost its context afresh (another sleep): the retries start over.
+  setSystemTime(Date.now() + 60_000);
+  try {
+    for (const n of [5, 6, 7, 8]) {
+      addons[n - 1].lose();
+      await frame();
+      expect(addons).toHaveLength(n + 1);
+      setSystemTime(Date.now() + 60_000);
+    }
+  } finally {
+    setSystemTime();
+  }
+});
+
+test("a terminal hidden or closed before the next frame does not get WebGL back", async () => {
+  const one = await open();
+  const two = await open();
+  showTerminal(one.id);
+  addons[0].lose();
+  showTerminal(two.id); // one is hidden before the frame
+  await frame();
+  expect(addons).toHaveLength(2);
+  addons[1].lose();
+  closeTerminal(two.id);
+  opened.splice(opened.indexOf(two.id), 1);
+  await frame();
   expect(addons).toHaveLength(2);
 });
 
