@@ -298,6 +298,16 @@ test("the projects section edits each project's scripts", async () => {
   expect(input("Archive script").value).toBe("");
 });
 
+test("a new account's folder example is a home folder of the platform (18.25)", () => {
+  open();
+  section("Accounts");
+  expect(input("New account folder").placeholder).toBe("/home/you/.claude-work");
+  asMac();
+  section("Agents");
+  section("Accounts");
+  expect(input("New account folder").placeholder).toBe("/Users/you/.claude-work");
+});
+
 test("the accounts section adds, renames, logs in to and removes Claude accounts (12.2)", async () => {
   open();
   section("Accounts");

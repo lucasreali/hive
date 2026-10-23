@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { App } from "../App";
 import { agentPlace, notify } from "../notify";
 import type { AgentState, ServiceMessage, Space } from "../protocol";
@@ -59,6 +60,17 @@ test("the sidebar shows the current space's projects; the select picks another",
   pick("Home");
   expect(select).toHaveBeenCalledWith("default");
   select.mockRestore();
+});
+
+test("the gh config folder's example is a home folder of the platform (18.25)", () => {
+  asMac();
+  show([home], "default");
+  pick("New space…");
+  const gh = screen.getByLabelText("GitHub CLI config folder") as HTMLInputElement;
+  expect(gh.placeholder).toBe("/Users/you/.config/gh-work");
+  expect((screen.getByLabelText("Git email") as HTMLInputElement).placeholder).toBe(
+    "you@work.example",
+  );
 });
 
 test("a new space is created with its environment, and a refusal is shown", () => {

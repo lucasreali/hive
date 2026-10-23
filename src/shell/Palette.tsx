@@ -14,7 +14,7 @@ import {
 import { openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
-import { composing } from "../window";
+import { composing, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
 import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
@@ -243,10 +243,10 @@ export function Palette() {
           <kbd>↑↓</kbd>navigate
         </span>
         <span>
-          <kbd>Enter</kbd>run
+          <kbd>{keyText("Enter")}</kbd>run
         </span>
         <span>
-          <kbd>Esc</kbd>close
+          <kbd>{keyText("Esc")}</kbd>close
         </span>
       </footer>
     </dialog>

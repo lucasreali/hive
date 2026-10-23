@@ -659,13 +659,31 @@ function hide(entry: Entry): void {
   entry.el.hidden = true;
 }
 
-/** The WebGL renderer, or null when WebGL is unavailable; a lost context falls back to DOM. */
-function webgl(entry: Entry): WebglAddon | null {
+/** Lost contexts in a row a shown terminal recovers WebGL from before it stays on DOM (18.23). */
+const WEBGL_RETRIES = 3;
+/** A renderer that lived this long (ms) lost its context afresh: the retries start over. */
+const WEBGL_SETTLED = 60_000;
+
+/**
+ * The WebGL renderer, or null when WebGL is unavailable. A lost context (sleep and wake, a
+ * display change) falls back to DOM, and a terminal still shown gets WebGL back on the next
+ * frame, `retries` times in a row at most, so a GPU that keeps losing it leaves it on DOM.
+ */
+function webgl(entry: Entry, retries = WEBGL_RETRIES): WebglAddon | null {
   try {
     const addon = new WebglAddon();
+    const born = Date.now();
     addon.onContextLoss(() => {
       addon.dispose();
-      if (entry.webgl === addon) entry.webgl = null;
+      if (entry.webgl !== addon) return;
+      entry.webgl = null;
+      const left = Date.now() - born >= WEBGL_SETTLED ? WEBGL_RETRIES : retries;
+      if (left === 0) return;
+      requestAnimationFrame(() => {
+        if (!entry.webgl && !entry.el.hidden && entry.el.isConnected) {
+          entry.webgl = webgl(entry, left - 1);
+        }
+      });
     });
     entry.term.loadAddon(addon);
     return addon;

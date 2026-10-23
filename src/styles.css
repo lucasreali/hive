@@ -162,6 +162,41 @@ body,
   margin: 0;
 }
 
+/* A Mac app's window (18.24): no rubber-band bounce, and ⌘A or a drag over buttons, rows and
+   dialogs highlights nothing. Only content selects: fields, Markdown, code and diffs, toasts,
+   error texts and paths. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+/* A modal dialog sits in the top layer, where Chromium does not inherit the body's. */
+body,
+dialog {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable],
+.cm-editor,
+.code-view,
+.markdown,
+.markdown-doc,
+code,
+[role="alert"],
+.files-error,
+.tree-error,
+.field-error,
+.pulls-error,
+.picker-path,
+.folder-path,
+.path {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* Scrollbars as in the prototype: thin rounded thumb, no track. */
 ::-webkit-scrollbar {
   width: 10px;
