@@ -26,6 +26,8 @@ const MAX_LAUNCHED: usize = 32;
 pub struct Agent {
     /// Terminal channel (`HIVE_TERMINAL_ID`) the agent runs in.
     pub channel: u32,
+    /// The project of its worktree, as its `AgentDetected` said.
+    pub project: Option<String>,
     /// The worktree the agent itself was placed in (#19). Subagents are linked to other
     /// worktrees only when it is known.
     pub worktree: Option<String>,
@@ -81,6 +83,7 @@ impl Agent {
     pub fn new(channel: u32, now: Instant, wall_ms: u64) -> Self {
         Self {
             channel,
+            project: None,
             worktree: None,
             cwd: None,
             title: None,
@@ -376,6 +379,16 @@ impl Agent {
     /// (when any is live) is shown. A seen agent is not pending.
     pub fn message(&self, id: &str) -> Control {
         self.status(id, None)
+    }
+
+    /// The `agent_detected` message: where the agent runs.
+    pub fn detected(&self, id: &str) -> Control {
+        Control::AgentDetected {
+            id: id.to_owned(),
+            project: self.project.clone(),
+            worktree: self.worktree.clone(),
+            cwd: self.cwd.clone(),
+        }
     }
 
     fn status(&self, id: &str, alert: Option<Alert>) -> Control {

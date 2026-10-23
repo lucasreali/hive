@@ -913,6 +913,9 @@ pub enum Control {
     },
     /// App → service: the settings; answered by `Settings`.
     GetSettings,
+    /// App → service: the UI was reloaded over the same connection (18.21): every live agent
+    /// again, as right after `Welcome` (`AgentDetected` first), and the session usage.
+    Resync,
     /// The service's settings (`$XDG_CONFIG_HOME/hive/settings.json`): sent to the app right
     /// after `Welcome`, and in answer to `GetSettings` and to a saved `SetSettings`.
     Settings {
@@ -2708,6 +2711,8 @@ mod tests {
     fn settings_messages_are_tagged_json_with_defaults_for_missing_keys() {
         let get = Frame::control(0, &Control::GetSettings);
         assert_eq!(&get.payload[..], br#"{"type":"get_settings"}"#);
+        let resync = Frame::control(0, &Control::Resync);
+        assert_eq!(&resync.payload[..], br#"{"type":"resync"}"#);
         let settings = Control::Settings {
             settings: Settings::default(),
         };

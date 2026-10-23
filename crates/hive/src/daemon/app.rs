@@ -163,9 +163,7 @@ where
     }
     *state.listed() = None;
     state.send_settings().await;
-    state.snapshot().await;
-    state.usage.lock().await.unsent();
-    state.send_usage().await;
+    resync(state).await;
     // Only the first app after a restart resumes the sessions the last one left.
     let restore = std::mem::take(&mut *state.restore.pending.lock().await);
     if !restore.is_empty() {
@@ -181,6 +179,13 @@ where
     writer.abort();
     *state.app.lock().await = None;
     true
+}
+
+/// What a new app, or a reloaded UI (`Resync`, 18.21), gets of the live agents and the usage.
+async fn resync(state: &Arc<State>) {
+    state.snapshot().await;
+    state.usage.lock().await.unsent();
+    state.send_usage().await;
 }
 
 async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSender<Frame>) {
@@ -211,6 +216,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             state.view(terminal.filter(|_| focused).unwrap_or(0)).await;
         }
         Ok(Control::GetSettings) => state.send_settings().await,
+        Ok(Control::Resync) => resync(state).await,
         Ok(Control::SetSettings { settings }) => {
             let reply = match tokio::task::block_in_place(|| state.settings.set(settings)) {
                 Ok(settings) => Control::Settings { settings },
@@ -745,6 +751,7 @@ mod tests {
         assert_eq!(read, Some(usage.clone()));
         // A subagent working in a worktree of its own.
         let mut owning = Agent::new(5, Instant::now(), 0);
+        owning.project = Some("/r".into());
         owning.worktree = Some("/r".into());
         let start = AgentEvent {
             provider: "claude-code".into(),
@@ -778,13 +785,19 @@ mod tests {
                 app_connection(reader, FramedWrite::new(write, FrameCodec), &state).await
             }
         });
-        let mut frames = FramedRead::new(client, FrameCodec);
-        let mut got = Vec::new();
-        for _ in 0..6 {
-            let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
-            let frame = next.await.expect("no snapshot").unwrap().unwrap();
-            got.push((frame.channel, frame.to_control().unwrap()));
-        }
+        let (mine, theirs) = tokio::io::split(client);
+        let mut frames = FramedRead::new(mine, FrameCodec);
+        let mut to_service = FramedWrite::new(theirs, FrameCodec);
+        let mut read = async |count: usize| {
+            let mut got = Vec::new();
+            for _ in 0..count {
+                let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
+                let frame = next.await.expect("no snapshot").unwrap().unwrap();
+                got.push((frame.channel, frame.to_control().unwrap()));
+            }
+            got
+        };
+        let got = read(8).await;
         let idle = |id: &str| Control::AgentState {
             id: id.into(),
             state: hive_protocol::AgentState::Idle,
@@ -803,25 +816,49 @@ mod tests {
             id: "s".into(),
             title: "Named".into(),
         };
-        let at = |message: &Control| got.iter().position(|(_, m)| m == message);
+        // Each agent's place, before its state.
+        let placed = Control::AgentDetected {
+            id: "u".into(),
+            project: Some("/r".into()),
+            worktree: Some("/r".into()),
+            cwd: None,
+        };
+        let unplaced = Control::AgentDetected {
+            id: "s".into(),
+            project: None,
+            worktree: None,
+            cwd: None,
+        };
+        let check = |got: &[(u32, Control)]| {
+            let at = |message: &Control| got.iter().position(|(_, m)| m == message);
+            assert!(got.contains(&(4, idle("s"))), "{got:?}");
+            assert!(got.contains(&(5, owning_state.clone())), "{got:?}");
+            assert!(got.contains(&(4, unplaced.clone())), "{got:?}");
+            assert!(got.contains(&(5, placed.clone())), "{got:?}");
+            assert!(at(&unplaced) < at(&idle("s")), "{got:?}");
+            assert!(at(&placed) < at(&owning_state), "{got:?}");
+            // Then the worktrees subagents own.
+            let owned = Control::SubagentWorktrees {
+                worktrees: vec!["/r/w".into()],
+            };
+            assert_eq!(got.last(), Some(&(0, owned)));
+            assert!(at(&named) > at(&idle("s")), "{got:?}");
+            assert_eq!(got[at(&named).unwrap()].0, 4);
+            // Its usage too, once known.
+            assert!(at(&usage) > at(&idle("s")), "{got:?}");
+            assert_eq!(got[at(&usage).unwrap()].0, 4);
+        };
         // The settings come first.
         let settings = Control::Settings {
             settings: Default::default(),
         };
         assert_eq!(got[0], (0, settings));
-        assert!(got.contains(&(4, idle("s"))), "{got:?}");
-        assert!(got.contains(&(5, owning_state)), "{got:?}");
-        // Then the worktrees subagents own.
-        let owned = Control::SubagentWorktrees {
-            worktrees: vec!["/r/w".into()],
-        };
-        assert_eq!(got.last(), Some(&(0, owned)));
-        assert!(at(&named) > at(&idle("s")), "{got:?}");
-        assert_eq!(got[at(&named).unwrap()].0, 4);
-        // Its usage too, once known.
-        assert!(at(&usage) > at(&idle("s")), "{got:?}");
-        assert_eq!(got[at(&usage).unwrap()].0, 4);
-        drop(frames);
+        check(&got[1..]);
+        // A reloaded UI (18.21) gets all of it again, without the settings.
+        let resync = Frame::control(0, &Control::Resync);
+        to_service.send(resync).await.unwrap();
+        check(&read(7).await);
+        drop((frames, to_service));
         assert!(serving.await.unwrap());
     }
 }
