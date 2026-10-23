@@ -70,6 +70,9 @@ jobs:
           tool: cargo-llvm-cov,cargo-mutants,cargo-nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        # Pinned: a newer bun counts comment-only lines as uncovered.
+        with:
+          bun-version-file: .bun-version
       # The integration tests' terminals run fish 4 (`common::Env`), from Homebrew as on the
       # human's Mac.
       - run: brew install fish
@@ -118,6 +121,9 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        # Pinned: a newer bun counts comment-only lines as uncovered.
+        with:
+          bun-version-file: .bun-version
       - run: |
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
