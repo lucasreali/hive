@@ -32,7 +32,7 @@ On Windows without WSL, or when the user chooses it (native mode, 12.5), the sam
 |---|---|
 | `hive-protocol` | Frame codec, `Control` messages, handshake constants, internal event model (`AgentEvent`, `EventKind`), `AgentState`. Shared with the app. |
 | `hive::cli` | clap subcommands. Runs each async command on a runtime that is dropped without waiting for a pending stdin read. |
-| `hive::paths` | Runtime dir (`$XDG_RUNTIME_DIR/hive`, or `/tmp/hive-<uid>`, checked to be ours and mode 0700), socket, lockfile, `daemon.log`, data dir, bin dir, hooks settings, `spaces.json`, `projects.json`, `ports.json`, `offered-pulls.json`, config dir (`$XDG_CONFIG_HOME/hive`, or `~/.config/hive`) and its `settings.json`. `paths::canonical` resolves a path without Windows' `\\?\` prefix (what the service compares and hands git). |
+| `hive::paths` | Runtime dir (`$XDG_RUNTIME_DIR/hive`, or `/tmp/hive-<uid>`, checked to be ours and mode 0700), socket, lockfile, `daemon.log` (in `logs`: `~/Library/Logs/Hive` on macOS, D18.6), data dir, bin dir, hooks settings, `spaces.json`, `projects.json`, `ports.json`, `offered-pulls.json`, config dir (`$XDG_CONFIG_HOME/hive`, or `~/.config/hive`) and its `settings.json`. `paths::canonical` resolves a path without Windows' `\\?\` prefix (what the service compares and hands git). |
 | `hive::daemon` | Lockfile, socket (0600), the service's `State`, projects/health/files-panel work, shutdown. Split by job (9.20): `daemon::app` (handshake, app and hook connections, the app's frames, prioritized writer), `daemon::terminals` (open, input, output pump, close, the unhooked-`claude` tick), `daemon::agents` (detection from hooks, events, titles, the silence/usage tick, the snapshot for a new app, subagents' worktrees), `daemon::usage` (the 5-hour windows `hive statusline` reports, 12.1). Also runs on native Windows (12.5.2), where no terminal opens yet. |
 | `hive::terminal` | Spawns `fish -C 'set -gx PATH <bin> $PATH'` (on macOS, `terminal::login`: the user's `$SHELL` as a login shell, the bin dir first once its login files ran) on a PTY with `HIVE_TERMINAL_ID`, its space's environment entries and its worktree's `HIVE_*` entries. Handles input and resize, and ends process groups. `ENXIO` from opening a PTY is reported as no pseudo-terminal left, naming macOS's `kern.tty.ptmx_max` (17.6). |
 | `hive::scripts` | Project scripts (6.8): each worktree's block of 10 ports (`<data>/hive/ports.json`), the `HIVE_*` environment, and running the archive script (`sh -c`, on native Windows the terminals' shell; time limit, process group or job killed). |
@@ -247,7 +247,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 
    On Windows the process gets `CREATE_NO_WINDOW`, and it is killed when the app drops the connection.
 2. The bridge connects to `<runtime>/hive.sock`, only when the runtime dir is ours (owned by the user, mode 0700, not a symlink) and the socket's peer runs as the user (`peer_cred`): anything else may be another user's (9.7, `Paths::connect`, also used by `hive hook`).
-3. If the connection fails, the bridge prepares the runtime dir, truncates `daemon.log` (0600) and runs `setsid --fork hive daemon`. The daemon's stdin and stdout are null and its stderr goes to the log.
+3. If the connection fails, the bridge prepares the runtime dir, renames the previous `daemon.log` to `daemon.log.1` and opens a new one (0600) and runs `setsid --fork hive daemon`. The daemon's stdin and stdout are null and its stderr goes to the log.
 4. The bridge retries the connection for up to 5 s. If the daemon never listens, the bridge fails with "the hive service did not start; see <log>".
 5. Two bridges racing is harmless: the second daemon cannot take the lockfile and exits. A daemon tries the lockfile again for up to 5 s (the bridge's wait), because a service that is ending keeps it until its terminals have ended (up to their 2 s grace); that service drops its listener and removes the socket as soon as it stops serving, so a bridge started meanwhile starts the new service.
 6. The bridge then copies bytes in both directions without looking at them. When either side closes, the bridge exits.
@@ -635,7 +635,8 @@ Diagnostics names the `claude` the wrapper would run (`wrapper::real_claude` on 
 |---|---|---|
 | `<runtime>/hive.sock` | 0600 | Service socket. |
 | `<runtime>/hive.lock` | 0600 | Single-instance lock. |
-| `<runtime>/daemon.log` | 0600 | stderr of a daemon started by the bridge. |
+| `<logs>/daemon.log` | 0600 | stderr of a daemon started by the bridge; the previous start's as `daemon.log.1`. `<logs>` is `~/Library/Logs/Hive` on macOS (D18.6) when `XDG_RUNTIME_DIR` is unset, else the runtime dir. |
+| `~/Library/Logs/Hive/app.log` | 0600 | macOS: the app's stderr and panics (`app.dev.log` for a development build); the previous launch's as `app.log.1`. |
 | `<data>/hive/bin/claude` | 0755 | Wrapper: finds the real `claude` on `PATH` (skipping the bin dir and itself). If `HIVE_WRAPPED` is unset it exports it and adds `--settings`; otherwise it runs the real claude unchanged. On Windows `claude.exe` and `hive.exe`, copies of `hive` (12.5.5). |
 | `<data>/hive/spaces.json` | 0600 | The spaces, their projects and environments, and the current space (see [Spaces](#spaces-614)). |
 | `<data>/hive/projects.json` | 0600 | The followed projects' paths before spaces (read only while `spaces.json` is missing). |

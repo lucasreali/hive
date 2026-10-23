@@ -399,6 +399,7 @@ mod tests {
         fn new() -> Self {
             let tmp = tempfile::tempdir().unwrap();
             let paths = Paths {
+                logs: tmp.path().join("run"),
                 runtime: tmp.path().join("run"),
                 data: tmp.path().join("it's data"),
                 config: tmp.path().join("config"),
@@ -627,6 +628,7 @@ mod tests {
     fn non_utf8_hive_path_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths {
+            logs: tmp.path().join("run"),
             runtime: tmp.path().join("run"),
             data: tmp.path().join("data"),
             config: tmp.path().join("config"),
@@ -642,6 +644,7 @@ mod tests {
         let file = tmp.path().join("file");
         std::fs::write(&file, "").unwrap();
         let paths = Paths {
+            logs: tmp.path().join("run"),
             runtime: tmp.path().join("run"),
             data: file,
             config: tmp.path().join("config"),

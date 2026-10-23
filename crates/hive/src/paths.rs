@@ -25,6 +25,10 @@ pub struct Paths {
     pub data: PathBuf,
     /// `$XDG_CONFIG_HOME/hive`, or `~/.config/hive`.
     pub config: PathBuf,
+    /// Where `daemon.log` goes: on macOS `~/Library/Logs/Hive` (D18.6), unless
+    /// `XDG_RUNTIME_DIR` is set (tests, `scripts/mac-dev.sh`), so that a second service never
+    /// rotates the installed one's log; elsewhere, and without a `HOME`, the runtime folder.
+    pub logs: PathBuf,
 }
 
 // Windows: `from_env`, `prepare_runtime` and `connect` are in `crate::windows`.
@@ -58,6 +62,11 @@ impl Paths {
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         };
+        // `user_temp` is known only on macOS.
+        let logs = match (&user_temp, var("XDG_RUNTIME_DIR"), var("HOME")) {
+            (Some(_), None, Some(home)) => Some(home.join("Library/Logs/Hive")),
+            _ => None,
+        };
         let user_temp = user_temp.map(|dir| {
             dir.filter(|dir| dir.is_absolute())
                 .or_else(|| var("TMPDIR").filter(|dir| own_folder(dir, uid)))
@@ -72,6 +81,7 @@ impl Paths {
         let config = home("XDG_CONFIG_HOME", ".config")
             .map_or_else(|| runtime.join("config"), |dir| dir.join("hive"));
         Self {
+            logs: logs.unwrap_or_else(|| runtime.clone()),
             runtime,
             data,
             config,
@@ -89,7 +99,7 @@ impl Paths {
 
     /// stderr of a daemon started by `hive bridge`: where a failed start explains itself.
     pub fn daemon_log(&self) -> PathBuf {
-        self.runtime.join("daemon.log")
+        self.logs.join("daemon.log")
     }
 
     /// Directory put first on `PATH` inside Hive terminals (the `claude` wrapper lives here).
@@ -342,6 +352,28 @@ mod tests {
     }
 
     #[test]
+    fn on_macos_the_daemon_log_is_in_the_users_logs_folder() {
+        let system = Some(Some("/var/folders/sys/T/"));
+        let log = |vars: &[(&str, &str)], user_temp| resolve_as(vars, user_temp).daemon_log();
+        let home = ("HOME", "/Users/me");
+        assert_eq!(
+            log(&[home], system),
+            PathBuf::from("/Users/me/Library/Logs/Hive/daemon.log")
+        );
+        // A second service (tests, a development run) keeps its own, in its runtime folder.
+        let run = ("XDG_RUNTIME_DIR", "/x");
+        assert_eq!(
+            log(&[home, run], system),
+            PathBuf::from("/x/hive/daemon.log")
+        );
+        let in_runtime = PathBuf::from("/var/folders/sys/T/hive/daemon.log");
+        assert_eq!(log(&[], system), in_runtime);
+        assert_eq!(log(&[("HOME", "")], system), in_runtime);
+        // Off macOS, the runtime folder.
+        assert_eq!(log(&[home, run], None), PathBuf::from("/x/hive/daemon.log"));
+    }
+
+    #[test]
     fn a_temporary_folder_of_another_user_is_not_used() {
         let tmp = tempfile::tempdir().unwrap();
         let me = nix::unistd::getuid().as_raw();
@@ -438,6 +470,7 @@ mod tests {
 
     fn paths_in(dir: &std::path::Path) -> Paths {
         Paths {
+            logs: dir.join("run"),
             runtime: dir.join("run"),
             data: dir.join("data"),
             config: dir.join("config"),

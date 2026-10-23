@@ -33,6 +33,10 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod fds;
 
+/// The app's log and panic hook (D18.6).
+#[cfg(unix)]
+pub mod log;
+
 /// App version, compared with the `hive` binary's in the handshake (#29).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

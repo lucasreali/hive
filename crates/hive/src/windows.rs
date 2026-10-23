@@ -70,6 +70,7 @@ pub fn paths(var: impl Fn(&str) -> Option<OsString>) -> Paths {
         .or_else(|| profile(r"AppData\Roaming"))
         .map_or_else(|| data.join("config"), |dir| dir.join("hive"));
     Paths {
+        logs: data.join("run"),
         runtime: data.join("run"),
         data,
         config,
@@ -2253,6 +2254,7 @@ mod tests {
     /// Paths in a temporary folder: a pipe of their own.
     fn paths_in(dir: &Path) -> Paths {
         Paths {
+            logs: dir.join("run"),
             runtime: dir.join("run"),
             data: dir.join("data"),
             config: dir.join("config"),
