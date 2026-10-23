@@ -730,6 +730,20 @@ mod tests {
         assert!(finished.is_ok());
     }
 
+    /// The next `count` messages the app gets, with their channels.
+    async fn controls<R: AsyncRead + Unpin>(
+        frames: &mut FramedRead<R, FrameCodec>,
+        count: usize,
+    ) -> Vec<(u32, Control)> {
+        let mut got = Vec::new();
+        for _ in 0..count {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
+            let frame = next.await.expect("no snapshot").unwrap().unwrap();
+            got.push((frame.channel, frame.to_control().unwrap()));
+        }
+        got
+    }
+
     #[tokio::test]
     async fn a_connecting_app_gets_the_state_of_every_live_agent() {
         // Agents outlive an app connection only in principle (the service exits with the
@@ -788,16 +802,7 @@ mod tests {
         let (mine, theirs) = tokio::io::split(client);
         let mut frames = FramedRead::new(mine, FrameCodec);
         let mut to_service = FramedWrite::new(theirs, FrameCodec);
-        let mut read = async |count: usize| {
-            let mut got = Vec::new();
-            for _ in 0..count {
-                let next = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next());
-                let frame = next.await.expect("no snapshot").unwrap().unwrap();
-                got.push((frame.channel, frame.to_control().unwrap()));
-            }
-            got
-        };
-        let got = read(8).await;
+        let got = controls(&mut frames, 8).await;
         let idle = |id: &str| Control::AgentState {
             id: id.into(),
             state: hive_protocol::AgentState::Idle,
@@ -857,7 +862,7 @@ mod tests {
         // A reloaded UI (18.21) gets all of it again, without the settings.
         let resync = Frame::control(0, &Control::Resync);
         to_service.send(resync).await.unwrap();
-        check(&read(7).await);
+        check(&controls(&mut frames, 7).await);
         drop((frames, to_service));
         assert!(serving.await.unwrap());
     }
