@@ -11,6 +11,9 @@ use tauri::Manager;
 // Wiring only (excluded from coverage, see COVERAGE_EXCLUSIONS.md): builder, plugins, state and
 // command registration. Commands and any logic live in lib.rs, which is tested.
 fn main() {
+    // A panic goes to stderr, which `setup` sends to the app's log (D18.6).
+    #[cfg(target_os = "macos")]
+    std::panic::set_hook(hive_lib::log::hook(|text| eprint!("{text}")));
     // A GUI app starts with 256 descriptors on macOS (17.6).
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     hive_lib::fds::raise_at_start(&hive_lib::fds::Process, &mut std::io::stderr());
@@ -36,6 +39,11 @@ fn main() {
     let result = builder
         .on_menu_event(|app, event| hive_lib::menu::on_menu(app, event.id().as_ref()))
         .setup(|app| {
+            // Here, past the single-instance check: a second launch never rotates the log.
+            #[cfg(target_os = "macos")]
+            if let Err(error) = hive_lib::log::start(std::env::var_os("HOME"), tauri::is_dev(), 2) {
+                eprintln!("hive-app: no app log: {error}");
+            }
             #[cfg(target_os = "macos")]
             app.set_menu(app_menu(app.handle())?)?;
             let resource = |name: &str| app.path().resolve(name, BaseDirectory::Resource).ok();

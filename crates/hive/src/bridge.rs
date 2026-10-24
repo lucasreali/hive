@@ -37,8 +37,8 @@ pub async fn run(paths: &Paths, hive: &Path) -> io::Result<()> {
 /// Two bridges racing here is fine: the lockfile lets only one daemon run.
 fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
     paths.prepare_runtime()?;
-    let log = crate::mode::private(File::options().create(true).write(true).truncate(true))
-        .open(paths.daemon_log())?;
+    crate::mode::folder(std::fs::DirBuilder::new().recursive(true), 0o700).create(&paths.logs)?;
+    let log = open_log(&paths.daemon_log())?;
     // The service runs a copy in the bin folder, so that it never keeps the app's installer
     // from replacing the installed `hive.exe`.
     #[cfg(windows)]
@@ -58,6 +58,16 @@ fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Opens `path` for a new run, the previous run's log kept as `<path>.1` (D18.6) and any
+/// older one dropped. Appends: should the rename fail, the previous log is kept in place.
+fn open_log(path: &Path) -> io::Result<File> {
+    let mut previous = path.as_os_str().to_owned();
+    previous.push(".1");
+    // A missing log (first start) or a failed rename only means nothing is rotated.
+    let _ = std::fs::rename(path, previous);
+    crate::mode::private(File::options().create(true).append(true)).open(path)
+}
+
 async fn connect_when_ready(paths: &Paths) -> io::Result<crate::paths::Stream> {
     let connect = async {
         loop {
@@ -75,4 +85,33 @@ async fn connect_when_ready(paths: &Paths) -> io::Result<crate::paths::Stream> {
                 paths.daemon_log().display()
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn each_start_keeps_the_previous_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("daemon.log");
+        let previous = tmp.path().join("daemon.log.1");
+        let read = |path: &Path| std::fs::read_to_string(path).unwrap();
+        for run in ["first", "second", "third"] {
+            write!(open_log(&log).unwrap(), "{run}").unwrap();
+        }
+        assert_eq!(read(&log), "third");
+        assert_eq!(read(&previous), "second");
+        #[cfg(unix)]
+        assert_eq!(
+            crate::mode::of(&std::fs::metadata(&log).unwrap()) & 0o777,
+            0o600
+        );
+        // A rename that fails (`daemon.log.1` is a folder with something in it) loses nothing.
+        std::fs::remove_file(&previous).unwrap();
+        std::fs::create_dir_all(previous.join("x")).unwrap();
+        write!(open_log(&log).unwrap(), "+fourth").unwrap();
+        assert_eq!(read(&log), "third+fourth");
+    }
 }

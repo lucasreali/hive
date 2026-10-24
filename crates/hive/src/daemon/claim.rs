@@ -118,6 +118,7 @@ mod tests {
 
     fn paths_in(dir: &Path) -> Paths {
         Paths {
+            logs: dir.join("run"),
             runtime: dir.join("run"),
             data: dir.join("data"),
             config: dir.join("config"),

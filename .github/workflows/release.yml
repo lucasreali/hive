@@ -121,6 +121,11 @@ jobs:
     # under the hardened runtime, and Tauri notarizes and staples the app (App Store Connect API
     # key). Each secret reaches only the steps that need it, and only after every dependency is
     # built (`--no-bundle`), so no build script runs with them or with the unlocked keychain.
+    env:
+      # A dSYM per release (D18.6): line tables in `hive.dSYM` and `hive-app.dSYM`, beside the
+      # stripped binaries (`strip = true` runs after `dsymutil`), so crash reports can be read.
+      CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -197,9 +202,14 @@ jobs:
       - run: |
           scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app \
             ${{ steps.signing.outputs.mode == 'developer-id' && '--developer-id' || '' }}
-      # The asset names tauri-action gave the updater tarball (`Hive_aarch64.app.tar.gz`).
+      # Each dSYM's UUID is the shipped binary's (`dwarfdump --uuid`).
+      - run: scripts/macos-bundle.sh dsyms target/release/bundle/macos/Hive.app target/release
+      # The asset names tauri-action gave the updater tarball (`Hive_aarch64.app.tar.gz`); the
+      # dSYMs zipped beside them (cargo's `target/release/*.dSYM` are links into `deps`).
       - run: |
-          mkdir out
+          mkdir out dsym
+          cp -RL target/release/hive-app.dSYM target/release/hive.dSYM dsym/
+          (cd dsym && zip -qr ../out/Hive_aarch64.dSYM.zip .)
           cp target/release/bundle/dmg/*.dmg out/
           cp target/release/bundle/macos/Hive.app.tar.gz out/Hive_aarch64.app.tar.gz
           cp target/release/bundle/macos/Hive.app.tar.gz.sig out/Hive_aarch64.app.tar.gz.sig

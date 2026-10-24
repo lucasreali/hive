@@ -328,6 +328,7 @@ mod tests {
 
     fn paths(tmp: &Path) -> Paths {
         Paths {
+            logs: tmp.join("run"),
             runtime: tmp.join("run"),
             data: tmp.join("data"),
             config: tmp.join("config"),

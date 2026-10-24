@@ -114,6 +114,10 @@ jobs:
     # As release.yml builds the shipped app: the SDK an app links against decides some of its
     # AppKit behaviour (macOS 26 SDK: the new window style), so moving it is the release's call.
     runs-on: macos-14
+    # With release.yml's dSYMs (D18.6), so their check runs on every branch.
+    env:
+      CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -140,6 +144,8 @@ jobs:
       # The bundle validates (`codesign --verify --deep --strict`), the nested `hive` has the
       # app's signer, the JIT entitlement and the folder prompts' texts are there (TODO 17.11).
       - run: scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app
+      # Each dSYM's UUID is the bundled binary's (`dwarfdump --uuid`).
+      - run: scripts/macos-bundle.sh dsyms target/release/bundle/macos/Hive.app target/release
       - uses: actions/upload-artifact@v6
         with:
           name: hive-macos
