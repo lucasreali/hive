@@ -34,13 +34,14 @@ pub const HOME: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 /// path, and the subfolders of the folder it ends in, or of the one holding its last name.
 pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windows) -> Control {
     match list(&path, windows, home, programs) {
-        Ok((path, linux, parent, dirs)) => Control::Dirs {
+        Ok((path, linux, parent, dirs, warning)) => Control::Dirs {
             path,
             windows,
             linux_path: linux,
             parent,
             dirs,
             error: None,
+            warning,
         },
         Err(err) => Control::Dirs {
             path,
@@ -49,13 +50,20 @@ pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windo
             parent: None,
             dirs: Vec::new(),
             error: Some(err.to_string()),
+            warning: None,
         },
     }
 }
 
 /// The path as typed (or the home folder), as a Linux path (none for the drives), the folder
 /// above the listed one, and the listed subfolders.
-type Listing = (String, Option<String>, Option<String>, Vec<Dir>);
+type Listing = (
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<Dir>,
+    Option<String>,
+);
 
 fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> io::Result<Listing> {
     if path.len() > PATH_LIMIT {
@@ -82,7 +90,7 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     // app filters by it as by any last name.
     #[cfg(windows)]
     if path.find(separators).is_none() {
-        return Ok((path, None, None, crate::windows::drives()));
+        return Ok((path, None, None, crate::windows::drives(), None));
     }
     let linux = if wsl {
         run(programs.wslpath, &["-u", &path])?
@@ -101,11 +109,17 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
         typed.parent().unwrap_or(typed)
     };
     let dirs = subfolders(folder)?;
+    // Only macOS checks for network and cloud folders (D18.9), on the folder listed: it exists,
+    // so links and `..` resolve.
+    #[cfg(target_os = "macos")]
+    let warning = crate::macos::folder_warning(folder, home);
+    #[cfg(not(target_os = "macos"))]
+    let warning = None;
     // The folder part of what was typed, and the one above it, in the same form.
     let above = path.rfind(separators).map_or("", |i| &path[..i]);
     let above = above.trim_end_matches(separators);
     let parent = above.rfind(separators).map(|i| path[..=i].to_owned());
-    Ok((path, Some(linux), parent, dirs))
+    Ok((path, Some(linux), parent, dirs, warning))
 }
 
 fn with_separator(mut path: String, separator: char) -> String {
@@ -200,6 +214,8 @@ mod tests {
             (&got["type"], &got["windows"]),
             (&"dirs".into(), &windows.into())
         );
+        // Only a folder on a network or cloud volume has one; tests list local ones.
+        assert_eq!(got["warning"], serde_json::Value::Null);
         let field = |key: &str| got[key].clone();
         (
             serde_json::from_value(field("path")).unwrap(),
@@ -223,6 +239,31 @@ mod tests {
             .unwrap();
         assert!(written.success());
         path.display().to_string()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_cloud_folder_or_a_link_to_one_comes_with_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(tmp.path()).unwrap();
+        let cloud = home.join("Library/CloudStorage/Dropbox/shop");
+        fs::create_dir_all(&cloud).unwrap();
+        std::os::unix::fs::symlink(&cloud, home.join("shop")).unwrap();
+        let warning = |typed: String| {
+            let got = serde_json::to_value(answer(typed, false, Some(&home), &WINDOWS)).unwrap();
+            got["warning"].as_str().map(str::to_owned)
+        };
+        for typed in [cloud.clone(), home.join("shop")] {
+            let got = warning(format!("{}/", typed.display())).unwrap();
+            assert!(got.contains("cloud storage"), "{got}");
+        }
+        // A name still being typed: judged by the folder listed, which holds it.
+        let partial = warning(format!("{}/sh", cloud.parent().unwrap().display())).unwrap();
+        assert!(partial.contains("cloud storage"), "{partial}");
+        // `..` out of the cloud folder leads to a local one.
+        fs::create_dir(home.join("x")).unwrap();
+        let out = home.join("Library/CloudStorage/../../x/missing");
+        assert_eq!(warning(out.display().to_string()), None);
     }
 
     #[test]

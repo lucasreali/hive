@@ -302,12 +302,20 @@ export const MOCK_GROUP: Project[] = [
  * The fake machine's folders for "Add project", besides the repositories (every folder above
  * one exists too): WSL's home and Windows' user folder (`C:\Users\user`, `/mnt/c/...`).
  */
+/** A folder on the fake machine's network volume. */
+export const MOCK_SHARE = "/mnt/share/wiki";
+/** What the service says of a folder on a network volume (`hive::macos::remote`). */
+export const MOCK_SHARE_WARNING =
+  "This folder is on a network volume (smbfs): Hive may miss changes made elsewhere, and git may be slow.";
+
 export const MOCK_FOLDERS = [
   ...MOCK_REPOS.map((p) => p.path),
   ...MOCK_GROUP.map((p) => p.path),
   "/home/user/Downloads",
   "/home/user/projects/notes",
   "/mnt/c/Users/user/Documents",
+  // On a network volume: answered with the service's warning (D18.9).
+  MOCK_SHARE,
 ];
 
 /** The folder part of `path`: up to its last separator (`\` too on Windows), else empty. */
@@ -324,14 +332,14 @@ export function mockDirs(asked: string, windows: boolean, native = false): Dirs 
   const path = asked || (win ? "C:\\Users\\user\\" : "/home/user/");
   if (native && !/[\\/]/.test(path)) {
     const dirs = [{ name: "C:", git: false }];
-    return { path, windows, linux_path: null, parent: null, dirs, error: null };
+    return { path, windows, linux_path: null, parent: null, dirs, error: null, warning: null };
   }
   const unix = win
     ? path
         .replace(/^([A-Za-z]):/, (_, drive: string) => `/mnt/${drive.toLowerCase()}`)
         .replaceAll("\\", "/")
     : path;
-  const answer = { path, windows, linux_path: null, parent: null, dirs: [] };
+  const answer = { path, windows, linux_path: null, parent: null, dirs: [], warning: null };
   if (!unix.startsWith("/")) return { ...answer, error: "type a full path" };
   const folder = unix.slice(0, unix.lastIndexOf("/") + 1);
   const inside = MOCK_FOLDERS.filter((f) => `${f}/`.startsWith(folder));
@@ -345,7 +353,8 @@ export function mockDirs(asked: string, windows: boolean, native = false): Dirs 
     .map((name) => ({ name, git: MOCK_REPOS.some((p) => p.path === folder + name) }));
   const above = folderPart(path, win).replace(win ? /[\\/]+$/ : /\/+$/, "");
   const parent = folderPart(above, win) || null;
-  return { ...answer, linux_path: native ? path : unix, parent, dirs, error: null };
+  const warning = unix.startsWith("/mnt/share/") ? MOCK_SHARE_WARNING : null;
+  return { ...answer, linux_path: native ? path : unix, parent, dirs, error: null, warning };
 }
 
 const MINUTE = 60_000;
