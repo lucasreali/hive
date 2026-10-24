@@ -184,6 +184,12 @@ export function AddProjectDialog() {
               {error}
             </span>
           )}
+          {/* A network or cloud folder (D18.9): it can still be added. */}
+          {target && listing?.warning && (
+            <p className="field-warning" role="status">
+              {listing.warning}
+            </p>
+          )}
           {windows && (
             <p className="field-help">
               Windows folders are slower and don't update live; WSL folders are recommended.

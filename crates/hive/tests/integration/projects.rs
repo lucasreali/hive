@@ -572,6 +572,7 @@ async fn folders_are_browsed_from_home() {
                 git: true,
             }],
             error: None,
+            warning: None,
         }
     );
     drop(conn);

@@ -371,6 +371,8 @@ export type Dirs = {
   parent: string | null;
   dirs: { name: string; git: boolean }[];
   error: string | null;
+  /** Why a project there would be followed badly (a network or cloud folder): a warning. */
+  warning: string | null;
 };
 
 /** Mirrors `hive_protocol::SaveError`. */

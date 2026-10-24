@@ -784,6 +784,9 @@ pub enum Control {
         dirs: Vec<Dir>,
         /// Why nothing could be listed.
         error: Option<String>,
+        /// Why a project in `linux_path` would be followed badly (a network or cloud folder,
+        /// D18.9), shown as a warning; it can still be added.
+        warning: Option<String>,
     },
     /// App → service: one file of a worktree of a followed project for the viewer and diff
     /// (#31), answered by `File`. `path` is relative to the worktree and must stay inside it.
@@ -2455,10 +2458,11 @@ mod tests {
                 git: false,
             }],
             error: None,
+            warning: Some("w".into()),
         };
         assert_eq!(
             &Frame::control(0, &dirs).payload[..],
-            br#"{"type":"dirs","path":"C:\\","windows":true,"linux_path":"/mnt/c","parent":null,"dirs":[{"name":"Users","git":false}],"error":null}"#
+            br#"{"type":"dirs","path":"C:\\","windows":true,"linux_path":"/mnt/c","parent":null,"dirs":[{"name":"Users","git":false}],"error":null,"warning":"w"}"#
         );
         let list = Control::ListDirs {
             path: String::new(),
