@@ -367,6 +367,38 @@ async fn login_shells_run_the_user_files_and_keep_hive_bin_first() {
     }
 }
 
+/// zsh keeps its history in the user's `ZDOTDIR` (else `HOME`), not in Hive's, where
+/// macOS's `/etc/zshrc` points it (18.17).
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn zsh_history_goes_to_the_user_file() {
+    for own in [false, true] {
+        let env = Env::new();
+        let home = env.path("home");
+        let dir = if own { home.join("zdot") } else { home.clone() };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hive = env.hive();
+        if own {
+            hive.env("ZDOTDIR", &dir);
+        }
+        let child = hive
+            .env("SHELL", "/bin/zsh")
+            .arg("daemon")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut daemon = crate::common::Daemon(child);
+        wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+        let mut app = env.connect(Role::App).await;
+        app.open_terminal(1, &home).await;
+        app.input(1, "echo \"hist=$HISTFILE.\"\r").await;
+        let want = format!("hist={}.", dir.join(".zsh_history").display());
+        app.output_until(1, &want).await;
+        drop(app);
+        assert!(daemon.wait_exit().success(), "own ZDOTDIR: {own}");
+    }
+}
+
 /// Bytes of terminal `channel`'s output read until at least `enough` came, or none for 1 s.
 async fn read_output(app: &mut crate::common::Conn, channel: u32, enough: usize) -> usize {
     let mut bytes = 0;
