@@ -74,7 +74,11 @@ async fn bridge_starts_the_service_and_forwards_frames() {
     // The service leads its own session, apart from the bridge's.
     let bridge_pid = bridge.child.id().unwrap() as i32;
     let processes = env.processes();
-    let daemon = processes.iter().find(|p| p.pid != bridge_pid).unwrap();
+    // Not what it starts (on macOS `xcrun -f git` at start, which may run `xcodebuild`).
+    let daemon = processes
+        .iter()
+        .find(|p| p.pid != bridge_pid && p.comm == "hive");
+    let daemon = daemon.unwrap();
     assert_eq!(daemon.session, daemon.pid, "{processes:?}");
     let log = env.path("run/hive/daemon.log");
     assert_eq!(
