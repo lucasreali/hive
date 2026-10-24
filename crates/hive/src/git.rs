@@ -77,23 +77,21 @@ fn program(resolved: &Resolved, path: Option<&OsStr>, stub: &Path) -> io::Result
     }
 }
 
-/// The `PATH` git calls get: the user's once known (17.5), else the service's.
-fn git_path() -> Option<OsString> {
-    crate::login_path::known().or_else(|| std::env::var_os("PATH"))
-}
-
-/// Why git cannot run, for Diagnostics; `None` when it can.
-pub fn problem() -> Option<String> {
-    let path = git_path();
-    let program = program(resolved(), path.as_deref(), Path::new(STUB));
-    program.err().map(|err| err.to_string())
+/// The program git calls run now ([`program`]), on the `PATH` they get: the user's once known
+/// (17.5), else the service's. Its error is why no git runs (Diagnostics shows it).
+pub fn current() -> io::Result<OsString> {
+    #[cfg(target_os = "macos")]
+    let path = crate::login_path::known().or_else(|| std::env::var_os("PATH"));
+    // Only Apple's stub is looked for on `PATH`.
+    #[cfg(not(target_os = "macos"))]
+    let path: Option<OsString> = None;
+    program(resolved(), path.as_deref(), Path::new(STUB))
 }
 
 /// `git -C <dir>`, ready for its arguments; an error, and nothing run, when no git can run
 /// ([`Resolved::Missing`]).
 pub fn command(dir: &Path) -> io::Result<Command> {
-    let path = git_path();
-    command_with(dir, program(resolved(), path.as_deref(), Path::new(STUB))?)
+    command_with(dir, current()?)
 }
 
 /// `git -C <dir>` run as `program`.
@@ -454,7 +452,7 @@ mod tests {
 
     #[test]
     fn this_machine_runs_git() {
-        assert_eq!(problem(), None);
+        assert!(current().is_ok());
         #[cfg(not(target_os = "macos"))]
         assert_eq!(resolved(), &Resolved::OnPath);
     }
