@@ -129,20 +129,15 @@ impl State {
         });
         let (project, worktree) = place.unzip();
         let mut agent = Agent::new(channel, Instant::now(), crate::hook::now_ms());
-        agent.worktree = worktree.clone();
-        agent.cwd = cwd.clone();
+        agent.project = project;
+        agent.worktree = worktree;
+        agent.cwd = cwd;
         agent.transcript = transcript::transcript_path(&event.raw);
         // Read on the next tick: what the transcript already holds is not news (interrupts).
         agent.usage.due = true;
         agent.claude_dir = claude_dir;
         let state = agent.message(&id);
-        let detected = Control::AgentDetected {
-            id: id.clone(),
-            project,
-            worktree,
-            cwd,
-        };
-        self.to_app(channel, &detected).await;
+        self.to_app(channel, &agent.detected(&id)).await;
         self.to_app(channel, &state).await;
         // A resumed session already has its name.
         self.retitle(&id, &mut agent).await;
@@ -193,10 +188,12 @@ impl State {
         }
     }
 
-    /// Sent to a newly connected app right after `Welcome`: the state of every live agent.
+    /// Sent to a newly connected app right after `Welcome`, and to a reloaded UI (`Resync`):
+    /// every live agent and its state.
     pub(super) async fn snapshot(&self) {
         let agents = self.agents.lock().await;
         for (id, agent) in agents.iter() {
+            self.to_app(agent.channel, &agent.detected(id)).await;
             self.to_app(agent.channel, &agent.message(id)).await;
             if let Some(title) = agent.title.clone() {
                 let id = id.clone();

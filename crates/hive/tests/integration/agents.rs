@@ -287,7 +287,14 @@ async fn agents_are_placed_by_their_cwd_and_removed_when_they_end() {
     let start = json!({"session_id": "s1", "cwd": cwd, "source": "startup"});
     let seen = hook(&repo, &mut app, "1", "SessionStart", start).await;
     let placed = detected("s1", Some((&root, &fix_a)), &cwd);
-    assert_eq!(seen, vec![(1, placed), (1, state("s1", Idle, vec![]))]);
+    assert_eq!(
+        seen,
+        vec![(1, placed.clone()), (1, state("s1", Idle, vec![]))]
+    );
+    // A reloaded UI (18.21) gets it again, place first.
+    app.send(0, Control::Resync).await;
+    assert_eq!(app.control().await, (1, placed));
+    assert_eq!(app.control().await, (1, state("s1", Idle, vec![])));
 
     let home = repo.env.path("home").display().to_string();
     let outside = json!({"session_id": "s2", "cwd": home});

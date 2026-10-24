@@ -1251,6 +1251,8 @@ async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
     // The new UI gets the settings and the projects again.
     assert_eq!(service.control().await, (0, Control::GetSettings));
     assert_eq!(service.control().await, (0, Control::ListProjects));
+    // And the live agents.
+    assert_eq!(service.control().await, (0, Control::Resync));
     // The old terminal's exit is not reported to the new UI.
     service
         .send(1, Control::TerminalExited { code: None })
@@ -1260,6 +1262,55 @@ async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
         next(&mut rx).await,
         json!({"type": "unhooked_agent", "channel": 0})
     );
+}
+
+#[tokio::test]
+async fn a_ui_reloaded_after_a_web_content_crash_keeps_its_terminals() {
+    let (hive, mut service, mut old) = welcomed().await;
+    for cwd in ["/w", "/v"] {
+        let (channel, _bytes) = output();
+        hive.open_terminal(cwd.into(), 80, 24, None, channel)
+            .unwrap();
+        service.control().await;
+    }
+    let opened = Control::TerminalOpened {
+        worktree: Some("/r".into()),
+    };
+    service.send(1, opened).await;
+    assert_eq!(next(&mut old).await["type"], "terminal_opened");
+
+    hive.web_content_terminated();
+    let (channel, mut rx) = ui();
+    hive.connect(channel);
+    assert_eq!(next(&mut rx).await["type"], "welcome");
+    // Each terminal, in order, with where it runs.
+    let kept = |channel: u32, cwd: &str, worktree: Value| json!({"type": "terminal_kept", "channel": channel, "cwd": cwd, "worktree": worktree});
+    assert_eq!(next(&mut rx).await, kept(1, "/w", json!("/r")));
+    assert_eq!(next(&mut rx).await, kept(2, "/v", Value::Null));
+    // None closes: the settings, the projects and the live agents come again.
+    assert_eq!(service.control().await, (0, Control::GetSettings));
+    assert_eq!(service.control().await, (0, Control::ListProjects));
+    assert_eq!(service.control().await, (0, Control::Resync));
+
+    // The new page takes the output, and what the dead one never acknowledged is.
+    let (channel, mut bytes) = output();
+    hive.attach_terminal(1, channel).unwrap();
+    let all = Control::Ack { bytes: u32::MAX };
+    assert_eq!(service.control().await, (1, all));
+    service.writer.send(Frame::terminal(1, "x")).await.unwrap();
+    assert_eq!(next(&mut bytes).await, b"x");
+    assert_eq!(
+        hive.attach_terminal(3, output().0),
+        Err("no such terminal".into())
+    );
+
+    // The next reload is an ordinary one: it closes them.
+    let (channel, _rx) = ui();
+    hive.connect(channel);
+    let mut closed = [service.control().await, service.control().await];
+    closed.sort_by_key(|(channel, _)| *channel);
+    let close = |channel| (channel, Control::CloseTerminal);
+    assert_eq!(closed, [close(1), close(2)]);
 }
 
 #[tokio::test]
@@ -1611,6 +1662,7 @@ fn commands_reach_the_managed_hive() {
         .invoke_handler(tauri::generate_handler![
             connect,
             open_terminal,
+            attach_terminal,
             write_terminal,
             resize_terminal,
             close_terminal,
@@ -1694,6 +1746,14 @@ fn commands_reach_the_managed_hive() {
         not_connected
     );
     assert_eq!(invoke(&webview, "ack_terminal", ack.clone()), not_connected);
+    let attach = json!({"id": 1, "onData": "__CHANNEL__:2"});
+    assert_eq!(
+        invoke(&webview, "attach_terminal", attach),
+        Err(json!("no such terminal"))
+    );
+    // A WebContent crash (18.21) marks the next connect as its reload.
+    web_content_terminated(webview.as_ref());
+    assert!(app.state::<Hive>().link().crashed);
     assert_eq!(invoke(&webview, "list_projects", json!({})), not_connected);
     let add = json!({"path": "/r"});
     assert_eq!(invoke(&webview, "add_project", add.clone()), not_connected);
@@ -2474,7 +2534,15 @@ async fn quitting_asks_the_ui_while_agents_would_end_with_the_app() {
     let exited = || exits.load(Ordering::SeqCst);
     let app = mock_builder().build(mock_context(noop_assets())).unwrap();
     let app = app.handle();
-    hive.link().terminals.insert(5, output().0);
+    let (output, cwd, worktree) = (output().0, "/w".into(), Value::Null);
+    hive.link().terminals.insert(
+        5,
+        Term {
+            output,
+            cwd,
+            worktree,
+        },
+    );
     // Each question long after the last (`ASK_AGAIN` is tested on its own).
     let quits = |hive: &Hive| {
         hive.link().asked = None;
