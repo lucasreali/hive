@@ -215,7 +215,29 @@ const LINKS = {
  * before the service is asked, so no output is lost before the tab appears. It gets the Claude
  * `account` when given (12.2), else the current one.
  */
-export async function openTerminal(cwd: string, account?: AccountDir): Promise<number> {
+export const openTerminal = (cwd: string, account?: AccountDir): Promise<number> =>
+  startTerminal(cwd, (term, onData) =>
+    transport.openTerminal(cwd, term.cols, term.rows, onData, account),
+  );
+
+/**
+ * Terminal `id`, kept by the app through a WebContent crash (18.21, `terminal_kept`), back in
+ * this reloaded page: a new Terminal and tab take its output from now on. What it showed before
+ * is gone; it is resized from 80×24, so a full-screen program (Claude Code) draws again once
+ * its pane is fitted.
+ */
+export const reattachTerminal = (id: number, cwd: string): Promise<number> =>
+  startTerminal(cwd, async (term, onData) => {
+    await transport.attachTerminal(id, onData);
+    void transport.resizeTerminal(id, term.cols, term.rows);
+    return id;
+  });
+
+/** A Terminal and its tab, for the channel `connect` resolves with. */
+async function startTerminal(
+  cwd: string,
+  connect: (term: Terminal, onData: (bytes: Uint8Array) => void) => Promise<number>,
+): Promise<number> {
   const term = new Terminal({
     lineHeight: 1.2,
     allowProposedApi: true, // registerCharacterJoiner
@@ -237,13 +259,7 @@ export async function openTerminal(cwd: string, account?: AccountDir): Promise<n
     unacked = 0;
   };
   try {
-    id = await transport.openTerminal(
-      cwd,
-      term.cols,
-      term.rows,
-      (bytes) => term.write(bytes, () => written(bytes.length)),
-      account,
-    );
+    id = await connect(term, (bytes) => term.write(bytes, () => written(bytes.length)));
   } catch (error) {
     term.dispose();
     throw error;

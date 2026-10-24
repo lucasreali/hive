@@ -20,7 +20,7 @@ fn main() {
     let mut context = tauri::generate_context!();
     let identifier = hive_lib::instance_identifier(tauri::is_dev(), &context.config().identifier);
     context.config_mut().identifier = identifier;
-    let result = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // First, so a second launch exits before anything else starts (17.18).
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             hive_lib::bring_up(app);
@@ -32,7 +32,11 @@ fn main() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+    // A WebContent crash reloads the page and keeps the terminals (18.21).
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(hive_lib::web_content_terminated);
+    let result = builder
         .on_menu_event(|app, event| hive_lib::menu::on_menu(app, event.id().as_ref()))
         .setup(|app| {
             // Here, past the single-instance check: a second launch never rotates the log.
@@ -139,6 +143,7 @@ fn main() {
             commands::check_update,
             commands::install_update,
             commands::open_terminal,
+            commands::attach_terminal,
             commands::write_terminal,
             commands::resize_terminal,
             commands::close_terminal,

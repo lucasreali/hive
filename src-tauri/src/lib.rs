@@ -624,6 +624,15 @@ pub fn double_click_action(setting: Option<&str>) -> &'static str {
     }
 }
 
+/// An open terminal: where its output goes, and where it runs, for a UI reloaded after a
+/// WebContent crash to show its tab again (`terminal_kept`).
+struct Term {
+    output: Channel<InvokeResponseBody>,
+    cwd: String,
+    /// Its `terminal_opened`'s `worktree`; null until then.
+    worktree: Value,
+}
+
 #[derive(Default)]
 struct Link {
     /// Control messages to the UI.
@@ -632,8 +641,11 @@ struct Link {
     frames: Option<mpsc::UnboundedSender<Frame>>,
     /// Replayed to a reloaded UI.
     welcome: Option<Value>,
-    /// Output channel of every open terminal, by frame channel.
-    terminals: HashMap<u32, Channel<InvokeResponseBody>>,
+    /// Every open terminal, by frame channel.
+    terminals: HashMap<u32, Term>,
+    /// The WebContent process died (18.21, D18.5): the next `connect` is its reloaded UI,
+    /// which keeps the terminals.
+    crashed: bool,
     last_channel: u32,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
@@ -1037,6 +1049,8 @@ impl Hive {
 
     /// Sends every service message to `ui`, starting the bridge unless a connection is up.
     /// A reloaded UI calls this again: its old terminals are closed and `welcome` is replayed.
+    /// After a WebContent crash ([`Hive::web_content_terminated`]) they stay instead, each
+    /// told to the UI as `terminal_kept` for it to reattach (`attach_terminal`, 18.21).
     /// With the choice of WSL or Windows, the UI first gets `app_mode`, and nothing starts
     /// until a mode is chosen. Must run inside the Tokio runtime.
     pub fn connect(&self, ui: Channel<Value>) {
@@ -1047,8 +1061,11 @@ impl Hive {
             let notice = !std::mem::replace(&mut link.translocation_told, true);
             link.to_ui(json!({"type": "translocated", "notice": notice}));
         }
-        for id in std::mem::take(&mut link.terminals).into_keys() {
-            let _ = link.send(id, &Control::CloseTerminal);
+        // After a WebContent crash the agents in them live on: the UI reattaches (18.21).
+        if !std::mem::take(&mut link.crashed) {
+            for id in std::mem::take(&mut link.terminals).into_keys() {
+                let _ = link.send(id, &Control::CloseTerminal);
+            }
         }
         let bridge = match &self.modes {
             None => &self.bridge,
@@ -1065,8 +1082,16 @@ impl Hive {
         if link.frames.is_some() {
             if let Some(welcome) = link.welcome.clone() {
                 link.to_ui(welcome);
+                let mut kept: Vec<_> = link.terminals.iter().collect();
+                kept.sort_by_key(|(id, _)| **id);
+                for (id, term) in kept {
+                    let (cwd, worktree) = (&term.cwd, &term.worktree);
+                    let message = json!({"type": "terminal_kept", "channel": id, "cwd": cwd, "worktree": worktree});
+                    link.to_ui(message);
+                }
                 let _ = link.send(0, &Control::GetSettings);
                 let _ = link.send(0, &Control::ListProjects);
+                let _ = link.send(0, &Control::Resync);
             }
             return;
         }
@@ -1173,14 +1198,41 @@ impl Hive {
     ) -> Result<u32, String> {
         let mut link = self.link();
         let open = Control::OpenTerminal {
-            cwd,
+            cwd: cwd.clone(),
             cols,
             rows,
             account,
         };
         let id = link.open(&open)?;
-        link.terminals.insert(id, output);
+        let worktree = Value::Null;
+        link.terminals.insert(
+            id,
+            Term {
+                output,
+                cwd,
+                worktree,
+            },
+        );
         Ok(id)
+    }
+
+    /// The WebContent process died (18.21, D18.5); its page reloads, and that UI's `connect`
+    /// keeps the terminals.
+    pub fn web_content_terminated(&self) {
+        self.link().crashed = true;
+    }
+
+    /// A UI reloaded after a WebContent crash takes terminal `id`'s output (`terminal_kept`).
+    /// What the dead page never acknowledged is acknowledged, so the terminal's output flows.
+    pub fn attach_terminal(
+        &self,
+        id: u32,
+        output: Channel<InvokeResponseBody>,
+    ) -> Result<(), String> {
+        let mut link = self.link();
+        let term = link.terminals.get_mut(&id).ok_or("no such terminal")?;
+        term.output = output;
+        link.send(id, &Control::Ack { bytes: u32::MAX })
     }
 
     /// Keystrokes or pasted text, split to fit the frame size limit.
@@ -1649,8 +1701,10 @@ async fn pump<R: AsyncRead + Unpin>(
         };
         let mut link = lock(link);
         if frame.kind == FrameType::Terminal {
-            if let Some(output) = link.terminals.get(&frame.channel) {
-                let _ = output.send(InvokeResponseBody::Raw(frame.payload.to_vec()));
+            if let Some(term) = link.terminals.get(&frame.channel) {
+                let _ = term
+                    .output
+                    .send(InvokeResponseBody::Raw(frame.payload.to_vec()));
             }
             continue;
         }
@@ -1683,6 +1737,11 @@ async fn pump<R: AsyncRead + Unpin>(
                 return End::Refused;
             }
             "terminal_exited" => drop(link.terminals.remove(&frame.channel)),
+            "terminal_opened" => {
+                if let Some(term) = link.terminals.get_mut(&frame.channel) {
+                    term.worktree = value["worktree"].clone();
+                }
+            }
             // A path the app may open once (`open_path`).
             "editor_target" | "session_located" => {
                 if let Some(path) = value["windows_path"].as_str() {
@@ -1750,6 +1809,16 @@ pub fn should_quit<R: Runtime>(app: &AppHandle<R>) -> bool {
 pub fn files_dropped<R: Runtime>(app: &AppHandle<R>, paths: &[String], x: f64, y: f64) -> bool {
     app.try_state::<Hive>()
         .is_some_and(|hive| hive.files_dropped(paths, x, y))
+}
+
+/// The webview's WebContent process died (18.21, macOS: wry's
+/// `on_web_content_process_terminate`; WebKit kills one past its memory limit): the page
+/// reloads, and its `connect` keeps the terminals ([`Hive::web_content_terminated`]).
+pub fn web_content_terminated<R: Runtime>(webview: &tauri::Webview<R>) {
+    if let Some(hive) = webview.try_state::<Hive>() {
+        hive.web_content_terminated();
+    }
+    let _ = webview.reload();
 }
 
 /// A click on the Dock icon (`RunEvent::Reopen`): with no visible window (minimized, hidden)
@@ -1824,6 +1893,15 @@ pub mod commands {
         on_data: Channel<InvokeResponseBody>,
     ) -> Result<u32, String> {
         hive.open_terminal(cwd, cols, rows, account, on_data)
+    }
+
+    #[tauri::command]
+    pub fn attach_terminal(
+        hive: State<'_, Hive>,
+        id: u32,
+        on_data: Channel<InvokeResponseBody>,
+    ) -> Result<(), String> {
+        hive.attach_terminal(id, on_data)
     }
 
     #[tauri::command]
