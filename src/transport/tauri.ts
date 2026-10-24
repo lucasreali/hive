@@ -20,6 +20,10 @@ export const tauriTransport: Transport = {
     const channel = new Channel<ArrayBuffer>((bytes) => onData(new Uint8Array(bytes)));
     return invoke<number>("open_terminal", { cwd, cols, rows, account, onData: channel });
   },
+  attachTerminal(id, onData) {
+    const channel = new Channel<ArrayBuffer>((bytes) => onData(new Uint8Array(bytes)));
+    return invoke<void>("attach_terminal", { id, onData: channel });
+  },
   writeTerminal: (id, data) => send("write_terminal", { id, data }),
   resizeTerminal: (id, cols, rows) => send("resize_terminal", { id, cols, rows }),
   closeTerminal: (id) => send("close_terminal", { id }),

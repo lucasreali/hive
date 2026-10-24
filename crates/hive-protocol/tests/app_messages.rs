@@ -77,6 +77,7 @@ sort! {
         | DeleteFile
         | OpenInEditor
         | GetSettings
+        | Resync
         | SetSettings
         | OpenSettingsFile
         | GetDiagnostics;

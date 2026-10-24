@@ -35,6 +35,9 @@ export type ServiceMessage =
   // From the app side (Rust, macOS): files dropped from Finder at (`x`, `y`), CSS pixels from
   // the window's top left (18.1); `text` is their paths, shell-quoted, each followed by a space.
   | { type: "files_dropped"; text: string; x: number; y: number }
+  // From the app side (Rust): a terminal kept through a WebContent crash (18.21), sent to the
+  // reloaded page right after `welcome`, which reattaches to it. `worktree` as `terminal_opened`'s.
+  | { type: "terminal_kept"; channel: number; cwd: string; worktree: string | null }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {

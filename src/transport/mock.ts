@@ -1266,6 +1266,11 @@ export function createMockTransport(
       if (scenario === "load") void replay(id);
       return id;
     },
+    async attachTerminal(id, onData) {
+      const terminal = terminals.get(id);
+      if (!terminal) throw new Error("no such terminal");
+      terminal.onData = onData;
+    },
     async writeTerminal(id, data) {
       const terminal = terminals.get(id);
       if (!terminal) return;
