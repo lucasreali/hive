@@ -347,6 +347,9 @@ pub mod login {
         let header =
             "# Written by Hive: runs your startup files, then puts Hive's bin dir first on PATH.\n";
         let zshenv = "HIVE_ZDOTDIR=$ZDOTDIR\nHIVE_USER_ZDOTDIR=${HIVE_USER_ZDOTDIR:-$HOME}\n";
+        // `/etc/zshrc` (macOS) put the history in Hive's folder: move it to the user's.
+        let zshrc_history = "[[ $HISTFILE == \"$HIVE_ZDOTDIR\"/* ]] && \
+                             HISTFILE=${HIVE_USER_ZDOTDIR:-$HOME}/.zsh_history\n";
         let zlogin = "ZDOTDIR=$HIVE_USER_ZDOTDIR\n\
                       export PATH=\"$HIVE_BIN_DIR:$PATH\"\n\
                       unset HIVE_BIN_DIR HIVE_ZDOTDIR HIVE_USER_ZDOTDIR\n";
@@ -363,7 +366,10 @@ pub mod login {
                 format!("{header}{zshenv}{}", zsh_file(".zshenv")),
             ),
             (".zprofile", format!("{header}{}", zsh_file(".zprofile"))),
-            (".zshrc", format!("{header}{}", zsh_file(".zshrc"))),
+            (
+                ".zshrc",
+                format!("{header}{zshrc_history}{}", zsh_file(".zshrc")),
+            ),
             (
                 ".zlogin",
                 format!("{header}{}{zlogin}", zsh_file(".zlogin")),
