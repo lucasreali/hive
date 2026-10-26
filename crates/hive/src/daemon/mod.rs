@@ -60,6 +60,9 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // (On Windows the bridge starts it detached.)
     #[cfg(unix)]
     let _ = nix::unistd::setsid();
+    // Its console is every program's it runs (16.4): a Ctrl+Break from one must not end it.
+    #[cfg(windows)]
+    crate::windows::ignore_ctrl()?;
     // Before any terminal, watch or socket: a GUI app's 256 runs out (17.6).
     #[cfg(unix)]
     crate::fds::raise_at_start(&crate::fds::Process, &mut io::stderr());

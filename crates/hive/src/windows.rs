@@ -34,9 +34,10 @@ use windows_sys::Win32::Security::{
     TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{GetLogicalDrives, MoveFileExW};
+use windows_sys::Win32::System::Console::{PHANDLER_ROUTINE, SetConsoleCtrlHandler};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, OpenProcess,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, OpenProcess,
     OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::core::BOOL;
@@ -307,15 +308,36 @@ fn instance(name: &str, user: &str, first: bool) -> io::Result<NamedPipeServer> 
 
 /// Starts the service out of this console and process group, so it outlives the bridge and
 /// ends with the app connection only; also out of this process's job (the app's), unless the
-/// job forbids it (e.g. cargo's).
+/// job forbids it (e.g. cargo's). It gets a console of its own without a window, which every
+/// program it runs shares (git, `gh`, scripts, and whatever they run): without a console
+/// (`DETACHED_PROCESS`), Windows would open a console window for each of them (16.4).
 pub fn spawn_detached(command: &mut Command) -> io::Result<Child> {
     // `bitor`, not `|`: or-ing and xor-ing flags that share no bit are the same.
-    let detached = DETACHED_PROCESS.bitor(CREATE_NEW_PROCESS_GROUP);
+    let detached = CREATE_NO_WINDOW.bitor(CREATE_NEW_PROCESS_GROUP);
     let breakaway = detached.bitor(CREATE_BREAKAWAY_FROM_JOB);
     command
         .creation_flags(breakaway)
         .spawn()
         .or_else(|_| command.creation_flags(detached).spawn())
+}
+
+/// Makes every console control event do nothing to this process. The service shares its
+/// console with every program it runs ([`spawn_detached`]): Ctrl+Break sent by one of them to
+/// the console or to the service's process group (`GenerateConsoleCtrlEvent`) would end the
+/// service, and every terminal with it (its own process group turns off Ctrl+C only). The
+/// `claude` wrapper leaves them to `claude`.
+pub fn ignore_ctrl() -> io::Result<()> {
+    set_ctrl_handler(|handler| unsafe { SetConsoleCtrlHandler(handler, 1) })
+}
+
+/// Adds [`ignore`] through `set` (`SetConsoleCtrlHandler`).
+fn set_ctrl_handler(set: impl FnOnce(PHANDLER_ROUTINE) -> BOOL) -> io::Result<()> {
+    check(set(Some(ignore)))
+}
+
+/// A console control handler that handles every event by doing nothing.
+unsafe extern "system" fn ignore(_event: u32) -> BOOL {
+    1
 }
 
 /// The machine-wide monotonic clock in ns, from the performance counter: one clock for every
@@ -1683,8 +1705,6 @@ pub mod claude {
     use std::process::{Command, ExitCode};
 
     use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
-    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
-    use windows_sys::core::BOOL;
 
     use super::{Job, monotonic_ns, wide};
     use crate::paths::canonical;
@@ -1856,7 +1876,8 @@ pub mod claude {
     fn wrap(exe: &Path, args: Vec<OsString>, var: &dyn Fn(&str) -> Option<OsString>) -> i32 {
         // Ctrl+C and Ctrl+Break reach every program of the console: `claude` decides what
         // they do, while the wrapper waits for it.
-        unsafe { SetConsoleCtrlHandler(Some(ignore), 1) };
+        // (Without it, `claude` still runs: only a Ctrl+C would end the wrapper too.)
+        let _ = super::ignore_ctrl();
         let bin = exe.parent().unwrap_or(exe);
         let Some(real) = crate::wrapper::real_claude(var("PATH").as_deref(), bin) else {
             eprintln!("hive: no claude found in PATH");
@@ -1874,11 +1895,6 @@ pub mod claude {
                 126
             }
         }
-    }
-
-    /// The wrapper's console control handler: every event is handled, by doing nothing.
-    unsafe extern "system" fn ignore(_event: u32) -> BOOL {
-        1
     }
 
     #[cfg(test)]
@@ -2186,7 +2202,7 @@ pub mod claude {
             assert_eq!(exit_code(256), ExitCode::FAILURE);
             assert_eq!(exit_code(0xC000_013A_u32 as i32), ExitCode::FAILURE);
             // Ctrl+C and Ctrl+Break do nothing to it.
-            assert_eq!(unsafe { ignore(0) }, 1);
+            assert_eq!(unsafe { crate::windows::ignore(0) }, 1);
         }
     }
 }
@@ -2574,6 +2590,43 @@ mod tests {
         exit.args(["/c", "exit 7"]);
         let status = spawn_detached(&mut exit).unwrap().wait().unwrap();
         assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn a_console_handler_not_added_is_an_error() {
+        let added = set_ctrl_handler(|handler| BOOL::from(handler.is_some()));
+        assert!(added.is_ok());
+        assert!(set_ctrl_handler(|_| 0).is_err());
+    }
+
+    #[test]
+    fn a_detached_program_has_a_console_without_a_window() {
+        // What the service gets, and so every console program it runs: a console of its own
+        // (without one, each program would get a new console window) with no window shown.
+        // The probe writes what it found, so a PowerShell that never ran the script fails too
+        // (one without a console exits 0 at once).
+        let probe = r#"Add-Type -Namespace Hive -Name Console -MemberDefinition '
+            [DllImport("kernel32.dll")] public static extern uint GetConsoleCP();
+            [DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr w);'
+            $console = [Hive.Console]::GetConsoleCP() -ne 0
+            $shown = [Hive.Console]::IsWindowVisible([Hive.Console]::GetConsoleWindow())
+            [IO.File]::WriteAllText("$PSScriptRoot\found", "console=$console shown=$shown")
+        "#;
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("probe.ps1");
+        std::fs::write(&file, probe).unwrap();
+        let mut powershell = Command::new("powershell");
+        let options = [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+        ];
+        powershell.args(options).arg("-File").arg(&file);
+        spawn_detached(&mut powershell).unwrap().wait().unwrap();
+        let found = std::fs::read_to_string(tmp.path().join("found"));
+        assert_eq!(found.ok().as_deref(), Some("console=True shown=False"));
     }
 
     #[test]

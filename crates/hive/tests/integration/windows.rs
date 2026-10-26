@@ -468,9 +468,9 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
     assert!(!paths.socket().exists());
 }
 
-#[tokio::test]
-async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_shell() {
-    let env = Env::new();
+/// The service started by a bridge, following the repository `repo` (one commit) whose
+/// archive script is `archive` in `shell`, and the path of its new worktree `a`.
+async fn with_worktree(env: &Env, shell: TerminalShell, archive: String) -> (Child, App, String) {
     let root = env.path("repo");
     std::fs::create_dir_all(&root).unwrap();
     let git = |args: &[&str]| {
@@ -485,7 +485,7 @@ async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_sh
     git(&["init", "-q", "-b", "main"]);
     let who = ["-c", "user.name=a", "-c", "user.email=a@b"];
     git(&[&who[..], &["commit", "-q", "--allow-empty", "-m", "m"]].concat());
-    let (mut bridge, mut app) = bridge(&env);
+    let (bridge, mut app) = bridge(env);
     app.send(0, Control::hello(Role::App, hive::VERSION)).await;
     let path = root.to_string_lossy().into_owned();
     app.send(0, Control::AddProject { path }).await;
@@ -494,13 +494,10 @@ async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_sh
     let Some(Control::ProjectAdded { project }) = app.until(0, "the project", added).await else {
         unreachable!()
     };
-    // The archive script, in Command Prompt: it notes the worktree it ran in.
-    let archived = root.join("archived");
-    let script = format!(r#"echo %HIVE_WORKTREE_PATH%> "{}""#, archived.display());
     let mut settings = Settings::default();
-    settings.terminal.shell = TerminalShell::Cmd;
+    settings.terminal.shell = shell;
     let scripts = ProjectScripts {
-        archive: Some(script),
+        archive: Some(archive),
         ..Default::default()
     };
     let project_settings = ProjectSettings { scripts };
@@ -525,6 +522,24 @@ async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_sh
     else {
         unreachable!()
     };
+    (bridge, app, path)
+}
+
+/// Whether `message` answers a `RemoveWorktree`.
+fn removal(message: Option<&Control>, _: &str) -> bool {
+    matches!(
+        message,
+        Some(Control::RemoveWorktreeFailed { .. } | Control::WorktreeRemoved { .. })
+    )
+}
+
+#[tokio::test]
+async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_shell() {
+    let env = Env::new();
+    // The archive script, in Command Prompt: it notes the worktree it ran in.
+    let archived = env.path("repo").join("archived");
+    let script = format!(r#"echo %HIVE_WORKTREE_PATH%> "{}""#, archived.display());
+    let (mut bridge, mut app, path) = with_worktree(&env, TerminalShell::Cmd, script).await;
 
     // A process working in it (not in a terminal of Hive) keeps it, before its script runs.
     let mut ping = std::process::Command::new("ping")
@@ -538,13 +553,7 @@ async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_sh
         force: false,
     };
     app.send(0, remove.clone()).await;
-    let answered = |message: Option<&Control>, _: &str| {
-        matches!(
-            message,
-            Some(Control::RemoveWorktreeFailed { .. } | Control::WorktreeRemoved { .. })
-        )
-    };
-    let failed = app.until(0, "the refusal", answered).await;
+    let failed = app.until(0, "the refusal", removal).await;
     let Some(Control::RemoveWorktreeFailed { message, .. }) = failed else {
         panic!("{failed:?}")
     };
@@ -557,7 +566,7 @@ async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_sh
     ping.kill().unwrap();
     ping.wait().unwrap();
     app.send(0, remove).await;
-    let removed = app.until(0, "the removal", answered).await;
+    let removed = app.until(0, "the removal", removal).await;
     assert!(
         matches!(removed, Some(Control::WorktreeRemoved { .. })),
         "{removed:?}"
@@ -565,6 +574,48 @@ async fn a_held_worktree_is_kept_and_the_archive_script_runs_in_the_terminals_sh
     assert!(!std::path::Path::new(&path).exists());
     let noted = std::fs::read_to_string(&archived).unwrap();
     assert_eq!(noted.trim_end(), path);
+
+    drop(app);
+    let ended = tokio::time::timeout(TIMEOUT, bridge.wait()).await;
+    assert!(ended.unwrap().unwrap().success());
+}
+
+#[tokio::test]
+async fn a_ctrl_break_from_a_program_the_service_runs_leaves_it_running() {
+    let env = Env::new();
+    // The archive script sends Ctrl+Break (1) to every process of its console (0): the
+    // service's own, which it shares (16.4). It first creates the file it is given, so the
+    // test knows it ran (its own Ctrl+Break may end it right after).
+    let source = env.path("ctrl_break.rs");
+    std::fs::write(
+        &source,
+        "extern \"system\" { fn GenerateConsoleCtrlEvent(event: u32, group: u32) -> i32; }\n\
+         fn main() {\n\
+             std::fs::write(std::env::args().nth(1).unwrap(), \"\").unwrap();\n\
+             unsafe { GenerateConsoleCtrlEvent(1, 0) };\n\
+         }\n",
+    )
+    .unwrap();
+    let sender = env.path("ctrl_break.exe");
+    let built = std::process::Command::new("rustc")
+        .args(["--edition", "2021", "-o"])
+        .arg(&sender)
+        .arg(&source)
+        .status();
+    assert!(built.unwrap().success());
+    let sent = env.path("sent");
+    let script = format!(r#""{}" "{}""#, sender.display(), sent.display());
+    let (mut bridge, mut app, path) = with_worktree(&env, TerminalShell::Cmd, script).await;
+    let remove = Control::RemoveWorktree { path, force: false };
+    app.send(0, remove).await;
+    app.until(0, "the removal", removal).await;
+    assert!(sent.exists(), "the script did not run");
+    // Still there, once the event has reached every process.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    app.send(0, Control::ListProjects).await;
+    let listed =
+        |message: Option<&Control>, _: &str| matches!(message, Some(Control::Projects { .. }));
+    app.until(0, "the projects", listed).await;
 
     drop(app);
     let ended = tokio::time::timeout(TIMEOUT, bridge.wait()).await;
