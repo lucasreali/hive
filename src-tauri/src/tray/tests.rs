@@ -191,12 +191,24 @@ fn assert_honeycomb(icon: &Icon) {
         assert_eq!(alpha(icon, x, y), 0, "({x}, {y})");
     }
     // The bottom half is left-right symmetric; the top one is not (the lit cell).
-    for (x, y) in [(5, 18), (8, 26), (12, 28), (16, 22), (3, 20)] {
-        assert_eq!(
-            alpha(icon, x, y),
-            alpha(icon, SIZE - 1 - x, y),
-            "({x}, {y})"
-        );
+    // The first columns hold only the left cell, which is top-bottom symmetric.
+    for x in 0..7 {
+        for y in 0..c {
+            assert_eq!(
+                alpha(icon, x, y),
+                alpha(icon, x, SIZE - 1 - y),
+                "({x}, {y})"
+            );
+        }
+    }
+    for y in c..SIZE {
+        for x in 0..c {
+            assert_eq!(
+                alpha(icon, x, y),
+                alpha(icon, SIZE - 1 - x, y),
+                "({x}, {y})"
+            );
+        }
     }
     assert_eq!(total_alpha(icon), TOTAL, "the cells' area");
 }

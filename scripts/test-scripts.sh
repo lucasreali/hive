@@ -231,6 +231,8 @@ if [ "$(uname)" = Darwin ]; then
   plutil -convert xml1 -o "$app/Contents/Info.plist" src-tauri/Info.plist
   plutil -insert CFBundleExecutable -string fake "$app/Contents/Info.plist"
   plutil -insert CFBundleIdentifier -string com.example.fake "$app/Contents/Info.plist"
+  plutil -insert CFBundleIconName -string AppIcon "$app/Contents/Info.plist"
+  cp src-tauri/icons/Assets.car "$app/Contents/Resources/Assets.car"
   new_hive() { printf 'int main(void) { return 0; }\n' | cc -x c -o "$app/Contents/Resources/hive" -; }
   seal() { codesign --force --sign - --options runtime "$@" "$app" 2>/dev/null; }
   bundle_check() { scripts/macos-bundle.sh check "$app" "$@" >/dev/null 2>&1; }
@@ -269,6 +271,17 @@ if [ "$(uname)" = Darwin ]; then
     check "bundle: a $key not naming Hive fails" '! bundle_check'
     cp "$tmp/Info.plist" "$app/Contents/Info.plist"
   done
+  plutil -replace CFBundleIconName -string Other "$app/Contents/Info.plist"
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: an icon name not in Assets.car fails" '! bundle_check'
+  plutil -remove CFBundleIconName "$app/Contents/Info.plist"
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: no CFBundleIconName fails" '! bundle_check'
+  plutil -insert CFBundleIconName -string AppIcon "$app/Contents/Info.plist"
+  mv "$app/Contents/Resources/Assets.car" "$tmp/Assets.car"
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: no Assets.car fails" '! bundle_check'
+  mv "$tmp/Assets.car" "$app/Contents/Resources/Assets.car"
   seal --entitlements src-tauri/Entitlements.plist
   check "bundle: restored, it passes again" 'bundle_check'
   # Another signer for the nested hive: a second real identity would need a keychain on the

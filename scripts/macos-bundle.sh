@@ -11,7 +11,8 @@
 #   macos-bundle.sh check <Hive.app> [--developer-id]
 #       The bundle validates (`codesign --verify --deep --strict`); the nested `hive` is signed
 #       (not only linker-signed) with the app's identity; the app's entitlements allow the
-#       WebView's JIT; the Info.plist names Hive in the folder prompts. With --developer-id also
+#       WebView's JIT; the Info.plist names Hive in the folder prompts; the Liquid Glass icon is there
+#       (Assets.car and CFBundleIconName, else macOS 26 boxes the icon in grey). With --developer-id also
 #       Gatekeeper's verdict (`spctl -a`) and the stapled notarization ticket.
 #   macos-bundle.sh dsyms <Hive.app> <folder>
 #       The app's binary and its nested `hive` each have a dSYM in <folder> (`hive-app.dSYM`,
@@ -72,6 +73,11 @@ check() {
     text=$(plutil -extract "$key" raw -o - "$plist" 2>/dev/null) || die "Info.plist has no $key"
     case $text in *Hive*) ;; *) die "$key does not name Hive: $text" ;; esac
   done
+
+  local icon
+  icon=$(plutil -extract CFBundleIconName raw -o - "$plist" 2>/dev/null) || die "Info.plist has no CFBundleIconName"
+  assetutil --info "$app/Contents/Resources/Assets.car" 2>/dev/null | grep -q "\"Name\" : \"$icon\"" ||
+    die "Assets.car has no $icon icon"
 
   if [ -n "$developer_id" ]; then
     case ",$hive_flags," in *,runtime,*) ;; *) die "the nested hive lacks the hardened runtime" ;; esac
