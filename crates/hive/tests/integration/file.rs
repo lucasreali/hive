@@ -277,12 +277,15 @@ async fn a_save_writes_only_over_the_version_the_app_read() {
     }
     // No `wslpath` on this machine: only running it fails.
     #[cfg(target_os = "linux")]
-    assert!(
-        matches!(
-            &revealed,
-            Control::EditorTarget { reveal: true, error: Some(e), .. } if !e.contains("reveals")
-        ),
-        "{revealed:?}"
+    assert_eq!(
+        revealed,
+        Control::EditorTarget {
+            worktree: root.clone(),
+            path: program.to_owned(),
+            reveal: true,
+            windows_path: None,
+            error: Some("No such file or directory (os error 2)".to_owned()),
+        }
     );
     drop(conn);
     stop(daemon);

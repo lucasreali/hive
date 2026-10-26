@@ -1394,6 +1394,14 @@ mod tests {
         file("README.Cmd");
         let beside = "Windows could run readme.cmd beside README instead of opening it";
         assert_eq!(at("README", false), Err(beside.to_owned()));
+        // A sibling that is no program does not block it.
+        file("LICENSE.txt");
+        let real = dir.path().canonicalize().unwrap().join("LICENSE");
+        let shown = match cfg!(target_os = "linux") {
+            true => format!("-w {}", real.display()),
+            false => real.display().to_string(),
+        };
+        assert_eq!(at("LICENSE", false), Ok(shown));
         // The name checked is the one the system opens: a symlink's target.
         std::os::unix::fs::symlink("a.exe", dir.path().join("notes.md")).unwrap();
         let run = format!("{SYSTEM} might run or install a.exe: Hive only reveals it");
