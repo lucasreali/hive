@@ -54,8 +54,8 @@ fn note(name: &str, text: String) -> Entry {
     }
 }
 
-/// The icon: `SIZE`×`SIZE` RGBA pixels of a hexagon outline, drawn as a template (the menu
-/// bar's own colour) or in the colour of the most urgent state.
+/// The icon: `SIZE`×`SIZE` RGBA pixels of the honeycomb, drawn as a template (the menu bar's
+/// own colour) or in the colour of the most urgent state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Icon {
     pub rgba: Vec<u8>,
@@ -179,41 +179,62 @@ pub fn tint(state: AgentState, pending: bool) -> Option<[u8; 3]> {
     }
 }
 
-/// How much of the pixel at (`x`, `y`) a hexagon outline covers, in 0..=255, from 4×4
-/// samples: inside the hexagon of `radius` (centre to corner, pointy top) centred on the icon
-/// and outside the one of `inner`.
-fn coverage(x: u32, y: u32, radius: f64, inner: f64) -> u8 {
-    let centre = f64::from(SIZE) / 2.0;
-    let inside = |px: f64, py: f64, r: f64| {
-        let (dx, dy) = ((px - centre).abs(), (py - centre).abs());
+/// The radius of a cell (centre to corner, pointy top) and the gap between two cells, in pixels:
+/// the app icon's honeycomb, 32 px wide.
+const CELL: f64 = 5.4;
+const GAP: f64 = 1.9;
+/// The alpha of the six cells; the lit one, top right, is opaque (the title bar's logo).
+pub const DIM: u8 = 128;
+
+/// The honeycomb's seven cells: centre and alpha.
+fn cells() -> [(f64, f64, u8); 7] {
+    let c = f64::from(SIZE) / 2.0;
+    let d = CELL * 3f64.sqrt() + GAP;
+    let h = d * 3f64.sqrt() / 2.0;
+    [
+        (c - d / 2.0, c - h, DIM),
+        (c + d / 2.0, c - h, u8::MAX),
+        (c - d, c, DIM),
+        (c, c, DIM),
+        (c + d, c, DIM),
+        (c - d / 2.0, c + h, DIM),
+        (c + d / 2.0, c + h, DIM),
+    ]
+}
+
+/// The alpha of the pixel at (`x`, `y`), from 4×4 samples of the cells.
+fn coverage(x: u32, y: u32) -> u8 {
+    let inside = |px: f64, py: f64, (cx, cy, _): &(f64, f64, u8)| {
+        let (dx, dy) = ((px - cx).abs(), (py - cy).abs());
         // A pointy-top hexagon: within the flat sides (|dx| ≤ r·√3/2) and the slanted ones.
-        let half = r * 3f64.sqrt() / 2.0;
-        dx <= half && dx / 3f64.sqrt() + dy <= r
+        dx <= CELL * 3f64.sqrt() / 2.0 && dx / 3f64.sqrt() + dy <= CELL
     };
-    let mut hits = 0_u32;
+    let cells = cells();
+    let mut sum = 0_u32;
     for sy in 0..4 {
         for sx in 0..4 {
             let px = f64::from(x) + (f64::from(sx) + 0.5) / 4.0;
             let py = f64::from(y) + (f64::from(sy) + 0.5) / 4.0;
-            hits += u32::from(inside(px, py, radius) && !inside(px, py, inner));
+            sum += cells
+                .iter()
+                .find(|cell| inside(px, py, cell))
+                .map_or(0, |cell| u32::from(cell.2));
         }
     }
-    u8::try_from(hits * 255 / 16).unwrap_or(u8::MAX)
+    u8::try_from(sum / 16).unwrap_or(u8::MAX)
 }
 
-/// The icon for the most urgent state (`None`: no agent): always the same hexagon outline, as
-/// a template when calm (the menu bar's own colour) or in the state's [`tint`] otherwise; only
-/// its colour changes (18.5).
+/// The icon for the most urgent state (`None`: no agent): always the same honeycomb, as a
+/// template when calm (the menu bar's own colour) or in the state's [`tint`] otherwise; only its
+/// colour changes (18.5).
 pub fn icon(urgent: Option<(AgentState, bool)>) -> Icon {
     let tint = urgent.and_then(|(state, pending)| tint(state, pending));
-    let radius = f64::from(SIZE) / 2.0 - 2.0;
-    let inner = radius - 4.0;
     let colour = tint.unwrap_or([0, 0, 0]);
     let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
     for y in 0..SIZE {
         for x in 0..SIZE {
             rgba.extend_from_slice(&colour);
-            rgba.push(coverage(x, y, radius, inner));
+            rgba.push(coverage(x, y));
         }
     }
     Icon {

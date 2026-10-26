@@ -169,25 +169,48 @@ fn total_alpha(icon: &Icon) -> u64 {
         .sum()
 }
 
+/// Checks the honeycomb's shape: dim cells, the lit one, the gaps and the margins.
+fn assert_honeycomb(icon: &Icon) {
+    assert_eq!(icon.rgba.len(), (SIZE * SIZE * 4) as usize);
+    let c = SIZE / 2;
+    assert_eq!(alpha(icon, c, c), DIM, "the centre cell");
+    assert_eq!(alpha(icon, 23, 8), u8::MAX, "the lit cell, top right");
+    assert_eq!(alpha(icon, 12, 8), DIM, "the top left cell");
+    assert_eq!(alpha(icon, 7, c), DIM, "the left cell");
+    assert_eq!(alpha(icon, 28, c), DIM, "the right cell");
+    // The gaps between the centre cell and its neighbours, and the empty corners.
+    assert_eq!(alpha(icon, 12, c), 0);
+    assert_eq!(alpha(icon, 23, c), 0);
+    for (x, y) in [
+        (0, 0),
+        (SIZE - 1, 0),
+        (0, SIZE - 1),
+        (SIZE - 1, SIZE - 1),
+        (c, 0),
+    ] {
+        assert_eq!(alpha(icon, x, y), 0, "({x}, {y})");
+    }
+    // The bottom half is left-right symmetric; the top one is not (the lit cell).
+    for (x, y) in [(5, 18), (8, 26), (12, 28), (16, 22), (3, 20)] {
+        assert_eq!(
+            alpha(icon, x, y),
+            alpha(icon, SIZE - 1 - x, y),
+            "({x}, {y})"
+        );
+    }
+    assert_eq!(total_alpha(icon), TOTAL, "the cells' area");
+}
+
+/// The sum of the honeycomb's alphas.
+const TOTAL: u64 = 77_436;
+
 #[test]
-fn a_calm_icon_is_a_template_hexagon_outline() {
+fn a_calm_icon_is_a_template_honeycomb() {
     for calm in [None, Some((AgentState::Idle, false))] {
         let icon = icon(calm);
         assert!(icon.template);
-        assert_eq!(icon.rgba.len(), (SIZE * SIZE * 4) as usize);
         assert!(icon.rgba.chunks(4).all(|p| p[..3] == [0, 0, 0]));
-        // Hollow in the middle, solid on its outline, empty at the corners.
-        assert_eq!(alpha(&icon, SIZE / 2, SIZE / 2), 0);
-        assert_eq!(alpha(&icon, SIZE / 2, 3), 255, "the top corner's outline");
-        assert_eq!(alpha(&icon, 5, SIZE / 2), 255, "the left side");
-        assert_eq!(alpha(&icon, 0, 0), 0);
-        assert_eq!(alpha(&icon, SIZE - 1, SIZE - 1), 0);
-        // Left-right and top-bottom symmetric.
-        for (x, y) in [(5, 10), (8, 4), (16, 2), (2, 18)] {
-            assert_eq!(alpha(&icon, x, y), alpha(&icon, SIZE - 1 - x, y));
-            assert_eq!(alpha(&icon, x, y), alpha(&icon, x, SIZE - 1 - y));
-        }
-        assert_eq!(total_alpha(&icon), 72_600, "the outline's area");
+        assert_honeycomb(&icon);
     }
 }
 
@@ -197,7 +220,7 @@ fn mask(icon: &Icon) -> Vec<u8> {
 }
 
 #[test]
-fn an_urgent_icon_is_the_same_outline_only_in_its_colour() {
+fn an_urgent_icon_is_the_same_honeycomb_only_in_its_colour() {
     let calm = icon(None);
     let urgent = [
         (AgentState::WaitingPermission, true, [0xa4, 0x88, 0x19]),
@@ -211,13 +234,10 @@ fn an_urgent_icon_is_the_same_outline_only_in_its_colour() {
     for (state, pending, colour) in urgent {
         let icon = icon(Some((state, pending)));
         assert!(!icon.template, "{state:?} carries a colour");
-        assert_eq!(icon.rgba.len(), calm.rgba.len());
         assert!(icon.rgba.chunks(4).all(|p| p[..3] == colour), "{state:?}");
-        // The same shape as the calm template, so never filled.
+        // The same shape as the calm template.
         assert_eq!(mask(&icon), mask(&calm), "{state:?}");
-        assert_eq!(alpha(&icon, SIZE / 2, SIZE / 2), 0, "{state:?} is hollow");
-        assert_eq!(alpha(&icon, SIZE / 2, 3), 255);
-        assert_eq!(total_alpha(&icon), 72_600);
+        assert_honeycomb(&icon);
     }
 }
 
