@@ -901,16 +901,22 @@ pub enum Control {
         worktree: String,
         message: String,
     },
-    /// App → service: where Windows sees this file, to open it in the user's editor; an empty
-    /// `path` is the worktree's folder, for the Windows Explorer. Answered by `EditorTarget`.
+    /// App → service: where Windows sees this file, to open it with its default app; an empty
+    /// `path` is the worktree's folder, for the Windows Explorer. With `reveal`, a file or
+    /// folder to show in the Explorer or the Finder, never to open (D19.1). Answered by
+    /// `EditorTarget`.
     OpenInEditor {
         worktree: String,
         path: String,
+        #[serde(default)]
+        reveal: bool,
     },
-    /// The file's Windows path (`wslpath -w`), or why it cannot be opened.
+    /// The file's Windows path (`wslpath -w`), or why it cannot be opened; `reveal` as asked
+    /// (a path checked only to be revealed).
     EditorTarget {
         worktree: String,
         path: String,
+        reveal: bool,
         windows_path: Option<String>,
         error: Option<String>,
     },
@@ -2595,13 +2601,31 @@ mod tests {
         let target = Control::EditorTarget {
             worktree: "/r".into(),
             path: "a".into(),
+            reveal: true,
             windows_path: Some("w".into()),
             error: None,
         };
         assert_eq!(
             &Frame::control(0, &target).payload[..],
-            br#"{"type":"editor_target","worktree":"/r","path":"a","windows_path":"w","error":null}"#
+            br#"{"type":"editor_target","worktree":"/r","path":"a","reveal":true,"windows_path":"w","error":null}"#
         );
+        // Without `reveal` the app asks to open.
+        let asked = |reveal| Control::OpenInEditor {
+            worktree: "/r".into(),
+            path: "a".into(),
+            reveal,
+        };
+        let open = br#"{"type":"open_in_editor","worktree":"/r","path":"a"}"#;
+        let reveal = br#"{"type":"open_in_editor","worktree":"/r","path":"a","reveal":true}"#;
+        assert_eq!(
+            serde_json::from_slice::<Control>(open).unwrap(),
+            asked(false)
+        );
+        assert_eq!(
+            serde_json::from_slice::<Control>(reveal).unwrap(),
+            asked(true)
+        );
+        assert_eq!(&Frame::control(0, &asked(true)).payload[..], &reveal[..]);
     }
 
     #[test]

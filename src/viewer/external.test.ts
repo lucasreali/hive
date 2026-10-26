@@ -33,8 +33,8 @@ test("a requested editor_target opens once", async () => {
   openInEditor("/w", "");
   openSettingsFile();
   expect(ask.mock.calls).toEqual([
-    ["/w", "a.ts"],
-    ["/w", ""],
+    ["/w", "a.ts", false],
+    ["/w", "", false],
   ]);
   expect(askSettings).toHaveBeenCalledTimes(1);
   const folder = "\\\\wsl.localhost\\Ubuntu\\w\\";
@@ -52,10 +52,16 @@ afterEach(() => {
   useHive.setState(initialState, true);
 });
 
-const target = (windows_path: string | null, error: string | null = null, path = "a.ts") => ({
+const target = (
+  windows_path: string | null,
+  error: string | null = null,
+  path = "a.ts",
+  reveal = false,
+) => ({
   type: "editor_target" as const,
   worktree: "/w",
   path,
+  reveal,
   windows_path,
   error,
 });
@@ -118,6 +124,42 @@ test("a worktree's folder opens in the Explorer, or an error toast says why not"
   await openFolder(target(folder, null, ""), true);
   expect(toast()).toContain("no Explorer");
   await openFolder(target(folder, null, ""));
+});
+
+test("an answer opens as asked: revealed, or from a menu as a toast, each once", async () => {
+  spyOn(transport, "openInEditor").mockResolvedValue();
+  const opened: unknown[] = [];
+  mockIPC((_, args) => {
+    opened.push(args);
+  });
+  const pdf = "\\\\wsl.localhost\\Ubuntu\\w\\b.pdf";
+  const src = "\\\\wsl.localhost\\Ubuntu\\w\\src";
+  openInEditor("/w", "src", true, false);
+  openInEditor("/w", "b.pdf", false, false);
+  // An answer to open is not the one asked to reveal, nor the other way round.
+  await openTarget(target(src, null, "src", false), true);
+  await openTarget(target(pdf, null, "b.pdf", true), true);
+  expect(opened).toEqual([]);
+  // A file not open in the view: from the menu, it opens all the same.
+  for (let i = 0; i < 2; i++) {
+    await openTarget(target(src, null, "src", true), true);
+    await openTarget(target(pdf, null, "b.pdf"), true);
+  }
+  expect(opened).toEqual([
+    { path: src, reveal: true },
+    { path: pdf, reveal: false },
+  ]);
+  expect(notice()).toBeNull();
+  // Outside the app, or refused, a toast says so.
+  openInEditor("/w", "b.pdf", false, false);
+  await openTarget(target(pdf, null, "b.pdf"), false);
+  expect(toast()).toBe(`Only the Hive app opens the file's default app: ${pdf}`);
+  openInEditor("/w", "src", true, false);
+  await openTarget(target(src, null, "src", true), false);
+  expect(toast()).toBe(`Only the Hive app opens the Explorer: ${src}`);
+  openInEditor("/w", "run.command", false, false);
+  await openTarget(target(null, "macOS might run or install run.command", "run.command"), true);
+  expect(toast()).toBe("macOS might run or install run.command");
 });
 
 test("the settings file (no worktree) opens the same way", async () => {

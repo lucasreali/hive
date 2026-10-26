@@ -1,5 +1,7 @@
 import {
+  ArrowSquareOutIcon,
   FilePlusIcon,
+  FolderOpenIcon,
   FolderPlusIcon,
   type Icon,
   PencilSimpleIcon,
@@ -16,6 +18,8 @@ import {
   within,
 } from "../store";
 import { transport } from "../transport";
+import { openInEditor } from "../viewer/external";
+import { isMac } from "../window";
 import { CloseIcon, ICON } from "./icons";
 import { ContextMenu, showModal } from "./WorktreeMenu";
 
@@ -40,10 +44,28 @@ export function FileMenu() {
       {label}
     </button>
   );
+  const { worktree, path } = target;
+  // The service checks what may be revealed or opened (D19.1); a folder is its own `folder`.
+  const outside = (Shape: Icon, label: string, reveal: boolean) =>
+    path !== null && (
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          closeMenu();
+          openInEditor(worktree, path, reveal, false);
+        }}
+      >
+        <Shape {...ICON} />
+        {label}
+      </button>
+    );
   return (
-    <ContextMenu at={menu} label={target.path ?? "Files"} onClose={closeMenu}>
+    <ContextMenu at={menu} label={path ?? "Files"} onClose={closeMenu}>
       {item(FilePlusIcon, "New File…", "file")}
       {item(FolderPlusIcon, "New Folder…", "folder")}
+      {outside(FolderOpenIcon, isMac() ? "Reveal in Finder" : "Show in Explorer", true)}
+      {path !== target.folder && outside(ArrowSquareOutIcon, "Open with Default App", false)}
       {target.path !== null && item(PencilSimpleIcon, "Rename…", "rename")}
       {target.path !== null && (
         <button

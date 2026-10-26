@@ -171,6 +171,7 @@ async fn only_a_path_the_service_sent_opens_and_only_once() {
     let target = |windows_path: Option<&str>| Control::EditorTarget {
         worktree: "/r".into(),
         path: "a.ts".into(),
+        reveal: false,
         windows_path: windows_path.map(Into::into),
         error: None,
     };
@@ -233,6 +234,27 @@ async fn only_a_path_the_service_sent_opens_and_only_once() {
     let gone = || hive.open_path("C:\\gone".into(), false);
     assert_eq!(gone(), Err("no app for it".into()));
     assert_eq!(gone(), refused("C:\\gone"));
+
+    // A path checked only to be revealed (D19.1) never opens; one checked to open may be
+    // revealed too.
+    let bundle = "/r/Shop.app";
+    let revealed = Control::EditorTarget {
+        worktree: "/r".into(),
+        path: "Shop.app".into(),
+        reveal: true,
+        windows_path: Some(bundle.into()),
+        error: None,
+    };
+    for message in [revealed, target(Some(file))] {
+        service.send(0, message).await;
+        next(&mut rx).await;
+    }
+    // The refused open does not use the approval up.
+    assert_eq!(hive.open_path(bundle.into(), false), refused(bundle));
+    assert_eq!(hive.open_path(bundle.into(), true), Ok(()));
+    assert_eq!(hive.open_path(file.into(), true), Ok(()));
+    let calls: Vec<_> = opened.try_iter().skip(1).collect(); // After "C:\gone".
+    assert_eq!(calls, [(bundle.into(), true), (file.into(), true)]);
 }
 
 #[test]
@@ -1072,12 +1094,16 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         name: "e".into(),
     };
     assert_eq!(service.control().await, (0, folder));
-    hive.open_in_editor("/r".into(), "a".into()).unwrap();
-    let editor = Control::OpenInEditor {
-        worktree: "/r".into(),
-        path: "a".into(),
-    };
-    assert_eq!(service.control().await, (0, editor));
+    for reveal in [false, true] {
+        hive.open_in_editor("/r".into(), "a".into(), reveal)
+            .unwrap();
+        let editor = Control::OpenInEditor {
+            worktree: "/r".into(),
+            path: "a".into(),
+            reveal,
+        };
+        assert_eq!(service.control().await, (0, editor));
+    }
     hive.get_settings().unwrap();
     assert_eq!(service.control().await, (0, Control::GetSettings));
     let mut settings = Settings::default();
@@ -1442,7 +1468,10 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.create_folder("/r".into(), "".into(), "d".into()),
         not_connected
     );
-    assert_eq!(hive.open_in_editor("/r".into(), "a".into()), not_connected);
+    assert_eq!(
+        hive.open_in_editor("/r".into(), "a".into(), true),
+        not_connected
+    );
     assert_eq!(hive.get_settings(), not_connected);
     assert_eq!(hive.set_settings(Settings::default()), not_connected);
     let env = SpaceEnv::default();
@@ -1768,6 +1797,7 @@ fn commands_reach_the_managed_hive() {
     let view = json!({"terminal": 1, "focused": true});
     let changes = json!({"path": "/r", "base": "head"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
+    let editor = json!({"worktree": "/r", "path": "a", "reveal": true});
     let search = json!({"worktree": "/r", "query": "q"});
     let dirs = json!({"path": "", "windows": false});
     let locate = json!({"id": "s", "target": "log"});
@@ -1816,7 +1846,7 @@ fn commands_reach_the_managed_hive() {
         ("move_file", &move_file),
         ("delete_file", &file),
         ("create_folder", &create_folder),
-        ("open_in_editor", &file),
+        ("open_in_editor", &editor),
         ("get_settings", &json!({})),
         ("set_settings", &settings),
         ("create_space", &new_space),
@@ -1890,7 +1920,7 @@ fn commands_reach_the_managed_hive() {
         ("move_file", move_file),
         ("delete_file", file.clone()),
         ("create_folder", create_folder),
-        ("open_in_editor", file),
+        ("open_in_editor", editor),
         ("get_settings", json!({})),
         ("set_settings", settings),
         ("create_space", new_space),

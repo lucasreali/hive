@@ -7,19 +7,32 @@ import { isFor } from "./buffer";
 
 type EditorTarget = Extract<ServiceMessage, { type: "editor_target" }>;
 
-/** The `editor_target` answers asked for and not yet received, by worktree and path. */
-const pending = new Set<string>();
-const key = (worktree: string, path: string) => JSON.stringify([worktree, path]);
+/**
+ * The `editor_target` answers asked for and not yet received, by worktree, path and `reveal`:
+ * whether the answer shows in the open file's view (else as a toast).
+ */
+const pending = new Map<string, boolean>();
+const key = (worktree: string, path: string, reveal: boolean) =>
+  JSON.stringify([worktree, path, reveal]);
 
-/** Asks the service for the Windows path of a worktree's file (an empty `path`: its folder). */
-export function openInEditor(worktree: string, path: string): void {
-  pending.add(key(worktree, path));
-  void transport.openInEditor(worktree, path);
+/**
+ * Asks the service for the Windows path of a worktree's file (an empty `path`: its folder), to
+ * open with its default app, or to show in the Finder or the Explorer when `reveal` (D19.1).
+ * The file view's button shows the answer in the view; a menu's (`inView` false), as a toast.
+ */
+export function openInEditor(
+  worktree: string,
+  path: string,
+  reveal = false,
+  inView = path !== "" && !reveal,
+): void {
+  pending.set(key(worktree, path, reveal), inView);
+  void transport.openInEditor(worktree, path, reveal);
 }
 
 /** Asks the service for the settings file's Windows path. */
 export function openSettingsFile(): void {
-  pending.add(key("", ""));
+  pending.set(key("", "", false), false);
   void transport.openSettingsFile();
 }
 
@@ -28,8 +41,11 @@ export function openSettingsFile(): void {
  * Anything else is dropped, so a service can never make the app open a path by itself.
  */
 export function openTarget(target: EditorTarget, tauri = isTauri()): Promise<void> | undefined {
-  if (!pending.delete(key(target.worktree, target.path))) return;
-  return target.path === "" ? openFolder(target, tauri) : openExternal(target, tauri);
+  const asked = key(target.worktree, target.path, target.reveal);
+  const inView = pending.get(asked);
+  if (inView === undefined) return;
+  pending.delete(asked);
+  return inView ? openExternal(target, tauri) : openFolder(target, tauri);
 }
 
 /**
@@ -60,18 +76,23 @@ export async function openExternal(target: EditorTarget, tauri = isTauri()): Pro
 }
 
 /**
- * "Open in Explorer" (a worktree's menu): the service's answer for the folder (an empty
- * `path`) opens its Windows path with Windows' default app for folders, the Explorer.
- * Anything that goes wrong shows as an error toast.
+ * A menu's answer: a worktree's folder (an empty `path`) opened in the Explorer or the Finder,
+ * a file or folder revealed there (`reveal`), or a file opened with its default app ("Open with
+ * Default App"). Anything that goes wrong shows as an error toast.
  */
 export async function openFolder(target: EditorTarget, tauri = isTauri()): Promise<void> {
   if (!target.windows_path) return showNotice("error", target.error ?? "No path");
   // No worktree: the settings file ("Open settings file"), opened the same way.
+  const manager = isMac() ? "the Finder" : "the Explorer";
   const what =
-    target.worktree === "" ? "the settings file" : isMac() ? "the Finder" : "the Explorer";
+    target.worktree === ""
+      ? "the settings file"
+      : target.reveal || target.path === ""
+        ? manager
+        : "the file's default app";
   if (!tauri) return showNotice("error", `Only the Hive app opens ${what}: ${target.windows_path}`);
   try {
-    await openPath(target.windows_path);
+    await openPath(target.windows_path, target.reveal);
   } catch (error) {
     showNotice("error", String(error));
   }

@@ -485,6 +485,7 @@ async fn the_settings_file_is_written_to_be_opened_and_diagnostics_name_it() {
     let target = Control::EditorTarget {
         worktree: String::new(),
         path: String::new(),
+        reveal: false,
         windows_path: Some(windows_path),
         error: None,
     };

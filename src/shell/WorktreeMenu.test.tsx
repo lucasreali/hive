@@ -46,7 +46,7 @@ test("a worktree's right click opens its menu at the pointer; main and foreign o
   expect(items).toEqual([
     ["New terminal here", false],
     ["Copy path", false],
-    ["Open in Explorer", false],
+    ["Show in Explorer", false],
     ["Rename…", false],
     ["Delete…", false],
   ]);
@@ -112,7 +112,7 @@ test("arrows move between enabled items; Esc, Tab, a click outside, scrolling an
   // Rename and Delete are disabled on main: it wraps to the first item.
   expect(document.activeElement).toBe(item("New terminal here"));
   fireEvent.keyDown(m, { key: "ArrowUp" });
-  expect(document.activeElement).toBe(item("Open in Explorer"));
+  expect(document.activeElement).toBe(item("Show in Explorer"));
   fireEvent.keyDown(m, { key: "x" });
   expect(menu()).toBeTruthy();
   fireEvent.keyDown(m, { key: "Escape" });
@@ -170,8 +170,8 @@ test("new terminal, copy path and Explorer act on the worktree", async () => {
   expect(noticeKind()).toBe("error");
 
   rightClick("fix-login");
-  fireEvent.click(item("Open in Explorer"));
-  expect(explorer).toHaveBeenCalledWith(login.path, "");
+  fireEvent.click(item("Show in Explorer"));
+  expect(explorer).toHaveBeenCalledWith(login.path, "", true);
   open.mockRestore();
   explorer.mockRestore();
   writeText.mockRestore();
@@ -205,9 +205,9 @@ test("on macOS the folder is revealed in the Finder", () => {
   asMac();
   show();
   rightClick("fix-login");
-  expect(screen.queryByRole("menuitem", { name: "Open in Explorer" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Show in Explorer" })).toBeNull();
   fireEvent.click(item("Reveal in Finder"));
-  expect(finder).toHaveBeenCalledWith(login.path, "");
+  expect(finder).toHaveBeenCalledWith(login.path, "", true);
   finder.mockRestore();
 });
 

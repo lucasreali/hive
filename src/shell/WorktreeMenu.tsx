@@ -163,9 +163,9 @@ export function WorktreeMenu() {
         <CopyIcon {...ICON} />
         Copy path
       </button>
-      <button type="button" role="menuitem" onClick={act(() => openInEditor(w.path, ""))}>
+      <button type="button" role="menuitem" onClick={act(() => openInEditor(w.path, "", true))}>
         <FolderOpenIcon {...ICON} />
-        {isMac() ? "Reveal in Finder" : "Open in Explorer"}
+        {isMac() ? "Reveal in Finder" : "Show in Explorer"}
       </button>
       <hr />
       <button

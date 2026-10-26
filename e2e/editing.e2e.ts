@@ -153,6 +153,28 @@ test("editing: the tree's menu renames the open file and creates a new one", asy
   await expect(panel.getByRole("treeitem", { name: "todo.md" })).toBeVisible();
 });
 
+test("files: the tree's menu reveals a file or a folder and opens a file with its default app (19.1)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const { panel } = await openReadme(page);
+  const toasts = page.getByRole("status", { name: "Messages" });
+  const reveal = page.getByRole("menuitem", { name: /^(Reveal in Finder|Show in Explorer)$/ });
+  // Outside the Hive app nothing opens: the toast names the path the service checked.
+  await panel.getByRole("treeitem", { name: "README.md" }).click({ button: "right" });
+  await reveal.click();
+  await expect(toasts).toContainText(/Only the Hive app opens the (Finder|Explorer): .*README\.md/);
+  await panel.getByRole("treeitem", { name: "README.md" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Open with Default App" }).click();
+  await expect(toasts).toContainText(
+    /Only the Hive app opens the file's default app: .*README\.md/,
+  );
+  // A folder is revealed, never opened.
+  await panel.getByRole("treeitem", { name: "src" }).click({ button: "right" });
+  await expect(reveal).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Open with Default App" })).toHaveCount(0);
+});
+
 test("files: New Folder shows an empty folder; a dragged file moves into it, its tab follows", async ({
   page,
 }) => {

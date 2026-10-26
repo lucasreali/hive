@@ -196,10 +196,10 @@ export interface Transport {
    */
   createFolder(worktree: string, folder: string, name: string): Promise<void>;
   /**
-   * The file's Windows path for an external editor (an empty `path`: the worktree's folder);
-   * answered by `editor_target`.
+   * The file's Windows path for its default app (an empty `path`: the worktree's folder), or a
+   * file's or folder's to show in the file manager (`reveal`); answered by `editor_target`.
    */
-  openInEditor(worktree: string, path: string): Promise<void>;
+  openInEditor(worktree: string, path: string, reveal: boolean): Promise<void>;
   /** Answered by `settings` (also sent after every `welcome`). */
   getSettings(): Promise<void>;
   /** Saves the whole settings; answered by `settings`, or `settings_failed` with nothing saved. */

@@ -502,6 +502,7 @@ fn samples() -> Vec<Control> {
         EditorTarget {
             worktree: s("/r"),
             path: s("a.rs"),
+            reveal: false,
             windows_path: None,
             error: Some(m()),
         },

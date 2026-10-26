@@ -140,14 +140,16 @@ pub mod answer {
         })
     }
 
-    /// `open_in_editor`: the Windows path of `path` of `worktree`.
-    pub fn editor(projects: &Projects, worktree: String, path: String) -> Control {
+    /// `open_in_editor`: the Windows path of `path` of `worktree`, to open or `reveal`.
+    pub fn editor(projects: &Projects, worktree: String, path: String, reveal: bool) -> Control {
+        let wslpath = OsStr::new("wslpath");
         let located = projects
             .worktree(&worktree)
-            .and_then(|dir| super::windows_path(&dir, &path, OsStr::new("wslpath")));
+            .and_then(|dir| super::windows_path(&dir, &path, reveal, wslpath));
         Control::EditorTarget {
             worktree,
             path,
+            reveal,
             error: located.as_ref().err().map(ToString::to_string),
             windows_path: located.ok(),
         }
@@ -618,125 +620,65 @@ const SYSTEM: &str = "macOS";
 #[cfg(windows)]
 const SYSTEM: &str = "Windows";
 
-/// Extensions of text and source files that open in an editor on Windows and macOS: no usual
-/// app runs, installs or follows one. Every other extension is refused (9.8), among them
-/// scripts an installed interpreter may run (`.js`, `.py`, `.sh`, `.rb`, `.pl`, `.ps1`, `.lua`,
-/// `.jsx`), web pages and XML (a browser or an Office app), projects an IDE builds when it
-/// opens them (`.sln`, `.csproj`, `.gradle`, `.kts`) and `.csv` (a spreadsheet).
-// ponytail: a fixed list, not the user's file associations; add a text type when one is missing.
-const EDITOR_EXTENSIONS: &[&str] = &[
-    "adoc",
-    "c",
-    "cc",
-    "cfg",
-    "cjs",
-    "clj",
-    "cljs",
-    "cmake",
-    "conf",
-    "cpp",
-    "cs",
-    "css",
-    "cts",
-    "cxx",
-    "dart",
-    "diff",
-    "dockerfile",
-    "env",
-    "erl",
-    "ex",
-    "exs",
-    "fs",
-    "go",
-    "graphql",
-    "h",
-    "hcl",
-    "hpp",
-    "hs",
-    "ini",
-    "java",
-    "json",
-    "json5",
-    "jsonc",
-    "jsonl",
-    "kt",
-    "less",
-    "lock",
-    "log",
-    "md",
-    "mdx",
-    "mjs",
-    "ml",
-    "mli",
-    "mts",
-    "nix",
-    "patch",
-    "properties",
-    "proto",
-    "rs",
-    "rst",
-    "sass",
-    "scala",
-    "scss",
-    "sql",
-    "svelte",
-    "swift",
-    "tex",
-    "tf",
-    "tfvars",
-    "toml",
-    "ts",
-    "tsx",
-    "txt",
-    "vue",
-    "yaml",
-    "yml",
-    "zig",
-];
-/// Names without an extension (dotfiles included) that open in an editor.
-const EDITOR_NAMES: &[&str] = &[
-    ".dockerignore",
-    ".editorconfig",
-    ".env",
-    ".env.development",
-    ".env.example",
-    ".env.local",
-    ".env.production",
-    ".env.sample",
-    ".env.test",
-    ".eslintignore",
-    ".eslintrc",
-    ".gitattributes",
-    ".gitignore",
-    ".gitkeep",
-    ".gitmodules",
-    ".mailmap",
-    ".node-version",
-    ".npmrc",
-    ".nvmrc",
-    ".prettierignore",
-    ".prettierrc",
-    ".python-version",
-    ".ruby-version",
-    ".tool-versions",
-    "authors",
-    "changelog",
-    "codeowners",
-    "containerfile",
-    "contributing",
-    "copying",
-    "dockerfile",
-    "gemfile",
-    "jenkinsfile",
-    "justfile",
-    "license",
-    "licence",
-    "makefile",
-    "notice",
-    "procfile",
-    "rakefile",
-    "readme",
-    "vagrantfile",
+/// Extensions of files the system's default app may run, install or follow instead of showing
+/// (D19.1): never opened, only revealed. Compared without case, on the last extension.
+// shortcut: a fixed list, not the user's file associations; add a type when one is missing.
+const LAUNCHABLE: &[&str] = &[
+    // macOS (bundles are in `BUNDLES`).
+    "applescript",
+    "command",
+    "dmg",
+    "fileloc",
+    "inetloc",
+    "jar",
+    "mobileconfig",
+    "scpt",
+    "scptd",
+    "terminal",
+    "tool",
+    "webloc",
+    // Windows.
+    "appinstaller",
+    "application",
+    "appref-ms",
+    "appx",
+    "bat",
+    "chm",
+    "cmd",
+    "com",
+    "cpl",
+    "diagcab",
+    "exe",
+    "hta",
+    "inf",
+    "js",
+    "jse",
+    "library-ms",
+    "lnk",
+    "msc",
+    "msi",
+    "msix",
+    "msp",
+    "pif",
+    "ps1",
+    "py",
+    "pyw",
+    "reg",
+    "scf",
+    "scr",
+    "sct",
+    "search-ms",
+    "searchconnector-ms",
+    "settingcontent-ms",
+    "theme",
+    "themepack",
+    "url",
+    "vbe",
+    "vbs",
+    "wsc",
+    "wsf",
+    "wsh",
+    "xll",
 ];
 /// Folder extensions that macOS runs or installs as one item (bundles).
 const BUNDLES: &[&str] = &[
@@ -769,9 +711,11 @@ fn plain_name(real: &Path) -> io::Result<()> {
 }
 
 /// The path the app opens (see [`windows`]) of the file `path` of the worktree at `dir` (the
-/// folder itself when `path` is empty), with the system's default app. Only a text or source
-/// file ([`EDITOR_EXTENSIONS`], [`EDITOR_NAMES`], compared without case) is handed over.
-pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<String> {
+/// folder itself when `path` is empty) with the system's default app, or shows in the Explorer
+/// or the Finder when `reveal` (D19.1). Any file or folder inside `dir` is revealed; only a
+/// regular file the system would show is opened: not executable, not [`LAUNCHABLE`], not in a
+/// bundle. The worktree's own folder opens unless it is a bundle.
+pub fn windows_path(dir: &Path, path: &str, reveal: bool, wslpath: &OsStr) -> io::Result<String> {
     if path.is_empty() {
         // The worktree's own folder, for the Windows Explorer or the Finder.
         let real = canonical(dir)?;
@@ -782,10 +726,7 @@ pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<Strin
             )));
         }
         plain_name(&real)?;
-        let extension = real.extension().unwrap_or_default().to_string_lossy();
-        if BUNDLES.contains(&extension.to_ascii_lowercase().as_str())
-            || real.join("Contents/Info.plist").exists()
-        {
+        if !reveal && (bundle(&real) || real.join("Contents/Info.plist").exists()) {
             return Err(io::Error::other(format!(
                 "{SYSTEM} might run or install the folder {}",
                 real.display()
@@ -793,28 +734,59 @@ pub fn windows_path(dir: &Path, path: &str, wslpath: &OsStr) -> io::Result<Strin
         }
         return windows(&real, wslpath);
     }
-    let Some(real) = resolve(dir, relative(path)?)? else {
+    let rel = relative(path)?;
+    let real = if reveal {
+        let real = match inside(dir, &dir.join(rel)) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            real => Some(real?),
+        };
+        // Never a FIFO or a device: only what the file manager lists.
+        let shown = |real: &PathBuf| real.metadata().is_ok_and(|m| m.is_file() || m.is_dir());
+        if real.as_ref().is_some_and(|real| !shown(real)) {
+            return Err(io::Error::other("not a regular file or a folder"));
+        }
+        real
+    } else {
+        resolve(dir, rel)?
+    };
+    let Some(real) = real else {
         return Err(io::Error::other(format!("{path} does not exist")));
     };
     // The name the system sees: a symlink's target.
     plain_name(&real)?;
+    if reveal {
+        return windows(&real, wslpath);
+    }
     let name = real.file_name().unwrap_or_default().to_string_lossy();
     let lower = name.to_ascii_lowercase();
-    let named = EDITOR_NAMES.contains(&lower.as_str());
     let extension = lower.rsplit_once('.').map(|(_, extension)| extension);
-    if !named && !extension.is_some_and(|e| EDITOR_EXTENSIONS.contains(&e)) {
+    // A file inside `Foo.app/` belongs to a program.
+    let root = canonical(dir)?;
+    let mut held = real
+        .strip_prefix(&root)
+        .unwrap_or(&real)
+        .ancestors()
+        .skip(1);
+    if extension.is_some_and(|e| LAUNCHABLE.contains(&e) || BUNDLES.contains(&e))
+        || held.any(bundle)
+    {
         return Err(io::Error::other(format!(
-            "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
-             Makefile), not {name}: {SYSTEM} might run it"
+            "{SYSTEM} might run or install {name}: Hive only reveals it"
         )));
     }
-    // macOS runs an executable file without an extension in the Terminal.
-    if named && mode::executable(&real.metadata()?) {
+    if mode::executable(&real.metadata()?) {
         return Err(io::Error::other(format!(
-            "{name} is executable: {SYSTEM} might run it instead of opening it in an editor"
+            "{name} is executable: {SYSTEM} might run it instead of opening it; Hive only \
+             reveals it"
         )));
     }
     windows(&real, wslpath)
+}
+
+/// Whether `path` names a bundle ([`BUNDLES`], without case).
+fn bundle(path: &Path) -> bool {
+    let extension = path.extension().unwrap_or_default().to_string_lossy();
+    BUNDLES.contains(&extension.to_ascii_lowercase().as_str())
 }
 
 /// Where Windows sees `path`: `<wslpath> -w <path>`.
@@ -1207,7 +1179,7 @@ mod tests {
         std::fs::write(dir.path().join("a.ts"), "").unwrap();
         let real = dir.path().canonicalize().unwrap().join("a.ts");
         let at = |path: &str, program: &str| {
-            windows_path(dir.path(), path, OsStr::new(program)).map_err(|e| e.to_string())
+            windows_path(dir.path(), path, false, OsStr::new(program)).map_err(|e| e.to_string())
         };
         // `echo` stands in for `wslpath`: it prints its arguments.
         assert_eq!(at("a.ts", "echo"), Ok(format!("-w {}", real.display())));
@@ -1229,7 +1201,7 @@ mod tests {
         std::fs::write(dir.path().join("Makefile"), "").unwrap();
         let top = canonical(dir.path()).unwrap();
         let at = |path: &str| {
-            windows_path(dir.path(), path, OsStr::new("wslpath")).map_err(|e| e.to_string())
+            windows_path(dir.path(), path, false, OsStr::new("wslpath")).map_err(|e| e.to_string())
         };
         assert_eq!(at("a.ts"), Ok(top.join("a.ts").display().to_string()));
         assert_eq!(at(""), Ok(top.display().to_string()));
@@ -1243,62 +1215,104 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn only_text_and_source_files_open_in_an_editor() {
+    fn launchable_files_and_executables_are_revealed_never_opened() {
         let dir = tempfile::tempdir().unwrap();
-        let at = |name: &str| {
-            let file = dir.path().join(name);
-            std::fs::write(&file, "").unwrap();
-            windows_path(dir.path(), name, OsStr::new("echo")).map_err(|e| e.to_string())
+        let at = |name: &str, reveal| {
+            windows_path(dir.path(), name, reveal, OsStr::new("echo")).map_err(|e| e.to_string())
         };
+        let file = |name: &str| {
+            let file = dir.path().join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "").unwrap();
+            name.to_owned()
+        };
+        // Images, PDFs and any other file the system shows open with its default app.
         for name in [
             "a.rs",
             "b.MD",
-            "c.json",
+            "c.png",
+            "d.PDF",
+            "e.jpeg",
+            "page.html",
             "Makefile",
             "LICENSE",
             ".gitignore",
-            ".env.local",
+            "tool",
             "d.e.ts",
         ] {
-            assert!(at(name).is_ok(), "{name}");
+            let name = file(name);
+            assert!(at(&name, false).is_ok(), "{name}");
+            assert!(at(&name, true).is_ok(), "{name}");
         }
-        let windows = [
-            "chm",
-            "py",
-            "pyw",
-            "appinstaller",
-            "msix",
-            "appx",
-            "settingcontent-ms",
-            "library-ms",
-            "search-ms",
-            "searchconnector-ms",
-            "xll",
-            "sct",
-            "wsc",
-            "diagcab",
-            "theme",
-            "themepack",
-            "exe",
-            "bat",
-            "JS",
-            "lnk",
+        let launchable = [
+            "app",
+            "command",
+            "tool",
+            "terminal",
+            "workflow",
+            "pkg",
+            "mpkg",
+            "scpt",
+            "applescript",
+            "webloc",
+            "inetloc",
+            "fileloc",
             "url",
+            "lnk",
+            "bat",
+            "cmd",
             "ps1",
+            "vbs",
+            "exe",
+            "JS",
+            "msi",
+            "py",
+            "jar",
+            "dmg",
+            "settingcontent-ms",
+            "prefpane",
         ];
-        let macos = [
-            "fileloc", "inetloc", "webloc", "mpkg", "dmg", "command", "app", "terminal",
-        ];
-        for extension in windows.iter().chain(&macos) {
-            let name = format!("a.{extension}");
-            let refused = format!(
-                "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
-                 Makefile), not {name}: {SYSTEM} might run it"
-            );
-            assert_eq!(at(&name), Err(refused), "{name}");
+        for extension in launchable {
+            let name = file(&format!("a.{extension}"));
+            let refused = format!("{SYSTEM} might run or install {name}: Hive only reveals it");
+            assert_eq!(at(&name, false), Err(refused), "{name}");
+            assert!(at(&name, true).is_ok(), "{name}");
         }
-        assert!(at("tool").is_err());
-        assert!(at(".bat").is_err());
+        assert!(at(&file(".bat"), false).is_err());
+        // A file inside a bundle belongs to a program; the bundle itself is a folder.
+        let plist = file("Shop.App/Contents/Info.plist");
+        let refused = format!("{SYSTEM} might run or install Info.plist: Hive only reveals it");
+        assert_eq!(at(&plist, false), Err(refused));
+        assert!(at(&plist, true).is_ok());
+        let not_file = Err("not a regular file".to_owned());
+        assert_eq!(at("Shop.App", false), not_file);
+        assert!(at("Shop.App", true).is_ok());
+        // Any folder is revealed, the worktree's own too, never opened by this path.
+        file("src/main.rs");
+        assert!(at("src", true).is_ok());
+        assert_eq!(at("src", false), not_file);
+        assert!(at("", true).is_ok());
+        // An executable is never opened, whatever its extension.
+        std::fs::set_permissions(dir.path().join("a.rs"), fs::Permissions::from_mode(0o744))
+            .unwrap();
+        let executable = format!(
+            "a.rs is executable: {SYSTEM} might run it instead of opening it; Hive only reveals it"
+        );
+        assert_eq!(at("a.rs", false), Err(executable));
+        assert!(at("a.rs", true).is_ok());
+        // Nothing outside the worktree, and only what exists.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("x.png"), "").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("x.png"), dir.path().join("x.png")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+        let escapes = Err("the file resolves outside the worktree".to_owned());
+        let not_inside = Err("not a relative path inside the worktree".to_owned());
+        for reveal in [false, true] {
+            assert_eq!(at("x.png", reveal), escapes);
+            assert_eq!(at("out", reveal), escapes);
+            assert_eq!(at("../x.png", reveal), not_inside);
+            assert_eq!(at("nope", reveal), Err("nope does not exist".to_owned()));
+        }
         // Win32 drops a final dot or space, and cannot name `:` (a stream) or a control.
         for name in [
             "a.exe.",
@@ -1315,39 +1329,30 @@ mod tests {
             "a*b.rs",
             "a\\b.rs",
         ] {
+            let name = file(name);
             let refused = format!(
                 "{name:?} could open another file on Windows: it ends in a dot or a space, or \
                  holds one of <>:\"|?*\\"
             );
-            assert_eq!(at(name), Err(refused), "{name:?}");
+            assert_eq!(at(&name, false), Err(refused.clone()), "{name:?}");
+            assert_eq!(at(&name, true), Err(refused), "{name:?}");
         }
-        // macOS runs an executable file without an extension; one with a text extension opens.
-        std::fs::set_permissions(
-            dir.path().join("Makefile"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-        let executable = format!(
-            "Makefile is executable: {SYSTEM} might run it instead of opening it in an editor"
-        );
-        assert_eq!(at("Makefile"), Err(executable));
-        std::fs::set_permissions(dir.path().join("a.rs"), fs::Permissions::from_mode(0o755))
-            .unwrap();
-        assert!(at("a.rs").is_ok());
         // Windows tries `README.exe` (any case) before `README`.
-        std::fs::write(dir.path().join("README.Cmd"), "").unwrap();
+        file("README");
+        file("README.Cmd");
         let beside = "Windows could run readme.cmd beside README instead of opening it";
-        assert_eq!(at("README"), Err(beside.to_owned()));
-        std::fs::write(dir.path().join("LICENSE.txt"), "").unwrap();
-        assert!(at("LICENSE").is_ok());
+        assert_eq!(at("README", false), Err(beside.to_owned()));
         // The name checked is the one the system opens: a symlink's target.
         std::os::unix::fs::symlink("a.exe", dir.path().join("notes.md")).unwrap();
-        let run = format!(
-            "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
-             Makefile), not a.exe: {SYSTEM} might run it"
-        );
-        let notes = windows_path(dir.path(), "notes.md", OsStr::new("echo"));
-        assert_eq!(notes.map_err(|e| e.to_string()), Err(run));
+        let run = format!("{SYSTEM} might run or install a.exe: Hive only reveals it");
+        assert_eq!(at("notes.md", false), Err(run));
+        // Only a file or a folder is revealed: the file manager would not list a FIFO.
+        let fifo = dir.path().join("fifo");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.unwrap().success());
+        let odd = Err("not a regular file or a folder".to_owned());
+        assert_eq!(at("fifo", true), odd);
+        assert_eq!(at("fifo", false), not_file);
     }
 
     #[test]
@@ -1356,7 +1361,7 @@ mod tests {
         let at = |name: &str| {
             let folder = dir.path().join(name);
             std::fs::create_dir(&folder).unwrap();
-            windows_path(&folder, "", OsStr::new("echo")).map_err(|e| e.to_string())
+            windows_path(&folder, "", false, OsStr::new("echo")).map_err(|e| e.to_string())
         };
         assert!(at("shop.9.8-task").is_ok());
         let real = canonical(dir.path()).unwrap();
@@ -1365,10 +1370,13 @@ mod tests {
             Err(format!("{SYSTEM} might run or install the folder {folder}"))
         };
         assert_eq!(at("Evil.APP"), bundle("Evil.APP"));
+        // Revealed, a bundle is only shown.
+        let shown = windows_path(&dir.path().join("Evil.APP"), "", true, OsStr::new("echo"));
+        assert!(shown.is_ok());
         // A bundle with any extension holds an `Info.plist`.
         std::fs::create_dir_all(dir.path().join("x.y/Contents")).unwrap();
         std::fs::write(dir.path().join("x.y/Contents/Info.plist"), "").unwrap();
-        let folder = windows_path(&dir.path().join("x.y"), "", OsStr::new("echo"));
+        let folder = windows_path(&dir.path().join("x.y"), "", false, OsStr::new("echo"));
         assert_eq!(folder.map_err(|e| e.to_string()), bundle("x.y"));
         std::fs::write(dir.path().join("shop.exe"), "").unwrap();
         let beside = "Windows could run shop.exe beside shop instead of opening it";
@@ -1381,7 +1389,7 @@ mod tests {
             assert_eq!(at("shop."), Err(odd.to_owned()));
         }
         // A file where a folder is expected (a session log's `cwd`) would be run or opened.
-        let file = windows_path(&dir.path().join("shop.exe"), "", OsStr::new("echo"));
+        let file = windows_path(&dir.path().join("shop.exe"), "", false, OsStr::new("echo"));
         let not_folder = format!("{} is not a folder", real.join("shop.exe").display());
         assert_eq!(file.map_err(|e| e.to_string()), Err(not_folder));
     }

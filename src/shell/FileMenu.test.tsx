@@ -1,10 +1,34 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { asMac } from "../../test/mac";
 import { apply } from "../reduce";
 import { initialState, openFileMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { askDelete, FileMenu, FileNameDialog } from "./FileMenu";
+
+test("a file is revealed or opened with its default app, a folder only revealed", () => {
+  const asked = spyOn(transport, "openInEditor").mockResolvedValue();
+  asMac();
+  render(<Shown />);
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src/a.pdf", x: 1, y: 2 }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Reveal in Finder" }));
+  expect(useHive.getState().fileMenu).toBeNull();
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src/a.pdf", x: 1, y: 2 }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open with Default App" }));
+  expect(useHive.getState().fileMenu).toBeNull();
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
+  expect(screen.queryByRole("menuitem", { name: "Open with Default App" })).toBeNull();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Reveal in Finder" }));
+  expect(asked.mock.calls).toEqual([
+    ["/w", "src/a.pdf", true],
+    ["/w", "src/a.pdf", false],
+    ["/w", "src", true],
+  ]);
+  // A deleted file (no path) and the tree's background have neither.
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: null, x: 1, y: 2 }));
+  expect(items()).toEqual(["New File…", "New Folder…"]);
+});
 
 afterEach(() => {
   mock.restore();
@@ -33,7 +57,14 @@ test("a file's menu renames it in its folder; the service's refusal shows until 
   render(<Shown />);
   expect(items()).toEqual([]);
   act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src/a.ts", x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
+  expect(items()).toEqual([
+    "New File…",
+    "New Folder…",
+    "Show in Explorer",
+    "Open with Default App",
+    "Rename…",
+    "Delete…",
+  ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
   expect(useHive.getState().fileMenu).toBeNull();
   expect(screen.getByRole("heading").textContent).toBe("Rename file");
@@ -63,7 +94,7 @@ test("a folder's menu renames it where it is", () => {
   const rename = spyOn(transport, "renameFile").mockResolvedValue();
   render(<Shown />);
   act(() => openFileMenu({ worktree: "/w", folder: "src/lib", path: "src/lib", x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
+  expect(items()).toEqual(["New File…", "New Folder…", "Show in Explorer", "Rename…", "Delete…"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
   expect(screen.getByRole("heading").textContent).toBe("Rename folder");
   expect(field().value).toBe("lib");
@@ -107,7 +138,7 @@ test("Delete… asks first, naming the entry and a folder's files; Cancel delete
   apply({ type: "files", path: "/w", files, ignored: ["node_modules/"], truncated: false });
   render(<Shown />);
   act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src", x: 1, y: 2 }));
-  expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
+  expect(items()).toEqual(["New File…", "New Folder…", "Show in Explorer", "Rename…", "Delete…"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
   expect(useHive.getState().fileMenu).toBeNull();
   expect(screen.getByRole("heading").textContent).toBe("Delete folder?");

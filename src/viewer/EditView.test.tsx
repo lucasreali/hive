@@ -183,7 +183,7 @@ test("the header warns of a working agent and opens the file elsewhere", () => {
   expect(screen.getByText("Agent working here")).toBeDefined();
 
   fireEvent.click(button("Open in external editor"));
-  expect(opened.mock.calls).toEqual([[worktree, "a.ts"]]);
+  expect(opened.mock.calls).toEqual([[worktree, "a.ts", false]]);
   act(() => useHive.setState({ editorNotice: "Only the Hive app opens an external editor" }));
   expect(screen.getByText("Only the Hive app opens an external editor")).toBeDefined();
 });

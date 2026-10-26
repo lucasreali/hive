@@ -132,7 +132,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   folder_created: { worktree: true, path: true },
   file_deleted: { worktree: true, path: true },
   file_op_failed: { worktree: true, message: true },
-  editor_target: { worktree: true, path: true, windows_path: true, error: true },
+  editor_target: { worktree: true, path: true, reveal: true, windows_path: true, error: true },
   disconnected: { reason: true, bundled: true },
   app_mode: { mode: true, wsl: true },
 };

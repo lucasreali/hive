@@ -550,6 +550,7 @@
     "type": "editor_target",
     "worktree": "/r",
     "path": "a.rs",
+    "reveal": false,
     "windows_path": null,
     "error": "m"
   },

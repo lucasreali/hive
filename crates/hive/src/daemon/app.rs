@@ -231,6 +231,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             let target = Control::EditorTarget {
                 worktree: String::new(),
                 path: String::new(),
+                reveal: false,
                 error: located.as_ref().err().map(ToString::to_string),
                 windows_path: located.ok(),
             };
@@ -462,7 +463,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                         SessionTarget::Log => file::windows(Path::new(&session.log), wslpath),
                         // The log's `cwd` is untrusted: checked as a worktree's folder is (9.10).
                         SessionTarget::Folder => {
-                            file::windows_path(Path::new(&session.cwd), "", wslpath)
+                            // Checked to open: the app may open or reveal it.
+                            file::windows_path(Path::new(&session.cwd), "", false, wslpath)
                         }
                     });
                 Control::SessionLocated {
@@ -539,8 +541,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::DeleteFile { worktree, path }) => {
             state.projects(move |projects| file::answer::delete(projects, worktree, path))
         }
-        Ok(Control::OpenInEditor { worktree, path }) => {
-            state.projects(move |projects| file::answer::editor(projects, worktree, path))
+        Ok(Control::OpenInEditor {
+            worktree,
+            path,
+            reveal,
+        }) => {
+            state.projects(move |projects| file::answer::editor(projects, worktree, path, reveal))
         }
         _ => {
             let message = "unexpected message from the app".to_owned();

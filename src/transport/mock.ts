@@ -983,7 +983,14 @@ export function createMockTransport(
     },
     async openSettingsFile() {
       const windows_path = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.config\\hive\\settings.json";
-      later({ type: "editor_target", worktree: "", path: "", windows_path, error: null });
+      later({
+        type: "editor_target",
+        worktree: "",
+        path: "",
+        reveal: false,
+        windows_path,
+        error: null,
+      });
     },
     async getDiagnostics() {
       later({ type: "diagnostics", ...MOCK_DIAGNOSTICS });
@@ -1259,12 +1266,12 @@ export function createMockTransport(
       const path = folder ? `${folder}/${name}` : name;
       fileOp(worktree, null, path, name, () => ({ type: "folder_created", worktree, path }), true);
     },
-    async openInEditor(worktree, path) {
+    async openInEditor(worktree, path, reveal) {
       // An empty path is the worktree's folder.
       const { error } = path ? fileAt(worktree, path) : { error: null };
       const unc = `\\\\wsl.localhost\\Ubuntu${`${worktree}/${path}`.replaceAll("/", "\\")}`;
       const windows_path = error ? null : unc;
-      later({ type: "editor_target", worktree, path, error, windows_path });
+      later({ type: "editor_target", worktree, path, reveal, error, windows_path });
     },
     async openTerminal(cwd, _cols, _rows, onData, account) {
       const id = ++last;

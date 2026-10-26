@@ -652,8 +652,9 @@ struct Link {
     /// The newer release `check_update` found and downloaded, for `install_update` or the
     /// app's exit (4.19).
     update: Option<(Update, Vec<u8>)>,
-    /// The paths the service sent for the app to open, oldest first, each for one `open_path`.
-    approved: VecDeque<String>,
+    /// The paths the service sent for the app to open, oldest first, each for one `open_path`,
+    /// with whether the service checked it only to be revealed (D19.1).
+    approved: VecDeque<(String, bool)>,
     /// Whether the UI was already told to move a translocated app (`connect`): the notice
     /// opens once per run, not again on a reload.
     translocation_told: bool,
@@ -672,12 +673,13 @@ struct Link {
 }
 
 impl Link {
-    /// Lets `open_path` open `path` once; the oldest waiting path goes past [`APPROVED_LIMIT`].
-    fn approve(&mut self, path: String) {
+    /// Lets `open_path` open `path` once (only reveal it when `reveal_only`); the oldest waiting
+    /// path goes past [`APPROVED_LIMIT`].
+    fn approve(&mut self, path: String, reveal_only: bool) {
         if self.approved.len() == APPROVED_LIMIT {
             self.approved.pop_front();
         }
-        self.approved.push_back(path);
+        self.approved.push_back((path, reveal_only));
     }
 
     /// Follows what quitting asks about (D17.3) in a service message: an agent's state, an
@@ -909,11 +911,15 @@ impl Hive {
     /// Opens `path` with the system's default app, or shows it in the file manager when
     /// `reveal` (open point #15): only a path the service just sent in `editor_target` or
     /// `session_located` (checked there: `hive::file::windows_path`, 9.8; a session's log), and
-    /// each at most once, even when opening it fails. The webview itself has no permission to
-    /// open a path, so a script in it can open nothing else.
+    /// each at most once, even when opening it fails; a path the service checked only to be
+    /// revealed (`editor_target`'s `reveal`, D19.1) is never opened. The webview itself has no
+    /// permission to open a path, so a script in it can open nothing else.
     pub fn open_path(&self, path: String, reveal: bool) -> Result<(), String> {
         let mut link = self.link();
-        let Some(at) = link.approved.iter().position(|approved| *approved == path) else {
+        let allowed = |(approved, reveal_only): &(String, bool)| {
+            *approved == path && (reveal || !reveal_only)
+        };
+        let Some(at) = link.approved.iter().position(allowed) else {
             return Err(format!("Hive opens only a path the service sent: {path}"));
         };
         link.approved.remove(at);
@@ -1457,9 +1463,18 @@ impl Hive {
     }
 
     /// The answer arrives as `editor_target`.
-    pub fn open_in_editor(&self, worktree: String, path: String) -> Result<(), String> {
-        self.link()
-            .send(0, &Control::OpenInEditor { worktree, path })
+    pub fn open_in_editor(
+        &self,
+        worktree: String,
+        path: String,
+        reveal: bool,
+    ) -> Result<(), String> {
+        let open = Control::OpenInEditor {
+            worktree,
+            path,
+            reveal,
+        };
+        self.link().send(0, &open)
     }
 
     /// The answer arrives as `settings`.
@@ -1745,7 +1760,7 @@ async fn pump<R: AsyncRead + Unpin>(
             // A path the app may open once (`open_path`).
             "editor_target" | "session_located" => {
                 if let Some(path) = value["windows_path"].as_str() {
-                    link.approve(path.to_owned());
+                    link.approve(path.to_owned(), value["reveal"] == true);
                 }
             }
             _ => link.follow(&value),
@@ -2137,8 +2152,9 @@ pub mod commands {
         hive: State<'_, Hive>,
         worktree: String,
         path: String,
+        reveal: bool,
     ) -> Result<(), String> {
-        hive.open_in_editor(worktree, path)
+        hive.open_in_editor(worktree, path, reveal)
     }
 
     // ponytail: sync like every command here (an `async` command left a macro line uncovered);

@@ -143,13 +143,14 @@ export type ServiceMessage =
   | { type: "folder_created"; worktree: string; path: string }
   | { type: "file_deleted"; worktree: string; path: string }
   | { type: "file_op_failed"; worktree: string; message: string }
-  // Handled by `openExternal` (src/viewer/external.ts), not stored.
+  // Handled by `openTarget` (src/viewer/external.ts), not stored.
   // An empty `path` is the worktree's folder (`openFolder`); an empty `worktree` too, the
-  // settings file.
+  // settings file. `reveal`: a path the service checked only to show in the file manager.
   | {
       type: "editor_target";
       worktree: string;
       path: string;
+      reveal: boolean;
       windows_path: string | null;
       error: string | null;
     }

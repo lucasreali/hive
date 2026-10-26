@@ -141,7 +141,7 @@ test("answers the settings file's path and the diagnostics", async () => {
   await tick();
   const windows_path = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.config\\hive\\settings.json";
   expect(messages.slice(-2)).toEqual([
-    { type: "editor_target", worktree: "", path: "", windows_path, error: null },
+    { type: "editor_target", worktree: "", path: "", reveal: false, windows_path, error: null },
     { type: "diagnostics", ...MOCK_DIAGNOSTICS },
   ]);
 });
@@ -852,14 +852,15 @@ test("a file's Windows path for an external editor, or why not", async () => {
   const { transport, messages } = await connected();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];
   messages.length = 0;
-  await transport.openInEditor(shop.path, "src/App.tsx");
-  await transport.openInEditor("/nowhere", "a");
+  await transport.openInEditor(shop.path, "src/App.tsx", false);
+  await transport.openInEditor("/nowhere", "a", true);
   await tick();
   expect(messages).toEqual([
     {
       type: "editor_target",
       worktree: shop.path,
       path: "src/App.tsx",
+      reveal: false,
       windows_path: "\\\\wsl.localhost\\Ubuntu\\home\\user\\projects\\shop\\src\\App.tsx",
       error: null,
     },
@@ -867,6 +868,7 @@ test("a file's Windows path for an external editor, or why not", async () => {
       type: "editor_target",
       worktree: "/nowhere",
       path: "a",
+      reveal: true,
       windows_path: null,
       error: "/nowhere is not a worktree of a followed project",
     },
@@ -919,13 +921,14 @@ test("an empty path locates the worktree's folder for the Explorer", async () =>
   const { transport, messages } = await connected();
   const [shop] = MOCK_REPOS;
   messages.length = 0;
-  await transport.openInEditor(shop.path, "");
+  await transport.openInEditor(shop.path, "", false);
   await tick();
   expect(messages).toEqual([
     {
       type: "editor_target",
       worktree: shop.path,
       path: "",
+      reveal: false,
       windows_path: "\\\\wsl.localhost\\Ubuntu\\home\\user\\projects\\shop\\",
       error: null,
     },

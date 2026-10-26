@@ -242,22 +242,47 @@ async fn a_save_writes_only_over_the_version_the_app_read() {
     assert_eq!(sides(&mut conn, &root, "a.txt").await.0, text("agent\n"));
 
     // The system would run it, so it is not handed to the app.
-    let open = Control::OpenInEditor {
+    let open = |reveal| Control::OpenInEditor {
         worktree: root.clone(),
         path: program.to_owned(),
+        reveal,
     };
-    conn.send(0, open).await;
+    conn.send(0, open(false)).await;
     assert_eq!(
         conn.control().await.1,
         Control::EditorTarget {
             worktree: root.clone(),
             path: program.to_owned(),
+            reveal: false,
             windows_path: None,
             error: Some(format!(
-                "Hive opens only text and source files in an editor (such as .rs, .md, .json or \
-                 Makefile), not {program}: {system} might run it"
+                "{system} might run or install {program}: Hive only reveals it"
             )),
         }
+    );
+    // Revealed, it is only shown in the file manager.
+    conn.send(0, open(true)).await;
+    let (_, revealed) = conn.control().await;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let real = std::fs::canonicalize(repo.root.join(program)).unwrap();
+        let shown = Control::EditorTarget {
+            worktree: root.clone(),
+            path: program.to_owned(),
+            reveal: true,
+            windows_path: Some(real.display().to_string()),
+            error: None,
+        };
+        assert_eq!(revealed, shown);
+    }
+    // No `wslpath` on this machine: only running it fails.
+    #[cfg(target_os = "linux")]
+    assert!(
+        matches!(
+            &revealed,
+            Control::EditorTarget { reveal: true, error: Some(e), .. } if !e.contains("reveals")
+        ),
+        "{revealed:?}"
     );
     drop(conn);
     stop(daemon);
