@@ -1081,6 +1081,8 @@ pub enum Theme {
     #[default]
     OneDark,
     OneLight,
+    /// Follows the system's dark or light appearance, live (D18.10 b).
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2770,6 +2772,10 @@ mod tests {
             .projects
             .insert("/r".into(), ProjectSettings::default());
         assert_eq!(partial, Control::SetSettings { settings: expected });
+        assert_eq!(
+            serde_json::from_str::<Theme>(r#""system""#).unwrap(),
+            Theme::System
+        );
         let failed = Control::SettingsFailed {
             message: "m".into(),
         };
