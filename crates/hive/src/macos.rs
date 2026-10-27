@@ -651,8 +651,8 @@ mod trash {
             .then_some(url)
             .ok_or(io::Error::other(failed))?;
         let mut error: Id = std::ptr::null_mut();
-        // SAFETY: the pool holds the autoreleased manager and error until popped, once, after
-        // the error was read; `url` is a live `CFURL` (toll-free bridged to `NSURL`), owned and
+        // SAFETY: `defaultManager` is an unowned singleton, never released here; the pool holds
+        // the autoreleased error until popped, once, after it was read; `url` is a live `CFURL` (toll-free bridged to `NSURL`), owned and
         // released once; `error` is a valid out pointer; each message is sent with the types
         // its method declares.
         unsafe {

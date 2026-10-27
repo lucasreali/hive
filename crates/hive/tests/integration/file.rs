@@ -504,8 +504,9 @@ async fn files_and_folders_are_deleted_inside_a_followed_worktree() {
     conn.send(0, delete("d")).await;
     assert_eq!(conn.control().await.1, deleted("d"));
     assert!(!repo.root.join("d").exists());
-    // A symlink goes itself, never what it points to (outside the worktree).
-    let outside = repo.env.path("outside");
+    // A symlink goes itself, never what it points to (outside the worktree; on macOS still on
+    // the test's disk image, so even a link followed never reaches the user's Trash).
+    let outside = repo.root.parent().unwrap().join("outside");
     std::fs::create_dir_all(outside.join("f")).unwrap();
     std::fs::write(outside.join("s"), "s").unwrap();
     std::os::unix::fs::symlink(outside.join("s"), repo.root.join("ls")).unwrap();
