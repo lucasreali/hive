@@ -655,3 +655,43 @@ fn only_followed_projects_with_a_github_remote_are_asked_about() {
     assert_eq!(error, "No remote of this repository is on github.com");
     assert_eq!(setup.calls().len(), 0);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_cached_list_runs_no_git_and_a_fetch_still_finds_the_remote() {
+    let setup = setup();
+    let [
+        Control::Runs {
+            runs, error: None, ..
+        },
+    ] = &setup.list(None, false)[..]
+    else {
+        panic!()
+    };
+    assert_eq!(runs.len(), 5);
+    // Without its repository any git call fails: the cached answer asks git nothing (19.8).
+    std::fs::remove_dir_all(Path::new(&setup.id).join(".git")).unwrap();
+    let [
+        Control::Runs {
+            runs, error: None, ..
+        },
+    ] = &setup.list(None, false)[..]
+    else {
+        panic!()
+    };
+    assert_eq!(runs.len(), 5);
+    // A fetch looks the remote up again.
+    let [
+        Control::Runs {
+            runs,
+            error: Some(error),
+            ..
+        },
+    ] = &setup.list(None, true)[..]
+    else {
+        panic!()
+    };
+    assert!(runs.is_empty());
+    assert_eq!(error, "No remote of this repository is on github.com");
+    assert_eq!(setup.calls().len(), 1);
+}

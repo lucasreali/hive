@@ -375,7 +375,7 @@ pub(crate) fn run(
 }
 
 /// The GitHub repository of the project at `root`, from its remotes on `host`.
-fn remote(root: &Path, host: &str) -> Result<Repo, String> {
+pub(crate) fn remote(root: &Path, host: &str) -> Result<Repo, String> {
     let args = ["config", "--get-regexp", r"^remote\..*\.(url|gh-resolved)$"];
     // A repository git cannot read has no remote either.
     let out = git::output(root, &args, &[0, 1]).unwrap_or_default();
