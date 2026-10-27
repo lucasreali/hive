@@ -19,7 +19,8 @@ use crate::git::Stdout;
 use crate::hook::now_ms;
 use crate::projects::Projects;
 use crate::pulls::{
-    ACTION_OUTPUT, Cache, LINE_LIMIT, Plan, items, key, line, link, located, number, run, text,
+    ACTION_OUTPUT, Cache, LINE_LIMIT, Plan, host, items, key, line, link, located, number, remote,
+    run, text,
 };
 
 /// Runs in a list.
@@ -90,10 +91,12 @@ fn list(
             error,
         }
     };
-    let (project, env, repo) = match located(projects, &id) {
-        Ok(found) => found,
-        Err(error) => return Some(reply(Err(error), 0)),
+    let project = match projects.followed(&id) {
+        Ok(project) => project,
+        Err(err) => return Some(reply(Err(err.to_string()), 0)),
     };
+    // The remote is looked up only to fetch: a cached answer runs no git (19.8).
+    let env = projects.space_env(&id);
     let key = format!("{}\n{branch:?}", key(&id, &env));
     let cache = || cache.lock().unwrap_or_else(PoisonError::into_inner);
     match cache().plan(&key, force, Instant::now()) {
@@ -101,13 +104,16 @@ fn list(
         Plan::Wait => return None,
         Plan::Fetch => {}
     }
-    let repo = repo.arg();
-    let mut args = vec!["run", "list", "--repo", &repo, "--limit", LIMIT];
-    let only = branch.as_ref().map(|branch| format!("--branch={branch}"));
-    args.extend(only.as_deref());
-    args.extend(["--json", FIELDS]);
-    let out = run(gh, &env, Path::new(&project.path), &args, LIST_OUTPUT);
-    let runs = out.and_then(|out| parse_list(&out, &project.worktrees));
+    let root = Path::new(&project.path);
+    let runs = remote(root, host(&env)).and_then(|repo| {
+        let repo = repo.arg();
+        let mut args = vec!["run", "list", "--repo", &repo, "--limit", LIMIT];
+        let only = branch.as_ref().map(|branch| format!("--branch={branch}"));
+        args.extend(only.as_deref());
+        args.extend(["--json", FIELDS]);
+        let out = run(gh, &env, root, &args, LIST_OUTPUT)?;
+        parse_list(&out, &project.worktrees)
+    });
     Some(cache().done(&key, reply(runs, now_ms()), Instant::now()))
 }
 
