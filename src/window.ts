@@ -98,11 +98,13 @@ export const commandKey = (event: KeyboardEvent) =>
 
 /**
  * A text naming keys, with macOS' symbols and names there (18.25): "Ctrl+Shift+O" becomes "⇧⌘O",
- * "Shift+Enter" "⇧↩", "Enter" "↩" and "Esc" "esc".
+ * "Control+Shift+Tab" "⌃⇧Tab", "Shift+Enter" "⇧↩", "Enter" "↩" and "Esc" "esc".
  */
 export const keyText = (text: string) =>
   isMac()
     ? text
+        .replaceAll("Control+Shift+", "⌃⇧")
+        .replaceAll("Control+", "⌃")
         .replaceAll("Ctrl+Shift+", "⇧⌘")
         .replaceAll("Ctrl+", "⌘")
         .replace(/\bShift\+Enter\b/g, "⇧↩")

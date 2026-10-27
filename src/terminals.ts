@@ -119,6 +119,38 @@ export function zoomTerminals(step: -1 | 0 | 1): void {
   applySettings(state);
 }
 
+/** How far a pinch goes before the font changes a step: a Ctrl+wheel's pixels, a gesture's scale. */
+const PINCH_PIXELS = 10;
+const PINCH_SCALE = 1.1;
+let pinched = 0;
+let scaled = 1;
+
+/**
+ * A trackpad pinch on the terminals is ⌘= / ⌘- (18.34, D18.10, macOS only): Chromium reports it
+ * as a Ctrl+wheel, WebKit as gesture events. One step per event at most.
+ */
+function onPinch(event: Event): void {
+  if (!isMac()) return;
+  if (event instanceof WheelEvent && !event.ctrlKey) return;
+  event.preventDefault();
+  event.stopPropagation(); // xterm would scroll
+  if (event instanceof WheelEvent) {
+    pinched -= event.deltaY;
+    if (Math.abs(pinched) < PINCH_PIXELS) return;
+    zoomTerminals(pinched > 0 ? 1 : -1);
+    pinched = 0;
+    return;
+  }
+  const scale = (event as Event & { scale?: number }).scale ?? 1;
+  if (event.type === "gesturestart") scaled = scale;
+  const ratio = scale / scaled;
+  if (ratio < PINCH_SCALE && ratio > 1 / PINCH_SCALE) return;
+  zoomTerminals(ratio > 1 ? 1 : -1);
+  scaled = scale;
+}
+
+const PINCH_EVENTS = ["wheel", "gesturestart", "gesturechange"];
+
 /**
  * Ligatures (7.11): xterm draws each cell alone, so a font's ligatures never show unless a
  * character joiner hands the WebGL renderer the sequence as one unit. The list is the one the
@@ -326,6 +358,14 @@ const MAC_LINE_KEYS: Record<string, string> = {
 /** macOS' prompt keys (17.25): Cmd + the key jumps to the previous or next prompt. */
 const MAC_JUMP_KEYS: Record<string, -1 | 1> = { ArrowUp: -1, ArrowDown: 1 };
 
+/** macOS' Fn + an arrow (18.34, D18.10): the keys it sends, and how each scrolls the scrollback. */
+const MAC_SCROLL_KEYS: Record<string, (term: Terminal) => void> = {
+  PageUp: (term) => term.scrollPages(-1),
+  PageDown: (term) => term.scrollPages(1),
+  Home: (term) => term.scrollToTop(),
+  End: (term) => term.scrollToBottom(),
+};
+
 /** The terminal's own macOS keys, for the settings' Shortcuts section. */
 export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
   { label: "Clear the terminal", keys: "⌘K" },
@@ -334,7 +374,25 @@ export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
   { label: "Go to the start of the line", keys: "⌘←" },
   { label: "Go to the end of the line", keys: "⌘→" },
   { label: "Delete to the start of the line", keys: "⌘⌫" },
+  { label: "Scroll a page up", keys: "fn↑" },
+  { label: "Scroll a page down", keys: "fn↓" },
+  { label: "Scroll to the top", keys: "fn←" },
+  { label: "Scroll to the bottom", keys: "fn→" },
 ];
+
+/**
+ * On macOS, Fn + an arrow (`MAC_SCROLL_KEYS`) scrolls the scrollback; in the alternate screen
+ * (vim, less, Claude Code) it is the program's, as everywhere.
+ */
+function macScroll(term: Terminal, event: KeyboardEvent): boolean {
+  const scroll = Object.hasOwn(MAC_SCROLL_KEYS, event.key) ? MAC_SCROLL_KEYS[event.key] : undefined;
+  const modified = event.ctrlKey || event.metaKey || event.altKey || event.shiftKey;
+  const alternate = term.buffer.active.type === "alternate";
+  if (!isMac() || event.type !== "keydown" || modified || !scroll || alternate) return false;
+  event.preventDefault();
+  scroll(term);
+  return true;
+}
 
 /**
  * On macOS, Cmd + an arrow or Backspace (`MAC_LINE_KEYS`), ⌘K (clear) or ⌘↑ / ⌘↓ (the previous
@@ -360,7 +418,7 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
  * own keys (`macKey`). Every other key is the shell's.
  */
 function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
-  if (intercept(event) || macKey(term, marks, event)) return false;
+  if (intercept(event) || macKey(term, marks, event) || macScroll(term, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const clipboard = CLIPBOARD_KEYS.get(event.key.toUpperCase());
   if (event.type !== "keydown" || !chord || !clipboard) return true;
@@ -736,11 +794,14 @@ export function mountTerminals(element: HTMLElement): () => void {
   });
   const observer = new ResizeObserver(refit);
   observer.observe(element);
+  for (const type of PINCH_EVENTS)
+    element.addEventListener(type, onPinch, { capture: true, passive: false });
   showTerminals(shown, null);
   void loadBundledFonts();
   return () => {
     clearTimeout(timer);
     observer.disconnect();
+    for (const type of PINCH_EVENTS) element.removeEventListener(type, onPinch, { capture: true });
     unsubscribe();
     if (host === element) host = null;
   };
