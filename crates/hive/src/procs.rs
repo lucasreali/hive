@@ -114,16 +114,17 @@ pub struct SystemScan {
 }
 
 impl Scan for SystemScan {
-    #[cfg(target_os = "macos")]
+    // One function for every platform: a mutant of a `cfg`'d-out one could never be caught.
     fn in_sessions(&mut self, sessions: &HashSet<i32>) -> Vec<Proc> {
-        crate::macos::in_sessions(sessions, &mut self.buf)
-    }
-
-    // `/proc/<pid>/stat` holds the session and name; Windows reads only the terminals' command lines.
-    #[cfg(not(target_os = "macos"))]
-    fn in_sessions(&mut self, sessions: &HashSet<i32>) -> Vec<Proc> {
-        let all = list(Source::System).into_iter();
-        all.filter(|p| sessions.contains(&p.session)).collect()
+        #[cfg(target_os = "macos")]
+        let found = crate::macos::in_sessions(sessions, &mut self.buf);
+        // `/proc/<pid>/stat` holds the session and name; Windows reads only the terminals'
+        // command lines.
+        #[cfg(not(target_os = "macos"))]
+        let found = (list(Source::System).into_iter())
+            .filter(|p| sessions.contains(&p.session))
+            .collect();
+        found
     }
 }
 
