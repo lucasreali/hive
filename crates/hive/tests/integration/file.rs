@@ -440,6 +440,15 @@ async fn files_are_moved_and_folders_created_inside_a_followed_worktree() {
 
 #[tokio::test]
 async fn files_and_folders_are_deleted_inside_a_followed_worktree() {
+    // On macOS they go to the Trash: the repository is on a disk image of its own, whose Trash
+    // is never the user's.
+    #[cfg(target_os = "macos")]
+    let (volume, repo) = {
+        let env = crate::common::Env::new();
+        let volume = crate::common::Volume::new(&env.path("trash.dmg"), &env.path("home/vol"));
+        (volume, Repo::in_env(env, "home/vol/repo"))
+    };
+    #[cfg(not(target_os = "macos"))]
     let repo = Repo::new();
     repo.commit("a.txt", "one\n");
     std::fs::create_dir_all(repo.root.join("d/e")).unwrap();
@@ -495,6 +504,29 @@ async fn files_and_folders_are_deleted_inside_a_followed_worktree() {
     conn.send(0, delete("d")).await;
     assert_eq!(conn.control().await.1, deleted("d"));
     assert!(!repo.root.join("d").exists());
+    // A symlink goes itself, never what it points to (outside the worktree; on macOS still on
+    // the test's disk image, so even a link followed never reaches the user's Trash).
+    let outside = repo.root.parent().unwrap().join("outside");
+    std::fs::create_dir_all(outside.join("f")).unwrap();
+    std::fs::write(outside.join("s"), "s").unwrap();
+    std::os::unix::fs::symlink(outside.join("s"), repo.root.join("ls")).unwrap();
+    std::os::unix::fs::symlink(outside.join("f"), repo.root.join("lf")).unwrap();
+    for link in ["ls", "lf"] {
+        conn.send(0, delete(link)).await;
+        assert_eq!(conn.control().await.1, deleted(link));
+        assert!(repo.root.join(link).symlink_metadata().is_err());
+    }
+    assert!(outside.join("s").is_file() && outside.join("f").is_dir());
+    #[cfg(target_os = "macos")]
+    {
+        for link in ["ls", "lf"] {
+            let trashed = volume.trashed(link).symlink_metadata().unwrap();
+            assert!(trashed.file_type().is_symlink());
+        }
+        let a = std::fs::read_to_string(volume.trashed("a.txt")).unwrap();
+        let b = std::fs::read_to_string(volume.trashed("d/e/b.txt")).unwrap();
+        assert_eq!((a.as_str(), b.as_str()), ("one\n", "b"));
+    }
     drop(conn);
     stop(daemon);
 }

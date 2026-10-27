@@ -410,6 +410,48 @@ impl Drop for Daemon {
     }
 }
 
+/// A disk image of its own mounted at a folder (macOS): what goes to the Trash from it goes to
+/// its `.Trashes/<uid>`, never the user's `~/.Trash`. Detached on drop.
+#[cfg(target_os = "macos")]
+pub struct Volume(pub PathBuf);
+
+#[cfg(target_os = "macos")]
+impl Volume {
+    /// A 16 MB APFS image `image`, mounted at `at` (created).
+    pub fn new(image: &std::path::Path, at: &std::path::Path) -> Self {
+        std::fs::create_dir_all(at).unwrap();
+        let hdiutil = |args: &[&std::ffi::OsStr]| {
+            let out = Command::new("hdiutil").args(args).output().unwrap();
+            assert!(out.status.success(), "hdiutil {args:?}: {out:?}");
+        };
+        let size = [
+            "create", "-size", "16m", "-fs", "APFS", "-volname", "HiveTest",
+        ];
+        let mut create: Vec<&std::ffi::OsStr> = size.iter().map(|s| s.as_ref()).collect();
+        create.push(image.as_os_str());
+        hdiutil(&create);
+        let attach = ["attach", "-nobrowse", "-mountpoint"].map(std::ffi::OsStr::new);
+        hdiutil(&[&attach[..], &[at.as_os_str(), image.as_os_str()]].concat());
+        Self(at.canonicalize().unwrap())
+    }
+
+    /// Where this user's Trash of the volume keeps `name`.
+    pub fn trashed(&self, name: &str) -> PathBuf {
+        let uid = nix::unistd::getuid();
+        self.0.join(format!(".Trashes/{uid}/{name}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Volume {
+    fn drop(&mut self) {
+        let _ = Command::new("hdiutil")
+            .args(["detach", "-force"])
+            .arg(&self.0)
+            .output();
+    }
+}
+
 /// Stops a daemon with SIGTERM so it exits normally (and writes its coverage data).
 pub fn stop(mut daemon: Daemon) {
     let pid = nix::unistd::Pid::from_raw(daemon.0.id() as i32);

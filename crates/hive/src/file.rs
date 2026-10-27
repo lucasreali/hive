@@ -133,7 +133,12 @@ pub mod answer {
 
     /// `delete_file`: `path` of `worktree`.
     pub fn delete(projects: &Projects, worktree: String, path: String) -> Control {
-        let delete = |dir: &Path| super::delete(dir, &path, &held(projects));
+        // On macOS the entry goes to the Trash (D18.10e).
+        #[cfg(target_os = "macos")]
+        let remove = |at: &Path, _: bool| crate::macos::trash(at);
+        #[cfg(not(target_os = "macos"))]
+        let remove = super::remove;
+        let delete = |dir: &Path| super::delete_with(dir, &path, &held(projects), &remove);
         op(projects, worktree, delete, |worktree, ()| {
             let path = path.clone();
             Control::FileDeleted { worktree, path }
@@ -500,6 +505,17 @@ pub const DELETE_DEPTH: usize = 64;
 /// itself, never what it points to; a folder with what it holds, never following a symlink in
 /// it (`remove_dir_all`), unless `held` refuses it or [`bounded`] does.
 pub fn delete(dir: &Path, path: &str, held: Held) -> io::Result<()> {
+    delete_with(dir, path, held, &remove)
+}
+
+/// [`delete`] with the removal of the checked entry passed in (given it and whether it is a
+/// folder): the Trash on macOS ([`crate::macos::trash`]), and its failure can be tested.
+pub fn delete_with(
+    dir: &Path,
+    path: &str,
+    held: Held,
+    remove: &dyn Fn(&Path, bool) -> io::Result<()>,
+) -> io::Result<()> {
     let root = canonical(dir)?;
     let (at, kind) = entry(dir, &root, path)?;
     if kind.is_dir() {
@@ -508,12 +524,19 @@ pub fn delete(dir: &Path, path: &str, held: Held) -> io::Result<()> {
         held(&canonical(&at)?)?;
         bounded(&root, &at, path)?;
         // ponytail: what an agent adds between the count and the removal is removed too.
-        fs::remove_dir_all(&at)?;
-    } else {
-        fs::remove_file(&at)?;
     }
+    remove(&at, kind.is_dir())?;
     let _ = File::open(at.parent().unwrap_or(&root)).and_then(|folder| folder.sync_all());
     Ok(())
+}
+
+/// Removes `at` for good: a folder with what it holds (`remove_dir_all`), else the entry.
+pub fn remove(at: &Path, folder: bool) -> io::Result<()> {
+    if folder {
+        fs::remove_dir_all(at)
+    } else {
+        fs::remove_file(at)
+    }
 }
 
 /// Refuses the folder `at` (the app's `path`, in `root`) when it holds a `.git` (another
@@ -2007,6 +2030,32 @@ mod tests {
         super::delete(dir.path(), "a", &busy).unwrap();
         let src = canonical(dir.path()).unwrap().join("src");
         assert_eq!(*asked.borrow(), [src]);
+    }
+
+    #[test]
+    fn the_removal_is_given_the_checked_entry_and_its_failure_is_answered() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("d/e")).unwrap();
+        std::fs::write(dir.path().join("a"), "a").unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let removed = std::cell::RefCell::new(Vec::new());
+        let trash = |at: &Path, folder: bool| {
+            removed.borrow_mut().push((at.to_path_buf(), folder));
+            Err(io::Error::other("cannot move a to the Trash"))
+        };
+        let err = super::delete_with(dir.path(), "a", &free, &trash).unwrap_err();
+        assert_eq!(err.to_string(), "cannot move a to the Trash");
+        let err = super::delete_with(dir.path(), "d", &free, &trash).unwrap_err();
+        assert_eq!(err.to_string(), "cannot move a to the Trash");
+        // Refused before any removal: escaping the worktree, `.git`.
+        assert!(super::delete_with(dir.path(), "../x", &free, &trash).is_err());
+        assert!(super::delete_with(dir.path(), ".git", &free, &trash).is_err());
+        let root = canonical(dir.path()).unwrap();
+        assert_eq!(
+            *removed.borrow(),
+            [(root.join("a"), false), (root.join("d"), true)]
+        );
+        assert!(dir.path().join("a").is_file() && dir.path().join("d/e").is_dir());
     }
 
     #[cfg(unix)]

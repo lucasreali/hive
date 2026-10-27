@@ -18,6 +18,7 @@ import {
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { asMac } from "../../test/mac";
 import { expectClearButton } from "../../test/searchClear";
 import type { ChangedFile, Changes, FileText, SearchResults } from "../protocol";
 import { apply } from "../reduce";
@@ -569,6 +570,14 @@ test("the tree works from the keyboard", () => {
     question: { title: "Delete file?", action: "Delete" },
   });
   expect(useHive.getState().question?.text).toStartWith("Delete package.json? ");
+  // ⌘⌫ is Delete only on macOS (D18.10).
+  act(() => useHive.setState({ modal: null, question: null }));
+  expect(fireEvent.keyDown(tree(), { key: "Backspace", metaKey: true })).toBe(true);
+  expect(useHive.getState().question).toBeNull();
+  asMac();
+  expect(fireEvent.keyDown(tree(), { key: "Backspace" })).toBe(true);
+  expect(fireEvent.keyDown(tree(), { key: "Backspace", metaKey: true })).toBe(false);
+  expect(useHive.getState().question?.title).toBe("Delete file?");
 });
 
 test("moving in the tree neither rebuilds nor walks it; opening a folder only walks it", () => {
