@@ -2,6 +2,7 @@
 //! (through `libproc`, `proc_pidinfo` and the `KERN_PROCARGS2` sysctl), the terminal's login
 //! shell and native file paths. Tested on macOS.
 
+use std::collections::HashSet;
 use std::ffi::{CStr, CString, OsStr, OsString, c_char, c_int};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
@@ -24,23 +25,54 @@ const ARGS_SIZE: usize = 1024 * 1024;
 const VNODE_PATH_INFO: c_int = 2;
 
 pub fn list() -> Vec<Proc> {
+    scan(|_| true, &mut Vec::new(), read_args)
+}
+
+/// The processes in `sessions`: only theirs get their arguments read, into `buf`, which the
+/// caller keeps from one scan to the next (sized on first use).
+pub fn in_sessions(sessions: &HashSet<i32>, buf: &mut Vec<u8>) -> Vec<Proc> {
+    scan(|session| sessions.contains(&session), buf, read_args)
+}
+
+/// The processes whose session `keep` keeps, their arguments read by `read` into `buf`.
+fn scan(
+    keep: impl Fn(i32) -> bool,
+    buf: &mut Vec<u8>,
+    mut read: impl FnMut(i32, &mut [u8]) -> Option<usize>,
+) -> Vec<Proc> {
     let pids = pids_by_type(ProcFilter::All).unwrap_or_default();
     // One buffer for every process's arguments.
-    let mut buf = vec![0; ARGS_SIZE];
-    pids.into_iter()
-        .filter_map(|pid| process(pid as i32, &mut buf))
+    buf.resize(ARGS_SIZE, 0);
+    let kept = |pid: i32| {
+        let session = getsid(Some(Pid::from_raw(pid))).ok()?.as_raw();
+        keep(session).then_some((pid, session))
+    };
+    (pids.into_iter().filter_map(|pid| kept(pid as i32)))
+        .filter_map(|(pid, session)| process(pid, session, buf, &mut read))
         .collect()
 }
 
-/// The process `pid`, named as [`name`] says; `buf` holds its arguments while they are read.
-fn process(pid: i32, buf: &mut [u8]) -> Option<Proc> {
+/// How many bytes of `buf` the `KERN_PROCARGS2` answer for `pid` takes ([`procargs`]).
+fn read_args(pid: i32, buf: &mut [u8]) -> Option<usize> {
+    procargs(pid, buf).map(<[u8]>::len)
+}
+
+/// The process `pid` of `session`, named as [`name`] says; `buf` holds its arguments while
+/// `read` reads them.
+fn process(
+    pid: i32,
+    session: i32,
+    buf: &mut [u8],
+    read: &mut impl FnMut(i32, &mut [u8]) -> Option<usize>,
+) -> Option<Proc> {
     // Fails for a zombie too (ESRCH), so zombies are skipped.
     let info = pidinfo::<BSDInfo>(pid, 0).ok()?;
+    let area = read(pid, buf).map(|len| &buf[..len]);
     Some(Proc {
         pid,
         pgrp: info.pbi_pgid as i32,
-        session: getsid(Some(Pid::from_raw(pid))).ok()?.as_raw(),
-        comm: comm(procargs(pid, buf), &info.pbi_comm)?,
+        session,
+        comm: comm(area, &info.pbi_comm)?,
     })
 }
 
@@ -711,7 +743,42 @@ mod tests {
         assert_eq!(found.comm, name);
         assert_eq!(cwd(me), Some(std::env::current_dir().unwrap()));
         assert_eq!(cwd(-1), None);
-        assert_eq!(process(-1, &mut vec![0; ARGS_SIZE]), None);
+        assert_eq!(
+            process(-1, 0, &mut vec![0; ARGS_SIZE], &mut read_args),
+            None
+        );
+    }
+
+    #[test]
+    fn a_scan_reads_only_the_kept_sessions_arguments_into_one_buffer() {
+        let me = std::process::id() as i32;
+        let mine = getsid(None).unwrap().as_raw();
+        let mut buf = Vec::new();
+        let mut reads = Vec::new();
+        let mut scans = Vec::new();
+        for _ in 0..2 {
+            let read = |pid, buf: &mut [u8]| {
+                reads.push((pid, buf.as_ptr()));
+                read_args(pid, buf)
+            };
+            scans.push(scan(|session| session == mine, &mut buf, read));
+        }
+        // Read once per process of the session, each scan, all into the buffer kept.
+        let pids: Vec<i32> = scans.iter().flatten().map(|p| p.pid).collect();
+        assert_eq!(reads.iter().map(|r| r.0).collect::<Vec<_>>(), pids);
+        assert!(reads.iter().all(|r| r.1 == buf.as_ptr()));
+        assert!(scans.iter().all(|s| s.iter().any(|p| p.pid == me)));
+        assert!(scans.iter().flatten().all(|p| p.session == mine));
+        // Other sessions' processes, which a whole listing has, are left out unread.
+        let others: Vec<i32> = (list().into_iter())
+            .filter(|p| p.session != mine)
+            .map(|p| p.pid)
+            .collect();
+        assert!(!others.is_empty());
+        assert!(!pids.iter().any(|pid| others.contains(pid)));
+        let kept = in_sessions(&HashSet::from([mine]), &mut buf);
+        assert!(kept.iter().any(|p| p.pid == me));
+        assert_eq!(in_sessions(&HashSet::new(), &mut buf), Vec::new());
     }
 
     #[test]
@@ -878,7 +945,7 @@ mod tests {
         // Every line runs however fast the child exits, so coverage does not depend on timing.
         let exited = (0..1000).any(|_| {
             std::thread::sleep(std::time::Duration::from_millis(10));
-            process(pid, &mut buf).is_none()
+            process(pid, 0, &mut buf, &mut read_args).is_none()
         });
         assert!(exited, "the child never exited");
         // Still there, as a zombie, until it is waited for.
