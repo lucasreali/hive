@@ -6,6 +6,8 @@
 #     both (D18.1)
 #   - memwatch.sh reads the available memory, stops a process below its threshold, and leaves it
 #     alone above
+#   - energy.sh: its argument checks, and finding Hive's processes in and parsing canned `ps` and
+#     `top` output
 #   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
 #     each broken one (TODO 17.11)
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
@@ -200,6 +202,50 @@ o=$(ci "$three" "2" green)
 check "ci.sh green: a red macos fails" 'has "$o" "green u/1" "no green macos run for HEAD" "exit=1"'
 o=$(ci "macos 2 u/2" "" green task/1.0-test)
 check "ci.sh green: no ci run fails" 'has "$o" "no green ci run for task/1.0-test" "exit=1"'
+
+# --- energy.sh ----------------------------------------------------------------------------------
+for bad_args in "" "0" "abc" "5 6" "-1" "100000"; do
+  o=$(scripts/energy.sh $bad_args 2>&1; echo "exit=$?")
+  check "energy: refuses '$bad_args'" 'has "$o" "usage: scripts/energy.sh <seconds>" "exit=2"'
+done
+o=$( source scripts/energy.sh; find_procs <<'EOF'
+100 1 01:00:00 /Applications/Hive.app/Contents/MacOS/hive-app
+101 1 01:00:01 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU
+102 1 59:58 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent
+103 1 01-02:00:00 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU
+104 100 01:00:00 /Users/x/.local/share/hive/bin/hive bridge
+105 104 01:00:00 /Users/x/.local/share/hive/bin/hive daemon
+106 1 05:00 /tmp/target/debug/hive daemon
+107 1 01:00:00 /tmp/target/debug/hive bridge
+108 105 03:00 /opt/homebrew/bin/fish -l
+EOF
+)
+check "energy: finds the app, its helpers by start time, its bridge and daemon" \
+  '[ "$(sort <<<"$o" | tr "\n" ";")" = "100 hive-app;101 WebKit.GPU;102 WebKit.WebContent;104 bridge;105 daemon;" ]'
+# top -l 3 -s 1: the first sample has no CPU or POWER yet; IDLEW is a running count.
+o=$( source scripts/energy.sh; parse_top 1 <<'EOF'
+Processes: 703 total, 3 running, 700 sleeping, 3643 threads
+2026/10/27 08:57:24
+
+PID    %CPU POWER IDLEW
+34362  0.0  0.0   29005
+34355  0.0  0.0   284811
+9      0.0  0.0   1K
+Processes: 703 total, 2 running, 701 sleeping, 3666 threads
+
+PID    %CPU POWER IDLEW
+34362  1.0  1.2   29007+
+34355  1.4  2.9   284849+
+9      0.0  0.0   1.5K+
+
+PID    %CPU POWER IDLEW
+34362  0.6  0.6   29009+
+34355  3.2  4.3   284875+
+9      0.0  0.0   2K+
+EOF
+)
+check "energy: parses a top sample" \
+  'has "$o" "34362 0.8 1.0 0.9 2.0" "34355 2.3 3.2 3.6 32.0" "9 0.0 0.0 0.0 500.0" "total 3.1 3.8 4.5 534.0"'
 
 # --- macos-bundle.sh signing-mode ---------------------------------------------------------------
 secrets="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8"
