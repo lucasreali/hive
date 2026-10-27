@@ -60,6 +60,17 @@ export function watchFocus(onChange: (focused: boolean) => void): () => void {
 }
 
 /**
+ * Calls `onChange` with whether the window is visible (the page's `visibilityState`: not
+ * hidden nor minimised), now and on every change. Returns the cleanup.
+ */
+export function watchVisible(onChange: (visible: boolean) => void): () => void {
+  const change = () => onChange(document.visibilityState !== "hidden");
+  change();
+  document.addEventListener("visibilitychange", change);
+  return () => document.removeEventListener("visibilitychange", change);
+}
+
+/**
  * The number on the Dock icon (17.16), removed at zero. Only in the macOS app: elsewhere there
  * is no Dock (Windows' taskbar has no badge count). A failure is dropped: the badge is a hint.
  */

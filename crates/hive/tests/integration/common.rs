@@ -130,6 +130,27 @@ impl Env {
         path
     }
 
+    /// A `git` that counts its calls ([`CountingGit`]), in `<env>/counting-git`.
+    pub fn counting_git(&self) -> CountingGit {
+        let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|dir| dir.join("git"))
+            .find(|git| git.is_file())
+            .expect("git on PATH");
+        let dir = self.path("counting-git");
+        std::fs::create_dir(&dir).unwrap();
+        let log = self.path("git-calls.log");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            real.display()
+        );
+        let git = dir.join("git");
+        std::fs::write(&git, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        CountingGit { dir, log }
+    }
+
     pub fn socket(&self) -> PathBuf {
         self.path("run/hive/hive.sock")
     }
@@ -347,6 +368,29 @@ impl Conn {
                 return status;
             }
         }
+    }
+}
+
+/// A `git` that writes each call's arguments, a line per call, to `log`, then runs the real one
+/// (the first `git` on the tests' `PATH`): first on a service's `PATH` ([`CountingGit::path`]),
+/// it counts the git that service runs.
+pub struct CountingGit {
+    pub dir: PathBuf,
+    pub log: PathBuf,
+}
+
+impl CountingGit {
+    /// The tests' `PATH` with this `git` first.
+    pub fn path(&self) -> std::ffi::OsString {
+        let rest = std::env::var_os("PATH").unwrap();
+        let dirs = std::iter::once(self.dir.clone()).chain(std::env::split_paths(&rest));
+        std::env::join_paths(dirs).unwrap()
+    }
+
+    /// How many calls so far had `pattern` in their arguments (e.g. `"worktree list"`).
+    pub fn count(&self, pattern: &str) -> usize {
+        let calls = std::fs::read_to_string(&self.log).unwrap_or_default();
+        calls.lines().filter(|call| call.contains(pattern)).count()
     }
 }
 

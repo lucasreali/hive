@@ -2,7 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use hive_protocol::{Control, DiffBase, Project, ProjectError, Role};
 
-use crate::common::{Conn, Env};
+use crate::common::{Conn, Env, wait_until};
 use crate::worktree::Repo;
 
 async fn add(conn: &mut Conn, path: &str) -> Control {
@@ -673,6 +673,49 @@ async fn worktrees_carry_their_health() {
     let mut expected = expected;
     expected[1].4 = (1, 2, 0);
     assert_eq!(health(&project), expected);
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn the_health_check_runs_no_git_while_the_window_is_hidden() {
+    let repo = Repo::new();
+    let git = repo.env.counting_git();
+    let every = std::time::Duration::from_millis(1000);
+    let mut hive = repo.env.hive();
+    hive.env("PATH", git.path())
+        .env(hive::health::INTERVAL_MS, every.as_millis().to_string());
+    let mut daemon = repo.env.daemon_with(&mut hive);
+    let mut conn = repo.env.connect(Role::App).await;
+    added(&mut conn, &repo.root.display().to_string()).await;
+    // Each tick lists the worktrees again. (No request may list them meanwhile: once a tick
+    // forgot them, it would list them too.)
+    let ticks = || git.count("worktree list");
+    let view = |visible| {
+        let (terminal, focused) = (None, false);
+        Control::View {
+            terminal,
+            focused,
+            visible,
+        }
+    };
+    let start = ticks();
+    wait_until(|| ticks() > start);
+
+    // Hidden, no git runs at all.
+    conn.send(0, view(false)).await;
+    tokio::time::sleep(every).await; // A tick already running ends.
+    let hidden = ticks();
+    let calls = git.count("");
+    tokio::time::sleep(3 * every).await;
+    assert_eq!((ticks(), git.count("")), (hidden, calls));
+
+    // Shown again: one refresh at once, the next a whole interval later.
+    conn.send(0, view(true)).await;
+    wait_until(|| ticks() > hidden);
+    tokio::time::sleep(every / 4).await;
+    assert_eq!(ticks(), hidden + 1);
+    wait_until(|| ticks() > hidden + 1);
     drop(conn);
     assert!(daemon.wait_exit().success());
 }

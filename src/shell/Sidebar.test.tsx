@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { App } from "../App";
 import type { AgentState, Project } from "../protocol";
 import { apply } from "../reduce";
-import { initialState, useHive } from "../store";
+import { initialState, setVisible, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
@@ -309,6 +309,15 @@ test("rows show the time in the state and the activity, all ticking on one timer
     act(() => (ticks()[0][0] as () => void)());
     expect(meta()).toEqual(["1h · Editing src/x.ts"]);
     expect(lines().map((l) => l.at(-1))).toEqual(["subagent-time=1h", "subagent-time=1h"]);
+    // Hidden, the timer stops (D18.11); shown again, the rows catch up at once on a new one.
+    act(() => setVisible(false));
+    expect(stops).toHaveBeenCalledTimes(1);
+    act(() => useHive.setState({ focused: true }));
+    expect(ticks()).toHaveLength(1);
+    clock.mockReturnValue(now + 7_200_000);
+    act(() => setVisible(true));
+    expect(meta()).toEqual(["2h · Editing src/x.ts"]);
+    expect(ticks()).toHaveLength(2);
     // The context used shows once the service sent it, on the agent's row only.
     const ctx = () => [...tree().querySelectorAll(".state-ctx")].map((m) => m.textContent);
     expect(ctx()).toEqual([]);
@@ -322,9 +331,9 @@ test("rows show the time in the state and the activity, all ticking on one timer
     act(() => apply({ type: "agent_usage", id: "s1", ...long, context_tokens: 105_900 }));
     expect(ctx()).toEqual(["ctx 10%"]);
     // The last row gone, the timer stops.
-    expect(stops).not.toHaveBeenCalled();
-    cleanup();
     expect(stops).toHaveBeenCalledTimes(1);
+    cleanup();
+    expect(stops).toHaveBeenCalledTimes(2);
   } finally {
     clock.mockRestore();
     timers.mockRestore();

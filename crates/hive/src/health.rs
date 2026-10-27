@@ -15,6 +15,17 @@ use crate::git;
 /// How often every followed worktree is checked again.
 pub const INTERVAL: Duration = Duration::from_secs(30);
 
+/// Set in a service's environment to a number of milliseconds, the interval instead of
+/// [`INTERVAL`]: the tests' services, which cannot wait 30 s for a tick.
+pub const INTERVAL_MS: &str = "HIVE_HEALTH_INTERVAL_MS";
+
+/// The interval [`INTERVAL_MS`]'s value `ms` sets: [`INTERVAL`] unless a whole number above 0.
+pub fn interval(ms: Option<&std::ffi::OsStr>) -> Duration {
+    let ms = ms.and_then(|ms| ms.to_str()?.parse().ok());
+    ms.filter(|&ms| ms > 0)
+        .map_or(INTERVAL, Duration::from_millis)
+}
+
 /// The status of `project`'s worktree `w`, `None` when git fails. The main worktree is
 /// counted against nothing; the others against its branch, when it has one. `totals`: its
 /// changes against `HEAD` when already counted (`changes::answer`), so git is not run again.
@@ -167,6 +178,16 @@ pub(crate) mod tests {
             merged: counts.is_some_and(|c| c.0 == 0),
             last_commit_ms: 1_700_000_000_000,
         })
+    }
+
+    #[test]
+    fn the_interval_is_30_s_unless_the_tests_set_milliseconds() {
+        let ms = |ms: &str| interval(Some(std::ffi::OsStr::new(ms)));
+        assert_eq!(interval(None), INTERVAL);
+        assert_eq!(ms("250"), Duration::from_millis(250));
+        for bad in ["0", "-1", "x", ""] {
+            assert_eq!(ms(bad), INTERVAL, "{bad}");
+        }
     }
 
     #[test]

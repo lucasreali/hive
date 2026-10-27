@@ -17,6 +17,7 @@ import {
   titleBarDoubleClick,
   watchFocus,
   watchFullscreen,
+  watchVisible,
   windowAction,
 } from "./window";
 
@@ -344,6 +345,25 @@ test("window focus: the page's focus and blur outside Tauri", () => {
   stop();
   window.dispatchEvent(new Event("blur"));
   expect(seen).toEqual([document.hasFocus(), false, true]);
+});
+
+test("window visibility: the page's visibilityState, now and on every change", () => {
+  const seen: boolean[] = [];
+  const state = (value: string) =>
+    Object.defineProperty(document, "visibilityState", { value, configurable: true });
+  try {
+    const stop = watchVisible((v) => seen.push(v));
+    state("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    state("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    stop();
+    state("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(seen).toEqual([true, false, true]);
+  } finally {
+    delete (document as { visibilityState?: string }).visibilityState;
+  }
 });
 
 test("window focus: Tauri's focus events in the app", async () => {

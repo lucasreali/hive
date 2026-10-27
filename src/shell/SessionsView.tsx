@@ -11,8 +11,9 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type MouseEvent, useRef, useState } from "react";
 import type { Session } from "../protocol";
+import { useRefresh } from "../refresh";
 import { ago, copy, locate, remove, resume, sessionName, sessionTokens } from "../sessions";
 import { openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
@@ -49,12 +50,7 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const space = useHive((s) => s.currentSpace);
   // Asked again every few seconds (sessions outside Hive change state without hooks) and for
   // another space: the service lists the current space's only.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new space is listed again.
-  useEffect(() => {
-    void transport.listSessions();
-    const every = setInterval(() => void transport.listSessions(), REFRESH_MS);
-    return () => clearInterval(every);
-  }, [space]);
+  useRefresh(() => void transport.listSessions(), REFRESH_MS, true, [space]);
   const q = query.trim().toLowerCase();
   const matches = (x: Session) =>
     [x.title, x.last_text, x.branch, x.id].some((v) => v?.toLowerCase().includes(q));

@@ -660,11 +660,13 @@ pub enum Control {
         status: Option<WorktreeStatus>,
     },
     /// App → service, sent when it changes: the terminal shown (none while a file, or
-    /// nothing, is) and whether the app window has the focus. An agent waiting for you in that
-    /// terminal while the window has the focus was seen, so it is not pending (15.6).
+    /// nothing, is), whether the app window has the focus and whether it is visible at all. An
+    /// agent waiting for you in that terminal while the window has the focus was seen, so it is
+    /// not pending (15.6). The worktree health check pauses while it is hidden (D18.11).
     View {
         terminal: Option<u32>,
         focused: bool,
+        visible: bool,
     },
     /// Every file of the watched worktree `path` that git lists (tracked, and untracked but
     /// not ignored), as sorted `/`-separated relative paths.
@@ -2309,10 +2311,11 @@ mod tests {
         let view = Control::View {
             terminal: Some(3),
             focused: true,
+            visible: false,
         };
         assert_eq!(
             &Frame::control(0, &view).payload[..],
-            br#"{"type":"view","terminal":3,"focused":true}"#
+            br#"{"type":"view","terminal":3,"focused":true,"visible":false}"#
         );
     }
 

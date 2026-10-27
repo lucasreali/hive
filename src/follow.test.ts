@@ -10,6 +10,7 @@ import {
   setFocused,
   setOpenFile,
   setRightPanel,
+  setVisible,
   useHive,
 } from "./store";
 import type { Transport } from "./transport";
@@ -190,14 +191,16 @@ test("asks again when a save found a newer version on disk", () => {
   stop();
 });
 
-test("tells the service the terminal in view and the window focus, when either changes", () => {
-  const setView = mock(async (_terminal: number | null, _focused: boolean) => {});
+test("tells the service the terminal in view, the window focus and visibility, on any change", () => {
+  const setView = mock(
+    async (_terminal: number | null, _focused: boolean, _visible: boolean) => {},
+  );
   addTab(1, "/w");
   const stop = followView({ setView } as unknown as Transport);
   setFocused(true);
   expect(setView).not.toHaveBeenCalled(); // Not connected yet.
   welcome();
-  expect(setView.mock.calls).toEqual([[1, true]]);
+  expect(setView.mock.calls).toEqual([[1, true, true]]);
   // Other changes do not send it again.
   setRightPanel("files");
   select("/w");
@@ -205,21 +208,24 @@ test("tells the service the terminal in view and the window focus, when either c
   setFocused(false);
   addTab(2, "/w");
   useHive.setState({ fileShown: true });
+  setVisible(false);
   expect(setView.mock.calls.slice(1)).toEqual([
-    [1, false],
-    [2, false],
-    [null, false],
+    [1, false, true],
+    [2, false, true],
+    [null, false, true],
+    [null, false, false],
   ]);
+  setVisible(true);
   useHive.setState({ fileShown: false });
-  expect(setView.mock.calls.at(-1)).toEqual([2, false]);
+  expect(setView.mock.calls.at(-1)).toEqual([2, false, true]);
   useHive.setState({ fileShown: true });
   // A new service is told again once connected.
   apply({ type: "disconnected", reason: "gone", bundled: false });
   setFocused(true);
-  expect(setView).toHaveBeenCalledTimes(6);
+  expect(setView).toHaveBeenCalledTimes(8);
   welcome();
-  expect(setView.mock.calls.at(-1)).toEqual([null, true]);
+  expect(setView.mock.calls.at(-1)).toEqual([null, true, true]);
   stop();
   setFocused(false);
-  expect(setView).toHaveBeenCalledTimes(7);
+  expect(setView).toHaveBeenCalledTimes(9);
 });

@@ -376,20 +376,39 @@ export function elapsed(since: number, now: number): string {
   return `${Math.floor(seconds / 3600)}h`;
 }
 
-/** One clock for every row: a single 1 s timer, running while any row shows a time. */
-const clock = { now: Date.now(), rows: new Set<() => void>(), timer: 0 as unknown };
+/**
+ * One clock for every row: a single 1 s timer, running while any row shows a time and the
+ * window is visible (D18.11); shown again, the rows catch up at once.
+ */
+const clock = {
+  now: Date.now(),
+  rows: new Set<() => void>(),
+  timer: 0 as unknown,
+  unwatch: () => {},
+};
+function tick() {
+  clock.now = Date.now();
+  for (const r of clock.rows) r();
+}
+function startClock() {
+  tick();
+  clock.timer = setInterval(tick, 1000);
+}
 function onTick(row: () => void) {
   if (clock.rows.size === 0) {
-    clock.now = Date.now();
-    clock.timer = setInterval(() => {
-      clock.now = Date.now();
-      for (const r of clock.rows) r();
-    }, 1000);
+    if (useHive.getState().visible) startClock();
+    clock.unwatch = useHive.subscribe((s, prev) => {
+      if (s.visible === prev.visible) return;
+      if (s.visible) startClock();
+      else clearInterval(clock.timer as number);
+    });
   }
   clock.rows.add(row);
   return () => {
     clock.rows.delete(row);
-    if (clock.rows.size === 0) clearInterval(clock.timer as number);
+    if (clock.rows.size > 0) return;
+    clock.unwatch();
+    clearInterval(clock.timer as number);
   };
 }
 export const useNow = () => useSyncExternalStore(onTick, () => clock.now);

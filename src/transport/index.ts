@@ -151,8 +151,8 @@ export interface Transport {
    * service lists one level of each and watches it; answered by `files` when the list changes.
    */
   expandIgnored(path: string, folders: string[]): Promise<void>;
-  /** The terminal shown (null: none, or a file is) and whether the window has the focus. */
-  setView(terminal: number | null, focused: boolean): Promise<void>;
+  /** The terminal shown (null: none, or a file is), whether the window has the focus and is visible. */
+  setView(terminal: number | null, focused: boolean, visible: boolean): Promise<void>;
   /** What differs from `base` in the worktree at `path`; answered by `changes`. */
   listChanges(path: string, base: DiffBase): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */

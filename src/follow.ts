@@ -38,18 +38,18 @@ export function followPanel(transport: Transport): () => void {
 }
 
 /**
- * Tells the service which terminal is in view (none while a file is shown) and whether the
- * window has the focus, whenever either changes and after a new `welcome`: the service decides
- * that an agent waiting for you there was already seen (hive.md item 5, 15.6). Returns the
- * unsubscribe.
+ * Tells the service which terminal is in view (none while a file is shown), whether the window
+ * has the focus and whether it is visible, whenever one changes and after a new `welcome`: the
+ * service decides that an agent waiting for you there was already seen (hive.md item 5, 15.6),
+ * and pauses its health check while the window is hidden (D18.11). Returns the unsubscribe.
  */
 export function followView(transport: Transport): () => void {
   let sent: unknown[] = [];
   const sync = (s: HiveState) => {
-    const view = [s.connection, s.fileShown ? null : s.activeTab, s.focused] as const;
+    const view = [s.connection, s.fileShown ? null : s.activeTab, s.focused, s.visible] as const;
     if (s.connection.status !== "connected" || view.every((v, i) => v === sent[i])) return;
     sent = [...view];
-    void transport.setView(view[1], view[2]);
+    void transport.setView(view[1], view[2], view[3]);
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);

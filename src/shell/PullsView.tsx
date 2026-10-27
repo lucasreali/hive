@@ -19,6 +19,7 @@ import {
   setPullBusy,
   showPull,
 } from "../pulls";
+import { useRefresh } from "../refresh";
 import { showRun } from "../runs";
 import { ago } from "../sessions";
 import { ask, scriptsOf, select, setPanelView, setRightPanel, useHive } from "../store";
@@ -86,12 +87,9 @@ const Checks = ({ state }: { state: CheckState | null }) =>
 export function PullsView({ project, worktree }: { project: Project; worktree: Worktree }) {
   const open = useHive((s) => (s.openPull?.project === project.id ? s.openPull : null));
   const repo = useHive((s) => s.pulls[project.id]?.repo ?? null);
-  useEffect(() => {
-    const ask = () => void transport.listPulls(project.id, false);
-    ask();
-    const timer = setInterval(ask, PULLS_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [project.id]);
+  useRefresh(() => void transport.listPulls(project.id, false), PULLS_INTERVAL_MS, true, [
+    project.id,
+  ]);
   useCheckedOut();
   return open ? (
     <PullDetails open={open} repo={repo} />

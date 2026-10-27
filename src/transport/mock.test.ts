@@ -704,7 +704,7 @@ test("a save checks the version as the service does; write stands in for an agen
   await transport.unwatchWorktree();
   await transport.writeTerminal(id, "write README.md again\r");
   // The view changes nothing in the mock.
-  await transport.setView(id, true);
+  await transport.setView(id, true, true);
   await tick();
   expect(messages).toHaveLength(3);
 });

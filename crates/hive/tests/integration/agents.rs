@@ -498,7 +498,13 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
     let turn = async |app: &mut Conn, terminal, focused| {
         // Working when the view changes: looking at it sees nothing yet (15.6).
         hook(&repo, app, "1", "UserPromptSubmit", s()).await;
-        app.send(0, Control::View { terminal, focused }).await;
+        let visible = true;
+        let view = Control::View {
+            terminal,
+            focused,
+            visible,
+        };
+        app.send(0, view).await;
         // Answered after the view is applied: frames are handled in order.
         app.send(0, Control::ListProjects).await;
         assert!(matches!(app.control().await, (0, Control::Projects { .. })));
@@ -549,7 +555,13 @@ async fn looking_at_an_agent_waiting_for_you_makes_it_not_pending_until_its_next
     let s = || json!({"session_id": "s"});
     // What a view sends before the next reply (frames are handled in order).
     let view = async |app: &mut Conn, terminal, focused| {
-        app.send(0, Control::View { terminal, focused }).await;
+        let visible = true;
+        let view = Control::View {
+            terminal,
+            focused,
+            visible,
+        };
+        app.send(0, view).await;
         app.send(0, Control::ListProjects).await;
         let mut sent = vec![];
         loop {

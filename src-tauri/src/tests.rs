@@ -1004,10 +1004,11 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         folders: vec!["target".into()],
     };
     assert_eq!(service.control().await, (0, expand));
-    hive.set_view(Some(2), true).unwrap();
+    hive.set_view(Some(2), true, false).unwrap();
     let view = Control::View {
         terminal: Some(2),
         focused: true,
+        visible: false,
     };
     assert_eq!(service.control().await, (0, view));
     hive.list_changes("/r".into(), DiffBase::Branch).unwrap();
@@ -1438,7 +1439,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.unwatch_worktree(), not_connected);
     assert_eq!(hive.expand_ignored("/r".into(), vec![]), not_connected);
-    assert_eq!(hive.set_view(None, false), not_connected);
+    assert_eq!(hive.set_view(None, false, true), not_connected);
     assert_eq!(
         hive.list_changes("/r".into(), DiffBase::Head),
         not_connected
@@ -1794,7 +1795,7 @@ fn commands_reach_the_managed_hive() {
     let rename = json!({"path": "/r/w", "name": "x"});
     let watch = json!({"path": "/r", "base": "branch"});
     let expand = json!({"path": "/r", "folders": ["target"]});
-    let view = json!({"terminal": 1, "focused": true});
+    let view = json!({"terminal": 1, "focused": true, "visible": true});
     let changes = json!({"path": "/r", "base": "head"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
     let editor = json!({"worktree": "/r", "path": "a", "reveal": true});
