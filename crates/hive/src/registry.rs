@@ -2,7 +2,9 @@
 //! the app's worktrees follow `git worktree add`, `remove` and `prune` run from anywhere, not
 //! only Hive's own requests and Claude Code's worktree hooks.
 //!
-//! Two directories per repository, never recursively (object writes would flood the watch):
+//! Two directories per repository, each watched non-recursively (object writes would flood the
+//! watch; on macOS notify keeps a non-recursive watch's events to it over a recursive FSEvents
+//! stream, so FSEvents still sees them, coalesced by [`files::watch_config`]'s latency):
 //! the common git dir, where a `worktrees/` folder appears or goes, and that `worktrees/`,
 //! where each linked worktree has an entry. A worktree folder deleted by hand leaves the
 //! registry as it was: it shows as gone on the next list (git marks it prunable).
@@ -54,13 +56,14 @@ pub struct Registry {
 impl Registry {
     pub fn new() -> io::Result<Self> {
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
-        let watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+        let handler = move |event: notify::Result<Event>| {
             if !matches!(&event, Ok(event) if event.kind.is_access()) {
                 // Full: a burst is already waiting to be seen.
                 let _ = tx.try_send(event);
             }
-        })
-        .map_err(io::Error::other)?;
+        };
+        let watcher =
+            RecommendedWatcher::new(handler, files::watch_config()).map_err(io::Error::other)?;
         Ok(Self {
             watcher,
             events,

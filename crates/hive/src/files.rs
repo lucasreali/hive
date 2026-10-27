@@ -44,6 +44,19 @@ pub const MAX_DELAY: Duration = Duration::from_secs(1);
 
 /// Events waiting to be seen; more are dropped, as a burst is already pending.
 const EVENT_QUEUE: usize = 4096;
+/// How long FSEvents gathers a burst's events into one delivery (18.28): its default, zero,
+/// wakes the watcher per written file, while a re-list waits for [`QUIET`] anyway. The first
+/// event after a quiet spell still comes at once (notify sets `NoDefer`).
+const FSEVENT_LATENCY: Duration = Duration::from_millis(100);
+
+/// The configuration of Hive's `notify` watchers (the files panel's and the registry's): a
+/// recursive watch never walks into a link (inotify; FSEvents never does), and FSEvents
+/// coalesces a burst for [`FSEVENT_LATENCY`].
+pub fn watch_config() -> notify::Config {
+    notify::Config::default()
+        .with_follow_symlinks(false)
+        .with_fsevent_latency(FSEVENT_LATENCY)
+}
 
 /// What git lists in a worktree.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -435,9 +448,8 @@ impl Watcher {
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
         let shared = filter.clone();
         let handler = move |event| forward(event, &shared, &tx);
-        // A recursive watch never walks into a link (inotify; FSEvents never does).
-        let config = notify::Config::default().with_follow_symlinks(false);
-        let mut watcher = RecommendedWatcher::new(handler, config).map_err(io::Error::other)?;
+        let mut watcher =
+            RecommendedWatcher::new(handler, watch_config()).map_err(io::Error::other)?;
         let git_dir = PathBuf::from(String::from_utf8_lossy(&out).trim_end());
         let git_dir = canonical(&git_dir)
             .ok()
@@ -743,6 +755,13 @@ fn git(root: &Path, args: &[&str], limit: u64) -> io::Result<(Vec<u8>, bool)> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn watchers_coalesce_bursts_and_never_follow_links() {
+        let config = watch_config();
+        assert_eq!(config.fsevent_latency(), Duration::from_millis(100));
+        assert!(!config.follow_symlinks());
+    }
 
     fn names(listing: &Listing) -> Vec<&str> {
         listing.files.iter().map(String::as_str).collect()
