@@ -16,7 +16,7 @@ import LIGATURES from "./assets/fonts/ligatures.json";
 import { Marks } from "./marks";
 import type { AgentState } from "./protocol";
 import { apply } from "./reduce";
-import { DEFAULT_SETTINGS, initialState, setWidth, useHive } from "./store";
+import { DEFAULT_SETTINGS, initialState, setSystemTheme, setWidth, useHive } from "./store";
 import { shownTerminals } from "./tabs";
 import { transport } from "./transport";
 import { agentStatus } from "./transport/mock";
@@ -220,6 +220,14 @@ test("new settings apply at once to open terminals, and the shown one refits", a
   settings.appearance.theme = "one-dark";
   apply({ type: "settings", settings: structuredClone(settings) });
   expect(term.options.theme?.background).toBe("#282c33");
+  // System: the terminals follow the system's appearance as it changes (18.33).
+  settings.appearance.theme = "system";
+  apply({ type: "settings", settings: structuredClone(settings) });
+  setSystemTheme("one-light");
+  expect(term.options.theme?.background).toBe("#fafafa");
+  setSystemTheme("one-dark");
+  expect(term.options.theme?.background).toBe("#282c33");
+  settings.appearance.theme = "one-dark";
   fit.mockRestore();
   // No terminal shown: nothing to refit.
   showTerminal(null);
@@ -745,6 +753,109 @@ test("on macOS ⌘← ⌘→ ⌘⌫ send line start, end and kill to the shell, 
   expect(clear).toHaveBeenCalledTimes(1);
   clear.mockRestore();
   write.mockRestore();
+});
+
+test("on macOS Fn + an arrow scrolls the scrollback; in the alternate screen it is the program's", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  const scrolls = {
+    pages: spyOn(term, "scrollPages"),
+    top: spyOn(term, "scrollToTop"),
+    bottom: spyOn(term, "scrollToBottom"),
+  };
+  const none = { ctrlKey: false, shiftKey: false };
+  const sent = () => write.mock.calls.map(([, data]) => data);
+  // Not on macOS: PageUp is the shell's.
+  press(term, "PageUp", { ...none, keyCode: 33 });
+  expect(sent()).toEqual(["\x1b[5~"]);
+  expect(scrolls.pages).not.toHaveBeenCalled();
+  write.mockClear();
+
+  asMac();
+  expect(press(term, "PageUp", none).defaultPrevented).toBe(true);
+  press(term, "PageDown", none);
+  expect(scrolls.pages.mock.calls).toEqual([[-1], [1]]);
+  press(term, "Home", none);
+  expect(scrolls.top).toHaveBeenCalledTimes(1);
+  press(term, "End", none);
+  expect(scrolls.bottom).toHaveBeenCalledTimes(1);
+  expect(sent()).toEqual([]);
+  // With a modifier, on key up, or another key: not these.
+  for (const modifier of ["ctrlKey", "metaKey", "altKey", "shiftKey"])
+    press(term, "Home", { ...none, [modifier]: true });
+  press(term, "Home", none, "keyup");
+  press(term, "ArrowUp", none);
+  expect(scrolls.top).toHaveBeenCalledTimes(1);
+  // In the alternate screen (vim, less): the program gets the key.
+  await new Promise<void>((resolve) => term.write("\x1b[?1049h", resolve));
+  write.mockClear();
+  press(term, "PageUp", { ...none, keyCode: 33 });
+  expect(sent()).toEqual(["\x1b[5~"]);
+  expect(scrolls.pages).toHaveBeenCalledTimes(2);
+  for (const spy of Object.values(scrolls)) spy.mockRestore();
+  write.mockRestore();
+});
+
+test("on macOS a pinch on the terminals zooms their font a step per event; not elsewhere", async () => {
+  const { id, term } = await open();
+  showTerminal(id);
+  const size = () => term.options.fontSize;
+  const wheel = (deltaY: number, ctrlKey = true) => {
+    const event = new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true });
+    // happy-dom's WheelEvent drops the modifiers it is given.
+    Object.defineProperty(event, "ctrlKey", { value: ctrlKey });
+    term.element?.dispatchEvent(event);
+    return event;
+  };
+  const gesture = (type: string, scale: number) => {
+    const event = Object.assign(new Event(type, { bubbles: true, cancelable: true }), { scale });
+    term.element?.dispatchEvent(event);
+    return event;
+  };
+  expect(wheel(-20).defaultPrevented).toBe(false);
+  expect(gesture("gesturechange", 2).defaultPrevented).toBe(false);
+  expect(size()).toBe(13);
+
+  asMac();
+  // A plain wheel scrolls, as ever.
+  expect(wheel(-20, false).defaultPrevented).toBe(false);
+  expect(size()).toBe(13);
+  // Chromium: a Ctrl+wheel, out (negative) bigger; small moves add up, one step at most.
+  expect(wheel(-4).defaultPrevented).toBe(true);
+  expect(size()).toBe(13);
+  wheel(-6);
+  expect(size()).toBe(14);
+  wheel(-500);
+  expect(size()).toBe(15);
+  wheel(9);
+  expect(size()).toBe(15);
+  wheel(1);
+  expect(size()).toBe(14);
+  // WebKit: gesture events, by their scale since the gesture started.
+  expect(gesture("gesturestart", 1).defaultPrevented).toBe(true);
+  gesture("gesturechange", 1.05);
+  expect(size()).toBe(14);
+  gesture("gesturechange", 1.1);
+  expect(size()).toBe(15);
+  gesture("gesturechange", 1.15);
+  expect(size()).toBe(15);
+  gesture("gesturechange", 4);
+  expect(size()).toBe(16);
+  gesture("gesturestart", 1);
+  gesture("gesturechange", 0.95);
+  expect(size()).toBe(16);
+  gesture("gesturechange", 0.9);
+  expect(size()).toBe(15);
+  // No scale (an odd event): nothing.
+  gesture("gesturestart", 1);
+  term.element?.dispatchEvent(new Event("gesturechange", { bubbles: true }));
+  expect(size()).toBe(15);
+  // Unmounted: the host listens no more.
+  unmount();
+  wheel(-20);
+  expect(size()).toBe(15);
+  unmount = mountTerminals(host);
 });
 
 test("the terminal menu finds the right-clicked terminal and whether it has a selection", async () => {
