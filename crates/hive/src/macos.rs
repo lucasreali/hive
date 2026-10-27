@@ -588,6 +588,109 @@ pub mod power {
     }
 }
 
+pub use trash::trash;
+
+/// The Trash (D18.10e): `-[NSFileManager trashItemAtURL:resultingItemURL:error:]`, called
+/// through the Objective-C runtime's C functions. The entry goes to the Trash of its volume:
+/// `~/.Trash` on the home's, `<volume>/.Trashes/<uid>` on another.
+mod trash {
+    use std::ffi::{c_char, c_void};
+    use std::io;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+
+    /// `kCFStringEncodingUTF8`.
+    const UTF8: u32 = 0x0800_0100;
+    /// Most bytes of the error's description kept.
+    const DESCRIPTION: usize = 1024;
+
+    // Links Foundation, where `NSFileManager` lives.
+    #[link(name = "Foundation", kind = "framework")]
+    unsafe extern "C" {}
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn sel_registerName(name: *const c_char) -> Sel;
+        fn objc_msgSend();
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFURLCreateFromFileSystemRepresentation(
+            allocator: *const c_void,
+            path: *const u8,
+            len: isize,
+            folder: u8,
+        ) -> Id;
+        fn CFErrorCopyDescription(error: Id) -> Id;
+        fn CFStringGetCString(string: Id, buf: *mut c_char, size: isize, encoding: u32) -> u8;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    /// Moves `at` (a file, a folder with what it holds, or a symlink itself) to the Trash; the
+    /// error says why not, as Foundation words it.
+    pub fn trash(at: &Path) -> io::Result<()> {
+        let path = at.as_os_str().as_bytes();
+        let failed = || io::Error::other("cannot move it to the Trash");
+        // SAFETY: `path` is `len` readable bytes; the default allocator (null) copies them.
+        let url = unsafe {
+            CFURLCreateFromFileSystemRepresentation(
+                std::ptr::null(),
+                path.as_ptr(),
+                path.len() as isize,
+                0,
+            )
+        };
+        let url = (!url.is_null()).then_some(url).ok_or_else(failed)?;
+        let mut error: Id = std::ptr::null_mut();
+        // SAFETY: the pool holds the autoreleased manager and error until popped, once, after
+        // the error was read; `url` is a live `CFURL` (toll-free bridged to `NSURL`), owned and
+        // released once; `error` is a valid out pointer; each message is sent with the types
+        // its method declares.
+        unsafe {
+            let pool = objc_autoreleasePoolPush();
+            let manager: unsafe extern "C" fn(Id, Sel) -> Id =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let manager = manager(
+                objc_getClass(c"NSFileManager".as_ptr()),
+                sel_registerName(c"defaultManager".as_ptr()),
+            );
+            let trash: unsafe extern "C" fn(Id, Sel, Id, *mut Id, *mut Id) -> i8 =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let sel = sel_registerName(c"trashItemAtURL:resultingItemURL:error:".as_ptr());
+            let done = trash(manager, sel, url, std::ptr::null_mut(), &mut error) != 0;
+            let result = (done.then_some(()))
+                .ok_or_else(|| describe(error).map_or_else(failed, io::Error::other));
+            CFRelease(url);
+            objc_autoreleasePoolPop(pool);
+            result
+        }
+    }
+
+    /// The description of the `NSError` (toll-free bridged to `CFError`) `error`, if any.
+    ///
+    /// # Safety
+    /// `error` is null or a live error.
+    unsafe fn describe(error: Id) -> Option<String> {
+        let mut buf = [0 as c_char; DESCRIPTION];
+        // SAFETY: as the caller says; the description is owned and released once; `buf` is
+        // `DESCRIPTION` writable bytes.
+        unsafe {
+            let text = (!error.is_null()).then(|| CFErrorCopyDescription(error));
+            let text = text.filter(|text| !text.is_null())?;
+            let done = CFStringGetCString(text, buf.as_mut_ptr(), DESCRIPTION as isize, UTF8);
+            CFRelease(text);
+            (done != 0).then(|| super::text(&buf)).flatten()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -623,6 +726,19 @@ mod tests {
         assert_eq!(at(theirs, Some(&local)), None);
         let cloud = "/Users/me/Library/CloudStorage/Dropbox";
         assert_eq!(remote(Path::new(cloud), None, Some(&local)), None);
+    }
+
+    /// Only a failure: a success moves to a Trash, which the integration test does on a disk
+    /// image of its own, never the user's `~/.Trash`.
+    #[test]
+    fn what_cannot_go_to_the_trash_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = trash(&dir.path().join("hive-missing"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("hive-missing"), "{err}");
+        assert_ne!(err, "cannot move it to the Trash");
+        assert!(dir.path().read_dir().unwrap().next().is_none());
     }
 
     #[test]

@@ -45,9 +45,13 @@ fn assert_fails(out: &Output, message: &str) {
 
 impl Repo {
     pub(crate) fn new() -> Self {
-        let env = Env::new();
-        let root = env.path("home/repo");
-        std::fs::create_dir(&root).unwrap();
+        Self::in_env(Env::new(), "home/repo")
+    }
+
+    /// A repository at `sub` of `env` (its folders created).
+    pub(crate) fn in_env(env: Env, sub: &str) -> Self {
+        let root = env.path(sub);
+        std::fs::create_dir_all(&root).unwrap();
         let repo = Self {
             root: root.canonicalize().unwrap(),
             env,

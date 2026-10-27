@@ -180,6 +180,16 @@ test("Delete… asks first, naming the entry and a folder's files; Cancel delete
   expect(useHive.getState().question).toBeNull();
 });
 
+test("on macOS Delete… says the entry goes to the Trash", () => {
+  asMac();
+  act(() => askDelete({ worktree: "/w", folder: "", path: "top.ts" }));
+  expect(useHive.getState().question).toMatchObject({
+    title: "Delete file?",
+    text: "Delete top.ts? It moves to the Trash, where you can put it back.",
+    action: "Delete",
+  });
+});
+
 test("New Folder… asks for a name and creates it in the menu's folder", () => {
   const create = spyOn(transport, "createFolder").mockResolvedValue();
   render(<Shown />);

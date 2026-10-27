@@ -728,7 +728,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
       pick(row);
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if (row.kind === "folder" && row.open === (event.key === "ArrowLeft")) pick(row);
-    } else if (event.key === "Delete") {
+    } else if (event.key === "Delete" || (isMac() && event.metaKey && event.key === "Backspace")) {
       askDelete(fileTarget(worktree, row));
     } else {
       return;

@@ -87,7 +87,8 @@ export function FileMenu() {
 
 /**
  * Asks before deleting the file or folder `path` of `target` (nothing without one): the text
- * names it and, for a folder, how many of the tree's files it holds.
+ * names it and, for a folder, how many of the tree's files it holds; on macOS it goes to the
+ * Trash (D18.10).
  */
 export function askDelete({ worktree, folder, path }: FileTarget) {
   if (path === null) return;
@@ -104,7 +105,9 @@ export function askDelete({ worktree, folder, path }: FileTarget) {
         : `the folder ${path} and the ${count} file${count === 1 ? "" : "s"} in it`;
   ask({
     title: path === folder ? "Delete folder?" : "Delete file?",
-    text: `Delete ${what}? Nothing goes to a trash: git can bring back tracked files, but untracked and ignored ones are lost for good.`,
+    text: isMac()
+      ? `Delete ${what}? It moves to the Trash, where you can put it back.`
+      : `Delete ${what}? Nothing goes to a trash: git can bring back tracked files, but untracked and ignored ones are lost for good.`,
     action: "Delete",
     run: () => void transport.deleteFile(worktree, path),
   });

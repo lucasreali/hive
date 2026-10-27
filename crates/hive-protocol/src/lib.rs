@@ -887,8 +887,9 @@ pub enum Control {
         worktree: String,
         path: String,
     },
-    /// App → service: delete the file or folder `path` (relative to the worktree) for good
-    /// (9.29). Answered by `FileDeleted` or `FileOpFailed`.
+    /// App → service: delete the file or folder `path` (relative to the worktree): to the
+    /// Trash on macOS (D18.10e), for good elsewhere (9.29). Answered by `FileDeleted` or
+    /// `FileOpFailed`.
     DeleteFile {
         worktree: String,
         path: String,
