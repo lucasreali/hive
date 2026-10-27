@@ -406,7 +406,20 @@ async fn zsh_history_goes_to_the_user_file() {
 async fn zsh_marks_its_commands_unless_the_user_config_does() {
     let user_marks = "preexec() { print -n '\\e]133;C\\a' }\n\
                       precmd() { print -n \"\\e]133;D;$?\\a\" }\n";
-    for (rc, hooks) in [("", "_hive_precmd"), (user_marks, "")] {
+    let user_hooks = "autoload -Uz add-zsh-hook\n\
+                      c() { print -n '\\e]133;C\\a' }\n\
+                      d() { print -n \"\\e]133;D;$?\\a\" }\n\
+                      add-zsh-hook preexec c\nadd-zsh-hook precmd d\n";
+    // Strict options, and a precmd hook before Hive's that changes `$?`.
+    let strict =
+        "setopt nounset\nautoload -Uz add-zsh-hook\nf() { false }\nadd-zsh-hook precmd f\n";
+    let cases = [
+        ("", "1"),
+        (user_marks, "0"),
+        (user_hooks, "0"),
+        (strict, "1"),
+    ];
+    for (rc, hooks) in cases {
         let env = Env::new();
         let home = env.path("home");
         std::fs::write(home.join(".zshrc"), rc).unwrap();
@@ -428,9 +441,10 @@ async fn zsh_marks_its_commands_unless_the_user_config_does() {
         app.send(0, set).await;
         assert_eq!(app.control().await, (0, Control::Settings { settings }));
         app.open_terminal(1, &home).await;
-        app.input(1, "echo \"hive=${(M)precmd_functions:#_hive*}.\"\r")
+        app.input(1, "echo \"hive=${+functions[_hive_precmd]}.\"\r")
             .await;
-        app.output_until(1, &format!("hive={hooks}.")).await;
+        let seen = app.output_until(1, &format!("hive={hooks}.")).await;
+        assert!(!seen.contains("not set"), "user rc: {rc:?}: {seen:?}");
         app.input(1, "sleep 1.2; (exit 3)\r").await;
         let finished = Control::CommandFinished {
             exit: Some(3),

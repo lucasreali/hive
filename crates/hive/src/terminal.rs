@@ -351,17 +351,20 @@ pub mod login {
         let zshrc_history = "[[ $HISTFILE == \"$HIVE_ZDOTDIR\"/* ]] && \
                              HISTFILE=${HIVE_USER_ZDOTDIR:-$HOME}/.zsh_history\n";
         // Long-command alerts (18.40): mark each command with OSC 133 `C` / `D;<exit>`, as
-        // fish 4 does, unless a hook of the user's config already emits OSC 133.
+        // fish 4 does, unless a hook of the user's config already emits OSC 133. `emulate -L
+        // zsh` keeps the user's options (e.g. `nounset`) out; `$?` is read before it.
         let zshrc_marks = r#"() {
+  emulate -L zsh
   local f
   for f in precmd preexec $precmd_functions $preexec_functions; do
     [[ ${functions[$f]} == *'133;'* ]] && return
   done
   autoload -Uz add-zsh-hook
-  _hive_preexec() { _hive_ran=1; print -n '\e]133;C\a' }
+  _hive_preexec() { emulate -L zsh; _hive_ran=1; print -n '\e]133;C\a' }
   _hive_precmd() {
     local s=$?
-    (( _hive_ran )) && print -n "\e]133;D;$s\a"
+    emulate -L zsh
+    (( ${_hive_ran:-0} )) && print -n "\e]133;D;$s\a"
     _hive_ran=0
   }
   add-zsh-hook preexec _hive_preexec
