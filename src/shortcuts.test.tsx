@@ -5,7 +5,7 @@ import { App } from "./App";
 import type { AgentState, Project } from "./protocol";
 import { apply } from "./reduce";
 import { paletteCommands } from "./shell/Palette";
-import { nextPending, shortcut } from "./shortcuts";
+import { newTerminal, nextPending, shortcut } from "./shortcuts";
 import { initialState, openModal, renderedShown, select, setOpenFile, useHive } from "./store";
 import { closeTerminal, openTerminal, terminal } from "./terminals";
 import { transport } from "./transport";
@@ -540,4 +540,59 @@ test("⌘= and ⌘- change every terminal's font size, ⌘0 gives back the setti
   expect(sizes()).toEqual([12, 12]);
   press({ key: "0", metaKey: true });
   expect(sizes()).toEqual([13, 13]);
+});
+
+test("on macOS ⌘T opens a terminal in the selected worktree, with none the picker; not elsewhere", async () => {
+  const open = spyOn(transport, "openTerminal");
+  app();
+  expect(press({ key: "t", ctrlKey: true })).toBe(false);
+  asMac();
+  expect(shortcut(new KeyboardEvent("keydown", { key: "t", metaKey: true }))).toBe(newTerminal);
+  // Nothing selected: the picker.
+  expect(press({ key: "t", metaKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("worktree-picker");
+  act(() => openModal(null));
+  const worktree = shop.worktrees[1].path;
+  act(() => select(shop.worktrees[1].id));
+  await act(async () => {
+    press({ key: "t", metaKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(open.mock.calls.map(([cwd]) => cwd)).toEqual([worktree]);
+  expect(useHive.getState().modal).toBeNull();
+  // ⇧⌘T stays the picker; ⌃T is the shell's.
+  expect(press({ key: "T", metaKey: true, shiftKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("worktree-picker");
+  act(() => openModal(null));
+  expect(press({ key: "t", ctrlKey: true })).toBe(false);
+  open.mockRestore();
+});
+
+test("on macOS ⌘N opens the new worktree dialog, as ⇧⌘N does; not elsewhere", () => {
+  app();
+  expect(press({ key: "n", ctrlKey: true })).toBe(false);
+  asMac();
+  expect(press({ key: "n", metaKey: true })).toBe(true);
+  expect(useHive.getState()).toMatchObject({ modal: "new-worktree", modalProject: shop.id });
+  act(() => openModal(null));
+  expect(press({ key: "n", ctrlKey: true })).toBe(false);
+});
+
+test("on macOS ⌃Tab and ⌃⇧Tab show the next and previous tab, wrapping; not elsewhere", async () => {
+  const [one, two] = await threeTabs();
+  expect(press({ key: "Tab", ctrlKey: true })).toBe(false);
+  expect(shownTab()).toBe("src/a.ts");
+  asMac();
+  expect(press({ key: "Tab", ctrlKey: true })).toBe(true);
+  expect(shownTab()).toBe(one);
+  press({ key: "Tab", ctrlKey: true });
+  expect(shownTab()).toBe(two);
+  expect(press({ key: "Tab", ctrlKey: true, shiftKey: true })).toBe(true);
+  expect(shownTab()).toBe(one);
+  press({ key: "Tab", ctrlKey: true, shiftKey: true });
+  expect(shownTab()).toBe("src/a.ts");
+  // With ⌘ too, or Tab alone: not these keys.
+  expect(press({ key: "Tab", ctrlKey: true, metaKey: true })).toBe(false);
+  expect(press({ key: "Tab" })).toBe(false);
+  expect(shownTab()).toBe("src/a.ts");
 });

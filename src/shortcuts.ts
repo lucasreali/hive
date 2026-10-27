@@ -23,6 +23,7 @@ import { barItems, fileVisible } from "./tabs";
 import {
   closeTerminal,
   interceptKeys,
+  openTerminal,
   showOpenFailure,
   splitTerminal,
   zoomTerminals,
@@ -34,7 +35,8 @@ import { commandKey, isMac, keyText } from "./window";
 
 // App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS), Ctrl+, and F8, taken even with
 // the focus in a terminal; on macOS also its own (D17.2, 17.14): ⌘W, ⌘1–9, ⇧⌘[ / ⇧⌘], ⌘= / ⌘- / ⌘0,
-// ⇧⌘J and ⌘F (17.21). Every other key goes to the terminal untouched.
+// ⇧⌘J and ⌘F (17.21); and (18.34, D18.10) ⌘T, ⌘N, ⌃Tab / ⌃⇧Tab. Every other key goes to the
+// terminal untouched.
 
 /** The selected project, the project of the selected worktree (or agent), else the current space's first. */
 export function currentProject(s: HiveState): string | null {
@@ -113,8 +115,16 @@ export function closeActiveTab(): void {
   else if (!s.fileShown && s.activeTab !== null) closeTerminal(s.activeTab);
 }
 
+/** ⌘T: a terminal in the selected worktree, as the "+" menu's Terminal; with none, the picker. */
+export function newTerminal(): void {
+  const worktree = selectedPlace(useHive.getState());
+  if (worktree) showOpenFailure(openTerminal(worktree));
+  else openModal("worktree-picker");
+}
+
 /**
- * An app command: its shortcut (`keys`, written for Windows: Ctrl stands for Cmd on macOS), and
+ * An app command: its shortcut (`keys`, written for Windows: Ctrl stands for Cmd on macOS, and
+ * Control is the Control key itself, only in macOS' keys), and
  * `macKeys`, a second one on macOS. One with `mac` exists only on macOS; one with `when` only
  * while it holds: their keys are free for the terminal otherwise.
  */
@@ -130,7 +140,7 @@ export type Command = {
 
 /** The text of a command's keys, as this platform names them. */
 export const commandKeys = (c: Command) =>
-  isMac() && c.macKeys ? `${keyText(c.macKeys)} or ${c.keys}` : keyText(c.keys);
+  isMac() && c.macKeys ? `${keyText(c.macKeys)} or ${keyText(c.keys)}` : keyText(c.keys);
 
 /**
  * Every app command with a shortcut: `shortcut()` runs them, the settings' Shortcuts section
@@ -151,9 +161,17 @@ export const COMMANDS: readonly Command[] = [
     run: () => openModal("worktree-picker"),
   },
   {
+    id: "new-terminal",
+    label: "New terminal in this worktree",
+    keys: "Ctrl+T",
+    mac: true,
+    run: newTerminal,
+  },
+  {
     id: "new-worktree",
     label: "New worktree",
     keys: "Ctrl+Shift+N",
+    macKeys: "Ctrl+N",
     run: () => {
       const s = useHive.getState();
       const project = currentProject(s);
@@ -224,6 +242,7 @@ export const COMMANDS: readonly Command[] = [
     id: "next-tab",
     label: "Show the next tab",
     keys: "Ctrl+Shift+]",
+    macKeys: "Control+Tab",
     mac: true,
     run: () => cycleTab(1),
   },
@@ -231,6 +250,7 @@ export const COMMANDS: readonly Command[] = [
     id: "previous-tab",
     label: "Show the previous tab",
     keys: "Ctrl+Shift+[",
+    macKeys: "Control+Shift+Tab",
     mac: true,
     run: () => cycleTab(-1),
   },
@@ -281,11 +301,14 @@ const CODES: Record<string, string> = {
   ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((n) => [`${n}`, `Digit${n}`])),
 };
 
-/** Whether `event` presses `keys` ("F8", "Ctrl+,", "Ctrl+Shift+T"), with no other modifier. */
+/** Whether `event` presses `keys` ("F8", "Ctrl+,", "Control+Tab"), with no other modifier. */
 function presses(keys: string, event: KeyboardEvent): boolean {
   const parts = keys.split("+");
   const key = parts.at(-1) as string;
-  const command = parts.includes("Ctrl") ? commandKey(event) : !event.ctrlKey && !event.metaKey;
+  const control = parts.includes("Control");
+  const command = parts.includes("Ctrl")
+    ? commandKey(event)
+    : event.ctrlKey === control && !event.metaKey;
   return (
     command &&
     event.shiftKey === parts.includes("Shift") &&
