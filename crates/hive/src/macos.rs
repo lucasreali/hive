@@ -637,7 +637,7 @@ mod trash {
     /// error says why not, as Foundation words it.
     pub fn trash(at: &Path) -> io::Result<()> {
         let path = at.as_os_str().as_bytes();
-        let failed = || io::Error::other("cannot move it to the Trash");
+        let failed = "cannot move it to the Trash";
         // SAFETY: `path` is `len` readable bytes; the default allocator (null) copies them.
         let url = unsafe {
             CFURLCreateFromFileSystemRepresentation(
@@ -647,7 +647,9 @@ mod trash {
                 0,
             )
         };
-        let url = (!url.is_null()).then_some(url).ok_or_else(failed)?;
+        let url = (!url.is_null())
+            .then_some(url)
+            .ok_or(io::Error::other(failed))?;
         let mut error: Id = std::ptr::null_mut();
         // SAFETY: the pool holds the autoreleased manager and error until popped, once, after
         // the error was read; `url` is a live `CFURL` (toll-free bridged to `NSURL`), owned and
@@ -666,7 +668,7 @@ mod trash {
             let sel = sel_registerName(c"trashItemAtURL:resultingItemURL:error:".as_ptr());
             let done = trash(manager, sel, url, std::ptr::null_mut(), &mut error) != 0;
             let result = (done.then_some(()))
-                .ok_or_else(|| describe(error).map_or_else(failed, io::Error::other));
+                .ok_or_else(|| io::Error::other(describe(error).unwrap_or(failed.to_owned())));
             CFRelease(url);
             objc_autoreleasePoolPop(pool);
             result
