@@ -26,7 +26,7 @@ import {
 } from "./shell/WorktreeMenu";
 import { WorktreePicker } from "./shell/WorktreePicker";
 import { installShortcuts } from "./shortcuts";
-import { useHive } from "./store";
+import { appliedTheme, useHive } from "./store";
 import { guardClose, nativeTheme } from "./window";
 
 export function App() {
@@ -37,7 +37,8 @@ export function App() {
   // A question asked from a dialog keeps that dialog open underneath, edits and all.
   const under = useHive((s) => (s.modal === "confirm" ? s.question?.back : s.modal));
   const hasProjects = useHive((s) => Object.keys(s.projects ?? {}).length > 0);
-  const theme = useHive((s) => s.settings.appearance.theme);
+  const setting = useHive((s) => s.settings.appearance.theme);
+  const theme = useHive(appliedTheme);
   // Nothing works without the service: the workspace is inert under the block (#29).
   // The title bar stays usable, so the window can still be closed.
   useEffect(installShortcuts, []);
@@ -45,8 +46,8 @@ export function App() {
   // The theme's CSS variables hang off this attribute (src/styles.css); the window follows.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    nativeTheme(theme);
-  }, [theme]);
+    nativeTheme(setting, theme);
+  }, [setting, theme]);
   // The first run on Windows with WSL asks where the service runs before any starts (12.5.4).
   const asking = useHive((s) => s.appMode?.mode === null);
   const blocked = status === "version_mismatch" || status === "disconnected" || asking;

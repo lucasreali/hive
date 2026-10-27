@@ -4,11 +4,14 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
 import { Marks } from "./marks";
-import type { AccountDir, Settings } from "./protocol";
+import type { AccountDir } from "./protocol";
 import { openLink, safeUrl } from "./shell/Markdown";
 import {
+  type AppliedTheme,
   addTab,
+  appliedTheme,
   focusPane,
+  type HiveState,
   paneAttention,
   removeTab,
   setSplit,
@@ -92,7 +95,8 @@ let zoom = 0;
 const zoomed = (size: number) => Math.min(FONT_MAX, Math.max(FONT_MIN, size + zoom));
 
 /** The xterm options the settings give (6.2): used by new terminals and live by open ones. */
-export function termOptions({ terminal: t, appearance }: Settings): ITerminalOptions {
+export function termOptions(s: Pick<HiveState, "settings" | "systemTheme">): ITerminalOptions {
+  const t = s.settings.terminal;
   return {
     fontFamily: t.font_family,
     fontSize: zoomed(t.font_size),
@@ -100,7 +104,7 @@ export function termOptions({ terminal: t, appearance }: Settings): ITerminalOpt
     cursorStyle: t.cursor_style,
     cursorBlink: t.cursor_blink,
     macOptionIsMeta: t.option_as_meta,
-    theme: appearance.theme === "one-light" ? ONE_LIGHT : ONE_DARK,
+    theme: appliedTheme(s) === "one-light" ? ONE_LIGHT : ONE_DARK,
   };
 }
 
@@ -109,10 +113,10 @@ export function termOptions({ terminal: t, appearance }: Settings): ITerminalOpt
  * settings' limits; ⌘0 (0) gives back the settings' size.
  */
 export function zoomTerminals(step: -1 | 0 | 1): void {
-  const settings = useHive.getState().settings;
-  const size = settings.terminal.font_size;
+  const state = useHive.getState();
+  const size = state.settings.terminal.font_size;
   zoom = step === 0 ? 0 : zoomed(size + step) - size;
-  applySettings(settings);
+  applySettings(state);
 }
 
 /** How far a pinch goes before the font changes a step: a Ctrl+wheel's pixels, a gesture's scale. */
@@ -276,7 +280,7 @@ async function startTerminal(
     // macOS: Option-drag selects even inside a program that takes the mouse (a TUI).
     macOptionClickForcesSelection: true,
     linkHandler: LINKS,
-    ...termOptions(useHive.getState().settings),
+    ...termOptions(useHive.getState()),
   });
   // Before any output: the first prompt is marked too.
   const marks = new Marks(term);
@@ -572,10 +576,7 @@ function copyOnSelect(term: Terminal, el: HTMLElement): void {
  * (`--state-permission`), the current one stronger. xterm wants #RRGGBB, so the tints are mixed
  * over each theme's background.
  */
-const MATCHES: Record<
-  Settings["appearance"]["theme"],
-  NonNullable<ISearchOptions["decorations"]>
-> = {
+const MATCHES: Record<AppliedTheme, NonNullable<ISearchOptions["decorations"]>> = {
   "one-dark": {
     matchBackground: "#5f594b",
     activeMatchBackground: "#958564",
@@ -618,8 +619,10 @@ export function searchTerminal(
     // would keep the old matches: forgetting the search makes it count them again.
     entry.search.clearDecorations();
   }
-  const theme = useHive.getState().settings.appearance.theme;
-  const find = { caseSensitive: options.caseSensitive, decorations: MATCHES[theme] };
+  const find = {
+    caseSensitive: options.caseSensitive,
+    decorations: MATCHES[appliedTheme(useHive.getState())],
+  };
   if (options.newer) entry.search.findNext(text, find);
   else entry.search.findPrevious(text, find);
 }
@@ -767,8 +770,8 @@ function webgl(entry: Entry, retries = WEBGL_RETRIES): WebglAddon | null {
 }
 
 /** New settings apply to every open terminal at once; the shown ones refit to the new font. */
-function applySettings(settings: Settings): void {
-  const options = termOptions(settings);
+function applySettings(s: Pick<HiveState, "settings" | "systemTheme">): void {
+  const options = termOptions(s);
   for (const entry of entries.values()) entry.term.options = options;
   fitShown();
 }
@@ -785,7 +788,7 @@ export function mountTerminals(element: HTMLElement): () => void {
     timer = setTimeout(fitShown, RESIZE_DEBOUNCE_MS);
   };
   const unsubscribe = useHive.subscribe((s, prev) => {
-    if (s.settings !== prev.settings) applySettings(s.settings);
+    if (s.settings !== prev.settings || s.systemTheme !== prev.systemTheme) applySettings(s);
     if (s.splitPercent !== prev.splitPercent) refit();
     if (s.agents !== prev.agents || s.agentStates !== prev.agentStates) outline();
   });

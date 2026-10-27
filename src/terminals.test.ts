@@ -16,7 +16,7 @@ import LIGATURES from "./assets/fonts/ligatures.json";
 import { Marks } from "./marks";
 import type { AgentState } from "./protocol";
 import { apply } from "./reduce";
-import { DEFAULT_SETTINGS, initialState, setWidth, useHive } from "./store";
+import { DEFAULT_SETTINGS, initialState, setSystemTheme, setWidth, useHive } from "./store";
 import { shownTerminals } from "./tabs";
 import { transport } from "./transport";
 import { agentStatus } from "./transport/mock";
@@ -220,6 +220,14 @@ test("new settings apply at once to open terminals, and the shown one refits", a
   settings.appearance.theme = "one-dark";
   apply({ type: "settings", settings: structuredClone(settings) });
   expect(term.options.theme?.background).toBe("#282c33");
+  // System: the terminals follow the system's appearance as it changes (18.33).
+  settings.appearance.theme = "system";
+  apply({ type: "settings", settings: structuredClone(settings) });
+  setSystemTheme("one-light");
+  expect(term.options.theme?.background).toBe("#fafafa");
+  setSystemTheme("one-dark");
+  expect(term.options.theme?.background).toBe("#282c33");
+  settings.appearance.theme = "one-dark";
   fit.mockRestore();
   // No terminal shown: nothing to refit.
   showTerminal(null);

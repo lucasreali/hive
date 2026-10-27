@@ -288,8 +288,10 @@ test("the window takes Hive's theme: appearance and background", async () => {
   mockIPC((cmd, args) => {
     calls.push([cmd, args]);
   });
-  nativeTheme("one-light");
-  nativeTheme("one-dark");
+  nativeTheme("one-light", "one-light");
+  nativeTheme("one-dark", "one-dark");
+  // System: the window follows the system's appearance, the background the theme it gives.
+  nativeTheme("system", "one-light");
   for (let i = 0; i < 3; i++) await settle();
   const color = (hex: string) => [
     Number.parseInt(hex.slice(1, 3), 16),
@@ -298,7 +300,7 @@ test("the window takes Hive's theme: appearance and background", async () => {
   ];
   const sent = calls.map(([cmd, args]) => {
     const a = args as { value?: unknown; color?: unknown };
-    return [cmd, a.value ?? a.color];
+    return [cmd, "value" in a ? a.value : a.color];
   });
   expect(sent).toEqual(
     expect.arrayContaining([
@@ -310,7 +312,14 @@ test("the window takes Hive's theme: appearance and background", async () => {
       ["plugin:webview|set_webview_background_color", "#282c33"],
     ]),
   );
-  expect(sent).toHaveLength(6);
+  expect(sent).toHaveLength(9);
+  const of = (cmd: string) => sent.filter(([c]) => c === cmd).map(([, v]) => v);
+  expect(of("plugin:window|set_theme")).toEqual(["light", "dark", null]);
+  expect(of("plugin:webview|set_webview_background_color")).toEqual([
+    "#fafafa",
+    "#282c33",
+    "#fafafa",
+  ]);
   expect(color(THEME_BACKGROUND["one-light"])).toEqual([250, 250, 250]);
 });
 
@@ -319,7 +328,7 @@ test("outside Tauri the theme stays in the page", () => {
   mockIPC((cmd) => {
     calls.push(cmd);
   });
-  nativeTheme("one-light");
+  nativeTheme("one-light", "one-light");
   expect(calls).toEqual([]);
 });
 

@@ -142,9 +142,10 @@ export function watchFullscreen(onChange: (fullscreen: boolean) => void): () => 
 }
 
 type Theme = Settings["appearance"]["theme"];
+type AppliedTheme = Exclude<Theme, "system">;
 
 /** Each theme's `--bg` (src/styles.css): the window's background behind the page. */
-export const THEME_BACKGROUND: Record<Theme, string> = {
+export const THEME_BACKGROUND: Record<AppliedTheme, string> = {
   "one-dark": "#282c33",
   "one-light": "#fafafa",
 };
@@ -152,13 +153,29 @@ export const THEME_BACKGROUND: Record<Theme, string> = {
 /**
  * The window follows Hive's theme: native parts (the window's controls, menus, form controls)
  * in the theme's light or dark appearance, and the theme's background behind the page, so a
- * resize or full screen shows no other colour. The config starts on One Dark's, the default
- * theme, so the launch shows no white. Outside Tauri nothing.
+ * resize or full screen shows no other colour. "system" leaves the appearance to the system
+ * (a forced one would also be what `prefers-color-scheme` reports); `shown` is the theme that
+ * gives. The config starts on One Dark's, the default theme, so the launch shows no white.
+ * Outside Tauri nothing.
  */
-export function nativeTheme(theme: Theme): void {
+export function nativeTheme(theme: Theme, shown: AppliedTheme): void {
   if (!isTauri()) return;
-  void getCurrentWindow().setTheme(theme === "one-light" ? "light" : "dark");
-  void getCurrentWebviewWindow().setBackgroundColor(THEME_BACKGROUND[theme]);
+  void getCurrentWindow().setTheme(
+    theme === "system" ? null : theme === "one-light" ? "light" : "dark",
+  );
+  void getCurrentWebviewWindow().setBackgroundColor(THEME_BACKGROUND[shown]);
+}
+
+/**
+ * Calls `onChange` with the theme the system's appearance gives (`prefers-color-scheme`), now
+ * and on every change. Returns the cleanup.
+ */
+export function watchColorScheme(onChange: (theme: AppliedTheme) => void): () => void {
+  const query = window.matchMedia("(prefers-color-scheme: dark)");
+  const change = () => onChange(query.matches ? "one-dark" : "one-light");
+  change();
+  query.addEventListener("change", change);
+  return () => query.removeEventListener("change", change);
 }
 
 /**
