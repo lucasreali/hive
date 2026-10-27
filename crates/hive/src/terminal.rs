@@ -350,6 +350,24 @@ pub mod login {
         // `/etc/zshrc` (macOS) put the history in Hive's folder: move it to the user's.
         let zshrc_history = "[[ $HISTFILE == \"$HIVE_ZDOTDIR\"/* ]] && \
                              HISTFILE=${HIVE_USER_ZDOTDIR:-$HOME}/.zsh_history\n";
+        // Long-command alerts (18.40): mark each command with OSC 133 `C` / `D;<exit>`, as
+        // fish 4 does, unless a hook of the user's config already emits OSC 133.
+        let zshrc_marks = r#"() {
+  local f
+  for f in precmd preexec $precmd_functions $preexec_functions; do
+    [[ ${functions[$f]} == *'133;'* ]] && return
+  done
+  autoload -Uz add-zsh-hook
+  _hive_preexec() { _hive_ran=1; print -n '\e]133;C\a' }
+  _hive_precmd() {
+    local s=$?
+    (( _hive_ran )) && print -n "\e]133;D;$s\a"
+    _hive_ran=0
+  }
+  add-zsh-hook preexec _hive_preexec
+  add-zsh-hook precmd _hive_precmd
+}
+"#;
         let zlogin = "ZDOTDIR=$HIVE_USER_ZDOTDIR\n\
                       export PATH=\"$HIVE_BIN_DIR:$PATH\"\n\
                       unset HIVE_BIN_DIR HIVE_ZDOTDIR HIVE_USER_ZDOTDIR\n";
@@ -368,7 +386,7 @@ pub mod login {
             (".zprofile", format!("{header}{}", zsh_file(".zprofile"))),
             (
                 ".zshrc",
-                format!("{header}{zshrc_history}{}", zsh_file(".zshrc")),
+                format!("{header}{zshrc_history}{}{zshrc_marks}", zsh_file(".zshrc")),
             ),
             (
                 ".zlogin",

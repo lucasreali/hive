@@ -377,7 +377,8 @@ const FIELDS: Field[] = [
     label: "Long commands (seconds)",
     help:
       "0 to 3600, 0 never: a command that ran this long notifies when it ends, in a terminal " +
-      "with no agent and not in view. Needs a shell that marks its commands (OSC 133), as fish 4 does.",
+      "with no agent and not in view. " +
+      "Needs a shell that marks its commands (OSC 133), as fish 4 does and zsh does in Hive.",
     control: (id, label) => (
       <NumberSetting
         id={id}
