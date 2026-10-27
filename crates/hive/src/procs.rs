@@ -100,6 +100,34 @@ pub fn list(source: Source) -> Vec<Proc> {
     source.list()
 }
 
+/// What the terminals' 1 s check reads processes from (a fake in the tick's tests).
+pub trait Scan: Send {
+    /// The live processes in `sessions`; no other process has its arguments read.
+    fn in_sessions(&mut self, sessions: &HashSet<i32>) -> Vec<Proc>;
+}
+
+/// This machine's processes; on macOS read with one arguments buffer kept across scans.
+#[derive(Debug, Default)]
+pub struct SystemScan {
+    #[cfg(target_os = "macos")]
+    buf: Vec<u8>,
+}
+
+impl Scan for SystemScan {
+    // One function for every platform: a mutant of a `cfg`'d-out one could never be caught.
+    fn in_sessions(&mut self, sessions: &HashSet<i32>) -> Vec<Proc> {
+        #[cfg(target_os = "macos")]
+        let found = crate::macos::in_sessions(sessions, &mut self.buf);
+        // `/proc/<pid>/stat` holds the session and name; Windows reads only the terminals'
+        // command lines.
+        #[cfg(not(target_os = "macos"))]
+        let found = (list(Source::System).into_iter())
+            .filter(|p| sessions.contains(&p.session))
+            .collect();
+        found
+    }
+}
+
 /// Live processes whose working directory is `dir` or inside it.
 pub fn inside(source: Source, dir: &Path) -> Vec<Proc> {
     // One process at a time would read the whole table each time.
@@ -440,6 +468,20 @@ mod tests {
         let here = std::env::current_dir().unwrap();
         let found = inside(Source::System, &here);
         assert!(found.iter().any(|p| p.pid == me), "{found:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_scan_lists_only_the_sessions_asked_for() {
+        let me = std::process::id() as i32;
+        let mine = nix::unistd::getsid(None).unwrap().as_raw();
+        let mut scan = SystemScan::default();
+        for _ in 0..2 {
+            let found = scan.in_sessions(&HashSet::from([mine]));
+            assert!(found.iter().any(|p| p.pid == me), "{found:?}");
+            assert!(found.iter().all(|p| p.session == mine), "{found:?}");
+        }
+        assert_eq!(scan.in_sessions(&HashSet::new()), Vec::new());
     }
 
     #[cfg(unix)]

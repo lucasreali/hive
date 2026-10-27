@@ -171,7 +171,7 @@ async fn serve(
     state: Arc<State>,
 ) -> io::Result<()> {
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
-    let watcher = tokio::spawn(watch_terminals(state.clone()));
+    let watcher = tokio::spawn(watch_terminals(state.clone(), procs::SystemScan::default()));
     let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
     let mut check = tokio::time::interval(CLAIM_CHECK);

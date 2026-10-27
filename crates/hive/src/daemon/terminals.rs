@@ -136,15 +136,19 @@ impl State {
 /// Warns the app about terminals running a `claude` that sends no hook events, and applies
 /// the silence rule to agents whose terminal went quiet; sends the session usage when it changed
 /// (12.1: its reset, a space switch).
-pub(super) async fn watch_terminals(state: Arc<State>) {
+pub(super) async fn watch_terminals(state: Arc<State>, mut scan: impl procs::Scan) {
     let mut ticks = tokio::time::interval(watch::INTERVAL);
     loop {
         ticks.tick().await;
-        // `/proc` is read on a blocking thread, and not at all while no terminal is open.
-        let running = if state.terminals.lock().await.is_empty() {
+        let sessions: HashSet<i32> = (state.terminals.lock().await.values())
+            .map(|t| t.session)
+            .collect();
+        // Only the terminals' processes, read on a blocking thread, and none while no terminal
+        // is open.
+        let running = if sessions.is_empty() {
             HashSet::new()
         } else {
-            let list = || watch::claude_sessions(&procs::list(procs::Source::System));
+            let list = || watch::claude_sessions(&scan.in_sessions(&sessions));
             tokio::task::block_in_place(list)
         };
         let now = Instant::now();
