@@ -186,6 +186,7 @@ export const DEFAULT_SETTINGS: Settings = {
     cursor_blink: false,
     copy_on_select: false,
     option_as_meta: false,
+    screen_reader: false,
     shell: "default",
   },
   appearance: { theme: "one-dark" },

@@ -1,5 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { type ISearchOptions, SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
@@ -100,6 +101,7 @@ export function termOptions({ terminal: t, appearance }: Settings): ITerminalOpt
     cursorStyle: t.cursor_style,
     cursorBlink: t.cursor_blink,
     macOptionIsMeta: t.option_as_meta,
+    screenReaderMode: t.screen_reader,
     theme: appearance.theme === "one-light" ? ONE_LIGHT : ONE_DARK,
   };
 }
@@ -240,12 +242,15 @@ async function startTerminal(
 ): Promise<number> {
   const term = new Terminal({
     lineHeight: 1.2,
-    allowProposedApi: true, // registerCharacterJoiner
+    allowProposedApi: true, // registerCharacterJoiner, unicode
     // macOS: Option-drag selects even inside a program that takes the mouse (a TUI).
     macOptionClickForcesSelection: true,
     linkHandler: LINKS,
     ...termOptions(useHive.getState().settings),
   });
+  // Emoji and other wide characters take two cells, as macOS draws them (18.39); before any output.
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = "11";
   // Before any output: the first prompt is marked too.
   const marks = new Marks(term);
   // 0 until the service answers (terminal channels start at 1): output can come first.

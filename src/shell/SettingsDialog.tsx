@@ -316,6 +316,21 @@ const FIELDS: Field[] = [
   },
   {
     section: "Terminal",
+    label: "Screen reader",
+    check: true,
+    help: "Lets VoiceOver and other screen readers read the terminal's text.",
+    control: () => (
+      <Toggle
+        label="Screen reader"
+        get={(s) => s.terminal.screen_reader}
+        set={(s, on) => {
+          s.terminal.screen_reader = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Terminal",
     label: "Shell",
     help: "PowerShell is pwsh when installed, else Windows PowerShell. For new terminals.",
     windows: true,

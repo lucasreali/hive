@@ -198,6 +198,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
     cursor_blink: true,
     copy_on_select: false,
     option_as_meta: true,
+    screen_reader: true,
     shell: "default",
   };
   settings.appearance.theme = "one-light";
@@ -210,6 +211,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
       cursorStyle: "bar",
       cursorBlink: true,
       macOptionIsMeta: true,
+      screenReaderMode: true,
     });
     expect(t.options.theme?.background).toBe("#fafafa");
   }
@@ -900,6 +902,30 @@ test("Option-click selects in a program that takes the mouse; Option as Meta fol
   apply({ type: "settings", settings });
   expect(term.options.macOptionIsMeta).toBe(true);
   expect((await open()).term.options.macOptionIsMeta).toBe(true);
+});
+
+test("screen reader mode follows the setting, on new terminals and live on open ones", async () => {
+  const { term } = await open();
+  expect(term.options.screenReaderMode).toBe(false);
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.terminal.screen_reader = true;
+  apply({ type: "settings", settings });
+  expect(term.options.screenReaderMode).toBe(true);
+  expect((await open()).term.options.screenReaderMode).toBe(true);
+  apply({ type: "settings", settings: DEFAULT_SETTINGS });
+  expect(term.options.screenReaderMode).toBe(false);
+});
+
+test("an emoji takes two cells (Unicode 11 widths)", async () => {
+  const { term } = await open();
+  expect(term.unicode.activeVersion).toBe("11");
+  term.write("😀a");
+  await written(term);
+  const line = term.buffer.active.getLine(0);
+  expect(line?.getCell(0)?.getChars()).toBe("😀");
+  expect(line?.getCell(0)?.getWidth()).toBe(2);
+  expect(line?.getCell(1)?.getWidth()).toBe(0);
+  expect(line?.getCell(2)?.getChars()).toBe("a");
 });
 
 test("the font zoom stays within the settings' sizes and follows a new size", async () => {
