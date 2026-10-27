@@ -6,8 +6,10 @@ import {
   saveAgentOrder,
   savedAgentOrder,
   savedTabOrder,
+  savedTheme,
   savedWidths,
   saveTabOrder,
+  saveTheme,
   saveWidths,
   widthKey,
 } from "./persist";
@@ -58,6 +60,9 @@ import { type EditBuffer, isDirty, isFor } from "./viewer/buffer";
 
 // The one store (#30, #38). UI state is set by components; service data changes only through
 // `apply` (reduce.ts).
+
+/** A theme the page can show: "system" is one of these, by the system's appearance. */
+export type AppliedTheme = Exclude<Settings["appearance"]["theme"], "system">;
 
 export type Connection =
   | { status: "connecting" }
@@ -340,6 +345,8 @@ export type HiveState = {
   pendingSeen: Record<string, AgentState>;
   /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
   focused: boolean;
+  /** The theme the system's appearance gives (`watchColorScheme` in `src/window.ts`). */
+  systemTheme: AppliedTheme;
   /**
    * Whether the app window is visible at all (`watchVisible` in `src/window.ts`): timed
    * refreshes pause while it is hidden (D18.11).
@@ -475,6 +482,7 @@ export const initialState: HiveState = {
   inboxSeen: 0,
   pendingSeen: {},
   focused: false,
+  systemTheme: "one-dark",
   visible: true,
   connection: { status: "connecting" },
   appMode: null,
@@ -576,11 +584,14 @@ export function stepAgent(id: string, step: -1 | 1): void {
 export const useHive = create<HiveState>()(() => ({
   ...initialState,
   ...savedWidths(),
+  // The theme of the last run until the service sends the settings, so it launches in it.
+  settings: { ...DEFAULT_SETTINGS, appearance: { theme: savedTheme() } },
   agentOrder: savedAgentOrder(),
   tabOrder: savedTabOrder(),
 }));
 useHive.subscribe(saveTabOrder);
 useHive.subscribe(saveAgentOrder);
+useHive.subscribe(saveTheme);
 
 /**
  * Sets a side's width (kept within its limits) and, unless `persist` is false (a drag in
@@ -745,6 +756,10 @@ export function selected(s: HiveState, selection: string | null): Partial<HiveSt
     : shown;
 }
 export const setFocused = (focused: boolean) => useHive.setState({ focused });
+export const setSystemTheme = (systemTheme: AppliedTheme) => useHive.setState({ systemTheme });
+/** The theme shown: the setting's, or the system's for "system" (D18.10 b). */
+export const appliedTheme = (s: Pick<HiveState, "settings" | "systemTheme">): AppliedTheme =>
+  s.settings.appearance.theme === "system" ? s.systemTheme : s.settings.appearance.theme;
 export const setVisible = (visible: boolean) => useHive.setState({ visible });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
