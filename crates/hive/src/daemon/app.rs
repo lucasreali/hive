@@ -212,7 +212,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::WatchWorktree { path, base }) => state.watch_worktree(Some((path, base))).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,
         Ok(Control::ExpandIgnored { path, folders }) => state.expand_ignored(&path, folders).await,
-        Ok(Control::View { terminal, focused }) => {
+        Ok(Control::View {
+            terminal,
+            focused,
+            visible,
+        }) => {
+            state.visible.send_replace(visible);
             state.view(terminal.filter(|_| focused).unwrap_or(0)).await;
         }
         Ok(Control::GetSettings) => state.send_settings().await,

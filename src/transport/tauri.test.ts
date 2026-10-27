@@ -84,7 +84,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.watchWorktree("/r", "branch");
   await tauriTransport.unwatchWorktree();
   await tauriTransport.expandIgnored("/r", ["target"]);
-  await tauriTransport.setView(3, true);
+  await tauriTransport.setView(3, true, false);
   await tauriTransport.listChanges("/r", "head");
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
@@ -134,7 +134,7 @@ test("terminal and project actions call their commands", async () => {
     ["watch_worktree", { path: "/r", base: "branch" }],
     ["unwatch_worktree", {}],
     ["expand_ignored", { path: "/r", folders: ["target"] }],
-    ["set_view", { terminal: 3, focused: true }],
+    ["set_view", { terminal: 3, focused: true, visible: false }],
     ["list_changes", { path: "/r", base: "head" }],
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],

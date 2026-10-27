@@ -1344,9 +1344,19 @@ impl Hive {
             .send(0, &Control::ExpandIgnored { path, folders })
     }
 
-    /// The terminal shown and whether the window has the focus.
-    pub fn set_view(&self, terminal: Option<u32>, focused: bool) -> Result<(), String> {
-        self.link().send(0, &Control::View { terminal, focused })
+    /// The terminal shown, whether the window has the focus and whether it is visible.
+    pub fn set_view(
+        &self,
+        terminal: Option<u32>,
+        focused: bool,
+        visible: bool,
+    ) -> Result<(), String> {
+        let view = Control::View {
+            terminal,
+            focused,
+            visible,
+        };
+        self.link().send(0, &view)
     }
 
     /// The answer arrives as `changes`.
@@ -2068,8 +2078,9 @@ pub mod commands {
         hive: State<'_, Hive>,
         terminal: Option<u32>,
         focused: bool,
+        visible: bool,
     ) -> Result<(), String> {
-        hive.set_view(terminal, focused)
+        hive.set_view(terminal, focused, visible)
     }
 
     #[tauri::command]

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Project, Worktree } from "../protocol";
 import { type CheckState, PULLS_INTERVAL_MS } from "../pulls";
+import { useRefresh } from "../refresh";
 import {
   actOnRun,
   duration,
@@ -47,12 +48,8 @@ const since = (iso: string) => {
 export function RunsView({ project, worktree }: { project: Project; worktree: Worktree }) {
   const open = useHive((s) => (s.openRun?.project === project.id ? s.openRun : null));
   const [branch, setBranch] = useState(worktree.branch);
-  useEffect(() => {
-    const ask = () => void transport.listRuns(project.id, branch, false);
-    ask();
-    const timer = setInterval(ask, PULLS_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [project.id, branch]);
+  const ask = () => void transport.listRuns(project.id, branch, false);
+  useRefresh(ask, PULLS_INTERVAL_MS, true, [project.id, branch]);
   return open ? (
     <RunDetails open={open} branch={branch} />
   ) : (
@@ -142,11 +139,8 @@ function RunDetails({ open, branch }: { open: OpenRun; branch: string | null }) 
   );
   const running = d?.summary.state === "running";
   // A run in progress: its jobs again every 30 s while they show.
-  useEffect(() => {
-    if (!running) return;
-    const timer = setInterval(() => void transport.openRun(project, run), RUN_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [project, run, running]);
+  const every = running ? RUN_INTERVAL_MS : null;
+  useRefresh(() => void transport.openRun(project, run), every, false, [project, run]);
   const bar = (
     <div className="pulls-bar">
       <button type="button" className="ghost" onClick={hideRun}>

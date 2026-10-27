@@ -553,6 +553,7 @@ async fn shell_marks_progress_and_notifications_reach_the_app() {
     let view = |terminal| Control::View {
         terminal: Some(terminal),
         focused: true,
+        visible: true,
     };
     app.send(0, view(2)).await;
     // A program's notification where an agent runs: dropped (its alert is checked off the

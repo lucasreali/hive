@@ -340,6 +340,11 @@ export type HiveState = {
   pendingSeen: Record<string, AgentState>;
   /** Whether the app window has the focus (`watchFocus` in `src/window.ts`). */
   focused: boolean;
+  /**
+   * Whether the app window is visible at all (`watchVisible` in `src/window.ts`): timed
+   * refreshes pause while it is hidden (D18.11).
+   */
+  visible: boolean;
   // Service data
   connection: Connection;
   /**
@@ -470,6 +475,7 @@ export const initialState: HiveState = {
   inboxSeen: 0,
   pendingSeen: {},
   focused: false,
+  visible: true,
   connection: { status: "connecting" },
   appMode: null,
   sessionUsage: null,
@@ -739,6 +745,7 @@ export function selected(s: HiveState, selection: string | null): Partial<HiveSt
     : shown;
 }
 export const setFocused = (focused: boolean) => useHive.setState({ focused });
+export const setVisible = (visible: boolean) => useHive.setState({ visible });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
 

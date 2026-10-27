@@ -172,7 +172,8 @@ async fn serve(
 ) -> io::Result<()> {
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
     let watcher = tokio::spawn(watch_terminals(state.clone(), procs::SystemScan::default()));
-    let health = tokio::spawn(watch_health(state.clone(), health::INTERVAL));
+    let every = health::interval(std::env::var_os(health::INTERVAL_MS).as_deref());
+    let health = tokio::spawn(watch_health(state.clone(), every));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
     let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
@@ -251,6 +252,9 @@ struct State {
     /// The terminal in view in the focused app window (the app's `view`); 0 when none, since
     /// terminal channels start at 1.
     watched: AtomicU32,
+    /// Whether the app window is visible (the app's `view`): the health check waits while it
+    /// is hidden (D18.11).
+    visible: tokio::sync::watch::Sender<bool>,
     bin_dir: PathBuf,
     projects: Projects,
     /// Claude Code's session logs of the followed projects.
@@ -315,6 +319,7 @@ impl State {
             agents: Mutex::new(HashMap::new()),
             watching: Mutex::new(None),
             watched: AtomicU32::new(0),
+            visible: tokio::sync::watch::Sender::new(true),
             bin_dir,
             projects,
             sessions,
@@ -823,11 +828,19 @@ impl State {
     }
 }
 
-/// Sends the worktree statuses that changed, every `interval` (first right away).
+/// Sends the worktree statuses that changed, every `interval` (first right away). Paused while
+/// the app window is hidden (D18.11): a tick missed then runs once it shows again, and the next
+/// a whole `interval` later.
 async fn watch_health(state: Arc<State>, interval: std::time::Duration) {
     let mut ticks = tokio::time::interval(interval);
+    let mut visible = state.visible.subscribe();
     loop {
         ticks.tick().await;
+        if !*visible.borrow_and_update() {
+            // Never an error: the sender lives in `state`.
+            let _ = visible.wait_for(|visible| *visible).await;
+            ticks.reset();
+        }
         // Worktrees changed by hand (e.g. a branch switched) show within a tick.
         state.projects.forget();
         state.refresh_health().await;
