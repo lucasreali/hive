@@ -1,3 +1,4 @@
+import type { Settings } from "./protocol";
 import type { HiveState } from "./store";
 
 // The window's own preferences, kept in its `localStorage` between runs (not service data, #37).
@@ -108,6 +109,32 @@ export function saveTabOrder(s: HiveState, prev: HiveState): void {
   if (s.tabOrder === prev.tabOrder) return;
   try {
     safeStorage()?.setItem(TAB_ORDER_STORAGE, JSON.stringify(s.tabOrder));
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
+/** Where the theme setting is remembered between runs, for the launch's colour (18.33). */
+const THEME_STORAGE = "hive.theme";
+type Theme = Settings["appearance"]["theme"];
+const THEMES: readonly Theme[] = ["one-dark", "one-light", "system"];
+
+/** The theme setting of the last run; One Dark (the default) when none or unknown. */
+export function savedTheme(storage: Pick<Storage, "getItem"> | null = safeStorage()): Theme {
+  try {
+    const saved = storage?.getItem(THEME_STORAGE);
+    return THEMES.find((t) => t === saved) ?? "one-dark";
+  } catch {
+    return "one-dark";
+  }
+}
+
+/** Remembers the theme setting whenever it changes. */
+export function saveTheme(s: HiveState, prev: HiveState): void {
+  const theme = s.settings.appearance.theme;
+  if (theme === prev.settings.appearance.theme) return;
+  try {
+    safeStorage()?.setItem(THEME_STORAGE, theme);
   } catch {
     // A full or blocked storage only loses the preference.
   }

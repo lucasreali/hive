@@ -494,7 +494,7 @@ export type Settings = {
     /** New terminals' shell when the service runs natively on Windows; ignored elsewhere. */
     shell: "default" | "cmd" | "git_bash";
   };
-  appearance: { theme: "one-dark" | "one-light" };
+  appearance: { theme: "one-dark" | "one-light" | "system" };
   /**
    * `volume`: the alert tone's, in percent; 0 mutes it. `bounce`: bounce the Dock icon once when
    * an agent needs an action while Hive is not focused (17.16). `menu_bar`: show the menu bar

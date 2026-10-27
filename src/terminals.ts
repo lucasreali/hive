@@ -5,11 +5,14 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITerminalOptions, type ITheme, Terminal } from "@xterm/xterm";
 import LIGATURES from "./assets/fonts/ligatures.json";
 import { Marks } from "./marks";
-import type { AccountDir, Settings } from "./protocol";
+import type { AccountDir } from "./protocol";
 import { openLink, safeUrl } from "./shell/Markdown";
 import {
+  type AppliedTheme,
   addTab,
+  appliedTheme,
   focusPane,
+  type HiveState,
   paneAttention,
   removeTab,
   setSplit,
@@ -93,7 +96,8 @@ let zoom = 0;
 const zoomed = (size: number) => Math.min(FONT_MAX, Math.max(FONT_MIN, size + zoom));
 
 /** The xterm options the settings give (6.2): used by new terminals and live by open ones. */
-export function termOptions({ terminal: t, appearance }: Settings): ITerminalOptions {
+export function termOptions(s: Pick<HiveState, "settings" | "systemTheme">): ITerminalOptions {
+  const t = s.settings.terminal;
   return {
     fontFamily: t.font_family,
     fontSize: zoomed(t.font_size),
@@ -102,7 +106,7 @@ export function termOptions({ terminal: t, appearance }: Settings): ITerminalOpt
     cursorBlink: t.cursor_blink,
     macOptionIsMeta: t.option_as_meta,
     screenReaderMode: t.screen_reader,
-    theme: appearance.theme === "one-light" ? ONE_LIGHT : ONE_DARK,
+    theme: appliedTheme(s) === "one-light" ? ONE_LIGHT : ONE_DARK,
   };
 }
 
@@ -111,11 +115,43 @@ export function termOptions({ terminal: t, appearance }: Settings): ITerminalOpt
  * settings' limits; ⌘0 (0) gives back the settings' size.
  */
 export function zoomTerminals(step: -1 | 0 | 1): void {
-  const settings = useHive.getState().settings;
-  const size = settings.terminal.font_size;
+  const state = useHive.getState();
+  const size = state.settings.terminal.font_size;
   zoom = step === 0 ? 0 : zoomed(size + step) - size;
-  applySettings(settings);
+  applySettings(state);
 }
+
+/** How far a pinch goes before the font changes a step: a Ctrl+wheel's pixels, a gesture's scale. */
+const PINCH_PIXELS = 10;
+const PINCH_SCALE = 1.1;
+let pinched = 0;
+let scaled = 1;
+
+/**
+ * A trackpad pinch on the terminals is ⌘= / ⌘- (18.34, D18.10, macOS only): Chromium reports it
+ * as a Ctrl+wheel, WebKit as gesture events. One step per event at most.
+ */
+function onPinch(event: Event): void {
+  if (!isMac()) return;
+  if (event instanceof WheelEvent && !event.ctrlKey) return;
+  event.preventDefault();
+  event.stopPropagation(); // xterm would scroll
+  if (event instanceof WheelEvent) {
+    pinched -= event.deltaY;
+    if (Math.abs(pinched) < PINCH_PIXELS) return;
+    zoomTerminals(pinched > 0 ? 1 : -1);
+    pinched = 0;
+    return;
+  }
+  const scale = (event as Event & { scale?: number }).scale ?? 1;
+  if (event.type === "gesturestart") scaled = scale;
+  const ratio = scale / scaled;
+  if (ratio < PINCH_SCALE && ratio > 1 / PINCH_SCALE) return;
+  zoomTerminals(ratio > 1 ? 1 : -1);
+  scaled = scale;
+}
+
+const PINCH_EVENTS = ["wheel", "gesturestart", "gesturechange"];
 
 /**
  * Ligatures (7.11): xterm draws each cell alone, so a font's ligatures never show unless a
@@ -246,7 +282,7 @@ async function startTerminal(
     // macOS: Option-drag selects even inside a program that takes the mouse (a TUI).
     macOptionClickForcesSelection: true,
     linkHandler: LINKS,
-    ...termOptions(useHive.getState().settings),
+    ...termOptions(useHive.getState()),
   });
   // Emoji and other wide characters take two cells, as macOS draws them (18.39); before any output.
   term.loadAddon(new Unicode11Addon());
@@ -327,6 +363,14 @@ const MAC_LINE_KEYS: Record<string, string> = {
 /** macOS' prompt keys (17.25): Cmd + the key jumps to the previous or next prompt. */
 const MAC_JUMP_KEYS: Record<string, -1 | 1> = { ArrowUp: -1, ArrowDown: 1 };
 
+/** macOS' Fn + an arrow (18.34, D18.10): the keys it sends, and how each scrolls the scrollback. */
+const MAC_SCROLL_KEYS: Record<string, (term: Terminal) => void> = {
+  PageUp: (term) => term.scrollPages(-1),
+  PageDown: (term) => term.scrollPages(1),
+  Home: (term) => term.scrollToTop(),
+  End: (term) => term.scrollToBottom(),
+};
+
 /** The terminal's own macOS keys, for the settings' Shortcuts section. */
 export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
   { label: "Clear the terminal", keys: "⌘K" },
@@ -335,7 +379,25 @@ export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
   { label: "Go to the start of the line", keys: "⌘←" },
   { label: "Go to the end of the line", keys: "⌘→" },
   { label: "Delete to the start of the line", keys: "⌘⌫" },
+  { label: "Scroll a page up", keys: "fn↑" },
+  { label: "Scroll a page down", keys: "fn↓" },
+  { label: "Scroll to the top", keys: "fn←" },
+  { label: "Scroll to the bottom", keys: "fn→" },
 ];
+
+/**
+ * On macOS, Fn + an arrow (`MAC_SCROLL_KEYS`) scrolls the scrollback; in the alternate screen
+ * (vim, less, Claude Code) it is the program's, as everywhere.
+ */
+function macScroll(term: Terminal, event: KeyboardEvent): boolean {
+  const scroll = Object.hasOwn(MAC_SCROLL_KEYS, event.key) ? MAC_SCROLL_KEYS[event.key] : undefined;
+  const modified = event.ctrlKey || event.metaKey || event.altKey || event.shiftKey;
+  const alternate = term.buffer.active.type === "alternate";
+  if (!isMac() || event.type !== "keydown" || modified || !scroll || alternate) return false;
+  event.preventDefault();
+  scroll(term);
+  return true;
+}
 
 /**
  * On macOS, Cmd + an arrow or Backspace (`MAC_LINE_KEYS`), ⌘K (clear) or ⌘↑ / ⌘↓ (the previous
@@ -361,7 +423,7 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
  * own keys (`macKey`). Every other key is the shell's.
  */
 function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
-  if (intercept(event) || macKey(term, marks, event)) return false;
+  if (intercept(event) || macKey(term, marks, event) || macScroll(term, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const clipboard = CLIPBOARD_KEYS.get(event.key.toUpperCase());
   if (event.type !== "keydown" || !chord || !clipboard) return true;
@@ -519,10 +581,7 @@ function copyOnSelect(term: Terminal, el: HTMLElement): void {
  * (`--state-permission`), the current one stronger. xterm wants #RRGGBB, so the tints are mixed
  * over each theme's background.
  */
-const MATCHES: Record<
-  Settings["appearance"]["theme"],
-  NonNullable<ISearchOptions["decorations"]>
-> = {
+const MATCHES: Record<AppliedTheme, NonNullable<ISearchOptions["decorations"]>> = {
   "one-dark": {
     matchBackground: "#5f594b",
     activeMatchBackground: "#958564",
@@ -565,8 +624,10 @@ export function searchTerminal(
     // would keep the old matches: forgetting the search makes it count them again.
     entry.search.clearDecorations();
   }
-  const theme = useHive.getState().settings.appearance.theme;
-  const find = { caseSensitive: options.caseSensitive, decorations: MATCHES[theme] };
+  const find = {
+    caseSensitive: options.caseSensitive,
+    decorations: MATCHES[appliedTheme(useHive.getState())],
+  };
   if (options.newer) entry.search.findNext(text, find);
   else entry.search.findPrevious(text, find);
 }
@@ -714,8 +775,8 @@ function webgl(entry: Entry, retries = WEBGL_RETRIES): WebglAddon | null {
 }
 
 /** New settings apply to every open terminal at once; the shown ones refit to the new font. */
-function applySettings(settings: Settings): void {
-  const options = termOptions(settings);
+function applySettings(s: Pick<HiveState, "settings" | "systemTheme">): void {
+  const options = termOptions(s);
   for (const entry of entries.values()) entry.term.options = options;
   fitShown();
 }
@@ -732,17 +793,20 @@ export function mountTerminals(element: HTMLElement): () => void {
     timer = setTimeout(fitShown, RESIZE_DEBOUNCE_MS);
   };
   const unsubscribe = useHive.subscribe((s, prev) => {
-    if (s.settings !== prev.settings) applySettings(s.settings);
+    if (s.settings !== prev.settings || s.systemTheme !== prev.systemTheme) applySettings(s);
     if (s.splitPercent !== prev.splitPercent) refit();
     if (s.agents !== prev.agents || s.agentStates !== prev.agentStates) outline();
   });
   const observer = new ResizeObserver(refit);
   observer.observe(element);
+  for (const type of PINCH_EVENTS)
+    element.addEventListener(type, onPinch, { capture: true, passive: false });
   showTerminals(shown, null);
   void loadBundledFonts();
   return () => {
     clearTimeout(timer);
     observer.disconnect();
+    for (const type of PINCH_EVENTS) element.removeEventListener(type, onPinch, { capture: true });
     unsubscribe();
     if (host === element) host = null;
   };

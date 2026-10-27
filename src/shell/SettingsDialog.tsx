@@ -215,6 +215,7 @@ const SHELLS = [
 const THEMES = [
   { value: "one-dark", label: "One Dark" },
   { value: "one-light", label: "One Light" },
+  { value: "system", label: "System" },
 ];
 
 /** Every setting, in section order; the search box filters them by label. */

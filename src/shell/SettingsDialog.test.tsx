@@ -443,20 +443,27 @@ test("on macOS the shortcuts are named with ⌘, with macOS' own and the termina
   open();
   section("Shortcuts");
   const rows = shortcutRows();
-  expect(rows).toHaveLength(COMMANDS.length + 6);
+  expect(rows).toHaveLength(COMMANDS.length + 10);
   expect(rows).toContain("Command palette⇧⌘P");
   expect(rows).toContain("Go to the next pending agent⇧⌘J or F8");
+  expect(rows).toContain("New terminal in this worktree⌘T");
+  expect(rows).toContain("New worktree⌘N or ⇧⌘N");
   expect(rows).toContain("Close the tab⌘W");
-  expect(rows).toContain("Show the previous tab⇧⌘[");
+  expect(rows).toContain("Show the next tab⌃Tab or ⇧⌘]");
+  expect(rows).toContain("Show the previous tab⌃⇧Tab or ⇧⌘[");
   expect(rows).toContain("Show tab 9⌘9");
   expect(rows).toContain("Make the terminal font smaller⌘-");
-  expect(rows.slice(-6)).toEqual([
+  expect(rows.slice(-10)).toEqual([
     "Clear the terminal⌘K",
     "Jump to the previous prompt⌘↑",
     "Jump to the next prompt⌘↓",
     "Go to the start of the line⌘←",
     "Go to the end of the line⌘→",
     "Delete to the start of the line⌘⌫",
+    "Scroll a page upfn↑",
+    "Scroll a page downfn↓",
+    "Scroll to the topfn←",
+    "Scroll to the bottomfn→",
   ]);
 });
 

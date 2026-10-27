@@ -16,7 +16,7 @@
         "create": false,
         "width": 1440,
         "height": 900,
-        "minWidth": 800,
+        "minWidth": 640,
         "minHeight": 500,
         "decorations": true,
         "titleBarStyle": "Overlay",

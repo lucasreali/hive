@@ -261,14 +261,17 @@ Terminal content in the prototype (Claude Code output, sample code) is sample da
 | Copy / paste in the terminal | Ctrl+Shift+C / Ctrl+Shift+V (macOS: ⌘C / ⌘V) | — |
 | Move in the tree | ↑ ↓ ← → Enter | same |
 
-macOS only (D17.2, 17.14), none reaching the shell as typed:
+macOS only (D17.2, 17.14, D18.10), none reaching the shell as typed (Fn + an arrow only outside the alternate screen):
 
 | Action | Shortcut |
 |---|---|
+| New terminal in the selected worktree (none selected: the worktree picker) | ⌘T |
+| New worktree | ⌘N (beside ⇧⌘N) |
 | Close the tab shown (a file with unsaved edits asks) | ⌘W |
 | Show tab 1–9 of the bar | ⌘1 … ⌘9 |
-| Next / previous tab (wrapping) | ⇧⌘] / ⇧⌘[ |
-| Terminal font bigger / smaller / the settings' size (every terminal, until restart) | ⌘= / ⌘- / ⌘0 |
+| Next / previous tab (wrapping) | ⌃Tab / ⌃⇧Tab, or ⇧⌘] / ⇧⌘[ |
+| Terminal font bigger / smaller / the settings' size (every terminal, until restart) | ⌘= / ⌘- / ⌘0, or a trackpad pinch on the terminals |
+| Scroll the scrollback a page up / down, to the top / bottom (in the alternate screen the program's PageUp/PageDown/Home/End) | fn↑ / fn↓ / fn← / fn→ |
 | Clear the focused terminal | ⌘K |
 | Line start / line end / delete to the line start (sends Ctrl+A / Ctrl+E / Ctrl+U) | ⌘← / ⌘→ / ⌘⌫ |
 
