@@ -2,6 +2,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { unifiedMergeView } from "@codemirror/merge";
+import { search, searchKeymap } from "@codemirror/search";
 import {
   Compartment,
   EditorSelection,
@@ -58,6 +59,42 @@ const theme = Prec.highest(
         fontSize: "var(--fs-meta)",
         // The default "⦚" marks are not in IBM Plex.
         "&:before, &:after": { display: "none" },
+      },
+      // The search panel (18.38): the terminal search bar's surfaces, matches in its yellow.
+      ".cm-panels": { backgroundColor: "var(--panel)", color: "var(--text)" },
+      ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+      ".cm-search": { fontFamily: "var(--font-sans)", fontSize: "var(--fs-small)" },
+      ".cm-textfield": {
+        backgroundColor: "var(--bg)",
+        color: "var(--text)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        fontFamily: "inherit",
+        fontSize: "var(--fs-small)",
+        outline: "none",
+        "&:focus": { borderColor: "var(--focus)" },
+      },
+      ".cm-button": {
+        backgroundImage: "none",
+        backgroundColor: "transparent",
+        border: "none",
+        borderRadius: "var(--radius)",
+        color: "var(--text-2)",
+        fontSize: "var(--fs-small)",
+        "&:hover": { backgroundColor: "var(--hover)", color: "var(--text)" },
+        "&:active": { backgroundColor: "var(--selected)", backgroundImage: "none" },
+      },
+      ".cm-panel.cm-search label": { color: "var(--text-2)", fontSize: "var(--fs-meta)" },
+      ".cm-search input[type=checkbox]": { accentColor: "var(--accent)" },
+      '.cm-panel.cm-search [name="close"]': { color: "var(--text-3)" },
+      '.cm-panel.cm-search [name="close"]:hover': { color: "var(--text)" },
+      ".cm-searchMatch": {
+        backgroundColor: "color-mix(in srgb, var(--state-permission) 25%, transparent)",
+        outline: "none",
+      },
+      ".cm-searchMatch.cm-searchMatch-selected": {
+        backgroundColor: "color-mix(in srgb, var(--state-permission) 50%, transparent)",
+        outline: "1px solid var(--state-permission)",
       },
     },
     { dark: true },
@@ -232,6 +269,13 @@ export function revealLine(view: EditorView, line: number): void {
   });
 }
 
+/**
+ * CodeMirror's search keys (18.38): Mod-f opens the panel (⌘F on macOS, Ctrl+F elsewhere), Enter
+ * / F3 / Mod-g find the next match, Shift with them the previous one, Esc closes it. Mod-Shift-l
+ * is left out: it is the app's "reference the selection" (#35).
+ */
+export const editorSearchKeymap = searchKeymap.filter((b) => b.key !== "Mod-Shift-l");
+
 /** What the editable view tells its owner. */
 export type EditorEvents = {
   /** The user changed the text. */
@@ -292,7 +336,9 @@ export function createEditor(
           indentWithTab,
           ...defaultKeymap,
           ...historyKeymap,
+          ...editorSearchKeymap,
         ]),
+        search({ top: true }),
         drawSelection(),
         markers.of(marked()),
         lineNumbers(),

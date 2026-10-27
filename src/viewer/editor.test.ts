@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { syntaxTree } from "@codemirror/language";
 import { getOriginalDoc } from "@codemirror/merge";
+import { SearchQuery, setSearchQuery } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { runScopeHandlers } from "@codemirror/view";
 import { toText } from "./buffer";
@@ -8,6 +9,7 @@ import {
   createEditor,
   createViewer,
   type Editor,
+  editorSearchKeymap,
   restoreView,
   revealLine,
   selectedLines,
@@ -145,6 +147,36 @@ test("the editor is editable text that reports edits, selections and Ctrl+S", ()
   const undo = new KeyboardEvent("keydown", { key: "z", ctrlKey: true });
   runScopeHandlers(view, undo, "editor");
   expect(view.state.doc.toString()).toBe("one\r\ntwo\n");
+});
+
+test("Mod-f opens the search panel on top; next and previous select the matches (18.38)", () => {
+  const { view } = editing("foo\nbar foo\nfoo\n");
+  const press = (init: KeyboardEventInit, scope = "editor") =>
+    runScopeHandlers(view, new KeyboardEvent("keydown", init), scope);
+  expect(press({ key: "f", ctrlKey: true })).toBe(true);
+  const panel = view.dom.querySelector(".cm-panels-top .cm-search");
+  expect(panel).not.toBeNull();
+  view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "foo" })) });
+  // From the cursor at the start: the first "foo", then the next, then back.
+  expect(press({ key: "g", ctrlKey: true })).toBe(true);
+  expect(view.state.selection.main).toMatchObject({ from: 0, to: 3 });
+  expect(press({ key: "F3" })).toBe(true);
+  expect(view.state.selection.main).toMatchObject({ from: 8, to: 11 });
+  expect(press({ key: "F3", shiftKey: true })).toBe(true);
+  expect(view.state.selection.main).toMatchObject({ from: 0, to: 3 });
+  // Esc in the panel's field closes it.
+  expect(press({ key: "Escape" }, "search-panel")).toBe(true);
+  expect(view.dom.querySelector(".cm-search")).toBeNull();
+});
+
+test("the editor's search keys leave Mod-Shift-l to the app's reference command (#35)", () => {
+  expect(editorSearchKeymap.map((b) => b.key)).toContain("Mod-f");
+  expect(editorSearchKeymap.map((b) => b.key)).not.toContain("Mod-Shift-l");
+  const { view } = editing("foo foo\n");
+  view.dispatch({ selection: { anchor: 0, head: 3 } });
+  const key = new KeyboardEvent("keydown", { key: "L", ctrlKey: true, shiftKey: true });
+  expect(runScopeHandlers(view, key, "editor")).toBe(false);
+  expect(view.state.selection.ranges).toHaveLength(1);
 });
 
 test("the cursor's line and its number are highlighted, focused or not", () => {
