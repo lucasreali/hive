@@ -3,7 +3,7 @@
 //! read, never written.
 
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use hive_protocol::Control;
@@ -47,36 +47,49 @@ fn open_inside(roots: &[PathBuf], path: &Path) -> io::Result<File> {
     File::open(&real)
 }
 
-/// The whole lines of the transcript at `path` (inside `roots`) written since `offset`, at most
-/// its last [`READ_LIMIT`] bytes, and whether it was read again from its start because it
-/// shrank. `offset` moves to the end of what was read. A transcript not written yet has no
-/// lines.
-fn read_lines(roots: &[PathBuf], path: &Path, offset: &mut u64) -> io::Result<(Vec<u8>, bool)> {
-    let mut file = match open_inside(roots, path) {
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Ok((Vec::new(), false));
+/// The whole lines of the transcript at `path` (inside `roots`) written since `offset`, from at
+/// most its last [`READ_LIMIT`] bytes, read one at a time; and whether it is read again from its
+/// start because it shrank. `offset` moves past each line taken. A transcript not written yet
+/// has no lines.
+fn lines_since<'a>(
+    roots: &[PathBuf],
+    path: &Path,
+    offset: &'a mut u64,
+) -> io::Result<(bool, impl Iterator<Item = Vec<u8>> + use<'a>)> {
+    let mut reader = None;
+    let mut restarted = false;
+    match open_inside(roots, path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        file => {
+            let mut file = file?;
+            let len = file.metadata()?.len();
+            restarted = len < *offset;
+            if restarted {
+                *offset = 0;
+            }
+            let start = (*offset).max(len.saturating_sub(READ_LIMIT));
+            file.seek(SeekFrom::Start(start))?;
+            *offset = start;
+            reader = Some(BufReader::new(file.take(READ_LIMIT)));
         }
-        file => file?,
-    };
-    let len = file.metadata()?.len();
-    let restarted = len < *offset;
-    if restarted {
-        *offset = 0;
     }
-    let start = (*offset).max(len.saturating_sub(READ_LIMIT));
-    file.seek(SeekFrom::Start(start))?;
-    let mut bytes = Vec::new();
-    file.take(READ_LIMIT).read_to_end(&mut bytes)?;
-    // A line still being written waits for the next read; one longer than the limit is
-    // skipped (what is left of it does not parse).
-    let whole = match bytes.iter().rposition(|&b| b == b'\n') {
-        Some(end) => end + 1,
-        None if bytes.len() as u64 == READ_LIMIT => bytes.len(),
-        None => 0,
-    };
-    *offset = start + whole as u64;
-    bytes.truncate(whole);
-    Ok((bytes, restarted))
+    let mut line = Vec::new();
+    let lines = std::iter::from_fn(move || {
+        let reader = reader.as_mut()?;
+        reader.read_until(b'\n', &mut line).ok()?;
+        if !line.ends_with(b"\n") {
+            // A line still being written waits for the next read; one longer than the limit
+            // is skipped (what is left of it does not parse).
+            if line.len() as u64 == READ_LIMIT {
+                *offset += READ_LIMIT;
+            }
+            return None;
+        }
+        *offset += line.len() as u64;
+        Some(std::mem::take(&mut line))
+    });
+    // Each line takes at least a byte, so the limit bounds them.
+    Ok((restarted, lines.take(READ_LIMIT as usize)))
 }
 
 /// Largest token count taken from one usage field; a larger one counts as 0.
@@ -198,13 +211,13 @@ impl Usage {
     /// so the output of a longer transcript's start is not counted.
     pub fn read(&mut self, id: &str, roots: &[PathBuf], path: &Path) -> Option<Control> {
         self.due = false;
-        let (bytes, restarted) = read_lines(roots, path, &mut self.offset).ok()?;
+        let (restarted, lines) = lines_since(roots, path, &mut self.offset).ok()?;
         if restarted {
             self.tokens = Tokens::default();
         }
         let mut end = None;
-        for line in bytes.split(|&b| b == b'\n') {
-            if let Ok(record) = serde_json::from_slice::<Value>(line) {
+        for line in lines {
+            if let Ok(record) = serde_json::from_slice::<Value>(&line) {
                 self.tokens.add(&record);
                 end = crate::sessions::ending_of(&record).or(end);
             }
@@ -304,6 +317,12 @@ mod tests {
         line(json!({"type": "user", "message": {"content": text}}))
     }
 
+    /// The lines [`lines_since`] takes, joined, and whether it restarted.
+    fn read_lines(roots: &[PathBuf], path: &Path, offset: &mut u64) -> io::Result<(Vec<u8>, bool)> {
+        let (restarted, lines) = lines_since(roots, path, offset)?;
+        Ok((lines.flatten().collect(), restarted))
+    }
+
     /// What [`read_lines`] returns, with its bytes as text.
     fn lines(f: &Fixture, offset: &mut u64) -> io::Result<(String, bool)> {
         let (bytes, restarted) = read_lines(std::slice::from_ref(&f.root), &f.log, offset)?;
@@ -350,6 +369,35 @@ mod tests {
         append(&f.log, &format!("\n{}", said("after")));
         let (text, _) = lines(&f, &mut offset).unwrap();
         assert!(text.ends_with(&said("after")));
+    }
+
+    #[test]
+    fn a_transcript_longer_than_the_limit_is_counted_from_its_last_lines() {
+        let f = fixture();
+        // Lines of 1 KiB, one output token each, 16 more than the limit holds.
+        const SIZE: usize = 1024;
+        let kept = READ_LIMIT as usize / SIZE;
+        let spent = |n: usize| {
+            let record = turn(
+                Some(&format!("m{n}")),
+                json!({"input_tokens": 10, "output_tokens": 1}),
+            );
+            format!("{:<width$}\n", record.to_string(), width = SIZE - 1)
+        };
+        let text: String = (0..kept + 16).map(spent).collect();
+        append(&f.log, &text);
+        let mut usage = Usage::default();
+        let message = usage.read("s", std::slice::from_ref(&f.root), &f.log);
+        assert_eq!(
+            message,
+            Some(Control::AgentUsage {
+                id: "s".into(),
+                context_tokens: 10,
+                context_limit: CONTEXT_LIMIT,
+                output_tokens: kept as u64,
+            })
+        );
+        assert_eq!(usage.offset, text.len() as u64);
     }
 
     #[cfg(unix)]
