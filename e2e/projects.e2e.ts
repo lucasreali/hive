@@ -58,12 +58,15 @@ test("the folder kind select opens the app's own list over the dialog", async ({
   const dialog = page.getByRole("dialog", { name: "Add project" });
   const kind = dialog.getByRole("combobox", { name: "Folder kind" });
   await expect(kind).toHaveText("WSL");
-  await expect(kind).toHaveCSS("cursor", "pointer");
+  // macOS shows the arrow over controls (18.36).
+  const pointer =
+    (await page.locator("html").getAttribute("data-mac")) === null ? "pointer" : "default";
+  await expect(kind).toHaveCSS("cursor", pointer);
 
   await kind.click();
   const list = page.getByRole("listbox", { name: "Folder kind" });
   const windows = list.getByRole("option", { name: "Windows" });
-  await expect(windows).toHaveCSS("cursor", "pointer");
+  await expect(windows).toHaveCSS("cursor", pointer);
   // Under the trigger, and on top: nothing of the dialog covers or clips it.
   const trigger = await kind.boundingBox();
   const box = await list.boundingBox();
