@@ -479,6 +479,14 @@ test("Option as Meta is a macOS setting, off by default", async () => {
   expect(input("Option as Meta").checked).toBe(true);
 });
 
+test("Screen reader is off by default and turns on", async () => {
+  open();
+  expect(input("Screen reader").checked).toBe(false);
+  fireEvent.click(input("Screen reader"));
+  await waitFor(() => expect(settings().terminal.screen_reader).toBe(true));
+  expect(input("Screen reader").checked).toBe(true);
+});
+
 test("about shows both versions, the service's diagnostics and terminals without hooks", async () => {
   open();
   const ask = spyOn(transport, "getDiagnostics");

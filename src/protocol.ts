@@ -489,6 +489,8 @@ export type Settings = {
     copy_on_select: boolean;
     /** macOS: Option is Meta (Esc + key) rather than the key that types accents (17.14). */
     option_as_meta: boolean;
+    /** xterm's screen reader mode, for VoiceOver (18.37). */
+    screen_reader: boolean;
     /** New terminals' shell when the service runs natively on Windows; ignored elsewhere. */
     shell: "default" | "cmd" | "git_bash";
   };

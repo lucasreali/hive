@@ -399,6 +399,63 @@ async fn zsh_history_goes_to_the_user_file() {
     }
 }
 
+/// zsh marks its commands with OSC 133 through Hive's `.zshrc` (18.40), so a long one
+/// raises `command_finished`; a user config that already marks gets no second set of hooks.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn zsh_marks_its_commands_unless_the_user_config_does() {
+    let user_marks = "preexec() { print -n '\\e]133;C\\a' }\n\
+                      precmd() { print -n \"\\e]133;D;$?\\a\" }\n";
+    let user_hooks = "autoload -Uz add-zsh-hook\n\
+                      c() { print -n '\\e]133;C\\a' }\n\
+                      d() { print -n \"\\e]133;D;$?\\a\" }\n\
+                      add-zsh-hook preexec c\nadd-zsh-hook precmd d\n";
+    // Strict options, and a precmd hook before Hive's that changes `$?`.
+    let strict =
+        "setopt nounset\nautoload -Uz add-zsh-hook\nf() { false }\nadd-zsh-hook precmd f\n";
+    let cases = [
+        ("", "1"),
+        (user_marks, "0"),
+        (user_hooks, "0"),
+        (strict, "1"),
+    ];
+    for (rc, hooks) in cases {
+        let env = Env::new();
+        let home = env.path("home");
+        std::fs::write(home.join(".zshrc"), rc).unwrap();
+        let child = env
+            .hive()
+            .env("SHELL", "/bin/zsh")
+            .arg("daemon")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut daemon = crate::common::Daemon(child);
+        wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+        let mut app = env.connect(Role::App).await;
+        let mut settings = hive_protocol::Settings::default();
+        settings.notifications.command_secs = 1;
+        let set = Control::SetSettings {
+            settings: settings.clone(),
+        };
+        app.send(0, set).await;
+        assert_eq!(app.control().await, (0, Control::Settings { settings }));
+        app.open_terminal(1, &home).await;
+        app.input(1, "echo \"hive=${+functions[_hive_precmd]}.\"\r")
+            .await;
+        let seen = app.output_until(1, &format!("hive={hooks}.")).await;
+        assert!(!seen.contains("not set"), "user rc: {rc:?}: {seen:?}");
+        app.input(1, "sleep 1.2; (exit 3)\r").await;
+        let finished = Control::CommandFinished {
+            exit: Some(3),
+            secs: 1,
+        };
+        assert_eq!(next_mark(&mut app).await, (1, finished), "user rc: {rc:?}");
+        drop(app);
+        assert!(daemon.wait_exit().success(), "user rc: {rc:?}");
+    }
+}
+
 /// Bytes of terminal `channel`'s output read until at least `enough` came, or none for 1 s.
 async fn read_output(app: &mut crate::common::Conn, channel: u32, enough: usize) -> usize {
     let mut bytes = 0;

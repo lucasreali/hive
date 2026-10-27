@@ -317,6 +317,21 @@ const FIELDS: Field[] = [
   },
   {
     section: "Terminal",
+    label: "Screen reader",
+    check: true,
+    help: "Lets VoiceOver and other screen readers read the terminal's text.",
+    control: () => (
+      <Toggle
+        label="Screen reader"
+        get={(s) => s.terminal.screen_reader}
+        set={(s, on) => {
+          s.terminal.screen_reader = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Terminal",
     label: "Shell",
     help: "PowerShell is pwsh when installed, else Windows PowerShell. For new terminals.",
     windows: true,
@@ -378,7 +393,8 @@ const FIELDS: Field[] = [
     label: "Long commands (seconds)",
     help:
       "0 to 3600, 0 never: a command that ran this long notifies when it ends, in a terminal " +
-      "with no agent and not in view. Needs a shell that marks its commands (OSC 133), as fish 4 does.",
+      "with no agent and not in view. " +
+      "Needs a shell that marks its commands (OSC 133), as fish 4 does and zsh does in Hive.",
     control: (id, label) => (
       <NumberSetting
         id={id}
