@@ -472,7 +472,12 @@ mod tests {
         let mut registry = Registry::new().unwrap();
         registry.follow(&[], &roots(&[&group]));
         // Let FSEvents' stream start before the first change.
-        while changes(&mut registry).await {}
+        // Bounded, so a mutant that sees every event cannot loop forever.
+        for _ in 0..10 {
+            if !changes(&mut registry).await {
+                break;
+            }
+        }
         // Files written deep in a repository of the group.
         let src = group.join("r0/src");
         std::fs::create_dir(&src).unwrap();
