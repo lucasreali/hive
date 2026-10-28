@@ -363,10 +363,10 @@ mod tests {
         registry.follow(&roots(&[&a]), &groups);
         // A missing group folder is not watched; one is, once (on Linux the folders in it too,
         // not its files).
-        let mut expected = BTreeSet::from([a.join(".git"), group.clone()]);
-        if cfg!(target_os = "linux") {
-            expected.insert(entry.clone());
-        }
+        #[cfg(target_os = "linux")]
+        let expected = BTreeSet::from([a.join(".git"), group.clone(), entry.clone()]);
+        #[cfg(not(target_os = "linux"))]
+        let expected = BTreeSet::from([a.join(".git"), group.clone()]);
         assert_eq!(registry.watched, expected);
         use notify::event::{DataChange, RenameMode};
         let written = EventKind::Modify(ModifyKind::Data(DataChange::Any));
