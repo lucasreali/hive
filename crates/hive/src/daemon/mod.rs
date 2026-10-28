@@ -37,6 +37,7 @@ use crate::power;
 use crate::projects::{self, Projects};
 use crate::registry::Registry;
 use crate::scripts::{self, Ports};
+use crate::session_watch;
 use crate::sessions::{self, Sessions};
 use crate::settings;
 use crate::spaces::Spaces;
@@ -175,6 +176,7 @@ async fn serve(
     let every = health::interval(std::env::var_os(health::INTERVAL_MS).as_deref());
     let health = tokio::spawn(watch_health(state.clone(), every));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
+    let logs = tokio::spawn(watch_sessions(state.clone(), session_watch::Watch::new()));
     let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
     let ended = async {
@@ -197,7 +199,7 @@ async fn serve(
     drop(listener);
     hold.release();
     let files = state.watching.lock().await.take().map(|files| files.task);
-    for task in [watcher, health, registry].into_iter().chain(files) {
+    for task in [watcher, health, registry, logs].into_iter().chain(files) {
         stop(task).await;
     }
     // Before the terminals end (and their sessions with them): what to resume next time.
@@ -275,6 +277,8 @@ struct State {
     worktrees_sent: std::sync::Mutex<HashMap<String, Vec<Worktree>>>,
     /// Woken when the current space's projects change, so their registries are watched.
     refollow: tokio::sync::Notify,
+    /// Woken when the app asks for the sessions, so the accounts' Claude folders are watched.
+    sessions_follow: tokio::sync::Notify,
     /// Held while [`State::worktrees_changed`] lists and sends.
     changing: Mutex<()>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for when first needed (diagnostics,
@@ -332,6 +336,7 @@ impl State {
             owned: Default::default(),
             worktrees_sent: Default::default(),
             refollow: Default::default(),
+            sessions_follow: Default::default(),
             changing: Mutex::new(()),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
@@ -582,6 +587,38 @@ impl State {
     fn new_to_app(&self, reply: &Control) -> bool {
         !matches!(reply, Control::Sessions { .. })
             || self.listed().replace(reply.clone()).as_ref() != Some(reply)
+    }
+
+    /// Sends the sessions list, unless it is the one the app has.
+    fn list_sessions(self: &Arc<Self>) {
+        // Resume commands for the terminals' shell: native Windows' own, else POSIX.
+        #[cfg(windows)]
+        let shell = Some(self.settings.get().0.terminal.shell);
+        #[cfg(not(windows))]
+        let shell = None;
+        // Hive's terminals: their hooks name their sessions.
+        self.sessions(move |projects, sessions, mut running| {
+            // Claude keeps a record of each running `claude` beside its projects folder.
+            let records = sessions.records();
+            running.extend(procs::claude_sessions(procs::Source::System, &records));
+            let (mut sessions, truncated, error) = sessions.list(projects, &running);
+            for session in &mut sessions {
+                session.resume_command = crate::sessions::resume_command(session, shell);
+            }
+            Control::Sessions {
+                sessions,
+                error,
+                truncated,
+            }
+        })
+    }
+
+    /// Sends the sessions list again when it changed (D19.4), once the app has one: it asks
+    /// when its Sessions tab opens, and only changes are pushed after that.
+    fn sessions_changed(self: &Arc<Self>) {
+        if self.listed().is_some() {
+            self.list_sessions();
+        }
     }
 
     /// The sessions list the app has; `None` for a new app, or a reloaded UI (which asks for
@@ -916,6 +953,34 @@ async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
     }
 }
 
+/// Watches Claude's session logs of the current space's projects and its records of running
+/// `claude`s, in every account's folder (D19.4): the app gets the sessions list again when it
+/// changed, once per burst.
+async fn watch_sessions(state: Arc<State>, watch: io::Result<session_watch::Watch>) {
+    let mut watch = match watch {
+        Ok(watch) => watch,
+        // E.g. no inotify instance left: the list still comes when the app asks.
+        Err(err) => return eprintln!("hive: warning: cannot watch Claude's sessions: {err}"),
+    };
+    loop {
+        let sessions = state.accounts_sessions(None);
+        tokio::task::block_in_place(|| watch.follow(&sessions.roots(), &sessions.records()));
+        // A group's repositories lie in its folder, so its folder covers their logs.
+        let folders = || {
+            let projects = &state.projects;
+            projects
+                .roots()
+                .into_iter()
+                .chain(projects.groups())
+                .collect()
+        };
+        tokio::select! {
+            () = state.sessions_follow.notified() => {}
+            () = watch.changed(folders) => state.sessions_changed(),
+        }
+    }
+}
+
 fn error(err: io::Error) -> Control {
     Control::Error {
         message: err.to_string(),
@@ -998,6 +1063,34 @@ mod tests {
         // Not waited for: a watch that never yields (a broken `Registry::changed`) cannot
         // hold the test up.
         runtime.shutdown_background();
+    }
+
+    #[test]
+    fn the_sessions_watch_ends_only_without_a_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // It ends instead of waiting for changes forever.
+        let failed = Err(io::Error::other("no inotify"));
+        runtime.block_on(watch_sessions(state.clone(), failed));
+        // With a watcher it follows the accounts' folders (again when the app asks) until
+        // stopped.
+        state.sessions_follow.notify_one();
+        let watching = runtime.spawn(watch_sessions(state, session_watch::Watch::new()));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!watching.is_finished());
+        runtime.shutdown_background();
+    }
+
+    #[test]
+    fn a_changed_sessions_list_is_sent_only_to_an_app_that_has_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        // Without a runtime, listing (a spawned task) would panic.
+        state.sessions_changed();
     }
 
     #[test]

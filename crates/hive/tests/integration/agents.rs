@@ -627,9 +627,16 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
     }
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
+    // The list the service pushes when a log or a record changes (D19.4) is no answer.
     let mut ask = async |message: Control| {
+        let listing = message == Control::ListSessions;
         app.send(0, message).await;
-        app.control().await.1
+        loop {
+            match app.control().await.1 {
+                Control::Sessions { .. } if !listing => {}
+                answer => return answer,
+            }
+        }
     };
     // Only the followed projects' sessions.
     assert_eq!(
@@ -713,27 +720,34 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
 
     // A running session is not deleted.
     app.open_terminal(1, &repo.root).await;
-    hook(
+    let mut seen = hook(
         &repo,
         &mut app,
         "1",
         "SessionStart",
         json!({"session_id": "s", "cwd": root}),
     )
-    .await;
-    // A session its hooks name runs, in Hive's terminal; the others do not.
-    app.send(0, Control::ListSessions).await;
-    let sessions = loop {
-        if let (0, Control::Sessions { sessions, .. }) = app.control().await {
-            break sessions;
+    .await
+    .into_iter();
+    // A session its hooks name runs, in Hive's terminal; the others do not. The app has a
+    // list, so the changed one comes without asking (the record's change may come first).
+    let expected = [(outside, false), ("old", false), ("s", true)];
+    loop {
+        let next = match seen.next() {
+            Some(message) => message,
+            None => app.control().await,
+        };
+        let (0, Control::Sessions { sessions, .. }) = next else {
+            continue;
+        };
+        let mut running: Vec<_> = (sessions.iter())
+            .map(|s| (s.id.as_str(), s.running))
+            .collect();
+        running.sort();
+        if running == expected {
+            break;
         }
-    };
-    let mut running: Vec<_> = sessions
-        .iter()
-        .map(|s| (s.id.as_str(), s.running))
-        .collect();
-    running.sort();
-    assert_eq!(running, [(outside, false), ("old", false), ("s", true)]);
+    }
     // Unchanged, the list is not sent again.
     app.send(0, Control::ListSessions).await;
     let locate = Control::LocateSession {
@@ -789,6 +803,48 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
         }
     };
     assert_eq!(again, sessions);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn a_new_log_reaches_the_app_without_a_request() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let folder: String = (root.chars())
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let projects = repo.env.path("home/.claude/projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    loop {
+        if let Control::ProjectAdded { .. } = app.control().await.1 {
+            break;
+        }
+    }
+    // The app asks once (its Sessions tab opens)…
+    app.send(0, Control::ListSessions).await;
+    loop {
+        if let Control::Sessions { sessions, .. } = app.control().await.1 {
+            assert_eq!(sessions, []);
+            break;
+        }
+    }
+    // …and a session started later (its log folder new too) comes without asking.
+    let logs = projects.join(folder);
+    std::fs::create_dir(&logs).unwrap();
+    let line = json!({"type": "user", "cwd": root, "message": {"content": "later"}});
+    std::fs::write(logs.join("new.jsonl"), format!("{line}\n")).unwrap();
+    let sessions = loop {
+        if let Control::Sessions { sessions, .. } = app.control().await.1 {
+            break sessions;
+        }
+    };
+    let ids: Vec<_> = sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["new"]);
     drop(app);
     assert!(daemon.wait_exit().success());
 }

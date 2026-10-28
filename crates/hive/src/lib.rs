@@ -32,6 +32,7 @@ pub mod pulls;
 pub mod registry;
 pub mod scripts;
 pub mod search;
+pub mod session_watch;
 pub mod sessions;
 pub mod settings;
 pub mod spaces;

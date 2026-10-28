@@ -768,6 +768,11 @@ export function createMockTransport(
     return `in use by ${ids.map(([id]) => `fish (${id})`).join(", ")}: close its terminals first`;
   };
   let sessions = MOCK_SESSIONS;
+  /** Sends the current space's sessions, as the service does when asked or when they change. */
+  const listSessions = () => {
+    const shown = sessions.filter((x) => space(current)?.projects.includes(x.project));
+    later({ type: "sessions", sessions: shown, error: null, truncated: false });
+  };
   /** The agent of the last OS notification (13.5). */
   let notified: string | null = null;
   /** The last menu bar icon sent (17.22). */
@@ -1172,9 +1177,7 @@ export function createMockTransport(
       later(changes(projects, path, base));
     },
     async listSessions() {
-      // Only the current space's.
-      const shown = sessions.filter((x) => space(current)?.projects.includes(x.project));
-      later({ type: "sessions", sessions: shown, error: null, truncated: false });
+      listSessions();
     },
     async locateSession(id, target) {
       const found = sessions.find((x) => x.id === id);
@@ -1191,6 +1194,8 @@ export function createMockTransport(
       }
       sessions = sessions.filter((x) => x.id !== id);
       later({ type: "session_deleted", id });
+      // As the service does when a log goes (D19.4).
+      listSessions();
     },
     async searchFiles(worktree, query) {
       const answer = { worktree, query, truncated: false };
