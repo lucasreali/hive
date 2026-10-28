@@ -96,19 +96,19 @@ impl Registry {
         wanted.extend(recursive.iter().cloned());
         // Linux: the folders directly in each group, and nothing recursively (module's doc).
         #[cfg(target_os = "linux")]
-        let recursive = {
-            wanted.extend(groups.iter().flat_map(|g| subfolders(g)));
-            BTreeSet::<PathBuf>::new()
-        };
+        wanted.extend(groups.iter().flat_map(|g| subfolders(g)));
         *self.groups.lock().unwrap_or_else(PoisonError::into_inner) = groups;
         let gone = self.watched.iter().filter(|dir| !wanted.contains(*dir));
         // Unwatching fails when the directory is gone, which removed its watch already.
         let unwatch = gone.map(PathOp::unwatch);
         let added: Vec<PathBuf> = wanted.difference(&self.watched).cloned().collect();
+        #[cfg(not(target_os = "linux"))]
         let watch = added.iter().map(|dir| match recursive.contains(dir) {
             true => PathOp::watch_recursive(dir),
             false => PathOp::watch_non_recursive(dir),
         });
+        #[cfg(target_os = "linux")]
+        let watch = added.iter().map(PathOp::watch_non_recursive);
         // ponytail: a watcher that fails (FSEvents only: its stream does not restart) leaves
         // the registry unwatched until the next follow; report it if that ever shows.
         let watcher = &mut self.watcher;
