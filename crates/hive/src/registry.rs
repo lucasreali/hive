@@ -9,6 +9,10 @@
 //! where each linked worktree has an entry. A worktree folder deleted by hand leaves the
 //! registry as it was: it shows as gone on the next list (git marks it prunable).
 //!
+//! Each linked worktree's entry in `worktrees/` is watched too, and with the common git dir
+//! that holds each worktree's `HEAD`: a branch switched by hand (`git switch` in a terminal)
+//! lists the worktrees again (19.5), which the health tick no longer does.
+//!
 //! Each group's folder (14.1) is watched once, recursively (D19.2): an entry made, removed or
 //! renamed in it, or a `.git` in one of its folders, may be a repository joining or leaving the
 //! group. Only those events and the registries' leave the watcher's thread ([`wanted`]), so a
@@ -43,6 +47,8 @@ const EVENT_QUEUE: usize = 256;
 
 /// The name of git's registry of linked worktrees, inside the common git dir.
 const WORKTREES: &str = "worktrees";
+/// The file naming a worktree's branch (or commit), in its git dir.
+const HEAD: &str = "HEAD";
 
 pub struct Registry {
     watcher: RecommendedWatcher,
@@ -50,6 +56,9 @@ pub struct Registry {
     /// Watched directories: common git dirs and their `worktrees/`, canonical, and groups'
     /// folders.
     watched: BTreeSet<PathBuf>,
+    /// The git dirs whose `HEAD` counts: each common git dir and each entry of its
+    /// `worktrees/` (19.5).
+    heads: BTreeSet<PathBuf>,
     /// The groups' folders followed (14.1), where a repository may appear or go; shared with
     /// the watcher's thread, which drops the events deeper in them.
     groups: Arc<Mutex<BTreeSet<PathBuf>>>,
@@ -74,22 +83,28 @@ impl Registry {
             watcher,
             events,
             watched: BTreeSet::new(),
+            heads: BTreeSet::new(),
             groups,
             burst: None,
         })
     }
 
-    /// Watches the registries of the repositories at `roots` and the folders of `groups` (14.1),
-    /// and no others. A folder whose git dir cannot be read is skipped. Blocks on git.
+    /// Watches the registries of the repositories at `roots` with their worktrees' git dirs,
+    /// and the folders of `groups` (14.1), and no others. A folder whose git dir cannot be read
+    /// is skipped. Blocks on git.
     pub fn follow(&mut self, roots: &[String], groups: &[String]) {
         let mut wanted = BTreeSet::new();
+        let mut heads = BTreeSet::new();
         for common in roots.iter().filter_map(|root| common_dir(Path::new(root))) {
             let worktrees = common.join(WORKTREES);
             if worktrees.is_dir() {
+                heads.extend(subfolders(&worktrees));
                 wanted.insert(worktrees);
             }
-            wanted.insert(common);
+            heads.insert(common);
         }
+        wanted.extend(heads.iter().cloned());
+        self.heads = heads;
         let groups: BTreeSet<PathBuf> = groups.iter().map(PathBuf::from).collect();
         let recursive: BTreeSet<PathBuf> =
             groups.iter().filter(|dir| dir.is_dir()).cloned().collect();
@@ -169,21 +184,22 @@ impl Registry {
         event.paths.is_empty() || paths.any(|path| self.counts(path) || group(path))
     }
 
-    /// Whether a change to `path` counts: `worktrees/` in a common git dir, or an entry in it.
-    /// The rest of the git dir (`index`, `HEAD`, locks…) changes all the time.
+    /// Whether a change to `path` counts: `worktrees/` in a common git dir, an entry in it,
+    /// or a worktree's `HEAD`. The rest of the git dir (`index`, locks…) changes all the time.
     fn counts(&self, path: &Path) -> bool {
         let Some(dir) = path.parent() else {
             return false;
         };
         let name = OsStr::new(WORKTREES);
-        self.watched.contains(dir)
+        let head = self.heads.contains(dir) && path.file_name() == Some(OsStr::new(HEAD));
+        head || self.watched.contains(dir)
             && (dir.file_name() == Some(name) || path.file_name() == Some(name))
     }
 }
 
 /// Whether the watcher's thread passes `event` on: not an access, and not only paths deep in a
 /// group's folder, where a repository's files and git objects churn; the registries' paths
-/// (`worktrees/` and its entries) pass wherever they are.
+/// (`worktrees/` and its entries) and the worktrees' `HEAD` (19.5) pass wherever they are.
 fn wanted(groups: &Mutex<BTreeSet<PathBuf>>, event: &notify::Result<Event>) -> bool {
     let Ok(event) = event else { return true };
     if event.kind.is_access() {
@@ -194,7 +210,13 @@ fn wanted(groups: &Mutex<BTreeSet<PathBuf>>, event: &notify::Result<Event>) -> b
         let name = Some(OsStr::new(WORKTREES));
         path.file_name() == name || path.parent().and_then(Path::file_name) == name
     };
-    let kept = |path: &PathBuf| in_group(&groups, path) != Some(false) || registry(path);
+    let head = |path: &Path| {
+        let dir = path.parent();
+        path.file_name() == Some(OsStr::new(HEAD))
+            && dir.is_some_and(|dir| dir.file_name() == Some(OsStr::new(".git")) || registry(dir))
+    };
+    let kept =
+        |path: &PathBuf| in_group(&groups, path) != Some(false) || registry(path) || head(path);
     event.paths.is_empty() || event.paths.iter().any(kept)
 }
 
@@ -205,11 +227,11 @@ fn in_group(groups: &BTreeSet<PathBuf>, path: &Path) -> Option<bool> {
     Some(depth <= 1 || depth == 2 && path.file_name() == Some(OsStr::new(".git")))
 }
 
-/// The folders (not links) directly in the group folder `group`, as many as a group's
-/// repositories are looked for among ([`crate::projects::GROUP_ENTRIES`]).
-#[cfg(target_os = "linux")]
-fn subfolders(group: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(group) else {
+/// The folders (not links) directly in `dir` (a group's folder on Linux, or a `worktrees/`),
+/// as many as a group's repositories are looked for among
+/// ([`crate::projects::GROUP_ENTRIES`]).
+fn subfolders(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let entries = entries.take(crate::projects::GROUP_ENTRIES).flatten();
@@ -287,7 +309,8 @@ mod tests {
         // from a linked worktree, the registry is the main one's.
         run_git(&a, &["worktree", "add", "-q", "../wt-a"]);
         registry.follow(&roots(&[&a, &a.join("../wt-a")]), &[]);
-        let expected = BTreeSet::from([git(&a), git(&a).join(WORKTREES)]);
+        let worktrees = git(&a).join(WORKTREES);
+        let expected = BTreeSet::from([git(&a), worktrees.join("wt-a"), worktrees]);
         assert_eq!(registry.watched, expected);
 
         // A project no longer followed is no longer watched.
@@ -328,8 +351,13 @@ mod tests {
             (worktrees.as_path(), true),
             (&worktrees.join("wt"), true),
             (&common.join("index"), false),
-            (&common.join("HEAD"), false),
-            (&worktrees.join("wt/HEAD"), false),
+            // A branch switched by hand, in the main worktree or a linked one (19.5).
+            (&common.join("HEAD"), true),
+            (&worktrees.join("wt/HEAD"), true),
+            (&common.join("HEAD.lock"), false),
+            (&worktrees.join("wt/index"), false),
+            (&worktrees.join("wt/refs/HEAD"), false),
+            (&a.join("HEAD"), false),
             (&a.join("worktrees"), false),
             (Path::new("/"), false),
         ] {
@@ -342,7 +370,8 @@ mod tests {
         // A `worktrees/` removed lost its watch, and is watched again once it is back.
         let removed = EventKind::Remove(RemoveKind::Folder);
         assert!(registry.saw(event(removed, &[&worktrees])));
-        assert_eq!(registry.watched, BTreeSet::from([common.clone()]));
+        let left = BTreeSet::from([common.clone(), worktrees.join("wt")]);
+        assert_eq!(registry.watched, left);
         registry.follow(&roots(&[&a]), &[]);
         assert!(registry.watched.contains(&worktrees));
         // Other changes leave the watches alone.
@@ -419,7 +448,12 @@ mod tests {
             // The registries pass wherever they are.
             (group.join("repo/.git/worktrees"), true),
             (group.join("repo/.git/worktrees/wt"), true),
-            (group.join("repo/.git/worktrees/wt/HEAD"), false),
+            // So do the worktrees' `HEAD` (19.5), and only theirs.
+            (group.join("repo/.git/HEAD"), true),
+            (group.join("repo/.git/worktrees/wt/HEAD"), true),
+            (group.join("repo/.git/worktrees/wt/index"), false),
+            (group.join("repo/.git/refs/HEAD"), false),
+            (group.join("repo/src/HEAD"), false),
             // The nearest group counts: a group inside another one.
             (inner.join("lib"), true),
             (inner.join("lib/.git"), true),
@@ -446,6 +480,16 @@ mod tests {
             std::fs::create_dir_all(group.join(format!("r{i}/.git"))).unwrap();
         }
         (tmp, group)
+    }
+
+    #[test]
+    fn subfolders_are_the_folders_directly_in_a_folder_and_none_in_a_missing_one() {
+        let (tmp, group) = group_of(2);
+        std::fs::write(group.join("file"), "").unwrap();
+        let mut found = subfolders(&group);
+        found.sort();
+        assert_eq!(found, [group.join("r0"), group.join("r1")]);
+        assert!(subfolders(&tmp.path().join("missing")).is_empty());
     }
 
     #[cfg(not(target_os = "linux"))]

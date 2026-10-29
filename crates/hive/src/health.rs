@@ -89,6 +89,10 @@ fn read(dir: &Path, base: Option<&str>, totals: Option<Totals>) -> io::Result<Wo
 /// fails or times out leaves the files counted, with no lines: it never hides the status.
 fn count(dir: &Path) -> io::Result<Totals> {
     let entries = changes::parse_status(&git(dir, &changes::STATUS)?);
+    // A clean worktree has no lines to count: `git diff` is not run (19.5).
+    if entries.is_empty() {
+        return Ok(Totals::default());
+    }
     let Ok(numstat) = git(dir, &changes::numstat("HEAD")) else {
         return Ok(Totals {
             files: entries.len() as u64,

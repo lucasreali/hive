@@ -452,24 +452,27 @@ impl State {
     }
 
     /// Gives the worktrees of the projects in a reply their status (git, so on a blocking
-    /// thread), remembered as sent.
+    /// thread), remembered as sent. A list of every space's projects gets only the current
+    /// space's (D19.3): no view shows another's, which a space switch refreshes.
     fn with_health(&self, reply: &mut Control) {
-        let projects = match reply {
+        let (projects, every) = match reply {
             Control::Projects { projects } => {
                 // Every project the app has.
                 self.worktrees_sent().clear();
-                projects.as_mut_slice()
+                (projects.as_mut_slice(), true)
             }
             Control::ProjectAdded { project }
             | Control::WorktreeCreated { project, .. }
             | Control::WorktreeRemoved { project, .. }
-            | Control::WorktreeRenamed { project, .. } => std::slice::from_mut(project),
+            | Control::WorktreeRenamed { project, .. } => (std::slice::from_mut(project), false),
             _ => return,
         };
         for project in projects {
             self.worktrees_sent()
                 .insert(project.id.clone(), project.worktrees.clone());
-            health::fill(project);
+            if !every || self.projects.in_current(project) {
+                health::fill(project);
+            }
             let mut sent = self.sent();
             for w in &project.worktrees {
                 sent.changed(&w.path, &w.status);
@@ -477,11 +480,11 @@ impl State {
         }
     }
 
-    /// Sends `worktree_status` for every followed worktree whose status is not the one the
-    /// app has.
+    /// Sends `worktree_status` for every worktree of the current space (D19.3) whose status is
+    /// not the one the app has.
     async fn refresh_health(&self) {
         let changed =
-            tokio::task::block_in_place(|| self.health_changed(&self.projects.list(), None));
+            tokio::task::block_in_place(|| self.health_changed(&self.projects.current(), None));
         for message in changed {
             self.to_app(0, &message).await;
         }
@@ -851,8 +854,8 @@ async fn watch_health(state: Arc<State>, interval: std::time::Duration) {
             let _ = visible.wait_for(|visible| *visible).await;
             ticks.reset();
         }
-        // Worktrees changed by hand (e.g. a branch switched) show within a tick.
-        state.projects.forget();
+        // The worktrees as last listed: git's registry and each worktree's `HEAD` tell when
+        // they change (`watch_registry`), so the tick does not list them again (19.5).
         state.refresh_health().await;
     }
 }
@@ -909,6 +912,7 @@ async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
         Err(err) => return eprintln!("hive: warning: cannot watch git's worktrees: {err}"),
     };
     let mut started = false;
+    let mut refollowed = false;
     loop {
         let (roots, groups) = (state.projects.roots(), state.projects.groups());
         // Before listing, so a change made meanwhile is seen next time.
@@ -918,11 +922,16 @@ async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
         if started {
             state.worktrees_changed().await;
         }
-        started = true;
-        tokio::select! {
-            () = state.refollow.notified() => {}
-            () = registry.changed() => {}
+        // A space switched to gets its health (D19.3); a status the projects just sent
+        // carried is not sent again.
+        if refollowed {
+            state.refresh_health().await;
         }
+        started = true;
+        refollowed = tokio::select! {
+            () = state.refollow.notified() => true,
+            () = registry.changed() => false,
+        };
     }
 }
 
@@ -1094,9 +1103,13 @@ mod tests {
         assert_eq!(next(&mut sent).await, 1);
         std::fs::remove_file(root.join("new")).unwrap();
         assert_eq!(next(&mut sent).await, 0);
-        // A worktree made behind Hive's back is listed again on a tick (9.14).
+        // A worktree made behind Hive's back is not listed by a tick (19.5)…
         let added = crate::paths::canonical(dir.path()).unwrap().join("w");
         git(&["worktree", "add", "-q", "-b", "w", added.to_str().unwrap()]);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(sent.try_recv().is_err(), "listed by a tick");
+        // …but once git's registry says the worktrees changed (`watch_registry`).
+        state.projects.forget();
         let frame = tokio::time::timeout(std::time::Duration::from_secs(10), sent.recv());
         let control = frame.await.expect("no status").unwrap().to_control();
         let json = serde_json::to_value(control.unwrap()).unwrap();

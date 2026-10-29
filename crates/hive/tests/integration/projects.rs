@@ -688,9 +688,8 @@ async fn the_health_check_runs_no_git_while_the_window_is_hidden() {
     let mut daemon = repo.env.daemon_with(&mut hive);
     let mut conn = repo.env.connect(Role::App).await;
     added(&mut conn, &repo.root.display().to_string()).await;
-    // Each tick lists the worktrees again. (No request may list them meanwhile: once a tick
-    // forgot them, it would list them too.)
-    let ticks = || git.count("worktree list");
+    // Each tick reads each worktree's last commit.
+    let ticks = || git.count("--format=%ct");
     let view = |visible| {
         let (terminal, focused) = (None, false);
         Control::View {
@@ -716,6 +715,101 @@ async fn the_health_check_runs_no_git_while_the_window_is_hidden() {
     tokio::time::sleep(every / 4).await;
     assert_eq!(ticks(), hidden + 1);
     wait_until(|| ticks() > hidden + 1);
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}
+
+/// Follows a second repository, `other`, in the default space and `repo` in a new space,
+/// "Work", the current one; their ids, `repo`'s first.
+async fn in_two_spaces(repo: &Repo, conn: &mut Conn) -> (String, String) {
+    let other = repo.env.path("home/other");
+    std::fs::create_dir(&other).unwrap();
+    repo.git_in(&other, &["init", "-q", "-b", "main"]);
+    repo.git_in(&other, &["commit", "-q", "--allow-empty", "-m", "o"]);
+    let other = other.canonicalize().unwrap().display().to_string();
+    let root = repo.root.display().to_string();
+    added(conn, &other).await;
+    let create = Control::CreateSpace {
+        name: "Work".into(),
+        env: hive_protocol::SpaceEnv::default(),
+    };
+    conn.send(0, create).await;
+    conn.any_control().await;
+    added(conn, &root).await;
+    (root, other)
+}
+
+/// The git a tick runs (19.5): per worktree of the current space only (D19.3), with no
+/// `git worktree list` and, for a clean worktree, no `git diff`. Before, every 30 s: a list per
+/// project and up to 4 git per worktree of every space. A branch switched by hand still shows,
+/// from the worktree's `HEAD` watched in the registry.
+#[tokio::test]
+async fn the_health_tick_runs_git_for_the_current_space_only_and_lists_nothing() {
+    let repo = Repo::new();
+    let git = repo.env.counting_git();
+    let every = std::time::Duration::from_millis(1000);
+    let mut hive = repo.env.hive();
+    hive.env("PATH", git.path())
+        .env(hive::health::INTERVAL_MS, every.as_millis().to_string());
+    let mut daemon = repo.env.daemon_with(&mut hive);
+    let mut conn = repo.env.connect(Role::App).await;
+    let (root, _) = in_two_spaces(&repo, &mut conn).await;
+
+    // Counted between ticks: a tick runs right after the last commit's time is read, and
+    // takes far less than half an interval.
+    let ticks = || git.count("--format=%ct");
+    let between = |at: usize| {
+        wait_until(|| ticks() > at);
+        std::thread::sleep(every / 2);
+        (ticks(), git.count(""))
+    };
+    let (start, calls) = between(ticks());
+    let (end, after) = between(start + 2);
+    let n = end - start;
+    assert!(n >= 3, "{n} ticks");
+    // `root`'s one worktree, clean: its last commit and its status, nothing else.
+    assert_eq!(after - calls, 2 * n, "{n} ticks");
+    // Not even when the projects were added: their worktrees were clean.
+    assert_eq!(git.count("diff"), 0);
+
+    // A branch switched by hand shows without any tick listing the worktrees.
+    repo.git(&["switch", "-q", "-c", "feature"]);
+    let feature = Some("feature".to_owned());
+    loop {
+        if let (_, Control::Projects { projects }) = conn.control().await
+            && (projects.iter()).any(|p| p.id == root && p.worktrees[0].branch == feature)
+        {
+            break;
+        }
+    }
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+}
+
+/// Another space's worktrees get no status (D19.3), until that space is switched to.
+#[tokio::test]
+async fn a_space_switched_to_gets_its_health() {
+    let repo = Repo::new();
+    // The 30 s tick runs once, at the start: a later status comes from the switch.
+    let mut daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    let (root, other) = in_two_spaces(&repo, &mut conn).await;
+    std::fs::write(format!("{other}/new.txt"), "x\n").unwrap();
+
+    let projects = list(&mut conn).await;
+    let status = |id: &str| {
+        let project = projects.iter().find(|p| p.id == id).unwrap();
+        project.worktrees[0].status.clone()
+    };
+    assert!(status(&root).is_some(), "the current space's");
+    assert_eq!(status(&other), None, "another space's");
+
+    let default = Control::SelectSpace {
+        id: "default".into(),
+    };
+    conn.send(0, default).await;
+    let status = conn.worktree_status(&other).await.expect("a status");
+    assert_eq!((status.changes, status.added), (1, 1));
     drop(conn);
     assert!(daemon.wait_exit().success());
 }

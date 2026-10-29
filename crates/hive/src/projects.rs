@@ -31,7 +31,7 @@ pub struct Projects {
     /// One lock per project, held while git lists it (9.20).
     listed: Mutex<HashMap<String, Arc<Mutex<Option<Project>>>>>,
     /// Each group's repositories as its folder was last read ([`scan`], 14.1), or why it could
-    /// not be, until [`Projects::forget`] (its folder's watch, the health tick): a slow folder
+    /// not be, until [`Projects::forget`] (its folder's watch): a slow folder
     /// never slows every list.
     scanned: Mutex<HashMap<String, Result<Vec<String>, String>>>,
     /// The Claude config folders the file's spaces had before accounts (12.2), with their
@@ -166,7 +166,7 @@ impl Projects {
         slot.get_or_insert_with(|| project(id)).clone()
     }
 
-    /// Forgets every project's worktrees: they changed, or may have (the health tick). The
+    /// Forgets every project's worktrees: they changed, or may have (git's registry, a `HEAD`). The
     /// next request lists them again.
     pub fn forget(&self) {
         (self.listed.lock().unwrap_or_else(PoisonError::into_inner)).clear();
@@ -201,6 +201,12 @@ impl Projects {
         let (paths, _) = self.spaces().current();
         let entries = self.entries(&paths);
         entries.into_iter().map(|e| self.build(e)).collect()
+    }
+
+    /// Whether `project` is in the current space (a group's repository is in its group's).
+    pub fn in_current(&self, project: &Project) -> bool {
+        let (paths, _) = self.spaces().current();
+        paths.contains(project.parent.as_ref().unwrap_or(&project.id))
     }
 
     /// The current space's repository folders, its groups' too, without asking git.
