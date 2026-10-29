@@ -472,11 +472,10 @@ mod tests {
         let mut registry = Registry::new().unwrap();
         registry.follow(&[], &roots(&[&group]));
         // Let FSEvents' stream start before the first change.
-        // Bounded, so a mutant that sees every event cannot loop forever.
+        // Bounded, so a mutant that sees every event cannot loop forever; no wait after a quiet one.
+        let mut busy = true;
         for _ in 0..10 {
-            if !changes(&mut registry).await {
-                break;
-            }
+            busy = busy && changes(&mut registry).await;
         }
         // Files written deep in a repository of the group.
         let src = group.join("r0/src");
