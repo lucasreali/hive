@@ -736,11 +736,11 @@ export function createMockTransport(
     if (terminals.delete(id)) later({ type: "terminal_exited", channel: id, code });
   };
   // A stand-in for a `SessionStart` placed by `projects::place`: only an exact worktree path.
-  const detect = (id: number, terminal: MockTerminal) => {
+  const detect = (id: number, terminal: MockTerminal, session = `mock-session-${id}`) => {
     const cwd = terminal.cwd;
     const project = projects.find((p) => p.worktrees.some((w) => w.path === cwd));
     const worktree = project ? cwd : null;
-    terminal.agent = `mock-session-${id}`;
+    terminal.agent = session;
     const placed = { project: project?.id ?? null, worktree, cwd };
     later({ type: "agent_detected", channel: id, id: terminal.agent, ...placed });
     setState(terminal.agent, "idle");
@@ -1307,6 +1307,13 @@ export function createMockTransport(
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
         if (terminal.agent && line) setState(terminal.agent, "working", line);
         if (line === "claude") detect(id, terminal);
+        // `/clear` (20.3): Claude ends its session (`SessionEnd` "clear"), clears the screen and
+        // its scrollback, and starts a new session in the same process (`SessionStart` "clear").
+        if (terminal.agent && line === "/clear") {
+          later({ type: "agent_removed", channel: id, id: terminal.agent });
+          print(id, "\x1b[2J\x1b[3J\x1b[H");
+          detect(id, terminal, `${terminal.agent}-clear`);
+        }
         // `state <state>` then moves it there, as a hook would (the inbox's alerts, 6.5).
         const next = line.slice(6) as AgentState;
         if (terminal.agent && line.startsWith("state ") && URGENCY.includes(next)) {

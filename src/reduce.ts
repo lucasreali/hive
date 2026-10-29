@@ -16,7 +16,7 @@ import {
   within,
   withNotice,
 } from "./store";
-import { dropFile, editFor, fileKey, fileTabState, opened } from "./tabs";
+import { dropFile, editFor, fileKey, fileTabState, opened, tabsPlace } from "./tabs";
 import { type EditBuffer, failed, isDirty, isFor, saved } from "./viewer/buffer";
 
 // How service data enters the store: `apply` stores what the service sent without deriving
@@ -170,7 +170,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { [m.id]: ___, ...agentTitles } = s.agentTitles;
       const { [m.id]: ____, ...agentUsage } = s.agentUsage;
       const { [m.id]: _____, ...pendingSeen } = s.pendingSeen;
-      return { agents, agentStates, agentTitles, agentUsage, pendingSeen };
+      // A selected agent (the inbox, the palette) that ends, e.g. on `/clear` (20.3), leaves the
+      // place it showed selected, so its terminal stays shown.
+      const selection = s.selection === m.id ? tabsPlace(s) : s.selection;
+      return { agents, agentStates, agentTitles, agentUsage, pendingSeen, selection };
     }
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };

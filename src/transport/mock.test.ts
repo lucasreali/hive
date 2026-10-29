@@ -340,6 +340,25 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   ]);
 });
 
+test("/clear in an agent ends its session, clears the screen and starts a new session (20.3)", async () => {
+  const { transport, messages } = await connected();
+  const printed: string[] = [];
+  const decoder = new TextDecoder();
+  const id = await transport.openTerminal("/w", 80, 24, (b) => printed.push(decoder.decode(b)));
+  // Without an agent it is a line like any other.
+  await transport.writeTerminal(id, "/clear\rclaude\r/clear\r");
+  await tick();
+  const sessions = messages.flatMap((m) =>
+    m.type === "agent_detected" || m.type === "agent_removed" ? [[m.type, m.id]] : [],
+  );
+  expect(sessions).toEqual([
+    ["agent_detected", "mock-session-1"],
+    ["agent_removed", "mock-session-1"],
+    ["agent_detected", "mock-session-1-clear"],
+  ]);
+  expect(printed.filter((p) => p === "\x1b[2J\x1b[3J\x1b[H")).toHaveLength(1);
+});
+
 test("hive badge sets and clears the terminal's badge", async () => {
   const { transport, messages } = await connected();
   const id = await transport.openTerminal("/w", 80, 24, () => {});

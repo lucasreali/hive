@@ -3,8 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../../test/mac";
 import { App } from "../App";
-import type { ProgressState } from "../protocol";
+import type { Agent, ProgressState } from "../protocol";
 import { apply } from "../reduce";
+import { goToAgent } from "../shortcuts";
 import { addTab, initialState, select, setEdit, setOpenFile, useHive } from "../store";
 import * as tabsModule from "../tabs";
 import { closeTerminal, terminal } from "../terminals";
@@ -422,6 +423,26 @@ async function openShown() {
   const inside = document.querySelector(`[data-terminal="${id}"] .xterm-screen`) as HTMLElement;
   return { id, term: terminal(id) as Terminal, inside };
 }
+
+test("`/clear` in a selected agent's terminal keeps it shown and focused (20.3)", async () => {
+  const { id, term } = await openShown();
+  const host = document.querySelector(".terminal-host") as HTMLElement;
+  const place = { project: shop.id, worktree: fixLogin.id, cwd: fixLogin.path };
+  act(() => apply({ type: "agent_detected", channel: id, id: "old", ...place }));
+  // The inbox and the palette select the agent itself.
+  act(() => goToAgent(useHive.getState().agents.old as Agent));
+  term.focus();
+  const focused = document.activeElement;
+  expect(focused?.closest(`[data-terminal="${id}"]`)).not.toBeNull();
+  act(() => {
+    apply({ type: "agent_removed", channel: id, id: "old" });
+    apply({ type: "agent_detected", channel: id, id: "new", ...place });
+  });
+  expect(useHive.getState()).toMatchObject({ selection: fixLogin.id, activeTab: id });
+  expect(bar().getByRole("tab", { selected: true }).textContent).toContain("fix-login");
+  expect(host.hidden).toBe(false);
+  expect(document.activeElement).toBe(focused);
+});
 
 const paneMenu = () => screen.getByRole("menu", { name: "Terminal" });
 const paneItems = () =>
