@@ -411,12 +411,13 @@ function onTick(row: () => void) {
     clearInterval(clock.timer as number);
   };
 }
-export const useNow = () => useSyncExternalStore(onTick, () => clock.now);
+/** The time since `since`, as `elapsed` reads it: a row renders only when its text changes. */
+export const useElapsed = (since: number) =>
+  useSyncExternalStore(onTick, () => elapsed(since, clock.now));
 
 /** The time in the state and what it is doing (muted, after the state's name). */
 function Meta({ doing }: { doing: Doing }) {
-  const now = useNow();
-  const time = elapsed(doing.since_ms, now);
+  const time = useElapsed(doing.since_ms);
   return (
     <span className="state-meta">{doing.activity ? `${time} · ${doing.activity}` : time}</span>
   );
@@ -549,13 +550,13 @@ function AgentRow({
  * no row (the service's `subagent_worktrees`); its path is the line's tooltip.
  */
 function SubagentLine({ sub }: { sub: Subagent }) {
-  const now = useNow();
+  const time = useElapsed(sub.since_ms);
   return (
     <li className="subagent-line" title={sub.worktree ?? undefined}>
       <StateIcon state={sub.state} />
       <span className="subagent-type">{sub.agent_type ?? "subagent"}</span>
       {sub.activity && <span className="subagent-activity">{sub.activity}</span>}
-      <span className="subagent-time">{elapsed(sub.since_ms, now)}</span>
+      <span className="subagent-time">{time}</span>
     </li>
   );
 }
