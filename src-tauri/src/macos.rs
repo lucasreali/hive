@@ -1590,15 +1590,12 @@ mod tests {
     /// The stand-in center's delegate (an address).
     static DELEGATE: AtomicUsize = AtomicUsize::new(0);
 
-    /// The text of a Foundation string; empty for nil.
+    /// The text of a Foundation string (never nil here).
     fn text_of(string: Id) -> String {
-        // SAFETY: `UTF8String` of a string, or nil answering null.
+        // SAFETY: `UTF8String` of a string.
         unsafe {
             let text = message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>();
             let utf8 = text(string, selector(c"UTF8String"));
-            if utf8.is_null() {
-                return String::new();
-            }
             CStr::from_ptr(utf8).to_string_lossy().into_owned()
         }
     }
