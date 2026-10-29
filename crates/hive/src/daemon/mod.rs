@@ -171,7 +171,11 @@ async fn serve(
     state: Arc<State>,
 ) -> io::Result<()> {
     let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
-    let watcher = tokio::spawn(watch_terminals(state.clone(), procs::SystemScan::default()));
+    let watcher = tokio::spawn(watch_terminals(
+        state.clone(),
+        procs::SystemScan::default(),
+        crate::watch::INTERVAL,
+    ));
     let every = health::interval(std::env::var_os(health::INTERVAL_MS).as_deref());
     let health = tokio::spawn(watch_health(state.clone(), every));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
@@ -291,6 +295,9 @@ struct State {
     usage: Mutex<usage::Usage>,
     /// The power assertion held while agents work (17.17).
     awake: std::sync::Mutex<power::Awake>,
+    /// Wakes the terminals' tick, asleep while [`State::ticking`] is false (19.3): a terminal
+    /// opened, the usage sent.
+    tick: tokio::sync::Notify,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -339,6 +346,7 @@ impl State {
             runs: Default::default(),
             usage: Default::default(),
             awake: std::sync::Mutex::new(power::Awake::new(None)),
+            tick: Default::default(),
         }
     }
 
@@ -644,8 +652,8 @@ impl State {
     }
 
     /// Sends the current account's windows (5-hour, 7-day) when they are not the ones the app
-    /// has: after a report, and every second for their resets, their pace and an account switch;
-    /// then any alert they raise (17.23).
+    /// has: after a report or a settings change (an account switch), and every tick for their
+    /// resets and pace; then any alert they raise (17.23).
     async fn send_usage(&self) {
         let account = self.account();
         let mut usage = self.usage.lock().await;
@@ -653,6 +661,8 @@ impl State {
         for message in usage.changed(account.as_deref(), now) {
             self.to_app(0, &message).await;
         }
+        // A window shown now needs the tick for its reset and pace.
+        self.tick.notify_one();
     }
 
     /// `gh` on the user's `PATH` (waits only for the first answer).

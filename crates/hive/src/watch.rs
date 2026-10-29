@@ -37,6 +37,12 @@ impl Watch {
         self.warned |= warn;
         warn
     }
+
+    /// A `claude` runs, unhooked, and may still be warned about: it needs ticks even while
+    /// its terminal is quiet.
+    pub fn pending(&self) -> bool {
+        self.claude_since.is_some() && !self.hooked && !self.warned
+    }
 }
 
 /// Sessions with a process named `claude` in them.
@@ -64,6 +70,22 @@ mod tests {
         assert!(!watch.tick(true, at(start, 4_999)));
         assert!(watch.tick(true, at(start, 5_000)));
         assert!(!watch.tick(true, at(start, 6_000)));
+    }
+
+    #[test]
+    fn a_watch_is_pending_from_a_claude_run_until_hooked_or_warned() {
+        let start = Instant::now();
+        let mut watch = Watch::default();
+        assert!(!watch.pending());
+        watch.tick(true, start);
+        assert!(watch.pending());
+        watch.tick(true, at(start, 5_000));
+        assert!(!watch.pending());
+        watch.tick(false, at(start, 6_000));
+        watch.tick(true, at(start, 7_000));
+        assert!(watch.pending());
+        watch.hooked();
+        assert!(!watch.pending());
     }
 
     #[test]

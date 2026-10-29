@@ -106,6 +106,9 @@ impl State {
                 }
             }
         };
+        if opened.is_ok() {
+            self.tick.notify_one();
+        }
         let reply = match opened {
             Ok(()) => Control::TerminalOpened { worktree },
             Err(message) => Control::Error { message },
@@ -133,41 +136,65 @@ impl State {
     }
 }
 
+impl State {
+    /// Whether the terminals' tick has anything to do (19.3): a terminal is open (its agents'
+    /// silence rule, its unhooked `claude`), or the app has a usage window (its reset, its
+    /// pace). Neither starts without waking the tick.
+    pub(super) async fn ticking(&self) -> bool {
+        // One lock at a time.
+        let open = !self.terminals.lock().await.is_empty();
+        open || self.usage.lock().await.shown()
+    }
+}
+
 /// Warns the app about terminals running a `claude` that sends no hook events, and applies
 /// the silence rule to agents whose terminal went quiet; sends the session usage when it changed
-/// (12.1: its reset, a space switch).
-pub(super) async fn watch_terminals(state: Arc<State>, mut scan: impl procs::Scan) {
-    let mut ticks = tokio::time::interval(watch::INTERVAL);
+/// (12.1: its reset, a space switch). Every `every` while [`State::ticking`], asleep otherwise.
+/// Processes are read only when some terminal printed since the last tick (a `claude` that
+/// starts or exits prints) or a watch is still pending.
+pub(super) async fn watch_terminals(
+    state: Arc<State>,
+    mut scan: impl procs::Scan,
+    every: Duration,
+) {
+    let mut ticks = tokio::time::interval(every);
+    // Each terminal's last output as of the last tick.
+    let mut printed = HashMap::new();
     loop {
         ticks.tick().await;
-        let sessions: HashSet<i32> = (state.terminals.lock().await.values())
-            .map(|t| t.session)
-            .collect();
-        // Only the terminals' processes, read on a blocking thread, and none while no terminal
-        // is open.
-        let running = if sessions.is_empty() {
-            HashSet::new()
-        } else {
-            let list = || watch::claude_sessions(&scan.in_sessions(&sessions));
-            tokio::task::block_in_place(list)
+        if !state.ticking().await {
+            state.tick.notified().await;
+            // The next tick a whole interval from now, not a burst of the ones missed asleep.
+            ticks.reset();
+            continue;
+        }
+        let (sessions, last_output, pending) = {
+            let terminals = state.terminals.lock().await;
+            let sessions: HashSet<i32> = terminals.values().map(|t| t.session).collect();
+            let last_output: HashMap<u32, Instant> = (terminals.iter())
+                .map(|(channel, t)| (*channel, t.last_output.get()))
+                .collect();
+            let pending = terminals.values().any(|t| t.watch.pending());
+            (sessions, last_output, pending)
         };
+        let due = pending || last_output != printed;
+        printed.clone_from(&last_output);
         let now = Instant::now();
-        let mut last_output = HashMap::new();
-        let unhooked: Vec<u32> = state
-            .terminals
-            .lock()
-            .await
-            .iter_mut()
-            .filter_map(|(channel, t)| {
-                last_output.insert(*channel, t.last_output.get());
-                let session = t.session;
-                t.watch
-                    .tick(running.contains(&session), now)
-                    .then_some(*channel)
-            })
-            .collect();
-        for channel in unhooked {
-            state.to_app(channel, &Control::UnhookedAgent).await;
+        if due && !sessions.is_empty() {
+            // Only the terminals' processes, read on a blocking thread.
+            let list = || watch::claude_sessions(&scan.in_sessions(&sessions));
+            let running = tokio::task::block_in_place(list);
+            let unhooked: Vec<u32> = (state.terminals.lock().await.iter_mut())
+                .filter_map(|(channel, t)| {
+                    let session = t.session;
+                    t.watch
+                        .tick(running.contains(&session), now)
+                        .then_some(*channel)
+                })
+                .collect();
+            for channel in unhooked {
+                state.to_app(channel, &Control::UnhookedAgent).await;
+            }
         }
         // Not under the terminals lock: placing a new agent holds the agents lock while git runs.
         state.tick_agents(&last_output, now).await;
@@ -269,5 +296,133 @@ impl State {
                 state.to_app(channel, &message).await;
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const EVERY: Duration = Duration::from_millis(10);
+
+    /// A process source that counts its listings; session 7 runs a `claude` when `claude`.
+    #[derive(Clone, Default)]
+    struct Counting {
+        listings: Arc<AtomicUsize>,
+        claude: bool,
+    }
+
+    impl procs::Scan for Counting {
+        fn in_sessions(&mut self, sessions: &HashSet<i32>) -> Vec<procs::Proc> {
+            self.listings.fetch_add(1, Ordering::SeqCst);
+            let claude = procs::Proc {
+                pid: 8,
+                pgrp: 8,
+                session: 7,
+                comm: "claude".into(),
+            };
+            (self.claude && sessions.contains(&7))
+                .then_some(claude)
+                .into_iter()
+                .collect()
+        }
+    }
+
+    impl Counting {
+        fn listings(&self) -> usize {
+            self.listings.load(Ordering::SeqCst)
+        }
+
+        /// Waits, a hundred ticks at most, until there were `n` listings.
+        async fn until(&self, n: usize) {
+            for _ in 0..100 {
+                if self.listings() >= n {
+                    return;
+                }
+                tokio::time::sleep(EVERY).await;
+            }
+        }
+    }
+
+    /// Opens a terminal of session 7 as `open` does, without a shell; its output.
+    async fn open(state: &State) -> terminal::LastOutput {
+        let last_output = terminal::LastOutput::new();
+        let terminal = terminal::Terminal {
+            session: 7,
+            watch: watch::Watch::default(),
+            last_output: last_output.clone(),
+            claude_dir: None,
+        };
+        state.terminals.lock().await.insert(1, terminal);
+        state.tick.notify_one();
+        last_output
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn processes_are_listed_only_after_output_or_while_a_claude_is_unanswered() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let scan = Counting::default();
+        let task = tokio::spawn(watch_terminals(state.clone(), scan.clone(), EVERY));
+        // No terminal: no listing.
+        tokio::time::sleep(EVERY * 10).await;
+        assert_eq!(scan.listings(), 0);
+        // A new terminal is listed once, then not while it stays quiet.
+        let output = open(&state).await;
+        scan.until(1).await;
+        tokio::time::sleep(EVERY * 10).await;
+        assert_eq!(scan.listings(), 1);
+        // Output: listed once more.
+        output.touch();
+        scan.until(2).await;
+        tokio::time::sleep(EVERY * 10).await;
+        assert_eq!(scan.listings(), 2);
+        task.abort();
+
+        // A `claude` that sent no `SessionStart` yet is listed every tick, though quiet.
+        let state = super::super::test_state(dir.path());
+        let scan = Counting {
+            claude: true,
+            ..Counting::default()
+        };
+        let task = tokio::spawn(watch_terminals(state.clone(), scan.clone(), EVERY));
+        open(&state).await;
+        scan.until(5).await;
+        assert!(scan.listings() >= 5);
+        // Hooked: quiet again (a tick already under way may still list).
+        state
+            .terminals
+            .lock()
+            .await
+            .get_mut(&1)
+            .unwrap()
+            .watch
+            .hooked();
+        let hooked = scan.listings();
+        tokio::time::sleep(EVERY * 10).await;
+        assert!(scan.listings() <= hooked + 1);
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tick_runs_while_a_terminal_is_open_or_a_usage_window_is_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        assert!(!state.ticking().await);
+        open(&state).await;
+        assert!(state.ticking().await);
+        state.terminals.lock().await.clear();
+        assert!(!state.ticking().await);
+        // A window reported is shown once sent, then ticks for its reset and pace.
+        let account = state.account().unwrap().to_string_lossy().into_owned();
+        let window = hive_protocol::SessionWindow {
+            used_percentage: 10,
+            resets_at: crate::hook::now_ms() / 1000 + 3600,
+        };
+        state.usage.lock().await.report(account, window, None);
+        assert!(!state.ticking().await);
+        state.send_usage().await;
+        assert!(state.ticking().await);
     }
 }

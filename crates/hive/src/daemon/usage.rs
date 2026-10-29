@@ -116,6 +116,11 @@ impl Usage {
         self.sent = Shown::default();
     }
 
+    /// Whether the app has a window: its reset and its pace still change with time.
+    pub fn shown(&self) -> bool {
+        self.sent.usage.is_some()
+    }
+
     /// What to send the app for `account` at `now` (Unix seconds): `session_usage` with its
     /// windows and their pace when they are not the ones the app has (none once the 5-hour
     /// window reset, and the 7-day one only until its own), then a `usage_alert` for each window
@@ -203,13 +208,16 @@ mod tests {
                 week_limit_at: None,
             })
         };
+        assert!(!usage.shown());
         assert_eq!(shown(&mut usage, a, 99), sent(Some(window(100, 100))));
+        assert!(usage.shown());
         // Only what changed.
         assert_eq!(usage.changed(a, 99), vec![]);
         usage.report("/a".into(), window(12, 100), None);
         assert_eq!(shown(&mut usage, a, 99), sent(Some(window(12, 100))));
         // Past its reset, none; another account's.
         assert_eq!(shown(&mut usage, a, 100), sent(None));
+        assert!(!usage.shown());
         assert_eq!(
             shown(&mut usage, Some(Path::new("/b")), 1),
             sent(Some(window(7, 100)))

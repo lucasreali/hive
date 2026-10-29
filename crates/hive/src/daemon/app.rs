@@ -228,6 +228,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 Err(message) => Control::SettingsFailed { message },
             };
             state.to_app(0, &reply).await;
+            // An account switch shows another account's windows, also while the tick sleeps.
+            state.send_usage().await;
         }
         Ok(Control::OpenSettingsFile) => {
             let located = tokio::task::block_in_place(|| {
