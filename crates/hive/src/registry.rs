@@ -9,13 +9,18 @@
 //! where each linked worktree has an entry. A worktree folder deleted by hand leaves the
 //! registry as it was: it shows as gone on the next list (git marks it prunable).
 //!
-//! Each group's folder (14.1) is watched the same way, non-recursively: an entry made, removed
-//! or renamed in it may be a repository joining or leaving the group.
+//! Each group's folder (14.1) is watched once, recursively (D19.2): an entry made, removed or
+//! renamed in it, or a `.git` in one of its folders, may be a repository joining or leaving the
+//! group. Only those events and the registries' leave the watcher's thread ([`wanted`]), so a
+//! build in a repository of the group does not fill the queue. On Linux, where inotify adds a
+//! watch per folder of a recursive one (every `node_modules`, every `.git/objects/xx`), the
+//! group's folder and the folders directly in it are watched non-recursively instead.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use notify::event::ModifyKind;
@@ -24,8 +29,8 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::files::{self, Debounce};
+use crate::git;
 use crate::paths::canonical;
-use crate::{git, projects};
 
 /// A change is reported once events have stopped for this long (a burst of `git worktree
 /// add`s or a prune is one change)…
@@ -45,10 +50,9 @@ pub struct Registry {
     /// Watched directories: common git dirs and their `worktrees/`, canonical, and groups'
     /// folders.
     watched: BTreeSet<PathBuf>,
-    /// The groups' folders followed (14.1), where a repository may appear or go.
-    groups: BTreeSet<PathBuf>,
-    /// The folders directly in them, where a `.git` may appear or go (a `git init`).
-    inside: BTreeSet<PathBuf>,
+    /// The groups' folders followed (14.1), where a repository may appear or go; shared with
+    /// the watcher's thread, which drops the events deeper in them.
+    groups: Arc<Mutex<BTreeSet<PathBuf>>>,
     /// The burst being coalesced; kept when a wait for [`Registry::changed`] is dropped.
     burst: Option<Debounce>,
 }
@@ -56,8 +60,10 @@ pub struct Registry {
 impl Registry {
     pub fn new() -> io::Result<Self> {
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
+        let groups = Arc::new(Mutex::new(BTreeSet::new()));
+        let shared = Arc::clone(&groups);
         let handler = move |event: notify::Result<Event>| {
-            if !matches!(&event, Ok(event) if event.kind.is_access()) {
+            if wanted(&shared, &event) {
                 // Full: a burst is already waiting to be seen.
                 let _ = tx.try_send(event);
             }
@@ -68,15 +74,13 @@ impl Registry {
             watcher,
             events,
             watched: BTreeSet::new(),
-            groups: BTreeSet::new(),
-            inside: BTreeSet::new(),
+            groups,
             burst: None,
         })
     }
 
-    /// Watches the registries of the repositories at `roots`, the folders of `groups` (14.1)
-    /// and the folders directly in them (where a `.git` comes or goes), and no others. A folder
-    /// whose git dir cannot be read is skipped. Blocks on git.
+    /// Watches the registries of the repositories at `roots` and the folders of `groups` (14.1),
+    /// and no others. A folder whose git dir cannot be read is skipped. Blocks on git.
     pub fn follow(&mut self, roots: &[String], groups: &[String]) {
         let mut wanted = BTreeSet::new();
         for common in roots.iter().filter_map(|root| common_dir(Path::new(root))) {
@@ -86,14 +90,24 @@ impl Registry {
             }
             wanted.insert(common);
         }
-        self.groups = groups.iter().map(PathBuf::from).collect();
-        wanted.extend(self.groups.iter().filter(|dir| dir.is_dir()).cloned());
-        self.inside = self.groups.iter().flat_map(|g| subfolders(g)).collect();
-        wanted.extend(self.inside.iter().cloned());
+        let groups: BTreeSet<PathBuf> = groups.iter().map(PathBuf::from).collect();
+        let recursive: BTreeSet<PathBuf> =
+            groups.iter().filter(|dir| dir.is_dir()).cloned().collect();
+        wanted.extend(recursive.iter().cloned());
+        // Linux: the folders directly in each group, and nothing recursively (module's doc).
+        #[cfg(target_os = "linux")]
+        wanted.extend(groups.iter().flat_map(|g| subfolders(g)));
+        *self.groups.lock().unwrap_or_else(PoisonError::into_inner) = groups;
         let gone = self.watched.iter().filter(|dir| !wanted.contains(*dir));
         // Unwatching fails when the directory is gone, which removed its watch already.
         let unwatch = gone.map(PathOp::unwatch);
         let added: Vec<PathBuf> = wanted.difference(&self.watched).cloned().collect();
+        #[cfg(not(target_os = "linux"))]
+        let watch = added.iter().map(|dir| match recursive.contains(dir) {
+            true => PathOp::watch_recursive(dir),
+            false => PathOp::watch_non_recursive(dir),
+        });
+        #[cfg(target_os = "linux")]
         let watch = added.iter().map(PathOp::watch_non_recursive);
         // ponytail: a watcher that fails (FSEvents only: its stream does not restart) leaves
         // the registry unwatched until the next follow; report it if that ever shows.
@@ -148,12 +162,8 @@ impl Registry {
         // folder itself, or a `.git` in a folder of it; not a file written.
         let entries =
             !matches!(event.kind, EventKind::Modify(m) if !matches!(m, ModifyKind::Name(_)));
-        let group = |path: &PathBuf| {
-            let parent = path.parent().is_some_and(|dir| self.groups.contains(dir));
-            let git = path.file_name() == Some(OsStr::new(".git"))
-                && path.parent().is_some_and(|dir| self.inside.contains(dir));
-            entries && (parent || git || self.groups.contains(path))
-        };
+        let groups = self.groups.lock().unwrap_or_else(PoisonError::into_inner);
+        let group = |path: &PathBuf| entries && in_group(&groups, path) == Some(true);
         // No path: an overflow, which calls for listing again.
         let mut paths = event.paths.iter();
         event.paths.is_empty() || paths.any(|path| self.counts(path) || group(path))
@@ -171,13 +181,38 @@ impl Registry {
     }
 }
 
+/// Whether the watcher's thread passes `event` on: not an access, and not only paths deep in a
+/// group's folder, where a repository's files and git objects churn; the registries' paths
+/// (`worktrees/` and its entries) pass wherever they are.
+fn wanted(groups: &Mutex<BTreeSet<PathBuf>>, event: &notify::Result<Event>) -> bool {
+    let Ok(event) = event else { return true };
+    if event.kind.is_access() {
+        return false;
+    }
+    let groups = groups.lock().unwrap_or_else(PoisonError::into_inner);
+    let registry = |path: &Path| {
+        let name = Some(OsStr::new(WORKTREES));
+        path.file_name() == name || path.parent().and_then(Path::file_name) == name
+    };
+    let kept = |path: &PathBuf| in_group(&groups, path) != Some(false) || registry(path);
+    event.paths.is_empty() || event.paths.iter().any(kept)
+}
+
+/// Whether `path`, inside the nearest of `groups`, is where a repository's coming or going
+/// shows: the group's folder, an entry in it, or the `.git` of one; `None` outside every group.
+fn in_group(groups: &BTreeSet<PathBuf>, path: &Path) -> Option<bool> {
+    let depth = path.ancestors().position(|dir| groups.contains(dir))?;
+    Some(depth <= 1 || depth == 2 && path.file_name() == Some(OsStr::new(".git")))
+}
+
 /// The folders (not links) directly in the group folder `group`, as many as a group's
-/// repositories are looked for among ([`projects::GROUP_ENTRIES`]).
+/// repositories are looked for among ([`crate::projects::GROUP_ENTRIES`]).
+#[cfg(target_os = "linux")]
 fn subfolders(group: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(group) else {
         return Vec::new();
     };
-    let entries = entries.take(projects::GROUP_ENTRIES).flatten();
+    let entries = entries.take(crate::projects::GROUP_ENTRIES).flatten();
     let folders = entries.filter(|e| e.file_type().is_ok_and(|t| t.is_dir()));
     folders.map(|e| e.path()).collect()
 }
@@ -326,8 +361,12 @@ mod tests {
         std::fs::write(group.join("notes.txt"), "").unwrap();
         let groups = roots(&[&group, &group.join("gone")]);
         registry.follow(&roots(&[&a]), &groups);
-        // A missing group folder is not watched; the folders in one are, not its files.
+        // A missing group folder is not watched; one is, once (on Linux the folders in it too,
+        // not its files).
+        #[cfg(target_os = "linux")]
         let expected = BTreeSet::from([a.join(".git"), group.clone(), entry.clone()]);
+        #[cfg(not(target_os = "linux"))]
+        let expected = BTreeSet::from([a.join(".git"), group.clone()]);
         assert_eq!(registry.watched, expected);
         use notify::event::{DataChange, RenameMode};
         let written = EventKind::Modify(ModifyKind::Data(DataChange::Any));
@@ -362,6 +401,102 @@ mod tests {
         registry.follow(&roots(&[&a]), &[]);
         assert_eq!(registry.watched, BTreeSet::from([a.join(".git")]));
         assert!(!registry.saw(event(made, &[&entry])));
+    }
+
+    #[test]
+    fn deep_events_in_a_group_never_leave_the_watchers_thread() {
+        let group = PathBuf::from("/g");
+        let inner = group.join("repo/vendor");
+        let groups = Mutex::new(BTreeSet::from([group.clone(), inner.clone()]));
+        let made = EventKind::Create(CreateKind::Any);
+        for (path, kept) in [
+            (group.clone(), true),
+            (group.join("repo"), true),
+            (group.join("repo/.git"), true),
+            (group.join("repo/src"), false),
+            (group.join("repo/.git/objects/ab"), false),
+            (group.join("repo/a/.git"), false),
+            // The registries pass wherever they are.
+            (group.join("repo/.git/worktrees"), true),
+            (group.join("repo/.git/worktrees/wt"), true),
+            (group.join("repo/.git/worktrees/wt/HEAD"), false),
+            // The nearest group counts: a group inside another one.
+            (inner.join("lib"), true),
+            (inner.join("lib/.git"), true),
+            (inner.join("lib/src"), false),
+            // Outside every group (another watch's).
+            (PathBuf::from("/other/a/b/c"), true),
+        ] {
+            assert_eq!(wanted(&groups, &event(made, &[&path])), kept, "{path:?}");
+        }
+        // One path enough to keep it; no path, or an error, may be lost events.
+        let src = group.join("repo/src");
+        assert!(wanted(&groups, &event(made, &[&src, &group])));
+        assert!(wanted(&groups, &event(EventKind::Other, &[])));
+        assert!(wanted(&groups, &Err(notify::Error::generic("lost"))));
+        let read = EventKind::Access(notify::event::AccessKind::Any);
+        assert!(!wanted(&groups, &event(read, &[&group])));
+    }
+
+    /// `count` repositories in a new group folder.
+    fn group_of(count: usize) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let group = canonical(tmp.path()).unwrap();
+        for i in 0..count {
+            std::fs::create_dir_all(group.join(format!("r{i}/.git"))).unwrap();
+        }
+        (tmp, group)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[tokio::test]
+    async fn a_group_is_one_watch_however_many_repositories_it_holds() {
+        for count in [1, 50] {
+            let (_tmp, group) = group_of(count);
+            let mut registry = Registry::new().unwrap();
+            registry.follow(&[], &roots(&[&group]));
+            assert_eq!(registry.watched, BTreeSet::from([group]));
+        }
+    }
+
+    /// Waits for a change, at most [`NEVER`]: whether one came.
+    async fn changes(registry: &mut Registry) -> bool {
+        tokio::time::timeout(NEVER, registry.changed())
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_repository_made_or_removed_in_a_group_is_seen_but_not_its_files() {
+        let (_tmp, group) = group_of(2);
+        let mut registry = Registry::new().unwrap();
+        registry.follow(&[], &roots(&[&group]));
+        // Let FSEvents' stream start before the first change.
+        // Bounded, so a mutant that sees every event cannot loop forever; no wait after a quiet one.
+        let mut busy = true;
+        for _ in 0..10 {
+            busy = busy && changes(&mut registry).await;
+        }
+        // Files written deep in a repository of the group.
+        let src = group.join("r0/src");
+        std::fs::create_dir(&src).unwrap();
+        for i in 0..50 {
+            std::fs::write(src.join(format!("{i}.rs")), "").unwrap();
+        }
+        std::fs::write(group.join("r0/.git/index"), "").unwrap();
+        assert!(!changes(&mut registry).await, "files written");
+        // A `git init` in a folder already there, and a `.git` removed.
+        std::fs::create_dir(group.join("r1/sub")).unwrap();
+        assert!(!changes(&mut registry).await, "a folder in a repository");
+        std::fs::remove_dir(group.join("r1/.git")).unwrap();
+        assert!(changes(&mut registry).await, ".git removed");
+        std::fs::create_dir(group.join("r1/.git")).unwrap();
+        assert!(changes(&mut registry).await, ".git made");
+        // A repository moved in, and removed.
+        std::fs::create_dir_all(group.join("new/.git")).unwrap();
+        assert!(changes(&mut registry).await, "repository made");
+        std::fs::remove_dir_all(group.join("new")).unwrap();
+        assert!(changes(&mut registry).await, "repository removed");
     }
 
     #[test]
