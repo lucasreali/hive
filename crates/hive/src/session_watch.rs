@@ -308,10 +308,10 @@ mod tests {
     fn a_folder_the_watcher_refuses_is_not_kept_as_watched() {
         let (_tmp, projects, records) = claude();
         let mut watched = BTreeMap::new();
-        // The records folder fails; the projects folder is still watched.
+        // The projects folder fails; the records folder after it is still watched.
         let mut refusing = |ops: Vec<PathOp>| {
             let mut ops = ops.into_iter();
-            let origin = ops.find(|op| op.as_path().ends_with("sessions"));
+            let origin = ops.find(|op| op.as_path().ends_with("projects"));
             match origin {
                 None => Ok(()),
                 origin => Err(Box::new(UpdatePathsError {
@@ -329,10 +329,7 @@ mod tests {
             &[],
             &mut refusing,
         );
-        assert_eq!(
-            watched,
-            BTreeMap::from([(projects.clone(), Kind::Projects)])
-        );
+        assert_eq!(watched, BTreeMap::from([(records.clone(), Kind::Records)]));
         // A watcher that fails as a whole: nothing is known to have failed.
         let mut broken = |_| {
             Err(Box::new(UpdatePathsError {
@@ -348,7 +345,7 @@ mod tests {
             &[],
             &mut broken,
         );
-        assert!(watched.contains_key(&records));
+        assert!(watched.contains_key(&projects));
     }
 
     #[tokio::test]
