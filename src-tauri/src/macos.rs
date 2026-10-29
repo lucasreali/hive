@@ -264,18 +264,18 @@ pub fn post(name: &CStr, identifier: &str, title: &str, body: &str) -> Result<()
 }
 
 /// Gets the identifier of each notification clicked ([`receive_clicks`]).
-type OnClick = Box<dyn Fn(&str) + Send + Sync>;
+pub type OnClick = Box<dyn Fn(&str) + Send + Sync>;
 static ON_CLICK: OnceLock<OnClick> = OnceLock::new();
 
 /// Makes the center `name` tell `on_click` the identifier of each notification clicked (19.10),
 /// through a delegate made here: no thread or timer waits for the click. A notification that
 /// comes while Hive is in front goes to the list only ([`LIST`]). Only the first call does
 /// anything; false when it did not (an earlier call, or no center).
-pub fn receive_clicks(name: &CStr, on_click: impl Fn(&str) + Send + Sync + 'static) -> bool {
+pub fn receive_clicks(name: &CStr, on_click: OnClick) -> bool {
     let Some(center) = center(name) else {
         return false;
     };
-    if ON_CLICK.set(Box::new(on_click)).is_err() {
+    if ON_CLICK.set(on_click).is_err() {
         return false;
     }
     // SAFETY: a new subclass of NSObject, registered once (`ON_CLICK` is set once), with the
@@ -1689,11 +1689,16 @@ mod tests {
     fn the_delegate_hands_each_click_over_and_lists_a_notification_shown_in_front() {
         post_center();
         let (tx, clicks) = std::sync::mpsc::channel::<String>();
-        assert!(!receive_clicks(c"HiveMissingCenter", |_| {}));
-        assert!(receive_clicks(c"HivePostCenter", move |id| {
-            tx.send(id.to_owned()).unwrap()
-        }));
-        assert!(!receive_clicks(c"HivePostCenter", |_| {}), "set once");
+        // The handler of the calls that keep none (called here only so coverage counts it).
+        let unkept = |_: &str| {};
+        unkept("");
+        assert!(!receive_clicks(c"HiveMissingCenter", Box::new(unkept)));
+        let kept = move |id: &str| tx.send(id.to_owned()).unwrap();
+        assert!(receive_clicks(c"HivePostCenter", Box::new(kept)));
+        assert!(
+            !receive_clicks(c"HivePostCenter", Box::new(unkept)),
+            "set once"
+        );
         let delegate = DELEGATE.load(SeqCst) as Id;
         assert!(!delegate.is_null());
         // A response whose notification and request are itself, with an identifier.
