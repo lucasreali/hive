@@ -60,6 +60,7 @@ fn main() {
                 .with_restart(move || handle.request_restart())
                 .with_exit(move || exit.exit(0))
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))
+                .with_update_dir(app.path().app_cache_dir()?)
                 .with_open(
                     |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
                     |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
@@ -404,21 +405,25 @@ fn tray_menu(app: &tauri::AppHandle, view: &tray::View) -> tauri::Result<Menu<ta
 
 fn update_tray(app: &tauri::AppHandle, shown: &TrayIcon, view: tray::View) -> tauri::Result<()> {
     let menu = tray_menu(app, &view)?;
-    shown.set_icon(Some(Image::new_owned(
-        view.icon.rgba,
-        tray::SIZE,
-        tray::SIZE,
-    )))?;
-    shown.set_icon_as_template(view.icon.template)?;
+    // Only when the most urgent state changed (`hive_lib::tray::Shown`).
+    if let Some(icon) = view.icon {
+        shown.set_icon(Some(Image::new_owned(icon.rgba, tray::SIZE, tray::SIZE)))?;
+        shown.set_icon_as_template(icon.template)?;
+    }
     shown.set_tooltip(Some(view.tooltip))?;
     shown.set_menu(Some(menu))
 }
 
 fn create_tray(app: &tauri::AppHandle, view: tray::View) -> tauri::Result<()> {
     let menu = tray_menu(app, &view)?;
-    TrayIconBuilder::with_id(tray::TRAY)
-        .icon(Image::new_owned(view.icon.rgba, tray::SIZE, tray::SIZE))
-        .icon_as_template(view.icon.template)
+    let mut builder = TrayIconBuilder::with_id(tray::TRAY);
+    // Always there: `hive_lib::tray::place` creates no tray without one.
+    if let Some(icon) = view.icon {
+        builder = builder
+            .icon(Image::new_owned(icon.rgba, tray::SIZE, tray::SIZE))
+            .icon_as_template(icon.template);
+    }
+    builder
         .tooltip(view.tooltip)
         .menu(&menu)
         .show_menu_on_left_click(true)
