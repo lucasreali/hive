@@ -11,6 +11,9 @@ export function moveNextTo<T>(list: T[], id: T, target: T, after: boolean): T[] 
 /** The item being dragged and its list: only that list takes it (one drag at a time). */
 let dragged: { group: string; id: string } | null = null;
 
+/** The id of the item of list `group` being dragged, if any (20.5: a tab dropped on a pane). */
+export const draggedFrom = (group: string) => (dragged?.group === group ? dragged.id : null);
+
 /** Where the drop line shows: on which item, and on which side of it. */
 type Line = { target: string; after: boolean };
 

@@ -1,11 +1,29 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../../test/mac";
 import { App } from "../App";
 import type { ProgressState } from "../protocol";
 import { apply } from "../reduce";
-import { addTab, initialState, select, setEdit, setOpenFile, useHive } from "../store";
+import {
+  addTab,
+  initialState,
+  select,
+  setEdit,
+  setOpenFile,
+  setSplit,
+  unsplit,
+  useHive,
+} from "../store";
 import * as tabsModule from "../tabs";
 import { closeTerminal, terminal } from "../terminals";
 import { transport } from "../transport";
@@ -371,11 +389,11 @@ test("a tab's menu splits it right, marks both tabs and shows a divider; Unsplit
   const tabs = () => bar().getAllByRole("tab");
   fireEvent.contextMenu(tabs()[0] as HTMLElement);
   fireEvent.click(within(menu()).getByRole("menuitem", { name: "Split right" }));
-  await waitFor(() => expect(useHive.getState().split).toEqual({ left: 1, right: 2 }));
+  await waitFor(() => expect(useHive.getState().splits).toEqual([{ left: 1, right: 2 }]));
   expect(screen.queryByRole("menu")).toBeNull();
   // The focused pane's tab is the active one; the other pane's is marked beside it.
   expect(tabs().map((t) => t.closest(".tab")?.getAttribute("data-split") ?? null)).toEqual([
-    "true",
+    "view",
     null,
     null,
   ]);
@@ -389,7 +407,7 @@ test("a tab's menu splits it right, marks both tabs and shows a divider; Unsplit
 
   fireEvent.contextMenu(tabs()[0] as HTMLElement);
   fireEvent.click(within(menu()).getByRole("menuitem", { name: "Unsplit" }));
-  await waitFor(() => expect(useHive.getState().split).toBeNull());
+  await waitFor(() => expect(useHive.getState().splits).toEqual([]));
   expect(screen.queryByRole("separator", { name: "Resize the split terminals" })).toBeNull();
 
   fireEvent.contextMenu(tabs()[2] as HTMLElement);
@@ -472,7 +490,7 @@ test("a right click in a terminal opens its menu: Copy, Paste, Clear and Split, 
 
   fireEvent.contextMenu(inside);
   fireEvent.click(item(/^Split right/));
-  await waitFor(() => expect(useHive.getState().split).toMatchObject({ left: id }));
+  await waitFor(() => expect(useHive.getState().splits[0]).toMatchObject({ left: id }));
   fireEvent.contextMenu(inside);
   expect(item(/^Unsplit/)).toBeDefined();
   // Esc closes it without doing anything.
@@ -489,4 +507,148 @@ test("on macOS the terminal menu shows the Mac keys, ⌘K for Clear", async () =
   const { inside } = await openShown();
   fireEvent.contextMenu(inside);
   expect(paneItems()).toEqual(["Copy ⌘C", "Paste ⌘V", "Clear ⌘K", "Split right ⇧⌘D"]);
+});
+
+/** Four terminals of fix-login, 1 and 2 a pair, 3 and 4 the pair shown with 4 focused (20.5). */
+function twoPairs() {
+  show();
+  act(() => {
+    for (const id of [1, 2, 3, 4]) addTab(id, fixLogin.path);
+    setSplit({ left: 1, right: 2 });
+    setSplit({ left: 3, right: 4 });
+  });
+  const boxes = () =>
+    bar()
+      .getAllByRole("tab")
+      .map((t) => t.closest(".tab") as HTMLElement);
+  return { boxes };
+}
+
+test("a pair's tabs are drawn as one group, the partner in view or just paired, described (20.5)", () => {
+  const { boxes } = twoPairs();
+  const attrs = (name: string) => boxes().map((b) => b.getAttribute(name));
+  expect(attrs("data-pair")).toEqual(["left", "right", "left", "right"]);
+  expect(attrs("data-split")).toEqual(["paired", "paired", "view", null]);
+  expect(attrs("data-active")).toEqual(["false", "false", "false", "true"]);
+  // The split icon on each group's first tab only.
+  expect(boxes().map((b) => !!b.querySelector(".tab-split"))).toEqual([true, false, true, false]);
+  const label = bar().getAllByRole("tab")[0] as HTMLElement;
+  expect(label.getAttribute("aria-description")).toBe("Split with fix-login");
+  expect(boxes()[0]?.getAttribute("title")).toBe(`${fixLogin.path}\nSplit with fix-login`);
+  // Over a file, no pair is in view.
+  act(() => setOpenFile({ worktree: fixLogin.id, path: "a.ts" }));
+  expect(attrs("data-split").slice(0, 4)).toEqual(["paired", "paired", "paired", "paired"]);
+  // Unpaired, a tab is plain again.
+  act(() => unsplit(1));
+  expect(boxes()[0]?.hasAttribute("data-pair")).toBe(false);
+  expect(label.hasAttribute("aria-description")).toBe(false);
+});
+
+test("a paired tab's menu replaces its pane with another tab of the worktree, or swaps sides (20.5)", () => {
+  const { boxes } = twoPairs();
+  act(() => addTab(5, fixLogin.path));
+  act(() => addTab(9, apiMain.path));
+  act(() => select(fixLogin.id));
+  const menu = () => screen.getByRole("menu", { name: "Terminal" });
+  const items = () =>
+    within(menu())
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent);
+  // A tab in no pair has neither item.
+  fireEvent.contextMenu(bar().getAllByRole("tab")[4] as HTMLElement);
+  expect(items()).toEqual(["Split right", "Close terminal"]);
+  fireEvent.keyDown(menu(), { key: "Escape" });
+
+  fireEvent.contextMenu(bar().getAllByRole("tab")[3] as HTMLElement);
+  expect(items()).toEqual(["Unsplit", "Replace with", "Swap sides", "Close terminal"]);
+  const replace = within(menu()).getByRole("menuitem", { name: "Replace with" });
+  expect(replace.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.keyDown(replace, { key: "ArrowDown" });
+  fireEvent.keyDown(replace, { key: "ArrowRight" });
+  // Its submenu: the worktree's terminals in no other pane of this pair, the first focused.
+  const sub = screen.getByRole("menu", { name: "Replace with" });
+  const others = within(sub).getAllByRole("menuitem");
+  expect(others.map((i) => i.textContent)).toEqual(["fix-login", "fix-login", "fix-login"]);
+  expect(document.activeElement).toBe(others[0] as HTMLElement);
+  fireEvent.click(replace);
+  expect(screen.queryByRole("menu", { name: "Replace with" })).toBeNull();
+  fireEvent.click(replace);
+  fireEvent.click(
+    within(screen.getByRole("menu", { name: "Replace with" })).getAllByRole(
+      "menuitem",
+    )[2] as HTMLElement,
+  );
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(useHive.getState().splits).toEqual([
+    { left: 1, right: 2 },
+    { left: 3, right: 5 },
+  ]);
+  expect(useHive.getState().activeTab).toBe(5);
+
+  fireEvent.contextMenu(bar().getAllByRole("tab")[0] as HTMLElement);
+  fireEvent.click(within(menu()).getByRole("menuitem", { name: "Swap sides" }));
+  expect(useHive.getState().splits).toEqual([
+    { left: 3, right: 5 },
+    { left: 2, right: 1 },
+  ]);
+  expect(boxes().map((b) => b.getAttribute("data-pair"))).toEqual([
+    "left",
+    "right",
+    "left",
+    "right",
+    null,
+  ]);
+
+  // With no other terminal to take its place, Replace with is disabled.
+  act(() => {
+    for (const id of [3, 4, 5]) closeTerminal(id);
+  });
+  fireEvent.contextMenu(bar().getAllByRole("tab")[0] as HTMLElement);
+  const none = within(menu()).getByRole("menuitem", { name: "Replace with" }) as HTMLButtonElement;
+  expect(none.disabled).toBe(true);
+});
+
+test("the submenu opens on the menu's left when the window has no room on its right (20.5)", () => {
+  twoPairs();
+  const rect = spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    right: window.innerWidth + 10,
+  } as DOMRect);
+  fireEvent.contextMenu(bar().getAllByRole("tab")[0] as HTMLElement);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Replace with" }));
+  expect(screen.getByRole("menu", { name: "Replace with" }).hasAttribute("data-flip")).toBe(true);
+  rect.mockRestore();
+});
+
+test("a tab dragged onto the terminals highlights the pane it would take and takes it (20.5)", () => {
+  const { boxes } = twoPairs();
+  const host = document.querySelector(".terminal-host") as HTMLElement;
+  spyOn(host, "getBoundingClientRect").mockReturnValue({ left: 0, width: 200 } as DOMRect);
+  const data = { setData() {}, effectAllowed: "", dropEffect: "" };
+  const drag = (type: "dragStart" | "dragOver" | "drop" | "dragLeave", el: HTMLElement, x = 0) => {
+    const event = createEvent[type](el);
+    Object.assign(event, { dataTransfer: data, clientX: x });
+    fireEvent(el, event);
+    return event;
+  };
+  const highlight = () => document.querySelector(".pane-drop")?.getAttribute("data-side") ?? null;
+  // Nothing dragged: no highlight.
+  drag("dragOver", host, 150);
+  expect(highlight()).toBeNull();
+
+  drag("dragStart", boxes()[0] as HTMLElement);
+  // The split's divider is at 50%: x 150 is over the right pane.
+  expect(drag("dragOver", host, 150).defaultPrevented).toBe(true);
+  expect(highlight()).toBe("right");
+  drag("dragOver", host, 50);
+  expect(highlight()).toBe("left");
+  drag("dragLeave", host);
+  expect(highlight()).toBeNull();
+  drag("dragOver", host, 150);
+  drag("drop", host, 150);
+  expect(highlight()).toBeNull();
+  expect(useHive.getState().splits).toEqual([{ left: 3, right: 1 }]);
+  fireEvent.dragEnd(boxes()[0] as HTMLElement);
+  // A drop with nothing dragged does nothing.
+  drag("drop", host, 150);
+  expect(useHive.getState().splits).toEqual([{ left: 3, right: 1 }]);
 });

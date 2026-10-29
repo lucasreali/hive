@@ -47,11 +47,13 @@ import {
   barItems,
   barKey,
   dropFile,
+  droppable,
   editFor,
   fileVisible,
   kept,
   opened,
   shownSplit,
+  splitOf,
   tabWorktree,
   visibleTabs,
   withKey,
@@ -204,7 +206,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
-/** Two terminals side by side (6.11), left and right, both of one worktree. */
+/** Two terminals side by side (6.11, a pair: 20.5), left and right, both of one worktree. */
 export type Split = { left: number; right: number };
 
 export type Modal =
@@ -326,10 +328,10 @@ export type HiveState = {
   tabs: Tab[];
   activeTab: number | null;
   /**
-   * The split terminals (6.11), shown while the active tab (the focused pane) is one of them;
-   * any other tab shows alone.
+   * The pairs of split terminals (6.11, 20.5), a tab in one at most: showing either tab of a pair
+   * shows the pair, that tab the focused pane; a tab outside every pair shows alone.
    */
-  split: Split | null;
+  splits: Split[];
   /**
    * The terminal whose search bar is open (17.21): it shows while that terminal is the active
    * tab, over its pane.
@@ -479,7 +481,7 @@ export const initialState: HiveState = {
   collapsed: {},
   tabs: [],
   activeTab: null,
-  split: null,
+  splits: [],
   terminalSearch: null,
   inbox: [],
   inboxSeen: 0,
@@ -788,15 +790,15 @@ export const activateTab = (tab: Tab) =>
   }));
 /**
  * Removes the tab; when it was shown, the other pane of its split is, else its right neighbour
- * in the bar (the left one when it was last), which may be a file. Closing either pane ends the
- * split.
+ * in the bar (the left one when it was last), which may be a file. Closing either pane ends its
+ * pair only.
  */
 export const removeTab = (id: number) =>
   useHive.setState((s) => {
     const shown = visibleTabs(s);
     const i = shown.findIndex((t) => t.id === id);
     const rest = shown.filter((t) => t.id !== id);
-    const split = s.split && [s.split.left, s.split.right].includes(id) ? s.split : null;
+    const split = splitOf(s, id);
     const other = split && (split.left === id ? split.right : split.left);
     const next = other ?? rest[Math.min(i, rest.length - 1)]?.id ?? null;
     const items = barItems(s);
@@ -807,20 +809,74 @@ export const removeTab = (id: number) =>
       tabs: s.tabs.filter((t) => t.id !== id),
       tabOrder: s.tabOrder.filter((k) => !gone.includes(k)),
       activeTab: s.activeTab === id ? next : s.activeTab,
-      split: split ? null : s.split,
+      splits: s.splits.filter((p) => p !== split),
     };
     return s.activeTab === id && !other && !s.fileShown && beside && "path" in beside
       ? { ...removed, ...opened({ ...s, ...removed }, beside, false) }
       : removed;
   });
 
-/** Shows `left` and `right` side by side, `right` focused; null ends the split. */
-export const setSplit = (split: Split | null) =>
-  useHive.setState((s) => ({
-    split,
-    activeTab: split ? split.right : s.activeTab,
-    fileShown: split ? false : s.fileShown,
-  }));
+/**
+ * Makes `left` and `right` a pair, shown side by side with `focus` focused: each leaves the pair
+ * it was in, and the right tab moves next to the left one in the bar (20.5).
+ */
+export const setSplit = (split: Split, focus = split.right) =>
+  useHive.setState((s) => {
+    if (split.left === split.right) return {};
+    const ids = [split.left, split.right];
+    const rest = s.splits.filter((p) => !ids.includes(p.left) && !ids.includes(p.right));
+    const splits = [...rest, split];
+    const keys = barItems(s).map((item) => barKey(s, item));
+    const tabOrder = inPlaces(s, keys, paired({ ...s, splits }, keys));
+    return { splits, tabOrder, activeTab: focus, fileShown: false };
+  });
+
+/** Ends the pair tab `id` is in; the other tab stays, alone. */
+export const unsplit = (id: number) =>
+  useHive.setState((s) => ({ splits: s.splits.filter((p) => p.left !== id && p.right !== id) }));
+
+/** Swaps the panes of tab `id`'s pair; its focused pane stays focused (else `id` is). */
+export function swapSides(id: number): void {
+  const s = useHive.getState();
+  const split = splitOf(s, id);
+  if (!split) return;
+  const focus = split === shownSplit(s) ? (s.activeTab as number) : id;
+  setSplit({ left: split.right, right: split.left }, focus);
+}
+
+/**
+ * Puts tab `by` in tab `id`'s pane, focused: `id` stays in the bar alone, `by` leaves its own
+ * pair; `by` already the other pane swaps the sides (20.5).
+ */
+export function replacePane(id: number, by: number): void {
+  const split = splitOf(useHive.getState(), id);
+  if (!split || by === id) return;
+  if (by === split.left || by === split.right) swapSides(id);
+  else
+    setSplit(
+      split.left === id ? { left: by, right: split.right } : { left: split.left, right: by },
+      by,
+    );
+}
+
+/**
+ * Bar tab `key` dropped on the terminals shown, on its `side` (20.5): onto a pane it takes that
+ * pane; onto a terminal alone it makes a pair with it, on that side. Files and other worktrees'
+ * tabs do nothing.
+ */
+export function dropOnPane(key: string, side: "left" | "right"): void {
+  const s = useHive.getState();
+  const tab = droppable(s, key);
+  if (!tab) return;
+  const split = shownSplit(s);
+  const shown = s.activeTab as number;
+  if (split) replacePane(split[side], tab.id);
+  else if (tab.id !== shown)
+    setSplit(
+      side === "left" ? { left: tab.id, right: shown } : { left: shown, right: tab.id },
+      tab.id,
+    );
+}
 
 /** Opens the search bar over the terminal shown (its active tab), when one is. */
 export const openTerminalSearch = () =>
@@ -848,14 +904,31 @@ export function moveTab(id: string, target: string, after: boolean): void {
     const keys = barItems(s).map((item) => barKey(s, item));
     const moved = moveNextTo(keys, id, target, after);
     if (moved === keys) return {};
-    const order = keys.reduce(withKey, s.tabOrder);
-    const slots = order.flatMap((k, i) => (keys.includes(k) ? [i] : []));
-    const tabOrder = [...order];
-    slots.forEach((slot, i) => {
-      tabOrder[slot] = moved[i] as string;
-    });
-    return { tabOrder };
+    return { tabOrder: inPlaces(s, keys, paired(s, moved, id)) };
   });
+}
+
+/** `tabOrder` with the bar's `keys` taking the places they held, in `moved`'s order. */
+function inPlaces(s: HiveState, keys: string[], moved: string[]): string[] {
+  const order = keys.reduce(withKey, s.tabOrder);
+  const slots = order.flatMap((k, i) => (keys.includes(k) ? [i] : []));
+  const tabOrder = [...order];
+  slots.forEach((slot, i) => {
+    tabOrder[slot] = moved[i] as string;
+  });
+  return tabOrder;
+}
+
+/**
+ * The bar's `keys` with each pair's tabs side by side, left first (20.5): the right tab follows
+ * the left one, except when it is the one `dragged`, which the left one then follows.
+ */
+function paired(s: HiveState, keys: string[], dragged?: string): string[] {
+  const key = (id: number) => barKey(s, { id, cwd: "" });
+  return s.splits.reduce((list, { left, right }) => {
+    const [l, r] = [key(left), key(right)];
+    return r === dragged ? moveNextTo(list, l, r, false) : moveNextTo(list, r, l, true);
+  }, keys);
 }
 
 /**

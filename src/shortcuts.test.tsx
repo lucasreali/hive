@@ -374,9 +374,9 @@ test("Ctrl+Shift+D splits the active terminal and pressed again un-splits", asyn
     ids.push(await openTerminal(cwd), await openTerminal(cwd));
   });
   expect(press(ctrlShift("D"))).toBe(true);
-  expect(useHive.getState().split).toEqual({ left: ids[1] as number, right: ids[0] as number });
+  expect(useHive.getState().splits).toEqual([{ left: ids[1] as number, right: ids[0] as number }]);
   press(ctrlShift("D"));
-  expect(useHive.getState().split).toBeNull();
+  expect(useHive.getState().splits).toEqual([]);
 });
 
 test("Ctrl+Shift+V (Cmd+Shift+V on macOS) toggles a Markdown file's tab, elsewhere the terminal pastes", async () => {

@@ -17,9 +17,10 @@ import {
   removeTab,
   setSplit,
   showFailure,
+  unsplit,
   useHive,
 } from "./store";
-import { inBarOrder, shownSplit, tabWorktree } from "./tabs";
+import { inBarOrder, splitOf, tabWorktree } from "./tabs";
 import { transport } from "./transport";
 import { commandKey, isMac } from "./window";
 
@@ -716,19 +717,18 @@ function fitShown(): void {
 
 /**
  * Ctrl+Shift+D and the tab menu's "Split right" (6.11): tab `id` beside the next tab of its
- * worktree in the bar's order, or beside a new terminal there when it has no other; when `id` is already a
- * shown pane, the split ends instead.
+ * worktree in the bar's order that is in no pair (20.5), or beside a new terminal there when it
+ * has none; when `id` is already in a pair, that pair ends instead.
  */
 export async function splitTerminal(id: number | null): Promise<void> {
   const s = useHive.getState();
-  const split = shownSplit(s);
-  if (split && (split.left === id || split.right === id)) return setSplit(null);
+  if (id !== null && splitOf(s, id)) return unsplit(id);
   const tab = s.tabs.find((t) => t.id === id);
   if (!tab) return;
   const place = tabWorktree(s, tab);
   const same = inBarOrder(
     s,
-    s.tabs.filter((t) => tabWorktree(s, t) === place),
+    s.tabs.filter((t) => t === tab || (tabWorktree(s, t) === place && !splitOf(s, t.id))),
   );
   const next = same[(same.indexOf(tab) + 1) % same.length] as typeof tab;
   const right = next === tab ? await openTerminal(tab.cwd) : next.id;

@@ -15,6 +15,7 @@ import {
   setOpenFile,
   setRendered,
   setSplit,
+  unsplit,
   useHive,
 } from "../store";
 import { closeTerminal } from "../terminals";
@@ -125,7 +126,7 @@ const ways: [string, () => void, () => void][] = [
       setSplit({ left: 1, right: 2 });
     },
     () => {
-      setSplit(null);
+      unsplit(1);
       setOpenFile(file("long.ts"));
     },
   ],
