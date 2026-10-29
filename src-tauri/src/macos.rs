@@ -35,6 +35,8 @@ unsafe extern "C" {
     fn class_addMethod(class: Id, name: Sel, imp: *const c_void, types: *const c_char) -> bool;
     fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
     fn objc_registerClassPair(class: Id);
+    fn objc_getProtocol(name: *const c_char) -> Id;
+    fn class_addProtocol(class: Id, protocol: Id) -> bool;
     /// Called through a cast to each message's own signature (arm64 has no variadic messages).
     fn objc_msgSend();
 }
@@ -263,31 +265,37 @@ pub fn post(name: &CStr, identifier: &str, title: &str, body: &str) -> Result<()
     Ok(())
 }
 
+/// The class of the app's notification center delegate ([`receive_clicks`]).
+pub const DELEGATE_CLASS: &CStr = c"HiveNotificationDelegate";
+
 /// Gets the identifier of each notification clicked ([`receive_clicks`]).
 pub type OnClick = Box<dyn Fn(&str) + Send + Sync>;
 static ON_CLICK: OnceLock<OnClick> = OnceLock::new();
 
 /// Makes the center `name` tell `on_click` the identifier of each notification clicked (19.10),
 /// through a delegate made here: no thread or timer waits for the click. A notification that
-/// comes while Hive is in front goes to the list only ([`LIST`]). Only the first call does
-/// anything; false when it did not (an earlier call, or no center).
-pub fn receive_clicks(name: &CStr, on_click: OnClick) -> bool {
+/// comes while Hive is in front goes to the list only ([`LIST`]). The delegate's class is a new
+/// one named `class` ([`DELEGATE_CLASS`] in the app), declaring `UNUserNotificationCenterDelegate`.
+/// Only the first call does anything; false when it did not (an earlier call, no center, or a
+/// class of that name already there).
+pub fn receive_clicks(name: &CStr, class: &CStr, on_click: OnClick) -> bool {
     let Some(center) = center(name) else {
         return false;
     };
-    if ON_CLICK.set(on_click).is_err() {
+    if ON_CLICK.get().is_some() {
         return false;
     }
-    // SAFETY: a new subclass of NSObject, registered once (`ON_CLICK` is set once), with the
-    // delegate's two methods ("v@:@@@?": self, _cmd, the center, the response or notification
-    // and the completion block). The delegate is owned (`new`) and never released: the center
-    // holds its delegate weakly, so it lives as long as the app.
+    // SAFETY: a new subclass of NSObject (nil, and nothing done, when the name is taken),
+    // registered once, with the delegate's two methods ("v@:@@@?": self, _cmd, the center, the
+    // response or notification and the completion block). The delegate is owned (`new`) and
+    // never released: the center holds its delegate weakly, so it lives as long as the app.
     unsafe {
-        let class = objc_allocateClassPair(
-            objc_getClass(c"NSObject".as_ptr()),
-            c"HiveNotificationDelegate".as_ptr(),
-            0,
-        );
+        let class = objc_allocateClassPair(objc_getClass(c"NSObject".as_ptr()), class.as_ptr(), 0);
+        if class.is_null() {
+            return false;
+        }
+        let protocol = objc_getProtocol(c"UNUserNotificationCenterDelegate".as_ptr());
+        let _ = (!protocol.is_null()).then(|| class_addProtocol(class, protocol));
         let methods: [(&CStr, *const c_void); 2] = [
             (
                 c"userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:",
@@ -302,6 +310,7 @@ pub fn receive_clicks(name: &CStr, on_click: OnClick) -> bool {
             class_addMethod(class, selector(name), imp, c"v@:@@@?".as_ptr());
         }
         objc_registerClassPair(class);
+        let _ = ON_CLICK.set(on_click);
         let delegate = message::<unsafe extern "C" fn(Id, Sel) -> Id>()(class, selector(c"new"));
         let set = message::<unsafe extern "C" fn(Id, Sel, Id)>();
         set(center, selector(c"setDelegate:"), delegate);
@@ -1023,6 +1032,7 @@ mod tests {
     #[link(name = "objc")]
     unsafe extern "C" {
         fn class_createInstance(class: Id, extra: usize) -> Id;
+        fn class_conformsToProtocol(class: Id, protocol: Id) -> bool;
     }
 
     // What the stand-in view and dragging info answer, and what they were asked.
@@ -1689,18 +1699,41 @@ mod tests {
     fn the_delegate_hands_each_click_over_and_lists_a_notification_shown_in_front() {
         post_center();
         let (tx, clicks) = std::sync::mpsc::channel::<String>();
-        // The handler of the calls that keep none (called here only so coverage counts it).
-        let unkept = |_: &str| {};
-        unkept("");
-        assert!(!receive_clicks(c"HiveMissingCenter", Box::new(unkept)));
-        let kept = move |id: &str| tx.send(id.to_owned()).unwrap();
-        assert!(receive_clicks(c"HivePostCenter", Box::new(kept)));
-        assert!(
-            !receive_clicks(c"HivePostCenter", Box::new(unkept)),
-            "set once"
-        );
+        // Handlers that name themselves: only the kept one ever gets a click.
+        let handler = |name: &'static str| -> OnClick {
+            let tx = tx.clone();
+            Box::new(move |id| tx.send(format!("{name} {id}")).unwrap())
+        };
+        let unkept = || handler("unkept");
+        assert!(!receive_clicks(
+            c"HiveMissingCenter",
+            DELEGATE_CLASS,
+            unkept()
+        ));
+        // A class of that name already there: nothing done, so a later call still works.
+        let taken = c"HiveTakenDelegate";
+        // SAFETY: a new subclass of NSObject, registered once.
+        unsafe {
+            let object = objc_getClass(c"NSObject".as_ptr());
+            objc_registerClassPair(objc_allocateClassPair(object, taken.as_ptr(), 0));
+        }
+        assert!(!receive_clicks(c"HivePostCenter", taken, unkept()));
+        assert_eq!(DELEGATE.load(SeqCst), 0, "no delegate set");
+        assert!(receive_clicks(
+            c"HivePostCenter",
+            DELEGATE_CLASS,
+            handler("kept")
+        ));
+        let again = receive_clicks(c"HivePostCenter", c"HiveOtherDelegate", unkept());
+        assert!(!again, "set once");
         let delegate = DELEGATE.load(SeqCst) as Id;
         assert!(!delegate.is_null());
+        // SAFETY: the delegate's class, and the protocol UserNotifications registers.
+        let conforms = unsafe {
+            let protocol = objc_getProtocol(c"UNUserNotificationCenterDelegate".as_ptr());
+            !protocol.is_null() && class_conformsToProtocol(object_getClass(delegate), protocol)
+        };
+        assert!(conforms, "it declares the delegate protocol");
         // A response whose notification and request are itself, with an identifier.
         let itself = itself as *const c_void;
         let response = instance(
@@ -1720,7 +1753,7 @@ mod tests {
             let mut finished = Block::new(done as Done, &SETTINGS_BLOCK, null_mut());
             let finished = (&raw mut finished).cast();
             call(delegate, selector(receive), null_mut(), response, finished);
-            assert_eq!(clicks.try_recv().as_deref(), Ok("ab-7"));
+            assert_eq!(clicks.try_recv().as_deref(), Ok("kept ab-7"));
             assert_eq!(DONE.load(SeqCst), 1);
             // No response: no click, still completed; no completion: nothing to call.
             call(
@@ -1739,7 +1772,7 @@ mod tests {
                 response,
                 null_mut(),
             );
-            assert_eq!(clicks.try_recv().as_deref(), Ok("ab-7"));
+            assert_eq!(clicks.try_recv().as_deref(), Ok("kept ab-7"));
             let mut shown = Block::new(presented as Present, &SETTINGS_BLOCK, null_mut());
             call(
                 delegate,

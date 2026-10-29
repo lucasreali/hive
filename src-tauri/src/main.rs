@@ -302,7 +302,7 @@ fn notifier(app: &tauri::App) -> Box<hive_lib::Notifier> {
     let (notify, clicked) = hive_lib::identified_notifier(move |id, title, body| {
         hive_lib::macos::post(center, id, title, body)
     });
-    if !hive_lib::macos::receive_clicks(center, clicked) {
+    if !hive_lib::macos::receive_clicks(center, hive_lib::macos::DELEGATE_CLASS, clicked) {
         eprintln!("hive-app: notification clicks cannot reach Hive");
     }
     notify
