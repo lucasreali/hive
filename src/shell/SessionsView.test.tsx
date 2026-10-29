@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, mock, setSystemTime, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, expect, jest, mock, setSystemTime, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { notice } from "../../test/notice";
 import { expectClearButton } from "../../test/searchClear";
@@ -8,7 +8,6 @@ import { initialState, select, setPanelView, setRightPanel, useHive } from "../s
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
-import { REFRESH_MS } from "./SessionsView";
 
 beforeAll(() => {
   // happy-dom has no layout: give the list and its rows a height so the virtualizer shows rows.
@@ -23,6 +22,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  jest.useRealTimers();
   setSystemTime();
   for (const tab of useHive.getState().tabs) closeTerminal(tab.id);
   mock.restore();
@@ -135,13 +135,15 @@ test("only the rows in view are rendered", () => {
   expect(screen.getByText("300 shown")).toBeDefined();
 });
 
-test("the open tab asks for the sessions again every few seconds", () => {
-  const every = spyOn(globalThis, "setInterval");
+test("the open tab asks once, then the service sends the changes (D19.4)", () => {
+  jest.useFakeTimers();
   const listed = show(shop.id);
-  const [tick, ms] = every.mock.calls.at(-1) as [() => void, number];
-  expect(ms).toBe(REFRESH_MS);
-  tick();
-  expect(listed).toHaveBeenCalledTimes(2);
+  expect(listed).toHaveBeenCalledTimes(1);
+  act(() => jest.advanceTimersByTime(60_000));
+  expect(listed).toHaveBeenCalledTimes(1);
+  // A list the service pushes shows as it comes.
+  act(() => apply({ type: "sessions", sessions: [checkout], error: null, truncated: false }));
+  expect(titles()).toEqual([checkout.title as string]);
 });
 
 test("a click resumes a session; a running one shows its state and its terminal", () => {

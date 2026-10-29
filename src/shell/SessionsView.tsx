@@ -11,18 +11,14 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type MouseEvent, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import type { Session } from "../protocol";
-import { useRefresh } from "../refresh";
 import { ago, copy, locate, remove, resume, sessionName, sessionTokens } from "../sessions";
 import { openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { SearchField } from "./SearchField";
 import { ContextMenu } from "./WorktreeMenu";
-
-/** How often the open Sessions tab asks for the sessions again. */
-export const REFRESH_MS = 5000;
 
 /** Opens the session's menu at the pointer, or under the ⋯ button that was clicked. */
 function menuAt(session: Session) {
@@ -48,9 +44,10 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const agents = useHive((s) => s.agents);
   const [query, setQuery] = useState("");
   const space = useHive((s) => s.currentSpace);
-  // Asked again every few seconds (sessions outside Hive change state without hooks) and for
-  // another space: the service lists the current space's only.
-  useRefresh(() => void transport.listSessions(), REFRESH_MS, true, [space]);
+  // Asked when the tab opens and for another space (the service lists the current space's
+  // only); the service sends the list again whenever it changes (D19.4).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `space` says when to ask again.
+  useEffect(() => void transport.listSessions(), [space]);
   const q = query.trim().toLowerCase();
   const matches = (x: Session) =>
     [x.title, x.last_text, x.branch, x.id].some((v) => v?.toLowerCase().includes(q));

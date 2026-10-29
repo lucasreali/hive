@@ -123,6 +123,10 @@ async fn hook_connection<R: AsyncRead + Unpin>(
             // The payload stays here: the app gets only what the service makes of it.
             let event = ClaudeCode.translate(&event, terminal_id, payload);
             state.saw(&event, sent_ns).await;
+            // An agent detected or ended: whether its session runs changed.
+            if let EventKind::SessionStarted | EventKind::SessionEnded { .. } = event.kind {
+                state.sessions_poke.notify_one();
+            }
             if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } =
                 event.kind
             {
@@ -438,28 +442,9 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
         }
         Ok(Control::ListSessions) => {
-            // Resume commands for the terminals' shell: native Windows' own, else POSIX.
-            #[cfg(windows)]
-            let shell = Some(state.settings.get().0.terminal.shell);
-            #[cfg(not(windows))]
-            let shell = None;
-            // Hive's terminals: their hooks name their sessions.
-            state.sessions(move |projects, sessions, mut running| {
-                // Claude keeps a record of each running `claude` beside its projects folder.
-                let roots = sessions.roots();
-                let parents = roots.iter().filter_map(|root| root.parent());
-                let records: Vec<PathBuf> = parents.map(|d| d.join("sessions")).collect();
-                running.extend(procs::claude_sessions(procs::Source::System, &records));
-                let (mut sessions, truncated, error) = sessions.list(projects, &running);
-                for session in &mut sessions {
-                    session.resume_command = crate::sessions::resume_command(session, shell);
-                }
-                Control::Sessions {
-                    sessions,
-                    error,
-                    truncated,
-                }
-            })
+            // The accounts' folders may have changed: watched again.
+            state.sessions_follow.notify_one();
+            state.list_sessions();
         }
         Ok(Control::LocateSession { id, target }) => {
             state.sessions(move |projects, sessions, _| {

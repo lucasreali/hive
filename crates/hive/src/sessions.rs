@@ -316,7 +316,7 @@ fn cut(text: &str) -> String {
 /// `path` with every character other than an ASCII letter or digit as `-`, which is how Claude
 /// names a project's log folder (it turns at least `/` and `.` into `-`); comparing two paths
 /// this way tells whether a folder may hold a project's logs.
-fn normalized(path: &str) -> String {
+pub(crate) fn normalized(path: &str) -> String {
     path.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect()
@@ -428,6 +428,12 @@ impl Sessions {
     /// Claude's projects folders.
     pub fn roots(&self) -> Vec<PathBuf> {
         self.roots.iter().map(|(_, root)| root.clone()).collect()
+    }
+
+    /// Where Claude keeps a record of each running `claude`: beside each projects folder.
+    pub fn records(&self) -> Vec<PathBuf> {
+        let parents = self.roots.iter().filter_map(|(_, root)| root.parent());
+        parents.map(|dir| dir.join("sessions")).collect()
     }
 
     /// Every session whose `cwd` lies in a followed worktree, the most recent first, at most
@@ -674,6 +680,8 @@ mod tests {
         let accounts = sessions.at(&dirs);
         let roots = ["/w/projects", "/h/.claude/projects", "/p/projects"].map(PathBuf::from);
         assert_eq!(accounts.roots(), roots);
+        let records = ["/w/sessions", "/h/.claude/sessions", "/p/sessions"].map(PathBuf::from);
+        assert_eq!(accounts.records(), records);
         assert!(Arc::ptr_eq(&accounts.cache, &sessions.cache));
         // Derived again, the default account's folder is still known.
         assert_eq!(accounts.at(&[None]).roots(), sessions.roots());

@@ -716,7 +716,7 @@ pub enum Control {
     ListSessions,
     /// The most recent first, at most the service's cap (`truncated` when older ones were
     /// left out); `error` says why none could be read. Sent only when it differs from the
-    /// last one the app got.
+    /// last one the app got: when asked, and unasked when it changed once the app has one.
     Sessions {
         sessions: Vec<Session>,
         error: Option<String>,

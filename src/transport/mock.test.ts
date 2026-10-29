@@ -1007,10 +1007,12 @@ test("sessions: listed, located, and deleted unless running", async () => {
       message: "the session is running: end it first",
     },
   ]);
-  expect(await answers(() => transport.deleteSession(first.id))).toEqual([
-    { type: "session_deleted", id: first.id },
-  ]);
-  const [listed] = (await answers(() => transport.listSessions())) as { sessions: unknown[] }[];
+  // The list without it comes unasked, as the service sends it when a log goes (D19.4).
+  const [deleted, listed] = (await answers(() => transport.deleteSession(first.id))) as [
+    ServiceMessage,
+    { sessions: unknown[] },
+  ];
+  expect(deleted).toEqual({ type: "session_deleted", id: first.id });
   expect(listed.sessions).toHaveLength(MOCK_SESSIONS.length - 1);
   // The shared fake list is left alone.
   expect(MOCK_SESSIONS[0]).toBe(first);
