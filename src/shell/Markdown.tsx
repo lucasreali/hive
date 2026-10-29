@@ -113,28 +113,41 @@ const SCHEMA: Schema = {
     ol: [["className", "contains-task-list"]],
     li: [["className", "task-list-item"]],
     input: [["type", "checkbox"], ["disabled", true], "checked"],
-    th: ["align"],
-    td: ["align"],
+    // Only the values GFM sets: `align` becomes the cell's `text-align`.
+    th: [["align", "left", "center", "right"]],
+    td: [["align", "left", "center", "right"]],
   },
   required: { input: { type: "checkbox", disabled: true } },
   protocols: { href: ["http", "https", "mailto"] },
   strip: ["script", "style"],
 };
 
-/** The text a reader sees of a node: its text, and an image's alt (the image never loads). */
-const shown = (node: ElementContent): string => {
-  if (node.type === "text") return node.value;
-  if (node.type !== "element") return "";
-  if (node.tagName === "img") return String(node.properties.alt ?? "");
-  return node.children.map(shown).join("");
-};
+/**
+ * The text a reader sees of a node: its text, and an image's alt (the image never loads).
+ * A loop, not recursion: hostile text can nest raw tables hundreds deep (a stack overflow).
+ */
+function shown(node: ElementContent): string {
+  let text = "";
+  const stack = [node];
+  for (let next = stack.pop(); next; next = stack.pop()) {
+    if (next.type === "text") text += next.value;
+    else if (next.type === "element" && next.tagName === "img")
+      text += String(next.properties.alt ?? "");
+    else if (next.type === "element")
+      for (const child of [...next.children].reverse()) stack.push(child);
+  }
+  return text;
+}
 
 /** A link left with nothing to read (an avatar with an empty alt) is dropped (D20.2). */
-function pruneEmptyLinks(node: Root | Element) {
-  node.children = node.children.filter(
-    (child) => !(child.type === "element" && child.tagName === "a" && !shown(child).trim()),
-  ) as typeof node.children;
-  for (const child of node.children) if (child.type === "element") pruneEmptyLinks(child);
+function pruneEmptyLinks(tree: Root) {
+  const stack: (Root | Element)[] = [tree];
+  for (let node = stack.pop(); node; node = stack.pop()) {
+    node.children = node.children.filter(
+      (child) => !(child.type === "element" && child.tagName === "a" && !shown(child).trim()),
+    ) as typeof node.children;
+    for (const child of node.children) if (child.type === "element") stack.push(child);
+  }
 }
 
 const PLUGINS = [remarkGfm];

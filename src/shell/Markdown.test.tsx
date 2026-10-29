@@ -118,6 +118,19 @@ test("raw HTML: nothing executable survives, other tags keep only their text (D2
   expect(view.querySelector("details > summary")?.textContent).toBe("More");
 });
 
+test("raw tables nested deep render without overflowing the stack; align takes GFM's values only", () => {
+  const view = md(`${"<table><tr><td>".repeat(600)}deep x`);
+  expect(view.querySelectorAll("td")).toHaveLength(600);
+  expect(view.querySelector("td")?.textContent).toBe("deep x");
+  const cells = md(
+    '<table><tr><td align="center;background:url(http://e/x)">a</td><td align="right">b</td></tr></table>',
+  ).querySelectorAll("td");
+  expect([...cells].map((td) => (td as HTMLElement).style.cssText)).toEqual([
+    "",
+    "text-align: right;",
+  ]);
+});
+
 test("a task checkbox stays a disabled checkbox; a raw input is never editable", () => {
   const view = md('- [x] done\n- [ ] todo\n\n<input type="text" value="typed">');
   const boxes = [...view.querySelectorAll("input")] as HTMLInputElement[];
