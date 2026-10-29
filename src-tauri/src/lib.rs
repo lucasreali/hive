@@ -14,7 +14,7 @@ use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use hive_protocol::{
     AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
     PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
@@ -1714,25 +1714,74 @@ fn pipe<T>(pipe: Option<T>) -> std::io::Result<T> {
     pipe.ok_or(std::io::ErrorKind::BrokenPipe.into())
 }
 
+/// The most frames, and about the most bytes, one burst of terminal output joins (19.9).
+const BURST_FRAMES: usize = 64;
+const BURST_BYTES: usize = 256 * 1024;
+
+/// Terminal output by frame channel.
+type Joined = Vec<(u32, Vec<u8>)>;
+
+/// The service's frames, whatever the connection (one `burst` for every reader).
+type Frames<'a> = dyn Stream<Item = Result<Frame, FrameError>> + Unpin + 'a;
+
+/// The terminal output already buffered after `first`, joined per channel in the order the
+/// channels first appear (19.9): one UI message per channel instead of one per PTY read, with
+/// no wait for more. Also the next item read, when it ended the burst (a control frame, an
+/// error or the end), to be handled next, in order.
+fn burst(
+    first: Frame,
+    frames: &mut Frames<'_>,
+) -> (Joined, Option<Option<Result<Frame, FrameError>>>) {
+    let mut size = first.payload.len();
+    let mut joined = vec![(first.channel, first.payload.to_vec())];
+    for _ in 1..BURST_FRAMES {
+        if size >= BURST_BYTES {
+            break;
+        }
+        match frames.next().now_or_never() {
+            Some(Some(Ok(frame))) if frame.kind == FrameType::Terminal => {
+                size += frame.payload.len();
+                match joined
+                    .iter_mut()
+                    .find(|(channel, _)| *channel == frame.channel)
+                {
+                    Some((_, bytes)) => bytes.extend_from_slice(&frame.payload),
+                    None => joined.push((frame.channel, frame.payload.to_vec())),
+                }
+            }
+            None => break,
+            next => return (joined, next),
+        }
+    }
+    (joined, None)
+}
+
 /// Routes service frames until the connection ends.
 async fn pump<R: AsyncRead + Unpin>(
     link: &Mutex<Link>,
     mut frames: FramedRead<R, FrameCodec>,
 ) -> End {
-    while let Some(frame) = frames.next().await {
+    let mut held = None;
+    while let Some(frame) = match held.take() {
+        Some(next) => next,
+        None => frames.next().await,
+    } {
         let frame = match frame {
             Ok(frame) => frame,
             Err(error) => return End::Broken(error.to_string()),
         };
-        let mut link = lock(link);
         if frame.kind == FrameType::Terminal {
-            if let Some(term) = link.terminals.get(&frame.channel) {
-                let _ = term
-                    .output
-                    .send(InvokeResponseBody::Raw(frame.payload.to_vec()));
+            let (joined, next) = burst(frame, &mut frames);
+            held = next;
+            let link = lock(link);
+            for (channel, bytes) in joined {
+                if let Some(term) = link.terminals.get(&channel) {
+                    let _ = term.output.send(InvokeResponseBody::Raw(bytes));
+                }
             }
             continue;
         }
+        let mut link = lock(link);
         // Forwarded as the service's JSON: only the type is read here. One message this side
         // cannot read is skipped; the connection and its terminals stay up.
         let value = serde_json::from_slice::<Value>(&frame.payload).ok();
