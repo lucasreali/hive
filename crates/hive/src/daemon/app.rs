@@ -125,7 +125,7 @@ async fn hook_connection<R: AsyncRead + Unpin>(
             state.saw(&event, sent_ns).await;
             // An agent detected or ended: whether its session runs changed.
             if let EventKind::SessionStarted | EventKind::SessionEnded { .. } = event.kind {
-                state.sessions_changed();
+                state.sessions_poke.notify_one();
             }
             if let EventKind::WorktreeCreated { .. } | EventKind::WorktreeRemoved { .. } =
                 event.kind

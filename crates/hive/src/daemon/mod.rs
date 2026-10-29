@@ -279,6 +279,9 @@ struct State {
     refollow: tokio::sync::Notify,
     /// Woken when the app asks for the sessions, so the accounts' Claude folders are watched.
     sessions_follow: tokio::sync::Notify,
+    /// Woken when an agent of Hive's terminals is detected or ends, so the list (its `running`)
+    /// is sent again with the next burst of log changes.
+    sessions_poke: tokio::sync::Notify,
     /// Held while [`State::worktrees_changed`] lists and sends.
     changing: Mutex<()>,
     /// The user's `PATH` ([`wrapper::user_path`]), asked for when first needed (diagnostics,
@@ -337,6 +340,7 @@ impl State {
             worktrees_sent: Default::default(),
             refollow: Default::default(),
             sessions_follow: Default::default(),
+            sessions_poke: Default::default(),
             changing: Mutex::new(()),
             user_path: tokio::sync::watch::Sender::new(None),
             asking_path: Default::default(),
@@ -962,22 +966,31 @@ async fn watch_sessions(state: Arc<State>, watch: io::Result<session_watch::Watc
         // E.g. no inotify instance left: the list still comes when the app asks.
         Err(err) => return eprintln!("hive: warning: cannot watch Claude's sessions: {err}"),
     };
+    let mut changed = false;
     loop {
-        let sessions = state.accounts_sessions(None);
-        tokio::task::block_in_place(|| watch.follow(&sessions.roots(), &sessions.records()));
         // A group's repositories lie in its folder, so its folder covers their logs.
         let folders = || {
             let projects = &state.projects;
-            projects
-                .roots()
-                .into_iter()
-                .chain(projects.groups())
-                .collect()
+            let roots = projects.roots().into_iter();
+            roots.chain(projects.groups()).collect::<Vec<_>>()
         };
-        tokio::select! {
-            () = state.sessions_follow.notified() => {}
-            () = watch.changed(folders) => state.sessions_changed(),
+        let sessions = state.accounts_sessions(None);
+        let (roots, records) = (sessions.roots(), sessions.records());
+        // Before listing, so a log folder made meanwhile (watched one by one on Linux) is
+        // either listed or seen next time.
+        tokio::task::block_in_place(|| watch.follow(&roots, &records, &folders()));
+        if changed {
+            state.sessions_changed();
         }
+        changed = tokio::select! {
+            () = state.sessions_follow.notified() => false,
+            // An agent detected or ended: one list for the burst.
+            () = state.sessions_poke.notified() => {
+                watch.poke();
+                false
+            }
+            () = watch.changed(folders) => true,
+        };
     }
 }
 
@@ -1085,12 +1098,31 @@ mod tests {
         runtime.shutdown_background();
     }
 
-    #[test]
-    fn a_changed_sessions_list_is_sent_only_to_an_app_that_has_one() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changed_sessions_list_is_sent_only_to_an_app_that_has_one() {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path());
-        // Without a runtime, listing (a spawned task) would panic.
-        state.sessions_changed();
+        let (app, mut frames) = mpsc::unbounded_channel();
+        *state.app.lock().await = Some(app);
+        let watching = tokio::spawn(watch_sessions(state.clone(), session_watch::Watch::new()));
+        let wait = session_watch::QUIET + std::time::Duration::from_millis(500);
+        // An agent detected before the app asked for the sessions: nothing is sent.
+        state.sessions_poke.notify_one();
+        tokio::time::sleep(wait).await;
+        assert!(frames.try_recv().is_err());
+        // Once it has a list, a burst of agents detected or ended sends the new one, once.
+        *state.listed() = Some(Control::ListSessions);
+        for _ in 0..3 {
+            state.sessions_poke.notify_one();
+        }
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(10), frames.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(frame.to_control(), Ok(Control::Sessions { .. })));
+        tokio::time::sleep(wait).await;
+        assert!(frames.try_recv().is_err());
+        watching.abort();
     }
 
     #[test]

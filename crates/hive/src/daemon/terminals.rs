@@ -219,7 +219,7 @@ async fn pump(
         }
         state.owned_changed(&agents).await;
         // Its agent's session no longer runs.
-        state.sessions_changed();
+        state.sessions_poke.notify_one();
     }
     state
         .to_app(channel, &Control::TerminalExited { code })

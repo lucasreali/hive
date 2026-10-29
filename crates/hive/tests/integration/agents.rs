@@ -732,6 +732,8 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
     // A session its hooks name runs, in Hive's terminal; the others do not. The app has a
     // list, so the changed one comes without asking (the record's change may come first).
     let expected = [(outside, false), ("old", false), ("s", true)];
+    // At most the record's lists (before and after its `claude` ended), then the agent's.
+    let mut lists = 0;
     loop {
         let next = match seen.next() {
             Some(message) => message,
@@ -744,9 +746,11 @@ async fn sessions_of_followed_projects_are_listed_located_and_deleted() {
             .map(|s| (s.id.as_str(), s.running))
             .collect();
         running.sort();
+        lists += 1;
         if running == expected {
             break;
         }
+        assert!(lists < 3, "{running:?}, expected {expected:?}");
     }
     // Unchanged, the list is not sent again.
     app.send(0, Control::ListSessions).await;
