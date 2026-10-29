@@ -407,6 +407,8 @@ export type HiveState = {
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
   changes: Record<string, Changes>;
+  /** By worktree path: how many `changes` arrived, equal ones too (the open file re-asks). */
+  changesSeen: Record<string, number>;
   /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
   diffBases: Record<string, DiffBase>;
   /** The last `file` the service sent; shown only while it is the open file. */
@@ -518,6 +520,7 @@ export const initialState: HiveState = {
   subagentWorktrees: [],
   worktreeFiles: null,
   changes: {},
+  changesSeen: {},
   diffBases: {},
   file: null,
   editing: false,

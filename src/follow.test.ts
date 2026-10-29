@@ -144,9 +144,15 @@ test("asks for the open file when it opens, its worktree changes, or the service
   apply({ type: "agent_removed", channel: 1, id: "x" });
   expect(openFile).toHaveBeenCalledTimes(1);
   changes("/w");
+  // An edit that keeps the counts sends an equal list: the file is asked for again (19.13).
+  const list = useHive.getState().changes["/w"];
+  changes("/w");
+  expect(useHive.getState().changes["/w"]).toBe(list);
+  expect(openFile).toHaveBeenCalledTimes(3);
   setOpenFile({ worktree: "/w", path: "b.ts" });
   welcome();
   expect(openFile.mock.calls.slice(1)).toEqual([
+    ["/w", "a.ts", "head"],
     ["/w", "a.ts", "head"],
     ["/w", "b.ts", "head"],
     ["/w", "b.ts", "head"],
@@ -158,7 +164,7 @@ test("asks for the open file when it opens, its worktree changes, or the service
   apply({ type: "disconnected", reason: "gone", bundled: false });
   stop();
   setOpenFile({ worktree: "/w", path: "c.ts" });
-  expect(openFile).toHaveBeenCalledTimes(5);
+  expect(openFile).toHaveBeenCalledTimes(6);
 });
 
 test("asks for the open file again at the base picked for its worktree", () => {
