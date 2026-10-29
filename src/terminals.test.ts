@@ -197,7 +197,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
     cursor_style: "bar",
     cursor_blink: true,
     copy_on_select: false,
-    option_as_meta: true,
+    option_as_meta: "left",
     screen_reader: true,
     shell: "default",
   };
@@ -210,7 +210,6 @@ test("new settings apply at once to open terminals, and the shown one refits", a
       scrollback: 1234,
       cursorStyle: "bar",
       cursorBlink: true,
-      macOptionIsMeta: true,
       screenReaderMode: true,
     });
     expect(t.options.theme?.background).toBe("#fafafa");
@@ -1004,15 +1003,67 @@ test("on macOS ⌘↑ and ⌘↓ jump to the shell's previous and next prompt, n
   write.mockRestore();
 });
 
-test("Option-click selects in a program that takes the mouse; Option as Meta follows the setting", async () => {
+test("Option-click selects in a program that takes the mouse; xterm's Option is never Meta", async () => {
   const { term } = await open();
   expect(term.options.macOptionClickForcesSelection).toBe(true);
-  expect(term.options.macOptionIsMeta).toBe(false);
   const settings = structuredClone(DEFAULT_SETTINGS);
-  settings.terminal.option_as_meta = true;
+  settings.terminal.option_as_meta = "both";
   apply({ type: "settings", settings });
-  expect(term.options.macOptionIsMeta).toBe(true);
-  expect((await open()).term.options.macOptionIsMeta).toBe(true);
+  expect(term.options.macOptionIsMeta).toBe(false);
+  expect((await open()).term.options.macOptionIsMeta).toBe(false);
+});
+
+test("on macOS the Option keys the setting makes Meta send Esc + the key, the others type (D20.1)", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  const sent = () => write.mock.calls.map(([, data]) => data);
+  const side = (option_as_meta: typeof DEFAULT_SETTINGS.terminal.option_as_meta) => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.terminal.option_as_meta = option_as_meta;
+    apply({ type: "settings", settings });
+  };
+  const alt = { ctrlKey: false, shiftKey: false, altKey: true };
+  const hold = (code: string, type = "keydown") => press(term, "Alt", { ...alt, code }, type);
+  const key = (code: string, key: string, init: KeyboardEventInit = {}) =>
+    press(term, key, { ...alt, code, ...init });
+  asMac();
+  side("left");
+  hold("AltLeft");
+  expect(key("KeyP", "π").defaultPrevented).toBe(true);
+  key("KeyP", "∏", { shiftKey: true });
+  key("Digit1", "¡");
+  key("Digit1", "⁄", { shiftKey: true });
+  key("Space", " ");
+  expect(sent()).toEqual(["\x1bp", "\x1bP", "\x1b1", "\x1b!", "\x1b "]);
+  // Not a key Meta knows, with Cmd or Ctrl, or on key up: xterm's.
+  expect(key("ArrowLeft", "ArrowLeft").defaultPrevented).toBe(false);
+  expect(key("KeyP", "π", { metaKey: true }).defaultPrevented).toBe(false);
+  expect(key("KeyP", "π", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(press(term, "π", { ...alt, code: "KeyP" }, "keyup").defaultPrevented).toBe(false);
+  hold("AltLeft", "keyup");
+  write.mockClear();
+  // The right Option types: ⌥C reaches xterm.
+  hold("AltRight");
+  expect(key("KeyC", "ç").defaultPrevented).toBe(false);
+  side("right");
+  key("KeyC", "ç");
+  expect(sent()).toEqual(["\x1bc"]);
+  // Losing focus forgets the held keys.
+  term.textarea?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  expect(key("KeyC", "ç").defaultPrevented).toBe(false);
+  side("both");
+  key("KeyB", "∫");
+  side("off");
+  hold("AltLeft");
+  expect(key("KeyF", "ƒ").defaultPrevented).toBe(false);
+  expect(sent()).toEqual(["\x1bc", "\x1bb"]);
+  // Not on macOS.
+  Object.defineProperty(navigator, "userAgent", { value: "Linux", configurable: true });
+  side("both");
+  expect(key("KeyB", "∫").defaultPrevented).toBe(false);
+  hold("AltLeft", "keyup");
+  write.mockRestore();
 });
 
 test("screen reader mode follows the setting, on new terminals and live on open ones", async () => {

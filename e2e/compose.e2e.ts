@@ -73,3 +73,65 @@ test("dead keys and ç: the terminal and the palette get the letters as typed", 
   await expect(palette).toBeHidden();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 });
+
+test.describe("Option as Meta on one side (D20.1)", () => {
+  // macOS' WebKit on every host: the Option keys are Meta only on macOS.
+  test.use({
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+  });
+
+  test("with the left Option as Meta, left ⌥P sends Esc P and right ⌥C types ç", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "webkit", "WebKit is macOS' engine");
+    // xterm tells macOS by the platform: off a Mac its Option would send Esc + the key itself.
+    await page.addInitScript(() =>
+      Object.defineProperty(navigator, "platform", { get: () => "MacIntel" }),
+    );
+    await page.goto("/");
+    await page
+      .getByRole("navigation", { name: "Projects" })
+      .getByRole("button", { name: "fix-login" })
+      .click();
+    await page.getByTitle("New terminal or file").click();
+    await page.getByRole("menuitem", { name: "Terminal" }).click();
+    await expect.poll(() => screen(page)).toBe("mock$");
+    // What terminal 1 sends, and whether each key's keydown was taken (macOS then types nothing).
+    await page.evaluate(async () => {
+      const w = window as unknown as { sent: string[]; taken: string[] };
+      w.sent = [];
+      w.taken = [];
+      const [terminals, store] = ["/src/terminals.ts", "/src/store.ts"];
+      const [{ terminal }, { useHive }] = await Promise.all([
+        import(/* @vite-ignore */ terminals),
+        import(/* @vite-ignore */ store),
+      ]);
+      terminal(1).onData((data: string) => w.sent.push(data));
+      window.addEventListener("keydown", (e) => {
+        if (e.code.startsWith("Key")) w.taken.push(`${e.code}:${e.defaultPrevented}`);
+      });
+      const { settings } = useHive.getState();
+      useHive.setState({
+        settings: { ...settings, terminal: { ...settings.terminal, option_as_meta: "left" } },
+      });
+    });
+    const read = () =>
+      page.evaluate(() => {
+        const { sent, taken } = window as unknown as { sent: string[]; taken: string[] };
+        return { sent, taken };
+      });
+
+    await page.keyboard.down("AltLeft");
+    await page.keyboard.press("KeyP");
+    await page.keyboard.up("AltLeft");
+    await page.keyboard.down("AltRight");
+    await page.keyboard.press("KeyC");
+    // Playwright types no text under Option: this is the ç macOS composes for a keydown left alone.
+    if (!(await read()).taken.includes("KeyC:true")) await page.keyboard.insertText("ç");
+    await page.keyboard.up("AltRight");
+    await expect.poll(() => screen(page)).toBe("mock$ ç");
+    expect(await read()).toEqual({ sent: ["\x1bp", "ç"], taken: ["KeyP:true", "KeyC:false"] });
+  });
+});

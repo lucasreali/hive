@@ -192,7 +192,7 @@ export const DEFAULT_SETTINGS: Settings = {
     cursor_style: "block",
     cursor_blink: false,
     copy_on_select: false,
-    option_as_meta: false,
+    option_as_meta: "off",
     screen_reader: false,
     shell: "default",
   },

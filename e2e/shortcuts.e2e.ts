@@ -44,7 +44,7 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
   await expect(input).toBeFocused();
 
   // Plain keys, Ctrl+O and Alt+B go to the terminal. On macOS Option types a character (none
-  // here: the OS composes it) unless "Option as Meta" is on (17.14).
+  // here: the OS composes it) unless "Option as Meta" makes that Option Meta (17.14, D20.1).
   await page.keyboard.type("ab");
   await page.keyboard.press("Control+O");
   await page.keyboard.press("Alt+B");

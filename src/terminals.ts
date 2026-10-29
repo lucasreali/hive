@@ -105,7 +105,6 @@ export function termOptions(s: Pick<HiveState, "settings" | "systemTheme">): ITe
     scrollback: t.scrollback,
     cursorStyle: t.cursor_style,
     cursorBlink: t.cursor_blink,
-    macOptionIsMeta: t.option_as_meta,
     screenReaderMode: t.screen_reader,
     theme: appliedTheme(s) === "one-light" ? ONE_LIGHT : ONE_DARK,
   };
@@ -320,6 +319,8 @@ async function startTerminal(
   el.dataset.terminal = String(id);
   el.hidden = true;
   el.addEventListener("focusin", () => focusPane(id));
+  // An Option released while the terminal had no focus never sends its keyup here.
+  el.addEventListener("focusout", () => optionsDown.clear());
   // Before xterm's own listener, on its textarea inside the pane.
   el.addEventListener("paste", (event) => onPaste(term, event), { capture: true });
   copyOnSelect(term, el);
@@ -418,13 +419,70 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
   return true;
 }
 
+/** The Option keys held down (`AltLeft`, `AltRight`), for `optionMeta`. */
+const optionsDown = new Set<string>();
+
+/** Meta's key for each `event.code` past the letters, unshifted and shifted (a US layout, as xterm's). */
+const META_KEYS = new Map(
+  Object.entries({
+    Digit1: "1!",
+    Digit2: "2@",
+    Digit3: "3#",
+    Digit4: "4$",
+    Digit5: "5%",
+    Digit6: "6^",
+    Digit7: "7&",
+    Digit8: "8*",
+    Digit9: "9(",
+    Digit0: "0)",
+    Minus: "-_",
+    Equal: "=+",
+    BracketLeft: "[{",
+    BracketRight: "]}",
+    Backslash: "\\|",
+    Semicolon: ";:",
+    Quote: "'\"",
+    Comma: ",<",
+    Period: ".>",
+    Slash: "/?",
+    Backquote: "`~",
+    Space: "  ",
+  }),
+);
+
+/**
+ * On macOS, an Option key the settings make Meta (`option_as_meta`, D20.1) + a key sends Esc and
+ * the key without Option (`event.code`, Shift kept: ⌥P → `\x1bp`); the other Option falls
+ * through to xterm, which types the accent or symbol (⌥C → `ç`, dead keys).
+ */
+function optionMeta(term: Terminal, event: KeyboardEvent): boolean {
+  if (event.code === "AltLeft" || event.code === "AltRight") {
+    if (event.type === "keydown") optionsDown.add(event.code);
+    if (event.type === "keyup") optionsDown.delete(event.code);
+    return false;
+  }
+  const side = useHive.getState().settings.terminal.option_as_meta;
+  const meta =
+    side === "both" ||
+    (side === "left" && optionsDown.has("AltLeft")) ||
+    (side === "right" && optionsDown.has("AltRight"));
+  const letter = /^Key([A-Z])$/.exec(event.code)?.[1];
+  const pair = letter ? letter.toLowerCase() + letter : META_KEYS.get(event.code);
+  const plain = event.altKey && !event.ctrlKey && !event.metaKey;
+  if (!isMac() || event.type !== "keydown" || !plain || !meta || !pair) return false;
+  event.preventDefault();
+  term.input(`\x1b${pair[event.shiftKey ? 1 : 0]}`);
+  return true;
+}
+
 /**
  * Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes (#35); on macOS Cmd+C (Ctrl+C's
  * interrupt with nothing selected, 18.2) and Cmd+V, and Ctrl+C stays the shell's, plus macOS'
  * own keys (`macKey`). Every other key is the shell's.
  */
 function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
-  if (intercept(event) || macKey(term, marks, event) || macScroll(term, event)) return false;
+  const done = intercept(event) || macKey(term, marks, event) || macScroll(term, event);
+  if (done || optionMeta(term, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const clipboard = CLIPBOARD_KEYS.get(event.key.toUpperCase());
   if (event.type !== "keydown" || !chord || !clipboard) return true;
