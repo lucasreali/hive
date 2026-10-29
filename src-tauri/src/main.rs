@@ -288,32 +288,37 @@ fn notifier(
     }
 }
 
-/// macOS notifications as the app's bundle (13.5), silent (Hive plays its own tone); `send`
-/// blocks until the click or the dismissal, so `waiting_notifier` runs each on a thread.
+/// macOS notifications (13.5, 19.10), silent (Hive plays its own tone): an installed app posts
+/// them on `UNUserNotificationCenter` and gets their clicks through its delegate, set once here;
+/// nothing waits for a click. A development build cannot use the center (it raises an exception
+/// outside an app bundle) and shows the notification plugin's, without clicks.
 #[cfg(target_os = "macos")]
-fn notifier(
-    app: &tauri::App,
-) -> impl Fn(&str, &str, hive_lib::Click) -> Result<(), String> + Send + Sync + 'static {
-    use mac_notification_sys::{Notification, NotificationResponse};
-    let identifier = &app.config().identifier;
-    let id = hive_lib::notifier(tauri::is_dev(), identifier, "com.apple.Terminal");
-    if let Err(error) = mac_notification_sys::set_application(id) {
-        eprintln!("hive-app: notifications cannot show as {id}: {error}");
+fn notifier(app: &tauri::App) -> Box<hive_lib::Notifier> {
+    let exe = std::env::current_exe().ok();
+    if !exe.is_some_and(|exe| hive_lib::in_app_bundle(&exe)) {
+        return Box::new(plugin_notifier(app));
     }
-    hive_lib::waiting_notifier(|title: &str, body: &str, wait: bool| {
-        let sent = Notification::new()
-            .title(title)
-            .message(body)
-            .wait_for_click(wait)
-            .send();
-        sent.map(|response| response == NotificationResponse::Click)
-            .map_err(|error| error.to_string())
-    })
+    let center = hive_lib::macos::CENTER;
+    let (notify, clicked) = hive_lib::identified_notifier(move |id, title, body| {
+        hive_lib::macos::post(center, id, title, body)
+    });
+    if !hive_lib::macos::receive_clicks(center, clicked) {
+        eprintln!("hive-app: notification clicks cannot reach Hive");
+    }
+    notify
 }
 
 /// Linux (development only): the notification plugin's, which reports no click.
 #[cfg(not(any(windows, target_os = "macos")))]
 fn notifier(
+    app: &tauri::App,
+) -> impl Fn(&str, &str, hive_lib::Click) -> Result<(), String> + Send + Sync + 'static {
+    plugin_notifier(app)
+}
+
+/// The notification plugin's notifications, which report no click.
+#[cfg(not(windows))]
+fn plugin_notifier(
     app: &tauri::App,
 ) -> impl Fn(&str, &str, hive_lib::Click) -> Result<(), String> + Send + Sync + 'static {
     use tauri_plugin_notification::NotificationExt;

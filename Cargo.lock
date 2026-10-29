@@ -1799,7 +1799,6 @@ version = "0.20.0"
 dependencies = [
  "futures-util",
  "hive-protocol",
- "mac-notification-sys",
  "serde_json",
  "tauri",
  "tauri-build",

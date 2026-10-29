@@ -2364,80 +2364,88 @@ fn a_notification_fails_without_a_notifier_or_when_the_os_refuses_it() {
     assert_eq!(shown, Err("toasts are off".into()));
 }
 
+/// The `(identifier, title, body)` of each notification posted.
+type Posted = Arc<Mutex<Vec<[String; 3]>>>;
+
+/// An [`identified_notifier`] whose posts go to the returned list, and a click that sends `i`.
+fn identified() -> (Box<Notifier>, Box<Clicked>, Posted) {
+    let posted = Arc::new(Mutex::new(Vec::new()));
+    let list = Arc::clone(&posted);
+    let (notify, clicked) = identified_notifier(move |id, title, body| {
+        list.lock()
+            .unwrap()
+            .push([id.into(), title.into(), body.into()]);
+        Ok(())
+    });
+    (notify, clicked, posted)
+}
+
 #[test]
-fn only_a_click_runs_the_click() {
+fn a_click_on_a_notification_runs_its_own_click_once() {
+    let (notify, clicked, posted) = identified();
     let (tx, clicks) = std::sync::mpsc::channel();
-    let click: Click = Box::new(move || tx.send(()).unwrap());
-    answered(Ok(false), &click);
-    answered(Err("no notification center".into()), &click);
+    let click = |i: usize| -> Click {
+        let tx = tx.clone();
+        Box::new(move || tx.send(i).unwrap())
+    };
+    assert_eq!(
+        notify("fix login finished", "shop · main", click(1)),
+        Ok(())
+    );
+    assert_eq!(notify("t", "b", click(2)), Ok(()));
+    let posted = posted.lock().unwrap().clone();
+    assert_eq!(posted[0][1..], ["fix login finished", "shop · main"]);
+    let ids = [posted[0][0].clone(), posted[1][0].clone()];
+    assert_ne!(ids[0], ids[1], "each has its own identifier");
+    assert!(clicks.try_recv().is_err(), "nothing runs before a click");
+    clicked(&ids[1]);
+    assert_eq!(clicks.try_recv(), Ok(2));
+    clicked(&ids[1]);
+    clicked("someone else's");
+    assert!(clicks.try_recv().is_err(), "once, and only its own");
+    clicked(&ids[0]);
+    assert_eq!(clicks.try_recv(), Ok(1));
+}
+
+#[test]
+fn only_the_last_clicks_notifications_keep_their_click() {
+    let (notify, clicked, posted) = identified();
+    let (tx, clicks) = std::sync::mpsc::channel();
+    for i in 0..=CLICKS {
+        let tx = tx.clone();
+        notify("t", "b", Box::new(move || tx.send(i).unwrap())).unwrap();
+    }
+    let ids: Vec<String> = posted
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|p| p[0].clone())
+        .collect();
+    clicked(&ids[0]);
+    assert!(clicks.try_recv().is_err(), "the oldest is dropped");
+    clicked(&ids[1]);
+    assert_eq!(clicks.try_recv(), Ok(1));
+    clicked(&ids[CLICKS]);
+    assert_eq!(clicks.try_recv(), Ok(CLICKS));
+}
+
+#[test]
+fn a_click_on_another_runs_notification_finds_nothing() {
+    let (first, _, first_posts) = identified();
+    let (second, clicked, second_posts) = identified();
+    let (tx, clicks) = std::sync::mpsc::channel();
+    first("t", "b", Box::new(|| {})).unwrap();
+    second("t", "b", Box::new(move || tx.send(()).unwrap())).unwrap();
+    clicked(&first_posts.lock().unwrap()[0][0]);
     assert!(clicks.try_recv().is_err());
-    answered(Ok(true), &click);
+    clicked(&second_posts.lock().unwrap()[0][0]);
     assert_eq!(clicks.try_recv(), Ok(()));
 }
 
 #[test]
-fn at_most_click_waits_notifications_wait_for_their_click() {
-    let (asked_tx, asked) = std::sync::mpsc::channel::<bool>();
-    let (answer, answers) = std::sync::mpsc::channel::<bool>();
-    let answers = Mutex::new(answers);
-    let notify = waiting_notifier(move |_, _, wait| {
-        asked_tx.send(wait).unwrap();
-        Ok(wait && answers.lock().unwrap().recv().unwrap())
-    });
-    let (clicked_tx, clicked) = std::sync::mpsc::channel::<usize>();
-    let click = |i: usize| -> Click {
-        let tx = clicked_tx.clone();
-        Box::new(move || tx.send(i).unwrap())
-    };
-    for i in 0..=CLICK_WAITS {
-        assert_eq!(notify("t", "b", click(i)), Ok(()));
-    }
-    let waiting = (0..=CLICK_WAITS)
-        .filter(|_| asked.recv_timeout(WAIT).unwrap())
-        .count();
-    assert_eq!(
-        waiting, CLICK_WAITS,
-        "one beyond the cap shows without waiting"
-    );
-    // One is clicked: its wait ends, so the next notification waits again.
-    answer.send(true).unwrap();
-    clicked.recv_timeout(WAIT).unwrap();
-    assert_eq!(notify("t", "b", click(99)), Ok(()));
-    assert_eq!(asked.recv_timeout(WAIT), Ok(true));
-    for _ in 0..CLICK_WAITS {
-        answer.send(false).unwrap();
-    }
-}
-
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
-
-static NO_THREADS: AtomicBool = AtomicBool::new(true);
-
-/// [`notification_thread`], failing while [`NO_THREADS`] holds.
-fn flaky(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
-    if NO_THREADS.load(SeqCst) {
-        return Err(std::io::Error::other("no threads"));
-    }
-    notification_thread(work)
-}
-
-#[test]
-fn a_notification_whose_thread_cannot_start_fails_and_frees_its_wait() {
-    let (asked_tx, asked) = std::sync::mpsc::channel::<bool>();
-    let notify = waits(
-        move |_, _, wait| {
-            asked_tx.send(wait).unwrap();
-            Ok(false)
-        },
-        flaky,
-    );
-    let failed = Err("cannot show the notification: no threads".to_owned());
-    for _ in 0..=CLICK_WAITS {
-        assert_eq!(notify("t", "b", Box::new(|| {})), failed);
-    }
-    NO_THREADS.store(false, SeqCst);
-    assert_eq!(notify("t", "b", Box::new(|| {})), Ok(()));
-    assert_eq!(asked.recv_timeout(WAIT), Ok(true), "no wait was kept");
+fn a_refused_notification_says_why() {
+    let (notify, _) = identified_notifier(|_, _, _| Err("not allowed".into()));
+    assert_eq!(notify("t", "b", Box::new(|| {})), Err("not allowed".into()));
 }
 
 #[test]
