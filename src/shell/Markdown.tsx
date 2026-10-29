@@ -3,8 +3,11 @@ import { languages } from "@codemirror/language-data";
 import { highlightCode, tags as t, tagHighlighter } from "@lezer/highlight";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import type { Element, ElementContent, Root } from "hast";
 import { memo, type ReactNode, useEffect, useState } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, type Options } from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { type Options as Schema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { showNotice } from "../store";
 
@@ -89,7 +92,70 @@ function Code({ lang, text }: { lang: string; text: string }) {
   return <code className={`language-${lang}`}>{nodes ?? text}</code>;
 }
 
+/**
+ * What survives of the HTML in a text (D20.2): the elements Markdown itself renders, and of raw
+ * HTML only `a`, `img` / `picture` (never loaded: the alt stands in), `sup`, `sub`, `br`,
+ * `details` / `summary`. Any other tag (`relative-time`, `iframe`…) keeps only its text, a
+ * `script` or `style` not even that. No attribute but `href` and `alt`, and the classes, task
+ * checkboxes and cell alignment Markdown sets itself: no `style`, no event handler, no `src`.
+ */
+const SCHEMA: Schema = {
+  tagNames: [
+    ...["p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code"],
+    ...["em", "strong", "del", "hr", "table", "thead", "tbody", "tr", "th", "td", "input"],
+    ...["a", "img", "picture", "sup", "sub", "br", "details", "summary"],
+  ],
+  attributes: {
+    a: ["href"],
+    img: ["alt"],
+    code: [["className", /^language-./]],
+    ul: [["className", "contains-task-list"]],
+    ol: [["className", "contains-task-list"]],
+    li: [["className", "task-list-item"]],
+    input: [["type", "checkbox"], ["disabled", true], "checked"],
+    // Only the values GFM sets: `align` becomes the cell's `text-align`.
+    th: [["align", "left", "center", "right"]],
+    td: [["align", "left", "center", "right"]],
+  },
+  required: { input: { type: "checkbox", disabled: true } },
+  protocols: { href: ["http", "https", "mailto"] },
+  strip: ["script", "style"],
+};
+
+/**
+ * The text a reader sees of a node: its text, and an image's alt (the image never loads).
+ * A loop, not recursion: hostile text can nest raw tables hundreds deep (a stack overflow).
+ */
+function shown(node: ElementContent): string {
+  let text = "";
+  const stack = [node];
+  for (let next = stack.pop(); next; next = stack.pop()) {
+    if (next.type === "text") text += next.value;
+    else if (next.type === "element" && next.tagName === "img")
+      text += String(next.properties.alt ?? "");
+    else if (next.type === "element")
+      for (const child of [...next.children].reverse()) stack.push(child);
+  }
+  return text;
+}
+
+/** A link left with nothing to read (an avatar with an empty alt) is dropped (D20.2). */
+function pruneEmptyLinks(tree: Root) {
+  const stack: (Root | Element)[] = [tree];
+  for (let node = stack.pop(); node; node = stack.pop()) {
+    node.children = node.children.filter(
+      (child) => !(child.type === "element" && child.tagName === "a" && !shown(child).trim()),
+    ) as typeof node.children;
+    for (const child of node.children) if (child.type === "element") stack.push(child);
+  }
+}
+
 const PLUGINS = [remarkGfm];
+const REHYPE: Options["rehypePlugins"] = [
+  rehypeRaw,
+  [rehypeSanitize, SCHEMA],
+  () => pruneEmptyLinks,
+];
 const DOC_COMPONENTS: Components = {
   // A block's text ends with its newline, which would show as an empty last line.
   code: ({ className, children }) => {
@@ -126,18 +192,26 @@ const COMPONENTS: Components = {
     ),
   // Never load an image (untrusted text, no network): its alt text stands in.
   img: ({ alt }) => (alt ? <span className="md-img">{alt}</span> : null),
-  // A table's cells wrap: it is never wider than the message (13.1).
+  // A table is never wider than the message (13.1): its cells wrap long words, and one that
+  // still cannot fit scrolls sideways inside its box (20.1).
   table: ({ children }) => (
     <div className="md-table">
       <table>{children}</table>
     </div>
   ),
+  td: ({ node, ...props }) => <td {...props} className={oneWord(node)} />,
+  th: ({ node, ...props }) => <th {...props} className={oneWord(node)} />,
 };
+
+/** A cell of one word (a date, a state, a path) never breaks: `-` and `/` would (20.1). */
+function oneWord(node: Element | undefined): string | undefined {
+  const text = node ? shown(node).trim() : "";
+  return text && !/\s/.test(text) ? "md-word" : undefined;
+}
 
 /**
  * Markdown text (8.6, spike Q5), such as a pull request's: GFM (tables, strikethrough, task
- * lists), no raw HTML (react-markdown shows it as text without `rehype-raw`), links filtered by
- * `safeUrl`. Memoized on the text, so an unchanged one is not parsed again.
+ * lists), raw HTML only through the `SCHEMA` allowlist (D20.2), links filtered by `safeUrl`. Memoized on the text, so an unchanged one is not parsed again.
  */
 export const Markdown = memo(function Markdown({
   text,
@@ -151,6 +225,7 @@ export const Markdown = memo(function Markdown({
     <div className={document ? "markdown markdown-doc" : "markdown"}>
       <ReactMarkdown
         remarkPlugins={PLUGINS}
+        rehypePlugins={REHYPE}
         urlTransform={safeUrl}
         components={document ? { ...COMPONENTS, ...DOC_COMPONENTS } : COMPONENTS}
       >

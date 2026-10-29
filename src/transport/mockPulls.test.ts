@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ServiceMessage } from "../protocol";
 import { createMockTransport, MOCK_REPOS } from "./mock";
-import { MOCK_PULLS } from "./mockPulls";
+import { MOCK_PULLS, VERCEL_COMMENT } from "./mockPulls";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const [shop, api] = MOCK_REPOS;
@@ -44,6 +44,16 @@ test("details, actions and a refused merge", async () => {
   if (messages[0]?.type !== "pull") throw new Error("expected pull");
   expect(messages[0].pull?.summary.title).toBe("Fix the login redirect");
   expect(messages[0].pull?.head).toHaveLength(40);
+  expect(messages[0].pull?.notes.map((n) => n.author)).toEqual(["octo-reviewer"]);
+  await transport.openPull(shop.id, 14);
+  await tick();
+  const review = messages.pop();
+  if (review?.type !== "pull") throw new Error("expected pull");
+  // #14 carries Vercel's bot comment, raw HTML and all (20.1).
+  expect(review.pull?.notes.map((n) => [n.author, n.body])).toEqual([
+    ["octo-reviewer", "Looks good, one nit."],
+    ["vercel", VERCEL_COMMENT],
+  ]);
   expect(messages[1]).toEqual({
     type: "pull",
     project: shop.id,
