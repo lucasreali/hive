@@ -1721,14 +1721,17 @@ const BURST_BYTES: usize = 256 * 1024;
 /// Terminal output by frame channel.
 type Joined = Vec<(u32, Vec<u8>)>;
 
+/// The service's frames, whatever the connection (one `burst` for every reader).
+type Frames<'a> = dyn Stream<Item = Result<Frame, FrameError>> + Unpin + 'a;
+
 /// The terminal output already buffered after `first`, joined per channel in the order the
 /// channels first appear (19.9): one UI message per channel instead of one per PTY read, with
 /// no wait for more. Also the next item read, when it ended the burst (a control frame, an
 /// error or the end), to be handled next, in order.
-fn burst<S, E>(first: Frame, frames: &mut S) -> (Joined, Option<Option<S::Item>>)
-where
-    S: Stream<Item = Result<Frame, E>> + Unpin,
-{
+fn burst(
+    first: Frame,
+    frames: &mut Frames<'_>,
+) -> (Joined, Option<Option<Result<Frame, FrameError>>>) {
     let mut size = first.payload.len();
     let mut joined = vec![(first.channel, first.payload.to_vec())];
     for _ in 1..BURST_FRAMES {
