@@ -1,9 +1,10 @@
 //! A downloaded update's installer, kept in the app's cache folder until it is installed
 //! instead of in memory for the rest of the run (19.11).
 
-use std::hash::{DefaultHasher, Hasher};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 /// The installer's file name in the cache folder.
 pub const FILE: &str = "update";
@@ -12,16 +13,15 @@ pub const FILE: &str = "update";
 #[derive(Debug)]
 pub struct Saved {
     path: PathBuf,
-    /// The installer's length and hash, which the file must still match when read back. Not a
-    /// security check (the download's signature was): only a file cut short or changed since.
+    /// The length and SHA-256 of the bytes whose signature the download checked. The installer
+    /// does not check it again, so the file must still match them when read back: another
+    /// process of the user swapping it before the install is refused.
     len: usize,
-    hash: u64,
+    hash: [u8; 32],
 }
 
-fn hash(bytes: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    hasher.write(bytes);
-    hasher.finish()
+fn hash(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 /// Removes an installer left by an earlier run (ended before installing it): never installed,
@@ -52,7 +52,8 @@ pub fn save(dir: &Path, bytes: &[u8]) -> Result<Saved, String> {
 }
 
 impl Saved {
-    /// The installer as it was saved; a missing or changed file is an error.
+    /// The installer as it was saved, read once: these very bytes are the ones checked and
+    /// installed. A missing or changed file is an error.
     pub fn read(&self) -> Result<Vec<u8>, String> {
         let bytes = std::fs::read(&self.path)
             .map_err(|error| format!("cannot read the update: {error}"))?;
