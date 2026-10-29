@@ -73,7 +73,7 @@ pub struct Agent {
     /// Wall clock (ms since the epoch) when the displayed state began.
     since_ms: u64,
     /// A moment and its wall clock time: wall times are counted from here with the monotonic
-    /// clock, so the caller's clocks are the only ones used.
+    /// clock, so the caller's clocks are the only ones used. Set again by [`Agent::clock`].
     origin: (Instant, u64),
 }
 
@@ -116,6 +116,13 @@ impl Agent {
         self.seen |= watched && self.displayed() == AgentState::WaitingYou;
         let after = self.message(id);
         (after != before).then_some(after)
+    }
+
+    /// The clocks agree again: `now` is `wall_ms` on the wall clock. The monotonic clock stops
+    /// while the Mac sleeps and the wall clock does not, so the caller sets both before each
+    /// change, or a state would begin as long before as the Mac slept since the agent began.
+    pub fn clock(&mut self, now: Instant, wall_ms: u64) {
+        self.origin = (now, wall_ms);
     }
 
     /// `now` on the wall clock.
@@ -1245,6 +1252,12 @@ mod tests {
                 .is_some()
         );
         assert_eq!(since(&agent), (55_060, vec![55_060, 55_060]));
+        // The Mac slept an hour, which the monotonic clock did not count: the clocks agree
+        // again before the next change.
+        let woken = at(70);
+        agent.clock(woken, 3_655_070);
+        agent.feed("s", &hook("PermissionRequest", None, json!({})), at(80));
+        assert_eq!(since(&agent), (3_655_080, vec![55_060, 55_060]));
     }
 
     #[test]

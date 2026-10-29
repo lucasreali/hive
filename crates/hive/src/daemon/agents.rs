@@ -87,7 +87,9 @@ impl State {
             place.map(|(_, worktree)| worktree)
         };
         agent.watched = self.watches(channel);
-        if let Some(state) = agent.apply(id, event, sent_ns, Instant::now(), &place) {
+        let now = Instant::now();
+        agent.clock(now, crate::hook::now_ms());
+        if let Some(state) = agent.apply(id, event, sent_ns, now, &place) {
             self.to_app(channel, &state).await;
         }
         // The transcript got a message: its usage is read on the next tick (at most once a
@@ -219,9 +221,12 @@ impl State {
     pub(super) async fn tick_agents(&self, last_output: &HashMap<u32, Instant>, now: Instant) {
         let silence = self.settings.silence();
         let mut agents = self.agents.lock().await;
+        // A `now` taken before this is shown as this moment (`Agent::clock`).
+        let clock = (Instant::now(), crate::hook::now_ms());
         for (id, agent) in agents.iter_mut() {
             let output = last_output.get(&agent.channel);
             agent.watched = self.watches(agent.channel);
+            agent.clock(clock.0, clock.1);
             if let Some(message) =
                 output.and_then(|&output| agent.reconcile(id, silence, output, now))
             {
