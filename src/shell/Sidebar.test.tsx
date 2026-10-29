@@ -1,5 +1,6 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, jest, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Profiler } from "react";
 import { App } from "../App";
 import type { AgentState, Project } from "../protocol";
 import { apply } from "../reduce";
@@ -342,6 +343,54 @@ test("rows show the time in the state and the activity, all ticking on one timer
 });
 
 const at = (w: (typeof shop.worktrees)[number]) => ({ worktree: w.id, cwd: w.path });
+
+test("a tick renders only the rows whose time text changed (19.15)", () => {
+  jest.useFakeTimers();
+  try {
+    let commits = 0;
+    render(
+      <Profiler id="app" onRender={() => commits++}>
+        <App />
+      </Profiler>,
+    );
+    const [main] = shop.worktrees;
+    const state = (ago: number, sub: number) =>
+      apply({
+        type: "agent_state",
+        id: "s1",
+        ...agentStatus("with_subagents", null, Date.now() - ago),
+        subagents: [
+          {
+            id: "a1",
+            agent_type: "Explore",
+            state: "working",
+            worktree: null,
+            writing: false,
+            activity: null,
+            since_ms: Date.now() - sub,
+          },
+        ],
+      });
+    act(() => {
+      apply({ type: "projects", projects: [shop] });
+      apply({ type: "agent_detected", channel: 1, id: "s1", project: shop.id, ...at(main) });
+      state(300_000, 300_000);
+    });
+    const times = () =>
+      [...tree().querySelectorAll(".state-meta, .subagent-time")].map((m) => m.textContent);
+    // Both at 5 minutes: 30 ticks change no text, so nothing renders.
+    commits = 0;
+    for (let i = 0; i < 30; i++) act(() => jest.advanceTimersByTime(1000));
+    expect([commits, times()]).toEqual([0, ["5m", "5m"]]);
+    // A subagent under a minute still updates each second.
+    act(() => state(300_000, 10_000));
+    commits = 0;
+    for (let i = 0; i < 30; i++) act(() => jest.advanceTimersByTime(1000));
+    expect([commits, times()]).toEqual([30, ["5m", "40s"]]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
 
 test("a 🟠 the service no longer counts as pending is drawn muted, in its row and rolled up", () => {
   render(<App />);

@@ -1,5 +1,6 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, jest, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Profiler } from "react";
 import { asMac } from "../../test/mac";
 import { notice } from "../../test/notice";
 import { LINK_DOWN, unsent } from "../../test/unsent";
@@ -93,6 +94,34 @@ test("a usage alert in the inbox is about no agent: choosing it only closes the 
   fireEvent.click(item);
   expect(screen.queryByRole("menu")).toBeNull();
   expect(useHive.getState().selection).toBe("x");
+});
+
+test("the open inbox renders on a tick only when an item's time text changes (19.15)", () => {
+  jest.useFakeTimers();
+  try {
+    let commits = 0;
+    render(
+      <Profiler id="app" onRender={() => commits++}>
+        <App />
+      </Profiler>,
+    );
+    act(() => {
+      apply({ type: "welcome", version: "0.1.0", distro: null });
+      addToInbox({ agent: null, state: null, at: Date.now() - 300_000, text: "Usage" });
+    });
+    fireEvent.click(document.querySelector(".pending-bell") as HTMLButtonElement);
+    const meta = () => screen.getAllByRole("menuitem").map((m) => m.textContent);
+    commits = 0;
+    for (let i = 0; i < 30; i++) act(() => jest.advanceTimersByTime(1000));
+    expect([commits, meta()]).toEqual([0, ["Usage5m ago"]]);
+    // An item under a minute still updates each second.
+    act(() => addToInbox({ agent: null, state: null, at: Date.now() - 10_000, text: "New" }));
+    commits = 0;
+    for (let i = 0; i < 30; i++) act(() => jest.advanceTimersByTime(1000));
+    expect([commits, meta()]).toEqual([30, ["New40s ago", "Usage6m ago"]]);
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test("the bell's inbox: pending agents, then the alerts; going to an agent", () => {

@@ -33,7 +33,7 @@ import {
   TerminalIcon,
   WindowCloseIcon,
 } from "./icons";
-import { elapsed, useNow } from "./Sidebar";
+import { useElapsed } from "./Sidebar";
 import { ContextMenu } from "./WorktreeMenu";
 
 // On Windows the window has no native decorations; this bar drags it and holds the window
@@ -170,7 +170,6 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   const titles = useHive((s) => s.agentTitles);
   // Each item names its agent's space when there are several (6.14).
   const spaces = useHive(useShallow((s) => pending.map((a) => spaceName(s, a.id))));
-  const now = useNow();
   // Placed once: a new position would move the focus back to the first item on every tick.
   const [at] = useState(() => {
     const box = bell.getBoundingClientRect();
@@ -196,8 +195,7 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
       })}
       {pending.length > 0 && inbox.length > 0 && <hr />}
       {inbox.map((item) => {
-        if ("offer" in item)
-          return <OfferItem key={item.id} item={item} now={now} onClose={onClose} />;
+        if ("offer" in item) return <OfferItem key={item.id} item={item} onClose={onClose} />;
         if ("terminal" in item) {
           const tab = tabs.find((t) => t.id === item.terminal);
           return (
@@ -216,7 +214,9 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
                 <TerminalIcon />
               </span>
               <span className="label">{item.text}</span>
-              <span className="inbox-meta">{`${elapsed(item.at, now)} ago`}</span>
+              <span className="inbox-meta">
+                <Ago at={item.at} />
+              </span>
             </button>
           );
         }
@@ -245,7 +245,8 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
             )}
             <span className="label">{item.text}</span>
             <span className="inbox-meta">
-              {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}
+              {item.space && `${item.space} · `}
+              <Ago at={item.at} />
             </span>
           </button>
         );
@@ -259,6 +260,11 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
   );
 }
 
+/** How long ago an inbox item came: only this text renders on a tick, not the whole inbox. */
+function Ago({ at }: { at: number }) {
+  return <>{`${useElapsed(at)} ago`}</>;
+}
+
 /**
  * An offer to remove a worktree whose pull request merged or closed (17.27): a click opens the
  * usual remove dialog (its archive script and health as from the worktree's menu); nothing is
@@ -266,11 +272,9 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
  */
 function OfferItem({
   item,
-  now,
   onClose,
 }: {
   item: InboxItem & { offer: RemoveOffer };
-  now: number;
   onClose: () => void;
 }) {
   const { worktree, title, state } = item.offer;
@@ -290,7 +294,8 @@ function OfferItem({
       <Icon {...ICON} />
       <span className="label">{item.text}</span>
       <span className="inbox-meta">
-        {[item.space, `${elapsed(item.at, now)} ago`].filter(Boolean).join(" · ")}
+        {item.space && `${item.space} · `}
+        <Ago at={item.at} />
       </span>
     </button>
   );
