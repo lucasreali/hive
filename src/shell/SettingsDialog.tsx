@@ -207,6 +207,12 @@ const CURSORS = [
   { value: "bar", label: "Bar" },
   { value: "underline", label: "Underline" },
 ];
+const OPTION_SIDES = [
+  { value: "off", label: "Off" },
+  { value: "left", label: "Left Option" },
+  { value: "right", label: "Right Option" },
+  { value: "both", label: "Both" },
+];
 const SHELLS = [
   { value: "default", label: "PowerShell" },
   { value: "cmd", label: "Command Prompt" },
@@ -302,18 +308,9 @@ const FIELDS: Field[] = [
   {
     section: "Terminal",
     label: "Option as Meta",
-    check: true,
-    help: "Option+key sends Esc and the key (Claude Code's Option+P and Option+T need it) instead of typing accents and symbols.",
+    help: "This Option key + a key sends Esc and the key (Claude Code's Option+P and Option+T need it) instead of typing accents and symbols; the other Option still types them.",
     mac: true,
-    control: () => (
-      <Toggle
-        label="Option as Meta"
-        get={(s) => s.terminal.option_as_meta}
-        set={(s, on) => {
-          s.terminal.option_as_meta = on;
-        }}
-      />
-    ),
+    control: (id) => <OptionAsMeta id={id} />,
   },
   {
     section: "Terminal",
@@ -531,6 +528,22 @@ function CursorStyle({ id }: { id: string }) {
       onChange={(v) =>
         saveSettings((s) => {
           s.terminal.cursor_style = v as Settings["terminal"]["cursor_style"];
+        })
+      }
+    />
+  );
+}
+
+function OptionAsMeta({ id }: { id: string }) {
+  const value = useHive((s) => s.settings.terminal.option_as_meta);
+  return (
+    <Select
+      aria-labelledby={`${id}-label`}
+      value={value}
+      options={OPTION_SIDES}
+      onChange={(v) =>
+        saveSettings((s) => {
+          s.terminal.option_as_meta = v as Settings["terminal"]["option_as_meta"];
         })
       }
     />

@@ -467,16 +467,18 @@ test("on macOS the shortcuts are named with ⌘, with macOS' own and the termina
   ]);
 });
 
-test("Option as Meta is a macOS setting, off by default", async () => {
+test("Option as Meta is a macOS setting, off by default, per Option key", async () => {
   open();
-  expect(screen.queryByLabelText("Option as Meta")).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Option as Meta" })).toBeNull();
   cleanup();
   asMac();
   open();
-  expect(input("Option as Meta").checked).toBe(false);
-  fireEvent.click(input("Option as Meta"));
-  await waitFor(() => expect(settings().terminal.option_as_meta).toBe(true));
-  expect(input("Option as Meta").checked).toBe(true);
+  const select = () => screen.getByRole("combobox", { name: "Option as Meta" });
+  expect(select().textContent).toContain("Off");
+  fireEvent.mouseDown(select());
+  fireEvent.click(screen.getByRole("option", { name: "Left Option" }));
+  await waitFor(() => expect(settings().terminal.option_as_meta).toBe("left"));
+  expect(select().textContent).toContain("Left Option");
 });
 
 test("Screen reader is off by default and turns on", async () => {
