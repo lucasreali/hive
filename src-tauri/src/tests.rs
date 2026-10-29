@@ -860,6 +860,86 @@ fn the_bridge_script_prefers_the_override_then_cargo_install() {
     assert!(!home.installed().exists());
 }
 
+/// What each of terminals 1 and 2 received, one entry per send, after `pump` read `frames`,
+/// all already buffered, to their end.
+async fn pumped(frames: Vec<Frame>) -> [Vec<Vec<u8>>; 2] {
+    let mut writer = FramedWrite::new(Vec::new(), FrameCodec);
+    for frame in frames {
+        writer.send(frame).await.unwrap();
+    }
+    let bytes = writer.into_inner();
+    let link = Mutex::new(Link::default());
+    let mut outputs = [1, 2].map(|channel| {
+        let (output, rx) = output();
+        let term = Term {
+            output,
+            cwd: "/w".into(),
+            worktree: Value::Null,
+        };
+        lock(&link).terminals.insert(channel, term);
+        rx
+    });
+    let end = pump(&link, FramedRead::new(bytes.as_slice(), FrameCodec)).await;
+    assert!(matches!(end, End::Closed));
+    outputs.each_mut().map(|rx| {
+        let mut sent = Vec::new();
+        while let Ok(bytes) = rx.try_recv() {
+            sent.push(bytes);
+        }
+        sent
+    })
+}
+
+#[tokio::test]
+async fn buffered_terminal_output_reaches_the_ui_in_one_send_per_channel() {
+    let frames = (0..10)
+        .map(|n| Frame::terminal(1, format!("{n}")))
+        .collect();
+    assert_eq!(pumped(frames).await, [vec![b"0123456789".to_vec()], vec![]]);
+
+    // Two channels stay apart, each in order.
+    let frames = vec![
+        Frame::terminal(1, "a"),
+        Frame::terminal(2, "x"),
+        Frame::terminal(1, "b"),
+        Frame::terminal(2, "y"),
+    ];
+    assert_eq!(
+        pumped(frames).await,
+        [vec![b"ab".to_vec()], vec![b"xy".to_vec()]]
+    );
+
+    // A control frame ends the burst: output before it is sent before it is handled.
+    let frames = vec![
+        Frame::terminal(1, "a"),
+        Frame::control(2, &Control::TerminalExited { code: None }),
+        Frame::terminal(1, "b"),
+        Frame::terminal(2, "late"),
+    ];
+    assert_eq!(
+        pumped(frames).await,
+        [vec![b"a".to_vec(), b"b".to_vec()], vec![]]
+    );
+}
+
+#[tokio::test]
+async fn a_burst_of_terminal_output_is_bounded() {
+    let frames = vec![Frame::terminal(1, "x"); BURST_FRAMES + 1];
+    let sent = pumped(frames).await;
+    assert_eq!(sent[0], [vec![b'x'; BURST_FRAMES], vec![b'x']]);
+
+    // The bytes bound is checked before each further frame.
+    let rest = vec![b'y'; BURST_BYTES - 1];
+    let frames = vec![
+        Frame::terminal(1, "y"),
+        Frame::terminal(1, rest),
+        Frame::terminal(1, "z"),
+    ];
+    let sent = pumped(frames).await;
+    assert_eq!(sent[0], [vec![b'y'; BURST_BYTES], b"z".to_vec()]);
+    assert_eq!((BURST_FRAMES, BURST_BYTES), (64, 262_144));
+}
+
 #[tokio::test]
 async fn terminal_messages_and_bytes_travel_on_their_channel() {
     let (hive, mut service, mut rx) = welcomed().await;
