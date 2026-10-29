@@ -90,3 +90,64 @@ test("split: Ctrl+Shift+D shows two terminals side by side, a click focuses one,
   await expect(tabs.getByRole("tab")).toHaveCount(1);
   await expect.poll(() => inView(page)).toBe(1);
 });
+
+/** The terminals shown, left to right, as the store has them. */
+const shown = (page: Page) =>
+  page.evaluate(async () => {
+    const [store, tabs] = ["/src/store.ts", "/src/tabs.ts"];
+    const { useHive } = await import(/* @vite-ignore */ store);
+    const { shownTerminals } = await import(/* @vite-ignore */ tabs);
+    return shownTerminals(useHive.getState());
+  });
+
+test("split pairs (20.5): two in a worktree, seen in the bar, rearranged by dragging and by the menu", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
+  const tab = (i: number) => tabs.getByRole("tab").nth(i);
+  const pairs = () =>
+    tabs.locator(".tab").evaluateAll((els) => els.map((el) => el.getAttribute("data-pair")));
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  for (let i = 1; i <= 4; i++) {
+    await page.getByTitle("New terminal or file").click();
+    await page.getByRole("menuitem", { name: "Terminal" }).click();
+    await expect(tabs.getByRole("tab")).toHaveCount(i);
+  }
+  await expect.poll(() => screen(page, 4)).toBe("mock$");
+
+  // Two pairs: 1 with 2, 3 with 4; a click on a tab of either shows its pair.
+  await tab(0).click();
+  await page.keyboard.press(`${mod}+Shift+D`);
+  await tab(2).click();
+  await page.keyboard.press(`${mod}+Shift+D`);
+  await expect.poll(() => shown(page)).toEqual([3, 4]);
+  await expect.poll(pairs).toEqual(["left", "right", "left", "right"]);
+  await tab(0).click();
+  await expect.poll(() => shown(page)).toEqual([1, 2]);
+  await expect(page.locator(".terminal-pane:visible")).toHaveCount(2);
+  await tab(3).click();
+  await expect.poll(() => shown(page)).toEqual([3, 4]);
+  await expect(tab(0)).toHaveAttribute("aria-description", "Split with fix-login");
+  // The bar with a shown pair (3, 4) and a hidden one (1, 2).
+  await expect(page.locator(".terminals > .bar")).toHaveScreenshot("split-pairs-bar.png");
+
+  // Tab 1 dragged onto the right pane takes it: 4 stays alone, and 2 too, its pair ended.
+  await tab(0).dragTo(page.locator('.terminal-pane[data-pane="right"]:visible'));
+  await expect.poll(() => shown(page)).toEqual([3, 1]);
+  await expect.poll(pairs).toEqual([null, "left", "right", null]);
+  await expect(page.locator(".pane-drop")).toHaveCount(0);
+
+  // Swap sides, from the tab menu.
+  await tab(1).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Swap sides" }).click();
+  await expect.poll(() => shown(page)).toEqual([1, 3]);
+
+  // Tab 2 dropped on the left half of terminal 4, shown alone: a pair, 2 on the left.
+  await tab(3).click();
+  await expect.poll(() => shown(page)).toEqual([4]);
+  await tab(0).dragTo(page.locator(".terminal-host"), { targetPosition: { x: 40, y: 100 } });
+  await expect.poll(() => shown(page)).toEqual([2, 4]);
+  await expect.poll(pairs).toEqual(["left", "right", "left", "right"]);
+});

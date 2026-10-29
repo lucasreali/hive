@@ -3367,10 +3367,6 @@ body[data-resizing] {
   background: var(--bg);
 }
 
-.tab[data-split="view"] {
-  color: var(--text);
-}
-
 .tab-label > svg.tab-split {
   color: var(--text-2);
 }
