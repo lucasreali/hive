@@ -1027,8 +1027,8 @@ pub struct TerminalSettings {
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
     pub copy_on_select: bool,
-    /// macOS: Option sends Meta (Esc + key) instead of typing accents (17.14).
-    pub option_as_meta: bool,
+    /// macOS: which Option keys send Meta (Esc + key) instead of typing accents (17.14, D20.1).
+    pub option_as_meta: OptionAsMeta,
     /// xterm's screen reader mode, for VoiceOver (18.37).
     pub screen_reader: bool,
     /// The shell of new terminals when the service runs natively on Windows (12.5.3);
@@ -1045,9 +1045,52 @@ impl Default for TerminalSettings {
             cursor_style: CursorStyle::Block,
             cursor_blink: false,
             copy_on_select: false,
-            option_as_meta: false,
+            option_as_meta: OptionAsMeta::Off,
             screen_reader: false,
             shell: TerminalShell::Default,
+        }
+    }
+}
+
+/// Which Option keys are Meta on macOS (D20.1). A pre-20.2 file's `true` reads as `both` and
+/// `false` as `off`; any other value is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", from = "OptionAsMetaFile")]
+pub enum OptionAsMeta {
+    #[default]
+    Off,
+    Left,
+    Right,
+    Both,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OptionAsMetaFile {
+    Old(bool),
+    Side(OptionAsMetaSide),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OptionAsMetaSide {
+    Off,
+    Left,
+    Right,
+    Both,
+}
+
+impl From<OptionAsMetaFile> for OptionAsMeta {
+    fn from(file: OptionAsMetaFile) -> Self {
+        match file {
+            OptionAsMetaFile::Old(true) | OptionAsMetaFile::Side(OptionAsMetaSide::Both) => {
+                Self::Both
+            }
+            OptionAsMetaFile::Old(false) | OptionAsMetaFile::Side(OptionAsMetaSide::Off) => {
+                Self::Off
+            }
+            OptionAsMetaFile::Side(OptionAsMetaSide::Left) => Self::Left,
+            OptionAsMetaFile::Side(OptionAsMetaSide::Right) => Self::Right,
         }
     }
 }
@@ -2758,7 +2801,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":false,"screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,
@@ -2807,6 +2850,25 @@ mod tests {
         );
         let underline: CursorStyle = serde_json::from_str(r#""underline""#).unwrap();
         assert_eq!(underline, CursorStyle::Underline);
+    }
+
+    #[test]
+    fn option_as_meta_reads_the_old_booleans_and_refuses_other_values() {
+        let read = |json: &str| serde_json::from_str::<OptionAsMeta>(json);
+        assert_eq!(read("true").unwrap(), OptionAsMeta::Both);
+        assert_eq!(read("false").unwrap(), OptionAsMeta::Off);
+        for (json, side) in [
+            (r#""off""#, OptionAsMeta::Off),
+            (r#""left""#, OptionAsMeta::Left),
+            (r#""right""#, OptionAsMeta::Right),
+            (r#""both""#, OptionAsMeta::Both),
+        ] {
+            assert_eq!(read(json).unwrap(), side);
+            assert_eq!(serde_json::to_string(&side).unwrap(), json);
+        }
+        for bad in [r#""up""#, "1", "null", r#""Left""#] {
+            assert!(read(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
