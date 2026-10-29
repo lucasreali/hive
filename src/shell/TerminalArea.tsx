@@ -11,7 +11,6 @@ import {
 } from "@phosphor-icons/react";
 import {
   type CSSProperties,
-  type DragEvent,
   type MouseEvent,
   type ReactNode,
   useCallback,
@@ -492,20 +491,12 @@ function TerminalPaneMenu({ menu, onClose }: { menu: PaneMenu; onClose: () => vo
  * click in a terminal opens its menu. A tab of their worktree dragged from the bar onto a pane
  * takes it, or onto a terminal alone makes a pair on the side it is dropped (20.5), highlighted.
  */
-function TerminalHost({ hidden, percent }: { hidden: boolean; percent: number }) {
+function TerminalHost({ hidden }: { hidden: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const active = useHive((s) => s.activeTab);
   const panes = useHive(useShallow(shownTerminals));
+  const share = useHive(leftShare);
   const [drop, setDrop] = useState<"left" | "right" | null>(null);
-  const share = panes.length > 1 ? percent / 100 : 0.5;
-  const side = (e: DragEvent<HTMLElement>) => {
-    const box = e.currentTarget.getBoundingClientRect();
-    return e.clientX < box.left + box.width * share ? "left" : "right";
-  };
-  const dragged = () => {
-    const key = draggedFrom("tabs");
-    return key !== null && droppable(useHive.getState(), key) ? key : null;
-  };
   const [menu, setMenu] = useState<PaneMenu | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   useEffect(() => {
@@ -516,10 +507,38 @@ function TerminalHost({ hidden, percent }: { hidden: boolean; percent: number })
       event.preventDefault();
       setMenu({ tab: at.id, selection: at.selection, x: event.clientX, y: event.clientY });
     };
-    host.addEventListener("contextmenu", onMenu);
+    const side = (event: DragEvent) => {
+      const box = host.getBoundingClientRect();
+      return event.clientX < box.left + box.width * leftShare(useHive.getState())
+        ? "left"
+        : "right";
+    };
+    const dragged = () => {
+      const key = draggedFrom("tabs");
+      return key !== null && droppable(useHive.getState(), key) ? key : null;
+    };
+    const onOver = (event: DragEvent) => {
+      if (!dragged()) return;
+      event.preventDefault();
+      setDrop(side(event));
+    };
+    const onLeave = (event: DragEvent) => {
+      if (!host.contains(event.relatedTarget as Node | null)) setDrop(null);
+    };
+    const onDrop = (event: DragEvent) => {
+      setDrop(null);
+      const key = dragged();
+      if (!key) return;
+      event.preventDefault();
+      dropOnPane(key, side(event));
+    };
+    const listeners = { contextmenu: onMenu, dragover: onOver, dragleave: onLeave, drop: onDrop };
+    for (const [type, on] of Object.entries(listeners))
+      host.addEventListener(type, on as EventListener);
     const unmount = mountTerminals(host);
     return () => {
-      host.removeEventListener("contextmenu", onMenu);
+      for (const [type, on] of Object.entries(listeners))
+        host.removeEventListener(type, on as EventListener);
       unmount();
     };
   }, []);
@@ -530,29 +549,7 @@ function TerminalHost({ hidden, percent }: { hidden: boolean; percent: number })
   const split = panes.length > 1 && !hidden;
   return (
     <>
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: a drop target for the bar's tabs; their menus do the same from the keyboard. */}
-      <div
-        className="terminal-host"
-        ref={ref}
-        hidden={hidden}
-        data-split={split || undefined}
-        onDragOver={(e) => {
-          if (!dragged()) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-          setDrop(side(e));
-        }}
-        onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDrop(null);
-        }}
-        onDrop={(e) => {
-          setDrop(null);
-          const key = dragged();
-          if (!key) return;
-          e.preventDefault();
-          dropOnPane(key, side(e));
-        }}
-      />
+      <div className="terminal-host" ref={ref} hidden={hidden} data-split={split || undefined} />
       {drop && (
         <div
           className="pane-drop"
@@ -567,6 +564,9 @@ function TerminalHost({ hidden, percent }: { hidden: boolean; percent: number })
     </>
   );
 }
+
+/** The left pane's share of the terminal area: the divider's in a split, else half (a drop there makes a pair). */
+const leftShare = (s: HiveState) => (shownTerminals(s).length > 1 ? s.splitPercent / 100 : 0.5);
 
 /** A worktree without terminals yet: its tab bar is empty. */
 function NoTerminals({ worktree }: { worktree: string }) {
@@ -704,7 +704,7 @@ export function TerminalArea() {
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file} percent={percent} />
+        <TerminalHost hidden={tabs.length === 0 || !!file} />
         {file && <FileView worktree={file.worktree} />}
       </div>
     </section>
