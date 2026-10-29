@@ -36,6 +36,7 @@ import {
   useTerminal,
 } from "../store";
 import {
+  type BarItem,
   barItems,
   barKey,
   fileKey,
@@ -507,8 +508,10 @@ export function TerminalArea() {
   const open = useHive((s) => s.rightPanel === "files");
   const empty = useHive((s) => s.projects !== null && Object.keys(s.projects).length === 0);
   const tabs = useHive(useShallow(visibleTabs));
-  const items = useHive(useShallow(barItems));
-  const keys = useHive(useShallow((s) => barItems(s).map((item) => barKey(s, item))));
+  // One selector, so the bar is built once per store update: each item, then its key.
+  const bar = useHive(useShallow((s) => barItems(s).flatMap((item) => [item, barKey(s, item)])));
+  const items = bar.filter((x): x is BarItem => typeof x !== "string");
+  const keys = bar.filter((x): x is string => typeof x === "string");
   const drag = useReorder("tabs", moveTab, true);
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
   const selected = useHive(selectedPlace);

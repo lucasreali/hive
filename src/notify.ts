@@ -33,7 +33,10 @@ function tone(volume: number): void {
   else webTone(volume);
 }
 
-/** A short synthesized beep at `volume` percent; no audio file. */
+/**
+ * A short synthesized beep at `volume` percent; no audio file. The context is suspended when
+ * the beep ends, so it does not keep the audio thread running between alerts.
+ */
 function webTone(volume: number): void {
   audio ??= new AudioContext();
   void audio.resume();
@@ -44,6 +47,7 @@ function webTone(volume: number): void {
   gain.gain.setValueAtTime((0.15 * volume) / 100, t);
   gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
   osc.connect(gain).connect(audio.destination);
+  osc.onended = () => void audio?.suspend();
   osc.start(t);
   osc.stop(t + 0.2);
 }

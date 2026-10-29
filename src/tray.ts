@@ -38,6 +38,23 @@ export function trayOf(s: HiveState): Tray {
   };
 }
 
+/** Whether two lists hold the same (`===`) items; null only equals null. */
+function sameItems(a: readonly unknown[] | null, b: readonly unknown[] | null): boolean {
+  if (!a || !b) return a === b;
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/** Whether two trays show the same, field by field. */
+export function sameTray(a: Tray, b: Tray): boolean {
+  return (
+    a.shown === b.shown &&
+    sameItems(a.urgent, b.urgent) &&
+    sameItems(a.usage, b.usage) &&
+    a.agents.length === b.agents.length &&
+    a.agents.every((agent, i) => sameItems(agent, b.agents[i] ?? null))
+  );
+}
+
 /**
  * Keeps the menu bar icon on the store, sent only when it changes. Only on macOS (the menu bar;
  * no Windows-only work, D17.0). Returns the unsubscribe.
@@ -47,12 +64,11 @@ export function followTray(
   mac = isMac(),
 ): () => void {
   if (!mac) return () => {};
-  let sent = "";
+  let sent: Tray | null = null;
   const sync = (s: HiveState) => {
     const tray = trayOf(s);
-    const json = JSON.stringify(tray);
-    if (json === sent) return;
-    sent = json;
+    if (sent && sameTray(tray, sent)) return;
+    sent = tray;
     // A failure is dropped: the icon is a hint.
     send(tray).catch(() => {});
   };

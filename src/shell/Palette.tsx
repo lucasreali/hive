@@ -1,5 +1,6 @@
 import { FileTextIcon, GitBranchIcon, type Icon, LightningIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { commandKeys, currentProject, goToAgent, platformCommands } from "../shortcuts";
 import {
   type HiveState,
@@ -136,22 +137,9 @@ export function places(s: HiveState): PaletteItem[] {
 
 const close = () => openModal(null);
 
-/**
- * Ctrl+Shift+P: commands, agents and worktrees filtered as typed, plus the matching lines of the
- * selected worktree's files (searched by the service once typing pauses). Arrows move, Enter
- * (or a click) runs the row, Esc closes.
- */
-export function Palette() {
-  const [query, setQuery] = useState("");
-  const [index, setIndex] = useState(0);
-  const q = query.trim();
-  const s = useHive();
+/** What the palette shows for `q`: its groups, the worktree it searches, whether it still is. */
+function paletteView(s: HiveState, q: string) {
   const worktree = panelWorktree(s)?.worktree.path ?? null;
-  useEffect(() => {
-    if (!worktree || !q) return;
-    const later = setTimeout(() => void transport.searchFiles(worktree, q), SEARCH_DELAY_MS);
-    return () => clearTimeout(later);
-  }, [worktree, q]);
   const results =
     worktree && s.searchResults?.worktree === worktree && s.searchResults.query === q
       ? s.searchResults
@@ -167,9 +155,39 @@ export function Palette() {
     { name: "Agents and worktrees", icon: GitBranchIcon, items: rank(places(s), q) },
     { name: "Files", icon: FileTextIcon, items: files },
   ].filter((g) => g.items.length > 0);
+  return { worktree, groups, searching: !!worktree && q !== "" && !results };
+}
+
+/**
+ * Ctrl+Shift+P: commands, agents and worktrees filtered as typed, plus the matching lines of the
+ * selected worktree's files (searched by the service once typing pauses). Arrows move, Enter
+ * (or a click) runs the row, Esc closes.
+ */
+export function Palette() {
+  const [query, setQuery] = useState("");
+  const [index, setIndex] = useState(0);
+  const q = query.trim();
+  // Renders when the text it shows changes, not on every store update (19.17).
+  useHive(
+    useShallow((s) => {
+      const { worktree, groups, searching } = paletteView(s, q);
+      const rows = groups.flatMap((g) => [
+        g.name,
+        ...g.items.flatMap((i) => [i.label, i.detail, i.keys]),
+      ]);
+      return [worktree, searching, ...rows];
+    }),
+  );
+  const { worktree, groups, searching } = paletteView(useHive.getState(), q);
+  useEffect(() => {
+    if (!worktree || !q) return;
+    const later = setTimeout(() => void transport.searchFiles(worktree, q), SEARCH_DELAY_MS);
+    return () => clearTimeout(later);
+  }, [worktree, q]);
   const items = groups.flatMap((g) => g.items);
-  const searching = !!worktree && q !== "" && !results;
-  const run = (item: PaletteItem | undefined) => {
+  // Row `i` as the current state builds it: same text, same rows, the latest actions.
+  const run = (i: number) => {
+    const item = paletteView(useHive.getState(), q).groups.flatMap((g) => g.items)[i];
     if (!item) return;
     close();
     item.run();
@@ -189,7 +207,7 @@ export function Palette() {
       onKeyDown={(e) => {
         if (e.key === "ArrowDown") setIndex(Math.min(items.length - 1, index + 1));
         else if (e.key === "ArrowUp") setIndex(Math.max(0, index - 1));
-        else if (e.key === "Enter" && !composing(e.nativeEvent)) run(items[index]);
+        else if (e.key === "Enter" && !composing(e.nativeEvent)) run(index);
         else return;
         e.preventDefault();
       }}
@@ -225,7 +243,7 @@ export function Palette() {
                   aria-pressed={i === index}
                   ref={i === index ? (row) => row?.scrollIntoView({ block: "nearest" }) : undefined}
                   onMouseEnter={() => setIndex(i)}
-                  onClick={() => run(item)}
+                  onClick={() => run(i)}
                 >
                   <span className="picker-name">{item.label}</span>
                   <span className="picker-path">{item.detail}</span>

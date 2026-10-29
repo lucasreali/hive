@@ -598,6 +598,13 @@ test("moving in the tree neither rebuilds nor walks it; opening a folder only wa
   expect([build.mock.calls.length, walk.mock.calls.length]).toEqual([1, 2]);
   act(() => apply({ type: "changes", ...changes(refactor.path, [file("x/y.ts")]) }));
   expect([build.mock.calls.length, walk.mock.calls.length]).toEqual([1, 2]);
+  // Another tree's folder or a sidebar row opening walks nothing (19.17).
+  act(() =>
+    useHive.setState((s) => ({
+      collapsed: { ...s.collapsed, "files:/elsewhere/x": false, [shop.id]: true },
+    })),
+  );
+  expect([build.mock.calls.length, walk.mock.calls.length]).toEqual([1, 2]);
 });
 
 test("an empty tree ignores keys", () => {

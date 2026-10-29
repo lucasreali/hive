@@ -11,7 +11,7 @@ import type { Transport } from "./transport";
  */
 export function followPanel(transport: Transport): () => void {
   let watched: string | null = null;
-  let expanded = "[]";
+  let expanded: string[] = [];
   const sync = (s: HiveState) => {
     const connected = s.connection.status === "connected";
     const open = connected && s.rightPanel === "files";
@@ -23,14 +23,15 @@ export function followPanel(transport: Transport): () => void {
       if (shown && base) void transport.watchWorktree(shown, base);
       else if (connected) void transport.unwatchWorktree();
       watched = key;
-      expanded = "[]";
+      expanded = [];
     }
     const listing = shown && s.worktreeFiles?.path === shown ? s.worktreeFiles : null;
     const folders = (listing?.ignored ?? [])
       .filter((p) => p.endsWith("/") && s.collapsed[`files:${shown}/${p.slice(0, -1)}`] === false)
       .map((p) => p.slice(0, -1));
-    if (!shown || JSON.stringify(folders) === expanded) return;
-    expanded = JSON.stringify(folders);
+    const same = folders.length === expanded.length && folders.every((p, i) => p === expanded[i]);
+    if (!shown || same) return;
+    expanded = folders;
     void transport.expandIgnored(shown, folders);
   };
   sync(useHive.getState());

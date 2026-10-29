@@ -28,23 +28,39 @@ let tones = 0;
 /** The gain each tone started at. */
 let gains: number[] = [];
 let shown: { title: string; body: string; agent: string }[] = [];
+/** The audio context's resumes and suspends, in order. */
+let audioCalls: string[] = [];
+/** The last tone's oscillator, to end it. */
+let lastOsc: { onended: (() => void) | null } | undefined;
 // Advances past the rate limit between tests; each test moves its own clock from here.
 let clock = 1_000_000;
 
 class FakeAudio {
   currentTime = 0;
   destination = {};
-  resume = () => Promise.resolve();
+  resume = () => {
+    audioCalls.push("resume");
+    return Promise.resolve();
+  };
+  suspend = () => {
+    audioCalls.push("suspend");
+    return Promise.resolve();
+  };
   createGain = () => ({
     gain: { setValueAtTime: (v: number) => gains.push(v), exponentialRampToValueAtTime() {} },
     connect: (d: unknown) => d,
   });
-  createOscillator = () => ({
-    frequency: { value: 0 },
-    connect: (n: unknown) => n,
-    start: () => tones++,
-    stop() {},
-  });
+  createOscillator = () => {
+    const osc = {
+      frequency: { value: 0 },
+      onended: null as (() => void) | null,
+      connect: (n: unknown) => n,
+      start: () => tones++,
+      stop() {},
+    };
+    lastOsc = osc;
+    return osc;
+  };
 }
 
 // The app side shows them (13.5); the test transport would only keep the last agent.
@@ -57,6 +73,7 @@ beforeEach(() => {
   tones = 0;
   gains = [];
   shown = [];
+  audioCalls = [];
   clock += 10 * TONE_GAP_MS;
   g.AudioContext = FakeAudio;
 });
@@ -109,6 +126,16 @@ test("the tone follows the volume setting; 0 plays none", () => {
   apply({ type: "settings", settings: structuredClone(settings) });
   feed("a", "error", "action", 2 * TONE_GAP_MS);
   expect([tones, gains]).toEqual([2, [0.15, 0.06]]);
+});
+
+test("the audio context runs only while a tone plays (19.17)", () => {
+  feed("a", "error", "action");
+  expect(audioCalls).toEqual(["resume"]);
+  lastOsc?.onended?.();
+  expect(audioCalls).toEqual(["resume", "suspend"]);
+  feed("a", "error", "action", TONE_GAP_MS);
+  lastOsc?.onended?.();
+  expect(audioCalls).toEqual(["resume", "suspend", "resume", "suspend"]);
 });
 
 test("on macOS the app plays the tone; the webview's only when the app cannot (17.19)", async () => {

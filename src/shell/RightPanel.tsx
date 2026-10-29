@@ -671,7 +671,13 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   const changes = useHive((s) => s.changes[worktree]);
   const listing = useHive((s) => (s.worktreeFiles?.path === worktree ? s.worktreeFiles : null));
   const all = changedOnly ? null : listing;
-  const collapsed = useHive((s) => s.collapsed);
+  // Only this tree's folders: another tree's or the sidebar's opening one walks nothing (19.17).
+  const prefix = `${changedOnly ? "changes" : "files"}:${worktree}/`;
+  const collapsed = useHive(
+    useShallow((s) =>
+      Object.fromEntries(Object.entries(s.collapsed).filter(([key]) => key.startsWith(prefix))),
+    ),
+  );
   const open = useHive((s) => (s.openFile?.worktree === worktree ? s.openFile.path : null));
   const newFolders = useHive((s) => (changedOnly ? undefined : s.newFolders[worktree]));
   const root = useMemo(

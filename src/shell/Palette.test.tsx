@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Profiler } from "react";
 import { asMac } from "../../test/mac";
 import { App } from "../App";
 import type { Project } from "../protocol";
@@ -9,7 +10,7 @@ import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
-import { FILE_LIMIT, fuzzy, type PaletteItem, paletteCommands, rank } from "./Palette";
+import { FILE_LIMIT, fuzzy, Palette, type PaletteItem, paletteCommands, rank } from "./Palette";
 
 beforeAll(async () => {
   await transport.connect(apply);
@@ -191,6 +192,46 @@ test("the selected worktree's run scripts are commands that type them into a new
   key("Enter");
   expect(terminal.mock.calls[0]?.[0]).toBe(fixLogin.path);
   await waitFor(() => expect(write).toHaveBeenCalledWith(8, "bun dev\r"));
+  terminal.mockRestore();
+  write.mockRestore();
+});
+
+test("the palette renders only when what it shows changes; a row runs as the store is now (19.17)", async () => {
+  const terminal = spyOn(transport, "openTerminal").mockResolvedValue(8);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.projects[shop.id] = {
+    scripts: { ...NO_SCRIPTS, run: [{ name: "dev", command: "bun dev" }] },
+  };
+  act(() => {
+    apply({ type: "projects", projects: [shop, api] });
+    apply({ type: "settings", settings });
+    useHive.setState({ selection: fixLogin.id });
+  });
+  let commits = 0;
+  render(
+    <Profiler id="palette" onRender={() => commits++}>
+      <Palette />
+    </Profiler>,
+  );
+  type("run dev");
+  commits = 0;
+  // A store update the palette does not show: no render.
+  act(() => useHive.setState({ splitPercent: 40 }));
+  expect(commits).toBe(0);
+  // One it shows (the row's worktree, renamed): a render.
+  const worktrees = shop.worktrees.map((w) => (w === fixLogin ? { ...w, name: "fix-auth" } : w));
+  act(() => apply({ type: "projects", projects: [{ ...shop, worktrees }, api] }));
+  expect([commits, document.querySelector(".picker-path")?.textContent]).toEqual([1, "fix-auth"]);
+  // The script's command is not shown: still no render, but Enter types the new one.
+  const changed = structuredClone(settings);
+  changed.projects[shop.id] = {
+    scripts: { ...NO_SCRIPTS, run: [{ name: "dev", command: "bun run dev" }] },
+  };
+  act(() => apply({ type: "settings", settings: changed }));
+  expect([commits, picked()?.textContent]).toEqual([1, "Run: dev"]);
+  key("Enter");
+  await waitFor(() => expect(write).toHaveBeenCalledWith(8, "bun run dev\r"));
   terminal.mockRestore();
   write.mockRestore();
 });

@@ -5,7 +5,7 @@ import { apply } from "./reduce";
 import { DEFAULT_SETTINGS, initialState, useHive } from "./store";
 import { agentStatus } from "./transport/mock";
 import { tauriTransport } from "./transport/tauri";
-import { followTray, type Tray, trayOf } from "./tray";
+import { followTray, sameTray, type Tray, trayOf } from "./tray";
 
 beforeEach(() => useHive.setState(initialState, true));
 afterEach(() => {
@@ -118,6 +118,27 @@ test("the tray follows the store on macOS only, sent when it changes; a failure 
   const refused = followTray(() => Promise.reject(new Error("no status bar")), true);
   await Promise.resolve();
   refused();
+});
+
+test("two trays are the same only when every field is (19.17)", () => {
+  const tray: Tray = {
+    shown: true,
+    urgent: ["error", true],
+    agents: [["a", "Claude", "error", null]],
+    usage: ["5h 40%"],
+  };
+  expect(sameTray(tray, structuredClone(tray))).toBe(true);
+  const changes: Partial<Tray>[] = [
+    { shown: false },
+    { urgent: null },
+    { urgent: ["error", false] },
+    { agents: [] },
+    { agents: [["a", "fix", "error", null]] },
+    { usage: [] },
+    { usage: ["5h 41%"] },
+  ];
+  for (const change of changes) expect(sameTray(tray, { ...tray, ...change })).toBe(false);
+  expect(sameTray({ ...tray, urgent: null }, { ...tray, urgent: null })).toBe(true);
 });
 
 test("the tray reaches the app side's set_tray command", async () => {

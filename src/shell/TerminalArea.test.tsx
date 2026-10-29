@@ -6,6 +6,7 @@ import { App } from "../App";
 import type { ProgressState } from "../protocol";
 import { apply } from "../reduce";
 import { addTab, initialState, select, setEdit, setOpenFile, useHive } from "../store";
+import * as tabsModule from "../tabs";
 import { closeTerminal, terminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
@@ -105,6 +106,28 @@ test("with an agent selected (F8), New terminal opens one in the agent's worktre
   });
   expect(button.disabled).toBe(true);
   open.mockRestore();
+});
+
+test("a store update builds the tab bar once, and the tabs keep their order and keys (19.17)", () => {
+  show();
+  act(() => {
+    addTab(1, shopMain.path);
+    addTab(2, shopMain.path);
+  });
+  const built = spyOn(tabsModule, "barItems");
+  try {
+    act(() => useHive.setState({ focused: !useHive.getState().focused }));
+    // React reads the one selector four times per update here (useSyncExternalStore's checks);
+    // a second selector building the bar again made it seven.
+    expect(built).toHaveBeenCalledTimes(4);
+  } finally {
+    built.mockRestore();
+  }
+  expect(
+    bar()
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["main", "main"]);
 });
 
 test("tabs switch and show exit and missing hooks", () => {
