@@ -283,14 +283,53 @@ fn set_tray_shows_the_view_or_removes_the_tray_when_the_setting_is_off() {
     let shown = shown.lock().unwrap();
     assert_eq!(
         *shown,
-        [Tray::Show(view(urgent, &agents, &[])), Tray::Remove]
+        [
+            Tray::Show(view(Some(icon(urgent)), &agents, &[])),
+            Tray::Remove
+        ]
     );
     let Tray::Show(view) = &shown[0] else {
         panic!("shown")
     };
     assert_eq!(view.tooltip, "Hive — 1 agent needs you");
-    assert!(!view.icon.template);
+    assert!(!view.icon.as_ref().unwrap().template);
     assert_eq!(view.entries[0], item("agent:a1", "fix login — error"));
+}
+
+/// Whether each view the tray was asked to show carried an icon.
+fn icons(shown: &Shown) -> Vec<bool> {
+    let shown = shown.lock().unwrap();
+    let carried = |tray: &Tray| matches!(tray, Tray::Show(View { icon: Some(_), .. }));
+    shown.iter().map(carried).collect()
+}
+
+#[test]
+fn the_icon_is_drawn_again_only_when_the_most_urgent_state_changes() {
+    let (hive, shown) = with_tray();
+    let error = Some((AgentState::Error, true));
+    for urgent in [None, None, error, error, None] {
+        assert_eq!(hive.set_tray(true, urgent, &[], &[]), Ok(()));
+    }
+    assert_eq!(icons(&shown), [true, false, true, false, true]);
+    // Once removed, the next tray is new: it gets the icon again.
+    assert_eq!(hive.set_tray(false, None, &[], &[]), Ok(()));
+    assert_eq!(hive.set_tray(true, None, &[], &[]), Ok(()));
+    assert!(icons(&shown)[6]);
+    // A tray the OS refused shows nothing: the next view draws it again.
+    let fails = Mutex::new(true);
+    let tried = Shown::default();
+    let seen = Arc::clone(&tried);
+    let hive = Hive::new("/nonexistent/hive-test".into(), vec![]).with_tray(move |view| {
+        seen.lock().unwrap().push(view);
+        match std::mem::replace(&mut *fails.lock().unwrap(), false) {
+            true => Err("no status bar".into()),
+            false => Ok(()),
+        }
+    });
+    assert!(hive.set_tray(true, None, &[], &[]).is_err());
+    assert_eq!(hive.set_tray(true, None, &[], &[]), Ok(()));
+    assert_eq!(hive.set_tray(true, None, &[], &[]), Ok(()));
+    assert_eq!(icons(&tried), [true, true, false]);
 }
 
 #[test]
@@ -317,16 +356,19 @@ fn set_tray_refuses_an_agent_id_longer_than_max_id() {
 #[test]
 fn a_view_updates_the_tray_found_or_creates_one() {
     // One instantiation of `place` for both cases, so its coverage counts both arms.
-    let place_on = |found: Option<u8>| {
+    let place_on = |found: Option<u8>, drawn: Option<Icon>| {
         place(
             found,
-            view(None, &[], &[]),
+            view(drawn, &[], &[]),
             |tray, v| Err(format!("updated {tray} {}", v.tooltip)),
             |v| Err(format!("created {}", v.tooltip)),
         )
     };
-    assert_eq!(place_on(None), Err("created Hive".into()));
-    assert_eq!(place_on(Some(7)), Err("updated 7 Hive".into()));
+    assert_eq!(place_on(None, Some(icon(None))), Err("created Hive".into()));
+    assert_eq!(place_on(Some(7), None), Err("updated 7 Hive".into()));
+    // No new tray without an icon.
+    let gone = Err("the menu bar icon is gone".into());
+    assert_eq!(place_on(None, None), gone);
 }
 
 #[test]

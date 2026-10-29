@@ -1801,6 +1801,7 @@ dependencies = [
  "hive-protocol",
  "mac-notification-sys",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",

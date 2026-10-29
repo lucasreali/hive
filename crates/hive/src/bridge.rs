@@ -11,6 +11,9 @@ use crate::paths::Paths;
 
 /// How long to wait for a freshly started service to accept connections.
 pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(5);
+/// How much each side reads at a time: a burst of terminal output crosses in a few copies, not
+/// tokio's default 8 KiB ones (D19.7).
+const BUFFER: usize = 64 * 1024;
 
 pub async fn run(paths: &Paths, hive: &Path) -> io::Result<()> {
     // Only to our own service (`Paths::connect`). A missing or insecure runtime directory goes
@@ -28,9 +31,18 @@ pub async fn run(paths: &Paths, hive: &Path) -> io::Result<()> {
     // The handshake and everything after it pass through unchanged.
     // Either side closing (app gone, or service refused the handshake) ends the bridge.
     tokio::select! {
-        result = tokio::io::copy(&mut stdin, &mut to_daemon) => result.map(drop),
-        result = tokio::io::copy(&mut from_daemon, &mut stdout) => result.map(drop),
+        result = pipe(&mut stdin, &mut to_daemon) => result.map(drop),
+        result = pipe(&mut from_daemon, &mut stdout) => result.map(drop),
     }
+}
+
+/// Copies `from` into `to` until `from` ends, [`BUFFER`] bytes at a time at most.
+async fn pipe<R, W>(from: R, to: &mut W) -> io::Result<u64>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin + ?Sized,
+{
+    tokio::io::copy_buf(&mut tokio::io::BufReader::with_capacity(BUFFER, from), to).await
 }
 
 /// Starts `hive daemon` in its own session so it outlives nothing but the app connection.
@@ -91,6 +103,39 @@ async fn connect_when_ready(paths: &Paths) -> io::Result<crate::paths::Stream> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// A reader of `data` that records the largest read it was offered.
+    struct Recorder<'a> {
+        data: &'a [u8],
+        largest: usize,
+    }
+
+    impl tokio::io::AsyncRead for Recorder<'_> {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            self.largest = self.largest.max(buf.remaining());
+            let n = buf.remaining().min(self.data.len());
+            buf.put_slice(&self.data[..n]);
+            self.data = &self.data[n..];
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_bridge_copies_everything_64_kib_at_a_time() {
+        let data: Vec<u8> = (0..300_000_u32).map(|i| (i % 251) as u8).collect();
+        let mut from = Recorder {
+            data: &data,
+            largest: 0,
+        };
+        let mut to = Vec::new();
+        assert_eq!(pipe(&mut from, &mut to).await.unwrap(), 300_000);
+        assert_eq!(to, data);
+        assert_eq!(from.largest, 64 * 1024);
+    }
 
     #[test]
     fn each_start_keeps_the_previous_log() {

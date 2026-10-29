@@ -2206,6 +2206,13 @@ async fn newer_update(app: &tauri::App<tauri::test::MockRuntime>) -> Update {
     app.updater().unwrap().check().await.unwrap().unwrap()
 }
 
+/// A cache folder of its own for a downloaded update.
+fn update_dir() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    scratch(&format!("update-{n}"))
+}
+
 /// A `Hive` whose installer records the bytes it gets and answers `result`.
 fn hive_installing(
     result: Result<(), String>,
@@ -2216,6 +2223,7 @@ fn hive_installing(
 ) {
     let (hive, rx) = hive_with_ui();
     let (tx, installed) = std::sync::mpsc::channel();
+    let hive = hive.with_update_dir(update_dir());
     let hive = hive.with_install(move |_, bytes| {
         tx.send(bytes.to_vec()).unwrap();
         result.clone()
@@ -2296,12 +2304,63 @@ async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
         next(&mut rx).await,
         json!({"type": "update_ready", "version": "99.0.0"})
     );
+    // Kept on disk, not in memory, until installed; then removed.
+    let saved = hive.update_dir.clone().unwrap().join(download::FILE);
+    assert_eq!(std::fs::read(&saved).unwrap(), b"setup");
     hive.install_update().await;
     assert_eq!(installed.try_recv(), Ok(b"setup".to_vec()));
     assert_eq!(restarted.try_recv(), Ok(()));
+    assert!(!saved.exists());
     // The exit after the restart has nothing left to install.
     assert_eq!(hive.install_pending(), None);
     assert!(installed.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_newer_download_replaces_the_saved_one() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"newer".to_vec()));
+    next(&mut rx).await;
+    next(&mut rx).await;
+    assert_eq!(hive.install_pending(), Some(Ok(())));
+    assert_eq!(installed.try_recv(), Ok(b"newer".to_vec()));
+}
+
+#[tokio::test]
+async fn an_update_that_cannot_be_saved_or_read_back_is_not_installed() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let dir = hive.update_dir.clone().unwrap();
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    // Changed on disk after the download: refused, and removed.
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    next(&mut rx).await;
+    std::fs::write(dir.join(download::FILE), "other").unwrap();
+    hive.install_update().await;
+    let failed = next(&mut rx).await;
+    assert_eq!(failed["type"], "update_failed");
+    assert!(installed.try_recv().is_err());
+    assert!(!dir.join(download::FILE).exists());
+    // A cache folder that is a file: nothing saved, nothing offered.
+    std::fs::remove_dir(&dir).unwrap();
+    std::fs::write(&dir, "").unwrap();
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    assert_eq!(hive.install_pending(), None);
+    // An app with no cache folder keeps no download either.
+    let (bare, mut bare_rx) = hive_with_ui();
+    bare.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    assert_eq!(bare.install_pending(), None);
+    assert!(rx.try_recv().is_err());
+    assert!(bare_rx.try_recv().is_err());
+}
+
+#[test]
+fn an_installer_left_by_an_earlier_run_is_removed_at_start() {
+    let dir = update_dir();
+    std::fs::write(dir.join(download::FILE), "stale").unwrap();
+    let _hive = hive().with_update_dir(dir.clone());
+    assert!(!dir.join(download::FILE).exists());
 }
 
 #[test]
@@ -2833,7 +2892,7 @@ fn a_second_launch_brings_the_window_up_when_there_is_one() {
 }
 
 /// A folder of its own for `name` under the system's temporary folder, empty.
-fn scratch(name: &str) -> PathBuf {
+pub(crate) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("hive-app-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

@@ -4,6 +4,7 @@
 
 use hive_protocol::AgentState;
 use serde_json::json;
+use std::sync::{Mutex, PoisonError};
 use tauri::{AppHandle, Runtime};
 
 use crate::{bring_up, lock, printable, Hive};
@@ -62,10 +63,10 @@ pub struct Icon {
     pub template: bool,
 }
 
-/// What the tray shows.
+/// What the tray shows. No `icon`: keep the one shown, as the most urgent state is unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct View {
-    pub icon: Icon,
+    pub icon: Option<Icon>,
     pub tooltip: String,
     pub entries: Vec<Entry>,
 }
@@ -81,7 +82,16 @@ pub enum Tray {
 /// Applies a [`Tray`] to the platform's tray; given by `main.rs` (`with_tray`).
 pub type Apply = dyn Fn(Tray) -> Result<(), String> + Send + Sync;
 
-/// Shows `view` on the tray `found` (`update` it in place) or on a new one (`create`).
+/// The platform's tray and the most urgent state its icon shows (`None`: no icon shown yet), so
+/// that the icon is drawn and set again only when that state changes.
+pub struct Shown {
+    apply: Box<Apply>,
+    urgent: Mutex<Option<Option<(AgentState, bool)>>>,
+}
+
+/// Shows `view` on the tray `found` (`update` it in place) or on a new one (`create`). A new
+/// tray needs an icon: without one (the tray gone behind Hive's back) it fails, and the next
+/// view draws it again.
 pub fn place<T>(
     found: Option<T>,
     view: View,
@@ -90,6 +100,7 @@ pub fn place<T>(
 ) -> Result<(), String> {
     match found {
         Some(tray) => update(tray, view),
+        None if view.icon.is_none() => Err("the menu bar icon is gone".into()),
         None => create(view),
     }
 }
@@ -252,10 +263,10 @@ pub fn tooltip(pending: usize) -> String {
     }
 }
 
-/// The whole view for what the UI sent.
-pub fn view(urgent: Option<(AgentState, bool)>, agents: &[Agent], usage: &[String]) -> View {
+/// The whole view for what the UI sent, with `icon` if it changed.
+pub fn view(icon: Option<Icon>, agents: &[Agent], usage: &[String]) -> View {
     View {
-        icon: icon(urgent),
+        icon,
         tooltip: tooltip(agents.len()),
         entries: entries(agents, usage),
     }
@@ -267,12 +278,17 @@ impl Hive {
         mut self,
         apply: impl Fn(Tray) -> Result<(), String> + Send + Sync + 'static,
     ) -> Self {
-        self.tray = Some(Box::new(apply));
+        let urgent = Mutex::default();
+        self.tray = Some(Shown {
+            apply: Box::new(apply),
+            urgent,
+        });
         self
     }
 
-    /// Shows the tray for what the UI sent (`shown`: the setting is on), or removes it. An
-    /// agent id longer than [`MAX_ID`] bytes refuses the whole message.
+    /// Shows the tray for what the UI sent (`shown`: the setting is on), or removes it. The icon
+    /// is drawn only when `urgent` differs from the one shown. An agent id longer than
+    /// [`MAX_ID`] bytes refuses the whole message.
     pub fn set_tray(
         &self,
         shown: bool,
@@ -280,14 +296,23 @@ impl Hive {
         agents: &[Agent],
         usage: &[String],
     ) -> Result<(), String> {
-        let apply = self.tray.as_ref().ok_or("this app has no menu bar icon")?;
+        let tray = self.tray.as_ref().ok_or("this app has no menu bar icon")?;
         if agents.iter().any(|(id, ..)| id.len() > MAX_ID) {
             return Err(format!("an agent id is longer than {MAX_ID} bytes"));
         }
-        apply(match shown {
-            true => Tray::Show(view(urgent, agents, usage)),
+        // Held while applying, so two views never race on what the icon shows.
+        let mut drawn = tray.urgent.lock().unwrap_or_else(PoisonError::into_inner);
+        let result = (tray.apply)(match shown {
+            true => Tray::Show(view(
+                (*drawn != Some(urgent)).then(|| icon(urgent)),
+                agents,
+                usage,
+            )),
             false => Tray::Remove,
-        })
+        });
+        // A removed or failed tray shows no icon of ours: the next view draws it.
+        *drawn = (shown && result.is_ok()).then_some(urgent);
+        result
     }
 }
 
