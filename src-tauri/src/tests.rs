@@ -923,6 +923,27 @@ async fn buffered_terminal_output_reaches_the_ui_in_one_send_per_channel() {
 }
 
 #[tokio::test]
+async fn terminal_output_goes_at_once_without_waiting_for_more() {
+    let link = Mutex::new(Link::default());
+    let (output, mut rx) = output();
+    let term = Term {
+        output,
+        cwd: "/w".into(),
+        worktree: Value::Null,
+    };
+    lock(&link).terminals.insert(1, term);
+    let (reader, writer) = tokio::io::duplex(1 << 16);
+    let mut writer = FramedWrite::new(writer, FrameCodec);
+    let service = async move {
+        writer.send(Frame::terminal(1, "a")).await.unwrap();
+        // Sent while the connection stays open, with nothing more to read.
+        assert_eq!(next(&mut rx).await, b"a");
+    };
+    let (end, ()) = tokio::join!(pump(&link, FramedRead::new(reader, FrameCodec)), service);
+    assert!(matches!(end, End::Closed));
+}
+
+#[tokio::test]
 async fn a_burst_of_terminal_output_is_bounded() {
     let frames = vec![Frame::terminal(1, "x"); BURST_FRAMES + 1];
     let sent = pumped(frames).await;
