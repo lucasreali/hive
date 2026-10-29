@@ -101,11 +101,12 @@ export function dropFile(s: HiveState, f: OpenFile): Partial<HiveState> {
   return next ? { ...closed, activeTab: next.id } : closed;
 }
 
-/** The split shown: the stored one while the active tab is one of its panes, else none. */
-export function shownSplit(s: HiveState): Split | null {
-  const split = s.split;
-  return split && (s.activeTab === split.left || s.activeTab === split.right) ? split : null;
-}
+/** The pair terminal `id` is in (20.5: one at most), or none. */
+export const splitOf = (s: HiveState, id: number | null): Split | null =>
+  s.splits.find((p) => p.left === id || p.right === id) ?? null;
+
+/** The split shown: the active tab's pair (its tab is the focused pane), else none. */
+export const shownSplit = (s: HiveState): Split | null => splitOf(s, s.activeTab);
 
 /** The terminals the terminal area shows, left to right. */
 export function shownTerminals(s: HiveState): number[] {
@@ -165,6 +166,13 @@ export function inBarOrder<T extends BarItem>(s: HiveState, items: T[]): T[] {
     return i < 0 ? s.tabOrder.length : i;
   };
   return [...items].sort((a, b) => rank(a) - rank(b));
+}
+
+/** The terminal tab `key` (a `barKey`) names when it can be dropped on the terminals shown: one of their worktree (20.5). */
+export function droppable(s: HiveState, key: string): Tab | null {
+  const tab = s.tabs.find((t) => barKey(s, t) === key);
+  const shown = s.tabs.find((t) => t.id === shownTerminals(s)[0]);
+  return tab && shown && !s.fileShown && tabWorktree(s, tab) === tabWorktree(s, shown) ? tab : null;
 }
 
 /** The tabs of the bar, terminals and files mixed, in its order. */

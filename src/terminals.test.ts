@@ -1199,7 +1199,7 @@ test("Ctrl+Shift+D splits with the next tab of the worktree, again un-splits; a 
   const two = await open();
   // The next tab after the last one of the worktree wraps to its first, skipping other places.
   await splitTerminal(two.id);
-  expect(useHive.getState().split).toEqual({ left: two.id, right: one.id });
+  expect(useHive.getState().splits).toEqual([{ left: two.id, right: one.id }]);
   expect(shownTerminals(useHive.getState())).toEqual([two.id, one.id]);
   expect(useHive.getState().activeTab).toBe(one.id);
 
@@ -1211,24 +1211,28 @@ test("Ctrl+Shift+D splits with the next tab of the worktree, again un-splits; a 
   expect(useHive.getState().activeTab).toBe(two.id);
 
   await splitTerminal(one.id);
-  expect(useHive.getState().split).toBeNull();
+  expect(useHive.getState().splits).toEqual([]);
   expect(shownTerminals(useHive.getState())).toEqual([two.id]);
   // Without a split, a pane taking the focus changes nothing.
   focusIn(one.term);
   expect(useHive.getState().activeTab).toBe(two.id);
   await splitTerminal(999);
-  expect(useHive.getState().split).toBeNull();
+  expect(useHive.getState().splits).toEqual([]);
   await splitTerminal(one.id);
-  expect(useHive.getState().split).toEqual({ left: one.id, right: two.id });
+  expect(useHive.getState().splits).toEqual([{ left: one.id, right: two.id }]);
   await splitTerminal(one.id);
   await splitTerminal(null);
-  expect(useHive.getState().split).toBeNull();
+  expect(useHive.getState().splits).toEqual([]);
 });
 
 test("a tab alone in its worktree splits beside a new terminal there; closing a pane un-splits", async () => {
   const one = await open();
   await splitTerminal(one.id);
-  const { split, tabs, activeTab } = useHive.getState();
+  const {
+    splits: [split],
+    tabs,
+    activeTab,
+  } = useHive.getState();
   const right = split?.right as number;
   opened.push(right);
   expect(split?.left).toBe(one.id);
@@ -1243,7 +1247,7 @@ test("a tab alone in its worktree splits beside a new terminal there; closing a 
 
   // Closing the focused pane shows the other one alone.
   closeTerminal(one.id);
-  expect(useHive.getState()).toMatchObject({ split: null, activeTab: right });
+  expect(useHive.getState()).toMatchObject({ splits: [], activeTab: right });
   opened.splice(opened.indexOf(one.id), 1);
 });
 

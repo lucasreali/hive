@@ -15,6 +15,7 @@ import { apply } from "./reduce";
 import {
   activateTab,
   addTab,
+  dropOnPane,
   type HiveState,
   initialState,
   moveTab,
@@ -22,14 +23,18 @@ import {
   pinFile,
   removeTab,
   renderedShown,
+  replacePane,
   select,
   setEdit,
   setEditing,
   setOpenFile,
   setRendered,
+  setSplit,
+  swapSides,
+  unsplit,
   useHive,
 } from "./store";
-import { barItems, dropFile, visibleTabs } from "./tabs";
+import { barItems, dropFile, shownSplit, shownTerminals, visibleTabs } from "./tabs";
 import { closeTerminal, splitTerminal } from "./terminals";
 import { MOCK_REPOS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";
@@ -266,7 +271,124 @@ test("Ctrl+Shift+D and closing follow the bar's order", async () => {
   moveTab("tab:3", "tab:1", true); // 1, 3, 2
   expect(visibleTabs(s()).map((t) => t.id)).toEqual([1, 3, 2]);
   await splitTerminal(1);
-  expect(s().split).toEqual({ left: 1, right: 3 });
+  expect(s().splits).toEqual([{ left: 1, right: 3 }]);
+});
+
+test("pairs (20.5): many, a tab in one at most, each shown from either tab, its tabs side by side", () => {
+  for (const id of [1, 2, 3, 4, 5]) addTab(id, W);
+  setSplit({ left: 1, right: 4 });
+  // The right tab moves next to the left one; it is focused.
+  expect(bar()).toEqual([1, 4, 2, 3, 5]);
+  expect(shownTerminals(s())).toEqual([1, 4]);
+  expect(s().activeTab).toBe(4);
+  setSplit({ left: 5, right: 2 }, 5);
+  expect(bar()).toEqual([1, 4, 3, 5, 2]);
+  expect(s().splits).toEqual([
+    { left: 1, right: 4 },
+    { left: 5, right: 2 },
+  ]);
+  // Each tab shows its own pair, or itself alone.
+  const shown = (id: number) => {
+    activateTab({ id, cwd: W });
+    return [shownSplit(s()), shownTerminals(s())];
+  };
+  expect(shown(1)).toEqual([{ left: 1, right: 4 }, [1, 4]]);
+  expect(shown(2)).toEqual([{ left: 5, right: 2 }, [5, 2]]);
+  expect(shown(3)).toEqual([null, [3]]);
+  // A tab joining another pair leaves its own, which ends.
+  setSplit({ left: 3, right: 4 });
+  expect(s().splits).toEqual([
+    { left: 5, right: 2 },
+    { left: 3, right: 4 },
+  ]);
+  expect(bar()).toEqual([1, 3, 4, 5, 2]);
+  // A pair of one tab is none.
+  setSplit({ left: 1, right: 1 });
+  expect(s().splits).toHaveLength(2);
+
+  // Replacing a pane: the tab replaced stays alone; one of another pair leaves it.
+  replacePane(4, 2);
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  expect([s().activeTab, bar()]).toEqual([2, [1, 3, 2, 4, 5]]);
+  replacePane(3, 3);
+  replacePane(1, 3);
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  // The partner put in a pane swaps the sides; so does "Swap sides", the focus kept.
+  replacePane(3, 2);
+  expect([s().splits, s().activeTab, bar()]).toEqual([[{ left: 2, right: 3 }], 2, [1, 2, 3, 4, 5]]);
+  // Swapped while hidden, the pair is shown from the tab swapped.
+  activateTab({ id: 5, cwd: W });
+  swapSides(3);
+  expect([s().splits, s().activeTab, bar()]).toEqual([[{ left: 3, right: 2 }], 3, [1, 3, 2, 4, 5]]);
+  swapSides(5);
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  setSplit({ left: 4, right: 5 });
+  // Unsplit and closing a tab end only their own pair.
+  unsplit(5);
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  setSplit({ left: 4, right: 5 });
+  removeTab(4);
+  expect([s().splits, s().activeTab]).toEqual([[{ left: 3, right: 2 }], 5]);
+  setSplit({ left: 1, right: 5 }, 1);
+  removeTab(2);
+  expect([s().splits, s().activeTab]).toEqual([[{ left: 1, right: 5 }], 1]);
+});
+
+test("dragging a paired tab moves its pair; a tab dropped inside a pair lands after it (20.5)", () => {
+  for (const id of [1, 2, 3, 4]) addTab(id, W);
+  setSplit({ left: 2, right: 3 });
+  expect(bar()).toEqual([1, 2, 3, 4]);
+  moveTab("tab:2", "tab:4", true);
+  expect(bar()).toEqual([1, 4, 2, 3]);
+  moveTab("tab:3", "tab:1", false);
+  expect(bar()).toEqual([2, 3, 1, 4]);
+  moveTab("tab:4", "tab:2", true);
+  expect(bar()).toEqual([2, 3, 4, 1]);
+  // Within the pair, the order stays left first.
+  moveTab("tab:3", "tab:2", false);
+  expect(bar()).toEqual([2, 3, 4, 1]);
+});
+
+test("a tab dropped on the terminals takes a pane or makes a pair on its side (20.5)", () => {
+  for (const id of [1, 2, 3]) addTab(id, W);
+  addTab(9, checkout.path);
+  select(fixLogin.id);
+  activateTab({ id: 1, cwd: W });
+  // Onto the terminal alone: a pair, the tab dropped on the side it was dropped, focused.
+  dropOnPane("tab:2", "left");
+  expect([s().splits, s().activeTab, bar()]).toEqual([[{ left: 2, right: 1 }], 2, [2, 1, 3]]);
+  // Onto a pane: it takes it.
+  dropOnPane("tab:3", "right");
+  expect([s().splits, s().activeTab]).toEqual([[{ left: 2, right: 3 }], 3]);
+  // The other pane's tab swaps the sides; the pane's own tab does nothing.
+  dropOnPane("tab:2", "right");
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  dropOnPane("tab:2", "right");
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  // Files, other worktrees' tabs and unknown keys do nothing; nor does a tab on itself.
+  for (const key of [`file:${W}\na.ts`, "tab:9", "tab:99"]) dropOnPane(key, "left");
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  activateTab({ id: 1, cwd: W });
+  dropOnPane("tab:1", "left");
+  expect([s().splits, shownTerminals(s())]).toEqual([[{ left: 3, right: 2 }], [1]]);
+  // Over a file's view, nothing.
+  keepOpen(file("a.ts"));
+  dropOnPane("tab:3", "left");
+  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+});
+
+test("Ctrl+Shift+D pairs with the next tab in no pair; on a paired tab it ends that pair (20.5)", async () => {
+  for (const id of [1, 2, 3, 4]) addTab(id, W);
+  setSplit({ left: 2, right: 3 });
+  // From 1, the next tab in no pair is 4.
+  await splitTerminal(1);
+  expect(s().splits).toEqual([
+    { left: 2, right: 3 },
+    { left: 1, right: 4 },
+  ]);
+  expect(bar()).toEqual([1, 4, 2, 3]);
+  await splitTerminal(3);
+  expect(s().splits).toEqual([{ left: 1, right: 4 }]);
 });
 
 test("a file moved into another folder (8.3) keeps its tab, its place and its unsaved edits", () => {
