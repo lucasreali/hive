@@ -2,10 +2,10 @@
 //! the Sessions list is sent again when they change, instead of the app asking every 5 s.
 //!
 //! Each account's projects folder is watched (a log written or removed in it), and the folder
-//! of its records beside it non-recursively (a `claude` that starts or exits). Only a project
+//! of its records beside it (a `claude` that starts or exits). Only a project
 //! folder's own entries count, and only for the followed projects: a subagent's log or another
-//! project's does not. The projects folder is watched recursively on macOS (one FSEvents
-//! stream); on Linux, where inotify adds a watch per folder of a recursive one (every
+//! project's does not. The folders are watched recursively on macOS (one FSEvents stream);
+//! on Linux, where inotify adds a watch per folder of a recursive one (every
 //! session's subagents and tool results), it and each followed project's log folder are
 //! watched non-recursively instead.
 
@@ -51,16 +51,12 @@ enum Kind {
     Records,
 }
 
-impl Kind {
-    fn mode(self) -> RecursiveMode {
-        // Linux: nothing recursively (the module's doc).
-        if cfg!(not(target_os = "linux")) && self == Kind::Projects {
-            RecursiveMode::Recursive
-        } else {
-            RecursiveMode::NonRecursive
-        }
-    }
-}
+/// How every folder is watched: recursively, except on Linux (the module's doc). A records
+/// folder holds only files, so watching it recursively changes nothing.
+#[cfg(not(target_os = "linux"))]
+const MODE: RecursiveMode = RecursiveMode::Recursive;
+#[cfg(target_os = "linux")]
+const MODE: RecursiveMode = RecursiveMode::NonRecursive;
 
 type Apply<'a> = dyn FnMut(Vec<PathOp>) -> Result<(), Box<UpdatePathsError>> + 'a;
 
@@ -225,8 +221,8 @@ fn follow(
         .filter(|(dir, _)| !watched.contains_key(*dir))
         .map(|(dir, kind)| (dir.clone(), *kind))
         .collect();
-    let watch = (added.iter())
-        .map(|(dir, kind)| PathOp::Watch(dir.clone(), WatchPathConfig::new(kind.mode())));
+    let watch =
+        (added.iter()).map(|(dir, _)| PathOp::Watch(dir.clone(), WatchPathConfig::new(MODE)));
     let ops = unwatch.chain(watch).collect();
     // ponytail: a watcher that fails as a whole leaves the folders unwatched until they are
     // followed again (the app's next ask).
@@ -289,14 +285,6 @@ mod tests {
             expected.insert(projects.join(name), Kind::Logs);
         }
         assert_eq!(watch.watched, expected);
-        #[cfg(target_os = "linux")]
-        let recursive = RecursiveMode::NonRecursive;
-        #[cfg(not(target_os = "linux"))]
-        let recursive = RecursiveMode::Recursive;
-        assert_eq!(Kind::Projects.mode(), recursive);
-        assert_eq!(Kind::Records.mode(), RecursiveMode::NonRecursive);
-        #[cfg(target_os = "linux")]
-        assert_eq!(Kind::Logs.mode(), RecursiveMode::NonRecursive);
         // Another account's folders replace them.
         let (_other, projects2, _) = claude();
         watch.follow(std::slice::from_ref(&projects2), &[], &shop());

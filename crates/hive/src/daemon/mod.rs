@@ -982,6 +982,8 @@ async fn watch_sessions(state: Arc<State>, watch: io::Result<session_watch::Watc
         if changed {
             state.sessions_changed();
         }
+        // Stays stoppable even if a wait returned at once every time.
+        tokio::task::yield_now().await;
         changed = tokio::select! {
             () = state.sessions_follow.notified() => false,
             // An agent detected or ended: one list for the burst.
