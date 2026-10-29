@@ -2,7 +2,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import { mod } from "./host";
 
 // D18.10 (a, b, d): a window that tiles, a System theme and the launch colour, and macOS' own
-// scrollbars and cursor.
+// cursor. D20.5: the prototype's scrollbars on every platform, native controls in the theme.
 
 const MAC_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
@@ -106,7 +106,7 @@ for (const [platform, userAgent] of [
     test.use({ userAgent });
     const mac = platform === "macOS";
 
-    test(`${mac ? "native" : "the prototype's"} scrollbars, ${mac ? "the arrow" : "a pointer"} over controls`, async ({
+    test(`the prototype's scrollbars, ${mac ? "the arrow" : "a pointer"} over controls`, async ({
       page,
       browserName,
     }) => {
@@ -119,7 +119,7 @@ for (const [platform, userAgent] of [
       await page.keyboard.press(mac ? "Meta+Comma" : "Control+Comma");
       const dialog = page.getByRole("dialog", { name: "Settings" });
       await expect(dialog.getByRole("checkbox").first()).toHaveCSS("cursor", pointer);
-      // An overflowing box's scrollbar: the prototype's is 10 px; macOS' is its own. (Headless
+      // An overflowing box's scrollbar: the prototype's 10 px, macOS too (D20.5). (Headless
       // Chromium hides every scrollbar.)
       if (browserName !== "webkit") return;
       const width = await page.evaluate(() => {
@@ -131,8 +131,49 @@ for (const [platform, userAgent] of [
         outer.remove();
         return w;
       });
-      if (mac) expect(width).not.toBe(10);
-      else expect(width).toBe(10);
+      expect(width).toBe(10);
     });
   });
 }
+
+test("native controls follow the theme's colour scheme (D20.5)", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("navigation", { name: "Projects" })).toBeVisible();
+  const root = page.locator("html");
+  for (const [theme, scheme] of [
+    ["one-dark", "dark"],
+    ["one-light", "light"],
+  ] as const) {
+    await root.evaluate((e, theme) => {
+      e.dataset.theme = theme;
+    }, theme);
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe(
+      scheme,
+    );
+  }
+});
+
+test.describe("the PRs view scrolled, on macOS (D20.5)", () => {
+  test.skip(({ browserName }) => browserName !== "webkit", "headless Chromium hides scrollbars");
+  test.use({ userAgent: MAC_UA, viewport: { width: 1000, height: 420 } });
+
+  test("the right panel's scrollbar is the prototype's thin thumb", async ({ page }) => {
+    await page.goto("/");
+    const tree = page.getByRole("navigation", { name: "Projects" });
+    await tree
+      .locator(".tree-row.worktree", { hasText: "fix-login" })
+      .locator(".pull-badge")
+      .click();
+    const panel = page.getByRole("region", { name: "PRs" });
+    await panel.getByRole("button", { name: "Pull requests" }).click();
+    await expect(panel.getByRole("region", { name: "Yours" }).locator(".pull")).toHaveCount(3);
+    const scroller = page.locator(".pulls");
+    expect(await scroller.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+    await scroller.evaluate((e) => {
+      e.scrollTop = e.scrollHeight;
+    });
+    await expect(page.getByRole("complementary", { name: "Side panel" })).toHaveScreenshot(
+      "pulls-scrolled.png",
+    );
+  });
+});

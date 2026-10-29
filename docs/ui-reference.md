@@ -15,7 +15,7 @@ The tokens live as CSS custom properties in `src/styles.css`.
 | `--panel` | `#2F343E` | Sidebar, tab bar, right panel, dialogs ("Painel") |
 | `--bar` | `#3B414D` | Title bar and status bar ("Barra de título / status") |
 | `--hover` | `#363C46` | Hover ("Hover"); also the subtle border |
-| `--selected` | `#454A56` | Selected row, active icon button, scrollbar thumb ("Selecionado") |
+| `--selected` | `#454A56` | Selected row, active icon button, scrollbar thumb ("Selecionado"): the prototype's 10 px scrollbars on every platform, macOS too (D20.5); the thumb is `--selected-hover` on hover, no track, a transparent corner |
 | `--selected-hover` | `#4F5563` | Hover on a selected-colored button ("New worktree" chip) |
 | `--border` | `#464B57` | Borders ("Borda") |
 | `--border-subtle` | `#363C46` | Inner separators ("sutil") |
@@ -49,6 +49,8 @@ Other values seen: canvas behind the prototype `#1B1E23` (not used in the app), 
 Git status colors in the files panel: modified `#DEC184`, added `#A1C181`, deleted `#D07277` (strikethrough). Diff backgrounds: added `rgba(161,193,129,0.12)`, removed `rgba(208,114,119,0.12)`, hunk header `rgba(116,173,232,0.08)` with `#74ADE8` text.
 
 Code in the Markdown preview (14.6): `--syn-keyword`, `--syn-name`, `--syn-function`, `--syn-constant`, `--syn-type`, `--syn-operator`, `--syn-comment`, `--syn-string`, the editor's One Dark groups (`#C678DD`, `#E06C75`, `#61AFEF`, `#D19A66`, `#E5C07B`, `#56B6C2`, `#7F848E`, `#98C379`); One Light uses Atom One Light's.
+
+`color-scheme` follows the theme (D20.5): `dark` in One Dark, `light` in One Light, so anything still native (a `<select>`'s popup, date inputs) matches the page.
 
 ### Typography
 
