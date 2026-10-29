@@ -66,7 +66,7 @@ export function followOpenFile(transport: Transport): () => void {
   const sync = (s: HiveState) => {
     const open = s.connection.status === "connected" ? s.openFile : null;
     const base = open && diffBase(s, open.worktree);
-    const changes = open && s.changes[open.worktree];
+    const changes = open && s.changesSeen[open.worktree];
     const reasons = [open, changes, base, s.connection, s.edit?.recheck ?? 0];
     if (reasons.every((reason, i) => reason === asked[i])) return;
     asked = reasons;

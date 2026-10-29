@@ -1,4 +1,4 @@
-import type { ServiceMessage, WorktreeFiles } from "./protocol";
+import type { ChangedFile, Changes, ServiceMessage, WorktreeFiles } from "./protocol";
 import {
   type FileTab,
   type HiveState,
@@ -39,6 +39,15 @@ function sameFields(a: object, b: object): boolean {
   const y = b as Record<string, unknown>;
   const keys = Object.keys(x);
   return keys.length === Object.keys(y).length && keys.every((k) => x[k] === y[k]);
+}
+
+/** `old` when it equals `changes` field for field, so the tree built from it is kept (19.13). */
+function keptChanges(old: Changes | undefined, changes: Changes): Changes {
+  if (!old || !sameFields({ ...old, files: null }, { ...changes, files: null })) return changes;
+  const same =
+    old.files.length === changes.files.length &&
+    old.files.every((f, i) => sameFields(f, changes.files[i] as ChangedFile));
+  return same ? old : changes;
 }
 
 function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<HiveState> {
@@ -345,8 +354,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return deletedFiles({ ...s, worktreeFiles }, s.worktreeFiles);
     }
     case "changes": {
+      // An equal list keeps its object; `changesSeen` still tells the open file to re-ask.
       const { type: _, ...changes } = m;
-      return { changes: { ...s.changes, [m.path]: changes } };
+      const kept = keptChanges(s.changes[m.path], changes);
+      const seen = { ...s.changesSeen, [m.path]: (s.changesSeen[m.path] ?? 0) + 1 };
+      return { changes: { ...s.changes, [m.path]: kept }, changesSeen: seen };
     }
     case "sessions":
       return { sessions: m.sessions, sessionsError: m.error, sessionsTruncated: m.truncated };

@@ -460,6 +460,36 @@ test("an equal file answer keeps its object, and still feeds the edit buffer (19
   expect(useHive.getState().edit?.doc.toString()).toBe("one\n");
 });
 
+test("an equal changes list keeps its object, and counts every arrival (19.13)", () => {
+  const none = { base: "head", branch: null, base_error: null } as const;
+  const row = { path: "a.ts", status: "modified", old_path: null, added: 1, removed: 0 } as const;
+  const list = { path: "/w", ...none, files: [row], added: 1, removed: 0, error: null };
+  const got = () => useHive.getState().changes["/w"];
+  apply({ type: "changes", ...list });
+  const first = got();
+  apply({ type: "changes", ...list, files: [{ ...row }] });
+  expect(got()).toBe(first);
+  expect(useHive.getState().changesSeen).toEqual({ "/w": 2 });
+  const others = [
+    { files: [] },
+    { files: [{ ...row, added: 2 }] },
+    { files: [{ ...row, status: "added" }] },
+    { files: [{ ...row, path: "b.ts" }] },
+    { added: 2 },
+    { removed: 1 },
+    { base: "branch" },
+    { error: "e" },
+  ] as const;
+  for (const other of others) {
+    apply({ type: "changes", ...list });
+    const before = got();
+    apply({ type: "changes", ...list, ...other } as ServiceMessage);
+    expect(got()).not.toBe(before);
+    expect(got()).toMatchObject(other);
+  }
+  expect(useHive.getState().changesSeen).toEqual({ "/w": 2 + 2 * others.length });
+});
+
 test("editing keeps a buffer for the open file, fed by its answers", () => {
   const edit = () => useHive.getState().edit;
   setOpenFile({ worktree: "/w", path: "a.ts" }, true);
