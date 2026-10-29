@@ -6,6 +6,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 import { notice } from "../../test/notice";
 import { initialState, useHive } from "../store";
+import { VERCEL_COMMENT } from "../transport/mockPulls";
 
 // Counts the parses (renders of react-markdown) to check the memo; it still renders.
 let parses = 0;
@@ -59,13 +60,74 @@ test("a GFM table has its header, cells and alignment, inside a scroller", () =>
   expect((cells[1] as HTMLElement).style.textAlign).toBe("right");
 });
 
-test("raw HTML shows as text, never as elements", () => {
+test("a cell of one word never breaks; a cell of several words, or none, wraps (20.1)", () => {
+  const view = md("| Approved | Reason | |\n|---|---|---|\n| 2026-09-23 | Pure wiring. | |");
+  const cls = (sel: string) => [...view.querySelectorAll(sel)].map((c) => c.className);
+  expect(cls("th")).toEqual(["md-word", "md-word", ""]);
+  expect(cls("td")).toEqual(["md-word", "", ""]);
+});
+
+test("Vercel's comment: its HTML links are links, its date is text, no tag shows (D20.2)", () => {
+  const view = md(VERCEL_COMMENT);
+  expect(
+    [...view.querySelectorAll("a")].map((a) => [a.textContent, a.getAttribute("href")]),
+  ).toEqual([
+    ["Vercel for GitHub", "https://vercel.link/github-learn-more"],
+    ["dashboards-one", "https://vercel.com/user/dashboards-one"],
+    ["Ready", "https://vercel.com/user/dashboards-one/Ab12"],
+    ["Preview", "https://dashboards-one-git-feature-user.vercel.app"],
+    [
+      "Request Review",
+      "https://vercel.com/vercel-agent/request-review?owner=user&repo=dashboards-one&pr=2",
+    ],
+  ]);
+  // The avatar link (an image with an empty alt) is dropped; no image or source loads.
+  expect(view.querySelector("img, source, sup:empty")).toBeNull();
+  expect(view.querySelector("a picture .md-img")?.textContent).toBe("Request Review");
+  const cells = [...view.querySelectorAll("td")].map((td) => td.textContent?.trim());
+  expect(cells).toEqual(["dashboards-one", "Ready Ready", "Preview", "Oct 26, 2026 6:46pm UTC"]);
+  expect(view.querySelector("relative-time")).toBeNull();
+  expect(view.textContent).not.toContain("<");
+  expect(view.textContent).not.toContain("vc]:");
+});
+
+test("raw HTML: nothing executable survives, other tags keep only their text (D20.2)", () => {
   const view = md(
-    '<script>alert(1)</script>\n\nhi <b onclick="x()">bold</b> <img src=x onerror=y>',
+    '<script>alert(1)</script>\n\nhi <b onclick="x()" style="color:red">bold</b> <img src=x onerror=y>' +
+      ' <iframe src="https://evil.dev"></iframe> <a href="javascript:alert(1)">js</a>' +
+      ' <a href="https://a.dev" onclick="x()" style="color:red" target="_blank">ok</a>' +
+      " <sup>up</sup><sub>down</sub>a<br>b\n\n<style>p{}</style>\n\n" +
+      "<details open><summary>More</summary>\n\nhidden\n\n</details>",
   );
-  expect(view.querySelector("script, b, img")).toBeNull();
-  expect(view.textContent).toContain("<script>alert(1)</script>");
-  expect(view.textContent).toContain('<b onclick="x()">bold</b>');
+  expect(view.querySelector("script, style, iframe, b, img")).toBeNull();
+  expect(view.textContent).not.toContain("alert");
+  expect(view.textContent).not.toContain("p{}");
+  expect(view.textContent).toContain("hi bold");
+  // A refused href is text; an allowed link keeps only its href.
+  const links = [...view.querySelectorAll("a")];
+  expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://a.dev"]);
+  expect(links[0]?.getAttributeNames().sort()).toEqual(["href", "title"]);
+  expect(view.textContent).toContain("js");
+  for (const el of view.querySelectorAll("*")) {
+    expect(el.getAttributeNames().filter((n) => n === "style" || n.startsWith("on"))).toEqual([]);
+  }
+  expect(view.querySelector("sup")?.textContent).toBe("up");
+  expect(view.querySelector("sub")?.textContent).toBe("down");
+  expect(view.querySelector("br")).not.toBeNull();
+  expect(view.querySelector("details")?.hasAttribute("open")).toBe(false);
+  expect(view.querySelector("details > summary")?.textContent).toBe("More");
+});
+
+test("a task checkbox stays a disabled checkbox; a raw input is never editable", () => {
+  const view = md('- [x] done\n- [ ] todo\n\n<input type="text" value="typed">');
+  const boxes = [...view.querySelectorAll("input")] as HTMLInputElement[];
+  expect(boxes.map((b) => [b.type, b.disabled, b.checked])).toEqual([
+    ["checkbox", true, true],
+    ["checkbox", true, false],
+    ["checkbox", true, false],
+  ]);
+  expect(view.querySelector("ul")?.className).toBe("contains-task-list");
+  expect(view.querySelector("li")?.className).toBe("task-list-item");
 });
 
 test("images are never loaded: the alt text stands in", () => {

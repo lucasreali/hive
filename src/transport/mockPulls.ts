@@ -50,6 +50,17 @@ export const MOCK_PULLS: Record<string, { mine: PullSummary[]; review: PullSumma
   },
 };
 
+/** Vercel's bot comment as GitHub returns it (20.1): Markdown with raw HTML in and after the table. */
+export const VERCEL_COMMENT = `[vc]: #a1b2c3:eyJpc01vbm9yZXBvIjp0cnVlfQ==
+The latest updates on your projects. Learn more about [Vercel for GitHub](https://vercel.link/github-learn-more).
+
+| Project | Deployment | Actions | Updated (UTC) |
+| :--- | :----- | :------ | :------ |
+| <a href="https://vercel.com/user/dashboards-one"><sup><img src="https://vercel.com/api/www/avatar?projectId=prj_1&s=32" width="16" height="16" align="middle" alt="" /></sup></a> [dashboards-one](https://vercel.com/user/dashboards-one) | ![Ready](https://vercel.com/static/status/ready.svg) [Ready](https://vercel.com/user/dashboards-one/Ab12) | [Preview](https://dashboards-one-git-feature-user.vercel.app) | <relative-time datetime="2026-10-26T18:46:20.389Z">Oct 26, 2026 6:46pm UTC</relative-time> |
+
+<a href="https://vercel.com/vercel-agent/request-review?owner=user&repo=dashboards-one&pr=2" rel="noreferrer"><picture><source media="(prefers-color-scheme: dark)" srcset="https://agents-vade-review.vercel.sh/request-review-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://agents-vade-review.vercel.sh/request-review-light.svg"><img src="https://agents-vade-review.vercel.sh/request-review-light.svg" alt="Request Review"></picture></a>
+`;
+
 const detail = (summary: PullSummary): PullDetail => ({
   summary,
   body: `## What\n\n${summary.title}, as asked in [the issue](${REPO.url}/issues/1).\n\n- one\n- two`,
@@ -64,6 +75,7 @@ const detail = (summary: PullSummary): PullDetail => ({
       at: summary.updated_at,
       review: "commented",
     },
+    { author: "vercel", body: VERCEL_COMMENT, at: summary.updated_at, review: null },
   ],
   checks: [
     {

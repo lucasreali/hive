@@ -3414,19 +3414,69 @@ body[data-resizing] {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* A table that cannot fit even with its columns at their longest word scrolls sideways in its
+   box, never the view (20.1). */
+.md-table {
+  overflow-x: auto;
+}
+
 .markdown table {
   max-width: 100%;
   border-collapse: collapse;
 }
 
+/* A cell breaks a word only when it must (not `anywhere`): a column is never narrower than its
+   longest word, so a date, a state or a path does not go one letter a line (20.1). */
 .markdown :is(th, td) {
   padding: 3px 8px;
   border: 1px solid var(--border);
+  overflow-wrap: break-word;
+}
+
+.markdown .md-word {
+  white-space: nowrap;
 }
 
 .markdown th {
   background: var(--panel);
   font-weight: 600;
+}
+
+/* A task's box (20.6): drawn, not WebKit's disabled checkbox, whose faded fill reads almost as
+   empty. Empty is an outline; done is a solid accent with a check, and its text recedes. */
+.markdown .task-list-item input {
+  appearance: none;
+  position: relative;
+  width: 14px;
+  height: 14px;
+  margin: 0 6px 0 0;
+  vertical-align: -2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  opacity: 1;
+}
+
+.markdown .task-list-item input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* The check: the bottom and right borders of a small box, turned. */
+.markdown .task-list-item input:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.markdown .task-list-item:has(> input:checked) {
+  color: var(--text-3);
 }
 
 .md-img {
@@ -3816,9 +3866,7 @@ button.link:hover {
 }
 
 .markdown-doc .task-list-item input {
-  margin: 0 8px 0 0;
-  vertical-align: -2px;
-  accent-color: var(--accent);
+  margin-right: 8px;
 }
 
 /* An image is never loaded: its alt text, as a chip. */
