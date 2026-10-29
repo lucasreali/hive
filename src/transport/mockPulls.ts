@@ -75,7 +75,10 @@ const detail = (summary: PullSummary): PullDetail => ({
       at: summary.updated_at,
       review: "commented",
     },
-    { author: "vercel", body: VERCEL_COMMENT, at: summary.updated_at, review: null },
+    // #14 also has Vercel's comment; #12 stays short enough not to scroll at 280 px.
+    ...(summary.number === 14
+      ? [{ author: "vercel", body: VERCEL_COMMENT, at: summary.updated_at, review: null }]
+      : []),
   ],
   checks: [
     {

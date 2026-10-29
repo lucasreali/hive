@@ -3808,8 +3808,11 @@ button.link:hover {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* The scrollbar's room is always kept (its track is transparent): a document about the view's
+     height with a wide table would otherwise flip it on and off, and WebKit keeps the wider
+     layout, a scrollbar's width past the view (20.1). */
+  overflow-y: scroll;
   padding: 12px 16px;
-  container-type: inline-size;
 }
 
 /* The preview's document style (14.6): the editor's density and code look (VS Code's and Zed's
@@ -3919,12 +3922,6 @@ button.link:hover {
 .markdown-doc th {
   border-color: var(--border);
   background: none;
-}
-
-/* A first column (usually the keys) is not squeezed to a letter a line by a long one beside
-   it, yet never takes more than a third of the view (13.1). */
-.markdown-doc :is(th, td):first-child {
-  min-width: min(9em, 33cqi);
 }
 
 .markdown-doc .tok-keyword {

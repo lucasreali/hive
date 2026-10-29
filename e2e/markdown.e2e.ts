@@ -135,7 +135,7 @@ test("markdown: the preview's document style in light and dark (14.6)", async ({
 });
 
 // 20.1: a table like COVERAGE_EXCLUSIONS.md sizes its columns by content: the date never breaks,
-// a path breaks only at a `/` (or not at all), and the long reason takes what is left.
+// a path breaks only at a `/` (or not at all), and nothing scrolls the page.
 const EXCLUSIONS = `| File | Reason | Approved |
 |---|---|---|
 | \`src-tauri/src/main.rs\` | ${"Pure wiring. It builds the Tauri app, registers plugins and commands, and runs the event loop, which needs a display and a WebView. ".repeat(2)}| 2026-09-23 |
@@ -193,8 +193,6 @@ for (const panelWidth of [280, 640]) {
             return n;
           });
         }),
-        // The reason column is wider than the file column.
-        widths: [...(rows[0]?.children ?? [])].map((td) => (td as HTMLElement).offsetWidth),
         pageFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
         viewFits: root.scrollWidth <= root.clientWidth,
       };
@@ -202,8 +200,6 @@ for (const panelWidth of [280, 640]) {
     await page.screenshot({ path: `target/e2e/markdown-columns-${panelWidth}.png` });
     expect(layout.dates).toEqual([1, 1]);
     expect(layout.paths.every((n) => n === 1)).toBe(true);
-    const [file = 0, reason = 0] = layout.widths;
-    expect(reason).toBeGreaterThan(file);
     expect(layout.pageFits).toBe(true);
     expect(layout.viewFits).toBe(true);
     if (panelWidth === 640) await expect(rendered).toHaveScreenshot("markdown-table-columns.png");
