@@ -360,6 +360,92 @@ async fn agents_are_placed_by_their_cwd_and_removed_when_they_end() {
     assert!(daemon.wait_exit().success());
 }
 
+/// Terminal `channel`'s output, read until it holds `text`; control messages are skipped.
+async fn printed(app: &mut Conn, channel: u32, text: &str) {
+    let mut seen = String::new();
+    while !seen.contains(text) {
+        let frame = app.next().await.expect("connection closed");
+        if frame.kind == hive_protocol::FrameType::Terminal && frame.channel == channel {
+            seen.push_str(&String::from_utf8_lossy(&frame.payload));
+        }
+    }
+}
+
+#[tokio::test]
+async fn clear_in_claude_ends_the_session_and_detects_the_new_one_in_the_same_terminal() {
+    // `/clear` (20.3): Claude clears the screen and its scrollback, sends `SessionEnd`
+    // ("clear") and then `SessionStart` ("clear") with a new session id, in the same process.
+    let repo = Repo::new();
+    assert!(repo.hive(&["create", "fix-a"]).status.success());
+    let root = repo.root.display().to_string();
+    let fix_a = format!("{root}/.claude/worktrees/fix-a");
+    let fake = repo.env.fake_claude("home/claude");
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    app.open_terminal(1, std::path::Path::new(&fix_a)).await;
+    let clear = "printf '\\033[2J\\033[3J\\033[H'; echo cleared-''screen";
+    app.input(1, &format!("{clear}; '{}'\r", fake.display()))
+        .await;
+    printed(&mut app, 1, "cleared-screen").await;
+    let start = |id: &str, source: &str| json!({"session_id": id, "cwd": fix_a, "source": source});
+    hook(
+        &repo,
+        &mut app,
+        "1",
+        "SessionStart",
+        start("old", "startup"),
+    )
+    .await;
+    let end = |id: &str| json!({"session_id": id, "cwd": fix_a, "reason": "clear"});
+    let placed = |id: &str| detected(id, Some((&root, &fix_a)), &fix_a);
+    let ended = |id: &str| {
+        let removed = Control::AgentRemoved { id: id.into() };
+        vec![(1, state(id, Ended, vec![])), (1, removed)]
+    };
+    let seen = hook(&repo, &mut app, "1", "SessionEnd", end("old")).await;
+    assert_eq!(seen, ended("old"));
+    let seen = hook(&repo, &mut app, "1", "SessionStart", start("new", "clear")).await;
+    assert_eq!(seen, [(1, placed("new")), (1, state("new", Idle, vec![]))]);
+    // A second `/clear` whose two hook calls (separate processes) arrive the other way round.
+    let seen = hook(
+        &repo,
+        &mut app,
+        "1",
+        "SessionStart",
+        start("newer", "clear"),
+    )
+    .await;
+    assert_eq!(
+        seen,
+        [(1, placed("newer")), (1, state("newer", Idle, vec![]))]
+    );
+    let seen = hook(&repo, &mut app, "1", "SessionEnd", end("new")).await;
+    assert_eq!(seen, ended("new"));
+    // One agent in the terminal: the latest session.
+    app.send(0, Control::Resync).await;
+    let resynced = settled(&mut app).await;
+    let agents: Vec<_> = (resynced.iter())
+        .filter(|(_, m)| matches!(m, Control::AgentDetected { .. }))
+        .collect();
+    assert_eq!(agents, [&(1, placed("newer"))]);
+    // The terminal stays open and takes input: its `claude` gets it (the PTY echoes it).
+    app.input(1, "typed-after-clear").await;
+    printed(&mut app, 1, "typed-after-clear").await;
+    let after = settled(&mut app).await;
+    assert!(
+        !(after.iter()).any(|(_, m)| matches!(m, Control::TerminalExited { .. })),
+        "{after:?}"
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
 #[tokio::test]
 async fn agent_states_follow_hook_events_and_terminal_silence() {
     let repo = Repo::new();
