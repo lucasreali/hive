@@ -8,6 +8,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { stubStorage } from "../test/storage";
 import { App } from "./App";
 import { savedTabOrder, saveTabOrder } from "./persist";
 import { apply } from "./reduce";
@@ -219,20 +220,17 @@ test("a saved order that cannot be read is empty; a failing storage keeps the mo
   localStorage.setItem("hive.tabOrder", JSON.stringify(["file:x", 2, "tab:3", "session:s"]));
   expect(savedTabOrder()).toEqual(["file:x", "session:s"]);
   expect(savedTabOrder(null)).toEqual([]);
-  const setItem = spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-    throw new Error("full");
-  });
+  const full = stubStorage(true);
   addTab(1, W);
   keepOpen(file("a.ts"));
   moveTab(`file:${W}\na.ts`, "tab:1", false);
   expect(bar()).toEqual(["a.ts", 1]);
-  setItem.mockRestore();
+  expect(full).toHaveBeenLastCalledWith("hive.tabOrder", JSON.stringify(s().tabOrder));
   // Unchanged, nothing is written.
-  const write = spyOn(Storage.prototype, "setItem");
+  const write = stubStorage();
   const state = s();
   saveTabOrder({ ...state } as HiveState, state);
   expect(write).not.toHaveBeenCalled();
-  write.mockRestore();
 });
 
 test("closing a tab shows its neighbour in the bar, a file or a terminal", () => {

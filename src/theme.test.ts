@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { stubStorage } from "../test/storage";
 import { savedTheme } from "./persist";
 import { appliedTheme, DEFAULT_SETTINGS, initialState, setSystemTheme, useHive } from "./store";
 import { watchColorScheme } from "./window";
@@ -45,14 +46,9 @@ test("the theme setting is remembered whenever it changes, and read back at laun
   };
   expect(savedTheme(broken)).toBe("one-dark");
   // A full or blocked storage only loses the preference.
-  const set = spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-    throw new Error("full");
-  });
-  try {
-    expect(() => useHive.setState({ settings: withTheme("one-light") })).not.toThrow();
-  } finally {
-    set.mockRestore();
-  }
+  const full = stubStorage(true);
+  expect(() => useHive.setState({ settings: withTheme("one-light") })).not.toThrow();
+  expect(full).toHaveBeenLastCalledWith("hive.theme", "one-light");
 });
 
 test("the system's appearance is followed live (prefers-color-scheme)", () => {

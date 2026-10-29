@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import {
   act,
   cleanup,
@@ -8,6 +8,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { stubStorage } from "../test/storage";
 import { App } from "./App";
 import { savedAgentOrder } from "./persist";
 import { apply } from "./reduce";
@@ -78,14 +79,13 @@ test("the order follows moves within a worktree, is remembered, and new agents g
 
 test("an agent is not moved into another worktree, nor next to itself or an unknown one", () => {
   agents();
-  const setItem = spyOn(Storage.prototype, "setItem");
+  const setItem = stubStorage();
   moveAgent("s4", "s1", false);
   moveAgent("s1", "s1", true);
   moveAgent("gone", "s1", true);
   moveAgent("s1", "gone", true);
   expect(ids()).toEqual(["s4", "s1", "s2", "s3"]);
   expect(setItem).not.toHaveBeenCalled();
-  setItem.mockRestore();
 });
 
 test("a saved order that cannot be read is empty; a failing storage keeps the move", () => {
@@ -97,12 +97,11 @@ test("a saved order that cannot be read is empty; a failing storage keeps the mo
   expect(savedAgentOrder()).toEqual(["s1", "s2"]);
   expect(savedAgentOrder(null)).toEqual([]);
   agents();
-  const setItem = spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-    throw new Error("full");
-  });
+  const full = stubStorage(true);
   moveAgent("s2", "s1", false);
   expect(ids()).toEqual(["s4", "s2", "s1", "s3"]);
-  setItem.mockRestore();
+  const order = JSON.stringify(useHive.getState().agentOrder);
+  expect(full).toHaveBeenLastCalledWith("hive.agentOrder", order);
 });
 
 test("Alt+↑/↓ moves the focused agent among its worktree's, keeping the focus", async () => {
