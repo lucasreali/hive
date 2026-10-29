@@ -1062,6 +1062,7 @@ test("on macOS the Option keys the setting makes Meta send Esc + the key, the ot
   Object.defineProperty(navigator, "userAgent", { value: "Linux", configurable: true });
   side("both");
   expect(key("KeyB", "∫").defaultPrevented).toBe(false);
+  hold("AltLeft", "keyup");
   write.mockRestore();
 });
 
