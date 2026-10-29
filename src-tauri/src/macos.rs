@@ -4,8 +4,8 @@
 //! - ⌘Q, the Dock's "Quit" and logging out ask first (17.7).
 //! - Files dropped from Finder on a terminal (18.1) and the files copied in Finder, which ⌘V
 //!   pastes (18.3): their paths, read from the drag's pasteboard and from the clipboard.
-//! - Asking the notification center (`UNUserNotificationCenter`) whether Hive may notify
-//!   (17.19). The notifications themselves still go through `mac-notification-sys` (`main.rs`).
+//! - The notification center (`UNUserNotificationCenter`): asking whether Hive may notify
+//!   (17.19), posting the notifications and getting their clicks through a delegate (19.10).
 //!   Tested against stand-in classes: a test process is no app bundle, and the real center
 //!   raises an exception for one.
 //! - Where the traffic lights go (18.4), from a close button laid out by this macOS.
@@ -14,7 +14,7 @@
 //! center is asked only by an app bundle (`in_app_bundle`), and the completion blocks only hand
 //! their answer over, inside `catch_unwind`.
 
-use std::ffi::{c_char, c_int, c_ulong, c_void, CStr};
+use std::ffi::{c_char, c_int, c_ulong, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::ptr::null_mut;
@@ -33,6 +33,10 @@ unsafe extern "C" {
     fn objc_getClass(name: *const c_char) -> Id;
     fn sel_registerName(name: *const c_char) -> Sel;
     fn class_addMethod(class: Id, name: Sel, imp: *const c_void, types: *const c_char) -> bool;
+    fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
+    fn objc_registerClassPair(class: Id);
+    fn objc_getProtocol(name: *const c_char) -> Id;
+    fn class_addProtocol(class: Id, protocol: Id) -> bool;
     /// Called through a cast to each message's own signature (arm64 has no variadic messages).
     fn objc_msgSend();
 }
@@ -204,6 +208,156 @@ pub fn permissions(
         center.map_or(Permission::Unknown, |center| {
             permission(center, ANSWER_WAIT)
         })
+    }
+}
+
+/// `UNNotificationPresentationOptionList`: a notification that comes while Hive is in front goes
+/// to Notification Center without a banner, as `NSUserNotification` showed it before (19.10).
+const LIST: usize = 1 << 3;
+
+/// A block's call with nothing (`didReceiveNotificationResponse:`'s completion) and with
+/// presentation options (`willPresentNotification:`'s).
+type Done = unsafe extern "C" fn(*mut c_void);
+type Present = unsafe extern "C" fn(*mut c_void, usize);
+
+/// Posts a notification now on the center `name` (19.10) under `identifier`, which its click
+/// gives back to [`receive_clicks`]' handler; silent, as no sound is set (Hive plays its own
+/// tone).
+pub fn post(name: &CStr, identifier: &str, title: &str, body: &str) -> Result<(), String> {
+    let center = center(name).ok_or("no notification center")?;
+    let text = |text: &str| CString::new(text).map_err(|_| "a notification text holds a NUL");
+    let (identifier, title, body) = (text(identifier)?, text(title)?, text(body)?);
+    // SAFETY: the signatures of `NSString`, `UNMutableNotificationContent`,
+    // `UNNotificationRequest` and the center's messages; `new` is owned and released here, the
+    // rest is autoreleased in the pool popped at the end, and the center keeps the request. Its
+    // completion handler may be nil.
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let set = message::<unsafe extern "C" fn(Id, Sel, Id)>();
+        let string = |text: &CStr| {
+            let make = message::<unsafe extern "C" fn(Id, Sel, *const c_char) -> Id>();
+            let class = objc_getClass(c"NSString".as_ptr());
+            make(class, selector(c"stringWithUTF8String:"), text.as_ptr())
+        };
+        let class = objc_getClass(c"UNMutableNotificationContent".as_ptr());
+        let content = object(class, selector(c"new"));
+        set(content, selector(c"setTitle:"), string(&title));
+        set(content, selector(c"setBody:"), string(&body));
+        let request = message::<unsafe extern "C" fn(Id, Sel, Id, Id, Id) -> Id>();
+        let request = request(
+            objc_getClass(c"UNNotificationRequest".as_ptr()),
+            selector(c"requestWithIdentifier:content:trigger:"),
+            string(&identifier),
+            content,
+            null_mut(),
+        );
+        let add = message::<unsafe extern "C" fn(Id, Sel, Id, Id)>();
+        add(
+            center,
+            selector(c"addNotificationRequest:withCompletionHandler:"),
+            request,
+            null_mut(),
+        );
+        message::<unsafe extern "C" fn(Id, Sel)>()(content, selector(c"release"));
+        objc_autoreleasePoolPop(pool);
+    }
+    Ok(())
+}
+
+/// The class of the app's notification center delegate ([`receive_clicks`]).
+pub const DELEGATE_CLASS: &CStr = c"HiveNotificationDelegate";
+
+/// Gets the identifier of each notification clicked ([`receive_clicks`]).
+pub type OnClick = Box<dyn Fn(&str) + Send + Sync>;
+static ON_CLICK: OnceLock<OnClick> = OnceLock::new();
+
+/// Makes the center `name` tell `on_click` the identifier of each notification clicked (19.10),
+/// through a delegate made here: no thread or timer waits for the click. A notification that
+/// comes while Hive is in front goes to the list only ([`LIST`]). The delegate's class is a new
+/// one named `class` ([`DELEGATE_CLASS`] in the app), declaring `UNUserNotificationCenterDelegate`.
+/// Only the first call does anything; false when it did not (an earlier call, no center, or a
+/// class of that name already there).
+pub fn receive_clicks(name: &CStr, class: &CStr, on_click: OnClick) -> bool {
+    let Some(center) = center(name) else {
+        return false;
+    };
+    if ON_CLICK.get().is_some() {
+        return false;
+    }
+    // SAFETY: a new subclass of NSObject (nil, and nothing done, when the name is taken),
+    // registered once, with the delegate's two methods ("v@:@@@?": self, _cmd, the center, the
+    // response or notification and the completion block). The delegate is owned (`new`) and
+    // never released: the center holds its delegate weakly, so it lives as long as the app.
+    unsafe {
+        let class = objc_allocateClassPair(objc_getClass(c"NSObject".as_ptr()), class.as_ptr(), 0);
+        if class.is_null() {
+            return false;
+        }
+        let protocol = objc_getProtocol(c"UNUserNotificationCenterDelegate".as_ptr());
+        let _ = (!protocol.is_null()).then(|| class_addProtocol(class, protocol));
+        let methods: [(&CStr, *const c_void); 2] = [
+            (
+                c"userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:",
+                did_receive as *const c_void,
+            ),
+            (
+                c"userNotificationCenter:willPresentNotification:withCompletionHandler:",
+                will_present as *const c_void,
+            ),
+        ];
+        for (name, imp) in methods {
+            class_addMethod(class, selector(name), imp, c"v@:@@@?".as_ptr());
+        }
+        objc_registerClassPair(class);
+        let _ = ON_CLICK.set(on_click);
+        let delegate = message::<unsafe extern "C" fn(Id, Sel) -> Id>()(class, selector(c"new"));
+        let set = message::<unsafe extern "C" fn(Id, Sel, Id)>();
+        set(center, selector(c"setDelegate:"), delegate);
+    }
+    true
+}
+
+/// `userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:`: the click's
+/// identifier to `ON_CLICK`, then the completion. Nothing unwinds into the center.
+unsafe extern "C" fn did_receive(_: Id, _: Sel, _: Id, response: Id, done: *mut c_void) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the center's response (or nil, which answers nil).
+        let identifier = unsafe { identifier(response) };
+        if let (Some(on_click), Some(identifier)) = (ON_CLICK.get(), identifier) {
+            on_click(&identifier);
+        }
+    }));
+    if !done.is_null() {
+        // SAFETY: the center's completion block, which takes nothing.
+        unsafe { ((*done.cast::<Block<Done>>()).invoke)(done) };
+    }
+}
+
+/// `userNotificationCenter:willPresentNotification:withCompletionHandler:`: [`LIST`].
+unsafe extern "C" fn will_present(_: Id, _: Sel, _: Id, _: Id, done: *mut c_void) {
+    if !done.is_null() {
+        // SAFETY: the center's completion block, which takes the presentation options.
+        unsafe { ((*done.cast::<Block<Present>>()).invoke)(done, LIST) };
+    }
+}
+
+/// The identifier of the notification a `UNNotificationResponse` answers; none for nil.
+///
+/// # Safety
+/// `response` is a `UNNotificationResponse` or nil.
+unsafe fn identifier(response: Id) -> Option<String> {
+    // SAFETY: `notification`, `request`, `identifier` and `UTF8String`, nil answering nil.
+    unsafe {
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let notification = object(response, selector(c"notification"));
+        let identifier = object(
+            object(notification, selector(c"request")),
+            selector(c"identifier"),
+        );
+        let text = message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>();
+        let utf8 = text(identifier, selector(c"UTF8String"));
+        (!utf8.is_null()).then(|| CStr::from_ptr(utf8).to_string_lossy().into_owned())
     }
 }
 
@@ -683,12 +837,6 @@ mod tests {
     use std::sync::atomic::{AtomicIsize, AtomicU8, AtomicUsize, Ordering::SeqCst};
     use std::sync::Once;
 
-    #[link(name = "objc")]
-    unsafe extern "C" {
-        fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
-        fn objc_registerClassPair(class: Id);
-    }
-
     // libSystem's blocks runtime, which the center copies its completion blocks with.
     unsafe extern "C" {
         fn _Block_copy(block: *const c_void) -> *mut c_void;
@@ -884,6 +1032,7 @@ mod tests {
     #[link(name = "objc")]
     unsafe extern "C" {
         fn class_createInstance(class: Id, extra: usize) -> Id;
+        fn class_conformsToProtocol(class: Id, protocol: Id) -> bool;
     }
 
     // What the stand-in view and dragging info answer, and what they were asked.
@@ -1442,5 +1591,205 @@ mod tests {
             4,
             "no button asked of no window"
         );
+    }
+
+    /// What the stand-in center was asked to post: identifier, title, body, and whether it was
+    /// silent, immediate and without a completion (no sound, trigger or handler).
+    static POSTED: std::sync::Mutex<Vec<(String, String, String, bool)>> =
+        std::sync::Mutex::new(Vec::new());
+    /// The stand-in center's delegate (an address).
+    static DELEGATE: AtomicUsize = AtomicUsize::new(0);
+
+    /// The text of a Foundation string (never nil here).
+    fn text_of(string: Id) -> String {
+        // SAFETY: `UTF8String` of a string.
+        unsafe {
+            let text = message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>();
+            let utf8 = text(string, selector(c"UTF8String"));
+            CStr::from_ptr(utf8).to_string_lossy().into_owned()
+        }
+    }
+
+    unsafe extern "C" fn add_request(_: Id, _: Sel, request: Id, handler: *mut c_void) {
+        unsafe {
+            let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+            let content = object(request, selector(c"content"));
+            let silent = object(content, selector(c"sound")).is_null()
+                && object(request, selector(c"trigger")).is_null()
+                && handler.is_null();
+            POSTED.lock().unwrap().push((
+                text_of(object(request, selector(c"identifier"))),
+                text_of(object(content, selector(c"title"))),
+                text_of(object(content, selector(c"body"))),
+                silent,
+            ));
+        }
+    }
+    extern "C" fn set_delegate(_: Id, _: Sel, delegate: Id) {
+        DELEGATE.store(delegate as usize, SeqCst);
+    }
+
+    /// `HivePostCenter`: a center that records what it is asked to post and its delegate.
+    fn post_center() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| unsafe {
+            let class = objc_allocateClassPair(
+                objc_getClass(c"NSObject".as_ptr()),
+                c"HivePostCenter".as_ptr(),
+                0,
+            );
+            let meta = object_getClass(class);
+            let methods: [(&CStr, *const c_void, &CStr); 3] = [
+                (
+                    c"currentNotificationCenter",
+                    itself as *const c_void,
+                    c"@@:",
+                ),
+                (
+                    c"addNotificationRequest:withCompletionHandler:",
+                    add_request as *const c_void,
+                    c"v@:@@?",
+                ),
+                (c"setDelegate:", set_delegate as *const c_void, c"v@:@"),
+            ];
+            for (name, imp, types) in methods {
+                assert!(class_addMethod(meta, selector(name), imp, types.as_ptr()));
+            }
+            objc_registerClassPair(class);
+        });
+    }
+
+    #[test]
+    fn a_notification_goes_to_the_center_silent_under_its_identifier() {
+        post_center();
+        let posted = post(
+            c"HivePostCenter",
+            "ab-1",
+            "fix login finished",
+            "shop · main",
+        );
+        assert_eq!(posted, Ok(()));
+        let (title, body) = ("fix login finished".into(), "shop · main".into());
+        let expected = vec![("ab-1".into(), title, body, true)];
+        assert_eq!(*POSTED.lock().unwrap(), expected);
+        let missing = post(c"HiveMissingCenter", "a", "t", "b");
+        assert_eq!(missing, Err("no notification center".to_owned()));
+        let nul = Err("a notification text holds a NUL".to_owned());
+        for (id, title, body) in [("a\0", "t", "b"), ("a", "t\0", "b"), ("a", "t", "b\0")] {
+            assert_eq!(post(c"HivePostCenter", id, title, body), nul);
+        }
+        assert_eq!(*POSTED.lock().unwrap(), expected, "nothing else posted");
+    }
+
+    /// Calls of the completion blocks the delegate was given, and the options it presented with.
+    static DONE: AtomicUsize = AtomicUsize::new(0);
+    static PRESENTED: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn done(_: *mut c_void) {
+        DONE.fetch_add(1, SeqCst);
+    }
+    unsafe extern "C" fn presented(_: *mut c_void, options: usize) {
+        PRESENTED.store(options, SeqCst);
+    }
+    extern "C" fn clicked_identifier(_: Id, _: Sel) -> Id {
+        string("ab-7")
+    }
+
+    #[test]
+    fn the_delegate_hands_each_click_over_and_lists_a_notification_shown_in_front() {
+        post_center();
+        let (tx, clicks) = std::sync::mpsc::channel::<String>();
+        // Handlers that name themselves: only the kept one ever gets a click.
+        let handler = |name: &'static str| -> OnClick {
+            let tx = tx.clone();
+            Box::new(move |id| tx.send(format!("{name} {id}")).unwrap())
+        };
+        let unkept = || handler("unkept");
+        assert!(!receive_clicks(
+            c"HiveMissingCenter",
+            DELEGATE_CLASS,
+            unkept()
+        ));
+        // A class of that name already there: nothing done, so a later call still works.
+        let taken = c"HiveTakenDelegate";
+        // SAFETY: a new subclass of NSObject, registered once.
+        unsafe {
+            let object = objc_getClass(c"NSObject".as_ptr());
+            objc_registerClassPair(objc_allocateClassPair(object, taken.as_ptr(), 0));
+        }
+        assert!(!receive_clicks(c"HivePostCenter", taken, unkept()));
+        assert_eq!(DELEGATE.load(SeqCst), 0, "no delegate set");
+        assert!(receive_clicks(
+            c"HivePostCenter",
+            DELEGATE_CLASS,
+            handler("kept")
+        ));
+        let again = receive_clicks(c"HivePostCenter", c"HiveOtherDelegate", unkept());
+        assert!(!again, "set once");
+        let delegate = DELEGATE.load(SeqCst) as Id;
+        assert!(!delegate.is_null());
+        // SAFETY: the delegate's class, and the protocol UserNotifications registers.
+        let conforms = unsafe {
+            let protocol = objc_getProtocol(c"UNUserNotificationCenterDelegate".as_ptr());
+            !protocol.is_null() && class_conformsToProtocol(object_getClass(delegate), protocol)
+        };
+        assert!(conforms, "it declares the delegate protocol");
+        // A response whose notification and request are itself, with an identifier.
+        let itself = itself as *const c_void;
+        let response = instance(
+            c"HiveTestResponse",
+            &[
+                (c"notification", itself, c"@@:"),
+                (c"request", itself, c"@@:"),
+                (c"identifier", clicked_identifier as *const c_void, c"@@:"),
+            ],
+        );
+        let receive =
+            c"userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:";
+        let present = c"userNotificationCenter:willPresentNotification:withCompletionHandler:";
+        // SAFETY: the delegate's methods, with their signatures; the blocks outlive the calls.
+        unsafe {
+            let call = message::<unsafe extern "C" fn(Id, Sel, Id, Id, *mut c_void)>();
+            let mut finished = Block::new(done as Done, &SETTINGS_BLOCK, null_mut());
+            let finished = (&raw mut finished).cast();
+            call(delegate, selector(receive), null_mut(), response, finished);
+            assert_eq!(clicks.try_recv().as_deref(), Ok("kept ab-7"));
+            assert_eq!(DONE.load(SeqCst), 1);
+            // No response: no click, still completed; no completion: nothing to call.
+            call(
+                delegate,
+                selector(receive),
+                null_mut(),
+                null_mut(),
+                finished,
+            );
+            assert!(clicks.try_recv().is_err());
+            assert_eq!(DONE.load(SeqCst), 2);
+            call(
+                delegate,
+                selector(receive),
+                null_mut(),
+                response,
+                null_mut(),
+            );
+            assert_eq!(clicks.try_recv().as_deref(), Ok("kept ab-7"));
+            let mut shown = Block::new(presented as Present, &SETTINGS_BLOCK, null_mut());
+            call(
+                delegate,
+                selector(present),
+                null_mut(),
+                response,
+                (&raw mut shown).cast(),
+            );
+            assert_eq!(PRESENTED.load(SeqCst), 1 << 3, "the list, no banner");
+            call(
+                delegate,
+                selector(present),
+                null_mut(),
+                response,
+                null_mut(),
+            );
+        }
+        assert_eq!(DONE.load(SeqCst), 2);
     }
 }

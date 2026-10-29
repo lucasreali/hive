@@ -365,7 +365,7 @@ type Player = dyn Fn(&Path, f32) -> Result<(), String> + Send + Sync;
 /// What a click on an OS notification does (13.5).
 pub type Click = Box<dyn Fn() + Send + Sync>;
 /// Shows an OS notification with a title and a body; a click on it runs the [`Click`].
-type Notifier = dyn Fn(&str, &str, Click) -> Result<(), String> + Send + Sync;
+pub type Notifier = dyn Fn(&str, &str, Click) -> Result<(), String> + Send + Sync;
 
 /// The app the OS shows a notification as (13.5): the installed app's `identifier`, which the
 /// Windows installer gives its shortcut as the AppUserModelID and macOS reads from the bundle.
@@ -413,69 +413,55 @@ pub fn bring_up<R: Runtime>(app: &AppHandle<R>) -> bool {
     true
 }
 
-/// How many notifications wait for their click at once (`waiting_notifier`); later ones show
-/// without click handling until one is answered. On macOS each wait holds a thread and a timer
-/// on the main run loop until the notification leaves the Notification Center.
-pub const CLICK_WAITS: usize = 8;
+/// How many notifications keep their click at once (`identified_notifier`, macOS): a click on
+/// an older one, or on one from an earlier run, finds none, and macOS only brings the app
+/// forward.
+pub const CLICKS: usize = 64;
 
-/// A notifier for a platform whose `send(title, body, wait)` blocks (macOS: until the click or
-/// the dismissal, when `wait`) and answers whether the user clicked it: each one is sent on a
-/// thread of its own, at most [`CLICK_WAITS`] of them waiting for their click.
-pub fn waiting_notifier(
-    send: impl Fn(&str, &str, bool) -> Result<bool, String> + Send + Sync + 'static,
-) -> impl Fn(&str, &str, Click) -> Result<(), String> + Send + Sync + 'static {
-    waits(send, notification_thread)
-}
+/// Runs the click of the notification with an identifier ([`identified_notifier`]).
+pub type Clicked = dyn Fn(&str) + Send + Sync;
 
-/// [`waiting_notifier`], its threads started by `start`.
-fn waits(
-    send: impl Fn(&str, &str, bool) -> Result<bool, String> + Send + Sync + 'static,
-    start: Start,
-) -> impl Fn(&str, &str, Click) -> Result<(), String> + Send + Sync + 'static {
-    let send = Arc::new(send);
-    // How many wait for their click.
-    let waiting = Arc::new(Mutex::new(0_usize));
-    move |title: &str, body: &str, click: Click| {
-        let wait = {
-            let mut waiting = waiting.lock().unwrap_or_else(PoisonError::into_inner);
-            let wait = *waiting < CLICK_WAITS;
-            *waiting += usize::from(wait);
-            wait
-        };
-        let done = Arc::clone(&waiting);
-        let release = move || {
-            if wait {
-                *done.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+/// The clicks of the last [`CLICKS`] notifications by identifier, and how many were posted.
+type Clicks = (u64, VecDeque<(String, Click)>);
+
+/// A notifier for a platform that reports a click by the notification's identifier (macOS's
+/// `UNUserNotificationCenter` delegate, 19.10), and the `clicked(identifier)` its delegate
+/// calls. Each notification is posted with `post(identifier, title, body)` under an identifier
+/// unique to this run; a click runs its [`Click`] once. Nothing waits or polls for it.
+pub fn identified_notifier(
+    post: impl Fn(&str, &str, &str) -> Result<(), String> + Send + Sync + 'static,
+) -> (Box<Notifier>, Box<Clicked>) {
+    // Random per notifier, so a click on an earlier run's notification never finds this one's.
+    let run = std::hash::BuildHasher::hash_one(&std::hash::RandomState::new(), 0_u8);
+    let run = format!("{run:x}");
+    let clicks = Arc::new(Mutex::new(Clicks::default()));
+    let kept = Arc::clone(&clicks);
+    let notify = move |title: &str, body: &str, click: Click| {
+        let id = {
+            let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
+            let (posted, waiting) = &mut *kept;
+            *posted += 1;
+            let id = format!("{run}-{posted}");
+            if waiting.len() >= CLICKS {
+                waiting.pop_front();
             }
+            waiting.push_back((id.clone(), click));
+            id
         };
-        let (send, title, body) = (Arc::clone(&send), title.to_owned(), body.to_owned());
-        let release_here = release.clone();
-        let started = start(Box::new(move || {
-            let outcome = send(&title, &body, wait);
-            release();
-            answered(outcome, &click);
-        }));
-        started.map_err(|error| {
-            release_here();
-            format!("cannot show the notification: {error}")
-        })
-    }
-}
-
-/// Runs `click` when the platform says the user clicked the notification; a failure to show it
-/// is logged.
-pub fn answered(outcome: Result<bool, String>, click: &Click) {
-    match outcome {
-        Ok(true) => click(),
-        Ok(false) => {}
-        Err(error) => eprintln!("hive-app: notification failed: {error}"),
-    }
-}
-
-/// Starts a [`waiting_notifier`]'s notification on a new thread.
-fn notification_thread(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
-    let thread = std::thread::Builder::new().name("notification".into());
-    thread.spawn(work).map(drop)
+        post(&id, title, body)
+    };
+    let clicked = move |id: &str| {
+        let click = {
+            let mut clicks = clicks.lock().unwrap_or_else(PoisonError::into_inner);
+            let at = clicks.1.iter().position(|(kept, _)| kept == id);
+            at.and_then(|at| clicks.1.remove(at))
+        };
+        // Outside the lock: the click talks to the window and the UI.
+        if let Some((_, click)) = click {
+            click();
+        }
+    };
+    (Box::new(notify), Box::new(clicked))
 }
 
 /// The text without control characters, which a Windows toast's XML refuses.
