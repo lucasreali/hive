@@ -482,6 +482,16 @@ mod tests {
         (tmp, group)
     }
 
+    #[test]
+    fn subfolders_are_the_folders_directly_in_a_folder_and_none_in_a_missing_one() {
+        let (tmp, group) = group_of(2);
+        std::fs::write(group.join("file"), "").unwrap();
+        let mut found = subfolders(&group);
+        found.sort();
+        assert_eq!(found, [group.join("r0"), group.join("r1")]);
+        assert!(subfolders(&tmp.path().join("missing")).is_empty());
+    }
+
     #[cfg(not(target_os = "linux"))]
     #[tokio::test]
     async fn a_group_is_one_watch_however_many_repositories_it_holds() {
