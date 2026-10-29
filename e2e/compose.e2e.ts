@@ -86,6 +86,10 @@ test.describe("Option as Meta on one side (D20.1)", () => {
     browserName,
   }) => {
     test.skip(browserName !== "webkit", "WebKit is macOS' engine");
+    // xterm tells macOS by the platform: off a Mac its Option would send Esc + the key itself.
+    await page.addInitScript(() =>
+      Object.defineProperty(navigator, "platform", { get: () => "MacIntel" }),
+    );
     await page.goto("/");
     await page
       .getByRole("navigation", { name: "Projects" })
