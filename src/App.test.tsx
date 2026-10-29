@@ -4,7 +4,7 @@ import { version } from "../package.json";
 import { asMac } from "../test/mac";
 import { App } from "./App";
 import { apply } from "./reduce";
-import { initialState, useHive } from "./store";
+import { initialState, setFocused, useHive } from "./store";
 import { MOCK_REPOS } from "./transport/mock";
 
 afterEach(() => {
@@ -20,6 +20,16 @@ test("renders the shell regions", () => {
   expect(screen.getByRole("contentinfo").textContent).toBe(`WSLconnectingv${version}`);
   // The side panel starts open.
   expect(screen.getByRole("complementary", { name: "Side panel" })).toBeDefined();
+});
+
+test("the root carries data-focused while Hive has the focus", () => {
+  render(<App />);
+  const root = document.documentElement;
+  expect(root.hasAttribute("data-focused")).toBe(false);
+  act(() => setFocused(true));
+  expect(root.hasAttribute("data-focused")).toBe(true);
+  act(() => setFocused(false));
+  expect(root.hasAttribute("data-focused")).toBe(false);
 });
 
 test("status bar follows the connection status", () => {

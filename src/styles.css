@@ -434,19 +434,32 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 .tab-progress[data-state="indeterminate"] {
+  position: relative;
+  overflow: hidden;
+}
+
+/* The busy sweep: 48px tiles slid one tile right per turn by the compositor (D19.8), the look
+   of the old `background-position` sweep without a repaint each frame. */
+.tab-progress[data-state="indeterminate"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -200%;
+  width: 400%;
   background: linear-gradient(to right, var(--border), var(--fill), var(--border));
-  background-size: 200% 100%;
+  background-size: 50% 100%;
   animation: hive-busy 1.2s linear infinite;
 }
 
 @keyframes hive-busy {
   to {
-    background-position: -200% 0;
+    transform: translateX(50%);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tab-progress[data-state="indeterminate"] {
+  .tab-progress[data-state="indeterminate"]::after {
     animation: none;
   }
 }
@@ -1779,6 +1792,12 @@ button.chevron:hover {
   .state-icon[data-state="working"] {
     animation: none;
   }
+}
+
+/* Out of focus the endless animations rest (D19.8): WebKit's display link stops with them. */
+:root:not([data-focused]) .state-icon,
+:root:not([data-focused]) .tab-progress::after {
+  animation-play-state: paused;
 }
 
 .agent-lines {

@@ -39,6 +39,7 @@ export function App() {
   const hasProjects = useHive((s) => Object.keys(s.projects ?? {}).length > 0);
   const setting = useHive((s) => s.settings.appearance.theme);
   const theme = useHive(appliedTheme);
+  const focused = useHive((s) => s.focused);
   // Nothing works without the service: the workspace is inert under the block (#29).
   // The title bar stays usable, so the window can still be closed.
   useEffect(installShortcuts, []);
@@ -48,6 +49,10 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     nativeTheme(setting, theme);
   }, [setting, theme]);
+  // The endless animations rest while Hive is not focused (D19.8, src/styles.css).
+  useEffect(() => {
+    document.documentElement.toggleAttribute("data-focused", focused);
+  }, [focused]);
   // The first run on Windows with WSL asks where the service runs before any starts (12.5.4).
   const asking = useHive((s) => s.appMode?.mode === null);
   const blocked = status === "version_mismatch" || status === "disconnected" || asking;
