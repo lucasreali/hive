@@ -424,9 +424,8 @@ impl State {
 
     /// The one place the followed projects' worktrees are known to have changed outside
     /// Hive's own requests: a worktree hook, or git's registry (9.36). The app gets the
-    /// projects again, with health, unless they are what it has (both saw the same change);
-    /// true when it did.
-    async fn worktrees_changed(&self) -> bool {
+    /// projects again, with health, unless they are what it has (both saw the same change).
+    async fn worktrees_changed(&self) {
         // One change at a time, so the second of two at once sees what the first sent.
         let _turn = self.changing.lock().await;
         let reply = tokio::task::block_in_place(|| {
@@ -439,9 +438,9 @@ impl State {
             self.with_health(&mut reply);
             Some(reply)
         });
-        let Some(reply) = reply else { return false };
-        self.to_app(0, &reply).await;
-        true
+        if let Some(reply) = reply {
+            self.to_app(0, &reply).await;
+        }
     }
 
     /// Gives the worktrees of the projects in a reply their status (git, so on a blocking
@@ -910,8 +909,12 @@ async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
         tokio::task::block_in_place(|| registry.follow(&roots, &groups));
         // After a change, and after the projects followed changed: what happened in a
         // registry while it was not watched yet (e.g. right after a space switch) is sent too.
-        // A space switched to gets its health (D19.3), unless the projects just sent had it.
-        if started && !state.worktrees_changed().await && refollowed {
+        if started {
+            state.worktrees_changed().await;
+        }
+        // A space switched to gets its health (D19.3); a status the projects just sent
+        // carried is not sent again.
+        if refollowed {
             state.refresh_health().await;
         }
         started = true;
