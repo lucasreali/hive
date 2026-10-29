@@ -29,9 +29,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+pub mod download;
 /// The app's descriptor limit (17.6).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub mod download;
 pub mod fds;
 
 /// The app's log and panic hook (D18.6).
