@@ -31,6 +31,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 /// The app's descriptor limit (17.6).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+pub mod download;
 pub mod fds;
 
 /// The app's log and panic hook (D18.6).
@@ -316,6 +317,9 @@ pub struct Hive {
     exit: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs a downloaded update's installer; given by `main.rs` (`with_install`).
     install: Option<Box<Installer>>,
+    /// Where a downloaded update waits to be installed (`with_update_dir`, 19.11); without
+    /// it a download is not kept.
+    update_dir: Option<PathBuf>,
     /// Opens a path, or shows it in the file manager; given by `main.rs` (`with_open`).
     open: Option<Box<Opener>>,
     /// Shows an OS notification; given by `main.rs` (`with_notify`).
@@ -333,7 +337,7 @@ pub struct Hive {
     /// The app runs translocated (`translocated`); given by `main.rs` (`with_translocated`).
     translocated: bool,
     /// Shows the menu bar icon; given by `main.rs` (`with_tray`, 17.22).
-    tray: Option<Box<tray::Apply>>,
+    tray: Option<tray::Shown>,
     /// Reads the files copied to the clipboard; given by `main.rs` on macOS (`with_clipboard`,
     /// 18.3).
     clipboard: Option<Box<dyn Clipboard>>,
@@ -650,8 +654,8 @@ struct Link {
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
     /// The newer release `check_update` found and downloaded, for `install_update` or the
-    /// app's exit (4.19).
-    update: Option<(Update, Vec<u8>)>,
+    /// app's exit (4.19), its installer saved in the cache folder (19.11).
+    update: Option<(Update, download::Saved)>,
     /// The paths the service sent for the app to open, oldest first, each for one `open_path`,
     /// with whether the service checked it only to be revealed (D19.1).
     approved: VecDeque<(String, bool)>,
@@ -766,6 +770,7 @@ impl Hive {
             restart: None,
             exit: None,
             install: None,
+            update_dir: None,
             open: None,
             notify: None,
             permission: None,
@@ -1035,6 +1040,14 @@ impl Hive {
         install: impl Fn(&Update, &[u8]) -> Result<(), String> + Send + Sync + 'static,
     ) -> Self {
         self.install = Some(Box::new(install));
+        self
+    }
+
+    /// Keeps a downloaded update in `dir` (the app's cache folder) until it is installed. An
+    /// installer an earlier run left there is removed.
+    pub fn with_update_dir(mut self, dir: PathBuf) -> Self {
+        download::clear(&dir);
+        self.update_dir = Some(dir);
         self
     }
 
@@ -1666,14 +1679,21 @@ impl Hive {
         }
     }
 
-    /// A downloaded update, its signature checked, waits for `install_update` or the app's exit
-    /// and goes to the UI as `update_ready {version}`. A failed download sends nothing, like a
-    /// failed check: the next start tries again.
+    /// A downloaded update, its signature checked, is saved to wait for `install_update` or the
+    /// app's exit, and goes to the UI as `update_ready {version}`. A failed download or save
+    /// sends nothing, like a failed check: the next start tries again.
     fn downloaded(&self, update: Update, bytes: Result<Vec<u8>, String>) {
         let Ok(bytes) = bytes else { return };
+        let Some(dir) = &self.update_dir else { return };
+        // The one saved before goes first: it is the same file.
+        drop(self.link().update.take());
+        let saved = match download::save(dir, &bytes) {
+            Ok(saved) => saved,
+            Err(error) => return eprintln!("hive-app: {error}"),
+        };
         let mut link = self.link();
         link.to_ui(json!({"type": "update_ready", "version": update.version}));
-        link.update = Some((update, bytes));
+        link.update = Some((update, saved));
     }
 
     /// Runs the installer of the downloaded update, then restarts. On Windows the installer
@@ -1688,13 +1708,14 @@ impl Hive {
     /// Installs the downloaded update, if any, so the next start runs it. Taken once: the exit
     /// that follows `install_update`'s restart does not install it again. A translocated app
     /// cannot replace itself, so it says why instead of running the installer (17.10).
+    /// Its saved installer is removed either way.
     pub fn install_pending(&self) -> Option<Result<(), String>> {
-        let (update, bytes) = self.link().update.take()?;
+        let (update, saved) = self.link().update.take()?;
         if self.translocated {
             return Some(Err(TRANSLOCATED.to_owned()));
         }
         let install = self.install.as_ref()?;
-        Some(install(&update, &bytes))
+        Some(saved.read().and_then(|bytes| install(&update, &bytes)))
     }
 
     /// Restarts once installed; a failure goes to the UI as `update_failed {error}`.
