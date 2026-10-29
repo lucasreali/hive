@@ -33,6 +33,14 @@ function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Part
   return { terminals: { ...s.terminals, [id]: { ...current, ...patch } } };
 }
 
+/** Whether `a` and `b` hold the same fields with the same (`===`) values. */
+function sameFields(a: object, b: object): boolean {
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  const keys = Object.keys(x);
+  return keys.length === Object.keys(y).length && keys.every((k) => x[k] === y[k]);
+}
+
 function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<HiveState> {
   return { worktreeDialog: { ...s.worktreeDialog, ...patch } };
 }
@@ -355,8 +363,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { dirs };
     }
     case "file": {
+      // An equal answer keeps its object, so the view is not rebuilt (19.12).
       const { type: _, ...file } = m;
-      return { file, edit: editFor(s, file) };
+      const kept = s.file && sameFields(s.file, file) ? s.file : file;
+      return { file: kept, edit: editFor(s, file) };
     }
     case "file_saved":
       return patchEdits(s, m, (b) => saved(b, m.version));
