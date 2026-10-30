@@ -1351,10 +1351,10 @@ export function createMockTransport(
           terminal.cwd = dir.startsWith("/") ? dir : `${terminal.cwd}/${dir}`;
         }
         shellMarks(id, line);
-        // A command runs between OSC 133 `C` and `D;<exit>`; `false` fails.
-        const ran = line
-          ? `\x1b]133;C\x07${line}\r\n\x1b]133;D;${line === "false" ? 1 : 0}\x07`
-          : "";
+        // A command runs between OSC 133 `C` and `D;<exit>`; `false` fails; `clear` erases the
+        // screen and the scrollback, its own prompt too (21.1), as `clear` in fish does.
+        const output = line === "clear" ? "\x1b[H\x1b[2J\x1b[3J" : `${line}\r\n`;
+        const ran = line ? `\x1b]133;C\x07${output}\x1b]133;D;${line === "false" ? 1 : 0}\x07` : "";
         print(id, `\r\n${ran}${PROMPT}`);
       }
       if (scenario === "load") print(id, ECHO_MARK);

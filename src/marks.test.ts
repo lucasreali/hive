@@ -59,6 +59,73 @@ test("each prompt is marked, with its command's status once it ends", async () =
   term.dispose();
 });
 
+test("a command that clears its prompt off the screen ends without marking it (21.1)", async () => {
+  const term = terminal();
+  const marks = new Marks(term);
+  const ended: string[] = [];
+  // fish's `clear`: the command's prompt is erased between its start and its end. The end then
+  // threw inside xterm's parser, and xterm drew nothing more.
+  await write(term, `${A}hive on main\r\n❯ clear\r\n${C}\x1b[H\x1b[2J\x1b[3J${D("0")}`);
+  await write(term, `${A}hive on main\r\n❯ `);
+  term.write("x", () => ended.push("x"));
+  await write(term, "");
+  expect(ended).toEqual(["x"]);
+  expect(marks.list()).toEqual([{ line: 0, status: undefined }]);
+  expect(term.buffer.active.getLine(1)?.translateToString(true)).toBe("❯ x");
+  // An older prompt left on the screen is not marked by that end either.
+  await write(term, `\r\n${A}$ \r\n${C}\x1b[2;1H\x1b[J${D("1")}`);
+  expect(marks.list()).toEqual([{ line: 0, status: undefined }]);
+  term.dispose();
+});
+
+/** Every line of `term`'s buffer, scrollback first, trailing blank lines dropped. */
+const lines = (term: Terminal) => {
+  const buffer = term.buffer.active;
+  const all: string[] = [];
+  for (let i = 0; i < buffer.length; i++)
+    all.push(buffer.getLine(i)?.translateToString(true) ?? "");
+  return all.join("\n").trimEnd();
+};
+
+test("clear keeps the whole prompt the cursor is at, at the top (21.1)", async () => {
+  const term = terminal(4);
+  const marks = new Marks(term);
+  // A prompt of two lines (fish's), after a command with more output than the screen holds.
+  await write(term, `${A}hive on main\r\n❯ seq\r\n${C}1\r\n2\r\n3\r\n4\r\n${D("0")}`);
+  await write(term, `${A}hive on main\r\n❯ typed`);
+  marks.clear();
+  await write(term, "");
+  expect(lines(term)).toBe("hive on main\n❯ typed");
+  expect(term.buffer.active.cursorY).toBe(1);
+  expect(term.buffer.active.cursorX).toBe(7);
+  expect(marks.list()).toEqual([{ line: 0, status: undefined }]);
+  // Already at the top: only the scrollback would go.
+  marks.clear();
+  await write(term, " more");
+  expect(lines(term)).toBe("hive on main\n❯ typed more");
+  // A command running: xterm's own clear, the cursor's line kept.
+  await write(term, `\r\n${C}out\r\nlast`);
+  marks.clear();
+  await write(term, "");
+  expect(lines(term)).toBe("last");
+  term.dispose();
+});
+
+test("clear without a prompt mark keeps the cursor's line, as xterm does", async () => {
+  const term = terminal(4);
+  const marks = new Marks(term);
+  await write(term, "one\r\ntwo\r\n$ ");
+  marks.clear();
+  await write(term, "");
+  expect(lines(term)).toBe("$");
+  // A prompt that left the screen (taller than it): the same.
+  await write(term, `\r\n${A}a\r\nb\r\nc\r\nd\r\ne\r\n> `);
+  marks.clear();
+  await write(term, "");
+  expect(lines(term)).toBe(">");
+  term.dispose();
+});
+
 test("prompts trimmed from the scrollback, or past the limit, are dropped", async () => {
   const term = new Terminal({ rows: 2, cols: 20, scrollback: 3, allowProposedApi: true });
   const marks = new Marks(term);

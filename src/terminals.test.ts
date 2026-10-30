@@ -721,7 +721,7 @@ test("on macOS ⌘← ⌘→ ⌘⌫ send line start, end and kill to the shell, 
   const write = spyOn(transport, "writeTerminal");
   const { id, term } = await open();
   showTerminal(id);
-  const clear = spyOn(term, "clear");
+  const clear = spyOn(Marks.prototype, "clear");
   const cmd = { ctrlKey: false, metaKey: true, shiftKey: false };
   const sent = () => write.mock.calls.map(([, data]) => data);
   // Not on macOS: Cmd is no command key there, and Ctrl+← is the shell's own.
@@ -887,7 +887,7 @@ test("the terminal menu copies, pastes (bracketed when asked) and clears, then f
   const { id, term } = await open();
   const other = await open();
   showTerminals([id, other.id], other.id);
-  const clear = spyOn(term, "clear");
+  const clear = spyOn(Marks.prototype, "clear");
   const focus = spyOn(term, "focus");
   await new Promise<void>((resolve) => term.write("hello world\x1b[?2004h", resolve));
 
@@ -916,6 +916,8 @@ test("the terminal menu copies, pastes (bracketed when asked) and clears, then f
   expect(write.mock.calls.every(([to]) => to === id)).toBe(true);
   terminalAction(999, "clear");
   expect(focus).toHaveBeenCalledTimes(5);
+  expect(clear).toHaveBeenCalledTimes(1);
+  clear.mockRestore();
   copy.mockRestore();
   read.mockRestore();
 });

@@ -414,7 +414,7 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
   if (send === undefined && jump === undefined && !clear) return false;
   event.preventDefault();
   if (jump !== undefined) marks.jump(jump);
-  else if (send === undefined) term.clear();
+  else if (send === undefined) marks.clear();
   else term.input(send);
   return true;
 }
@@ -611,11 +611,12 @@ export function dropFiles(text: string, x: number, y: number): boolean {
  * terminal keeps the keyboard.
  */
 export function terminalAction(id: number, action: "copy" | "paste" | "clear"): void {
-  const term = terminal(id);
-  if (!term) return;
+  const entry = entries.get(id);
+  if (!entry) return;
+  const { term } = entry;
   if (action === "copy") copy(term);
   else if (action === "paste") paste(term);
-  else term.clear();
+  else entry.marks.clear();
   term.focus();
 }
 

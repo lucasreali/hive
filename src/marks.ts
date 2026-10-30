@@ -45,8 +45,8 @@ type Prompt = { marker: IMarker; decoration?: IDecoration; status?: Status };
 /** A terminal's prompts, in order, and the jumps between them. */
 export class Marks {
   private prompts: Prompt[] = [];
-  /** A command started at the last prompt and has not ended. */
-  private running = false;
+  /** The prompt whose command started and has not ended. */
+  private running: Prompt | null = null;
 
   constructor(private readonly term: Terminal) {
     term.parser.registerOscHandler(133, (data) => {
@@ -63,24 +63,42 @@ export class Marks {
   private mark(mark: Mark): void {
     if (mark?.kind === "prompt") {
       const prompt: Prompt = { marker: this.term.registerMarker(0) };
-      this.running = false;
+      this.running = null;
       this.prompts.push(prompt);
-      // Gone from the scrollback: gone from the list.
+      // Gone from the scrollback, or erased while its command runs (`clear`'s `\x1b[2J`, 21.1):
+      // gone from the list, and its command's end marks nothing.
       prompt.marker.onDispose(() => {
         this.prompts = this.prompts.filter((p) => p !== prompt);
+        if (this.running === prompt) this.running = null;
       });
       if (this.prompts.length > MAX_PROMPTS) this.prompts[0]?.marker.dispose();
     } else if (mark?.kind === "start") {
-      this.running = this.prompts.length > 0;
+      this.running = this.prompts.at(-1) ?? null;
     } else if (mark?.kind === "end" && this.running) {
-      this.running = false;
-      const prompt = this.prompts[this.prompts.length - 1] as Prompt;
+      const prompt = this.running;
+      this.running = null;
       const status: Status = mark.exit === null ? null : mark.exit === 0 ? "ok" : "failed";
       prompt.status = status;
       const decoration = this.term.registerDecoration({ marker: prompt.marker, width: 1 });
       decoration?.onRender((el) => renderMark(el, status));
       prompt.decoration = decoration;
     }
+  }
+
+  /**
+   * ⌘K and the menu's Clear (21.1): the scrollback and the screen go, and the prompt the cursor
+   * is at moves to the top whole, from its mark (fish's prompt of two lines keeps both), as
+   * Terminal.app and Ghostty keep it. Nothing reaches the shell. Without a mark above the cursor
+   * on the screen (no shell integration, a command running), xterm's own clear keeps the
+   * cursor's line.
+   */
+  clear(): void {
+    const buffer = this.term.buffer.active;
+    const line = this.running ? undefined : this.prompts.at(-1)?.marker.line;
+    const row = line === undefined ? -1 : line - buffer.baseY;
+    if (buffer.type !== "normal" || row < 0 || row > buffer.cursorY) this.term.clear();
+    // Scrolled up by its row (the lines above it are dropped, not kept), the cursor with it.
+    else this.term.write(`${row ? `\x1b[${row}S\x1b[${row}A` : ""}\x1b[3J`);
   }
 
   /**
