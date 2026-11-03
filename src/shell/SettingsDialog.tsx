@@ -292,6 +292,24 @@ const FIELDS: Field[] = [
     ),
   },
   {
+    section: "Accounts",
+    label: "Share sessions between accounts",
+    check: true,
+    help:
+      "Resuming a session from the history runs it as the account picked in the status bar, " +
+      "not the one it ran as: its log moves into that account's folder (rewind checkpoints " +
+      "from before the move are lost). Off, a session resumes as its own account.",
+    control: () => (
+      <Toggle
+        label="Share sessions between accounts"
+        get={(s) => s.claude.share_sessions}
+        set={(s, on) => {
+          s.claude.share_sessions = on;
+        }}
+      />
+    ),
+  },
+  {
     section: "Terminal",
     label: "Copy on select",
     check: true,
@@ -1038,8 +1056,15 @@ function Content({ section, query }: { section: Section; query: string }) {
   if (section === "Shortcuts") return <Shortcuts />;
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
-  if (section === "Accounts") return <Accounts />;
   const shown = <Fields fields={fields.filter((f) => f.section === section)} />;
+  if (section === "Accounts") {
+    return (
+      <>
+        <Accounts />
+        {shown}
+      </>
+    );
+  }
   if (section !== "Notifications") return shown;
   return (
     <>

@@ -1005,7 +1005,7 @@ export function createMockTransport(
       // A current Claude account that is gone falls back to the default one, as in the service.
       const { accounts, account } = next.claude;
       const known = accounts.some((a) => a.config_dir === account);
-      settings = { ...next, claude: { accounts, account: known ? account : null } };
+      settings = { ...next, claude: { ...next.claude, account: known ? account : null } };
       later({ type: "settings", settings });
     },
     async openSettingsFile() {
@@ -1217,6 +1217,19 @@ export function createMockTransport(
       sessions = sessions.filter((x) => x.id !== id);
       later({ type: "session_deleted", id });
       // As the service does when a log goes (D19.4).
+      listSessions();
+    },
+    async moveSession(id, config_dir) {
+      const found = sessions.find((x) => x.id === id);
+      const running = [...terminals.values()].some((t) => t.agent === id);
+      if (!found || running) {
+        const message = running
+          ? "the session is running: end it first"
+          : `no session ${id} in the followed projects`;
+        return void later({ type: "move_session_failed", id, message });
+      }
+      sessions = sessions.map((x) => (x.id === id ? { ...x, config_dir } : x));
+      later({ type: "session_moved", id, config_dir });
       listSessions();
     },
     async searchFiles(worktree, query) {

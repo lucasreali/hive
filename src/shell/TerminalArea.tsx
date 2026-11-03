@@ -367,7 +367,7 @@ function SplitItem(props: { tab: number; onClose: () => void; keys?: boolean }) 
 }
 
 /** A submenu beside its menu (on its left without room on its right), its first item focused. */
-function Submenu({ label, children }: { label: string; children: ReactNode }) {
+export function Submenu({ label, children }: { label: string; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current as HTMLDivElement;

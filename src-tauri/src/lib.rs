@@ -1410,6 +1410,12 @@ impl Hive {
         self.link().send(0, &Control::DeleteSession { id })
     }
 
+    /// The answer arrives as `session_moved` or `move_session_failed`.
+    pub fn move_session(&self, id: String, config_dir: Option<String>) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::MoveSession { id, config_dir })
+    }
+
     /// The answer arrives as `dirs`.
     pub fn list_dirs(&self, path: String, windows: bool) -> Result<(), String> {
         self.link().send(0, &Control::ListDirs { path, windows })
@@ -2141,6 +2147,15 @@ pub mod commands {
     #[tauri::command]
     pub fn delete_session(hive: State<'_, Hive>, id: String) -> Result<(), String> {
         hive.delete_session(id)
+    }
+
+    #[tauri::command]
+    pub fn move_session(
+        hive: State<'_, Hive>,
+        id: String,
+        config_dir: Option<String>,
+    ) -> Result<(), String> {
+        hive.move_session(id, config_dir)
     }
 
     #[tauri::command]

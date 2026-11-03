@@ -104,7 +104,10 @@ test("keeps the settings it is given in memory", async () => {
 test("new terminals get the current Claude account, or the one asked for (12.2)", async () => {
   const { transport, messages } = await connected();
   const work = { name: "Work", config_dir: "/w/.claude" };
-  const settings = { ...DEFAULT_SETTINGS, claude: { accounts: [work], account: "/w/.claude" } };
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    claude: { accounts: [work], account: "/w/.claude", share_sessions: false },
+  };
   await transport.setSettings(settings);
   const outputs: string[] = [];
   const decoder = new TextDecoder();
@@ -122,12 +125,16 @@ test("new terminals get the current Claude account, or the one asked for (12.2)"
   expect(outputs[0]).toContain("echo $CLAUDE_CONFIG_DIR\r\n/w/.claude");
   expect(outputs[1]).not.toContain("/w/.claude");
   // Removing the current account makes the default one current.
-  await transport.setSettings({ ...settings, claude: { accounts: [], account: "/w/.claude" } });
+  await transport.setSettings({
+    ...settings,
+    claude: { accounts: [], account: "/w/.claude", share_sessions: false },
+  });
   await tick();
   const last = messages.at(-1);
   expect(last?.type === "settings" && last.settings.claude).toEqual({
     accounts: [],
     account: null,
+    share_sessions: false,
   });
 });
 
@@ -1029,6 +1036,23 @@ test("sessions: listed, located, and deleted unless running", async () => {
   await transport.writeTerminal(id, "claude\r");
   await tick();
   const agent = `mock-session-${id}`;
+  // Moved into another account's folder (21.10), never while it runs; listed again unasked.
+  const [moved, relisted] = (await answers(() => transport.moveSession(first.id, "/w"))) as [
+    ServiceMessage,
+    { sessions: { id: string; config_dir: string | null }[] },
+  ];
+  expect(moved).toEqual({ type: "session_moved", id: first.id, config_dir: "/w" });
+  expect(relisted.sessions.find((s) => s.id === first.id)?.config_dir).toBe("/w");
+  expect(await answers(() => transport.moveSession(agent, null))).toEqual([
+    { type: "move_session_failed", id: agent, message: "the session is running: end it first" },
+  ]);
+  expect(await answers(() => transport.moveSession("nope", null))).toEqual([
+    {
+      type: "move_session_failed",
+      id: "nope",
+      message: "no session nope in the followed projects",
+    },
+  ]);
   expect(await answers(() => transport.deleteSession(agent))).toEqual([
     {
       type: "delete_session_failed",

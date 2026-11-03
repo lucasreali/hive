@@ -156,7 +156,11 @@ test("with an account besides the default one, a select picks the current accoun
   render(<StatusBar />);
   const select = () => screen.queryByRole("combobox", { name: "Claude account" });
   expect(select()).toBeNull();
-  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: "/w" };
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: "/w",
+    share_sessions: false,
+  };
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
   expect(select()?.textContent).toBe("Work");
   // Its session usage (12.1) sits right after it.
@@ -185,7 +189,11 @@ test("whether each account logged in is asked once connected, for new accounts a
   expect(ask).not.toHaveBeenCalled();
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(ask).toHaveBeenCalledTimes(1);
-  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: null };
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: null,
+    share_sessions: false,
+  };
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
   expect(ask).toHaveBeenCalledTimes(2);
   // Back from the browser, where a `/login` finished.
@@ -202,7 +210,11 @@ test("whether each account logged in is asked once connected, for new accounts a
 test("an account that never logged in says so in the select, with Log in… when current (21.6)", () => {
   const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
   render(<StatusBar />);
-  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: "/w" };
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: "/w",
+    share_sessions: false,
+  };
   act(() => {
     apply({ type: "welcome", version: "0.1.0", distro: null });
     apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } });

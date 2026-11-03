@@ -167,6 +167,7 @@ fn main() {
             commands::list_sessions,
             commands::locate_session,
             commands::delete_session,
+            commands::move_session,
             commands::save_file,
             commands::create_file,
             commands::rename_file,

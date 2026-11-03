@@ -3,7 +3,7 @@ import { runMenuItem } from "./menu";
 import { goToClicked, notify } from "./notify";
 import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
-import { openLocated, restore } from "./sessions";
+import { onMoved, openLocated, restore } from "./sessions";
 import { requestQuit } from "./shell/CloseAppDialog";
 import { dropFiles, reattachTerminal, showOpenFailure } from "./terminals";
 import { transport } from "./transport";
@@ -15,6 +15,9 @@ function onMessage(message: ServiceMessage): void {
   bounceFor(message);
   apply(message);
   if (message.type === "session_located") void openLocated(message);
+  if (message.type === "session_moved" || message.type === "move_session_failed") {
+    onMoved(message);
+  }
   if (message.type === "restore_sessions") void restore(message.sessions);
   if (message.type === "editor_target") void openTarget(message);
   // An OS notification's click (13.5) or a pending agent chosen in the menu bar icon (17.22).

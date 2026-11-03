@@ -492,6 +492,31 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 }
             })
         }
+        Ok(Control::MoveSession { id, config_dir }) => {
+            let known = state.settings.account_dirs();
+            state.sessions(move |projects, sessions, mut running| {
+                // Only into an account's folder; and a session running outside Hive too keeps
+                // writing its log (#20).
+                let moved = match &config_dir {
+                    Some(dir) if !known.contains(dir) => {
+                        Err(io::Error::other(format!("{dir} is not a Claude account")))
+                    }
+                    _ => {
+                        let records = sessions.records();
+                        running.extend(procs::claude_sessions(procs::Source::System, &records));
+                        let dir = config_dir.as_deref();
+                        sessions.move_to(projects, &id, dir, &running, &crate::sessions::System)
+                    }
+                };
+                match moved {
+                    Ok(()) => Control::SessionMoved { id, config_dir },
+                    Err(err) => Control::MoveSessionFailed {
+                        id,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
         Ok(Control::ListDirs { path, windows }) => state.projects(move |_| {
             let home = std::env::var_os(dirs::HOME).map(PathBuf::from);
             dirs::answer(path, windows, home.as_deref(), &dirs::WINDOWS)

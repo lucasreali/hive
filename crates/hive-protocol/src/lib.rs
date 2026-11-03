@@ -780,6 +780,23 @@ pub enum Control {
         id: String,
         message: String,
     },
+    /// App → service: moves a listed session's log (and its subagents' folder) into the Claude
+    /// account `config_dir`'s folder (`None`: the default account), to resume it as that
+    /// account (21.10, D22.5); never while it runs, never over a log already there. Its
+    /// `file-history` stays behind. Answered by `SessionMoved` (also when it was there
+    /// already) or `MoveSessionFailed`.
+    MoveSession {
+        id: String,
+        config_dir: Option<String>,
+    },
+    SessionMoved {
+        id: String,
+        config_dir: Option<String>,
+    },
+    MoveSessionFailed {
+        id: String,
+        message: String,
+    },
     /// App → service: the lines of a followed worktree's files holding `query` (fixed string,
     /// any case; ignored and binary files skipped), answered by `SearchResults`.
     SearchFiles {
@@ -1029,6 +1046,10 @@ pub struct ClaudeSettings {
     /// The current account's folder: new terminals get it as `CLAUDE_CONFIG_DIR`. `None`, or a
     /// folder no account has: the default account.
     pub account: Option<String>,
+    /// Sessions are shared between the accounts (21.10, D22.5): resuming one from the history
+    /// runs as the current account, its log moved into that account's folder. Off: as the
+    /// account it ran as.
+    pub share_sessions: bool,
 }
 
 /// A Claude account: a name and its `CLAUDE_CONFIG_DIR`.
@@ -2517,6 +2538,14 @@ mod tests {
             &Frame::control(0, &locate).payload[..],
             br#"{"type":"locate_session","id":"s","target":"folder"}"#
         );
+        let moved = Control::MoveSession {
+            id: "s".into(),
+            config_dir: Some("/w".into()),
+        };
+        assert_eq!(
+            &Frame::control(0, &moved).payload[..],
+            br#"{"type":"move_session","id":"s","config_dir":"/w"}"#
+        );
         let restore = Control::RestoreSessions {
             sessions: vec![OpenSession {
                 id: "s".into(),
@@ -2548,6 +2577,14 @@ mod tests {
                 target: SessionTarget::Log,
                 windows_path: None,
                 error: Some("e".into()),
+            },
+            Control::SessionMoved {
+                id: "s".into(),
+                config_dir: None,
+            },
+            Control::MoveSessionFailed {
+                id: "s".into(),
+                message: "m".into(),
             },
         ] {
             assert_eq!(Frame::control(0, &message).to_control().unwrap(), message);
@@ -2872,7 +2909,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null,"share_sessions":false}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,

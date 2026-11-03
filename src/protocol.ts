@@ -147,6 +147,9 @@ export type ServiceMessage =
   // Handled by `restore` (src/sessions.ts), not stored.
   | { type: "restore_sessions"; sessions: OpenSession[] }
   | { type: "delete_session_failed"; id: string; message: string }
+  // Handled by `resume` (src/sessions.ts), not stored.
+  | { type: "session_moved"; id: string; config_dir: string | null }
+  | { type: "move_session_failed"; id: string; message: string }
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   | { type: "file_created"; worktree: string; path: string }
@@ -530,8 +533,10 @@ export type Settings = {
   /**
    * The Claude accounts (12.2) besides the default one (`~/.claude`, always there), and the
    * current one's folder (null: the default one): new terminals get it as `CLAUDE_CONFIG_DIR`.
+   * `share_sessions` (21.10, D22.5): a session resumed from the history runs as the current
+   * account, its log moved into that account's folder; off, as the account it ran as.
    */
-  claude: { accounts: Account[]; account: string | null };
+  claude: { accounts: Account[]; account: string | null; share_sessions: boolean };
 };
 
 /** Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`. */

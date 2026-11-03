@@ -128,6 +128,8 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   session_deleted: { id: true },
   restore_sessions: { sessions: true },
   delete_session_failed: { id: true, message: true },
+  session_moved: { id: true, config_dir: true },
+  move_session_failed: { id: true, message: true },
   file_saved: { worktree: true, path: true, version: true },
   save_failed: { worktree: true, path: true, error: true, message: true },
   file_created: { worktree: true, path: true },
