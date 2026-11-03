@@ -89,6 +89,7 @@ export type ServiceMessage =
   | { type: "spaces"; spaces: Space[]; current: string }
   | { type: "space_failed"; message: string }
   | ({ type: "gh_accounts" } & GhAccounts)
+  | { type: "claude_logins"; logins: ClaudeLogin[] }
   | { type: "notice"; message: string }
   | ({ type: "pulls" } & Pulls)
   | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
@@ -519,6 +520,12 @@ export type Settings = {
 
 /** Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`. */
 export type Account = { name: string; config_dir: string };
+
+/**
+ * Mirrors `hive_protocol::ClaudeLogin` (21.6): whether the account whose folder is `config_dir`
+ * (null: the default one) has logged in, from its `.claude.json` (never the credentials, #45).
+ */
+export type ClaudeLogin = { config_dir: string | null; logged_in: boolean };
 
 /**
  * Mirrors `hive_protocol::AccountDir`: the Claude account a terminal is opened with (12.2),

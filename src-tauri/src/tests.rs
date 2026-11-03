@@ -1240,6 +1240,9 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.select_space("w".into()).unwrap();
     let select = Control::SelectSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, select));
+    hive.list_claude_logins().unwrap();
+    let list = Control::ListClaudeLogins;
+    assert_eq!(service.control().await, (0, list));
     hive.list_gh_accounts(Some("/g".into())).unwrap();
     let list = Control::ListGhAccounts {
         gh_config_dir: Some("/g".into()),
@@ -1589,6 +1592,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.delete_space("w".into()), not_connected);
     assert_eq!(hive.remove_project("/r".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
+    assert_eq!(hive.list_claude_logins(), not_connected);
     assert_eq!(hive.list_gh_accounts(None), not_connected);
     let account = GhAccount {
         host: "h".into(),
@@ -1836,6 +1840,7 @@ fn commands_reach_the_managed_hive() {
             delete_space,
             remove_project,
             select_space,
+            list_claude_logins,
             list_gh_accounts,
             switch_gh_account,
             list_pulls,
@@ -1962,6 +1967,7 @@ fn commands_reach_the_managed_hive() {
         ("delete_space", &space),
         ("remove_project", &space),
         ("select_space", &space),
+        ("list_claude_logins", &json!({})),
         ("list_gh_accounts", &json!({"ghConfigDir": null})),
         ("switch_gh_account", &switch_gh),
         ("list_pulls", &list_pulls),

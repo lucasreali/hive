@@ -1200,6 +1200,31 @@ test("gh's accounts are listed, and the active one switched", async () => {
   ]);
 });
 
+test("the default account has logged in, and an account added in the mock has not", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  messages.length = 0;
+  await transport.listClaudeLogins();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.claude.accounts.push({ name: "Work", config_dir: "/w" });
+  await transport.setSettings(settings);
+  await transport.listClaudeLogins();
+  await tick();
+  const logins = messages.filter((m) => m.type === "claude_logins");
+  expect(logins).toEqual([
+    { type: "claude_logins", logins: [{ config_dir: null, logged_in: true }] },
+    {
+      type: "claude_logins",
+      logins: [
+        { config_dir: null, logged_in: true },
+        { config_dir: "/w", logged_in: false },
+      ],
+    },
+  ]);
+});
+
 test("spaces are kept as the service keeps them", async () => {
   const transport = createMockTransport();
   const messages: ServiceMessage[] = [];

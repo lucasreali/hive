@@ -347,6 +347,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::DeleteSpace { id }) => state.change_spaces(|s| s.delete(&id)).await,
         Ok(Control::SelectSpace { id }) => state.change_spaces(|s| s.select(&id)).await,
         Ok(Control::ListGhAccounts { gh_config_dir }) => state.gh_accounts(gh_config_dir, None),
+        Ok(Control::ListClaudeLogins) => state.claude_logins(),
         Ok(Control::SwitchGhAccount {
             gh_config_dir,
             account,
