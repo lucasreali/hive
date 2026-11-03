@@ -3,7 +3,7 @@ import { type Connection, useHive } from "../store";
 import { Select } from "../ui/Select";
 import { usageLines } from "../usage";
 import { isMac } from "../window";
-import { saveSettings } from "./SettingsDialog";
+import { LogIn, loggedIn, NotLoggedIn, saveSettings, useClaudeLogins } from "./SettingsDialog";
 
 const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
@@ -14,33 +14,48 @@ const LABEL: Record<Connection["status"], string> = {
 
 /**
  * The current Claude account (12.2): new terminals get it, open ones keep theirs. Only shown when
- * there is an account besides the default one. The value "" is the default account.
+ * there is an account besides the default one. The value "" is the default account. An account
+ * that never logged in says so (21.6), and when it is the current one, "Log in…" is beside it.
  */
 function AccountSelect() {
   const { accounts, account, default_name } = useHive((s) => s.settings.claude);
+  const logins = useHive((s) => s.claudeLogins);
   if (accounts.length === 0) return null;
+  const label = (name: string, dir: string | null) =>
+    loggedIn(logins, dir) ? name : `${name} (not logged in)`;
   const options = [
-    { value: "", label: default_name },
-    ...accounts.map((a) => ({ value: a.config_dir, label: a.name })),
+    { value: "", label: label(default_name, null) },
+    ...accounts.map((a) => ({ value: a.config_dir, label: label(a.name, a.config_dir) })),
   ];
+  const current = accounts.find((a) => a.config_dir === account);
+  const dir = current?.config_dir ?? null;
   return (
-    <Select
-      className="account-select"
-      aria-label="Claude account"
-      value={account ?? ""}
-      options={options}
-      onChange={(value) =>
-        saveSettings((s) => {
-          s.claude.account = value || null;
-        })
-      }
-    />
+    <>
+      {loggedIn(logins, dir) ? null : (
+        <>
+          <NotLoggedIn dir={dir} />
+          <LogIn dir={dir} name={current?.name ?? default_name} />
+        </>
+      )}
+      <Select
+        className="account-select"
+        aria-label="Claude account"
+        value={account ?? ""}
+        options={options}
+        onChange={(value) =>
+          saveSettings((s) => {
+            s.claude.account = value || null;
+          })
+        }
+      />
+    </>
   );
 }
 
 // The place and connection state (#141), the Claude account (12.2) with its session usage
 // (12.1), and the app version; never a message (10.3: `Toasts`).
 export function StatusBar() {
+  useClaudeLogins();
   const connection = useHive((s) => s.connection);
   // The service reports its distribution in `welcome`; until then only "WSL" is known. On
   // macOS, and on Windows in native mode (12.5.4), the service runs natively and reports none.

@@ -372,6 +372,30 @@ test("the default account is renamed in place, and emptied it is Default again (
   expect(settings().claude.default_name).toBe("Default");
 });
 
+test("the accounts section marks an account that never logged in (21.6)", async () => {
+  const ask = spyOn(transport, "listClaudeLogins");
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: null,
+    default_name: "Default",
+  };
+  await transport.setSettings({ ...DEFAULT_SETTINGS, claude });
+  open();
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
+  const asked = ask.mock.calls.length;
+  section("Accounts");
+  // Asked again as the section opens: a `/login` may have finished in a Hive terminal.
+  expect(ask.mock.calls.length).toBe(asked + 1);
+  // The mock: the default account logged in, Work not.
+  const marks = () => [...document.querySelectorAll(".script-run")].map((row) => row.textContent);
+  await waitFor(() => expect(marks()[1]).toContain("Not logged in"));
+  expect(marks()[0]).not.toContain("Not logged in");
+  // The mark sits right before the row's "Log in…".
+  const mark = screen.getByText("Not logged in");
+  expect(mark.nextElementSibling?.textContent).toBe("Log in…");
+  ask.mockRestore();
+});
+
 test("a run script keeps its fields and the focus while renamed; a late edit finds its row", async () => {
   open();
   section("Projects");

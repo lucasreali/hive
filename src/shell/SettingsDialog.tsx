@@ -12,7 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
-import type { AppMode, ProjectScripts, Settings } from "../protocol";
+import type { AppMode, ClaudeLogin, ProjectScripts, Settings } from "../protocol";
 import { commandKeys, platformCommands } from "../shortcuts";
 import { ask, openModal, panelWorktree, scriptsOf, useHive } from "../store";
 import { MAC_TERMINAL_KEYS, openClaude, showOpenFailure } from "../terminals";
@@ -840,11 +840,43 @@ function ScriptFields({ id }: { id: string }) {
 }
 
 /**
+ * Whether the account whose folder is `dir` (null: the default one) has logged in (21.6): yes
+ * until the service says otherwise.
+ */
+export const loggedIn = (logins: ClaudeLogin[] | null, dir: string | null) =>
+  logins?.find((l) => l.config_dir === dir)?.logged_in ?? true;
+
+/**
+ * Asks the service whether each Claude account has logged in (21.6): once connected, whenever
+ * the accounts change, and whenever the window comes back to the front (a `/login` finishes in
+ * the browser).
+ */
+export function useClaudeLogins() {
+  const connected = useHive((s) => s.connection.status === "connected");
+  const accounts = useHive((s) => s.settings.claude.accounts);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `accounts` says when to ask again.
+  useEffect(() => {
+    if (!connected) return;
+    const ask = () => void transport.listClaudeLogins();
+    ask();
+    window.addEventListener("focus", ask);
+    return () => window.removeEventListener("focus", ask);
+  }, [connected, accounts]);
+}
+
+/** "Not logged in" (21.6) beside an account that never finished its `/login`. */
+export function NotLoggedIn({ dir }: { dir: string | null }) {
+  const logins = useHive((s) => s.claudeLogins);
+  if (loggedIn(logins, dir)) return null;
+  return <span className="not-logged-in">Not logged in</span>;
+}
+
+/**
  * "Log in…" for the account whose folder is `dir` (null: the default one): a new terminal where
  * a new terminal would open (the files panel's worktree) running `claude` as that account, where
  * the user types `/login`. Hive never reads or writes credentials (#45).
  */
-function LogIn({ dir, name }: { dir: string | null; name: string }) {
+export function LogIn({ dir, name }: { dir: string | null; name: string }) {
   const where = useHive((s) => panelWorktree(s)?.worktree.path ?? null);
   return (
     <button
@@ -874,6 +906,8 @@ function LogIn({ dir, name }: { dir: string | null; name: string }) {
 function Accounts() {
   const accounts = useHive((s) => s.settings.claude.accounts);
   const defaultName = useHive((s) => s.settings.claude.default_name);
+  // Asked again when the section opens: a `/login` may have finished in a Hive terminal.
+  useEffect(() => void transport.listClaudeLogins(), []);
   const [name, setName] = useState("");
   const [dir, setDir] = useState("");
   const add = () => {
@@ -899,6 +933,7 @@ function Accounts() {
           }
         />
         <input aria-label="Folder of the default account" value="~/.claude" readOnly />
+        <NotLoggedIn dir={null} />
         <LogIn dir={null} name={defaultName} />
       </div>
       {accounts.map((a) => (
@@ -915,6 +950,7 @@ function Accounts() {
             }
           />
           <input aria-label={`Folder of ${a.name}`} value={a.config_dir} readOnly />
+          <NotLoggedIn dir={a.config_dir} />
           <LogIn dir={a.config_dir} name={a.name} />
           <button
             type="button"
@@ -959,8 +995,9 @@ function Accounts() {
         settings and sessions. The first one is <code>~/.claude</code> itself: it can be renamed but
         not removed, and an empty name is "Default" again. The status bar picks the one new
         terminals get; open ones keep theirs. "Log in…" opens a terminal running <code>claude</code>{" "}
-        as the account: type <code>/login</code> there. Hive never reads or writes credentials.
-        Removing an account leaves its folder on disk.
+        as the account: type <code>/login</code> there; "Not logged in" marks an account whose{" "}
+        <code>.claude.json</code> has no login yet. Hive never reads or writes credentials. Removing
+        an account leaves its folder on disk.
       </p>
     </div>
   );

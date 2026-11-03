@@ -159,3 +159,75 @@ test("with an account besides the default one, a select picks the current accoun
   expect(screen.getByRole("option", { name: "Personal" })).toBeTruthy();
   set.mockRestore();
 });
+
+test("whether each account logged in is asked once connected, for new accounts and on focus (21.6)", () => {
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  render(<StatusBar />);
+  expect(ask).not.toHaveBeenCalled();
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
+  expect(ask).toHaveBeenCalledTimes(1);
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: null,
+    default_name: "Default",
+  };
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
+  expect(ask).toHaveBeenCalledTimes(2);
+  // Back from the browser, where a `/login` finished.
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(ask).toHaveBeenCalledTimes(3);
+  cleanup();
+  window.dispatchEvent(new Event("focus"));
+  expect(ask).toHaveBeenCalledTimes(3);
+  ask.mockRestore();
+});
+
+test("an account that never logged in says so in the select, with Log in… when current (21.6)", () => {
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  render(<StatusBar />);
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: "/w",
+    default_name: "Default",
+  };
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } });
+  });
+  const select = () => screen.getByRole("combobox", { name: "Claude account" });
+  const logIn = () => screen.queryByRole("button", { name: "Log in…" });
+  // Until the service answers, every account counts as logged in.
+  expect(select().textContent).toBe("Work");
+  expect(logIn()).toBeNull();
+  const logins = (work: boolean, def = true) => [
+    { config_dir: null, logged_in: def },
+    { config_dir: "/w", logged_in: work },
+  ];
+  act(() => apply({ type: "claude_logins", logins: logins(false) }));
+  expect(select().textContent).toBe("Work (not logged in)");
+  expect(screen.getByText("Not logged in").className).toBe("not-logged-in");
+  expect(logIn()?.title).toBe("Select a worktree to open the terminal in");
+  fireEvent.mouseDown(select());
+  const options = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(options).toEqual(["Default", "Work (not logged in)"]);
+  fireEvent.keyDown(select(), { key: "Escape" });
+  // Logged in now: no mark.
+  act(() => apply({ type: "claude_logins", logins: logins(true) }));
+  expect(select().textContent).toBe("Work");
+  expect(logIn()).toBeNull();
+  // The default account, current and never logged in.
+  const def = { ...claude, account: null };
+  act(() => {
+    apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: def } });
+    apply({ type: "claude_logins", logins: logins(true, false) });
+  });
+  expect(select().textContent).toBe("Default (not logged in)");
+  expect(logIn()).not.toBeNull();
+  // Renamed (21.4), it keeps the mark.
+  const personal = { ...def, default_name: "Personal" };
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: personal } }));
+  expect(select().textContent).toBe("Personal (not logged in)");
+  ask.mockRestore();
+});

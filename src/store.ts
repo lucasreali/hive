@@ -21,6 +21,7 @@ import type {
   AppMode,
   Branches,
   Changes,
+  ClaudeLogin,
   CreateFailure,
   Diagnostics,
   DiffBase,
@@ -394,6 +395,8 @@ export type HiveState = {
   spaceError: string | null;
   /** The last `gh_accounts` answer (9.30), for the space dialog; null until asked. */
   ghAccounts: GhAccounts | null;
+  /** The last `claude_logins` answer (21.6); null until asked. */
+  claudeLogins: ClaudeLogin[] | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
   /** The worktree a dialog opened for (its row's menu). */
@@ -511,6 +514,7 @@ export const initialState: HiveState = {
   currentSpace: null,
   spaceError: null,
   ghAccounts: null,
+  claudeLogins: null,
   modalProject: null,
   modalWorktree: null,
   worktreeDialog: {
