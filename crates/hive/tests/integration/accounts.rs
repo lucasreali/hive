@@ -162,3 +162,76 @@ async fn the_spaces_claude_folders_become_accounts_once() {
         assert!(daemon.wait_exit().success());
     }
 }
+
+#[tokio::test]
+async fn a_session_moves_into_another_accounts_folder() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let work = repo.env.path("home/.claude-work");
+    std::fs::create_dir_all(&work).unwrap();
+    let log = session(&repo.env.path("home/.claude"), &root, "a");
+    let work = work.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let added = request(&mut app, Control::AddProject { path: root.clone() }).await;
+    assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
+    let mut settings = Settings::default();
+    settings.claude.accounts.push(Account {
+        name: "Work".into(),
+        config_dir: work.clone(),
+    });
+    let set = Control::SetSettings {
+        settings: settings.clone(),
+    };
+    assert_eq!(request(&mut app, set).await, Control::Settings { settings });
+    let mut ask = async |id: &str, config_dir: Option<&str>| {
+        let config_dir = config_dir.map(Into::into);
+        let id = id.into();
+        app.send(0, Control::MoveSession { id, config_dir }).await;
+        loop {
+            if let answer @ (Control::SessionMoved { .. } | Control::MoveSessionFailed { .. }) =
+                app.control().await.1
+            {
+                return answer;
+            }
+        }
+    };
+    // Only into an account's folder.
+    assert_eq!(
+        ask("a", Some("/nope")).await,
+        Control::MoveSessionFailed {
+            id: "a".into(),
+            message: "/nope is not a Claude account".into(),
+        }
+    );
+    assert!(log.exists());
+    assert_eq!(
+        ask("a", Some(&work)).await,
+        Control::SessionMoved {
+            id: "a".into(),
+            config_dir: Some(work.clone()),
+        }
+    );
+    let moved = Path::new(&work)
+        .join("projects")
+        .join(log.parent().unwrap().file_name().unwrap())
+        .join("a.jsonl");
+    assert!(moved.exists() && !log.exists());
+    let Control::MoveSessionFailed { message, .. } = ask("b", None).await else {
+        panic!("expected a refusal")
+    };
+    assert_eq!(message, "no session b in the followed projects");
+    // Listed once, in the account it now lives in.
+    app.send(0, Control::ListSessions).await;
+    let sessions = loop {
+        if let (0, Control::Sessions { sessions, .. }) = app.control().await {
+            break sessions;
+        }
+    };
+    let listed: Vec<_> = (sessions.iter())
+        .map(|s| (s.id.as_str(), s.config_dir.as_deref()))
+        .collect();
+    assert_eq!(listed, [("a", Some(work.as_str()))]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}

@@ -479,6 +479,16 @@
     "message": "m"
   },
   {
+    "type": "session_moved",
+    "id": "s",
+    "config_dir": "/w"
+  },
+  {
+    "type": "move_session_failed",
+    "id": "s",
+    "message": "m"
+  },
+  {
     "type": "search_results",
     "worktree": "/r",
     "query": "q",
@@ -588,7 +598,8 @@
       "projects": {},
       "claude": {
         "accounts": [],
-        "account": null
+        "account": null,
+        "share_sessions": false
       }
     }
   },

@@ -66,6 +66,7 @@ sort! {
         | ListSessions
         | LocateSession
         | DeleteSession
+        | MoveSession
         | SearchFiles
         | ListDirs
         | OpenFile
@@ -134,6 +135,8 @@ sort! {
         | SessionLocated
         | SessionDeleted
         | DeleteSessionFailed
+        | SessionMoved
+        | MoveSessionFailed
         | SearchResults
         | Dirs
         | File
@@ -438,6 +441,14 @@ fn samples() -> Vec<Control> {
         },
         SessionDeleted { id: s("s") },
         DeleteSessionFailed {
+            id: s("s"),
+            message: m(),
+        },
+        SessionMoved {
+            id: s("s"),
+            config_dir: Some(s("/w")),
+        },
+        MoveSessionFailed {
             id: s("s"),
             message: m(),
         },

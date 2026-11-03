@@ -472,6 +472,9 @@ impl Sessions {
             }
         }
         logs.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
+        // One row per session: a log of it in two accounts' folders shows the newer (21.10).
+        let mut ids = HashSet::new();
+        logs.retain(|log| ids.insert(log.id.clone()));
         let mut sessions: Vec<_> = logs
             .into_iter()
             .filter_map(|log| self.session(projects, log))
@@ -525,6 +528,73 @@ impl Sessions {
         let folder = log.with_extension("");
         if folder.symlink_metadata().is_ok_and(|m| m.is_dir()) {
             std::fs::remove_dir_all(&folder)?;
+        }
+        self.cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&log);
+        Ok(())
+    }
+
+    /// Moves the listed session `id` into the projects folder of the account whose Claude
+    /// config folder is `config_dir` (`None`: the default account's), to resume it as that
+    /// account (21.10, D22.5): its log and the folder of the same name beside it (subagents'
+    /// logs, saved tool outputs), into the project folder of the same name. Claude Code does
+    /// not resume a linked log, so the log moves. Refused while it runs (`running`, #20), when
+    /// that account already has a log of the session, and for a log outside every account's
+    /// projects folder. Its `file-history` stays behind. Nothing to do when it is there already.
+    pub fn move_to(
+        &self,
+        projects: &[Project],
+        id: &str,
+        config_dir: Option<&str>,
+        running: &HashSet<String>,
+        files: &impl Files,
+    ) -> io::Result<()> {
+        let session = self.find(projects, id)?;
+        if running.contains(id) {
+            return Err(io::Error::other("the session is running: end it first"));
+        }
+        let to = self.at(&[config_dir]).roots();
+        let to = to
+            .first()
+            .ok_or_else(|| io::Error::other("the default account has no folder"))?;
+        // Listed, so in one of the accounts' projects folders: `<root>/<project>/<id>.jsonl`.
+        let log = PathBuf::from(&session.log);
+        let from = log.parent().and_then(Path::parent);
+        if from == Some(to.as_path()) {
+            return Ok(());
+        }
+        let name = log.parent().and_then(Path::file_name).unwrap_or_default();
+        let target = to.join(name);
+        if log_in(to, id, &session.cwd).is_some() || there(&target.join(id)) {
+            return Err(io::Error::other(format!(
+                "the account already has a log of session {id}"
+            )));
+        }
+        // Made as Claude makes them; one that is a link is not followed out.
+        for dir in [to.as_path(), target.as_path()] {
+            let meta = dir.symlink_metadata();
+            if meta
+                .as_ref()
+                .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+            {
+                create_private_dir(dir)?;
+            } else if !meta.is_ok_and(|m| m.is_dir()) {
+                return Err(io::Error::other(format!(
+                    "{} is not a folder",
+                    dir.display()
+                )));
+            }
+        }
+        let beside = log.with_extension("");
+        let has_folder = beside.symlink_metadata().is_ok_and(|m| m.is_dir());
+        let moved = target.join(format!("{id}.jsonl"));
+        move_path(files, &log, &moved)?;
+        if has_folder && let Err(err) = move_path(files, &beside, &target.join(id)) {
+            // The log goes back beside its folder.
+            let _ = move_path(files, &moved, &log);
+            return Err(err);
         }
         self.cache
             .lock()
@@ -598,6 +668,103 @@ fn log_in(root: &Path, id: &str, cwd: &str) -> Option<PathBuf> {
         .filter(|dir| normalized(&dir.file_name().to_string_lossy()) == folder)
         .map(|dir| dir.path().join(&name))
         .find(is_log)
+}
+
+/// Most bytes copied when a session moves to another file system (its log and its folder).
+const MOVE_LIMIT: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
+/// Most files and folders copied then, and how deep its folder goes.
+const MOVE_ENTRIES: u64 = 10_000;
+const MOVE_DEPTH: usize = 8;
+
+/// How a session's files are moved (injected, so tests reach the copy of another file system).
+pub trait Files {
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+}
+
+/// The real file system.
+pub struct System;
+
+impl Files for System {
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+}
+
+/// Something (even a dangling link) is at `path`.
+fn there(path: &Path) -> bool {
+    path.symlink_metadata().is_ok()
+}
+
+/// A folder only its owner reads, as Claude's own.
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
+/// Moves the file or folder `from` to `to`, where nothing is: a rename, else (another file
+/// system) a copy, written to disk, then `from` removed. Links in a folder are not copied (a
+/// session's are refused); a copy beyond the limits is refused and removed.
+fn move_path(files: &impl Files, from: &Path, to: &Path) -> io::Result<()> {
+    if there(to) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} exists", to.display()),
+        ));
+    }
+    match files.rename(from, to) {
+        Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {}
+        done => return done,
+    }
+    let mut left = (MOVE_LIMIT, MOVE_ENTRIES);
+    if let Err(err) = copy(from, to, 0, &mut left) {
+        let _ = if to.is_dir() {
+            std::fs::remove_dir_all(to)
+        } else {
+            std::fs::remove_file(to)
+        };
+        return Err(err);
+    }
+    if from.symlink_metadata()?.is_dir() {
+        std::fs::remove_dir_all(from)
+    } else {
+        std::fs::remove_file(from)
+    }
+}
+
+/// Copies `from` (a file, or a folder `depth` deep) to `to`, never over something, taking what
+/// it copies from `left` (bytes, entries).
+fn copy(from: &Path, to: &Path, depth: usize, left: &mut (u64, u64)) -> io::Result<()> {
+    let too_large = || io::Error::other("the session is too large to move to another disk");
+    left.1 = left.1.checked_sub(1).ok_or_else(too_large)?;
+    let meta = from.symlink_metadata()?;
+    if meta.is_dir() {
+        if depth >= MOVE_DEPTH {
+            return Err(too_large());
+        }
+        create_private_dir(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy(&entry.path(), &to.join(entry.file_name()), depth + 1, left)?;
+        }
+        return Ok(());
+    }
+    if !meta.is_file() {
+        return Err(io::Error::other(format!(
+            "{} is a link or not a regular file",
+            from.display()
+        )));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut out = options.open(to)?;
+    let mut source = File::open(from)?.take(left.0.saturating_add(1));
+    let copied = io::copy(&mut source, &mut out)?;
+    left.0 = left.0.checked_sub(copied).ok_or_else(too_large)?;
+    out.sync_all()
 }
 
 /// A session log found in a folder of Claude's: a regular `<id>.jsonl` file, in the projects
@@ -704,8 +871,10 @@ mod tests {
         let home = tmp.path().join("home/.claude/projects");
         let work = tmp.path().join("work");
         let folder = |root: &Path| root.join(normalized(repo));
-        touched(&log(&folder(&home), "a.jsonl", repo), 0);
-        touched(&log(&folder(&work.join("projects")), "b.jsonl", repo), 1);
+        touched(&log(&folder(&home), "a.jsonl", repo), 1);
+        touched(&log(&folder(&work.join("projects")), "b.jsonl", repo), 2);
+        // A session with a log in two accounts' folders is listed once, as the newer log.
+        touched(&log(&folder(&work.join("projects")), "a.jsonl", repo), 0);
         let work = work.to_str().unwrap();
         // An account without a projects folder yet lists nothing and fails nothing; one whose
         // projects folder cannot be read is skipped, and the others are still listed.
@@ -734,6 +903,220 @@ mod tests {
         sessions.delete(&[project(repo)], "b").unwrap();
         let list = sessions.list(&[project(repo)], &HashSet::new()).0;
         assert_eq!(list.len(), 1);
+    }
+
+    /// Renames as the system does, or (`cross`) answers as a rename to another disk does; and
+    /// refuses to rename a folder when `folders` is false.
+    struct Fake {
+        cross: bool,
+        folders: bool,
+    }
+
+    impl Files for Fake {
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            if !self.folders && from.is_dir() {
+                return Err(io::Error::other("no folders"));
+            }
+            if self.cross {
+                return Err(io::ErrorKind::CrossesDevices.into());
+            }
+            System.rename(from, to)
+        }
+    }
+
+    /// Two accounts' folders (the default `home`, and `work`) and a followed repository.
+    struct Accounts {
+        _tmp: tempfile::TempDir,
+        repo: String,
+        home: PathBuf,
+        work: PathBuf,
+        sessions: Sessions,
+    }
+
+    fn accounts() -> Accounts {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo").to_str().unwrap().to_owned();
+        std::fs::create_dir_all(&repo).unwrap();
+        let home = tmp.path().join("home/.claude/projects");
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let sessions = Sessions::new(Some(home.clone())).at(&[None, work.to_str()]);
+        Accounts {
+            _tmp: tmp,
+            repo,
+            home,
+            work,
+            sessions,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_session_moves_to_another_account_with_its_folder() {
+        for cross in [false, true] {
+            let a = accounts();
+            let followed = [project(&a.repo)];
+            let folder = a.home.join(normalized(&a.repo));
+            let moving = log(&folder, "s.jsonl", &a.repo);
+            touched(&log(&folder, "t.jsonl", &a.repo), 0);
+            std::fs::create_dir_all(folder.join("s/subagents")).unwrap();
+            std::fs::write(folder.join("s/subagents/agent-1.jsonl"), "sub").unwrap();
+            let before = std::fs::read(&moving).unwrap();
+            let work = a.work.to_str();
+            let files = Fake {
+                cross,
+                folders: true,
+            };
+            let none = HashSet::new();
+            a.sessions
+                .move_to(&followed, "s", work, &none, &files)
+                .unwrap();
+            // Into the account's own projects folder, made as Claude makes them.
+            let target = a.work.join("projects").join(normalized(&a.repo));
+            assert_eq!(std::fs::read(target.join("s.jsonl")).unwrap(), before);
+            let sub = std::fs::read(target.join("s/subagents/agent-1.jsonl")).unwrap();
+            assert_eq!(sub, b"sub");
+            assert!(!moving.exists() && !folder.join("s").exists(), "{cross}");
+            assert!(folder.join("t.jsonl").exists());
+            use std::os::unix::fs::PermissionsExt;
+            for dir in [a.work.join("projects"), target.clone()] {
+                let mode = dir.metadata().unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o700, "{dir:?}");
+            }
+            // Listed once, in the account it now lives in.
+            let list = a.sessions.list(&followed, &none).0;
+            let got: Vec<_> = (list.iter())
+                .map(|s| (s.id.as_str(), s.config_dir.as_deref()))
+                .collect();
+            assert_eq!(got, [("s", work), ("t", None)]);
+            // Already there: nothing to do. Back to the default account, without its folder.
+            a.sessions
+                .move_to(&followed, "s", work, &none, &files)
+                .unwrap();
+            std::fs::remove_dir_all(target.join("s")).unwrap();
+            a.sessions
+                .move_to(&followed, "s", None, &none, &files)
+                .unwrap();
+            assert_eq!(std::fs::read(&moving).unwrap(), before);
+            assert!(!target.join("s.jsonl").exists() && !folder.join("s").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_move_is_refused_where_it_would_lose_or_overwrite_something() {
+        let a = accounts();
+        let followed = [project(&a.repo)];
+        let folder = a.home.join(normalized(&a.repo));
+        let moving = log(&folder, "s.jsonl", &a.repo);
+        let work = a.work.to_str();
+        let system = Fake {
+            cross: false,
+            folders: true,
+        };
+        let refused = |id: &str, dir: Option<&str>, running: &[&str], files: &Fake| {
+            let running = running.iter().map(|s| s.to_string()).collect();
+            let moved = a.sessions.move_to(&followed, id, dir, &running, files);
+            moved.unwrap_err().to_string()
+        };
+        // A running session keeps writing its log (#20); an unknown one is not moved.
+        assert_eq!(
+            refused("s", work, &["s"], &system),
+            "the session is running: end it first"
+        );
+        assert!(refused("x", work, &[], &system).starts_with("no session x"));
+        // The account already has a log of it, or a folder of its name.
+        let target = a.work.join("projects").join(normalized(&a.repo));
+        // (An older one: the newer, in the default account, is the one listed.)
+        let theirs = log(&target, "s.jsonl", &a.repo);
+        std::fs::write(&theirs, "theirs\n").unwrap();
+        touched(&theirs, 0);
+        touched(&moving, 1);
+        let has = "the account already has a log of session s";
+        assert_eq!(refused("s", work, &[], &system), has);
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "theirs\n");
+        std::fs::remove_file(&theirs).unwrap();
+        std::fs::create_dir(target.join("s")).unwrap();
+        assert_eq!(refused("s", work, &[], &system), has);
+        std::fs::remove_dir(target.join("s")).unwrap();
+        // A project folder that is a link is not followed out.
+        std::fs::remove_dir(&target).unwrap();
+        let elsewhere = a.work.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &target).unwrap();
+        let link = format!("{} is not a folder", target.display());
+        assert_eq!(refused("s", work, &[], &system), link);
+        std::fs::remove_file(&target).unwrap();
+        // A folder that cannot be moved leaves the log where it was.
+        std::fs::create_dir(folder.join("s")).unwrap();
+        let stuck = Fake {
+            cross: false,
+            folders: false,
+        };
+        assert_eq!(refused("s", work, &[], &stuck), "no folders");
+        assert!(moving.exists() && !target.join("s.jsonl").exists());
+        // Into an account whose folder is gone: nothing made.
+        let gone = a.work.join("gone");
+        let gone = gone.to_str();
+        assert!(refused("s", gone, &[], &system).contains("No such file"));
+        // A log outside the accounts asked for is not found, so never moved.
+        let only_work = a.sessions.at(&[work]);
+        let outside = only_work.move_to(&followed, "s", work, &HashSet::new(), &system);
+        assert!(outside.unwrap_err().to_string().starts_with("no session s"));
+        // Without a default account, nothing moves to it.
+        let rootless = Sessions::new(None).at(&[work, None]);
+        log(&target, "w.jsonl", &a.repo);
+        let none = rootless.move_to(&followed, "w", None, &HashSet::new(), &system);
+        assert_eq!(
+            none.unwrap_err().to_string(),
+            "the default account has no folder"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_to_another_disk_is_bounded_and_takes_no_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let from = tmp.path().join("from");
+        std::fs::create_dir_all(from.join("a")).unwrap();
+        std::fs::write(from.join("a/f"), "12345").unwrap();
+        let cross = Fake {
+            cross: true,
+            folders: true,
+        };
+        // Too many bytes, too many entries, too deep: refused, and nothing is left behind.
+        for (left, depth) in [((4, 10), 0), ((10, 2), 0), ((10, 10), MOVE_DEPTH)] {
+            let to = tmp.path().join("to");
+            let mut left = left;
+            let copied = copy(&from, &to, depth, &mut left);
+            assert!(copied.unwrap_err().to_string().contains("too large"));
+            let _ = std::fs::remove_dir_all(&to);
+        }
+        let mut left = (5, 3);
+        copy(&from, &tmp.path().join("exact"), 0, &mut left).unwrap();
+        assert_eq!(left, (0, 0));
+        // A link inside: refused, the copy removed, the source kept.
+        std::os::unix::fs::symlink("/etc/passwd", from.join("a/link")).unwrap();
+        let to = tmp.path().join("to");
+        let moved = move_path(&cross, &from, &to);
+        assert!(
+            moved
+                .unwrap_err()
+                .to_string()
+                .ends_with("is a link or not a regular file")
+        );
+        assert!(!to.exists() && from.join("a/f").exists());
+        // Never over something there.
+        std::fs::remove_file(from.join("a/link")).unwrap();
+        std::fs::write(&to, "mine").unwrap();
+        let over = move_path(&cross, &from.join("a/f"), &to).unwrap_err();
+        assert_eq!(over.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "mine");
+        // A failed copy of a file removes what it wrote.
+        std::fs::remove_file(&to).unwrap();
+        let file = move_path(&cross, &from.join("missing"), &to).unwrap_err();
+        assert_eq!(file.kind(), io::ErrorKind::NotFound);
+        assert!(!to.exists());
     }
 
     const LOG: &str = r#"{"type":"mode","mode":"x"}

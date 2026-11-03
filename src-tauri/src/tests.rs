@@ -1129,6 +1129,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.delete_session("s".into()).unwrap();
     let delete = Control::DeleteSession { id: "s".into() };
     assert_eq!(service.control().await, (0, delete));
+    hive.move_session("s".into(), Some("/w".into())).unwrap();
+    let moved = Control::MoveSession {
+        id: "s".into(),
+        config_dir: Some("/w".into()),
+    };
+    assert_eq!(service.control().await, (0, moved));
     hive.search_files("/r".into(), "q".into()).unwrap();
     let search = Control::SearchFiles {
         worktree: "/r".into(),
@@ -1614,6 +1620,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.delete_session("s".into()), not_connected);
+    assert_eq!(hive.move_session("s".into(), None), not_connected);
     assert_eq!(hive.remove_worktree("/r/w".into(), false), not_connected);
     assert_eq!(
         hive.rename_worktree("/r/w".into(), "x".into()),
@@ -1817,6 +1824,7 @@ fn commands_reach_the_managed_hive() {
             list_sessions,
             locate_session,
             delete_session,
+            move_session,
             save_file,
             create_file,
             rename_file,
@@ -1904,6 +1912,7 @@ fn commands_reach_the_managed_hive() {
     let dirs = json!({"path": "", "windows": false});
     let locate = json!({"id": "s", "target": "log"});
     let delete = json!({"id": "s"});
+    let move_session = json!({"id": "s", "configDir": "/w"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
     let create_file = json!({"worktree": "/r", "folder": "", "name": "a"});
     let rename_file = json!({"worktree": "/r", "path": "a", "name": "b"});
@@ -1942,6 +1951,7 @@ fn commands_reach_the_managed_hive() {
         ("list_sessions", &json!({})),
         ("locate_session", &locate),
         ("delete_session", &delete),
+        ("move_session", &move_session),
         ("save_file", &save),
         ("create_file", &create_file),
         ("rename_file", &rename_file),
@@ -2016,6 +2026,7 @@ fn commands_reach_the_managed_hive() {
         ("list_sessions", json!({})),
         ("locate_session", locate),
         ("delete_session", delete),
+        ("move_session", move_session),
         ("save_file", save),
         ("create_file", create_file),
         ("rename_file", rename_file),
