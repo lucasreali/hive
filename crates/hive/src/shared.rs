@@ -239,7 +239,6 @@ mod tests {
         let long = "a".repeat(NAME_BYTES);
         for name in [
             ".hidden",
-            "tab\there",
             "rtl\u{202E}gpj",
             "lrm\u{200E}",
             "iso\u{2068}",
@@ -250,7 +249,8 @@ mod tests {
             write(&dir.join("commands").join(format!("{name}.md")), "x");
         }
         assert_eq!(shared(dir).2, [long.clone(), "ok".to_owned()]);
-        assert!(!fair("\u{2069}x") && !fair("") && fair("é"));
+        // A control character, which Windows refuses in a file name.
+        assert!(!fair("tab\there") && !fair("\u{2069}x") && !fair("") && fair("é"));
         for i in 0..=MOST {
             write(&dir.join("agents").join(format!("a{i:03}.md")), "x");
         }
