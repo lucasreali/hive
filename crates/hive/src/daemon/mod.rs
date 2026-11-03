@@ -1244,6 +1244,67 @@ mod tests {
         ticking.abort();
     }
 
+    #[test]
+    fn a_change_in_one_worktree_sends_only_its_status_with_its_totals() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = crate::paths::canonical(dir.path()).unwrap();
+        let root = base.join("r");
+        std::fs::create_dir(&root).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "a"]);
+        for name in ["w", "x"] {
+            let path = base.join(name);
+            git(&["worktree", "add", "-q", "-b", name, path.to_str().unwrap()]);
+        }
+        let state = test_state(dir.path());
+        state.projects.add(&root.display().to_string()).unwrap();
+        let projects = state.projects.list();
+        assert_eq!(projects[0].worktrees.len(), 3);
+        let sent = |only: &Path, files| {
+            let path = only.display().to_string();
+            let totals = changes::Totals {
+                files,
+                added: 2 * files,
+                removed: files,
+            };
+            state.health_changed(&projects, Some((&path, Some(totals))))
+        };
+        // Its status as git reads it, with the totals counted for it.
+        let expected = |name: &str, files| {
+            let path = base.join(name).display().to_string();
+            let w = projects[0].worktrees.iter().find(|w| w.path == path);
+            let status = hive_protocol::WorktreeStatus {
+                changes: files,
+                added: 2 * files,
+                removed: files,
+                ..health::of(&projects[0], w.unwrap(), None).unwrap()
+            };
+            Control::WorktreeStatus {
+                path,
+                status: Some(status),
+            }
+        };
+        // Only the worktree that changed, of three.
+        for (name, files) in [("w", 3), ("r", 5)] {
+            let statuses = sent(&base.join(name), files);
+            assert_eq!(statuses, vec![expected(name, files)], "{name}");
+        }
+        // Unchanged since: nothing.
+        assert_eq!(sent(&base.join("w"), 3), vec![]);
+    }
+
     /// Placing it would open it, which sends the user's credentials to its host.
     #[cfg(windows)]
     #[tokio::test]
