@@ -619,8 +619,9 @@ pub fn double_click_action(setting: Option<&str>) -> &'static str {
 struct Term {
     output: Channel<InvokeResponseBody>,
     cwd: String,
-    /// Its `terminal_opened`'s `worktree`; null until then.
+    /// Its `terminal_opened`'s `worktree` and `account` (21.7); null until then.
     worktree: Value,
+    account: Value,
 }
 
 #[derive(Default)]
@@ -1090,8 +1091,8 @@ impl Hive {
                 let mut kept: Vec<_> = link.terminals.iter().collect();
                 kept.sort_by_key(|(id, _)| **id);
                 for (id, term) in kept {
-                    let (cwd, worktree) = (&term.cwd, &term.worktree);
-                    let message = json!({"type": "terminal_kept", "channel": id, "cwd": cwd, "worktree": worktree});
+                    let (cwd, worktree, account) = (&term.cwd, &term.worktree, &term.account);
+                    let message = json!({"type": "terminal_kept", "channel": id, "cwd": cwd, "worktree": worktree, "account": account});
                     link.to_ui(message);
                 }
                 let _ = link.send(0, &Control::GetSettings);
@@ -1209,13 +1210,13 @@ impl Hive {
             account,
         };
         let id = link.open(&open)?;
-        let worktree = Value::Null;
         link.terminals.insert(
             id,
             Term {
                 output,
                 cwd,
-                worktree,
+                worktree: Value::Null,
+                account: Value::Null,
             },
         );
         Ok(id)
@@ -1821,6 +1822,7 @@ async fn pump<R: AsyncRead + Unpin>(
             "terminal_opened" => {
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
                     term.worktree = value["worktree"].clone();
+                    term.account = value["account"].clone();
                 }
             }
             // A path the app may open once (`open_path`).

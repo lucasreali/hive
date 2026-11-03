@@ -68,6 +68,7 @@ impl State {
                 }
             }
         }
+        let account = self.settings.account_name(claude_dir.as_deref());
         let place = tokio::task::block_in_place(|| projects::place(&self.projects.list(), cwd));
         let worktree = place.as_ref().map(|(_, worktree)| worktree.clone());
         env.extend(tokio::task::block_in_place(|| self.hive_env(place)));
@@ -110,7 +111,7 @@ impl State {
             self.tick.notify_one();
         }
         let reply = match opened {
-            Ok(()) => Control::TerminalOpened { worktree },
+            Ok(()) => Control::TerminalOpened { worktree, account },
             Err(message) => Control::Error { message },
         };
         self.to_app(channel, &reply).await;

@@ -93,6 +93,8 @@ export type Terminal = {
    * every project or until the service answered: its tab's place (`tabWorktree`).
    */
   worktree: string | null;
+  /** The name of the Claude account it runs as (21.7), null until the service answered. */
+  account: string | null;
 };
 
 /** The file shown under the files tree, in the viewer or its diff. */
@@ -617,6 +619,15 @@ export const findWorktree = (projects: HiveState["projects"], id: string | null)
   owner(projects, id)?.worktrees.find((w) => w.id === id);
 
 /** Whether `path` is `folder` or inside it. */
+/**
+ * "Claude account: <name>" of terminal `id` (21.7), for its tooltips and menus: only with more
+ * than one account (the default one and another), and once the service named it.
+ */
+export const accountLine = (s: HiveState, id: number | undefined): string | null => {
+  const name = id === undefined ? null : s.terminals[id]?.account;
+  return name && s.settings.claude.accounts.length > 0 ? `Claude account: ${name}` : null;
+};
+
 export const within = (path: string, folder: string) =>
   path === folder || path.startsWith(`${folder}/`);
 

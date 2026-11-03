@@ -101,6 +101,15 @@ impl Store {
         }
     }
 
+    /// The name of the account whose config folder is `dir` (21.7): `None`, or a folder no
+    /// account has any more, is the default account's.
+    pub fn account_name(&self, dir: Option<&str>) -> String {
+        let current = self.current();
+        let mut accounts = current.0.claude.accounts.iter();
+        let named = dir.and_then(|dir| accounts.find(|a| a.config_dir == dir));
+        named.map_or_else(|| DEFAULT_ACCOUNT.to_owned(), |a| a.name.clone())
+    }
+
     /// Makes an account of each Claude config folder spaces had before accounts existed
     /// (12.2), given as `(space name, folder)`, unless an account has it already; each is
     /// named after its space. Nothing is saved while the settings file is ignored (saving
@@ -695,6 +704,10 @@ mod tests {
             asked(Some("/other")),
             Err("No Claude account has the folder /other".into())
         );
+        // Each terminal's account is shown by name (21.7).
+        assert_eq!(store.account_name(Some(&work)), "Work");
+        assert_eq!(store.account_name(None), DEFAULT_ACCOUNT);
+        assert_eq!(store.account_name(Some("/other")), DEFAULT_ACCOUNT);
 
         // A known folder may be gone since; a new one must exist.
         std::fs::remove_dir(&work).unwrap();

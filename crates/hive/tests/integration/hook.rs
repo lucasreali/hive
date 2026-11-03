@@ -150,7 +150,13 @@ async fn badge_reaches_the_app_on_its_terminal_cleaned_and_cut() {
     drop(env.connect(Role::Hook).await);
     let mut garbage = env.connect(Role::Hook).await;
     garbage
-        .send(1, Control::TerminalOpened { worktree: None })
+        .send(
+            1,
+            Control::TerminalOpened {
+                worktree: None,
+                account: String::new(),
+            },
+        )
         .await;
     drop(garbage);
     // Not an open terminal: dropped.

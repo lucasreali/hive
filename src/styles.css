@@ -2691,6 +2691,13 @@ button.chevron:hover {
   color: inherit;
 }
 
+/* A line that only informs (21.7: the terminal's Claude account), not an item. */
+.context-menu .menu-note {
+  padding: 4px 10px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
 .context-menu hr {
   margin: 4px 0;
   border: none;

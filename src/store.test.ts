@@ -4,6 +4,7 @@ import { notice, noticeKind } from "../test/notice";
 import type { AgentState, FileText, ServiceMessage, Subagent } from "./protocol";
 import { apply } from "./reduce";
 import {
+  accountLine,
   activateTab,
   addTab,
   agentWorkingIn,
@@ -90,26 +91,55 @@ test("disconnected keeps the reason; unknown messages change nothing", () => {
 });
 
 test("terminal messages update only their terminal", () => {
-  apply({ type: "terminal_opened", channel: 1, worktree: null });
-  apply({ type: "terminal_opened", channel: 2, worktree: "/w" });
+  apply({ type: "terminal_opened", channel: 1, worktree: null, account: "Default" });
+  apply({ type: "terminal_opened", channel: 2, worktree: "/w", account: "Work" });
   apply({ type: "unhooked_agent", channel: 1 });
   apply({ type: "badge", channel: 1, text: "db" });
   expect(useHive.getState().terminals[1]?.badge).toBe("db");
   apply({ type: "terminal_exited", channel: 1, code: 3 });
   const { terminals } = useHive.getState();
-  const closed = { id: 1, exited: true, code: 3, unhooked: true, badge: "", worktree: null };
+  const closed = {
+    id: 1,
+    exited: true,
+    code: 3,
+    unhooked: true,
+    badge: "",
+    worktree: null,
+    account: "Default",
+  };
   expect(terminals[1]).toEqual(closed);
-  const open = { id: 2, exited: false, code: null, unhooked: false, worktree: "/w" };
+  const open = {
+    id: 2,
+    exited: false,
+    code: null,
+    unhooked: false,
+    worktree: "/w",
+    account: "Work",
+  };
   expect(terminals[2]).toEqual(open);
-  apply({ type: "terminal_opened", channel: 1, worktree: null });
+  apply({ type: "terminal_opened", channel: 1, worktree: null, account: "Default" });
   expect(useHive.getState().terminals[1]).toEqual({
     id: 1,
     exited: false,
     code: null,
     unhooked: false,
     worktree: null,
+    account: "Default",
     badge: "",
   });
+});
+
+test("a terminal's account line needs another account and its name (21.7)", () => {
+  const accounts = [{ name: "Work", config_dir: "/w" }];
+  const s = useHive.getState();
+  const two = { ...s, settings: { ...s.settings, claude: { accounts, account: null } } };
+  const open = { id: 1, exited: false, code: null, unhooked: false, worktree: null };
+  const named = { 1: { ...open, account: "Work" } };
+  expect(accountLine({ ...two, terminals: named }, 1)).toBe("Claude account: Work");
+  expect(accountLine({ ...s, terminals: named }, 1)).toBeNull();
+  expect(accountLine({ ...two, terminals: { 1: { ...open, account: null } } }, 1)).toBeNull();
+  expect(accountLine(two, undefined)).toBeNull();
+  expect(accountLine(two, 9)).toBeNull();
 });
 
 test("ui actions set ui state", () => {
@@ -149,7 +179,7 @@ test("tabs belong to the worktree they opened in; a project shows its main workt
   addTab(2, main.path);
   addTab(3, login.path);
   addTab(4, `${shop.path}/src`); // placed by the service in its main worktree
-  apply({ type: "terminal_opened", channel: 4, worktree: main.id });
+  apply({ type: "terminal_opened", channel: 4, worktree: main.id, account: "Default" });
   addTab(5, "/outside");
   select(shop.id);
   expect([shown(), active()]).toEqual([[1, 2, 4], 4]);
@@ -199,8 +229,8 @@ test("tabs belong to the worktree they opened in; a project shows its main workt
   expect(fileVisible(useHive.getState())).toBe(false);
 
   // A worktree that goes away leaves its tabs under its project; other places stay.
-  apply({ type: "terminal_opened", channel: 3, worktree: login.id });
-  apply({ type: "terminal_opened", channel: 5, worktree: "/unknown" });
+  apply({ type: "terminal_opened", channel: 3, worktree: login.id, account: "Default" });
+  apply({ type: "terminal_opened", channel: 5, worktree: "/unknown", account: "Default" });
   apply({ type: "projects", projects: [{ ...shop, worktrees: [main, checkout] }] });
   select(shop.id);
   expect(shown()).toEqual([1, 3]);
@@ -298,7 +328,7 @@ test("agent usage is stored as sent and goes with the agent", () => {
 });
 
 test("useTerminal reads one terminal", () => {
-  apply({ type: "terminal_opened", channel: 4, worktree: null });
+  apply({ type: "terminal_opened", channel: 4, worktree: null, account: "Default" });
   const { result } = renderHook(() => useTerminal(4));
   expect(result.current?.id).toBe(4);
 });
@@ -787,20 +817,20 @@ test("a tab opened in a subfolder or through a link shows under the worktree the
   // Until the service answers, the tab stands at its own folder.
   addTab(1, `${login.path}/src`);
   expect(at()).toEqual([`${login.path}/src`, [1], null]);
-  apply({ type: "terminal_opened", channel: 1, worktree: login.id });
+  apply({ type: "terminal_opened", channel: 1, worktree: login.id, account: "Default" });
   expect(at()).toEqual([login.id, [1], login.id]);
   // Answered before its tab is added (a link to the worktree).
-  apply({ type: "terminal_opened", channel: 2, worktree: login.id });
+  apply({ type: "terminal_opened", channel: 2, worktree: login.id, account: "Default" });
   addTab(2, "/home/user/link-to-login");
   expect(at()).toEqual([login.id, [1, 2], login.id]);
   // A selection made meanwhile stays.
   addTab(3, `${login.path}/docs`);
   select(shop.id);
-  apply({ type: "terminal_opened", channel: 3, worktree: login.id });
+  apply({ type: "terminal_opened", channel: 3, worktree: login.id, account: "Default" });
   expect(useHive.getState().selection).toBe(shop.id);
   // Outside every project, its place is its folder.
   addTab(4, "/outside");
-  apply({ type: "terminal_opened", channel: 4, worktree: null });
+  apply({ type: "terminal_opened", channel: 4, worktree: null, account: "Default" });
   expect(at()).toEqual(["/outside", [4], null]);
   // With nothing selected, the files panel shows the active terminal's worktree.
   activateTab({ id: 3, cwd: `${login.path}/docs` });

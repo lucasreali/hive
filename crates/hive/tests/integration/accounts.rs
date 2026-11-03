@@ -79,14 +79,17 @@ async fn new_terminals_get_the_current_account_and_every_accounts_sessions_are_l
             config_dir: account.map(Into::into),
         }),
     };
+    // Each opened with its account's name (21.7).
+    let named = |worktree: &str, account: &str| Control::TerminalOpened {
+        worktree: Some(worktree.into()),
+        account: account.into(),
+    };
     app.send(3, open(None)).await;
-    let opened = app.control().await;
-    assert!(
-        matches!(opened, (3, Control::TerminalOpened { .. })),
-        "{opened:?}"
-    );
+    assert_eq!(app.control().await, (3, named(&root, "Default")));
     app.input(3, echo).await;
     app.output_until(3, "[]").await;
+    app.send(5, open(Some(&work))).await;
+    assert_eq!(app.control().await, (5, named(&root, "Work")));
     app.send(4, open(Some("/nope"))).await;
     let refused = Control::Error {
         message: "No Claude account has the folder /nope".into(),

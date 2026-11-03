@@ -25,7 +25,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   update_checked: { error: true },
   tray_clicked: { agent: true },
   files_dropped: { text: true, x: true, y: true },
-  terminal_kept: { channel: true, cwd: true, worktree: true },
+  terminal_kept: { channel: true, cwd: true, worktree: true, account: true },
   version_mismatch: {
     protocol: true,
     version: true,
@@ -33,7 +33,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     app_version: true,
     bundled: true,
   },
-  terminal_opened: { channel: true, worktree: true },
+  terminal_opened: { channel: true, worktree: true, account: true },
   terminal_exited: { channel: true, code: true },
   unhooked_agent: { channel: true },
   badge: { channel: true, text: true },

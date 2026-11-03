@@ -29,6 +29,7 @@ function patchTerminal(s: HiveState, id: number, patch: Partial<Terminal>): Part
     code: null,
     unhooked: false,
     worktree: null,
+    account: null,
   };
   return { terminals: { ...s.terminals, [id]: { ...current, ...patch } } };
 }
@@ -139,7 +140,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     // A kept terminal (18.21) is open again for this page; its tab comes with `reattachTerminal`.
     case "terminal_kept":
     case "terminal_opened": {
-      const opened = { exited: false, code: null, unhooked: false, worktree: m.worktree };
+      const { worktree, account } = m;
+      const opened = { exited: false, code: null, unhooked: false, worktree, account };
       // Its tab selected its cwd; the place is the worktree holding it (a subfolder, a link).
       const tab = s.tabs.find((t) => t.id === m.channel);
       const moved = tab && s.selection === tab.cwd ? { selection: m.worktree ?? tab.cwd } : {};

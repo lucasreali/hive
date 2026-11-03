@@ -530,6 +530,37 @@ test("on macOS the terminal menu shows the Mac keys, ⌘K for Clear", async () =
   expect(paneItems()).toEqual(["Copy ⌘C", "Paste ⌘V", "Clear ⌘K", "Split right ⇧⌘D"]);
 });
 
+test("with more than one Claude account, the tab's tooltip and the menus name the terminal's (21.7)", async () => {
+  const { id, inside } = await openShown();
+  const opened = (account: string) =>
+    ({ type: "terminal_opened", channel: id, worktree: fixLogin.id, account }) as const;
+  act(() => apply(opened("Default")));
+  const tip = () => tab("fix-login").closest(".tab")?.getAttribute("title");
+  const note = () => paneMenu().querySelector(".menu-note")?.textContent ?? null;
+  // Only the default account: nothing to tell apart.
+  expect(tip()).toBe(fixLogin.path);
+  fireEvent.contextMenu(inside);
+  expect(note()).toBeNull();
+  fireEvent.keyDown(paneMenu(), { key: "Escape" });
+
+  const { settings } = useHive.getState();
+  const accounts = [{ name: "Work", config_dir: "/home/me/.claude-work" }];
+  act(() =>
+    apply({ type: "settings", settings: { ...settings, claude: { accounts, account: null } } }),
+  );
+  expect(tip()).toBe(`${fixLogin.path}\nClaude account: Default`);
+  fireEvent.contextMenu(inside);
+  expect(note()).toBe("Claude account: Default");
+  // Not an item: the arrows and the focus skip it.
+  expect(paneItems()[0]).toBe("Copy Ctrl+Shift+C");
+  fireEvent.keyDown(paneMenu(), { key: "Escape" });
+  // The tab's own menu too, with the name the service sent.
+  act(() => apply(opened("Work")));
+  expect(tip()).toBe(`${fixLogin.path}\nClaude account: Work`);
+  fireEvent.contextMenu(tab("fix-login"));
+  expect(note()).toBe("Claude account: Work");
+});
+
 /** Four terminals of fix-login, 1 and 2 a pair, 3 and 4 the pair shown with 4 focused (20.5). */
 function twoPairs() {
   show();
