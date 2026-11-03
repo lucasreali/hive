@@ -119,7 +119,8 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         crate::offers::Offers::new(paths.offers()),
         restore,
     )
-    .with_power(power);
+    .with_power(power)
+    .with_usage(usage::Usage::load(paths.usage()));
     let state = Arc::new(state);
     serve(listener, hold, terminated, state).await
 }
@@ -298,7 +299,8 @@ struct State {
     pulls: std::sync::Mutex<crate::pulls::Cache>,
     /// The Actions runs lists fetched (9.32).
     runs: std::sync::Mutex<crate::pulls::Cache>,
-    /// The usage windows `hive statusline` reported (12.1, 15.3), and the ones the app has.
+    /// The usage windows `hive statusline` reported (12.1, 15.3; kept across restarts, 21.8),
+    /// and the ones the app has.
     usage: Mutex<usage::Usage>,
     /// The power assertion held while agents work (17.17).
     awake: std::sync::Mutex<power::Awake>,
@@ -362,6 +364,12 @@ impl State {
     /// Holds `power`'s assertion while agents work (17.17); none without it.
     fn with_power(mut self, power: Option<Box<dyn power::Power>>) -> Self {
         self.awake = std::sync::Mutex::new(power::Awake::new(power));
+        self
+    }
+
+    /// Starts from `usage`'s windows, kept across restarts (21.8).
+    fn with_usage(mut self, usage: usage::Usage) -> Self {
+        self.usage = Mutex::new(usage);
         self
     }
 

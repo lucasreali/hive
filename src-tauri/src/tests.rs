@@ -3126,7 +3126,15 @@ fn a_file_no_app_opens_opens_in_the_text_editor_or_says_so() {
             "#!/bin/sh\nprintf '%s\\n' \"$@\" '' >> '{}'\n[ \"$1\" = -t ] && exit {text}\nexit {plain}\n",
             calls.display()
         );
-        std::fs::write(&program, script).unwrap();
+        // `cp` writes the program in its own process: a test thread forking meanwhile would
+        // inherit a write fd of ours to it, and running it would fail with ETXTBSY on Linux.
+        let source = root.join(format!("{name}.sh"));
+        std::fs::write(&source, script).unwrap();
+        let copied = std::process::Command::new("cp")
+            .arg(&source)
+            .arg(&program)
+            .status();
+        assert!(copied.unwrap().success());
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         mac_open(program)
     };
