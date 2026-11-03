@@ -159,6 +159,7 @@ test("with an account besides the default one, a select picks the current accoun
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
     account: "/w",
+    default_name: "Default",
     share_sessions: false,
   };
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
@@ -180,6 +181,12 @@ test("with an account besides the default one, a select picks the current accoun
   fireEvent.mouseDown(select() as HTMLElement);
   fireEvent.click(screen.getByRole("option", { name: "Work" }));
   expect(set).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, claude });
+  // The default account renamed (21.4) shows its name.
+  const personal = { ...claude, account, default_name: "Personal" };
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: personal } }));
+  expect(select()?.textContent).toBe("Personal");
+  fireEvent.mouseDown(select() as HTMLElement);
+  expect(screen.getByRole("option", { name: "Personal" })).toBeTruthy();
   set.mockRestore();
 });
 
@@ -192,6 +199,7 @@ test("whether each account logged in is asked once connected, for new accounts a
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
     account: null,
+    default_name: "Default",
     share_sessions: false,
   };
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
@@ -213,6 +221,7 @@ test("an account that never logged in says so in the select, with Log in… when
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
     account: "/w",
+    default_name: "Default",
     share_sessions: false,
   };
   act(() => {
@@ -248,5 +257,9 @@ test("an account that never logged in says so in the select, with Log in… when
   });
   expect(select().textContent).toBe("Default (not logged in)");
   expect(logIn()).not.toBeNull();
+  // Renamed (21.4), it keeps the mark.
+  const personal = { ...def, default_name: "Personal" };
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: personal } }));
+  expect(select().textContent).toBe("Personal (not logged in)");
   ask.mockRestore();
 });

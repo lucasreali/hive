@@ -361,11 +361,33 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   await waitFor(() => expect(accounts()).toEqual([]));
 });
 
+test("the default account is renamed in place, and emptied it is Default again (21.4)", async () => {
+  open();
+  section("Accounts");
+  const name = () => input("Name of the default account");
+  expect(name().value).toBe("Default");
+  fireEvent.change(name(), { target: { value: " Personal " } });
+  await waitFor(() => expect(settings().claude.default_name).toBe("Personal"));
+  expect(name().value).toBe("Personal");
+  const [shop] = MOCK_REPOS;
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    useHive.setState({ selection: shop.id });
+  });
+  const logIn = screen.getAllByRole("button", { name: "Log in…" })[0] as HTMLButtonElement;
+  expect(logIn.title).toBe("A terminal running claude as Personal: type /login there");
+  // The service reads an empty name as "Default".
+  fireEvent.change(name(), { target: { value: " " } });
+  await waitFor(() => expect(name().value).toBe("Default"));
+  expect(settings().claude.default_name).toBe("Default");
+});
+
 test("the accounts section marks an account that never logged in (21.6)", async () => {
   const ask = spyOn(transport, "listClaudeLogins");
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
     account: null,
+    default_name: "Default",
     share_sessions: false,
   };
   await transport.setSettings({ ...DEFAULT_SETTINGS, claude });

@@ -132,7 +132,7 @@ test("terminal messages update only their terminal", () => {
 test("a terminal's account line needs another account and its name (21.7)", () => {
   const accounts = [{ name: "Work", config_dir: "/w" }];
   const s = useHive.getState();
-  const two = { ...s, settings: { ...s.settings, claude: { accounts, account: null } } };
+  const two = { ...s, settings: { ...s.settings, claude: { ...s.settings.claude, accounts } } };
   const open = { id: 1, exited: false, code: null, unhooked: false, worktree: null };
   const named = { 1: { ...open, account: "Work" } };
   expect(accountLine({ ...two, terminals: named }, 1)).toBe("Claude account: Work");

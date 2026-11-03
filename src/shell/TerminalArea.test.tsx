@@ -546,7 +546,10 @@ test("with more than one Claude account, the tab's tooltip and the menus name th
   const { settings } = useHive.getState();
   const accounts = [{ name: "Work", config_dir: "/home/me/.claude-work" }];
   act(() =>
-    apply({ type: "settings", settings: { ...settings, claude: { accounts, account: null } } }),
+    apply({
+      type: "settings",
+      settings: { ...settings, claude: { ...settings.claude, accounts } },
+    }),
   );
   expect(tip()).toBe(`${fixLogin.path}\nClaude account: Default`);
   fireEvent.contextMenu(inside);

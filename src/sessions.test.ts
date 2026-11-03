@@ -95,6 +95,7 @@ test("shared sessions resume as the current account, their log moved there first
   const claude = (share_sessions: boolean, account: string | null) => ({
     accounts: [{ name: "Work", config_dir: "/w" }],
     account,
+    default_name: "Default",
     share_sessions,
   });
   const set = (share: boolean, account: string | null) =>
@@ -144,7 +145,11 @@ test("a move waits for its answer at most 30 s, and one move of a session at a t
   const open = spyOn(transport, "openTerminal").mockResolvedValue(5);
   // The service never answers.
   const moved = spyOn(transport, "moveSession").mockResolvedValue();
-  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: "/w" };
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: "/w",
+    default_name: "Default",
+  };
   const settings = { ...initialState.settings, claude: { ...claude, share_sessions: true } };
   useHive.setState({ settings });
   const first = resume(stopped);

@@ -626,6 +626,7 @@
       "claude": {
         "accounts": [],
         "account": null,
+        "default_name": "Default",
         "share_sessions": false
       }
     }

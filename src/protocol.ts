@@ -533,10 +533,17 @@ export type Settings = {
   /**
    * The Claude accounts (12.2) besides the default one (`~/.claude`, always there), and the
    * current one's folder (null: the default one): new terminals get it as `CLAUDE_CONFIG_DIR`.
-   * `share_sessions` (21.10, D22.5): a session resumed from the history runs as the current
-   * account, its log moved into that account's folder; off, as the account it ran as.
+   * `default_name`: the default account's name (21.4), "Default" unless renamed; the service
+   * turns an empty one back into "Default". `share_sessions` (21.10, D22.5): a session resumed
+   * from the history runs as the current account, its log moved into that account's folder;
+   * off, as the account it ran as.
    */
-  claude: { accounts: Account[]; account: string | null; share_sessions: boolean };
+  claude: {
+    accounts: Account[];
+    account: string | null;
+    default_name: string;
+    share_sessions: boolean;
+  };
 };
 
 /** Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`. */

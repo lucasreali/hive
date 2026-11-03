@@ -14,7 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
-import type { Account, Session } from "../protocol";
+import type { Session, Settings } from "../protocol";
 import {
   ago,
   copy,
@@ -29,7 +29,6 @@ import { openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { SearchField } from "./SearchField";
-import { DEFAULT_ACCOUNT } from "./SettingsDialog";
 import { Submenu } from "./TerminalArea";
 import { ContextMenu } from "./WorktreeMenu";
 
@@ -37,10 +36,13 @@ import { ContextMenu } from "./WorktreeMenu";
  * The name of the Claude account whose folder holds the session's log (the one it last ran as),
  * for its row; null with only the default account.
  */
-function accountName(accounts: Account[], session: Session): string | null {
+function accountName(
+  { accounts, default_name }: Settings["claude"],
+  session: Session,
+): string | null {
   if (accounts.length === 0) return null;
   const own = accounts.find((a) => a.config_dir === session.config_dir);
-  return own?.name ?? DEFAULT_ACCOUNT;
+  return own?.name ?? default_name;
 }
 
 /** Opens the session's menu at the pointer, or under the ⋯ button that was clicked. */
@@ -147,7 +149,7 @@ function SessionRow({ session: x, live, index, measure, top }: RowProps) {
   const state = useHive((s) => (live ? (s.agentStates[x.id]?.state ?? "idle") : x.state));
   const menu = menuAt(x);
   // The account it last ran as (its log's folder), when there is more than one.
-  const account = useHive((s) => accountName(s.settings.claude.accounts, x));
+  const account = useHive((s) => accountName(s.settings.claude, x));
   // Running outside Hive: nothing to do here, and nothing said.
   const title = live ? "Show its terminal" : x.running ? undefined : "Resume in its worktree";
   return (
@@ -202,10 +204,10 @@ const closeMenu = () => openSessionMenu(null);
  * one account; not while it runs (its log cannot move).
  */
 function ContinueIn({ session, disabled }: { session: Session; disabled: boolean }) {
-  const accounts = useHive((s) => s.settings.claude.accounts);
+  const { accounts, default_name } = useHive((s) => s.settings.claude);
   const [open, setOpen] = useState(false);
   if (accounts.length === 0) return null;
-  const all = [{ name: DEFAULT_ACCOUNT, config_dir: null as string | null }, ...accounts];
+  const all = [{ name: default_name, config_dir: null as string | null }, ...accounts];
   const others = all.filter((a) => a.config_dir !== session.config_dir);
   return (
     <div className="submenu-anchor">

@@ -106,7 +106,7 @@ test("new terminals get the current Claude account, or the one asked for (12.2)"
   const work = { name: "Work", config_dir: "/w/.claude" };
   const settings = {
     ...DEFAULT_SETTINGS,
-    claude: { accounts: [work], account: "/w/.claude", share_sessions: false },
+    claude: { ...DEFAULT_SETTINGS.claude, accounts: [work], account: "/w/.claude" },
   };
   await transport.setSettings(settings);
   const outputs: string[] = [];
@@ -124,16 +124,17 @@ test("new terminals get the current Claude account, or the one asked for (12.2)"
   await tick();
   expect(outputs[0]).toContain("echo $CLAUDE_CONFIG_DIR\r\n/w/.claude");
   expect(outputs[1]).not.toContain("/w/.claude");
-  // Removing the current account makes the default one current.
+  // Removing the current account makes the default one current; its empty name is "Default".
   await transport.setSettings({
     ...settings,
-    claude: { accounts: [], account: "/w/.claude", share_sessions: false },
+    claude: { accounts: [], account: "/w/.claude", default_name: "", share_sessions: false },
   });
   await tick();
   const last = messages.at(-1);
   expect(last?.type === "settings" && last.settings.claude).toEqual({
     accounts: [],
     account: null,
+    default_name: "Default",
     share_sessions: false,
   });
 });

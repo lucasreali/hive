@@ -857,9 +857,6 @@ function ScriptFields({ id }: { id: string }) {
   );
 }
 
-/** The default Claude account's name (12.2): no `CLAUDE_CONFIG_DIR`, so `~/.claude`. */
-export const DEFAULT_ACCOUNT = "Default";
-
 /**
  * Whether the account whose folder is `dir` (null: the default one) has logged in (21.6): yes
  * until the service says otherwise.
@@ -920,12 +917,13 @@ export function LogIn({ dir, name }: { dir: string | null; name: string }) {
 }
 
 /**
- * The Claude accounts (12.2): the default one (`~/.claude`, fixed) and the user's, each a name
- * and a `CLAUDE_CONFIG_DIR`, renamed, removed or added here and picked in the status bar. The
- * service checks them.
+ * The Claude accounts (12.2): the default one (`~/.claude`, renamed here but never removed,
+ * 21.4) and the user's, each a name and a `CLAUDE_CONFIG_DIR`, renamed, removed or added here
+ * and picked in the status bar. The service checks them.
  */
 function Accounts() {
   const accounts = useHive((s) => s.settings.claude.accounts);
+  const defaultName = useHive((s) => s.settings.claude.default_name);
   // Asked again when the section opens: a `/login` may have finished in a Hive terminal.
   useEffect(() => void transport.listClaudeLogins(), []);
   const [name, setName] = useState("");
@@ -942,10 +940,19 @@ function Accounts() {
     <div className="field">
       <span>Claude accounts</span>
       <div className="script-run">
-        <input aria-label="Name of the default account" value={DEFAULT_ACCOUNT} readOnly />
+        <Typed
+          id="setting-account-default"
+          aria-label="Name of the default account"
+          value={defaultName}
+          onSave={(text) =>
+            saveSettings((s) => {
+              s.claude.default_name = text.trim();
+            })
+          }
+        />
         <input aria-label="Folder of the default account" value="~/.claude" readOnly />
         <NotLoggedIn dir={null} />
-        <LogIn dir={null} name={DEFAULT_ACCOUNT} />
+        <LogIn dir={null} name={defaultName} />
       </div>
       {accounts.map((a) => (
         <div className="script-run" key={a.config_dir}>
@@ -1003,11 +1010,12 @@ function Accounts() {
       </form>
       <p className="field-help">
         Each account is a <code>CLAUDE_CONFIG_DIR</code> (an existing folder): its own login,
-        settings and sessions. The status bar picks the one new terminals get; open ones keep
-        theirs. "Log in…" opens a terminal running <code>claude</code> as the account: type{" "}
-        <code>/login</code> there; "Not logged in" marks an account whose <code>.claude.json</code>{" "}
-        has no login yet. Hive never reads or writes credentials. Removing an account leaves its
-        folder on disk.
+        settings and sessions. The first one is <code>~/.claude</code> itself: it can be renamed but
+        not removed, and an empty name is "Default" again. The status bar picks the one new
+        terminals get; open ones keep theirs. "Log in…" opens a terminal running <code>claude</code>{" "}
+        as the account: type <code>/login</code> there; "Not logged in" marks an account whose{" "}
+        <code>.claude.json</code> has no login yet. Hive never reads or writes credentials. Removing
+        an account leaves its folder on disk.
       </p>
     </div>
   );

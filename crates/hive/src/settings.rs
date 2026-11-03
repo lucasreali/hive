@@ -7,14 +7,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use hive_protocol::{Account, AccountDir, ProjectScripts, Settings};
+use hive_protocol::{
+    Account, AccountDir, ClaudeSettings, DEFAULT_ACCOUNT, ProjectScripts, Settings,
+};
 
 use crate::git::read_limited;
 use crate::spaces;
 use crate::wrapper::write_atomic;
-
-/// The default Claude account's name (12.2): no `CLAUDE_CONFIG_DIR`, so `~/.claude`.
-pub const DEFAULT_ACCOUNT: &str = "Default";
 
 /// Largest settings file read or written.
 const FILE_LIMIT: u64 = 256 * 1024;
@@ -120,11 +119,11 @@ impl Store {
             return Err(warning.clone());
         }
         let mut settings = current.0.clone();
-        let accounts = &mut settings.claude.accounts;
+        let claude = &mut settings.claude;
         for (name, config_dir) in legacy {
-            if accounts.iter().all(|a| a.config_dir != config_dir) {
-                let name = free_name(accounts, &name);
-                accounts.push(Account { name, config_dir });
+            if claude.accounts.iter().all(|a| a.config_dir != config_dir) {
+                let name = free_name(claude, &name);
+                claude.accounts.push(Account { name, config_dir });
             }
         }
         if settings == current.0 {
@@ -218,9 +217,13 @@ fn save(file: &Path, settings: &Settings) -> io::Result<()> {
     write_atomic(file, &json, 0o600)
 }
 
-/// A current Claude account no account has any more is the default one.
+/// A current Claude account no account has any more is the default one; an empty default
+/// account name is [`DEFAULT_ACCOUNT`] (21.4).
 fn settle(settings: &mut Settings) {
     let claude = &mut settings.claude;
+    if claude.default_name.is_empty() {
+        claude.default_name = DEFAULT_ACCOUNT.to_owned();
+    }
     let gone = |dir: &String| claude.accounts.iter().all(|a| a.config_dir != *dir);
     if claude.account.as_ref().is_some_and(gone) {
         claude.account = None;
@@ -228,8 +231,9 @@ fn settle(settings: &mut Settings) {
 }
 
 /// `name`, or `name 2`, `name 3`… when an account, or the default one, has it.
-fn free_name(accounts: &[Account], name: &str) -> String {
-    let taken = |n: &str| n == DEFAULT_ACCOUNT || accounts.iter().any(|a| a.name == n);
+fn free_name(claude: &ClaudeSettings, name: &str) -> String {
+    let accounts = &claude.accounts;
+    let taken = |n: &str| n == default_name(claude) || accounts.iter().any(|a| a.name == n);
     // One of these is free: there are more of them than accounts.
     let names = (1..=accounts.len() + 2).map(|n| match n {
         1 => name.to_owned(),
@@ -238,10 +242,25 @@ fn free_name(accounts: &[Account], name: &str) -> String {
     names.into_iter().find(|n| !taken(n)).unwrap_or_default()
 }
 
+/// The default account's name (21.4): [`DEFAULT_ACCOUNT`] while it is empty.
+fn default_name(claude: &ClaudeSettings) -> &str {
+    match claude.default_name.as_str() {
+        "" => DEFAULT_ACCOUNT,
+        name => name,
+    }
+}
+
 /// The Claude accounts (12.2): each name as a space's (`spaces::name_of`), unique and not the
-/// default account's; each folder as a space's was (absolute, printable), unique. Neither
-/// with spaces around it.
-fn accounts(accounts: &[Account]) -> Result<(), String> {
+/// default account's (its own name checked the same way, 21.4, or empty); each folder as a
+/// space's was (absolute, printable), unique. Neither with spaces around it.
+fn accounts(claude: &ClaudeSettings) -> Result<(), String> {
+    let accounts = &claude.accounts;
+    let default = &claude.default_name;
+    if !default.is_empty() && spaces::name_of("the default account", default)? != *default {
+        return Err(format!(
+            "The default account's name {default:?} has spaces around it"
+        ));
+    }
     if accounts.len() > ACCOUNT_LIMIT {
         return Err(format!("At most {ACCOUNT_LIMIT} accounts can be added"));
     }
@@ -256,7 +275,7 @@ fn accounts(accounts: &[Account]) -> Result<(), String> {
             ));
         }
         let before = &accounts[..i];
-        if name == DEFAULT_ACCOUNT || before.iter().any(|a| a.name == *name) {
+        if name == default_name(claude) || before.iter().any(|a| a.name == *name) {
             return Err(format!("Another account is named {name}"));
         }
         if before.iter().any(|a| a.config_dir == *dir) {
@@ -270,7 +289,7 @@ fn accounts(accounts: &[Account]) -> Result<(), String> {
 
 /// Every value within its range, with a message naming the first that is not.
 pub fn check(settings: &Settings) -> Result<(), String> {
-    accounts(&settings.claude.accounts)?;
+    accounts(&settings.claude)?;
     let terminal = &settings.terminal;
     range("terminal.font_size", terminal.font_size, 8, 32)?;
     range("terminal.scrollback", terminal.scrollback, 1000, 100_000)?;
@@ -791,6 +810,72 @@ mod tests {
         let mut too_many: Vec<Account> = many(ACCOUNT_LIMIT + 1).collect();
         too_many[0].name = " ".into();
         assert_eq!(refused(&too_many), "At most 64 accounts can be added");
+    }
+
+    // `/a` is no absolute path on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn the_default_account_is_renamed_and_no_other_account_takes_its_name() {
+        let (tmp, store) = store();
+        let file = tmp.path().join("hive/settings.json");
+        std::fs::create_dir(tmp.path().join("hive")).unwrap();
+        // A file from before 21.4, without the name, and one with it empty: "Default".
+        for old in [
+            r#"{"claude":{"accounts":[]}}"#,
+            r#"{"claude":{"default_name":""}}"#,
+        ] {
+            std::fs::write(&file, old).unwrap();
+            let read = Store::load(file.clone()).get();
+            assert_eq!(read.0.claude.default_name, "Default", "{old}");
+            assert_eq!(read.1, None);
+        }
+        // Renamed, saved and read back.
+        let mut settings = Settings::default();
+        settings.claude.default_name = "Personal".into();
+        assert_eq!(store.set(settings.clone()), Ok(settings.clone()));
+        let read = Store::load(file.clone()).get().0;
+        assert_eq!(read.claude.default_name, "Personal");
+        // Emptied, it is "Default" again.
+        let mut emptied = settings.clone();
+        emptied.claude.default_name = String::new();
+        assert_eq!(store.set(emptied).unwrap().claude.default_name, "Default");
+        assert_eq!(store.get().0.claude.default_name, "Default");
+
+        // Its current name is taken: "Default" is free once it is renamed.
+        let with = |default: &str, names: &[&str]| {
+            let mut settings = Settings::default();
+            settings.claude.default_name = default.into();
+            let dirs = names.iter().enumerate();
+            let accounts = dirs.map(|(i, n)| account(n, &format!("/{i}")));
+            settings.claude.accounts = accounts.collect();
+            check(&settings)
+        };
+        let taken = |name: &str| Err(format!("Another account is named {name}"));
+        assert_eq!(with("Personal", &["Personal"]), taken("Personal"));
+        assert_eq!(with("", &["Default"]), taken("Default"));
+        assert_eq!(with("Personal", &["Default", "Work"]), Ok(()));
+        // Its name follows an account name's rules.
+        let long = "x".repeat(spaces::NAME_LIMIT + 1);
+        let cases = [
+            (" ", "Enter a name for the default account".to_owned()),
+            (&long, "The name is longer than 64 characters".to_owned()),
+            ("A\u{7}", "The name has control characters".to_owned()),
+            (
+                " Personal",
+                "The default account's name \" Personal\" has spaces around it".to_owned(),
+            ),
+        ];
+        for (name, message) in cases {
+            assert_eq!(with(name, &[]), Err(message), "{name:?}");
+        }
+
+        // A space's old folder named as the default account gets a number.
+        let mut renamed = Settings::default();
+        renamed.claude.default_name = "Personal".into();
+        store.set(renamed).unwrap();
+        let legacy = vec![("Personal".to_owned(), "/p".to_owned())];
+        assert_eq!(store.migrate(legacy), Ok(()));
+        assert_eq!(store.get().0.claude.accounts, [account("Personal 2", "/p")]);
     }
 
     // `/a` is no absolute path on Windows.

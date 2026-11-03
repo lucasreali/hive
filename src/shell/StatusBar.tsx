@@ -3,14 +3,7 @@ import { type Connection, useHive } from "../store";
 import { Select } from "../ui/Select";
 import { usageLines } from "../usage";
 import { isMac } from "../window";
-import {
-  DEFAULT_ACCOUNT,
-  LogIn,
-  loggedIn,
-  NotLoggedIn,
-  saveSettings,
-  useClaudeLogins,
-} from "./SettingsDialog";
+import { LogIn, loggedIn, NotLoggedIn, saveSettings, useClaudeLogins } from "./SettingsDialog";
 
 const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
@@ -25,13 +18,13 @@ const LABEL: Record<Connection["status"], string> = {
  * that never logged in says so (21.6), and when it is the current one, "Log in…" is beside it.
  */
 function AccountSelect() {
-  const { accounts, account } = useHive((s) => s.settings.claude);
+  const { accounts, account, default_name } = useHive((s) => s.settings.claude);
   const logins = useHive((s) => s.claudeLogins);
   if (accounts.length === 0) return null;
   const label = (name: string, dir: string | null) =>
     loggedIn(logins, dir) ? name : `${name} (not logged in)`;
   const options = [
-    { value: "", label: label(DEFAULT_ACCOUNT, null) },
+    { value: "", label: label(default_name, null) },
     ...accounts.map((a) => ({ value: a.config_dir, label: label(a.name, a.config_dir) })),
   ];
   const current = accounts.find((a) => a.config_dir === account);
@@ -41,7 +34,7 @@ function AccountSelect() {
       {loggedIn(logins, dir) ? null : (
         <>
           <NotLoggedIn dir={dir} />
-          <LogIn dir={dir} name={current?.name ?? DEFAULT_ACCOUNT} />
+          <LogIn dir={dir} name={current?.name ?? default_name} />
         </>
       )}
       <Select

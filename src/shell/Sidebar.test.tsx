@@ -175,7 +175,10 @@ test("with more than one Claude account, an agent's tooltip names its terminal's
   const { settings } = useHive.getState();
   const accounts = [{ name: "Work", config_dir: "/home/me/.claude-work" }];
   act(() =>
-    apply({ type: "settings", settings: { ...settings, claude: { accounts, account: null } } }),
+    apply({
+      type: "settings",
+      settings: { ...settings, claude: { ...settings.claude, accounts } },
+    }),
   );
   expect(tip()).toBe(`${cwd}\nClaude account: Work`);
 });
