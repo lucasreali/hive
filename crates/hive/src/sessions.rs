@@ -685,8 +685,9 @@ pub trait Files {
 pub struct System;
 
 impl Files for System {
+    /// Never over something that appeared since it was checked: fails (`AlreadyExists`) instead.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        std::fs::rename(from, to)
+        crate::file::rename_new(from, to)
     }
 }
 
@@ -705,7 +706,7 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
 
 /// Moves the file or folder `from` to `to`, where nothing is: a rename, else (another file
 /// system) a copy, written to disk, then `from` removed. Links in a folder are not copied (a
-/// session's are refused); a copy beyond the limits is refused and removed.
+/// session's are refused); a copy beyond the limits is refused and what it made removed.
 fn move_path(files: &impl Files, from: &Path, to: &Path) -> io::Result<()> {
     if there(to) {
         return Err(io::Error::new(
@@ -717,15 +718,7 @@ fn move_path(files: &impl Files, from: &Path, to: &Path) -> io::Result<()> {
         Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {}
         done => return done,
     }
-    let mut left = (MOVE_LIMIT, MOVE_ENTRIES);
-    if let Err(err) = copy(from, to, 0, &mut left) {
-        let _ = if to.is_dir() {
-            std::fs::remove_dir_all(to)
-        } else {
-            std::fs::remove_file(to)
-        };
-        return Err(err);
-    }
+    copy(from, to, 0, &mut (MOVE_LIMIT, MOVE_ENTRIES))?;
     if from.symlink_metadata()?.is_dir() {
         std::fs::remove_dir_all(from)
     } else {
@@ -734,7 +727,8 @@ fn move_path(files: &impl Files, from: &Path, to: &Path) -> io::Result<()> {
 }
 
 /// Copies `from` (a file, or a folder `depth` deep) to `to`, never over something, taking what
-/// it copies from `left` (bytes, entries).
+/// it copies from `left` (bytes, entries). On failure, only what it made is removed: a `to`
+/// that was there (made by someone else meanwhile) is left alone.
 fn copy(from: &Path, to: &Path, depth: usize, left: &mut (u64, u64)) -> io::Result<()> {
     let too_large = || io::Error::other("the session is too large to move to another disk");
     left.1 = left.1.checked_sub(1).ok_or_else(too_large)?;
@@ -744,11 +738,16 @@ fn copy(from: &Path, to: &Path, depth: usize, left: &mut (u64, u64)) -> io::Resu
             return Err(too_large());
         }
         create_private_dir(to)?;
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            copy(&entry.path(), &to.join(entry.file_name()), depth + 1, left)?;
+        let copied = std::fs::read_dir(from).and_then(|entries| {
+            entries.into_iter().try_for_each(|entry| {
+                let entry = entry?;
+                copy(&entry.path(), &to.join(entry.file_name()), depth + 1, left)
+            })
+        });
+        if copied.is_err() {
+            let _ = std::fs::remove_dir_all(to);
         }
-        return Ok(());
+        return copied;
     }
     if !meta.is_file() {
         return Err(io::Error::other(format!(
@@ -761,10 +760,20 @@ fn copy(from: &Path, to: &Path, depth: usize, left: &mut (u64, u64)) -> io::Resu
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let mut out = options.open(to)?;
-    let mut source = File::open(from)?.take(left.0.saturating_add(1));
-    let copied = io::copy(&mut source, &mut out)?;
-    left.0 = left.0.checked_sub(copied).ok_or_else(too_large)?;
-    out.sync_all()
+    let mut source = std::fs::OpenOptions::new();
+    source.read(true);
+    // A link swapped in since it was checked is not followed.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut source, nix::libc::O_NOFOLLOW);
+    let copied = source.open(from).and_then(|file| {
+        let copied = io::copy(&mut file.take(left.0.saturating_add(1)), &mut out)?;
+        left.0 = left.0.checked_sub(copied).ok_or_else(too_large)?;
+        out.sync_all()
+    });
+    if copied.is_err() {
+        let _ = std::fs::remove_file(to);
+    }
+    copied
 }
 
 /// A session log found in a folder of Claude's: a regular `<id>.jsonl` file, in the projects
@@ -1122,11 +1131,45 @@ mod tests {
         let over = move_path(&cross, &from.join("a/f"), &to).unwrap_err();
         assert_eq!(over.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read_to_string(&to).unwrap(), "mine");
-        // A failed copy of a file removes what it wrote.
+        // Something there before the copy starts (made meanwhile) is kept, file or folder.
+        let file = copy(&from.join("a/f"), &to, 0, &mut (10, 10)).unwrap_err();
+        assert_eq!(file.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "mine");
         std::fs::remove_file(&to).unwrap();
+        std::fs::create_dir_all(to.join("theirs")).unwrap();
+        let folder = copy(&from, &to, 0, &mut (10, 10)).unwrap_err();
+        assert_eq!(folder.kind(), io::ErrorKind::AlreadyExists);
+        assert!(to.join("theirs").is_dir());
+        std::fs::remove_dir_all(&to).unwrap();
+        // A failed copy of a file removes what it wrote; a missing source writes nothing.
+        let large = copy(&from.join("a/f"), &to, 0, &mut (4, 10)).unwrap_err();
+        assert!(large.to_string().contains("too large"));
+        assert!(!to.exists());
         let file = move_path(&cross, &from.join("missing"), &to).unwrap_err();
         assert_eq!(file.kind(), io::ErrorKind::NotFound);
         assert!(!to.exists());
+    }
+
+    /// Renames as the system does, after something else took `to` (between the check and the
+    /// rename).
+    struct Racing;
+
+    impl Files for Racing {
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            std::fs::write(to, "theirs").unwrap();
+            System.rename(from, to)
+        }
+    }
+
+    #[test]
+    fn a_move_never_replaces_what_appeared_meanwhile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (from, to) = (tmp.path().join("from"), tmp.path().join("to"));
+        std::fs::write(&from, "mine").unwrap();
+        let raced = move_path(&Racing, &from, &to).unwrap_err();
+        assert_eq!(raced.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "theirs");
+        assert_eq!(std::fs::read_to_string(&from).unwrap(), "mine");
     }
 
     const LOG: &str = r#"{"type":"mode","mode":"x"}

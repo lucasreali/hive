@@ -619,7 +619,7 @@ fn relink(from: &Path, to: &Path, unlink: &dyn Fn(&Path) -> io::Result<()>) -> i
 /// Renames `from` to `to` in one step, failing (`EEXIST`) when `to` exists, where `rename(2)`
 /// would replace an empty folder. Used by path, as [`relink`].
 #[cfg(target_os = "linux")]
-fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
     use nix::fcntl::{AT_FDCWD, RenameFlags, renameat2};
     Ok(renameat2(
         AT_FDCWD,
@@ -631,9 +631,9 @@ fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-use crate::macos::rename_new;
+pub(crate) use crate::macos::rename_new;
 #[cfg(windows)]
-use crate::windows::rename_new;
+pub(crate) use crate::windows::rename_new;
 
 /// The system that opens files for the app: Windows through WSL, or macOS itself.
 #[cfg(target_os = "linux")]

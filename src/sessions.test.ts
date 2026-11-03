@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, jest, spyOn, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { notice, noticeKind } from "../test/notice";
 import { connect } from "./connect";
@@ -8,6 +8,7 @@ import {
   ago,
   copy,
   locate,
+  MOVE_WAIT_MS,
   onMoved,
   openLocated,
   remove,
@@ -135,6 +136,35 @@ test("shared sessions resume as the current account, their log moved there first
   onMoved({ type: "session_moved", id: "nobody", config_dir: null });
   open.mockRestore();
   write.mockRestore();
+  moved.mockRestore();
+});
+
+test("a move waits for its answer at most 30 s, and one move of a session at a time", async () => {
+  jest.useFakeTimers();
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(5);
+  // The service never answers.
+  const moved = spyOn(transport, "moveSession").mockResolvedValue();
+  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: "/w" };
+  const settings = { ...initialState.settings, claude: { ...claude, share_sessions: true } };
+  useHive.setState({ settings });
+  const first = resume(stopped);
+  await resume(stopped);
+  expect(notice()).toBe("Cannot move the session: it is already being moved");
+  expect(moved).toHaveBeenCalledTimes(1);
+  jest.advanceTimersByTime(MOVE_WAIT_MS - 1);
+  await Promise.resolve();
+  expect(notice()).toBe("Cannot move the session: it is already being moved");
+  jest.advanceTimersByTime(1);
+  await first;
+  expect(notice()).toBe("Cannot move the session: the service did not answer");
+  expect(open).not.toHaveBeenCalled();
+  // A late answer finds nobody waiting; the next move is asked again.
+  onMoved({ type: "session_moved", id: stopped.id, config_dir: "/w" });
+  void resume(stopped);
+  expect(moved).toHaveBeenCalledTimes(2);
+  jest.advanceTimersByTime(MOVE_WAIT_MS);
+  jest.useRealTimers();
+  open.mockRestore();
   moved.mockRestore();
 });
 

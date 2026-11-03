@@ -43,10 +43,24 @@ export function accountFor(session: Session, account?: string | null): string | 
   return shared ? currentAccount() : session.config_dir;
 }
 
-/** Asks the service to move a session's log into `account`'s folder; why it could not, or null. */
+/** How long a move may wait for the service's answer. */
+export const MOVE_WAIT_MS = 30_000;
+
+/**
+ * Asks the service to move a session's log into `account`'s folder; why it could not, or null.
+ * One move of a session at a time; no answer within `MOVE_WAIT_MS` ends the wait as a failure.
+ */
 const moveTo = (id: string, account: string | null) =>
   new Promise<string | null>((done) => {
-    moving.set(id, done);
+    if (moving.has(id)) return done("it is already being moved");
+    const timer = setTimeout(() => {
+      moving.delete(id);
+      done("the service did not answer");
+    }, MOVE_WAIT_MS);
+    moving.set(id, (error) => {
+      clearTimeout(timer);
+      done(error);
+    });
     void transport.moveSession(id, account);
   });
 
