@@ -57,10 +57,12 @@ impl Paths {
         uid: u32,
         user_temp: Option<Option<PathBuf>>,
     ) -> Self {
+        // Only absolute folders (the XDG spec): a relative one would put the hooks settings and
+        // the shared plugin in whatever folder a terminal runs `claude` from (a cloned repo).
         let var = |key| {
             var(key)
-                .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
+                .filter(|value| value.is_absolute())
         };
         // `user_temp` is known only on macOS.
         let logs = match (&user_temp, var("XDG_RUNTIME_DIR"), var("HOME")) {
@@ -466,6 +468,22 @@ mod tests {
         assert_eq!(paths.runtime, PathBuf::from("/tmp/hive-1000"));
         assert_eq!(paths.data, PathBuf::from("/home/me/.local/share/hive"));
         assert_eq!(paths.config, PathBuf::from("/home/me/.config/hive"));
+    }
+
+    #[test]
+    fn relative_folders_are_ignored() {
+        let paths = resolve(&[
+            ("XDG_RUNTIME_DIR", "run"),
+            ("XDG_DATA_HOME", "./d"),
+            ("XDG_CONFIG_HOME", "c"),
+            ("HOME", "/home/me"),
+        ]);
+        assert_eq!(paths.runtime, PathBuf::from("/tmp/hive-1000"));
+        assert_eq!(paths.data, PathBuf::from("/home/me/.local/share/hive"));
+        assert_eq!(paths.config, PathBuf::from("/home/me/.config/hive"));
+        // A relative home too: under the runtime folder.
+        let paths = resolve(&[("HOME", "me")]);
+        assert_eq!(paths.data, PathBuf::from("/tmp/hive-1000/data"));
     }
 
     #[test]
