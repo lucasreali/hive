@@ -110,16 +110,12 @@ fn fair(name: &str) -> bool {
 /// when the file has no such key, as Claude Code reads it), and why it was not understood. No
 /// file, no servers.
 fn mcp_servers(file: &Path) -> (Vec<String>, Option<String>) {
-    let read = || -> Result<Value, String> {
-        if !std::fs::metadata(file)
-            .map_err(|err| err.to_string())?
-            .is_file()
-        {
-            return Err("not a file".to_owned());
+    let read = || -> io::Result<Value> {
+        if !std::fs::metadata(file)?.is_file() {
+            return Err(io::Error::other("not a file"));
         }
-        let mut input = std::fs::File::open(file).map_err(|err| err.to_string())?;
-        let bytes = crate::git::read_limited(&mut input, MCP_BYTES).map_err(|e| e.to_string())?;
-        serde_json::from_slice(&bytes).map_err(|err| err.to_string())
+        let bytes = crate::git::read_limited(&mut std::fs::File::open(file)?, MCP_BYTES)?;
+        Ok(serde_json::from_slice(&bytes)?)
     };
     if file.symlink_metadata().is_err() {
         return (Vec::new(), None);
