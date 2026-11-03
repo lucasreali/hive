@@ -570,6 +570,37 @@ fn tone_failed(error: std::io::Error) -> String {
     format!("cannot play the tone: {error}")
 }
 
+/// Opens a file with `program` (macOS's `open`) as `program -- <path>`, its default app; when
+/// that fails (no app claims the type: `open` exits 1, as for a session's `.jsonl`), again as
+/// `program -t -- <path>`, the default text editor (D21.1). Each a separate argument. When both
+/// fail, the error names the file ("No app opens <name>"), never `open`'s exit status.
+pub fn mac_open(program: PathBuf) -> impl Fn(&str) -> Result<(), String> + Send + Sync {
+    move |path: &str| {
+        let name = Path::new(path)
+            .file_name()
+            .map_or_else(|| path.into(), |name| name.to_string_lossy());
+        let open = |text: bool| {
+            let mut command = std::process::Command::new(&program);
+            if text {
+                command.arg("-t");
+            }
+            command
+                .arg("--")
+                .arg(path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|error| format!("cannot open {name}: {error}"))
+        };
+        if open(false)?.success() || open(true)?.success() {
+            Ok(())
+        } else {
+            Err(format!("No app opens {name}"))
+        }
+    }
+}
+
 /// The alert tone played by the app (17.19): its folder, whether its file was written in this
 /// run, and the player.
 struct Tone {
