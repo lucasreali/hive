@@ -1349,7 +1349,7 @@ export function createMockTransport(
       terminals.set(id, { onData, line: "", cwd, agent: null, claude });
       // Named as `Store::account_name` names it.
       const named = settings.claude.accounts.find((a) => a.config_dir === claude);
-      const name = named?.name ?? "Default";
+      const name = named?.name ?? settings.claude.default_name;
       later({ type: "terminal_opened", channel: id, worktree: place(cwd), account: name });
       setTimeout(() => print(id, PROMPT), 0);
       if (scenario === "load") void replay(id);

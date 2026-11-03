@@ -101,12 +101,13 @@ impl Store {
     }
 
     /// The name of the account whose config folder is `dir` (21.7): `None`, or a folder no
-    /// account has any more, is the default account's.
+    /// account has any more, is the default account's, as configured (21.4).
     pub fn account_name(&self, dir: Option<&str>) -> String {
         let current = self.current();
         let mut accounts = current.0.claude.accounts.iter();
         let named = dir.and_then(|dir| accounts.find(|a| a.config_dir == dir));
-        named.map_or_else(|| DEFAULT_ACCOUNT.to_owned(), |a| a.name.clone())
+        let default = || default_name(&current.0.claude).to_owned();
+        named.map_or_else(default, |a| a.name.clone())
     }
 
     /// Makes an account of each Claude config folder spaces had before accounts existed
@@ -814,6 +815,25 @@ mod tests {
 
     // `/a` is no absolute path on Windows.
     #[cfg(unix)]
+    #[test]
+    fn a_terminal_names_the_default_account_by_its_configured_name() {
+        let (tmp, store) = store();
+        let file = tmp.path().join("hive/settings.json");
+        std::fs::create_dir(tmp.path().join("hive")).unwrap();
+        // Renamed (21.4): a terminal without an account, or of a folder no account has.
+        let mut settings = Settings::default();
+        settings.claude.default_name = "Personal".into();
+        store.set(settings.clone()).unwrap();
+        assert_eq!(store.account_name(None), "Personal");
+        assert_eq!(store.account_name(Some("/other")), "Personal");
+        // Emptied, or missing from the file: "Default".
+        settings.claude.default_name = String::new();
+        store.set(settings).unwrap();
+        assert_eq!(store.account_name(None), "Default");
+        std::fs::write(&file, r#"{"claude":{"accounts":[]}}"#).unwrap();
+        assert_eq!(Store::load(file).account_name(None), "Default");
+    }
+
     #[test]
     fn the_default_account_is_renamed_and_no_other_account_takes_its_name() {
         let (tmp, store) = store();

@@ -300,6 +300,12 @@ test("a terminal prints a prompt, echoes input and repeats the line", async () =
   expect(output()).toBe(`${A}mock$ hi\r\n${C}hi\r\n${D(0)}${A}mock$ \r\n${A}mock$ `);
   await transport.resizeTerminal(id, 100, 30);
   expect(await transport.openTerminal("/", 1, 1, () => {})).toBe(2);
+  // A renamed default account is named as configured (21.4/21.7).
+  const claude = { ...DEFAULT_SETTINGS.claude, default_name: "Personal" };
+  await transport.setSettings({ ...DEFAULT_SETTINGS, claude });
+  await transport.openTerminal("/", 1, 1, () => {});
+  await tick();
+  expect(messages.at(-1)).toMatchObject({ type: "terminal_opened", account: "Personal" });
 });
 
 test("exit ends the terminal with code 0 and close with no code", async () => {
