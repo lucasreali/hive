@@ -80,7 +80,9 @@ sort! {
         | Resync
         | SetSettings
         | OpenSettingsFile
-        | GetDiagnostics;
+        | GetDiagnostics
+        | GetShared
+        | OpenShared;
     received:
         Welcome
         | VersionMismatch
@@ -148,6 +150,7 @@ sort! {
         | Settings
         | SettingsFailed
         | Diagnostics
+        | Shared
         | Error;
 }
 
@@ -515,6 +518,15 @@ fn samples() -> Vec<Control> {
             wrapper: s("/h/.local/share/hive/bin/claude"),
             claude: None,
             git_error: Some(m()),
+        },
+        Shared {
+            folder: s("/h/.local/share/hive/shared"),
+            plugin: s("hive-shared"),
+            skills: vec![s("review")],
+            agents: vec![s("tester")],
+            commands: vec![s("about")],
+            mcp_servers: vec![s("db")],
+            error: Some(m()),
         },
         Error { message: m() },
     ]

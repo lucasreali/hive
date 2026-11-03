@@ -112,6 +112,12 @@ impl Paths {
         self.data.join("hive-hooks.json")
     }
 
+    /// The folder every Claude account shares, a plugin the `claude` wrapper passes with
+    /// `--plugin-dir` (21.9, see [`crate::shared`]).
+    pub fn shared_dir(&self) -> PathBuf {
+        self.data.join(crate::shared::FOLDER)
+    }
+
     /// The projects the app followed before spaces (6.14): read only while `spaces` is missing.
     pub fn projects(&self) -> PathBuf {
         self.data.join("projects.json")
@@ -443,6 +449,7 @@ mod tests {
             paths.hooks_settings(),
             PathBuf::from("/d/hive/hive-hooks.json")
         );
+        assert_eq!(paths.shared_dir(), PathBuf::from("/d/hive/shared"));
         assert_eq!(paths.projects(), PathBuf::from("/d/hive/projects.json"));
         assert_eq!(paths.spaces(), PathBuf::from("/d/hive/spaces.json"));
         assert_eq!(paths.ports(), PathBuf::from("/d/hive/ports.json"));

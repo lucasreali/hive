@@ -604,6 +604,24 @@
     "git_error": "m"
   },
   {
+    "type": "shared",
+    "folder": "/h/.local/share/hive/shared",
+    "plugin": "hive-shared",
+    "skills": [
+      "review"
+    ],
+    "agents": [
+      "tester"
+    ],
+    "commands": [
+      "about"
+    ],
+    "mcp_servers": [
+      "db"
+    ],
+    "error": "m"
+  },
+  {
     "type": "error",
     "message": "m"
   }

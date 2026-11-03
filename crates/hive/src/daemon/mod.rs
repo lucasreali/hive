@@ -410,6 +410,11 @@ impl State {
         claude
     }
 
+    /// The folder every Claude account shares (21.9), beside the bin folder in Hive's data.
+    fn shared_dir(&self) -> PathBuf {
+        self.bin_dir.with_file_name(crate::shared::FOLDER)
+    }
+
     fn sent(&self) -> std::sync::MutexGuard<'_, health::Sent> {
         self.sent
             .lock()
