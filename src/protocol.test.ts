@@ -70,6 +70,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   gh_accounts: { gh_config_dir: true, accounts: true, problem: true },
   gh_identity: { account: true, name: true, email: true },
   gh_identity_failed: { account: true, message: true },
+  claude_logins: { logins: true },
   notice: { message: true },
   pulls: { project: true, repo: true, mine: true, review: true, fetched_ms: true, error: true },
   pull: { project: true, number: true, pull: true, error: true },

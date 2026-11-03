@@ -292,6 +292,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...runError } = m;
       return { runBusy: null, runError };
     }
+    case "claude_logins":
+      return { claudeLogins: m.logins };
     case "gh_accounts": {
       const { type: _, ...accounts } = m;
       return { ghAccounts: accounts };

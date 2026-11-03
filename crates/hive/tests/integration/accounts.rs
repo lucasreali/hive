@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use hive_protocol::{Account, AccountDir, Control, Role, Settings};
+use hive_protocol::{Account, AccountDir, ClaudeLogin, Control, Role, Settings};
 use serde_json::json;
 
 use crate::agents::{hook, next_usage};
@@ -161,4 +161,42 @@ async fn the_spaces_claude_folders_become_accounts_once() {
         drop(app);
         assert!(daemon.wait_exit().success());
     }
+}
+
+#[tokio::test]
+async fn each_account_says_whether_it_logged_in() {
+    let repo = Repo::new();
+    let home = repo.env.path("home");
+    let work = repo.env.path("home/.claude-work");
+    std::fs::create_dir_all(&work).unwrap();
+    // The default account's file is beside `~/.claude`, a named account's in its folder.
+    std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"a":1}}"#).unwrap();
+    std::fs::write(work.join(".claude.json"), r#"{"numStartups":1}"#).unwrap();
+    let work = work.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let mut settings = Settings::default();
+    settings.claude.accounts.push(Account {
+        name: "Work".into(),
+        config_dir: work.clone(),
+    });
+    let set = Control::SetSettings {
+        settings: settings.clone(),
+    };
+    assert_eq!(request(&mut app, set).await, Control::Settings { settings });
+    let login = |config_dir: Option<&str>, logged_in| ClaudeLogin {
+        config_dir: config_dir.map(String::from),
+        logged_in,
+    };
+    let logins = vec![login(None, true), login(Some(&work), false)];
+    let answer = request(&mut app, Control::ListClaudeLogins).await;
+    assert_eq!(answer, Control::ClaudeLogins { logins });
+    // Its `/login` finished: asked again, it is logged in.
+    let done = r#"{"numStartups":1,"oauthAccount":{}}"#;
+    std::fs::write(Path::new(&work).join(".claude.json"), done).unwrap();
+    let logins = vec![login(None, true), login(Some(&work), true)];
+    let answer = request(&mut app, Control::ListClaudeLogins).await;
+    assert_eq!(answer, Control::ClaudeLogins { logins });
+    drop(app);
+    assert!(daemon.wait_exit().success());
 }

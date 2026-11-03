@@ -714,6 +714,18 @@ impl State {
         crate::gh::Gh::on(self.users_path().await)
     }
 
+    /// Answers `claude_logins` (21.6) off the frame loop: each account's config file is read.
+    fn claude_logins(self: &Arc<Self>) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let dirs = state.settings.account_dirs();
+            let logins = tokio::task::block_in_place(|| {
+                crate::logins::answer(&dirs, |key| std::env::var_os(key))
+            });
+            state.to_app(0, &Control::ClaudeLogins { logins }).await;
+        });
+    }
+
     /// Answers `gh_accounts` for `gh_config_dir` off the frame loop (`gh` asks GitHub), after
     /// making `switch` `gh`'s active account when given (9.30).
     fn gh_accounts(self: &Arc<Self>, gh_config_dir: Option<String>, switch: Option<GhAccount>) {

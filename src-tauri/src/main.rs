@@ -182,6 +182,7 @@ fn main() {
             commands::delete_space,
             commands::remove_project,
             commands::select_space,
+            commands::list_claude_logins,
             commands::list_gh_accounts,
             commands::switch_gh_account,
             commands::get_gh_identity,
