@@ -132,6 +132,13 @@ test("a located log or folder opens, or is revealed, with Windows' apps", async 
   locate(session, "log", "open");
   await openLocated(located("log", "C:\\log"), true);
   expect(notice()).toContain("no app");
+  // A log no app opens, even the text editor (D21.1): the app's words, never an exit status.
+  mockIPC(() => {
+    throw "No app opens 570714e7.jsonl";
+  });
+  locate(session, "log", "open");
+  await openLocated(located("log", "C:\\log"), true);
+  expect([notice(), noticeKind()]).toEqual(["No app opens 570714e7.jsonl", "error"]);
   locate(session, "log", "open");
   await openLocated(located("log", "C:\\log"));
   asked.mockRestore();

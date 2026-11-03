@@ -293,6 +293,42 @@ mod tests {
     }
 
     #[test]
+    fn only_a_folder_no_longer_wanted_is_unwatched() {
+        let (_tmp, projects, records) = claude();
+        let (_other, _, records2) = claude();
+        let mut watched = BTreeMap::new();
+        let mut ops = Vec::new();
+        let mut follow_now = |records: &PathBuf, ops: &mut Vec<(bool, PathBuf)>| {
+            let mut apply = |sent: Vec<PathOp>| {
+                let sent = sent.iter().map(|op| {
+                    let watch = matches!(op, PathOp::Watch(..));
+                    (watch, op.as_path().to_path_buf())
+                });
+                ops.extend(sent);
+                Ok(())
+            };
+            let roots = std::slice::from_ref(&projects);
+            follow(
+                &mut watched,
+                roots,
+                std::slice::from_ref(records),
+                &[],
+                &mut apply,
+            );
+        };
+        follow_now(&records, &mut ops);
+        assert_eq!(ops, vec![(true, projects.clone()), (true, records.clone())]);
+        ops.clear();
+        // The records folder changes: the old one is unwatched, the projects folder kept.
+        follow_now(&records2, &mut ops);
+        assert_eq!(ops, vec![(false, records), (true, records2.clone())]);
+        assert_eq!(
+            watched,
+            BTreeMap::from([(projects, Kind::Projects), (records2, Kind::Records)])
+        );
+    }
+
+    #[test]
     fn a_folder_the_watcher_refuses_is_not_kept_as_watched() {
         let (_tmp, projects, records) = claude();
         let mut watched = BTreeMap::new();
