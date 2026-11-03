@@ -363,7 +363,11 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
 
 test("the accounts section marks an account that never logged in (21.6)", async () => {
   const ask = spyOn(transport, "listClaudeLogins");
-  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: null };
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: null,
+    share_sessions: false,
+  };
   await transport.setSettings({ ...DEFAULT_SETTINGS, claude });
   open();
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
