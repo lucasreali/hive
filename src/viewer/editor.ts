@@ -142,43 +142,85 @@ function highlighting(view: EditorView, path: string) {
  * hidden or detached, which is when it is left; a view not scrolled since keeps what was put back.
  */
 const scrolls = new WeakMap<EditorView, StateEffect<unknown>>();
+/** The same, as the line at the view's top (21.3): its number, plus how far into it (0 to 1). */
+const tops = new WeakMap<EditorView, number>();
+
+/** The line at the top of `view` as it is now (see `tops`); 1 for an empty or detached view. */
+export function topOf(view: EditorView): number {
+  const top = view.scrollDOM.scrollTop;
+  const block = view.lineBlockAtHeight(top);
+  const into = block.height > 0 ? (top - block.top) / block.height : 0;
+  return view.state.doc.lineAt(block.from).number + Math.min(1, Math.max(0, into));
+}
 
 /** Keeps `view`'s scroll at every scroll event, for `snapshot` and `replaceState`. */
 function trackScroll(view: EditorView) {
-  view.scrollDOM.addEventListener("scroll", () => scrolls.set(view, view.scrollSnapshot()));
+  view.scrollDOM.addEventListener("scroll", () => {
+    scrolls.set(view, view.scrollSnapshot());
+    tops.set(view, topOf(view));
+  });
 }
 
 const scrollOf = (view: EditorView) => scrolls.get(view) ?? view.scrollSnapshot();
+const topLineOf = (view: EditorView) => tops.get(view) ?? topOf(view);
 
-/** Scrolls `view` to `scroll` once it has measured its text (clamped to it), and keeps it. */
-function scrollTo(view: EditorView, scroll: StateEffect<unknown>) {
+/**
+ * Scrolls `view` to `scroll` once it has measured its text (clamped to it), and keeps it with
+ * `top`, the line it puts at the top.
+ */
+function scrollTo(view: EditorView, scroll: StateEffect<unknown>, top: number) {
   scrolls.set(view, scroll);
+  tops.set(view, top);
   view.dispatch({ effects: scroll });
 }
 
 /** Replaces the view's state, keeping its scroll position (the same line at its top). */
 function replaceState(view: EditorView, state: EditorState) {
   const scroll = scrollOf(view);
+  const top = topLineOf(view);
   view.setState(state);
-  scrollTo(view, scroll);
+  scrollTo(view, scroll, top);
 }
 
-/** A view's selection and scroll, kept in a file's tab to show it again as it was left (8.21). */
-export type ViewSnapshot = { selection: EditorSelection; scroll: StateEffect<unknown> };
+/**
+ * A view's selection and scroll, kept in a file's tab to show it again as it was left (8.21);
+ * `top` is the scroll as a line (`tops`), for the rendered Markdown (21.3).
+ */
+export type ViewSnapshot = {
+  selection: EditorSelection;
+  scroll: StateEffect<unknown>;
+  top: number;
+};
 
 export const snapshot = (view: EditorView): ViewSnapshot => ({
   selection: view.state.selection,
   scroll: scrollOf(view),
+  top: topLineOf(view),
 });
 
-/** Puts a snapshot back into `view`, its selection kept within the text; none does nothing. */
-export function restoreView(view: EditorView, saved: unknown): void {
-  if (!saved) return;
-  const { selection, scroll } = saved as ViewSnapshot;
-  const clamp = (n: number) => Math.min(n, view.state.doc.length);
-  const ranges = selection.ranges.map((r) => EditorSelection.range(clamp(r.anchor), clamp(r.head)));
-  view.dispatch({ selection: EditorSelection.create(ranges, selection.mainIndex) });
-  scrollTo(view, scroll);
+/**
+ * Puts a snapshot back into `view`, its selection kept within the text; none does nothing.
+ * With `line` (the rendered Markdown's place, 21.3), that line (clamped to the text) goes to the
+ * top instead of the snapshot's scroll.
+ */
+export function restoreView(view: EditorView, saved: unknown, line?: number): void {
+  const doc = view.state.doc;
+  if (saved) {
+    const { selection } = saved as ViewSnapshot;
+    const clamp = (n: number) => Math.min(n, doc.length);
+    const ranges = selection.ranges.map((r) =>
+      EditorSelection.range(clamp(r.anchor), clamp(r.head)),
+    );
+    view.dispatch({ selection: EditorSelection.create(ranges, selection.mainIndex) });
+  }
+  if (line !== undefined) {
+    const at = Math.max(1, Math.min(Math.floor(line), doc.lines));
+    const scroll = EditorView.scrollIntoView(doc.line(at).from, { y: "start", yMargin: 0 });
+    scrollTo(view, scroll, at);
+  } else if (saved) {
+    const { scroll, top } = saved as ViewSnapshot;
+    scrollTo(view, scroll, top);
+  }
 }
 
 const commented = Decoration.line({ class: "cm-commented" });
