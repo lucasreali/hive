@@ -3102,6 +3102,56 @@ fn afplay_gets_the_volume_and_the_file_as_separate_arguments() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+// A shell script stands in for macOS's `open` (the Linux CI runs it too): it logs each call's
+// arguments, one a line, and exits with the status `exits` gives that call (`-t` or not).
+#[cfg(unix)]
+#[test]
+fn a_file_no_app_opens_opens_in_the_text_editor_or_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch("open");
+    let calls = root.join("calls");
+    let fake = |name: &str, plain: u8, text: u8| {
+        let program = root.join(name);
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" '' >> '{}'\n[ \"$1\" = -t ] && exit {text}\nexit {plain}\n",
+            calls.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        mac_open(program)
+    };
+    let file = root.join("a log; echo x.jsonl");
+    let path = file.to_str().unwrap();
+    let take = || {
+        let logged = std::fs::read_to_string(&calls).unwrap_or_default();
+        let _ = std::fs::remove_file(&calls);
+        logged
+    };
+    let plain = format!("--\n{path}\n\n");
+    let text = format!("-t\n--\n{path}\n\n");
+
+    // A default app: opened once, never retried.
+    assert_eq!(fake("opens", 0, 1)(path), Ok(()));
+    assert_eq!(take(), plain);
+    // No app claims the type: the text editor opens it.
+    assert_eq!(fake("text", 1, 0)(path), Ok(()));
+    assert_eq!(take(), format!("{plain}{text}"));
+    // Neither: the file's name, not `open`'s exit status.
+    let none = fake("none", 1, 1)(path);
+    assert_eq!(none, Err("No app opens a log; echo x.jsonl".into()));
+    assert_eq!(take(), format!("{plain}{text}"));
+    // A path with no file name is named whole.
+    assert_eq!(fake("root", 1, 1)("/"), Err("No app opens /".into()));
+    let _ = take();
+
+    let missing = mac_open(root.join("missing"))(path).unwrap_err();
+    assert!(
+        missing.starts_with("cannot open a log; echo x.jsonl: "),
+        "{missing}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[tokio::test]
 async fn a_check_from_the_menu_answers_a_failed_download() {
     let (hive, mut rx) = hive_with_ui();
