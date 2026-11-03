@@ -1356,6 +1356,11 @@ label:has(> input[type="checkbox"]:disabled) {
   stroke: var(--state-permission);
 }
 
+/* No window yet (21.8): the track alone, dimmed. */
+.session-usage[data-empty] .usage-track {
+  opacity: 0.5;
+}
+
 .usage-tip {
   display: none;
   position: absolute;

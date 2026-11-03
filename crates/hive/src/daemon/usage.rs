@@ -1,11 +1,17 @@
 //! The usage windows `hive statusline` reports (12.1; the 7-day one, 15.3): the service's side,
 //! apart from the statusline itself so it runs wherever the service does. Also their pace and
-//! the alerts at 80% and 95% (17.23).
+//! the alerts at 80% and 95% (17.23). The latest windows are kept in `<data>/hive/usage.json`
+//! across restarts (21.8).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use hive_protocol::{Control, SessionWindow, UsageWindow};
+use serde::{Deserialize, Serialize};
+
+use crate::git::read_limited;
+use crate::wrapper::write_atomic;
 
 /// Most Claude config folders the service keeps a window for; a new one past it is ignored.
 const FOLDERS: usize = 64;
@@ -18,8 +24,19 @@ const WEEK_LENGTH: u64 = 7 * 86400;
 /// The shares of a window that alert, once each per window, lowest first.
 const THRESHOLDS: [u8; 2] = [80, 95];
 
+/// Largest `usage.json` read: more than the most it holds once written ([`FOLDERS`] folders of
+/// [`FOLDER_LIMIT`] bytes, each byte at most 6 once escaped as JSON, with their windows).
+const FILE_LIMIT: u64 = 2 * 1024 * 1024;
+
 /// A folder's 5-hour window and its 7-day one, when it reported one.
 type Windows = (SessionWindow, Option<SessionWindow>);
+
+/// A folder's windows as `usage.json` keeps them.
+#[derive(Serialize, Deserialize)]
+struct Saved {
+    usage: SessionWindow,
+    week: Option<SessionWindow>,
+}
 
 /// What `session_usage` last told the app.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -37,9 +54,11 @@ struct Alerted {
     threshold: u8,
 }
 
-/// The latest windows of each Claude config folder (in memory only), and the ones the app has.
+/// The latest windows of each Claude config folder (kept in `file`, when there is one), and the
+/// ones the app has.
 #[derive(Debug, Default)]
 pub struct Usage {
+    file: Option<PathBuf>,
     windows: HashMap<String, Windows>,
     sent: Shown,
     /// Per folder of `windows`: the 5-hour window's alerts and the 7-day one's.
@@ -61,6 +80,26 @@ fn limit_at(window: &SessionWindow, length: u64, now: u64) -> Option<u64> {
     (at < window.resets_at).then_some(at / 60 * 60)
 }
 
+/// The highest threshold `window` reached.
+fn reached(window: &SessionWindow) -> Option<u8> {
+    THRESHOLDS
+        .into_iter()
+        .rev()
+        .find(|&t| window.used_percentage >= t)
+}
+
+/// What a window kept in the file already alerted for: the service that kept it alerted as it
+/// reached each threshold, so a new one does not again.
+fn alerted_before(window: Option<SessionWindow>) -> Alerted {
+    let alerted = |window: SessionWindow| {
+        reached(&window).map(|threshold| Alerted {
+            resets_at: window.resets_at,
+            threshold,
+        })
+    };
+    window.and_then(alerted).unwrap_or_default()
+}
+
 /// The alert `window` (of `kind`) raises at `now`: the highest threshold it reached, unless that
 /// window already alerted for it. A window past its reset no longer counts.
 fn alert(
@@ -73,10 +112,7 @@ fn alert(
     if now >= alerted.resets_at {
         *alerted = Alerted::default();
     }
-    let threshold = THRESHOLDS
-        .into_iter()
-        .rev()
-        .find(|&t| window.used_percentage >= t)?;
+    let threshold = reached(&window)?;
     if threshold <= alerted.threshold {
         return None;
     }
@@ -92,23 +128,73 @@ fn alert(
 }
 
 impl Usage {
+    /// The windows kept in `file` (untrusted: as bounded as reports), written there again on
+    /// each change; the thresholds they reached already alerted. An unreadable or corrupt file
+    /// has none.
+    pub fn load(file: PathBuf) -> Self {
+        let read = std::fs::File::open(&file)
+            .and_then(|mut file| read_limited(&mut file, FILE_LIMIT))
+            .ok();
+        let saved: HashMap<String, Saved> = read
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let mut usage = Self::default();
+        for (claude_dir, saved) in saved {
+            let before = [
+                alerted_before(Some(saved.usage)),
+                alerted_before(saved.week),
+            ];
+            if usage.keep(claude_dir.clone(), saved.usage, saved.week) {
+                usage.alerted.insert(claude_dir, before);
+            }
+        }
+        usage.file = Some(file);
+        usage
+    }
+
     /// Keeps `usage` and `week` as the latest windows of `claude_dir` (from a hook connection:
-    /// untrusted).
+    /// untrusted), and writes them to the file when they changed.
     pub fn report(
         &mut self,
         claude_dir: String,
         usage: SessionWindow,
         week: Option<SessionWindow>,
-    ) {
-        let room = self.windows.len() < FOLDERS || self.windows.contains_key(&claude_dir);
-        if room && claude_dir.len() <= FOLDER_LIMIT {
-            let capped = |mut window: SessionWindow| {
-                window.used_percentage = window.used_percentage.min(100);
-                window
-            };
-            self.windows
-                .insert(claude_dir, (capped(usage), week.map(capped)));
+    ) -> io::Result<()> {
+        match (self.keep(claude_dir, usage, week), &self.file) {
+            (true, Some(file)) => self.write(file),
+            _ => Ok(()),
         }
+    }
+
+    /// Keeps the windows when there is room for `claude_dir`; whether they changed.
+    fn keep(
+        &mut self,
+        claude_dir: String,
+        usage: SessionWindow,
+        week: Option<SessionWindow>,
+    ) -> bool {
+        let room = self.windows.len() < FOLDERS || self.windows.contains_key(&claude_dir);
+        if !room || claude_dir.len() > FOLDER_LIMIT {
+            return false;
+        }
+        let capped = |mut window: SessionWindow| {
+            window.used_percentage = window.used_percentage.min(100);
+            window
+        };
+        let windows = (capped(usage), week.map(capped));
+        self.windows.insert(claude_dir, windows) != Some(windows)
+    }
+
+    /// Writes every folder's windows to `file`.
+    fn write(&self, file: &Path) -> io::Result<()> {
+        let saved: HashMap<&String, Saved> = self
+            .windows
+            .iter()
+            .map(|(dir, &(usage, week))| (dir, Saved { usage, week }))
+            .collect();
+        let json = serde_json::to_vec(&saved)?;
+        file.parent().map_or(Ok(()), std::fs::create_dir_all)?;
+        write_atomic(file, &json, 0o600)
     }
 
     /// A new app has none.
@@ -198,8 +284,8 @@ mod tests {
         let mut usage = Usage::default();
         let a = Some(Path::new("/a"));
         assert!(usage.changed(a, 0).is_empty());
-        usage.report("/a".into(), window(150, 100), None);
-        usage.report("/b".into(), window(7, 100), None);
+        usage.report("/a".into(), window(150, 100), None).unwrap();
+        usage.report("/b".into(), window(7, 100), None).unwrap();
         let sent = |usage: Option<SessionWindow>| {
             Some(Control::SessionUsage {
                 usage,
@@ -213,7 +299,7 @@ mod tests {
         assert!(usage.shown());
         // Only what changed.
         assert_eq!(usage.changed(a, 99), vec![]);
-        usage.report("/a".into(), window(12, 100), None);
+        usage.report("/a".into(), window(12, 100), None).unwrap();
         assert_eq!(shown(&mut usage, a, 99), sent(Some(window(12, 100))));
         // Past its reset, none; another account's.
         assert_eq!(shown(&mut usage, a, 100), sent(None));
@@ -241,7 +327,9 @@ mod tests {
                 week_limit_at: None,
             })
         };
-        usage.report("/a".into(), window(12, 100), Some(window(250, 50)));
+        usage
+            .report("/a".into(), window(12, 100), Some(window(250, 50)))
+            .unwrap();
         assert_eq!(
             shown(&mut usage, a, 49),
             sent(Some(window(12, 100)), Some(window(100, 50)))
@@ -251,38 +339,194 @@ mod tests {
         assert_eq!(shown(&mut usage, a, 50), sent(Some(window(12, 100)), None));
         assert_eq!(usage.changed(a, 51), vec![]);
         // A new 7-day one is sent; a report without one drops it.
-        usage.report("/a".into(), window(12, 200), Some(window(41, 900)));
+        usage
+            .report("/a".into(), window(12, 200), Some(window(41, 900)))
+            .unwrap();
         assert_eq!(
             shown(&mut usage, a, 51),
             sent(Some(window(12, 200)), Some(window(41, 900)))
         );
-        usage.report("/a".into(), window(12, 200), Some(window(42, 900)));
+        usage
+            .report("/a".into(), window(12, 200), Some(window(42, 900)))
+            .unwrap();
         assert_eq!(
             shown(&mut usage, a, 51),
             sent(Some(window(12, 200)), Some(window(42, 900)))
         );
-        usage.report("/a".into(), window(12, 200), None);
+        usage.report("/a".into(), window(12, 200), None).unwrap();
         assert_eq!(shown(&mut usage, a, 51), sent(Some(window(12, 200)), None));
         // Never without the 5-hour one: past its reset, neither.
-        usage.report("/a".into(), window(12, 200), Some(window(41, 900)));
+        usage
+            .report("/a".into(), window(12, 200), Some(window(41, 900)))
+            .unwrap();
         assert_eq!(shown(&mut usage, a, 200), sent(None, None));
+    }
+
+    #[test]
+    fn the_windows_are_kept_in_a_file_and_loaded_by_a_new_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("hive/usage.json");
+        let a = Some(Path::new("/a"));
+        // None yet: nothing to load.
+        let mut usage = Usage::load(file.clone());
+        assert_eq!(shown(&mut usage, a, 1), None);
+        usage
+            .report("/a".into(), window(150, 100), Some(window(41, 900)))
+            .unwrap();
+        usage.report("/b".into(), window(7, 50), None).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = file.metadata().unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let mut loaded = Usage::load(file.clone());
+        assert_eq!(loaded.windows, usage.windows);
+        let both = Control::SessionUsage {
+            usage: Some(window(100, 100)),
+            week: Some(window(41, 900)),
+            limit_at: None,
+            week_limit_at: None,
+        };
+        assert_eq!(shown(&mut loaded, a, 99), Some(both));
+        // A window past its reset is kept but not shown.
+        let none = Control::SessionUsage {
+            usage: None,
+            week: None,
+            limit_at: None,
+            week_limit_at: None,
+        };
+        assert_eq!(shown(&mut loaded, Some(Path::new("/b")), 50), Some(none));
+        // A loaded service writes its changes too; an unchanged report writes nothing.
+        std::fs::remove_file(&file).unwrap();
+        loaded.report("/b".into(), window(7, 50), None).unwrap();
+        assert!(!file.exists());
+        loaded.report("/b".into(), window(8, 50), None).unwrap();
+        assert_eq!(Usage::load(file).windows["/b"], (window(8, 50), None));
+    }
+
+    #[test]
+    fn a_loaded_window_does_not_alert_again_for_what_it_reached() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("usage.json");
+        let mut usage = Usage::load(file.clone());
+        let (a, b) = (Some(Path::new("/a")), Some(Path::new("/b")));
+        usage
+            .report("/a".into(), window(85, 100), Some(window(97, 900)))
+            .unwrap();
+        usage.report("/b".into(), window(70, 100), None).unwrap();
+        let mut loaded = Usage::load(file);
+        assert_eq!(alerts(&mut loaded, a, 1), vec![]);
+        assert_eq!(alerts(&mut loaded, b, 1), vec![]);
+        // Its next threshold still alerts; a window below them alerts for the first it reaches.
+        loaded
+            .report("/a".into(), window(96, 100), Some(window(99, 900)))
+            .unwrap();
+        assert_eq!(
+            alerts(&mut loaded, a, 2),
+            vec![(UsageWindow::Session, 95, 100)]
+        );
+        loaded.report("/b".into(), window(80, 100), None).unwrap();
+        assert_eq!(
+            alerts(&mut loaded, b, 2),
+            vec![(UsageWindow::Session, 80, 100)]
+        );
+        // The record ends with the window: the next one alerts.
+        loaded
+            .report("/a".into(), window(81, 200), Some(window(99, 900)))
+            .unwrap();
+        assert_eq!(
+            alerts(&mut loaded, a, 100),
+            vec![(UsageWindow::Session, 80, 200)]
+        );
+    }
+
+    #[test]
+    fn a_corrupt_or_unwritable_file_is_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("usage.json");
+        let a = Some(Path::new("/a"));
+        for corrupt in ["{", "[1]", r#"{"/a": {"usage": {"used_percentage": 300}}}"#] {
+            std::fs::write(&file, corrupt).unwrap();
+            let mut usage = Usage::load(file.clone());
+            assert!(usage.windows.is_empty());
+            assert_eq!(shown(&mut usage, a, 1), None);
+        }
+        // Written over by the next report.
+        let mut usage = Usage::load(file.clone());
+        usage.report("/a".into(), window(5, 9), None).unwrap();
+        assert_eq!(
+            Usage::load(file.clone()).windows["/a"],
+            (window(5, 9), None)
+        );
+        // A file that cannot be written: the windows are still kept, the error returned.
+        let blocked = tmp.path().join("usage.json/usage.json");
+        let mut usage = Usage::load(blocked);
+        assert!(usage.report("/a".into(), window(6, 9), None).is_err());
+        assert_eq!(usage.windows["/a"], (window(6, 9), None));
+    }
+
+    #[test]
+    fn the_largest_file_written_is_read_back_and_bounded_as_reports() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("usage.json");
+        let mut usage = Usage::load(file.clone());
+        // Each byte escaped as six (`\u0001`).
+        for n in 0..FOLDERS {
+            let dir = format!("{n:02}{}", "\u{1}".repeat(FOLDER_LIMIT - 2));
+            let windows = (window(100, u64::MAX), Some(window(100, u64::MAX)));
+            usage.report(dir, windows.0, windows.1).unwrap();
+        }
+        let size = file.metadata().unwrap().len();
+        assert!(size > 6 * (FOLDER_LIMIT * FOLDERS) as u64, "{size}");
+        assert_eq!(Usage::load(file.clone()).windows, usage.windows);
+        // A file past the limit is ignored.
+        let mut big = std::fs::read(&file).unwrap();
+        big.resize(FILE_LIMIT as usize + 1, b' ');
+        std::fs::write(&file, big).unwrap();
+        assert!(Usage::load(file.clone()).windows.is_empty());
+        // A file with too many folders, folders too long or shares past 100 (another program's,
+        // an older Hive's) is bounded as reports are.
+        let mut saved = serde_json::Map::new();
+        let entry = serde_json::json!({
+            "usage": { "used_percentage": 250, "resets_at": 9 },
+            "week": null,
+        });
+        for n in 0..=FOLDERS {
+            saved.insert(format!("/{n}"), entry.clone());
+        }
+        saved.insert("/".repeat(FOLDER_LIMIT + 1), entry);
+        std::fs::write(&file, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let loaded = Usage::load(file);
+        assert_eq!(loaded.windows.len(), FOLDERS);
+        assert_eq!(loaded.alerted.len(), FOLDERS);
+        assert!(
+            loaded
+                .windows
+                .values()
+                .all(|w| *w == (window(100, 9), None))
+        );
     }
 
     #[test]
     fn the_service_keeps_a_bounded_number_of_folders_of_a_bounded_length() {
         let mut usage = Usage::default();
         let long = "/".repeat(FOLDER_LIMIT);
-        usage.report(long.clone(), window(1, 9), None);
-        usage.report(format!("{long}x"), window(1, 9), None);
+        usage.report(long.clone(), window(1, 9), None).unwrap();
+        usage
+            .report(format!("{long}x"), window(1, 9), None)
+            .unwrap();
         assert_eq!(usage.windows.len(), 1);
         for n in 1..FOLDERS {
-            usage.report(format!("/{n}"), window(1, 9), None);
+            usage.report(format!("/{n}"), window(1, 9), None).unwrap();
         }
-        usage.report("/new".into(), window(1, 9), None);
+        usage.report("/new".into(), window(1, 9), None).unwrap();
         assert_eq!(usage.windows.len(), FOLDERS);
         assert!(!usage.windows.contains_key("/new"));
         // A known one is still updated.
-        usage.report("/1".into(), window(2, 9), Some(window(3, 9)));
+        usage
+            .report("/1".into(), window(2, 9), Some(window(3, 9)))
+            .unwrap();
         assert_eq!(usage.windows["/1"], (window(2, 9), Some(window(3, 9))));
         // Alerts are kept only for a folder with windows.
         usage.changed(Some(Path::new("/new")), 1);
@@ -344,7 +588,9 @@ mod tests {
         // its reset.
         let week_start = START - 86400;
         let week_reset = week_start + WEEK_LENGTH;
-        usage.report("/a".into(), window(25, RESET), Some(window(10, week_reset)));
+        usage
+            .report("/a".into(), window(25, RESET), Some(window(10, week_reset)))
+            .unwrap();
         assert_eq!(
             paces(&mut usage, START + 3600),
             Some((Some(START + 4 * 3600), None))
@@ -352,7 +598,9 @@ mod tests {
         // The same minute: nothing new to send.
         assert_eq!(paces(&mut usage, START + 3601), None);
         // 60% of the week 26 h in; the session idle since.
-        usage.report("/a".into(), window(25, RESET), Some(window(60, week_reset)));
+        usage
+            .report("/a".into(), window(25, RESET), Some(window(60, week_reset)))
+            .unwrap();
         assert_eq!(
             paces(&mut usage, START + 7200),
             Some((None, Some(week_start + 156_000)))
@@ -360,7 +608,9 @@ mod tests {
         // Past the session's reset, neither.
         assert_eq!(paces(&mut usage, RESET), Some((None, None)));
         // A new window paces from its own start.
-        usage.report("/a".into(), window(30, RESET + SESSION_LENGTH), None);
+        usage
+            .report("/a".into(), window(30, RESET + SESSION_LENGTH), None)
+            .unwrap();
         assert_eq!(
             paces(&mut usage, RESET + 3600),
             Some((Some(RESET + 12_000), None))
@@ -371,9 +621,13 @@ mod tests {
     fn each_threshold_alerts_once_per_window() {
         let mut usage = Usage::default();
         let a = Some(Path::new("/a"));
-        usage.report("/a".into(), window(79, 100), Some(window(10, 900)));
+        usage
+            .report("/a".into(), window(79, 100), Some(window(10, 900)))
+            .unwrap();
         assert_eq!(alerts(&mut usage, a, 1), vec![]);
-        usage.report("/a".into(), window(80, 100), Some(window(10, 900)));
+        usage
+            .report("/a".into(), window(80, 100), Some(window(10, 900)))
+            .unwrap();
         assert_eq!(
             alerts(&mut usage, a, 1),
             vec![(UsageWindow::Session, 80, 100)]
@@ -381,9 +635,13 @@ mod tests {
         // Once: not on the next tick, a new app, nor a higher share below the next threshold.
         assert_eq!(alerts(&mut usage, a, 2), vec![]);
         usage.unsent();
-        usage.report("/a".into(), window(94, 100), Some(window(10, 900)));
+        usage
+            .report("/a".into(), window(94, 100), Some(window(10, 900)))
+            .unwrap();
         assert_eq!(alerts(&mut usage, a, 2), vec![]);
-        usage.report("/a".into(), window(95, 100), Some(window(95, 900)));
+        usage
+            .report("/a".into(), window(95, 100), Some(window(95, 900)))
+            .unwrap();
         assert_eq!(
             alerts(&mut usage, a, 3),
             vec![
@@ -392,10 +650,14 @@ mod tests {
             ]
         );
         // A lower share later in the window does not alert again.
-        usage.report("/a".into(), window(81, 100), Some(window(99, 900)));
+        usage
+            .report("/a".into(), window(81, 100), Some(window(99, 900)))
+            .unwrap();
         assert_eq!(alerts(&mut usage, a, 4), vec![]);
         // A new window alerts again (a jump past both thresholds: 95 alone).
-        usage.report("/a".into(), window(96, 200), Some(window(99, 900)));
+        usage
+            .report("/a".into(), window(96, 200), Some(window(99, 900)))
+            .unwrap();
         assert_eq!(
             alerts(&mut usage, a, 100),
             vec![(UsageWindow::Session, 95, 200)]
@@ -403,18 +665,22 @@ mod tests {
         assert_eq!(alerts(&mut usage, a, 101), vec![]);
         // Another account has its own; none for a folder without windows or past their reset.
         let b = Some(Path::new("/b"));
-        usage.report("/b".into(), window(85, 100), None);
+        usage.report("/b".into(), window(85, 100), None).unwrap();
         assert_eq!(
             alerts(&mut usage, b, 99),
             vec![(UsageWindow::Session, 80, 100)]
         );
         assert_eq!(alerts(&mut usage, Some(Path::new("/c")), 99), vec![]);
-        usage.report("/b".into(), window(99, 100), None);
+        usage.report("/b".into(), window(99, 100), None).unwrap();
         assert_eq!(alerts(&mut usage, b, 100), vec![]);
         // The week's alert lives until its own reset, past which a new week alerts.
-        usage.report("/a".into(), window(1, 1000), Some(window(99, 900)));
+        usage
+            .report("/a".into(), window(1, 1000), Some(window(99, 900)))
+            .unwrap();
         assert_eq!(alerts(&mut usage, a, 899), vec![]);
-        usage.report("/a".into(), window(1, 1000), Some(window(80, 2000)));
+        usage
+            .report("/a".into(), window(1, 1000), Some(window(80, 2000)))
+            .unwrap();
         assert_eq!(
             alerts(&mut usage, a, 900),
             vec![(UsageWindow::Week, 80, 2000)]
