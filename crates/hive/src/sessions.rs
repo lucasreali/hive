@@ -698,10 +698,11 @@ fn there(path: &Path) -> bool {
 
 /// A folder only its owner reads, as Claude's own.
 fn create_private_dir(dir: &Path) -> io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(dir)
+    return std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .create(dir);
+    #[cfg(not(unix))]
+    std::fs::create_dir(dir)
 }
 
 /// Moves the file or folder `from` to `to`, where nothing is: a rename, else (another file
@@ -916,11 +917,13 @@ mod tests {
 
     /// Renames as the system does, or (`cross`) answers as a rename to another disk does; and
     /// refuses to rename a folder when `folders` is false.
+    #[cfg(unix)]
     struct Fake {
         cross: bool,
         folders: bool,
     }
 
+    #[cfg(unix)]
     impl Files for Fake {
         fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
             if !self.folders && from.is_dir() {
@@ -934,6 +937,7 @@ mod tests {
     }
 
     /// Two accounts' folders (the default `home`, and `work`) and a followed repository.
+    #[cfg(unix)]
     struct Accounts {
         _tmp: tempfile::TempDir,
         repo: String,
@@ -942,6 +946,7 @@ mod tests {
         sessions: Sessions,
     }
 
+    #[cfg(unix)]
     fn accounts() -> Accounts {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo").to_str().unwrap().to_owned();
