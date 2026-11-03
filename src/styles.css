@@ -2284,6 +2284,19 @@ button.chevron:hover {
   min-width: 0;
 }
 
+/* An account that never logged in (21.6), in Settings and in the status bar. */
+.not-logged-in {
+  color: var(--state-permission);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+
+.statusbar-account .secondary {
+  height: 20px;
+  padding: 0 8px;
+  font-size: var(--fs-small);
+}
+
 /* Select (src/ui/Select.tsx): a trigger like a field, a list like the context menu */
 .select {
   display: flex;

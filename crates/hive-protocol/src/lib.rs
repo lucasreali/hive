@@ -409,6 +409,14 @@ pub enum Control {
         accounts: Vec<GhLogin>,
         problem: Option<String>,
     },
+    /// App → service: whether each Claude account (12.2), the default one first, has logged
+    /// in (21.6); answered by `ClaudeLogins`.
+    ListClaudeLogins,
+    /// Whether each Claude account has logged in: its `.claude.json` has an `oauthAccount`
+    /// (never the credentials, #45). The default account first, then the settings' accounts.
+    ClaudeLogins {
+        logins: Vec<ClaudeLogin>,
+    },
     /// Something the human should know that has no place of its own, shown as is in a toast
     /// that stays until dismissed: e.g. a terminal that could not get its space's GitHub
     /// account (9.30).
@@ -1007,6 +1015,14 @@ pub struct ClaudeSettings {
 pub struct Account {
     pub name: String,
     pub config_dir: String,
+}
+
+/// Whether the Claude account whose folder is `config_dir` (`None`: the default account) has
+/// logged in (21.6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeLogin {
+    pub config_dir: Option<String>,
+    pub logged_in: bool,
 }
 
 /// Which Claude account a terminal gets: `config_dir` `None` is the default account.
@@ -2216,6 +2232,24 @@ mod tests {
                 gh_config_dir: None
             }
         );
+        let logins = Control::ClaudeLogins {
+            logins: vec![
+                ClaudeLogin {
+                    config_dir: None,
+                    logged_in: true,
+                },
+                ClaudeLogin {
+                    config_dir: Some("/w".into()),
+                    logged_in: false,
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_string(&logins).unwrap(),
+            r#"{"type":"claude_logins","logins":[{"config_dir":null,"logged_in":true},{"config_dir":"/w","logged_in":false}]}"#
+        );
+        let list: Control = serde_json::from_str(r#"{"type":"list_claude_logins"}"#).unwrap();
+        assert_eq!(list, Control::ListClaudeLogins);
         let bare: Space = serde_json::from_str(r#"{"id":"x","name":"X"}"#).unwrap();
         assert!(bare.projects.is_empty() && bare.env == SpaceEnv::default());
         for msg in [
