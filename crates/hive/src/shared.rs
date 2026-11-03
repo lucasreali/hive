@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(shared(dir).4.as_deref(), Some(".mcp.json: not a file"));
         // Exactly the largest read.
         std::fs::remove_dir(&mcp).unwrap();
-        let pad = MCP_BYTES as usize - r#"{"a": ""}"#.len();
+        let pad = 256 * 1024 - r#"{"a": ""}"#.len();
         write(&mcp, &format!("{{\"a\": \"{}\"}}", "x".repeat(pad)));
         assert_eq!(shared(dir).3, ["a"]);
     }
