@@ -132,6 +132,11 @@ impl Paths {
         self.data.join("offered-pulls.json")
     }
 
+    /// The latest usage windows of each Claude config folder (`daemon::usage`, 21.8).
+    pub fn usage(&self) -> PathBuf {
+        self.data.join("usage.json")
+    }
+
     /// The Claude sessions that ran in Hive's terminals when the app last closed.
     pub fn open_sessions(&self) -> PathBuf {
         self.data.join("open-sessions.json")
@@ -447,6 +452,7 @@ mod tests {
         assert_eq!(paths.spaces(), PathBuf::from("/d/hive/spaces.json"));
         assert_eq!(paths.ports(), PathBuf::from("/d/hive/ports.json"));
         assert_eq!(paths.offers(), PathBuf::from("/d/hive/offered-pulls.json"));
+        assert_eq!(paths.usage(), PathBuf::from("/d/hive/usage.json"));
         assert_eq!(
             paths.open_sessions(),
             PathBuf::from("/d/hive/open-sessions.json")

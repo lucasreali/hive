@@ -423,7 +423,12 @@ mod tests {
             used_percentage: 10,
             resets_at: crate::hook::now_ms() / 1000 + 3600,
         };
-        state.usage.lock().await.report(account, window, None);
+        state
+            .usage
+            .lock()
+            .await
+            .report(account, window, None)
+            .unwrap();
         assert!(!state.ticking().await);
         state.send_usage().await;
         assert!(state.ticking().await);
