@@ -127,7 +127,11 @@ test("with an account besides the default one, a select picks the current accoun
   render(<StatusBar />);
   const select = () => screen.queryByRole("combobox", { name: "Claude account" });
   expect(select()).toBeNull();
-  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: "/w" };
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: "/w",
+    default_name: "Default",
+  };
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
   expect(select()?.textContent).toBe("Work");
   // Its session usage (12.1) sits right after it.
@@ -147,5 +151,11 @@ test("with an account besides the default one, a select picks the current accoun
   fireEvent.mouseDown(select() as HTMLElement);
   fireEvent.click(screen.getByRole("option", { name: "Work" }));
   expect(set).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, claude });
+  // The default account renamed (21.4) shows its name.
+  const personal = { ...claude, account, default_name: "Personal" };
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: personal } }));
+  expect(select()?.textContent).toBe("Personal");
+  fireEvent.mouseDown(select() as HTMLElement);
+  expect(screen.getByRole("option", { name: "Personal" })).toBeTruthy();
   set.mockRestore();
 });

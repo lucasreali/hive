@@ -993,13 +993,28 @@ pub struct Settings {
 
 /// The Claude accounts (12.2), besides the default one (no `CLAUDE_CONFIG_DIR`: `~/.claude`),
 /// which always exists.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ClaudeSettings {
     pub accounts: Vec<Account>,
     /// The current account's folder: new terminals get it as `CLAUDE_CONFIG_DIR`. `None`, or a
     /// folder no account has: the default account.
     pub account: Option<String>,
+    /// The default account's name (21.4): [`DEFAULT_ACCOUNT`] when missing or empty in the file.
+    pub default_name: String,
+}
+
+/// The default Claude account's name unless renamed (12.2, 21.4).
+pub const DEFAULT_ACCOUNT: &str = "Default";
+
+impl Default for ClaudeSettings {
+    fn default() -> Self {
+        Self {
+            accounts: Vec::new(),
+            account: None,
+            default_name: DEFAULT_ACCOUNT.to_owned(),
+        }
+    }
 }
 
 /// A Claude account: a name and its `CLAUDE_CONFIG_DIR`.
@@ -2801,7 +2816,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null,"default_name":"Default"}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,

@@ -104,7 +104,10 @@ test("keeps the settings it is given in memory", async () => {
 test("new terminals get the current Claude account, or the one asked for (12.2)", async () => {
   const { transport, messages } = await connected();
   const work = { name: "Work", config_dir: "/w/.claude" };
-  const settings = { ...DEFAULT_SETTINGS, claude: { accounts: [work], account: "/w/.claude" } };
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    claude: { ...DEFAULT_SETTINGS.claude, accounts: [work], account: "/w/.claude" },
+  };
   await transport.setSettings(settings);
   const outputs: string[] = [];
   const decoder = new TextDecoder();
@@ -121,13 +124,17 @@ test("new terminals get the current Claude account, or the one asked for (12.2)"
   await tick();
   expect(outputs[0]).toContain("echo $CLAUDE_CONFIG_DIR\r\n/w/.claude");
   expect(outputs[1]).not.toContain("/w/.claude");
-  // Removing the current account makes the default one current.
-  await transport.setSettings({ ...settings, claude: { accounts: [], account: "/w/.claude" } });
+  // Removing the current account makes the default one current; its empty name is "Default".
+  await transport.setSettings({
+    ...settings,
+    claude: { accounts: [], account: "/w/.claude", default_name: "" },
+  });
   await tick();
   const last = messages.at(-1);
   expect(last?.type === "settings" && last.settings.claude).toEqual({
     accounts: [],
     account: null,
+    default_name: "Default",
   });
 });
 

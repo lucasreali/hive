@@ -980,10 +980,16 @@ export function createMockTransport(
       later({ type: "settings", settings });
     },
     async setSettings(next) {
-      // A current Claude account that is gone falls back to the default one, as in the service.
-      const { accounts, account } = next.claude;
+      // A current Claude account that is gone falls back to the default one, and an empty
+      // default account name is "Default", as in the service.
+      const { accounts, account, default_name } = next.claude;
       const known = accounts.some((a) => a.config_dir === account);
-      settings = { ...next, claude: { accounts, account: known ? account : null } };
+      const claude = {
+        ...next.claude,
+        account: known ? account : null,
+        default_name: default_name || "Default",
+      };
+      settings = { ...next, claude };
       later({ type: "settings", settings });
     },
     async openSettingsFile() {

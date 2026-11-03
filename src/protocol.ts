@@ -512,8 +512,10 @@ export type Settings = {
   /**
    * The Claude accounts (12.2) besides the default one (`~/.claude`, always there), and the
    * current one's folder (null: the default one): new terminals get it as `CLAUDE_CONFIG_DIR`.
+   * `default_name`: the default account's name (21.4), "Default" unless renamed; the service
+   * turns an empty one back into "Default".
    */
-  claude: { accounts: Account[]; account: string | null };
+  claude: { accounts: Account[]; account: string | null; default_name: string };
 };
 
 /** Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`. */

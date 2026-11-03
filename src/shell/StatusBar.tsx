@@ -3,7 +3,7 @@ import { type Connection, useHive } from "../store";
 import { Select } from "../ui/Select";
 import { usageLines } from "../usage";
 import { isMac } from "../window";
-import { DEFAULT_ACCOUNT, saveSettings } from "./SettingsDialog";
+import { saveSettings } from "./SettingsDialog";
 
 const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
@@ -17,10 +17,10 @@ const LABEL: Record<Connection["status"], string> = {
  * there is an account besides the default one. The value "" is the default account.
  */
 function AccountSelect() {
-  const { accounts, account } = useHive((s) => s.settings.claude);
+  const { accounts, account, default_name } = useHive((s) => s.settings.claude);
   if (accounts.length === 0) return null;
   const options = [
-    { value: "", label: DEFAULT_ACCOUNT },
+    { value: "", label: default_name },
     ...accounts.map((a) => ({ value: a.config_dir, label: a.name })),
   ];
   return (

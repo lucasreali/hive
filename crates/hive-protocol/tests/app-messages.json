@@ -588,7 +588,8 @@
       "projects": {},
       "claude": {
         "accounts": [],
-        "account": null
+        "account": null,
+        "default_name": "Default"
       }
     }
   },
