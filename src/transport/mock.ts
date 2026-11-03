@@ -52,6 +52,16 @@ export const MOCK_DIAGNOSTICS = {
   git_error: null,
 };
 
+export const MOCK_SHARED = {
+  folder: "/home/mock/.local/share/hive/shared",
+  plugin: "hive-shared",
+  skills: ["review"],
+  agents: ["tester"],
+  commands: [],
+  mcp_servers: ["db"],
+  error: null,
+};
+
 const WELCOME: ServiceMessage = { type: "welcome", version: "mock", distro: "Ubuntu" };
 
 const sub = (
@@ -999,6 +1009,20 @@ export function createMockTransport(
     },
     async getDiagnostics() {
       later({ type: "diagnostics", ...MOCK_DIAGNOSTICS });
+    },
+    async getShared() {
+      later({ type: "shared", ...MOCK_SHARED });
+    },
+    async openShared() {
+      const windows_path = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.local\\share\\hive\\shared";
+      later({
+        type: "editor_target",
+        worktree: "",
+        path: "shared",
+        reveal: false,
+        windows_path,
+        error: null,
+      });
     },
     async checkUpdate(manual) {
       if (scenario === "update") later({ type: "update_ready", version: "9.9.9" });

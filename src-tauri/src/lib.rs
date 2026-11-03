@@ -1626,6 +1626,16 @@ impl Hive {
     pub fn get_diagnostics(&self) -> Result<(), String> {
         self.link().send(0, &Control::GetDiagnostics)
     }
+
+    /// The answer arrives as `shared`.
+    pub fn get_shared(&self) -> Result<(), String> {
+        self.link().send(0, &Control::GetShared)
+    }
+
+    /// The answer arrives as `editor_target` with an empty `worktree` and the `path` `shared`.
+    pub fn open_shared(&self) -> Result<(), String> {
+        self.link().send(0, &Control::OpenShared)
+    }
 }
 
 impl Hive {
@@ -2361,6 +2371,16 @@ pub mod commands {
     #[tauri::command]
     pub fn get_diagnostics(hive: State<'_, Hive>) -> Result<(), String> {
         hive.get_diagnostics()
+    }
+
+    #[tauri::command]
+    pub fn get_shared(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.get_shared()
+    }
+
+    #[tauri::command]
+    pub fn open_shared(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.open_shared()
     }
 
     #[tauri::command]

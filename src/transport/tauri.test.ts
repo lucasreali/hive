@@ -102,6 +102,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.setSettings(DEFAULT_SETTINGS);
   await tauriTransport.openSettingsFile();
   await tauriTransport.getDiagnostics();
+  await tauriTransport.getShared();
+  await tauriTransport.openShared();
   await tauriTransport.checkUpdate();
   await tauriTransport.checkUpdate(true);
   await tauriTransport.installUpdate();
@@ -152,6 +154,8 @@ test("terminal and project actions call their commands", async () => {
     ["set_settings", { settings: DEFAULT_SETTINGS }],
     ["open_settings_file", {}],
     ["get_diagnostics", {}],
+    ["get_shared", {}],
+    ["open_shared", {}],
     ["check_update", { manual: false }],
     ["check_update", { manual: true }],
     ["install_update", {}],

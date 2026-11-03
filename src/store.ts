@@ -36,6 +36,7 @@ import type {
   Session,
   SessionWindow,
   Settings,
+  Shared,
   Space,
   Worktree,
   WorktreeFiles,
@@ -376,6 +377,8 @@ export type HiveState = {
   settingsPending: boolean;
   /** The last `diagnostics`, or null until asked. */
   diagnostics: Diagnostics | null;
+  /** The last `shared` (21.9), or null until asked. */
+  shared: Shared | null;
   /** In the service's order; `null` until the service sent the list. */
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
@@ -498,6 +501,7 @@ export const initialState: HiveState = {
   settingsError: null,
   settingsPending: false,
   diagnostics: null,
+  shared: null,
   projects: null,
   addProjectError: null,
   spaces: null,

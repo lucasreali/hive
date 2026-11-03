@@ -1317,6 +1317,10 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
     hive.get_diagnostics().unwrap();
     assert_eq!(service.control().await, (0, Control::GetDiagnostics));
+    hive.get_shared().unwrap();
+    assert_eq!(service.control().await, (0, Control::GetShared));
+    hive.open_shared().unwrap();
+    assert_eq!(service.control().await, (0, Control::OpenShared));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;

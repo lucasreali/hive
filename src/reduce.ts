@@ -117,6 +117,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...diagnostics } = m;
       return { diagnostics };
     }
+    case "shared": {
+      const { type: _, ...shared } = m;
+      return { shared };
+    }
     case "notification_permission":
       return { notificationPermission: m.permission };
     case "update_ready":

@@ -13,6 +13,7 @@ export type ServiceMessage =
   // the defaults).
   | { type: "settings_failed"; message: string }
   | ({ type: "diagnostics" } & Diagnostics)
+  | ({ type: "shared" } & Shared)
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
@@ -550,4 +551,20 @@ export type Diagnostics = {
   claude: string | null;
   /** Why the service runs no git (Apple's Command Line Tools missing); null when git runs. */
   git_error: string | null;
+};
+
+/**
+ * The folder every Claude account shares (21.9, the service's `shared`): a plugin Hive's
+ * terminals pass to every `claude`, and the names of what it holds, checked by the service.
+ */
+export type Shared = {
+  folder: string;
+  /** What its skills, agents and commands are named under: `/<plugin>:<name>`. */
+  plugin: string;
+  skills: string[];
+  agents: string[];
+  commands: string[];
+  mcp_servers: string[];
+  /** Why the folder could not be made or read, or its `.mcp.json` was not understood. */
+  error: string | null;
 };

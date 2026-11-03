@@ -4,7 +4,15 @@ import { asMac } from "../../test/mac";
 import { noticeKind, notice as toast } from "../../test/notice";
 import { initialState, setOpenFile, useHive } from "../store";
 import { transport } from "../transport";
-import { openExternal, openFolder, openInEditor, openSettingsFile, openTarget } from "./external";
+import { isMac } from "../window";
+import {
+  openExternal,
+  openFolder,
+  openInEditor,
+  openSettingsFile,
+  openSharedFolder,
+  openTarget,
+} from "./external";
 
 afterEach(() => mock.restore());
 
@@ -160,6 +168,23 @@ test("an answer opens as asked: revealed, or from a menu as a toast, each once",
   openInEditor("/w", "run.command", false, false);
   await openTarget(target(null, "macOS might run or install run.command", "run.command"), true);
   expect(toast()).toBe("macOS might run or install run.command");
+});
+
+test("the shared folder opens once, in the file manager", async () => {
+  const ask = spyOn(transport, "openShared").mockResolvedValue();
+  const opened: unknown[] = [];
+  mockIPC((_, args) => {
+    opened.push(args);
+  });
+  const shared = { ...target("/d/shared", null, "shared"), worktree: "" };
+  openSharedFolder();
+  expect(ask).toHaveBeenCalledTimes(1);
+  await openTarget(shared, true);
+  await openTarget(shared, true);
+  expect(opened).toEqual([{ path: "/d/shared", reveal: false }]);
+  await openFolder(shared, false);
+  const manager = isMac() ? "Finder" : "Explorer";
+  expect(toast()).toBe(`Only the Hive app opens the ${manager}: /d/shared`);
 });
 
 test("the settings file (no worktree) opens the same way", async () => {
