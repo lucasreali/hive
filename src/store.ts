@@ -112,6 +112,13 @@ export type FileTab = OpenFile & {
    */
   preview?: boolean;
   rendered?: boolean;
+  /** The rendered view's scroll as it was last seen (21.3), in pixels. */
+  renderedScroll?: number;
+  /**
+   * The line (and how far into it) to put at the top when the file next shows (21.3): set when
+   * it switches between text and rendered, so the other view starts at the same place.
+   */
+  place?: number;
 };
 
 /** A session's context menu, at the pointer. */
@@ -699,6 +706,35 @@ export const saveFileView = (f: OpenFile, view: unknown) =>
   useHive.setState((s) => ({
     openFiles: s.openFiles.map((t) => (isFor(t, f) ? { ...t, view } : t)),
   }));
+
+/** Keeps the rendered view's scroll in the file's tab (21.3). */
+export const saveRenderedScroll = (f: OpenFile, renderedScroll: number) =>
+  useHive.setState((s) => ({
+    openFiles: s.openFiles.map((t) => (isFor(t, f) ? { ...t, renderedScroll } : t)),
+  }));
+
+/**
+ * A view of `f` is left (21.3) at line `top`: when that is because the open file switched to
+ * the other view (`rendered` now), that view starts at `top`.
+ */
+export const leaveView = (f: OpenFile, rendered: boolean, top: number) =>
+  useHive.setState((s) => ({
+    openFiles: s.openFiles.map((t) =>
+      isFor(t, f) && s.openFile && isFor(s.openFile, f) && !!t.rendered === rendered
+        ? { ...t, place: top }
+        : t,
+    ),
+  }));
+
+/** The line `f` was asked to show at its top (`FileTab.place`), now taken: undefined if none. */
+export function takePlace(f: OpenFile): number | undefined {
+  const place = useHive.getState().openFiles.find((t) => isFor(t, f))?.place;
+  if (place !== undefined)
+    useHive.setState((s) => ({
+      openFiles: s.openFiles.map((t) => (isFor(t, f) ? { ...t, place: undefined } : t)),
+    }));
+  return place;
+}
 
 /** A Markdown file (11.2): by its name, as the eye button and Ctrl+Shift+V offer it. */
 export const isMarkdown = (path: string) => path.toLowerCase().endsWith(".md");
