@@ -272,3 +272,36 @@ test("a pull request's text is not a document: its code stays plain", () => {
   expect(view.querySelector("pre > code")?.textContent).toBe("export const a = 1;\n");
   expect(view.querySelector("pre span")).toBeNull();
 });
+
+// 21.3: a file's top-level blocks carry their first line, for the text and rendered to agree.
+const BLOCKS =
+  '# Title\n\nA paragraph\nof two lines.\n\n- one\n- two\n\n```ts\nconst a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<p data-line="99">raw</p>';
+const lines = (view: HTMLElement) =>
+  [...(view.querySelector(".markdown") as HTMLElement).children].map((el) => [
+    el.tagName.toLowerCase(),
+    el.getAttribute("data-line"),
+  ]);
+
+test("a file's top-level blocks carry their first line, a raw `data-line` replaced (21.3)", () => {
+  const view = doc(BLOCKS);
+  expect(lines(view)).toEqual([
+    ["h1", "1"],
+    ["p", "3"],
+    ["ul", "6"],
+    ["pre", "9"],
+    ["div", "13"],
+    ["p", "17"],
+  ]);
+  expect(view.querySelector(".md-table")?.getAttribute("data-line")).toBe("13");
+  // Only the top-level blocks: not a list's items, nor the table inside its box.
+  expect(view.querySelectorAll("[data-line]")).toHaveLength(6);
+});
+
+test("a chat's Markdown carries no line, not even one written in its HTML (21.3)", () => {
+  const view = md(BLOCKS);
+  expect(view.querySelectorAll("[data-line]")).toHaveLength(0);
+});
+
+test("a file with no blocks has no line (21.3)", () => {
+  expect(doc("\n\n").querySelectorAll("[data-line]")).toHaveLength(0);
+});

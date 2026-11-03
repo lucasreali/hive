@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { clearGotoLine, saveFileView, setEdit, setSelectedLines, useHive } from "../store";
+import {
+  clearGotoLine,
+  leaveView,
+  saveFileView,
+  setEdit,
+  setSelectedLines,
+  takePlace,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { type EditBuffer, failed, isFor, resolve, startSave } from "./buffer";
 import { createEditor, type Editor, restoreView, revealLine, snapshot } from "./editor";
@@ -47,9 +55,12 @@ export function EditView({ edit }: { edit: EditBuffer }) {
     });
     editor.current = created;
     // Shown again in its tab (8.21): as it was left.
-    restoreView(created.view, openFiles.find((f) => isFor(f, file))?.view);
+    restoreView(created.view, openFiles.find((f) => isFor(f, file))?.view, takePlace(file));
     return () => {
-      saveFileView(file, snapshot(created.view));
+      const left = snapshot(created.view);
+      saveFileView(file, left);
+      // Left for the rendered Markdown (21.3): it starts at the same line.
+      leaveView(file, true, left.top);
       created.destroy();
       setSelectedLines(null);
     };

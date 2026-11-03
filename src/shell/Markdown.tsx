@@ -150,12 +150,24 @@ function pruneEmptyLinks(tree: Root) {
   }
 }
 
+/**
+ * Marks each top-level block of a whole file with its first source line (`data-line`, 21.3), so
+ * the rendered view and the text can show the same place. Runs after sanitising, so the schema
+ * does not strip it and no `data-line` written in the file survives to be read.
+ */
+export function markLines(tree: Root) {
+  for (const child of tree.children)
+    if (child.type === "element" && child.position)
+      child.properties.dataLine = child.position.start.line;
+}
+
 const PLUGINS = [remarkGfm];
 const REHYPE: Options["rehypePlugins"] = [
   rehypeRaw,
   [rehypeSanitize, SCHEMA],
   () => pruneEmptyLinks,
 ];
+const DOC_REHYPE: Options["rehypePlugins"] = [...REHYPE, () => markLines];
 const DOC_COMPONENTS: Components = {
   // A block's text ends with its newline, which would show as an empty last line.
   code: ({ className, children }) => {
@@ -194,8 +206,9 @@ const COMPONENTS: Components = {
   img: ({ alt }) => (alt ? <span className="md-img">{alt}</span> : null),
   // A table is never wider than the message (13.1): its cells wrap long words, and one that
   // still cannot fit scrolls sideways inside its box (20.1).
-  table: ({ children }) => (
-    <div className="md-table">
+  // A document's block line (21.3) goes on the box, the top-level block.
+  table: ({ children, ...props }) => (
+    <div className="md-table" data-line={(props as { "data-line"?: number })["data-line"]}>
       <table>{children}</table>
     </div>
   ),
@@ -225,7 +238,7 @@ export const Markdown = memo(function Markdown({
     <div className={document ? "markdown markdown-doc" : "markdown"}>
       <ReactMarkdown
         remarkPlugins={PLUGINS}
-        rehypePlugins={REHYPE}
+        rehypePlugins={document ? DOC_REHYPE : REHYPE}
         urlTransform={safeUrl}
         components={document ? { ...COMPONENTS, ...DOC_COMPONENTS } : COMPONENTS}
       >
