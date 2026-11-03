@@ -1007,6 +1007,27 @@ pub enum Control {
         /// when git runs.
         git_error: Option<String>,
     },
+    /// App → service: what the folder every Claude account shares holds (21.9, D22.4), made
+    /// when missing. Answered by `Shared`.
+    GetShared,
+    /// The shared folder (`<data>/hive/shared`), a Claude Code plugin the `claude` wrapper
+    /// passes with `--plugin-dir` to every account's `claude` in Hive's terminals: the names
+    /// of its skills, agents, commands and MCP servers, each sorted, checked and capped.
+    Shared {
+        folder: String,
+        /// The plugin's name, which its skills, agents and commands are named under
+        /// (`/<plugin>:<skill>`).
+        plugin: String,
+        skills: Vec<String>,
+        agents: Vec<String>,
+        commands: Vec<String>,
+        mcp_servers: Vec<String>,
+        /// Why the folder could not be made or read, or its `.mcp.json` was not understood.
+        error: Option<String>,
+    },
+    /// App → service: open the shared folder in the file manager, made when missing.
+    /// Answered by `EditorTarget` with an empty `worktree` and the `path` `shared`.
+    OpenShared,
     Error {
         message: String,
     },
@@ -2971,6 +2992,27 @@ mod tests {
         assert_eq!(
             &Frame::control(0, &diagnostics).payload[..],
             br#"{"type":"diagnostics","settings_file":"/c/settings.json","wrapper":"/d/bin/claude","claude":null,"git_error":"no tools"}"#
+        );
+        assert_eq!(
+            &Frame::control(0, &Control::GetShared).payload[..],
+            br#"{"type":"get_shared"}"#
+        );
+        assert_eq!(
+            &Frame::control(0, &Control::OpenShared).payload[..],
+            br#"{"type":"open_shared"}"#
+        );
+        let shared = Control::Shared {
+            folder: "/d/shared".into(),
+            plugin: "hive-shared".into(),
+            skills: vec!["review".into()],
+            agents: vec![],
+            commands: vec!["about".into()],
+            mcp_servers: vec!["db".into()],
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &shared).payload[..],
+            br#"{"type":"shared","folder":"/d/shared","plugin":"hive-shared","skills":["review"],"agents":[],"commands":["about"],"mcp_servers":["db"],"error":null}"#
         );
         let underline: CursorStyle = serde_json::from_str(r#""underline""#).unwrap();
         assert_eq!(underline, CursorStyle::Underline);

@@ -57,10 +57,12 @@ impl Paths {
         uid: u32,
         user_temp: Option<Option<PathBuf>>,
     ) -> Self {
+        // Only absolute folders (the XDG spec): a relative one would put the hooks settings and
+        // the shared plugin in whatever folder a terminal runs `claude` from (a cloned repo).
         let var = |key| {
             var(key)
-                .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
+                .filter(|value| value.is_absolute())
         };
         // `user_temp` is known only on macOS.
         let logs = match (&user_temp, var("XDG_RUNTIME_DIR"), var("HOME")) {
@@ -110,6 +112,12 @@ impl Paths {
     /// Hooks settings the `claude` wrapper passes to Claude Code with `--settings`.
     pub fn hooks_settings(&self) -> PathBuf {
         self.data.join("hive-hooks.json")
+    }
+
+    /// The folder every Claude account shares, a plugin the `claude` wrapper passes with
+    /// `--plugin-dir` (21.9, see [`crate::shared`]).
+    pub fn shared_dir(&self) -> PathBuf {
+        self.data.join(crate::shared::FOLDER)
     }
 
     /// The projects the app followed before spaces (6.14): read only while `spaces` is missing.
@@ -448,6 +456,7 @@ mod tests {
             paths.hooks_settings(),
             PathBuf::from("/d/hive/hive-hooks.json")
         );
+        assert_eq!(paths.shared_dir(), PathBuf::from("/d/hive/shared"));
         assert_eq!(paths.projects(), PathBuf::from("/d/hive/projects.json"));
         assert_eq!(paths.spaces(), PathBuf::from("/d/hive/spaces.json"));
         assert_eq!(paths.ports(), PathBuf::from("/d/hive/ports.json"));
@@ -465,6 +474,22 @@ mod tests {
         assert_eq!(paths.runtime, PathBuf::from("/tmp/hive-1000"));
         assert_eq!(paths.data, PathBuf::from("/home/me/.local/share/hive"));
         assert_eq!(paths.config, PathBuf::from("/home/me/.config/hive"));
+    }
+
+    #[test]
+    fn relative_folders_are_ignored() {
+        let paths = resolve(&[
+            ("XDG_RUNTIME_DIR", "run"),
+            ("XDG_DATA_HOME", "./d"),
+            ("XDG_CONFIG_HOME", "c"),
+            ("HOME", "/home/me"),
+        ]);
+        assert_eq!(paths.runtime, PathBuf::from("/tmp/hive-1000"));
+        assert_eq!(paths.data, PathBuf::from("/home/me/.local/share/hive"));
+        assert_eq!(paths.config, PathBuf::from("/home/me/.config/hive"));
+        // A relative home too: under the runtime folder.
+        let paths = resolve(&[("HOME", "me")]);
+        assert_eq!(paths.data, PathBuf::from("/tmp/hive-1000/data"));
     }
 
     #[test]

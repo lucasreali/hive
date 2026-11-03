@@ -1340,6 +1340,10 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     assert_eq!(service.control().await, (0, Control::OpenSettingsFile));
     hive.get_diagnostics().unwrap();
     assert_eq!(service.control().await, (0, Control::GetDiagnostics));
+    hive.get_shared().unwrap();
+    assert_eq!(service.control().await, (0, Control::GetShared));
+    hive.open_shared().unwrap();
+    assert_eq!(service.control().await, (0, Control::OpenShared));
     service
         .send(0, Control::Projects { projects: vec![] })
         .await;
@@ -1874,7 +1878,9 @@ fn commands_reach_the_managed_hive() {
             open_job_log,
             act_on_run,
             open_settings_file,
-            get_diagnostics
+            get_diagnostics,
+            get_shared,
+            open_shared
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -2003,6 +2009,8 @@ fn commands_reach_the_managed_hive() {
         ("act_on_run", &act_on_run),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
+        ("get_shared", &json!({})),
+        ("open_shared", &json!({})),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }

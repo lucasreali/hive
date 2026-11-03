@@ -8,7 +8,7 @@ import { apply } from "../reduce";
 import { COMMANDS } from "../shortcuts";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_DIAGNOSTICS, MOCK_REPOS } from "../transport/mock";
+import { MOCK_DIAGNOSTICS, MOCK_REPOS, MOCK_SHARED } from "../transport/mock";
 import { isMac } from "../window";
 import { SECTIONS } from "./SettingsDialog";
 
@@ -585,6 +585,29 @@ test("before the answers, about says so", () => {
   expect(about).toContain("Settings file…");
   expect(about).toContain("claude it runs…");
   ask.mockRestore();
+});
+
+test("Accounts lists what the shared folder holds and opens it (21.9)", async () => {
+  const ask = spyOn(transport, "getShared");
+  const openIt = spyOn(transport, "openShared").mockResolvedValue();
+  open();
+  section("Accounts");
+  expect(ask).toHaveBeenCalledTimes(1);
+  expect(input("Shared folder").value).toBe("…");
+  await waitFor(() => expect(input("Shared folder").value).toBe(MOCK_SHARED.folder));
+  const help = () =>
+    [...document.querySelectorAll(".field-help")].map((p) => p.textContent).join("\n");
+  expect(help()).toContain("Skills: /hive-shared:review");
+  expect(help()).toContain("Commands: none");
+  expect(help()).toContain("Agents: hive-shared:tester");
+  expect(help()).toContain("MCP servers: db");
+  expect(document.querySelector(".field-error")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
+  expect(openIt).toHaveBeenCalledTimes(1);
+  act(() => apply({ type: "shared", ...MOCK_SHARED, error: ".mcp.json: not a file" }));
+  expect(document.querySelector(".field-error")?.textContent).toBe(".mcp.json: not a file");
+  ask.mockRestore();
+  openIt.mockRestore();
 });
 
 test("Open settings file asks the service, whose answer opens it", async () => {

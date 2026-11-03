@@ -19,7 +19,7 @@ import { MAC_TERMINAL_KEYS, openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
-import { openSettingsFile } from "../viewer/external";
+import { openSettingsFile, openSharedFolder } from "../viewer/external";
 import { homeText, isMac } from "../window";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
@@ -1022,6 +1022,47 @@ function Accounts() {
 }
 
 /**
+ * The folder every account shares (21.9): what the service found in it, asked when the
+ * section opens, and a button that opens it in the file manager.
+ */
+function SharedPlugin() {
+  const shared = useHive((s) => s.shared);
+  useEffect(() => void transport.getShared(), []);
+  const named = (names: string[]) => names.map((n) => `/${shared?.plugin}:${n}`);
+  const rows: [string, string[]][] = shared
+    ? [
+        ["Skills", named(shared.skills)],
+        ["Commands", named(shared.commands)],
+        ["Agents", shared.agents.map((n) => `${shared.plugin}:${n}`)],
+        ["MCP servers", shared.mcp_servers],
+      ]
+    : [];
+  return (
+    <div className="field">
+      <span>Shared</span>
+      <div className="script-run">
+        <input aria-label="Shared folder" value={shared?.folder ?? "…"} readOnly />
+        <button type="button" className="secondary" onClick={openSharedFolder}>
+          Open folder
+        </button>
+      </div>
+      {shared?.error && <p className="field-error">{shared.error}</p>}
+      {rows.map(([label, names]) => (
+        <p className="field-help" key={label}>
+          {label}: {names.length ? names.join(", ") : "none"}
+        </p>
+      ))}
+      <p className="field-help">
+        Skills (<code>skills/&lt;name&gt;/SKILL.md</code>), agents (<code>agents/</code>), commands
+        (<code>commands/</code>) and MCP servers (<code>.mcp.json</code>) in this folder reach every
+        account's <code>claude</code> in Hive's terminals, as a plugin. Credentials are never
+        shared: each account logs in on its own.
+      </p>
+    </div>
+  );
+}
+
+/**
  * A hint while the OS keeps Hive from notifying (17.19: macOS's settings say "denied"), with a
  * link to them. Asked when the section opens and whenever the window comes back to the front,
  * as from System Settings.
@@ -1070,6 +1111,7 @@ function Content({ section, query }: { section: Section; query: string }) {
       <>
         <Accounts />
         {shown}
+        <SharedPlugin />
       </>
     );
   }

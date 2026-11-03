@@ -226,6 +226,13 @@ export interface Transport {
   openSettingsFile(): Promise<void>;
   /** What the settings' About section shows; answered by `diagnostics`. */
   getDiagnostics(): Promise<void>;
+  /** What the folder every Claude account shares holds (21.9); answered by `shared`. */
+  getShared(): Promise<void>;
+  /**
+   * The shared folder's Windows path, the folder made first when missing; answered by
+   * `editor_target` with an empty `worktree` and the `path` `shared`.
+   */
+  openShared(): Promise<void>;
   /**
    * Asks GitHub for a newer release and downloads it; answered by `update_ready` only once one is
    * downloaded. `manual` (the menu's "Check for Updates…") also answers "up to date" and a failed

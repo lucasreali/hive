@@ -251,6 +251,25 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             };
             state.to_app(0, &target).await;
         }
+        Ok(Control::GetShared) => {
+            let shared = tokio::task::block_in_place(|| crate::shared::list(&state.shared_dir()));
+            state.to_app(0, &shared).await;
+        }
+        Ok(Control::OpenShared) => {
+            let located = tokio::task::block_in_place(|| {
+                let dir = state.shared_dir();
+                crate::shared::ensure(&dir)?;
+                file::windows(&dir, OsStr::new("wslpath"))
+            });
+            let target = Control::EditorTarget {
+                worktree: String::new(),
+                path: crate::shared::FOLDER.to_owned(),
+                reveal: false,
+                error: located.as_ref().err().map(ToString::to_string),
+                windows_path: located.ok(),
+            };
+            state.to_app(0, &target).await;
+        }
         Ok(Control::GetDiagnostics) => {
             let claude = state.user_claude().await;
             let diagnostics = Control::Diagnostics {

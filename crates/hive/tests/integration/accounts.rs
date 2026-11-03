@@ -167,6 +167,114 @@ async fn the_spaces_claude_folders_become_accounts_once() {
 }
 
 #[tokio::test]
+async fn every_claude_in_a_terminal_gets_the_shared_plugin_which_settings_list_and_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = crate::common::Env::new();
+    // A `wslpath`, and a `claude` that prints its arguments (never the real one), of the
+    // test's own.
+    let tools = env.path("tools");
+    let fake = env.path("fake");
+    for dir in [&tools, &fake] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let args = "#!/bin/sh\nprintf '<%s>' \"$@\"; echo '<end>'\n";
+    for (file, script) in [
+        (tools.join("wslpath"), "#!/bin/sh\necho \"W:$2\"\n"),
+        (fake.join("claude"), args),
+    ] {
+        std::fs::write(&file, script).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // First on the service's own `PATH`, which still finds the terminals' shell.
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(tools.clone()).chain(std::env::split_paths(&path)));
+    let child = env
+        .hive()
+        .env("PATH", path.unwrap())
+        .arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut daemon = crate::common::Daemon(child);
+    crate::common::wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+    let mut app = env.connect(Role::App).await;
+    // Made at the service's start, as a plugin.
+    let shared = env.path("data/hive/shared");
+    let manifest = std::fs::read_to_string(shared.join(".claude-plugin/plugin.json")).unwrap();
+    assert!(manifest.contains("\"name\": \"hive-shared\""), "{manifest}");
+
+    // The wrapper of a terminal, with only the fake `claude` to find.
+    let settings = env.path("data/hive/hive-hooks.json");
+    let wrapper = env.path("data/hive/bin/claude");
+    let run = format!(
+        "env PATH='{}' '{}' one\r",
+        fake.display(),
+        wrapper.display()
+    );
+    app.open_terminal(1, &env.path("home")).await;
+    app.input(1, &run).await;
+    let with = format!(
+        "<--settings><{}><--plugin-dir><{}><one><end>",
+        settings.display(),
+        shared.display()
+    );
+    app.output_until(1, &with).await;
+
+    // Listed by the settings, by name.
+    std::fs::create_dir_all(shared.join("skills/review")).unwrap();
+    std::fs::write(shared.join("skills/review/SKILL.md"), "x").unwrap();
+    std::fs::write(shared.join("agents/tester.md"), "x").unwrap();
+    std::fs::write(shared.join(".mcp.json"), r#"{"mcpServers": {"db": {}}}"#).unwrap();
+    let listed = Control::Shared {
+        folder: shared.display().to_string(),
+        plugin: "hive-shared".into(),
+        skills: vec!["review".into()],
+        agents: vec!["tester".into()],
+        commands: vec![],
+        mcp_servers: vec!["db".into()],
+        error: None,
+    };
+    assert_eq!(request(&mut app, Control::GetShared).await, listed);
+
+    // Without the folder, the hooks settings only.
+    std::fs::remove_dir_all(&shared).unwrap();
+    app.input(1, &run).await;
+    let without = format!("<--settings><{}><one><end>", settings.display());
+    app.output_until(1, &without).await;
+
+    // Opening it makes it again.
+    #[cfg(target_os = "linux")]
+    let windows_path = format!("W:{}", shared.display());
+    #[cfg(target_os = "macos")]
+    let windows_path = shared.display().to_string();
+    let target = Control::EditorTarget {
+        worktree: String::new(),
+        path: "shared".into(),
+        reveal: false,
+        windows_path: Some(windows_path),
+        error: None,
+    };
+    assert_eq!(request(&mut app, Control::OpenShared).await, target);
+    assert!(shared.join(".claude-plugin/plugin.json").is_file());
+    // One that cannot be made: why.
+    std::fs::remove_dir_all(&shared).unwrap();
+    std::fs::write(&shared, "").unwrap();
+    let Control::EditorTarget {
+        windows_path,
+        error,
+        ..
+    } = request(&mut app, Control::OpenShared).await
+    else {
+        panic!("expected editor_target")
+    };
+    assert_eq!(windows_path, None);
+    assert!(error.is_some());
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn each_account_says_whether_it_logged_in() {
     let repo = Repo::new();
     let home = repo.env.path("home");

@@ -36,6 +36,12 @@ export function openSettingsFile(): void {
   void transport.openSettingsFile();
 }
 
+/** Asks the service for the shared folder's Windows path (21.9), opened in the file manager. */
+export function openSharedFolder(): void {
+  pending.set(key("", "shared", false), false);
+  void transport.openShared();
+}
+
 /**
  * An `editor_target` from the service: opened once, and only while the app is waiting for it.
  * Anything else is dropped, so a service can never make the app open a path by itself.
@@ -82,11 +88,14 @@ export async function openExternal(target: EditorTarget, tauri = isTauri()): Pro
  */
 export async function openFolder(target: EditorTarget, tauri = isTauri()): Promise<void> {
   if (!target.windows_path) return showNotice("error", target.error ?? "No path");
-  // No worktree: the settings file ("Open settings file"), opened the same way.
+  // No worktree: the settings file ("Open settings file") or the shared folder, opened the
+  // same way.
   const manager = isMac() ? "the Finder" : "the Explorer";
   const what =
     target.worktree === ""
-      ? "the settings file"
+      ? target.path === ""
+        ? "the settings file"
+        : manager
       : target.reveal || target.path === ""
         ? manager
         : "the file's default app";

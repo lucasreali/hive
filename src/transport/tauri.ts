@@ -79,6 +79,8 @@ export const tauriTransport: Transport = {
   setSettings: (settings) => send("set_settings", { settings }),
   openSettingsFile: () => send("open_settings_file"),
   getDiagnostics: () => send("get_diagnostics"),
+  getShared: () => send("get_shared"),
+  openShared: () => send("open_shared"),
   checkUpdate: (manual = false) => send("check_update", { manual }),
   installUpdate: () => send("install_update"),
   showNotification: (title, body, agent) => send("show_notification", { title, body, agent }),

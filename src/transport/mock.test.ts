@@ -17,6 +17,7 @@ import {
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_SESSIONS,
+  MOCK_SHARED,
   MOCK_STATES,
   MOCK_TEXTS,
   mockDirs,
@@ -151,6 +152,21 @@ test("answers the settings file's path and the diagnostics", async () => {
   expect(messages.slice(-2)).toEqual([
     { type: "editor_target", worktree: "", path: "", reveal: false, windows_path, error: null },
     { type: "diagnostics", ...MOCK_DIAGNOSTICS },
+  ]);
+  await transport.getShared();
+  await transport.openShared();
+  await tick();
+  const shared = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.local\\share\\hive\\shared";
+  expect(messages.slice(-2)).toEqual([
+    { type: "shared", ...MOCK_SHARED },
+    {
+      type: "editor_target",
+      worktree: "",
+      path: "shared",
+      reveal: false,
+      windows_path: shared,
+      error: null,
+    },
   ]);
 });
 
