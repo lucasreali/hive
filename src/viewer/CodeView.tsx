@@ -1,6 +1,13 @@
 import { useEffect, useRef } from "react";
 import type { FileText } from "../protocol";
-import { clearGotoLine, saveFileView, setSelectedLines, useHive } from "../store";
+import {
+  clearGotoLine,
+  leaveView,
+  saveFileView,
+  setSelectedLines,
+  takePlace,
+  useHive,
+} from "../store";
 import { isFor } from "./buffer";
 import { createViewer, restoreView, revealLine, snapshot, type Viewer } from "./editor";
 
@@ -22,14 +29,19 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
   const viewer = useRef<Viewer | null>(null);
   // The view as its tab left it (8.21), put back once the text first shows.
   const saved = useRef<unknown>(null);
+  // The rendered Markdown's place when the file switched from it (21.3).
+  const place = useRef<number | undefined>(undefined);
   const { path, worktree } = text;
   useEffect(() => {
     const file = { worktree, path };
     const created = createViewer(parent.current as HTMLDivElement, path, setSelectedLines);
     viewer.current = created;
     saved.current = useHive.getState().openFiles.find((f) => isFor(f, file))?.view;
+    place.current = takePlace(file);
     return () => {
-      saveFileView(file, snapshot(created.view));
+      const left = snapshot(created.view);
+      saveFileView(file, left);
+      leaveView(file, true, left.top);
       created.destroy();
       setSelectedLines(null);
     };
@@ -38,8 +50,9 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
     const original = diff ? (text.base ?? "") : null;
     const view = viewer.current as Viewer;
     view.show({ content: text.content ?? "", original });
-    restoreView(view.view, saved.current);
+    restoreView(view.view, saved.current, place.current);
     saved.current = null;
+    place.current = undefined;
   }, [text, diff]);
   // A search result asked for a line: shown once this file's text is there.
   const goto = useHive((s) => s.gotoLine);

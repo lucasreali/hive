@@ -56,6 +56,7 @@ import { isDirty } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
+import { useRenderedPlace } from "../viewer/place";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
 import { commandKey, isMac, keyText } from "../window";
@@ -1105,7 +1106,13 @@ export function FileView({ worktree }: { worktree: string }) {
           why ? (
             <div className="hint">{why}</div>
           ) : (
-            <RenderedView text={edit ? edit.doc.toString() : (text?.content ?? "")} />
+            // Once there is text to render, so its kept scroll fits in it (21.3).
+            (edit || text) && (
+              <RenderedView
+                file={openFile}
+                text={edit ? edit.doc.toString() : (text?.content ?? "")}
+              />
+            )
           )
         ) : edit ? (
           <EditView key={`${worktree}\n${openFile.path}`} edit={edit} />
@@ -1128,7 +1135,9 @@ export function FileView({ worktree }: { worktree: string }) {
  * A Markdown file rendered (11.2), with its unsaved edits, by the sanitised renderer of #43.
  * Ctrl+S saves any unsaved edits and shows the text again.
  */
-function RenderedView({ text }: { text: string }) {
+function RenderedView({ file, text }: { file: OpenFile; text: string }) {
+  // Its scroll kept per file, and the text's place when switched (21.3).
+  const scroller = useRenderedPlace(file, text);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!commandKey(event) || event.shiftKey || event.altKey) return;
@@ -1141,7 +1150,7 @@ function RenderedView({ text }: { text: string }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
   return (
-    <div className="markdown-view hive-scroll">
+    <div className="markdown-view hive-scroll" ref={scroller}>
       <Markdown text={text} document />
     </div>
   );
