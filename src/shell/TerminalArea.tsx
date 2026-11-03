@@ -23,6 +23,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { ProgressState } from "../protocol";
 import { draggedFrom, useReorder } from "../reorder";
 import {
+  accountLine,
   activateTab,
   dropOnPane,
   type FileTab as FileTabData,
@@ -213,7 +214,8 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
   const title = useHive((s) => (agent ? s.agentTitles[agent] : undefined));
   const label = title ?? name;
   const paired = pair ? `Split with ${pair.partner}` : undefined;
-  const tip = title ? `${title}\n${tab.cwd}` : tab.cwd;
+  const account = useHive((s) => accountLine(s, tab.id));
+  const tip = [title, tab.cwd, account].filter(Boolean).join("\n");
   return (
     <TabItem
       drag={props.drag}
@@ -438,10 +440,23 @@ function PairItems({ tab, onClose }: { tab: number; onClose: () => void }) {
   );
 }
 
+/** With more than one Claude account, the one terminal `tab` runs as (21.7), atop its menus. */
+function AccountNote({ tab }: { tab: number }) {
+  const account = useHive((s) => accountLine(s, tab));
+  if (!account) return null;
+  return (
+    <>
+      <div className="menu-note">{account}</div>
+      <hr />
+    </>
+  );
+}
+
 /** A terminal tab's context menu (right click): split it, rearrange its pair, or close it. */
 function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void }) {
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
+      <AccountNote tab={menu.tab} />
       <SplitItem tab={menu.tab} onClose={onClose} />
       <PairItems tab={menu.tab} onClose={onClose} />
       <MenuItem onClose={onClose} action={() => closeTerminal(menu.tab)}>
@@ -463,6 +478,7 @@ function TerminalPaneMenu({ menu, onClose }: { menu: PaneMenu; onClose: () => vo
   const run = (action: "copy" | "paste" | "clear") => () => terminalAction(menu.tab, action);
   return (
     <ContextMenu at={menu} label="Terminal" onClose={onClose}>
+      <AccountNote tab={menu.tab} />
       <MenuItem onClose={onClose} action={run("copy")} disabled={!menu.selection}>
         <CopyIcon {...ICON} />
         Copy

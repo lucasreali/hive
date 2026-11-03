@@ -203,6 +203,7 @@ fn samples() -> Vec<Control> {
         },
         TerminalOpened {
             worktree: Some(s("/r")),
+            account: s("Work"),
         },
         TerminalExited { code: Some(0) },
         Badge { text: s("db") },

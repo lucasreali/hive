@@ -167,9 +167,12 @@ pub enum Control {
     },
     /// The terminal is running. `worktree` is the id of the followed worktree holding its
     /// `cwd` (`projects::place`: resolved, the deepest wins), `None` outside every followed
-    /// project: the app shows the tab under that worktree.
+    /// project: the app shows the tab under that worktree. `account` is the name of the
+    /// Claude account it runs as (21.7), shown when there is more than one.
     TerminalOpened {
         worktree: Option<String>,
+        #[serde(default)]
+        account: String,
     },
     Resize {
         cols: u16,
@@ -2129,11 +2132,20 @@ mod tests {
     fn terminal_and_subagent_worktree_messages_are_tagged_json() {
         let opened = Control::TerminalOpened {
             worktree: Some("/r".into()),
+            account: "Work".into(),
         };
         assert_eq!(
             &Frame::control(1, &opened).payload[..],
-            br#"{"type":"terminal_opened","worktree":"/r"}"#
+            br#"{"type":"terminal_opened","worktree":"/r","account":"Work"}"#
         );
+        // One from before 21.7 has no account.
+        let old: Control =
+            serde_json::from_str(r#"{"type":"terminal_opened","worktree":null}"#).unwrap();
+        let unnamed = Control::TerminalOpened {
+            worktree: None,
+            account: String::new(),
+        };
+        assert_eq!(old, unnamed);
         // Without an account: the current one (12.2); with one, `null` is the default account.
         let open: Control =
             serde_json::from_str(r#"{"type":"open_terminal","cwd":"/r","cols":80,"rows":24}"#)

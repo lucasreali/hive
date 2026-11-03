@@ -37,12 +37,18 @@ test("a kept terminal gets its tab and its output back in the reloaded page", as
   connected.mockRestore();
   const resized = spyOn(transport, "resizeTerminal");
 
-  onMessage({ type: "terminal_kept", channel: kept, cwd: shop.path, worktree: shop.path });
+  onMessage({
+    type: "terminal_kept",
+    channel: kept,
+    cwd: shop.path,
+    worktree: shop.path,
+    account: "Work",
+  });
   await settle();
   const s = useHive.getState();
   expect(s.tabs).toEqual([{ id: kept, cwd: shop.path }]);
   expect(s.activeTab).toBe(kept);
-  expect(s.terminals[kept]).toMatchObject({ exited: false, worktree: shop.path });
+  expect(s.terminals[kept]).toMatchObject({ exited: false, worktree: shop.path, account: "Work" });
   // Resized from 80×24, so a full-screen program draws again once the pane is fitted.
   expect(resized).toHaveBeenCalledWith(kept, 80, 24);
   resized.mockRestore();
@@ -52,7 +58,7 @@ test("a kept terminal gets its tab and its output back in the reloaded page", as
   expect(await screen(terminal(kept) as Terminal)).toContain("x");
 
   // One the app no longer has is shown as a failure.
-  onMessage({ type: "terminal_kept", channel: 999, cwd: shop.path, worktree: null });
+  onMessage({ type: "terminal_kept", channel: 999, cwd: shop.path, worktree: null, account: null });
   await settle();
   expect(notice()).toContain("Cannot open a terminal: Error: no such terminal");
   expect(terminal(999)).toBeUndefined();

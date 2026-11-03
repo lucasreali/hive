@@ -11,7 +11,8 @@
   },
   {
     "type": "terminal_opened",
-    "worktree": "/r"
+    "worktree": "/r",
+    "account": "Work"
   },
   {
     "type": "terminal_exited",

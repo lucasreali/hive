@@ -383,7 +383,13 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
     let worktree = Some(repo.root.display().to_string());
     assert_eq!(
         app.control().await,
-        (3, Control::TerminalOpened { worktree })
+        (
+            3,
+            Control::TerminalOpened {
+                worktree,
+                account: "Default".into()
+            }
+        )
     );
 
     // gh's own active account changes only when asked for.

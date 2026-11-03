@@ -192,8 +192,11 @@ async fn open(app: &mut App, channel: u32, cwd: &str) {
         account: None,
     };
     app.send(channel, open).await;
-    app.wait_for(channel, Control::TerminalOpened { worktree: None })
-        .await;
+    let opened = Control::TerminalOpened {
+        worktree: None,
+        account: "Default".into(),
+    };
+    app.wait_for(channel, opened).await;
 }
 
 /// Closes terminal `channel`; its shell exits.

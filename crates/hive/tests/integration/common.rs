@@ -312,7 +312,7 @@ impl Conn {
         )
         .await;
         match self.control().await {
-            (at, Control::TerminalOpened { worktree }) if at == channel => worktree,
+            (at, Control::TerminalOpened { worktree, .. }) if at == channel => worktree,
             other => panic!("expected terminal {channel} to open, got {other:?}"),
         }
     }

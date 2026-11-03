@@ -265,7 +265,12 @@ test("typed stand-ins send a terminal's progress, long command and notification"
 test("a terminal prints a prompt, echoes input and repeats the line", async () => {
   const { transport, messages, id, output } = await opened();
   expect(id).toBe(1);
-  expect(messages.at(-1)).toEqual({ type: "terminal_opened", channel: 1, worktree: null });
+  expect(messages.at(-1)).toEqual({
+    type: "terminal_opened",
+    channel: 1,
+    worktree: null,
+    account: "Default",
+  });
   expect(output()).toBe(`${A}mock$ `);
   await transport.writeTerminal(id, "hi\r\r");
   expect(output()).toBe(`${A}mock$ hi\r\n${C}hi\r\n${D(0)}${A}mock$ \r\n${A}mock$ `);
@@ -303,7 +308,12 @@ test("claude detects an idle agent where the terminal is; lines set it working; 
   // Its terminal is placed in the deepest worktree holding its folder.
   const inside = await transport.openTerminal(`${fixLogin}/src`, 80, 24, () => {});
   await tick();
-  const placed = { type: "terminal_opened", channel: inside, worktree: fixLogin };
+  const placed = {
+    type: "terminal_opened",
+    channel: inside,
+    worktree: fixLogin,
+    account: "Default",
+  };
   expect(messages).toContainEqual(placed as ServiceMessage);
   const state = (state: AgentState, activity: string | null = null): ServiceMessage => ({
     type: "agent_state",

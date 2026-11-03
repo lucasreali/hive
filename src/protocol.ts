@@ -36,8 +36,15 @@ export type ServiceMessage =
   // the window's top left (18.1); `text` is their paths, shell-quoted, each followed by a space.
   | { type: "files_dropped"; text: string; x: number; y: number }
   // From the app side (Rust): a terminal kept through a WebContent crash (18.21), sent to the
-  // reloaded page right after `welcome`, which reattaches to it. `worktree` as `terminal_opened`'s.
-  | { type: "terminal_kept"; channel: number; cwd: string; worktree: string | null }
+  // reloaded page right after `welcome`, which reattaches to it. `worktree` and `account` as
+  // `terminal_opened`'s; both null when it had not answered yet.
+  | {
+      type: "terminal_kept";
+      channel: number;
+      cwd: string;
+      worktree: string | null;
+      account: string | null;
+    }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
@@ -49,7 +56,8 @@ export type ServiceMessage =
       bundled: boolean;
     }
   // `worktree`: the followed worktree the service placed the terminal's cwd in, null outside.
-  | { type: "terminal_opened"; channel: number; worktree: string | null }
+  // `account`: the name of the Claude account it runs as (21.7).
+  | { type: "terminal_opened"; channel: number; worktree: string | null; account: string }
   | { type: "terminal_exited"; channel: number; code: number | null }
   | { type: "unhooked_agent"; channel: number }
   // `hive badge` in that terminal; empty clears it.

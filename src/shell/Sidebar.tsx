@@ -21,6 +21,7 @@ import type {
 } from "../protocol";
 import { useReorder } from "../reorder";
 import {
+  accountLine,
   activateTab,
   inAgentOrder,
   mostUrgent,
@@ -488,6 +489,7 @@ function AgentRow({
   // The session's name, as on its tab; until it has one, "Claude".
   const name = useHive((s) => s.agentTitles[agent.id] ?? "Claude");
   const badge = useHive((s) => s.terminals[agent.terminal]?.badge);
+  const account = useHive((s) => accountLine(s, agent.terminal));
   const show = () => tab && activateTab(tab);
   const row = useRef<HTMLDivElement>(null);
   // F8 picks an agent that may be out of view.
@@ -499,7 +501,7 @@ function AgentRow({
       <div
         ref={row}
         className="tree-row agent"
-        title={agent.cwd ?? undefined}
+        title={[agent.cwd, account].filter(Boolean).join("\n") || undefined}
         data-selected={shown}
         {...drag}
       >

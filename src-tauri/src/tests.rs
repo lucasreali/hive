@@ -875,6 +875,7 @@ async fn pumped(frames: Vec<Frame>) -> [Vec<Vec<u8>>; 2] {
             output,
             cwd: "/w".into(),
             worktree: Value::Null,
+            account: Value::Null,
         };
         lock(&link).terminals.insert(channel, term);
         rx
@@ -930,6 +931,7 @@ async fn terminal_output_goes_at_once_without_waiting_for_more() {
         output,
         cwd: "/w".into(),
         worktree: Value::Null,
+        account: Value::Null,
     };
     lock(&link).terminals.insert(1, term);
     let (reader, writer) = tokio::io::duplex(1 << 16);
@@ -978,12 +980,15 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
     };
     assert_eq!(service.control().await, (1, open));
 
-    let worktree = Some("/w".into());
-    service.send(1, Control::TerminalOpened { worktree }).await;
+    let opened = Control::TerminalOpened {
+        worktree: Some("/w".into()),
+        account: "Work".into(),
+    };
+    service.send(1, opened).await;
     service.writer.send(Frame::terminal(1, "$ ")).await.unwrap();
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "terminal_opened", "channel": 1, "worktree": "/w"})
+        json!({"type": "terminal_opened", "channel": 1, "worktree": "/w", "account": "Work"})
     );
     assert_eq!(next(&mut bytes).await, b"$ ");
 
@@ -1002,9 +1007,11 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
 
     // Nothing reaches the UI for a channel it did not open; channel 0 always does.
     service.writer.send(Frame::terminal(7, "x")).await.unwrap();
-    service
-        .send(7, Control::TerminalOpened { worktree: None })
-        .await;
+    let stray = Control::TerminalOpened {
+        worktree: None,
+        account: String::new(),
+    };
+    service.send(7, stray).await;
     let error = Control::Error {
         message: "m".into(),
     };
@@ -1413,6 +1420,7 @@ async fn a_ui_reloaded_after_a_web_content_crash_keeps_its_terminals() {
     }
     let opened = Control::TerminalOpened {
         worktree: Some("/r".into()),
+        account: "Work".into(),
     };
     service.send(1, opened).await;
     assert_eq!(next(&mut old).await["type"], "terminal_opened");
@@ -1421,10 +1429,11 @@ async fn a_ui_reloaded_after_a_web_content_crash_keeps_its_terminals() {
     let (channel, mut rx) = ui();
     hive.connect(channel);
     assert_eq!(next(&mut rx).await["type"], "welcome");
-    // Each terminal, in order, with where it runs.
-    let kept = |channel: u32, cwd: &str, worktree: Value| json!({"type": "terminal_kept", "channel": channel, "cwd": cwd, "worktree": worktree});
-    assert_eq!(next(&mut rx).await, kept(1, "/w", json!("/r")));
-    assert_eq!(next(&mut rx).await, kept(2, "/v", Value::Null));
+    // Each terminal, in order, with where it runs and its account (21.7).
+    let kept = |channel: u32, cwd: &str, worktree: Value, account: Value| json!({"type": "terminal_kept", "channel": channel, "cwd": cwd, "worktree": worktree, "account": account});
+    let work = json!("Work");
+    assert_eq!(next(&mut rx).await, kept(1, "/w", json!("/r"), work));
+    assert_eq!(next(&mut rx).await, kept(2, "/v", Value::Null, Value::Null));
     // None closes: the settings, the projects and the live agents come again.
     assert_eq!(service.control().await, (0, Control::GetSettings));
     assert_eq!(service.control().await, (0, Control::ListProjects));
@@ -2756,6 +2765,7 @@ async fn quitting_asks_the_ui_while_agents_would_end_with_the_app() {
             output,
             cwd,
             worktree,
+            account: Value::Null,
         },
     );
     // Each question long after the last (`ASK_AGAIN` is tested on its own).

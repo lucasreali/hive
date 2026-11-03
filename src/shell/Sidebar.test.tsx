@@ -153,6 +153,33 @@ test("an agent shows under the worktree it was placed in and shows its tab when 
   expect(badge.parentElement?.getAttribute("aria-current")).toBe("false");
 });
 
+test("with more than one Claude account, an agent's tooltip names its terminal's (21.7)", () => {
+  render(<App />);
+  const fixLogin = shop.worktrees[1];
+  const cwd = `${fixLogin.path}/src`;
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    apply({ type: "terminal_opened", channel: 1, worktree: fixLogin.id, account: "Work" });
+    apply({
+      type: "agent_detected",
+      channel: 1,
+      id: "s1",
+      project: shop.id,
+      worktree: fixLogin.id,
+      cwd,
+    });
+  });
+  const tip = () => tree().querySelector(".tree-row.agent")?.getAttribute("title");
+  // Only the default account: its folder alone.
+  expect(tip()).toBe(cwd);
+  const { settings } = useHive.getState();
+  const accounts = [{ name: "Work", config_dir: "/home/me/.claude-work" }];
+  act(() =>
+    apply({ type: "settings", settings: { ...settings, claude: { accounts, account: null } } }),
+  );
+  expect(tip()).toBe(`${cwd}\nClaude account: Work`);
+});
+
 test("agents and their subagents show the state the service sent, named for screen readers", () => {
   render(<App />);
   const none = { activity: null, since_ms: 0 };

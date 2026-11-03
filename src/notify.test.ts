@@ -360,7 +360,7 @@ test("a terminal is named by its worktree, else its folder", () => {
       { id: 3, cwd: "/" },
     ],
   });
-  apply({ type: "terminal_opened", channel: 1, worktree: main.id });
+  apply({ type: "terminal_opened", channel: 1, worktree: main.id, account: "Default" });
   const s = useHive.getState();
   expect([1, 2, 3, 4].map((id) => terminalName(s, id))).toEqual([
     main.name,
