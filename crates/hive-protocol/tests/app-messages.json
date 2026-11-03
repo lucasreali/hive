@@ -216,6 +216,15 @@
     "message": "m"
   },
   {
+    "type": "claude_logins",
+    "logins": [
+      {
+        "config_dir": null,
+        "logged_in": true
+      }
+    ]
+  },
+  {
     "type": "gh_accounts",
     "gh_config_dir": null,
     "accounts": [],

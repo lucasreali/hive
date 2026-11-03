@@ -42,6 +42,7 @@ sort! {
         | UpdateSpace
         | DeleteSpace
         | SelectSpace
+        | ListClaudeLogins
         | ListGhAccounts
         | SwitchGhAccount
         | ListPulls
@@ -106,6 +107,7 @@ sort! {
         | RemoveProjectFailed
         | Spaces
         | SpaceFailed
+        | ClaudeLogins
         | GhAccounts
         | Notice
         | Pulls
@@ -297,6 +299,12 @@ fn samples() -> Vec<Control> {
             current: s("default"),
         },
         SpaceFailed { message: m() },
+        ClaudeLogins {
+            logins: vec![ClaudeLogin {
+                config_dir: None,
+                logged_in: true,
+            }],
+        },
         GhAccounts {
             gh_config_dir: None,
             accounts: vec![],

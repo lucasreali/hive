@@ -1545,6 +1545,11 @@ impl Hive {
         self.link().send(0, &Control::SelectSpace { id })
     }
 
+    /// The answer arrives as `claude_logins` (21.6).
+    pub fn list_claude_logins(&self) -> Result<(), String> {
+        self.link().send(0, &Control::ListClaudeLogins)
+    }
+
     /// The answer to both arrives as `gh_accounts` (9.30).
     pub fn list_gh_accounts(&self, gh_config_dir: Option<String>) -> Result<(), String> {
         self.link()
@@ -2297,6 +2302,11 @@ pub mod commands {
     #[tauri::command]
     pub fn select_space(hive: State<'_, Hive>, id: String) -> Result<(), String> {
         hive.select_space(id)
+    }
+
+    #[tauri::command]
+    pub fn list_claude_logins(hive: State<'_, Hive>) -> Result<(), String> {
+        hive.list_claude_logins()
     }
 
     #[tauri::command]
