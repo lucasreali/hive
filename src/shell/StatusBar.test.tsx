@@ -7,6 +7,9 @@ import { DEFAULT_SETTINGS, initialState, showNotice, useHive } from "../store";
 import { transport } from "../transport";
 import { StatusBar } from "./StatusBar";
 
+/** The empty ring's tooltip, while no window came (21.8). */
+const EMPTY = "No usage yet: it appears once an agent of this account answers";
+
 afterEach(() => {
   cleanup();
   useHive.setState(initialState, true);
@@ -17,14 +20,14 @@ test("shows the app version at the right end of the status line", () => {
   act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" }));
   const bar = screen.getByRole("contentinfo");
   expect(bar.lastElementChild?.textContent).toBe(`v${version}`);
-  expect(bar.textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
+  expect(bar.textContent).toBe(`WSL: Ubuntuconnected${EMPTY}v${version}`);
 });
 
 test("shows the version on macOS without the WSL part", () => {
   asMac();
   render(<StatusBar />);
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
-  expect(screen.getByRole("contentinfo").textContent).toBe(`macOSconnectedv${version}`);
+  expect(screen.getByRole("contentinfo").textContent).toBe(`macOSconnected${EMPTY}v${version}`);
 });
 
 test("shows Windows while the service runs on Windows itself (12.5.4)", () => {
@@ -32,7 +35,7 @@ test("shows Windows while the service runs on Windows itself (12.5.4)", () => {
   act(() => apply({ type: "app_mode", mode: "native", wsl: true }));
   expect(screen.getByTitle("Service connection").textContent).toBe("Windowsconnecting");
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
-  expect(screen.getByRole("contentinfo").textContent).toBe(`Windowsconnectedv${version}`);
+  expect(screen.getByRole("contentinfo").textContent).toBe(`Windowsconnected${EMPTY}v${version}`);
   // In WSL mode, its distribution as before.
   act(() => apply({ type: "app_mode", mode: "wsl", wsl: true }));
   act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" }));
@@ -52,15 +55,39 @@ test("shows the current account's session usage as a ring, with its reset in loc
   expect(ring.querySelector(".usage-arc")?.getAttribute("pathLength")).toBe("100");
   expect(ring.querySelector(".usage-tip")?.textContent).toBe("Session 42% · resets 14:30");
   expect(ring.hasAttribute("data-warning")).toBe(false);
-  // None once it reset, and none from a service that is gone.
+  expect(ring.hasAttribute("data-empty")).toBe(false);
+  // The empty ring once it reset, and none from a service that is gone.
   act(() => apply({ type: "session_usage", usage: null, week: null }));
-  expect(screen.queryByRole("button")).toBeNull();
-  expect(screen.getByRole("contentinfo").textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
+  expect(screen.getByRole("button", { name: EMPTY })).toBeDefined();
+  expect(screen.getByRole("contentinfo").textContent).toBe(
+    `WSL: Ubuntuconnected${EMPTY}v${version}`,
+  );
   act(() => {
     apply({ type: "session_usage", usage: { used_percentage: 7, resets_at } });
     apply({ type: "disconnected", reason: "gone", bundled: false });
   });
+  expect(screen.queryByRole("button")).toBeNull();
   expect(screen.getByRole("contentinfo").textContent).toBe(`WSLdisconnectedv${version}`);
+});
+
+test("with no window, a dim empty ring says when the usage appears (21.8)", () => {
+  render(<StatusBar />);
+  // Nothing before the service is connected.
+  expect(screen.queryByRole("button")).toBeNull();
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" }));
+  const ring = screen.getByRole("button", { name: EMPTY });
+  expect(ring.className).toBe("session-usage");
+  expect(ring.hasAttribute("data-empty")).toBe(true);
+  expect(ring.hasAttribute("data-warning")).toBe(false);
+  expect(ring.querySelector(".usage-track")).not.toBeNull();
+  expect(ring.querySelector(".usage-arc")?.getAttribute("stroke-dasharray")).toBe("0 100");
+  expect(ring.querySelector(".usage-tip")?.textContent).toBe(EMPTY);
+  // A window fills it.
+  const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;
+  act(() => apply({ type: "session_usage", usage: { used_percentage: 85, resets_at } }));
+  expect(ring.getAttribute("aria-label")).toBe("Session 85% · resets 14:30");
+  expect(ring.hasAttribute("data-empty")).toBe(false);
+  expect(ring.hasAttribute("data-warning")).toBe(true);
 });
 
 test("the ring's tooltip adds the weekly window when the service sends one (15.3)", () => {
@@ -119,7 +146,9 @@ test("holds no message:a failure or a confirmation shows elsewhere, as a toast (
     showNotice("info", "Copied /w");
   });
   expect(useHive.getState().notices).toHaveLength(2);
-  expect(screen.getByRole("contentinfo").textContent).toBe(`WSL: Ubuntuconnectedv${version}`);
+  expect(screen.getByRole("contentinfo").textContent).toBe(
+    `WSL: Ubuntuconnected${EMPTY}v${version}`,
+  );
 });
 
 test("with an account besides the default one, a select picks the current account (12.2)", () => {
