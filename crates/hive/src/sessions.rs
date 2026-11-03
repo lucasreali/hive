@@ -671,7 +671,7 @@ fn log_in(root: &Path, id: &str, cwd: &str) -> Option<PathBuf> {
 }
 
 /// Most bytes copied when a session moves to another file system (its log and its folder).
-const MOVE_LIMIT: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
+const MOVE_LIMIT: u64 = 4_294_967_296; // 4 GiB
 /// Most files and folders copied then, and how deep its folder goes.
 const MOVE_ENTRIES: u64 = 10_000;
 const MOVE_DEPTH: usize = 8;
@@ -1092,6 +1092,16 @@ mod tests {
             assert!(copied.unwrap_err().to_string().contains("too large"));
             let _ = std::fs::remove_dir_all(&to);
         }
+        // Each folder counts one level: one nested past the limit is refused from the top.
+        let deep = tmp.path().join("deep");
+        let mut inner = deep.clone();
+        for _ in 0..MOVE_DEPTH {
+            inner.push("d");
+        }
+        std::fs::create_dir_all(&inner).unwrap();
+        let mut left = (10, 100);
+        let nested = copy(&deep, &tmp.path().join("deep-to"), 0, &mut left);
+        assert!(nested.unwrap_err().to_string().contains("too large"));
         let mut left = (5, 3);
         copy(&from, &tmp.path().join("exact"), 0, &mut left).unwrap();
         assert_eq!(left, (0, 0));
