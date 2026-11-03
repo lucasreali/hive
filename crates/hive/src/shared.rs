@@ -28,13 +28,21 @@ const MCP_BYTES: u64 = 256 * 1024;
 const KINDS: [&str; 3] = ["skills", "agents", "commands"];
 
 /// Makes the shared folder `dir` when missing: its kinds' folders and a minimal manifest
-/// (`.claude-plugin/plugin.json`). What is there already, the manifest too, is left as it is.
+/// (`.claude-plugin/plugin.json`), each folder `0700` (it holds MCP servers' tokens). What is
+/// there already, the manifest too, is left as it is, but the folder is made `0700` if others
+/// could read it.
 pub fn ensure(dir: &Path) -> io::Result<()> {
     let manifest = dir.join(".claude-plugin");
-    std::fs::create_dir_all(&manifest)?;
+    let make = |folder: &Path| {
+        crate::mode::folder(std::fs::DirBuilder::new().recursive(true), 0o700).create(folder)
+    };
+    make(&manifest)?;
     for kind in KINDS {
-        std::fs::create_dir_all(dir.join(kind))?;
+        make(&dir.join(kind))?;
     }
+    // One made looser before (or by the user) is tightened.
+    #[cfg(unix)]
+    std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     let file = manifest.join("plugin.json");
     if file.symlink_metadata().is_ok() {
         return Ok(());
@@ -53,22 +61,22 @@ pub fn list(dir: &Path) -> Control {
     Control::Shared {
         folder: dir.display().to_string(),
         plugin: PLUGIN.to_owned(),
-        skills: names(&dir.join("skills"), skill),
-        agents: names(&dir.join("agents"), markdown),
-        commands: names(&dir.join("commands"), markdown),
+        skills: names(&dir.join("skills"), skill, SCAN),
+        agents: names(&dir.join("agents"), markdown, SCAN),
+        commands: names(&dir.join("commands"), markdown, SCAN),
         mcp_servers,
         error: made.err().or(mcp),
     }
 }
 
 /// The names `pick` finds in `folder`'s entries (a missing folder has none): fair ones only,
-/// sorted, at most [`MOST`].
-fn names(folder: &Path, pick: fn(&Path, &str) -> Option<String>) -> Vec<String> {
+/// sorted, at most [`MOST`], from at most `scan` entries.
+fn names(folder: &Path, pick: fn(&Path, &str) -> Option<String>, scan: usize) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
     };
     let found = entries
-        .take(SCAN)
+        .take(scan)
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
@@ -280,6 +288,44 @@ mod tests {
         let pad = 256 * 1024 - r#"{"a": ""}"#.len();
         write(&mcp, &format!("{{\"a\": \"{}\"}}", "x".repeat(pad)));
         assert_eq!(shared(dir).3, ["a"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_is_only_its_owners_new_or_made_loose() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("shared");
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode();
+        ensure(&dir).unwrap();
+        for folder in [dir.clone(), dir.join(".claude-plugin"), dir.join("skills")] {
+            assert_eq!(mode(&folder) & 0o077, 0, "{}", folder.display());
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ensure(&dir).unwrap();
+        assert_eq!(mode(&dir) & 0o777, 0o700);
+    }
+
+    #[test]
+    fn at_most_scan_entries_are_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["a", "b", "c"] {
+            write(&tmp.path().join(format!("{name}.md")), "x");
+        }
+        assert_eq!(names(tmp.path(), markdown, 3).len(), 3);
+        assert_eq!(names(tmp.path(), markdown, 2).len(), 2);
+    }
+
+    // macOS refuses a file name that is not UTF-8.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_that_is_not_utf8_is_skipped() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let bad = std::ffi::OsStr::from_bytes(b"bad\xff.md");
+        std::fs::write(tmp.path().join(bad), "x").unwrap();
+        write(&tmp.path().join("ok.md"), "x");
+        assert_eq!(names(tmp.path(), markdown, SCAN), ["ok"]);
     }
 
     #[cfg(unix)]
