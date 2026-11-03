@@ -83,6 +83,13 @@ test("the Windows path opens with its default app inside Tauri", async () => {
   });
   await openExternal(target(unc), true);
   expect(notice()).toContain("no default app");
+
+  // The app's own words when no app opens the file (D21.1), as they are.
+  mockIPC(() => {
+    throw "No app opens a.ts";
+  });
+  await openExternal(target(unc), true);
+  expect(notice()).toBe("No app opens a.ts");
 });
 
 test("the service's refusal, the browser, and a file no longer open", async () => {
