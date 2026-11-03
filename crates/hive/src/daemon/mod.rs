@@ -1244,6 +1244,63 @@ mod tests {
         ticking.abort();
     }
 
+    #[test]
+    fn a_change_in_one_worktree_sends_only_its_status_with_its_totals() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = crate::paths::canonical(dir.path()).unwrap();
+        let root = base.join("r");
+        std::fs::create_dir(&root).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "a"]);
+        for name in ["w", "x"] {
+            let path = base.join(name);
+            git(&["worktree", "add", "-q", "-b", name, path.to_str().unwrap()]);
+        }
+        let state = test_state(dir.path());
+        state.projects.add(&root.display().to_string()).unwrap();
+        let projects = state.projects.list();
+        assert_eq!(projects[0].worktrees.len(), 3);
+        let sent = |only: &Path, files| {
+            let path = only.display().to_string();
+            let totals = changes::Totals {
+                files,
+                added: 2 * files,
+                removed: files,
+            };
+            let statuses = state.health_changed(&projects, Some((&path, Some(totals))));
+            let sent: Vec<_> = statuses
+                .into_iter()
+                .map(|control| match control {
+                    Control::WorktreeStatus {
+                        path,
+                        status: Some(status),
+                    } => (path, status.changes, status.added, status.removed),
+                    other => panic!("not a status: {other:?}"),
+                })
+                .collect();
+            (path, sent)
+        };
+        // Only the worktree that changed, with the totals counted for it, of three.
+        for (name, files) in [("w", 3), ("r", 5)] {
+            let (path, statuses) = sent(&base.join(name), files);
+            assert_eq!(statuses, vec![(path, files, 2 * files, files)], "{name}");
+        }
+        // Unchanged since: nothing.
+        assert_eq!(sent(&base.join("w"), 3).1, vec![]);
+    }
+
     /// Placing it would open it, which sends the user's credentials to its host.
     #[cfg(windows)]
     #[tokio::test]
