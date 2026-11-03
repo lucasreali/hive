@@ -72,6 +72,11 @@ export interface Transport {
   /** Makes `id` the current space: the sidebar and the Sessions panel show its projects. */
   selectSpace(id: string): Promise<void>;
   /**
+   * Whether each Claude account has logged in (21.6), the default one first; answered by
+   * `claude_logins`.
+   */
+  listClaudeLogins(): Promise<void>;
+  /**
    * The accounts logged in to `gh` (9.30), in `ghConfigDir` when set (else `gh`'s own config);
    * answered by `gh_accounts`, logins only.
    */

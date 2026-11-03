@@ -68,6 +68,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   spaces: { spaces: true, current: true },
   space_failed: { message: true },
   gh_accounts: { gh_config_dir: true, accounts: true, problem: true },
+  claude_logins: { logins: true },
   notice: { message: true },
   pulls: { project: true, repo: true, mine: true, review: true, fetched_ms: true, error: true },
   pull: { project: true, number: true, pull: true, error: true },
