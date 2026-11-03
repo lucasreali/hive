@@ -96,6 +96,8 @@ export type ServiceMessage =
   | { type: "spaces"; spaces: Space[]; current: string }
   | { type: "space_failed"; message: string }
   | ({ type: "gh_accounts" } & GhAccounts)
+  | { type: "gh_identity"; account: GhAccount; name: string; email: string }
+  | { type: "gh_identity_failed"; account: GhAccount; message: string }
   | { type: "claude_logins"; logins: ClaudeLogin[] }
   | { type: "notice"; message: string }
   | ({ type: "pulls" } & Pulls)
@@ -246,6 +248,13 @@ export type GhAccounts = {
   accounts: GhLogin[];
   problem: string | null;
 };
+/**
+ * An account's git identity (21.5), from `gh_identity` (`name`, `email`) or
+ * `gh_identity_failed` (`message`).
+ */
+export type GhIdentity =
+  | { account: GhAccount; name: string; email: string }
+  | { account: GhAccount; message: string };
 
 /** Mirrors `hive_protocol::Space` (6.14): its projects' ids and its terminals' environment. */
 /** `groups` (14.1): which of `projects` are groups; sent only when there are some. */

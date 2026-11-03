@@ -75,6 +75,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.listClaudeLogins();
   await tauriTransport.listGhAccounts("/g");
   await tauriTransport.switchGhAccount(null, { host: "h", login: "me" });
+  await tauriTransport.getGhIdentity("/g", { host: "h", login: "me" });
   await tauriTransport.listDirs("", true);
   await tauriTransport.listBranches("/r");
   await tauriTransport.validateWorktreeName("/r", "x");
@@ -126,6 +127,7 @@ test("terminal and project actions call their commands", async () => {
     ["list_claude_logins", {}],
     ["list_gh_accounts", { ghConfigDir: "/g" }],
     ["switch_gh_account", { ghConfigDir: null, account: { host: "h", login: "me" } }],
+    ["get_gh_identity", { ghConfigDir: "/g", account: { host: "h", login: "me" } }],
     ["list_dirs", { path: "", windows: true }],
     ["list_branches", { project: "/r" }],
     ["validate_worktree_name", { project: "/r", name: "x" }],

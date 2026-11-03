@@ -28,6 +28,7 @@ import type {
   Dirs,
   FileText,
   GhAccounts,
+  GhIdentity,
   NameCheck,
   NotificationPermission,
   ProgressState,
@@ -397,6 +398,8 @@ export type HiveState = {
   spaceError: string | null;
   /** The last `gh_accounts` answer (9.30), for the space dialog; null until asked. */
   ghAccounts: GhAccounts | null;
+  /** The last `gh_identity` or `gh_identity_failed` answer (21.5), for the space dialog. */
+  ghIdentity: GhIdentity | null;
   /** The last `claude_logins` answer (21.6); null until asked. */
   claudeLogins: ClaudeLogin[] | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
@@ -516,6 +519,7 @@ export const initialState: HiveState = {
   currentSpace: null,
   spaceError: null,
   ghAccounts: null,
+  ghIdentity: null,
   claudeLogins: null,
   modalProject: null,
   modalWorktree: null,

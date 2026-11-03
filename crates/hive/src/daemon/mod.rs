@@ -755,6 +755,28 @@ impl State {
         });
     }
 
+    /// Answers `gh_identity` (or `gh_identity_failed`) for `account` off the frame loop: `gh`
+    /// asks GitHub (21.5).
+    fn gh_identity(self: &Arc<Self>, gh_config_dir: Option<String>, account: GhAccount) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let gh = state.gh().await;
+            let found = tokio::task::block_in_place(|| {
+                let dir = crate::spaces::gh_config_dir(gh_config_dir, true)?;
+                gh.identity(dir.as_deref(), &account)
+            });
+            let reply = match found {
+                Ok((name, email)) => Control::GhIdentity {
+                    account,
+                    name,
+                    email,
+                },
+                Err(message) => Control::GhIdentityFailed { account, message },
+            };
+            state.to_app(0, &reply).await;
+        });
+    }
+
     /// Answers a request of the pull requests (9.31) or Actions (9.32) view off the frame
     /// loop: `gh` asks GitHub.
     fn github(self: &Arc<Self>, request: Control) {

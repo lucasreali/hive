@@ -205,6 +205,44 @@ impl Gh {
         };
         self.output((config_dir, &vars), Some(cwd), args, (&[0], keep, TIME))
     }
+
+    /// `account`'s git identity (21.5): its login as the name and its noreply email, from
+    /// `gh api user` run with its token (looked up in `config_dir`), as [`Gh::run`] runs `gh`.
+    /// The error names the login and says why, fit to show as is.
+    pub fn identity(
+        &self,
+        config_dir: Option<&str>,
+        account: &GhAccount,
+    ) -> Result<(String, String), String> {
+        let found = self.token(config_dir, account).and_then(|token| {
+            let vars = token_vars(account, token);
+            let limits = (&[0][..], Stdout::Max(AUTH_OUTPUT), TIME);
+            let out = self.output((config_dir, &vars), None, &["api", "user"], limits)?;
+            noreply(&out, &account.host)
+        });
+        let GhAccount { host, login } = account;
+        found.map_err(|err| format!("Could not get the identity of {login} on {host}: {err}"))
+    }
+}
+
+/// The login and noreply email (`<id>+<login>@users.noreply.<host>`, without a port) in
+/// `gh api user`'s answer on `host`.
+fn noreply(out: &[u8], host: &str) -> Result<(String, String), String> {
+    #[derive(serde::Deserialize)]
+    struct User {
+        id: u64,
+        login: String,
+    }
+    let user: User = serde_json::from_slice(out)
+        .map_err(|_| "gh api user gave no account id and login".to_owned())?;
+    let account = GhAccount {
+        host: host.to_owned(),
+        login: user.login,
+    };
+    check_account(&account)?;
+    let domain = host.split(':').next().unwrap_or(host);
+    let email = format!("{}+{}@users.noreply.{domain}", user.id, account.login);
+    Ok((account.login, email))
 }
 
 /// The environment giving `gh` `account`'s `token`: `GH_TOKEN` on github.com and `*.ghe.com`,
@@ -329,12 +367,19 @@ case "$1 $2" in
   "auth status") if grep -q 'not logged' '{file}'; then cat '{file}' >&2; exit 1; fi; cat '{file}' ;;
   "auth token") case "$6" in
       me) echo ' tok-me ' ;;
+      odd|bad|gone) echo "tok-$6" ;;
       tab) printf 'tok\tx' ;;
       long) head -c 1025 /dev/zero | tr '\0' a ;;
       max) head -c 1024 /dev/zero | tr '\0' a ;;
       fail) echo tok-secret; echo 'no oauth token found for me' >&2; exit 1 ;;
     esac ;;
   "auth switch") [ "$6" = me ] || {{ echo 'not logged in as them' >&2; exit 1; }} ;;
+  "api user") case "$GH_TOKEN" in
+      tok-me) echo '{{"login":"me","id":583231,"name":"Me Myself","email":null}}' ;;
+      tok-odd) echo 'not json' ;;
+      tok-bad) echo '{{"login":"-x","id":1}}' ;;
+      *) echo 'HTTP 401: Bad credentials (https://api.github.com/user)' >&2; exit 1 ;;
+    esac ;;
   "big out") head -c 100 /dev/zero ;;
   *) echo "ran $*" ;;
 esac
@@ -551,6 +596,56 @@ esac
         assert_eq!(ghe("tenant.ghe.com"), "GH_TOKEN");
         assert_eq!(ghe("ghe.example:8443"), "GH_ENTERPRISE_TOKEN");
         assert_eq!(ghe("ghe.com"), "GH_ENTERPRISE_TOKEN");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_identity_is_the_login_and_its_noreply_email_from_gh_api_user() {
+        let fake = Fake::new(STATUS);
+        let me = account("github.com", "me");
+        let found = fake.gh.identity(Some("/cfg"), &me);
+        let email = "583231+me@users.noreply.github.com";
+        assert_eq!(found, Ok(("me".into(), email.into())));
+        // Asked with the account's token, in its config folder.
+        let last = fake.log().lines().last().unwrap().to_owned();
+        assert!(
+            last.starts_with("api user|tok-me|github.com|/cfg|1|"),
+            "{last}"
+        );
+        let failed = |login: &str, why: &str| {
+            let err = fake.gh.identity(None, &account("github.com", login));
+            let said = format!("Could not get the identity of {login} on github.com: {why}");
+            assert_eq!(err, Err(said));
+        };
+        failed("odd", "gh api user gave no account id and login");
+        failed("bad", r#""-x" is not a GitHub login"#);
+        failed(
+            "gone",
+            "gh api user failed: HTTP 401: Bad credentials (https://api.github.com/user)",
+        );
+        let calls = fake.log().lines().count();
+        failed(
+            "fail",
+            "gh auth token --hostname github.com --user fail failed: no oauth token found for me",
+        );
+        // No token, no call to GitHub.
+        assert_eq!(fake.log().lines().count(), calls + 1);
+        let missing = Gh::on(fake.dir.path().join("none").into());
+        let err = missing.identity(None, &me).unwrap_err();
+        assert_eq!(
+            err,
+            format!("Could not get the identity of me on github.com: {NOT_INSTALLED}")
+        );
+        // Another host: its own noreply domain, without the port.
+        let user = br#"{"login":"me_corp","id":7}"#;
+        let ghe = noreply(user, "ghe.example:8443");
+        assert_eq!(
+            ghe,
+            Ok((
+                "me_corp".into(),
+                "7+me_corp@users.noreply.ghe.example".into()
+            ))
+        );
     }
 
     #[cfg(unix)]

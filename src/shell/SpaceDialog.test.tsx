@@ -297,3 +297,93 @@ test("making the space's account gh's active one asks first, over the kept dialo
   list.mockRestore();
   switchGh.mockRestore();
 });
+
+const WARNING = /^Commits will use git's own guess/;
+const useAccount = () => screen.getByRole("button", { name: "Use the GitHub account's" });
+const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
+
+test("a GitHub account without a git identity warns, and the account's fills it", () => {
+  const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
+  const get = spyOn(transport, "getGhIdentity").mockResolvedValue();
+  const update = spyOn(transport, "updateSpace").mockResolvedValue();
+  const personal = { host: GITHUB, login: "octo-personal" };
+  const workAccount = { host: GITHUB, login: "octo-work" };
+  // An old answer for the same account, from before: never filled in.
+  act(() =>
+    apply({ type: "gh_identity", account: personal, name: "octo-personal", email: "old@x" }),
+  );
+  show([home, { ...work, env: { ...NO_ENV, gh_config_dir: "/cfg", gh_account: personal } }], "w");
+  pick("Edit space…");
+  act(() => ghAccounts("/cfg"));
+  expect(screen.getByText(WARNING).textContent).toBe(
+    "Commits will use git's own guess: this space has a GitHub account but no git name or email.",
+  );
+  expect(screen.getByText(WARNING).className).toBe("field-warning");
+  expect(value("Git email")).toBe("");
+
+  // A failure is said plainly, and it can be asked again.
+  fireEvent.click(useAccount());
+  expect(get).toHaveBeenLastCalledWith("/cfg", personal);
+  expect((useAccount() as HTMLButtonElement).disabled).toBe(true);
+  const message =
+    "Could not get the identity of octo-personal on github.com: gh api user failed: HTTP 401: Bad credentials";
+  act(() => apply({ type: "gh_identity_failed", account: personal, message }));
+  expect(within(dialog("Edit space")).getByRole("alert").textContent).toBe(message);
+  expect((useAccount() as HTMLButtonElement).disabled).toBe(false);
+
+  // An answer for another account is not this one's.
+  fireEvent.click(useAccount());
+  expect(screen.queryByRole("alert")).toBeNull();
+  act(() => apply({ type: "gh_identity", account: workAccount, name: "octo-work", email: "w@x" }));
+  expect(value("Git name")).toBe("");
+
+  // A name of its own is kept; only the missing email is filled.
+  fireEvent.change(screen.getByLabelText("Git name"), { target: { value: "Me" } });
+  expect(screen.getByText(WARNING).textContent).toContain("but no git email.");
+  const email = "1+octo-personal@users.noreply.github.com";
+  act(() => apply({ type: "gh_identity", account: personal, name: "octo-personal", email }));
+  expect([value("Git name"), value("Git email")]).toEqual(["Me", email]);
+  expect(screen.queryByText(WARNING)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(update).toHaveBeenCalledWith("w", "Work", {
+    ...NO_ENV,
+    git_name: "Me",
+    git_email: email,
+    gh_config_dir: "/cfg",
+    gh_account: personal,
+  });
+
+  // Both empty: both filled.
+  fireEvent.change(screen.getByLabelText("Git name"), { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("Git email"), { target: { value: "" } });
+  fireEvent.click(useAccount());
+  act(() => apply({ type: "gh_identity", account: personal, name: "octo-personal", email }));
+  expect([value("Git name"), value("Git email")]).toEqual(["octo-personal", email]);
+  list.mockRestore();
+  get.mockRestore();
+  update.mockRestore();
+});
+
+test("no warning without an account, with a git name and email, or for another account asked", () => {
+  const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
+  const get = spyOn(transport, "getGhIdentity").mockResolvedValue();
+  show([home], "default");
+  pick("Edit space…");
+  act(() => ghAccounts(null));
+  expect(screen.queryByText(WARNING)).toBeNull();
+  // An account chosen: warned only until both are set (the email alone says the name).
+  fireEvent.mouseDown(ghSelect());
+  fireEvent.click(screen.getByRole("option", { name: "octo-work" }));
+  fireEvent.change(screen.getByLabelText("Git email"), { target: { value: "me@x" } });
+  expect(screen.getByText(WARNING).textContent).toContain("but no git name.");
+  // Asked for one account, then another chosen: the button is free again.
+  fireEvent.click(useAccount());
+  expect((useAccount() as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.mouseDown(ghSelect());
+  fireEvent.click(screen.getByRole("option", { name: "octo-personal" }));
+  expect((useAccount() as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText("Git name"), { target: { value: "Me" } });
+  expect(screen.queryByText(WARNING)).toBeNull();
+  list.mockRestore();
+  get.mockRestore();
+});

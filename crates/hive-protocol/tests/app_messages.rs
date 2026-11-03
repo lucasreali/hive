@@ -45,6 +45,7 @@ sort! {
         | ListClaudeLogins
         | ListGhAccounts
         | SwitchGhAccount
+        | GetGhIdentity
         | ListPulls
         | OpenPull
         | ActOnPull
@@ -109,6 +110,8 @@ sort! {
         | SpaceFailed
         | ClaudeLogins
         | GhAccounts
+        | GhIdentity
+        | GhIdentityFailed
         | Notice
         | Pulls
         | Pull
@@ -309,6 +312,21 @@ fn samples() -> Vec<Control> {
             gh_config_dir: None,
             accounts: vec![],
             problem: None,
+        },
+        GhIdentity {
+            account: GhAccount {
+                host: s("github.com"),
+                login: s("me"),
+            },
+            name: s("me"),
+            email: s("1+me@users.noreply.github.com"),
+        },
+        GhIdentityFailed {
+            account: GhAccount {
+                host: s("github.com"),
+                login: s("me"),
+            },
+            message: m(),
         },
         Notice { message: m() },
         Pulls {

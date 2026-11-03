@@ -1262,9 +1262,16 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.switch_gh_account(None, account.clone()).unwrap();
     let switch = Control::SwitchGhAccount {
         gh_config_dir: None,
-        account,
+        account: account.clone(),
     };
     assert_eq!(service.control().await, (0, switch));
+    hive.get_gh_identity(Some("/g".into()), account.clone())
+        .unwrap();
+    let get = Control::GetGhIdentity {
+        gh_config_dir: Some("/g".into()),
+        account,
+    };
+    assert_eq!(service.control().await, (0, get));
     hive.list_pulls("/r".into(), true).unwrap();
     let list = Control::ListPulls {
         project: "/r".into(),
@@ -1603,6 +1610,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         host: "h".into(),
         login: "l".into(),
     };
+    assert_eq!(hive.get_gh_identity(None, account.clone()), not_connected);
     assert_eq!(hive.switch_gh_account(None, account), not_connected);
     assert_eq!(hive.list_pulls("/r".into(), false), not_connected);
     assert_eq!(hive.open_pull("/r".into(), 1), not_connected);
@@ -1848,6 +1856,7 @@ fn commands_reach_the_managed_hive() {
             list_claude_logins,
             list_gh_accounts,
             switch_gh_account,
+            get_gh_identity,
             list_pulls,
             open_pull,
             act_on_pull,
@@ -1973,6 +1982,7 @@ fn commands_reach_the_managed_hive() {
         ("list_claude_logins", &json!({})),
         ("list_gh_accounts", &json!({"ghConfigDir": null})),
         ("switch_gh_account", &switch_gh),
+        ("get_gh_identity", &switch_gh),
         ("list_pulls", &list_pulls),
         ("open_pull", &open_pull),
         ("act_on_pull", &act_on_pull),

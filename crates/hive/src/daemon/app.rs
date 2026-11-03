@@ -336,6 +336,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             gh_config_dir,
             account,
         }) => state.gh_accounts(gh_config_dir, Some(account)),
+        Ok(Control::GetGhIdentity {
+            gh_config_dir,
+            account,
+        }) => state.gh_identity(gh_config_dir, account),
         Ok(
             request @ (Control::ListPulls { .. }
             | Control::OpenPull { .. }

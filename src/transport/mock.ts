@@ -968,6 +968,17 @@ export function createMockTransport(
       for (const l of ghLogins) l.active = l.login === account.login && l.host === account.host;
       sendGhAccounts(ghConfigDir);
     },
+    async getGhIdentity(_ghConfigDir, account) {
+      // As GitHub answers `gh api user`: a logged-in account's login and its noreply email.
+      const at = ghLogins.findIndex((l) => l.login === account.login && l.host === account.host);
+      if (at < 0) {
+        const message = `Could not get the identity of ${account.login} on ${account.host}: gh gave no usable token for ${account.login} on ${account.host}`;
+        later({ type: "gh_identity_failed", account, message });
+      } else {
+        const email = `${1001 + at}+${account.login}@users.noreply.${account.host}`;
+        later({ type: "gh_identity", account, name: account.login, email });
+      }
+    },
     listPulls: pulls.listPulls,
     openPull: pulls.openPull,
     async actOnPull(project, number, action) {

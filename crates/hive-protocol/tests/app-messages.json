@@ -231,6 +231,23 @@
     "problem": null
   },
   {
+    "type": "gh_identity",
+    "account": {
+      "host": "github.com",
+      "login": "me"
+    },
+    "name": "me",
+    "email": "1+me@users.noreply.github.com"
+  },
+  {
+    "type": "gh_identity_failed",
+    "account": {
+      "host": "github.com",
+      "login": "me"
+    },
+    "message": "m"
+  },
+  {
     "type": "notice",
     "message": "m"
   },
