@@ -1282,12 +1282,17 @@ mod tests {
             let statuses = state.health_changed(&projects, Some((&path, Some(totals))));
             let sent: Vec<_> = statuses
                 .into_iter()
-                .map(|control| match control {
-                    Control::WorktreeStatus {
-                        path,
-                        status: Some(status),
-                    } => (path, status.changes, status.added, status.removed),
-                    other => panic!("not a status: {other:?}"),
+                // Read as JSON: a message that is not a status has none of these.
+                .map(|control| {
+                    let v = serde_json::to_value(control).unwrap();
+                    let s = &v["status"];
+                    (
+                        v["type"].clone(),
+                        v["path"].clone(),
+                        s["changes"].clone(),
+                        s["added"].clone(),
+                        s["removed"].clone(),
+                    )
                 })
                 .collect();
             (path, sent)
@@ -1295,7 +1300,14 @@ mod tests {
         // Only the worktree that changed, with the totals counted for it, of three.
         for (name, files) in [("w", 3), ("r", 5)] {
             let (path, statuses) = sent(&base.join(name), files);
-            assert_eq!(statuses, vec![(path, files, 2 * files, files)], "{name}");
+            let status = (
+                "worktree_status".into(),
+                path.into(),
+                files.into(),
+                (2 * files).into(),
+                files.into(),
+            );
+            assert_eq!(statuses, vec![status], "{name}");
         }
         // Unchanged since: nothing.
         assert_eq!(sent(&base.join("w"), 3).1, vec![]);
