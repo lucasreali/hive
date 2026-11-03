@@ -149,21 +149,20 @@ mod tests {
     );
 
     fn shared(dir: &Path) -> Listed {
-        let Control::Shared {
-            folder,
-            plugin,
-            skills,
-            agents,
-            commands,
-            mcp_servers,
+        // Read as JSON, so the helper has no branch for another message.
+        let answer = serde_json::to_value(list(dir)).unwrap();
+        assert_eq!(answer["type"], "shared");
+        assert_eq!(answer["folder"], dir.display().to_string());
+        assert_eq!(answer["plugin"], "hive-shared");
+        let names = |key: &str| serde_json::from_value(answer[key].clone()).unwrap();
+        let error = serde_json::from_value(answer["error"].clone()).unwrap();
+        (
+            names("skills"),
+            names("agents"),
+            names("commands"),
+            names("mcp_servers"),
             error,
-        } = list(dir)
-        else {
-            panic!("expected shared");
-        };
-        assert_eq!(folder, dir.display().to_string());
-        assert_eq!(plugin, "hive-shared");
-        (skills, agents, commands, mcp_servers, error)
+        )
     }
 
     fn write(path: &Path, text: &str) {

@@ -1847,7 +1847,9 @@ fn commands_reach_the_managed_hive() {
             open_job_log,
             act_on_run,
             open_settings_file,
-            get_diagnostics
+            get_diagnostics,
+            get_shared,
+            open_shared
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -1972,6 +1974,8 @@ fn commands_reach_the_managed_hive() {
         ("act_on_run", &act_on_run),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
+        ("get_shared", &json!({})),
+        ("open_shared", &json!({})),
     ] {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }

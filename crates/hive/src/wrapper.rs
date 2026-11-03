@@ -68,11 +68,9 @@ pub fn install(paths: &Paths, hive: &Path) -> io::Result<()> {
         eprintln!("hive: cannot make the shared folder: {err}");
     }
     #[cfg(unix)]
-    write_atomic(
-        &bin.join("claude"),
-        &script(&bin, &settings, &paths.shared_dir()),
-        0o755,
-    )?;
+    let wrapper = script(&bin, &settings, &paths.shared_dir());
+    #[cfg(unix)]
+    write_atomic(&bin.join("claude"), &wrapper, 0o755)?;
     // Shells that put the bin folder first after the user's startup files: zsh and bash on
     // macOS, Git Bash on Windows.
     #[cfg(not(target_os = "linux"))]
