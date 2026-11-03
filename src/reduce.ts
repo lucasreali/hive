@@ -482,6 +482,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "error":
     case "session_located":
+    case "session_moved":
+    case "move_session_failed":
     case "restore_sessions":
     case "editor_target":
     case "notification_clicked":

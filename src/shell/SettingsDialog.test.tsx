@@ -308,6 +308,16 @@ test("a new account's folder example is a home folder of the platform (18.25)", 
   expect(input("New account folder").placeholder).toBe("/Users/you/.claude-work");
 });
 
+test("sharing sessions between accounts is off by default and turns on (21.10)", async () => {
+  open();
+  section("Accounts");
+  const share = input("Share sessions between accounts");
+  expect(share.checked).toBe(false);
+  expect(screen.getByText(/rewind checkpoints from before the move are lost/)).toBeDefined();
+  fireEvent.click(share);
+  await waitFor(() => expect(settings().claude.share_sessions).toBe(true));
+});
+
 test("the accounts section adds, renames, logs in to and removes Claude accounts (12.2)", async () => {
   open();
   section("Accounts");

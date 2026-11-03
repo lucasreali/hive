@@ -127,7 +127,11 @@ test("with an account besides the default one, a select picks the current accoun
   render(<StatusBar />);
   const select = () => screen.queryByRole("combobox", { name: "Claude account" });
   expect(select()).toBeNull();
-  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], account: "/w" };
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: "/w",
+    share_sessions: false,
+  };
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
   expect(select()?.textContent).toBe("Work");
   // Its session usage (12.1) sits right after it.

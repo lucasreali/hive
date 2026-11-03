@@ -1,11 +1,14 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { notice, noticeKind } from "../test/notice";
+import { connect } from "./connect";
+import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
 import {
   ago,
   copy,
   locate,
+  onMoved,
   openLocated,
   remove,
   restore,
@@ -66,6 +69,73 @@ test("resume shows a running session's terminal, else runs claude --resume in it
   expect(notice()).toBe(`Cannot open a terminal in ${stopped.cwd}: no such folder`);
   open.mockRestore();
   write.mockRestore();
+});
+
+test("shared sessions resume as the current account, their log moved there first (21.10)", async () => {
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(5);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  // The service answers each move, through the app's message handler: done, or why not.
+  let onMessage: (message: ServiceMessage) => void = () => {};
+  const connected = spyOn(transport, "connect").mockImplementation(async (handler) => {
+    onMessage = handler;
+  });
+  await connect();
+  connected.mockRestore();
+  let answer: string | null = null;
+  const moved = spyOn(transport, "moveSession").mockImplementation(async (id, config_dir) => {
+    queueMicrotask(() =>
+      onMessage(
+        answer === null
+          ? { type: "session_moved", id, config_dir }
+          : { type: "move_session_failed", id, message: answer },
+      ),
+    );
+  });
+  const claude = (share_sessions: boolean, account: string | null) => ({
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account,
+    share_sessions,
+  });
+  const set = (share: boolean, account: string | null) =>
+    useHive.setState({ settings: { ...initialState.settings, claude: claude(share, account) } });
+  const asked = () => open.mock.calls.at(-1)?.[4];
+
+  // Off: as the account it ran as, nothing moved.
+  set(false, "/w");
+  await resume(stopped);
+  expect(asked()).toEqual({ config_dir: null });
+  expect(moved).not.toHaveBeenCalled();
+  // On: as the current account, its log moved there first.
+  set(true, "/w");
+  await resume(stopped);
+  expect(moved).toHaveBeenLastCalledWith(stopped.id, "/w");
+  expect(asked()).toEqual({ config_dir: "/w" });
+  // A current account no account has is the default one: already its own, nothing moved.
+  set(true, "/gone");
+  await resume(stopped);
+  expect(moved).toHaveBeenCalledTimes(1);
+  expect(asked()).toEqual({ config_dir: null });
+  // "Continue in" names the account, whatever the setting.
+  set(false, null);
+  await resume(stopped, false, "/w");
+  expect(moved).toHaveBeenLastCalledWith(stopped.id, "/w");
+  expect(asked()).toEqual({ config_dir: "/w" });
+  // A fork of a session running elsewhere stays in its own account: its log cannot move.
+  set(true, "/w");
+  await resume(session, true);
+  expect(moved).toHaveBeenCalledTimes(2);
+  expect(asked()).toEqual({ config_dir: session.config_dir });
+  // A refused move opens nothing and says why.
+  answer = "the account already has a log of session x";
+  const opened = open.mock.calls.length;
+  await resume(stopped);
+  expect(open.mock.calls.length).toBe(opened);
+  expect(notice()).toBe("Cannot move the session: the account already has a log of session x");
+  // An answer nobody waits for is ignored.
+  onMoved({ type: "session_moved", id: "nobody", config_dir: null });
+  open.mockRestore();
+  write.mockRestore();
+  moved.mockRestore();
 });
 
 test("the sessions open when the app last closed are resumed, one after the other", async () => {

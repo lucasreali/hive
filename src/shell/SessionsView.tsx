@@ -1,5 +1,6 @@
 import {
   ArrowBendUpRightIcon,
+  CaretRightIcon,
   CopyIcon,
   DotsThreeIcon,
   FileTextIcon,
@@ -9,16 +10,38 @@ import {
   PlayIcon,
   TerminalWindowIcon,
   TrashIcon,
+  UserSwitchIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
-import type { Session } from "../protocol";
-import { ago, copy, locate, remove, resume, sessionName, sessionTokens } from "../sessions";
+import type { Account, Session } from "../protocol";
+import {
+  ago,
+  copy,
+  locate,
+  MOVE_NOTE,
+  remove,
+  resume,
+  sessionName,
+  sessionTokens,
+} from "../sessions";
 import { openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { SearchField } from "./SearchField";
+import { DEFAULT_ACCOUNT } from "./SettingsDialog";
+import { Submenu } from "./TerminalArea";
 import { ContextMenu } from "./WorktreeMenu";
+
+/**
+ * The name of the Claude account whose folder holds the session's log (the one it last ran as),
+ * for its row; null with only the default account.
+ */
+function accountName(accounts: Account[], session: Session): string | null {
+  if (accounts.length === 0) return null;
+  const own = accounts.find((a) => a.config_dir === session.config_dir);
+  return own?.name ?? DEFAULT_ACCOUNT;
+}
 
 /** Opens the session's menu at the pointer, or under the ⋯ button that was clicked. */
 function menuAt(session: Session) {
@@ -123,6 +146,8 @@ function SessionRow({ session: x, live, index, measure, top }: RowProps) {
   // A session in a Hive terminal has its live state; any other, the one its log tells.
   const state = useHive((s) => (live ? (s.agentStates[x.id]?.state ?? "idle") : x.state));
   const menu = menuAt(x);
+  // The account it last ran as (its log's folder), when there is more than one.
+  const account = useHive((s) => accountName(s.settings.claude.accounts, x));
   // Running outside Hive: nothing to do here, and nothing said.
   const title = live ? "Show its terminal" : x.running ? undefined : "Resume in its worktree";
   return (
@@ -151,7 +176,7 @@ function SessionRow({ session: x, live, index, measure, top }: RowProps) {
           </span>
         )}
         <span className="session-meta">
-          {[`${x.messages} msgs`, sessionTokens(x), ago(x.updated_ms), x.model]
+          {[`${x.messages} msgs`, sessionTokens(x), ago(x.updated_ms), x.model, account]
             .filter(Boolean)
             .join(" · ")}
         </span>
@@ -170,6 +195,59 @@ function SessionRow({ session: x, live, index, measure, top }: RowProps) {
 }
 
 const closeMenu = () => openSessionMenu(null);
+
+/**
+ * "Continue in ▸" (21.10): resumes the session as another Claude account, whatever
+ * `share_sessions` says, its log moved into that account's folder first. Only with more than
+ * one account; not while it runs (its log cannot move).
+ */
+function ContinueIn({ session, disabled }: { session: Session; disabled: boolean }) {
+  const accounts = useHive((s) => s.settings.claude.accounts);
+  const [open, setOpen] = useState(false);
+  if (accounts.length === 0) return null;
+  const all = [{ name: DEFAULT_ACCOUNT, config_dir: null as string | null }, ...accounts];
+  const others = all.filter((a) => a.config_dir !== session.config_dir);
+  return (
+    <div className="submenu-anchor">
+      <button
+        type="button"
+        role="menuitem"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        title={disabled ? "End the session before moving it" : MOVE_NOTE}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowRight") return;
+          e.preventDefault();
+          setOpen(true);
+        }}
+      >
+        <UserSwitchIcon {...ICON} />
+        Continue in
+        <CaretRightIcon className="submenu-caret" {...ICON} />
+      </button>
+      {open && (
+        <Submenu label="Continue in">
+          {others.map((a) => (
+            <button
+              type="button"
+              role="menuitem"
+              key={a.config_dir ?? ""}
+              title={MOVE_NOTE}
+              onClick={() => {
+                closeMenu();
+                void resume(session, false, a.config_dir);
+              }}
+            >
+              {a.name}
+            </button>
+          ))}
+        </Submenu>
+      )}
+    </div>
+  );
+}
 
 /** A session's actions (⋯ or right click), as in Orca. */
 export function SessionMenu() {
@@ -202,6 +280,8 @@ export function SessionMenu() {
         { disabled: outside },
       )}
       {item(ArrowBendUpRightIcon, "Continue in New Session", () => void resume(x, true))}
+      <ContinueIn session={x} disabled={live || x.running} />
+
       {item(
         CopyIcon,
         "Copy Resume Command",

@@ -18,20 +18,70 @@ const pending = new Map<string, Handing>();
 export const resumeArgs = (session: Session, fork = false) =>
   `--resume ${session.id}${fork ? " --fork-session" : ""}`;
 
+type Moved = Extract<ServiceMessage, { type: "session_moved" | "move_session_failed" }>;
+
+/** The moves asked of the service, by session id, until it answers: why one failed, or null. */
+const moving = new Map<string, (error: string | null) => void>();
+
+/** What a rewind loses when a session moves (its `file-history` stays behind, 21.10). */
+export const MOVE_NOTE =
+  "Its log moves into that account's folder: rewind checkpoints from before the move are lost.";
+
+/** The current Claude account's folder: null for the default one, or one no account has. */
+function currentAccount(): string | null {
+  const { accounts, account } = useHive.getState().settings.claude;
+  return accounts.some((a) => a.config_dir === account) ? account : null;
+}
+
+/**
+ * The Claude account a session goes on as: `account` when one is asked ("Continue in"), the
+ * current one when sessions are shared (21.10, D22.5), else the one it ran as (12.2).
+ */
+export function accountFor(session: Session, account?: string | null): string | null {
+  if (account !== undefined) return account;
+  const shared = useHive.getState().settings.claude.share_sessions;
+  return shared ? currentAccount() : session.config_dir;
+}
+
+/** Asks the service to move a session's log into `account`'s folder; why it could not, or null. */
+const moveTo = (id: string, account: string | null) =>
+  new Promise<string | null>((done) => {
+    moving.set(id, done);
+    void transport.moveSession(id, account);
+  });
+
+/** The service's answer to a move: the waiting `resume` goes on, or says why not. */
+export function onMoved(moved: Moved): void {
+  const done = moving.get(moved.id);
+  moving.delete(moved.id);
+  done?.(moved.type === "session_moved" ? null : moved.message);
+}
+
 /**
  * Goes on with the session: shows its terminal when it runs in one, else runs
- * `claude --resume` in a new terminal in its folder, as the Claude account it ran as (its log is
- * in that account's folder, 12.2). `fork` always starts a new session.
+ * `claude --resume` in a new terminal in its folder, as the account `accountFor` picks. Its log
+ * is moved into that account's folder first when it is in another (Claude Code resumes only a
+ * log in its own folder). `fork` always starts a new session; one running elsewhere is forked
+ * as its own account, since its log cannot move.
  */
-export async function resume(session: Session, fork = false): Promise<void> {
+export async function resume(
+  session: Session,
+  fork = false,
+  account?: string | null,
+): Promise<void> {
   const s = useHive.getState();
   const agent = s.agents[session.id];
   const tab = agent && s.tabs.find((t) => t.id === agent.terminal);
   if (tab && !fork) return activateTab(tab);
   // Running outside Hive: a second `claude` on the same session would write the same log.
   if (session.running && !fork) return;
+  const dir = session.running ? session.config_dir : accountFor(session, account);
+  if (dir !== session.config_dir) {
+    const error = await moveTo(session.id, dir);
+    if (error) return showNotice("error", `Cannot move the session: ${error}`);
+  }
   try {
-    await openClaude(session.cwd, resumeArgs(session, fork), { config_dir: session.config_dir });
+    await openClaude(session.cwd, resumeArgs(session, fork), { config_dir: dir });
   } catch (error) {
     showNotice("error", `Cannot open a terminal in ${session.cwd}: ${error}`);
   }

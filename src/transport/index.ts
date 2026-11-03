@@ -161,6 +161,11 @@ export interface Transport {
   locateSession(id: string, target: SessionTarget): Promise<void>;
   /** Deletes a session's log; answered by `session_deleted` or `delete_session_failed`. */
   deleteSession(id: string): Promise<void>;
+  /**
+   * Moves a session's log into the Claude account `configDir`'s folder (null: the default
+   * one); answered by `session_moved` or `move_session_failed`.
+   */
+  moveSession(id: string, configDir: string | null): Promise<void>;
   /** The lines of a followed worktree's files holding `query`; answered by `search_results`. */
   searchFiles(worktree: string, query: string): Promise<void>;
   /** A file of a followed worktree on disk and at `base`; answered by `file`. */

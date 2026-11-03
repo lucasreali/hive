@@ -4,6 +4,7 @@ import { notice } from "../../test/notice";
 import { expectClearButton } from "../../test/searchClear";
 import { App } from "../App";
 import { apply } from "../reduce";
+import { onMoved } from "../sessions";
 import { initialState, select, setPanelView, setRightPanel, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
@@ -293,4 +294,62 @@ test("⋯ and a right click open a session's menu of actions", async () => {
   // A session that went away takes its menu with it.
   act(() => apply({ type: "session_deleted", id: untitled.id }));
   expect(menu()).toBeNull();
+});
+
+test("with accounts, a row names its account and the menu continues it in another (21.10)", async () => {
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(8);
+  spyOn(transport, "writeTerminal").mockResolvedValue();
+  const moved = spyOn(transport, "moveSession").mockImplementation(async (id, config_dir) => {
+    queueMicrotask(() => onMoved({ type: "session_moved", id, config_dir }));
+  });
+  show(shop.id);
+  act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
+  const name = "Checkout totals";
+  const actions = () =>
+    fireEvent.click(screen.getByRole("button", { name: `Actions for ${name}` }));
+  const meta = () =>
+    screen.getByText(name).closest(".session")?.querySelector(".session-meta")?.textContent;
+  // Only the default account: no account named, no "Continue in".
+  expect(meta()).not.toContain("Default");
+  actions();
+  expect(screen.queryByRole("menuitem", { name: "Continue in" })).toBeNull();
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+  const accounts = [{ name: "Work", config_dir: "/w" }];
+  const claude = { accounts, account: null, share_sessions: false };
+  act(() => useHive.setState({ settings: { ...initialState.settings, claude } }));
+  expect(meta()).toContain("Default");
+  const worked = MOCK_SESSIONS.map((s) => (s === checkout ? { ...s, config_dir: "/w" } : s));
+  act(() => apply({ type: "sessions", sessions: worked, error: null, truncated: false }));
+  expect(meta()).toContain("Work");
+  actions();
+  const item = screen.getByRole("menuitem", { name: "Continue in" });
+  expect(item.getAttribute("title")).toContain("rewind checkpoints from before the move are lost");
+  fireEvent.keyDown(item, { key: "Enter" });
+  expect(screen.queryByRole("menu", { name: "Continue in" })).toBeNull();
+  fireEvent.keyDown(item, { key: "ArrowRight" });
+  const sub = screen.getByRole("menu", { name: "Continue in" });
+  // Every account but its own.
+  expect(
+    within(sub)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Default"]);
+  fireEvent.click(item);
+  expect(screen.queryByRole("menu", { name: "Continue in" })).toBeNull();
+  fireEvent.click(item);
+  fireEvent.click(within(screen.getByRole("menu", { name: "Continue in" })).getByRole("menuitem"));
+  expect(screen.queryByRole("menu")).toBeNull();
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  expect(moved).toHaveBeenCalledWith(checkout.id, null);
+  expect(open.mock.calls.at(-1)?.[4]).toEqual({ config_dir: null });
+
+  // Running: its log cannot move.
+  act(() => select(shop.worktrees[1].id));
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Fix the login redirect" }));
+  const running = screen.getByRole("menuitem", { name: "Continue in" });
+  expect([running.hasAttribute("disabled"), running.title]).toEqual([
+    true,
+    "End the session before moving it",
+  ]);
 });
