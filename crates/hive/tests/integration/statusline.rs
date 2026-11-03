@@ -115,13 +115,14 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
     );
     assert_eq!(app.control().await, answer);
     assert_eq!(app.control().await, usage(7, now + 3600));
-    // Kept in memory only: a new service has none until a statusline runs.
+    // Kept in a file (21.8): a new service shows it right away, while it is before its reset.
     drop(app);
     assert!(daemon.wait_exit().success());
     // The selected account is kept in the settings.
     let mut daemon = env.daemon();
     let mut app = env.handshake(hive_protocol::Role::App).await;
     assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    assert_eq!(app.control().await, usage(7, now + 3600));
     app.send(0, Control::ListProjects).await;
     let projects = Control::Projects { projects: vec![] };
     assert_eq!(app.control().await, (0, projects));
@@ -160,6 +161,22 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
     let out = statusline(&env, &hive, Some(&work), &input(86.0, now + 600));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(app.control().await, usage(86, now + 600));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn a_window_that_cannot_be_kept_is_still_shown() {
+    let env = Env::new();
+    // Where the windows are kept is a folder.
+    std::fs::create_dir_all(env.path("data/hive/usage.json")).unwrap();
+    let mut daemon = env.daemon();
+    let mut app = env.app().await;
+    let hive = hive_statusline(&env);
+    let now = hive::hook::now_ms() / 1000;
+    let out = statusline(&env, &hive, None, &input(12.0, now + 3600));
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(app.control().await, usage(12, now + 3600));
     drop(app);
     assert!(daemon.wait_exit().success());
 }

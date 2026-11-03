@@ -111,7 +111,10 @@ async fn hook_connection<R: AsyncRead + Unpin>(
             usage,
             week,
         }) => {
-            state.usage.lock().await.report(claude_dir, usage, week);
+            let kept = state.usage.lock().await.report(claude_dir, usage, week);
+            if let Err(err) = kept {
+                eprintln!("hive: warning: cannot keep the session usage: {err}");
+            }
             state.send_usage().await;
         }
         Ok(Control::Hook {
