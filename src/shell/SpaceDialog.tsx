@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { GhAccount, SpaceEnv } from "../protocol";
+import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
+import type { GhAccount, GhIdentity, SpaceEnv } from "../protocol";
 import { ask, currentSpace, openModal, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
@@ -116,6 +116,70 @@ function GhAccountField({ env, setEnv }: { env: SpaceEnv; setEnv: (env: SpaceEnv
 }
 
 /**
+ * A space with a GitHub account but no git name or email (21.5, D22.8) commits as git's own
+ * guess while it pushes as the account: says so, and "Use the GitHub account's" asks the service
+ * for the account's login and noreply email, which fill the empty fields.
+ */
+function IdentityWarning({
+  env,
+  setEnv,
+}: {
+  env: SpaceEnv;
+  setEnv: Dispatch<SetStateAction<SpaceEnv>>;
+}) {
+  const answer = useHive((s) => s.ghIdentity);
+  // The answer there was when asked: only a newer one, for the same account, is this request's.
+  const [asked, setAsked] = useState<{ account: GhAccount; before: GhIdentity | null } | null>(
+    null,
+  );
+  const account = env.gh_account;
+  // Asked for the account chosen now (another one chosen since: not asked).
+  const asking =
+    asked && account && accountKey(asked.account) === accountKey(account) ? asked : null;
+  const mine =
+    asking &&
+    answer &&
+    answer !== asking.before &&
+    accountKey(answer.account) === accountKey(asking.account)
+      ? answer
+      : null;
+  useEffect(() => {
+    if (!mine || !("name" in mine)) return;
+    const { name, email } = mine;
+    setEnv((env) => ({
+      ...env,
+      git_name: env.git_name ?? name,
+      git_email: env.git_email ?? email,
+    }));
+    setAsked(null);
+  }, [mine, setEnv]);
+  if (!account || (env.git_name && env.git_email)) return null;
+  const pending = asking !== null && mine === null;
+  const use = () => {
+    setAsked({ account, before: useHive.getState().ghIdentity });
+    void transport.getGhIdentity(env.gh_config_dir, account);
+  };
+  return (
+    <div className="field">
+      <p className="field-warning">
+        Commits will use git's own guess: this space has a GitHub account but no git{" "}
+        {env.git_name ? "email" : env.git_email ? "name" : "name or email"}.
+      </p>
+      <div>
+        <button type="button" className="secondary" disabled={pending} onClick={use}>
+          Use the GitHub account's
+        </button>
+      </div>
+      {mine && "message" in mine && (
+        <span className="field-error" role="alert">
+          {mine.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
  * Creates a space ("new-space") or edits the current one ("edit-space"): its name and what its
  * new terminals get in their environment; an empty field leaves the user's own. The service
  * checks everything and answers `spaces` (the dialog closes) or why it refused (shown).
@@ -180,6 +244,7 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
             </div>
           ))}
           <GhAccountField env={env} setEnv={setEnv} />
+          <IdentityWarning env={env} setEnv={setEnv} />
           {error && (
             <span className="field-error" role="alert">
               {error}

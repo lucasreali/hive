@@ -1184,6 +1184,33 @@ test("gh's accounts are listed, and the active one switched", async () => {
   ]);
 });
 
+test("a logged-in account's identity is its login and noreply email", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  messages.length = 0;
+  const work = { host: "github.com", login: "mock-work" };
+  const gone = { host: "github.com", login: "gone" };
+  await transport.getGhIdentity(null, work);
+  await transport.getGhIdentity(null, gone);
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "gh_identity",
+      account: work,
+      name: "mock-work",
+      email: "1002+mock-work@users.noreply.github.com",
+    },
+    {
+      type: "gh_identity_failed",
+      account: gone,
+      message:
+        "Could not get the identity of gone on github.com: gh gave no usable token for gone on github.com",
+    },
+  ]);
+});
+
 test("spaces are kept as the service keeps them", async () => {
   const transport = createMockTransport();
   const messages: ServiceMessage[] = [];

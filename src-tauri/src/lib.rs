@@ -1531,6 +1531,19 @@ impl Hive {
         self.link().send(0, &switch)
     }
 
+    /// The answer arrives as `gh_identity` or `gh_identity_failed` (21.5).
+    pub fn get_gh_identity(
+        &self,
+        gh_config_dir: Option<String>,
+        account: GhAccount,
+    ) -> Result<(), String> {
+        let get = Control::GetGhIdentity {
+            gh_config_dir,
+            account,
+        };
+        self.link().send(0, &get)
+    }
+
     /// The answer arrives as `pulls` (9.31).
     pub fn list_pulls(&self, project: String, force: bool) -> Result<(), String> {
         self.link().send(0, &Control::ListPulls { project, force })
@@ -2281,6 +2294,15 @@ pub mod commands {
         account: GhAccount,
     ) -> Result<(), String> {
         hive.switch_gh_account(gh_config_dir, account)
+    }
+
+    #[tauri::command]
+    pub fn get_gh_identity(
+        hive: State<'_, Hive>,
+        gh_config_dir: Option<String>,
+        account: GhAccount,
+    ) -> Result<(), String> {
+        hive.get_gh_identity(gh_config_dir, account)
     }
 
     #[tauri::command]

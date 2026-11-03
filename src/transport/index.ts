@@ -82,6 +82,11 @@ export interface Transport {
    */
   switchGhAccount(ghConfigDir: string | null, account: GhAccount): Promise<void>;
   /**
+   * `account`'s git name and noreply email (21.5), from GitHub with its token; answered by
+   * `gh_identity` or `gh_identity_failed`.
+   */
+  getGhIdentity(ghConfigDir: string | null, account: GhAccount): Promise<void>;
+  /**
    * The project's pull requests (9.31); answered by `pulls`. Without `force` the service sends
    * a list under 2 minutes old again instead of asking GitHub.
    */

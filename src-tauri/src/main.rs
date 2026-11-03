@@ -185,6 +185,7 @@ fn main() {
             commands::select_space,
             commands::list_gh_accounts,
             commands::switch_gh_account,
+            commands::get_gh_identity,
             commands::list_pulls,
             commands::open_pull,
             commands::act_on_pull,

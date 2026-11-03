@@ -37,6 +37,7 @@ export const tauriTransport: Transport = {
   selectSpace: (id) => send("select_space", { id }),
   listGhAccounts: (ghConfigDir) => send("list_gh_accounts", { ghConfigDir }),
   switchGhAccount: (ghConfigDir, account) => send("switch_gh_account", { ghConfigDir, account }),
+  getGhIdentity: (ghConfigDir, account) => send("get_gh_identity", { ghConfigDir, account }),
   listPulls: (project, force) => send("list_pulls", { project, force }),
   openPull: (project, number) => send("open_pull", { project, number }),
   actOnPull: (project, number, action) => send("act_on_pull", { project, number, action }),

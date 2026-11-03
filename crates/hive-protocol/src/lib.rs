@@ -409,6 +409,24 @@ pub enum Control {
         accounts: Vec<GhLogin>,
         problem: Option<String>,
     },
+    /// App → service: the git identity of `account` (21.5), as `gh api user` run with its
+    /// token (looked up in `gh_config_dir` when set) gives it. Answered by `GhIdentity` or
+    /// `GhIdentityFailed`.
+    GetGhIdentity {
+        gh_config_dir: Option<String>,
+        account: GhAccount,
+    },
+    /// `account`'s git name (its login) and email (`<id>+<login>@users.noreply.<host>`).
+    GhIdentity {
+        account: GhAccount,
+        name: String,
+        email: String,
+    },
+    /// Why `account`'s identity is not known (no `gh`, no token, GitHub's error), shown as is.
+    GhIdentityFailed {
+        account: GhAccount,
+        message: String,
+    },
     /// Something the human should know that has no place of its own, shown as is in a toast
     /// that stays until dismissed: e.g. a terminal that could not get its space's GitHub
     /// account (9.30).
@@ -2234,6 +2252,13 @@ mod tests {
             },
             Control::SwitchGhAccount {
                 gh_config_dir: None,
+                account: GhAccount {
+                    host: "github.com".into(),
+                    login: "me".into(),
+                },
+            },
+            Control::GetGhIdentity {
+                gh_config_dir: Some("/g".into()),
                 account: GhAccount {
                     host: "github.com".into(),
                     login: "me".into(),

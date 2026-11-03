@@ -296,6 +296,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...accounts } = m;
       return { ghAccounts: accounts };
     }
+    case "gh_identity":
+    case "gh_identity_failed": {
+      const { type: _, ...ghIdentity } = m;
+      return { ghIdentity };
+    }
     case "branches": {
       const { type: _, ...branches } = m;
       return patchDialog(s, { branches });

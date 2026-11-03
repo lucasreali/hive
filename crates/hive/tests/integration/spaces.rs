@@ -259,6 +259,7 @@ case "$1 $2" in
     '  ✓ Logged in to github.com account octo-work (/x/hosts.yml)' \
     '  - Active account: false' ;;
   "auth token") [ "$6" != octo-gone ] || {{ echo 'no oauth token found for octo-gone' >&2; exit 1; }}; echo "tok-$6" ;;
+  "api user") [ "$GH_TOKEN" = tok-octo-work ] || {{ echo 'HTTP 401: Bad credentials' >&2; exit 1; }}; echo '{{"login":"octo-work","id":42}}' ;;
 esac
 "#,
         log.display()
@@ -482,6 +483,44 @@ async fn a_remote_base_is_fetched_as_the_space_and_never_prompts() {
     let log = std::fs::read_to_string(log).unwrap();
     let quiet = "GIT_TERMINAL_PROMPT:GCM_INTERACTIVE";
     assert_eq!(log, format!("tok-octo-work|0|never|WT_SESSION:{quiet}\n"));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn an_account_identity_is_its_login_and_noreply_email() {
+    let repo = Repo::new();
+    let fake = fake_gh(&repo);
+    let fish = repo.env.path("config/fish");
+    std::fs::create_dir_all(&fish).unwrap();
+    let config = format!("set -gx PATH '{}' $PATH\n", fake.display());
+    std::fs::write(fish.join("config.fish"), config).unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    let get = |dir: Option<&str>, login: &str| Control::GetGhIdentity {
+        gh_config_dir: dir.map(str::to_owned),
+        account: gh_account(login),
+    };
+    let found = Control::GhIdentity {
+        account: gh_account("octo-work"),
+        name: "octo-work".into(),
+        email: "42+octo-work@users.noreply.github.com".into(),
+    };
+    assert_eq!(ask(&mut app, get(None, "octo-work")).await, found);
+    let failed = |login: &str, message: &str| Control::GhIdentityFailed {
+        account: gh_account(login),
+        message: message.into(),
+    };
+    let refused = failed(
+        "octo-personal",
+        "Could not get the identity of octo-personal on github.com: gh api user failed: HTTP 401: Bad credentials",
+    );
+    assert_eq!(ask(&mut app, get(None, "octo-personal")).await, refused);
+    let relative = failed(
+        "octo-work",
+        "The GitHub CLI config folder must be an absolute path",
+    );
+    assert_eq!(ask(&mut app, get(Some("rel"), "octo-work")).await, relative);
     drop(app);
     assert!(daemon.wait_exit().success());
 }
