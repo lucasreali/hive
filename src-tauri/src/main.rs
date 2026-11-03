@@ -61,10 +61,9 @@ fn main() {
                 .with_exit(move || exit.exit(0))
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))
                 .with_update_dir(app.path().app_cache_dir()?)
-                .with_open(
-                    |path: &str| tauri_plugin_opener::open_path(path, None::<&str>),
-                    |path: &str| tauri_plugin_opener::reveal_item_in_dir(path),
-                )
+                .with_open(open_file(), |path: &str| {
+                    tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| e.to_string())
+                })
                 .with_notify(notifier(app))
                 .with_url(|url: &str| {
                     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
@@ -331,6 +330,19 @@ fn plugin_notifier(
 }
 
 /// `hive_lib::menu::MENUS` as Tauri's menu (17.13): item for item, in order.
+/// Opens a file with its default app; on macOS, with the text editor when no app claims its type
+/// (D21.1).
+#[cfg(target_os = "macos")]
+fn open_file() -> impl Fn(&str) -> Result<(), String> + Send + Sync + 'static {
+    hive_lib::mac_open("/usr/bin/open".into())
+}
+
+/// Opens a file with its default app (the opener plugin).
+#[cfg(not(target_os = "macos"))]
+fn open_file() -> impl Fn(&str) -> Result<(), String> + Send + Sync + 'static {
+    |path: &str| tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
 #[cfg(target_os = "macos")]
 fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use hive_lib::menu::{Item, Native, Role, MENUS};
