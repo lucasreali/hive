@@ -1291,26 +1291,30 @@ mod tests {
                 added: 2 * files,
                 removed: files,
             };
-            let statuses = state.health_changed(&projects, Some((&path, Some(totals))));
-            let sent: Vec<_> = statuses
-                .into_iter()
-                .map(|control| match control {
-                    Control::WorktreeStatus {
-                        path,
-                        status: Some(status),
-                    } => (path, status.changes, status.added, status.removed),
-                    other => panic!("not a status: {other:?}"),
-                })
-                .collect();
-            (path, sent)
+            state.health_changed(&projects, Some((&path, Some(totals))))
         };
-        // Only the worktree that changed, with the totals counted for it, of three.
+        // Its status as git reads it, with the totals counted for it.
+        let expected = |name: &str, files| {
+            let path = base.join(name).display().to_string();
+            let w = projects[0].worktrees.iter().find(|w| w.path == path);
+            let status = hive_protocol::WorktreeStatus {
+                changes: files,
+                added: 2 * files,
+                removed: files,
+                ..health::of(&projects[0], w.unwrap(), None).unwrap()
+            };
+            Control::WorktreeStatus {
+                path,
+                status: Some(status),
+            }
+        };
+        // Only the worktree that changed, of three.
         for (name, files) in [("w", 3), ("r", 5)] {
-            let (path, statuses) = sent(&base.join(name), files);
-            assert_eq!(statuses, vec![(path, files, 2 * files, files)], "{name}");
+            let statuses = sent(&base.join(name), files);
+            assert_eq!(statuses, vec![expected(name, files)], "{name}");
         }
         // Unchanged since: nothing.
-        assert_eq!(sent(&base.join("w"), 3).1, vec![]);
+        assert_eq!(sent(&base.join("w"), 3), vec![]);
     }
 
     /// Placing it would open it, which sends the user's credentials to its host.
