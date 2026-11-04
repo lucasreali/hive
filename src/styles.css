@@ -1964,6 +1964,8 @@ button.chevron:hover {
   width: 520px;
   max-width: calc(100% - 32px);
   margin: 120px auto auto;
+  /* Below its top margin, so a tall one (the space dialog) scrolls and its footer stays on screen. */
+  max-height: calc(100vh - 144px);
   padding: 0;
   color: var(--text);
   background: var(--panel);
