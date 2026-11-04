@@ -1,6 +1,6 @@
 //! Spaces (6.14): groups of followed projects, e.g. work and personal, each with an optional
-//! identity for the terminals opened in its projects (git and `gh`; the Claude account is
-//! `hive::settings`', 12.2). `hive::projects` keeps them in `<data>/hive/spaces.json`; this
+//! identity for the terminals opened in its projects (git, `gh` and, 22.5, one of the Claude
+//! accounts of `hive::settings`). `hive::projects` keeps them in `<data>/hive/spaces.json`; this
 //! module holds the rules.
 
 use std::path::Path;
@@ -121,6 +121,19 @@ impl Spaces {
     /// Whether the project `id` is a group (14.1).
     pub fn is_group(&self, id: &str) -> bool {
         self.spaces.iter().any(|s| s.groups.iter().any(|g| g == id))
+    }
+
+    /// The first space whose Claude account (22.5) is the one of folder `dir`.
+    pub fn using(&self, dir: &str) -> Option<&Space> {
+        let uses = |s: &&Space| s.env.claude_account.as_deref() == Some(dir);
+        self.spaces.iter().find(uses)
+    }
+
+    /// Makes `dir` the Claude account of every space: the account selected before 22.5.
+    pub fn take_account(&mut self, dir: &str) {
+        for space in &mut self.spaces {
+            space.env.claude_account = Some(dir.to_owned());
+        }
     }
 
     /// Takes the project `id` out of the space holding it (9.28); an unfollowed one is refused.
@@ -261,6 +274,8 @@ fn check_env(env: SpaceEnv, on_disk: bool) -> Result<SpaceEnv, String> {
             Some(account) => gh::check_account(&account).map(|()| Some(account))?,
             None => None,
         },
+        // Whether an account has it is the settings' to say (`settings::Store::known`).
+        claude_account: claude_config_dir(env.claude_account, false)?,
     })
 }
 
@@ -283,6 +298,7 @@ pub fn vars(env: &SpaceEnv) -> Vec<(&'static str, String)> {
         ("GIT_AUTHOR_EMAIL", &env.git_email),
         ("GIT_COMMITTER_EMAIL", &env.git_email),
         ("GH_CONFIG_DIR", &env.gh_config_dir),
+        ("CLAUDE_CONFIG_DIR", &env.claude_account),
     ];
     let set = vars
         .into_iter()
@@ -300,7 +316,37 @@ mod tests {
             git_email: None,
             gh_config_dir: dir.map(Into::into),
             gh_account: None,
+            claude_account: None,
         }
+    }
+
+    #[test]
+    fn a_space_keeps_its_claude_account_and_the_old_selected_one_goes_to_every_space() {
+        let mut spaces = Spaces::with(vec![]);
+        let work = SpaceEnv {
+            claude_account: Some(" /w ".into()),
+            ..SpaceEnv::default()
+        };
+        spaces.create("Work", work).unwrap();
+        assert_eq!(spaces.current().1.claude_account.as_deref(), Some("/w"));
+        assert_eq!(spaces.using("/w").map(|s| s.name.as_str()), Some("Work"));
+        assert_eq!(spaces.using("/p"), None);
+        let relative = SpaceEnv {
+            claude_account: Some("w".into()),
+            ..SpaceEnv::default()
+        };
+        assert_eq!(
+            spaces.create("n", relative),
+            Err("The Claude config folder must be an absolute path".into())
+        );
+        spaces.take_account("/p");
+        let all: Vec<_> = spaces
+            .spaces
+            .iter()
+            .map(|s| &s.env.claude_account)
+            .collect();
+        assert_eq!(all, [&Some("/p".to_owned()), &Some("/p".to_owned())]);
+        assert_eq!(spaces.using("/p").map(|s| s.id.as_str()), Some("default"));
     }
 
     #[test]
@@ -620,6 +666,7 @@ mod tests {
                 host: "github.com".into(),
                 login: "me".into(),
             }),
+            claude_account: Some("/c".into()),
         };
         let expected = [
             ("GIT_AUTHOR_NAME", "Me"),
@@ -627,6 +674,7 @@ mod tests {
             ("GIT_AUTHOR_EMAIL", "me@x"),
             ("GIT_COMMITTER_EMAIL", "me@x"),
             ("GH_CONFIG_DIR", "/g"),
+            ("CLAUDE_CONFIG_DIR", "/c"),
         ]
         .map(|(k, v)| (k, v.to_owned()));
         assert_eq!(vars(&full), expected);

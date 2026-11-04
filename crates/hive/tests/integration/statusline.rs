@@ -91,7 +91,8 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
         )
     );
 
-    // Another account's window is kept, not shown, until it is the selected account (12.2).
+    // Another account's window is kept, not shown, until it is the current space's account
+    // (22.5).
     let work = env.path("work");
     user_statusline(&work, "printf work");
     let out = statusline(&env, &hive, Some(&work), &input(7.0, now + 3600));
@@ -102,11 +103,10 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
         name: "Work".into(),
         config_dir: config_dir.clone(),
     });
-    settings.claude.account = Some(config_dir);
-    let select = Control::SetSettings {
+    let add = Control::SetSettings {
         settings: settings.clone(),
     };
-    app.send(0, select).await;
+    app.send(0, add).await;
     let answer = (
         0,
         Control::Settings {
@@ -114,11 +114,20 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
         },
     );
     assert_eq!(app.control().await, answer);
+    let select = Control::UpdateSpace {
+        id: "default".into(),
+        name: "Default".into(),
+        env: hive_protocol::SpaceEnv {
+            claude_account: Some(config_dir),
+            ..Default::default()
+        },
+    };
+    app.send(0, select).await;
     assert_eq!(app.control().await, usage(7, now + 3600));
     // Kept in a file (21.8): a new service shows it right away, while it is before its reset.
     drop(app);
     assert!(daemon.wait_exit().success());
-    // The selected account is kept in the settings.
+    // The space's account is kept in the spaces.
     let mut daemon = env.daemon();
     let mut app = env.handshake(hive_protocol::Role::App).await;
     assert_eq!(app.control().await, (0, Control::Settings { settings }));

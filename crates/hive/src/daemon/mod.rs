@@ -100,6 +100,13 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings());
     projects.migrate_accounts(&mut |legacy| settings.migrate(legacy));
+    // The account selected before 22.5 becomes every space's.
+    settings.migrate_account(&mut |dir| {
+        projects.change_spaces(|s| {
+            s.take_account(dir);
+            Ok(())
+        })
+    });
     let ports = Ports::new(paths.ports());
     let restore = Restore {
         file: paths.open_sessions(),
@@ -696,12 +703,15 @@ impl State {
             Err(message) => Control::SpaceFailed { message },
         };
         self.to_app(0, &reply).await;
+        // The current space's account's windows (22.5), also while the tick sleeps.
+        self.send_usage().await;
     }
 
-    /// The Claude config folder whose usage the status bar shows (12.1): the selected
-    /// account's (12.2), else the one the service's terminals get (the default account).
+    /// The Claude config folder whose usage the status bar shows (12.1): the current space's
+    /// account's (22.5), else the one the service's terminals get (the default account).
     fn account(&self) -> Option<PathBuf> {
-        let selected = self.settings.account().map(OsString::from);
+        let space = self.projects.current_env().claude_account;
+        let selected = self.settings.known(space).map(OsString::from);
         sessions::claude_dir(|key| match key {
             "CLAUDE_CONFIG_DIR" => selected.clone().or_else(|| std::env::var_os(key)),
             _ => std::env::var_os(key),

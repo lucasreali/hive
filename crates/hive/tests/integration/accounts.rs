@@ -34,40 +34,90 @@ fn session(claude: &Path, cwd: &str, id: &str) -> std::path::PathBuf {
 }
 
 #[tokio::test]
-async fn new_terminals_get_the_current_account_and_every_accounts_sessions_are_listed() {
+async fn terminals_get_their_projects_space_account_and_every_accounts_sessions_are_listed() {
     let repo = Repo::new();
     let root = repo.root.display().to_string();
     let work = repo.env.path("home/.claude-work");
+    std::fs::create_dir_all(&work).unwrap();
     session(&repo.env.path("home/.claude"), &root, "a");
     let work_log = session(&work, &root, "b");
     let work = work.display().to_string();
+    // A second project, for a second space.
+    let other = repo.root.with_file_name("other");
+    std::fs::create_dir(&other).unwrap();
+    repo.git_in(&other, &["init", "-q", "-b", "main"]);
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     let added = request(&mut app, Control::AddProject { path: root.clone() }).await;
     assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
 
-    // The default account: no `CLAUDE_CONFIG_DIR`.
+    // The default space's account is the default one: no `CLAUDE_CONFIG_DIR`.
     let echo = "echo \"[$CLAUDE_CONFIG_DIR]\"\r";
     app.open_terminal(1, &repo.root).await;
     app.input(1, echo).await;
     app.output_until(1, "[]").await;
 
-    // Another account made current: new terminals get it, open ones keep theirs.
     let mut settings = Settings::default();
     settings.claude.accounts.push(Account {
         name: "Work".into(),
         config_dir: work.clone(),
     });
-    settings.claude.account = Some(work.clone());
     let set = Control::SetSettings {
         settings: settings.clone(),
     };
-    assert_eq!(request(&mut app, set).await, Control::Settings { settings });
-    app.open_terminal(2, &repo.root).await;
+    let saved = Control::Settings {
+        settings: settings.clone(),
+    };
+    assert_eq!(request(&mut app, set).await, saved);
+    // A space's account must be one of the accounts (22.5).
+    let space = |account: &str| Control::CreateSpace {
+        name: "Work".into(),
+        env: hive_protocol::SpaceEnv {
+            claude_account: Some(account.into()),
+            ..Default::default()
+        },
+    };
+    app.send(0, space("/nope")).await;
+    let unknown = Control::SpaceFailed {
+        message: "No Claude account has the folder /nope".into(),
+    };
+    assert_eq!(app.any_control().await, (0, unknown));
+    // A space with the other account, made current, with the second project.
+    app.send(0, space(&work)).await;
+    let made = app.any_control().await.1;
+    assert!(matches!(made, Control::Spaces { .. }), "{made:?}");
+    let add = Control::AddProject {
+        path: other.display().to_string(),
+    };
+    let added = request(&mut app, add).await;
+    assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
+
+    // Two terminals at once, each with its project's space's account, whichever space is
+    // current; one opened before keeps its own.
+    app.open_terminal(2, &other).await;
     app.input(2, echo).await;
     app.output_until(2, &format!("[{work}]")).await;
+    app.open_terminal(6, &repo.root).await;
+    app.input(6, echo).await;
+    app.output_until(6, "[]").await;
     app.input(1, echo).await;
     app.output_until(1, "[]").await;
+
+    // An account a space uses cannot be removed, naming the space.
+    let removed = Control::SetSettings {
+        settings: Settings::default(),
+    };
+    let refused = Control::SettingsFailed {
+        message: "Work is the Claude account of the space Work: choose another one for it first"
+            .into(),
+    };
+    assert_eq!(request(&mut app, removed).await, refused);
+    let select = Control::SelectSpace {
+        id: "default".into(),
+    };
+    app.send(0, select).await;
+    let selected = app.any_control().await.1;
+    assert!(matches!(selected, Control::Spaces { .. }), "{selected:?}");
 
     // A terminal asked for with an account (to log in, or to resume one of its sessions) gets
     // that one, the default account too; a folder no account has is refused.
@@ -161,6 +211,51 @@ async fn the_spaces_claude_folders_become_accounts_once() {
         let saved = std::fs::read_to_string(&file).unwrap();
         assert!(!saved.contains("claude_config_dir"), "{saved}");
         assert!(saved.contains("\"git_name\": \"Me\""), "{saved}");
+        drop(app);
+        assert!(daemon.wait_exit().success());
+    }
+}
+
+#[tokio::test]
+async fn the_account_selected_before_spaces_had_one_becomes_every_spaces() {
+    let repo = Repo::new();
+    let work = repo.env.path("home/.claude-work").display().to_string();
+    let spaces_file = repo.env.path("data/hive/spaces.json");
+    let settings_file = repo.env.path("config/hive/settings.json");
+    for file in [&spaces_file, &settings_file] {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    }
+    // As 21.10 wrote them: no account in the spaces, the selected one in the settings.
+    let spaces = json!({"current": "default", "spaces": [
+        {"id": "default", "name": "Default", "env": {"git_name": "Me"}},
+        {"id": "space-1", "name": "Work", "env": {}},
+    ]});
+    std::fs::write(&spaces_file, spaces.to_string()).unwrap();
+    let account = json!({"name": "Work", "config_dir": work});
+    let settings = json!({"claude": {"accounts": [account], "account": work}});
+    std::fs::write(&settings_file, settings.to_string()).unwrap();
+    let mut expected = Settings::default();
+    expected.claude.accounts.push(Account {
+        name: "Work".into(),
+        config_dir: work.clone(),
+    });
+    // Twice: the second start finds it done.
+    for _ in 0..2 {
+        let mut daemon = repo.env.daemon();
+        let mut app = repo.env.handshake(Role::App).await;
+        let settings = Control::Settings {
+            settings: expected.clone(),
+        };
+        assert_eq!(app.control().await, (0, settings));
+        app.send(0, Control::ListProjects).await;
+        let Control::Spaces { spaces, .. } = app.any_control().await.1 else {
+            panic!("expected spaces")
+        };
+        let accounts: Vec<_> = spaces.iter().map(|s| &s.env.claude_account).collect();
+        assert_eq!(accounts, [&Some(work.clone()), &Some(work.clone())]);
+        assert_eq!(spaces[0].env.git_name.as_deref(), Some("Me"));
+        let saved = std::fs::read_to_string(&settings_file).unwrap();
+        assert!(!saved.contains("\"account\""), "{saved}");
         drop(app);
         assert!(daemon.wait_exit().success());
     }

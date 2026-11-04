@@ -28,27 +28,55 @@ pub struct Store {
     file: PathBuf,
     /// The settings in use, and why the file was ignored (until the settings are saved).
     current: Mutex<(Settings, Option<String>)>,
+    /// The file's `claude.account`, the account selected before 22.5, until the spaces have it
+    /// ([`Store::migrate_account`]): `Some(None)` for the default account or a folder no
+    /// account has.
+    selected: Mutex<Option<Option<String>>>,
 }
 
 impl Store {
     /// Loads `file`. A missing file is the defaults; an unreadable or invalid one is the
     /// defaults too, with a warning for the app, and stays untouched until the user saves.
     pub fn load(file: PathBuf) -> Self {
-        let current = match read(&file) {
-            Ok(settings) => (settings, None),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => (Settings::default(), None),
+        let (current, selected) = match read(&file) {
+            Ok((settings, selected)) => ((settings, None), selected),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                ((Settings::default(), None), None)
+            }
             Err(err) => {
                 let warning = format!(
                     "Ignoring {}: {err}. Using the defaults until the settings are saved.",
                     file.display()
                 );
                 eprintln!("hive: warning: {warning}");
-                (Settings::default(), Some(warning))
+                ((Settings::default(), Some(warning)), None)
             }
         };
         Self {
             file,
             current: Mutex::new(current),
+            selected: Mutex::new(selected),
+        }
+    }
+
+    /// Hands the account selected before 22.5 (when it is one of the accounts) to `give`, which
+    /// makes it every space's, then saves the settings without it, so nothing changes on
+    /// upgrade. Nothing is saved when `give` fails (the warning is logged): the next start
+    /// tries again.
+    pub fn migrate_account(&self, give: &mut dyn FnMut(&str) -> Result<(), String>) {
+        let mut selected = self.selected.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(dir) = selected.as_ref() else {
+            return;
+        };
+        let mut current = self.current();
+        let settings = current.0.clone();
+        let saved = (dir.as_deref().map_or(Ok(()), give))
+            .and_then(|()| self.save_in(&mut current, settings).map(drop));
+        match saved {
+            Ok(()) => *selected = None,
+            Err(err) => eprintln!(
+                "hive: warning: the selected Claude account is not the spaces' yet: {err}"
+            ),
         }
     }
 
@@ -61,10 +89,21 @@ impl Store {
         self.current().clone()
     }
 
+    /// [`Store::set_with`] where no space uses an account.
+    #[cfg(test)]
+    pub fn set(&self, settings: Settings) -> Result<Settings, String> {
+        self.set_with(settings, |_| None)
+    }
+
     /// Checks and saves `settings`, which are then in use. Nothing changes on a failure. A
-    /// Claude account's folder must exist when it is new; a current account that is gone
-    /// falls back to the default one.
-    pub fn set(&self, mut settings: Settings) -> Result<Settings, String> {
+    /// Claude account's folder must exist when it is new; one whose folder `using` names a
+    /// space of (22.5) cannot be removed. (`using` locks the spaces: they are never locked
+    /// before the settings.)
+    pub fn set_with(
+        &self,
+        mut settings: Settings,
+        using: impl Fn(&str) -> Option<String>,
+    ) -> Result<Settings, String> {
         check(&settings)?;
         let mut current = self.current();
         let known = &current.0.claude.accounts;
@@ -73,13 +112,17 @@ impl Store {
                 spaces::claude_config_dir(Some(account.config_dir.clone()), true)?;
             }
         }
+        let kept = |dir: &str| settings.claude.accounts.iter().any(|a| a.config_dir == dir);
+        for gone in known.iter().filter(|a| !kept(&a.config_dir)) {
+            if let Some(space) = using(&gone.config_dir) {
+                let name = &gone.name;
+                return Err(format!(
+                    "{name} is the Claude account of the space {space}: choose another one for it first"
+                ));
+            }
+        }
         settle(&mut settings);
         self.save_in(&mut current, settings)
-    }
-
-    /// The current Claude account's config folder (12.2); `None`: the default account.
-    pub fn account(&self) -> Option<String> {
-        self.current().0.claude.account.clone()
     }
 
     /// Every Claude account's config folder but the default one's.
@@ -89,11 +132,21 @@ impl Store {
         accounts.map(|a| a.config_dir.clone()).collect()
     }
 
+    /// `dir` when it is one of the accounts' folders; else `None`, the default account (a
+    /// space's account, 22.5, may name a folder no account has any more in a hand-edited file).
+    pub fn known(&self, dir: Option<String>) -> Option<String> {
+        dir.filter(|dir| self.account_dirs().contains(dir))
+    }
+
     /// The Claude config folder a new terminal gets: the `asked` account's, which must be one
-    /// of the accounts, else the current one's (`None`: the default account).
-    pub fn claude_dir(&self, asked: Option<AccountDir>) -> Result<Option<String>, String> {
+    /// of the accounts, else its `space`'s (22.5; `None`: the default account).
+    pub fn claude_dir(
+        &self,
+        asked: Option<AccountDir>,
+        space: Option<String>,
+    ) -> Result<Option<String>, String> {
         match asked.map(|a| a.config_dir) {
-            None => Ok(self.account()),
+            None => Ok(self.known(space)),
             Some(None) => Ok(None),
             Some(Some(dir)) if self.account_dirs().contains(&dir) => Ok(Some(dir)),
             Some(Some(dir)) => Err(format!("No Claude account has the folder {dir}")),
@@ -196,15 +249,25 @@ impl Store {
 /// was saved with the old default, not chosen.
 const OLD_FONT_DEFAULT: &str = "\"IBM Plex Mono\", monospace";
 
-fn read(file: &Path) -> io::Result<Settings> {
+/// The settings in `file`, and its `claude.account` when it has one (the account selected
+/// before 22.5; `Some(None)`: the default one, or a folder no account has).
+fn read(file: &Path) -> io::Result<(Settings, Option<Option<String>>)> {
     let bytes = read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
-    let mut settings: Settings = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    let selected = value.get("claude").and_then(|c| c.get("account")).map(|a| {
+        let dir = a.as_str().map(str::to_owned);
+        let accounts = value["claude"]["accounts"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        dir.filter(|dir| accounts.iter().any(|a| a["config_dir"] == dir.as_str()))
+    });
+    let mut settings: Settings = serde_json::from_value(value).map_err(io::Error::other)?;
     check(&settings).map_err(io::Error::other)?;
     settle(&mut settings);
     if settings.terminal.font_family == OLD_FONT_DEFAULT {
         settings.terminal.font_family = Settings::default().terminal.font_family;
     }
-    Ok(settings)
+    Ok((settings, selected))
 }
 
 fn save(file: &Path, settings: &Settings) -> io::Result<()> {
@@ -218,16 +281,11 @@ fn save(file: &Path, settings: &Settings) -> io::Result<()> {
     write_atomic(file, &json, 0o600)
 }
 
-/// A current Claude account no account has any more is the default one; an empty default
-/// account name is [`DEFAULT_ACCOUNT`] (21.4).
+/// An empty default account name is [`DEFAULT_ACCOUNT`] (21.4).
 fn settle(settings: &mut Settings) {
     let claude = &mut settings.claude;
     if claude.default_name.is_empty() {
         claude.default_name = DEFAULT_ACCOUNT.to_owned();
-    }
-    let gone = |dir: &String| claude.accounts.iter().all(|a| a.config_dir != *dir);
-    if claude.account.as_ref().is_some_and(gone) {
-        claude.account = None;
     }
 }
 
@@ -705,19 +763,23 @@ mod tests {
         std::fs::create_dir(&work).unwrap();
         let mut settings = Settings::default();
         settings.claude.accounts.push(account("Work", &work));
-        settings.claude.account = Some(work.clone());
         assert_eq!(store.set(settings.clone()), Ok(settings.clone()));
-        assert_eq!(store.account(), Some(work.clone()));
         assert_eq!(store.account_dirs(), std::slice::from_ref(&work));
         let file = tmp.path().join("hive/settings.json");
         assert_eq!(Store::load(file.clone()).get(), (settings.clone(), None));
-        // A terminal gets the current account, or the one asked for when it is an account.
+        // A terminal gets its space's account (22.5), the default one for a folder no account
+        // has, or the one asked for when it is an account.
         let asked = |dir: Option<&str>| {
-            store.claude_dir(Some(AccountDir {
-                config_dir: dir.map(Into::into),
-            }))
+            let config_dir = dir.map(Into::into);
+            store.claude_dir(Some(AccountDir { config_dir }), Some(work.clone()))
         };
-        assert_eq!(store.claude_dir(None), Ok(Some(work.clone())));
+        assert_eq!(
+            store.claude_dir(None, Some(work.clone())),
+            Ok(Some(work.clone()))
+        );
+        assert_eq!(store.claude_dir(None, Some("/other".into())), Ok(None));
+        assert_eq!(store.claude_dir(None, None), Ok(None));
+        assert_eq!(store.known(Some(work.clone())), Some(work.clone()));
         assert_eq!(asked(None), Ok(None));
         assert_eq!(asked(Some(&work)), Ok(Some(work.clone())));
         assert_eq!(
@@ -742,15 +804,74 @@ mod tests {
                 "The Claude config folder: {missing} is not a folder"
             ))
         );
-        // Removing the current account makes the default one current.
-        settings.claude.accounts.clear();
-        let mut fallen = settings.clone();
-        fallen.claude.account = None;
-        assert_eq!(store.set(settings), Ok(fallen.clone()));
-        assert_eq!(store.account(), None);
-        // A file naming no account's folder as the current one reads as the default one.
-        std::fs::write(&file, r#"{"claude":{"account":"/gone"}}"#).unwrap();
-        assert_eq!(Store::load(file).get(), (Settings::default(), None));
+        // An account a space uses cannot be removed (22.5), naming the space; nothing changes.
+        let mut removed = settings.clone();
+        removed.claude.accounts.clear();
+        let used = |dir: &str| (dir == work).then(|| "Work".to_owned());
+        assert_eq!(
+            store.set_with(removed.clone(), used),
+            Err(
+                "Work is the Claude account of the space Work: choose another one for it first"
+                    .into()
+            )
+        );
+        assert_eq!(store.get().0, settings);
+        // Kept, or used by no space: saved.
+        assert_eq!(store.set_with(settings.clone(), used), Ok(settings));
+        assert_eq!(store.set_with(removed.clone(), |_| None), Ok(removed));
+        assert_eq!(store.account_dirs(), Vec::<String>::new());
+    }
+
+    // `/w` is no absolute path on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn the_account_selected_before_spaces_had_one_goes_to_them_and_leaves_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("settings.json");
+        let old = r#"{"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"}}"#;
+        std::fs::write(&file, old).unwrap();
+        // The old file still loads, as before.
+        let store = Store::load(file.clone());
+        let mut expected = Settings::default();
+        expected.claude.accounts.push(account("Work", "/w"));
+        assert_eq!(store.get(), (expected.clone(), None));
+        // The spaces refuse it: the file is kept, and the next start tries again.
+        let given = std::cell::RefCell::new(Vec::new());
+        let mut refuse = |dir: &str| {
+            given.borrow_mut().push(dir.to_owned());
+            Err("no".to_owned())
+        };
+        store.migrate_account(&mut refuse);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), old);
+        let mut take = |dir: &str| {
+            given.borrow_mut().push(dir.to_owned());
+            Ok(())
+        };
+        store.migrate_account(&mut take);
+        assert_eq!(*given.borrow(), ["/w", "/w"]);
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(!saved.contains("\"account\""), "{saved}");
+        assert_eq!(Store::load(file.clone()).get(), (expected, None));
+        // Once only.
+        store.migrate_account(&mut take);
+        assert_eq!(given.borrow().len(), 2);
+        // The default account, or a folder no account has, is no space's: only the file changes.
+        for old in [
+            r#"{"claude":{"account":null}}"#,
+            r#"{"claude":{"account":"/gone"}}"#,
+        ] {
+            std::fs::write(&file, old).unwrap();
+            let store = Store::load(file.clone());
+            assert_eq!(store.get(), (Settings::default(), None));
+            store.migrate_account(&mut take);
+            assert_eq!(given.borrow().len(), 2, "{old}");
+            let saved = std::fs::read_to_string(&file).unwrap();
+            assert!(!saved.contains("\"account\""), "{saved}");
+        }
+        // A file without it is not written.
+        std::fs::write(&file, "{}").unwrap();
+        Store::load(file.clone()).migrate_account(&mut take);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
     }
 
     // `/a` is no absolute path on Windows.

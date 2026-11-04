@@ -76,6 +76,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         git_email: Some("me@work".into()),
         gh_config_dir: Some(claude.clone()),
         gh_account: None,
+        claude_account: None,
     };
     let mut work = Space {
         id: "space-1".into(),
@@ -103,7 +104,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     let added = app.control().await.1;
     assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
 
-    // Its terminals get the space's identity (no Claude account: that is not the space's).
+    // Its terminals get the space's identity (the default Claude account: it names none).
     app.open_terminal(1, &repo.root).await;
     let echo = "echo \"[$CLAUDE_CONFIG_DIR]$GIT_AUTHOR_NAME|$GIT_COMMITTER_NAME|$GIT_AUTHOR_EMAIL|$GIT_COMMITTER_EMAIL|$GH_CONFIG_DIR\"\r";
     app.input(1, echo).await;

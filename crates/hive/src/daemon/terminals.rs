@@ -29,8 +29,8 @@ impl State {
         }
     }
 
-    /// Opens a terminal of `(cols, rows)` in `cwd`, as the `account` asked for (12.2; the
-    /// current one when `None`).
+    /// Opens a terminal of `(cols, rows)` in `cwd`, as the `account` asked for (12.2; its
+    /// project's space's when `None`, 22.5).
     pub(super) async fn open(
         self: &Arc<Self>,
         channel: u32,
@@ -45,18 +45,16 @@ impl State {
             let message = err.to_string();
             return self.to_app(channel, &Control::Error { message }).await;
         }
-        let claude_dir = match self.settings.claude_dir(account) {
+        // Its space's environment (6.14) with its Claude account (the asked one, 12.2, else the
+        // space's, 22.5) and its GitHub account's token (9.30), and its worktree's `HIVE_*`
+        // (6.8), placed before the lock since placing lists worktrees.
+        let mut space = tokio::task::block_in_place(|| self.projects.space_env(cwd));
+        space.claude_account = match self.settings.claude_dir(account, space.claude_account) {
             Ok(dir) => dir,
             Err(message) => return self.to_app(channel, &Control::Error { message }).await,
         };
-        // Its Claude account, its space's environment (6.14) with its GitHub account's token
-        // (9.30), and its worktree's `HIVE_*` (6.8), placed before the lock since placing
-        // lists worktrees.
-        let space = tokio::task::block_in_place(|| self.projects.space_env(cwd));
-        let claude = claude_dir
-            .iter()
-            .map(|dir| ("CLAUDE_CONFIG_DIR", dir.clone()));
-        let mut env: Vec<_> = claude.chain(crate::spaces::vars(&space)).collect();
+        let claude_dir = space.claude_account.clone();
+        let mut env = crate::spaces::vars(&space);
         if space.gh_account.is_some() {
             let gh = self.gh().await;
             match tokio::task::block_in_place(|| gh.vars(&space)) {

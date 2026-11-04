@@ -205,7 +205,8 @@
           "git_name": null,
           "git_email": null,
           "gh_config_dir": null,
-          "gh_account": null
+          "gh_account": null,
+          "claude_account": null
         }
       }
     ],
@@ -625,7 +626,6 @@
       "projects": {},
       "claude": {
         "accounts": [],
-        "account": null,
         "default_name": "Default",
         "share_sessions": false
       }
