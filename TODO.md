@@ -660,7 +660,9 @@ Asked by the human 2026-11-03, after setting up a project's scripts (6.8): a run
   - **The help cut down:** one line each, the rest in tooltips or the docs.
   - **Sessions and Shared as their own titled groups.** Shared shows its path in full (or `~`-shortened) and lists what it holds on one line, "none" said once when empty.
 
-  The agent shows the layout at the checkpoint before finishing: a screenshot of the mock transport, with three accounts, one not logged in, a long folder path, and a Shared folder with and without content. Tests: bun, the columns and actions per row (default without remove), the add flow through the button, the badge; e2e on the mock transport for the page at the dialog's narrow and wide sizes, with no clipped button.
+  - **The status bar too** (second screenshot, 2026-11-04): with the current account not logged in, it shows "Not logged in" in yellow, a "Log in…" button, then the select "Ai3 - Visus (not logged in)". The same fact is said twice, and the button is a full-size button in a status bar. Proposal: one compact mark on the select itself (a small warning dot or icon on the account, its tooltip "Not logged in: click to log in"), with "Log in…" as an item in the select's menu or the mark's click, not a separate button. The option labels in the open menu may keep "(not logged in)".
+
+  The agent shows the layout at the checkpoint before finishing: a screenshot of the mock transport, with three accounts, one not logged in, a long folder path, and a Shared folder with and without content, and the status bar with the current account logged in and not. Tests: bun, the columns and actions per row (default without remove), the add flow through the button, the badge, the status bar's mark and its log-in action; e2e on the mock transport for the page at the dialog's narrow and wide sizes, with no clipped button.
 ---
 
 ## Stage 23 — Files inside the app
