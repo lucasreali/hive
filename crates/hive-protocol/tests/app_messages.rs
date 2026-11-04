@@ -82,6 +82,8 @@ sort! {
         | GetSettings
         | Resync
         | SetSettings
+        | CreateAccount
+        | RemoveAccount
         | OpenSettingsFile
         | GetDiagnostics
         | GetShared

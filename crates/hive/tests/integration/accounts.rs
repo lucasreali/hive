@@ -57,6 +57,7 @@ async fn new_terminals_get_the_current_account_and_every_accounts_sessions_are_l
     settings.claude.accounts.push(Account {
         name: "Work".into(),
         config_dir: work.clone(),
+        hive_folder: false,
     });
     settings.claude.account = Some(work.clone());
     let set = Control::SetSettings {
@@ -149,6 +150,7 @@ async fn the_spaces_claude_folders_become_accounts_once() {
     expected.claude.accounts.push(Account {
         name: "Work".into(),
         config_dir: work.clone(),
+        hive_folder: false,
     });
     // Twice: the second start finds them made already.
     for _ in 0..2 {
@@ -290,6 +292,7 @@ async fn each_account_says_whether_it_logged_in() {
     settings.claude.accounts.push(Account {
         name: "Work".into(),
         config_dir: work.clone(),
+        hive_folder: false,
     });
     let set = Control::SetSettings {
         settings: settings.clone(),
@@ -328,6 +331,7 @@ async fn a_session_moves_into_another_accounts_folder() {
     settings.claude.accounts.push(Account {
         name: "Work".into(),
         config_dir: work.clone(),
+        hive_folder: false,
     });
     let set = Control::SetSettings {
         settings: settings.clone(),
@@ -381,6 +385,53 @@ async fn a_session_moves_into_another_accounts_folder() {
         .map(|s| (s.id.as_str(), s.config_dir.as_deref()))
         .collect();
     assert_eq!(listed, [("a", Some(work.as_str()))]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+// Unix: the folders' mode.
+#[cfg(unix)]
+#[tokio::test]
+async fn hive_makes_a_new_accounts_private_folder_and_deletes_only_its_own() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = crate::common::Env::new();
+    let mut daemon = env.daemon();
+    // Hive's folder, named by `HIVE_HOME`, and its `accounts/` are private from the start.
+    let mode = |dir: &Path| std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+    let accounts = env.path("data/hive/accounts");
+    assert_eq!(mode(&env.path("data/hive")), 0o700);
+    assert_eq!(mode(&accounts), 0o700);
+    let mut app = env.connect(Role::App).await;
+    let create = |name: &str| Control::CreateAccount { name: name.into() };
+    let Control::Settings { settings } = request(&mut app, create("Work")).await else {
+        panic!("not created");
+    };
+    let work = accounts.join("work");
+    let made = Account {
+        name: "Work".into(),
+        config_dir: work.display().to_string(),
+        hive_folder: true,
+    };
+    assert_eq!(settings.claude.accounts, std::slice::from_ref(&made));
+    assert_eq!(mode(&work), 0o700);
+    let failed = request(&mut app, create("..")).await;
+    let message = "\"..\" cannot name a folder: give the account a letter or a digit".into();
+    assert_eq!(failed, Control::SettingsFailed { message });
+    // Removed with its folder; a folder Hive did not make is refused.
+    let remove = |config_dir: &str, delete_folder| Control::RemoveAccount {
+        config_dir: config_dir.into(),
+        delete_folder,
+    };
+    let home = env.path("home").display().to_string();
+    let message = format!("Hive did not make {home}: it is never deleted");
+    let refused = request(&mut app, remove(&home, true)).await;
+    assert_eq!(refused, Control::SettingsFailed { message });
+    let Control::Settings { settings } = request(&mut app, remove(&made.config_dir, true)).await
+    else {
+        panic!("not removed");
+    };
+    assert!(settings.claude.accounts.is_empty());
+    assert!(!work.exists());
     drop(app);
     assert!(daemon.wait_exit().success());
 }

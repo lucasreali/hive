@@ -2,6 +2,7 @@
 //! `~/.hive/settings.json`. The app reads and saves them whole through the
 //! protocol (`get_settings`, `set_settings`); ranges are checked here.
 
+use std::fs::DirBuilder;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -28,6 +29,9 @@ pub struct Store {
     file: PathBuf,
     /// The settings in use, and why the file was ignored (until the settings are saved).
     current: Mutex<(Settings, Option<String>)>,
+    /// Where Hive makes the Claude account folders (22.3, [`crate::paths::Paths::accounts_dir`]);
+    /// empty until [`Store::with_accounts`].
+    accounts: PathBuf,
 }
 
 impl Store {
@@ -49,7 +53,15 @@ impl Store {
         Self {
             file,
             current: Mutex::new(current),
+            accounts: PathBuf::new(),
         }
+    }
+
+    /// The store, making the Claude account folders in `accounts` (22.3).
+    pub fn with_accounts(mut self, accounts: PathBuf) -> Self {
+        mark(&mut self.current().0, &accounts);
+        self.accounts = accounts;
+        self
     }
 
     fn current(&self) -> MutexGuard<'_, (Settings, Option<String>)> {
@@ -74,7 +86,75 @@ impl Store {
             }
         }
         settle(&mut settings);
+        mark(&mut settings, &self.accounts);
         self.save_in(&mut current, settings)
+    }
+
+    /// Adds the Claude account `name` (22.3, D22.1) with a new folder of its own, made private
+    /// (0700) in [`Store::accounts`] and named after it ([`slug`]). Refused, with nothing made,
+    /// when the name has no letter or digit, when the folder is there already, or when the
+    /// account would not be saved (its name taken).
+    pub fn create_account(&self, name: &str) -> Result<Settings, String> {
+        let slug = slug(name);
+        if slug.is_empty() {
+            return Err(format!(
+                "{name:?} cannot name a folder: give the account a letter or a digit"
+            ));
+        }
+        let dir = self.accounts.join(&slug);
+        let config_dir = dir.to_str().ok_or("Hive's folder is no text")?.to_owned();
+        let mut current = self.current();
+        let mut settings = current.0.clone();
+        let account = Account {
+            name: name.to_owned(),
+            config_dir,
+            hive_folder: true,
+        };
+        settings.claude.accounts.push(account);
+        check(&settings)?;
+        let made = crate::mode::folder(DirBuilder::new().recursive(true), 0o700)
+            .create(&self.accounts)
+            .and_then(|()| crate::mode::folder(&mut DirBuilder::new(), 0o700).create(&dir));
+        made.map_err(|err| match err.kind() {
+            io::ErrorKind::AlreadyExists => format!(
+                "{} exists already: give the account another name",
+                dir.display()
+            ),
+            _ => format!("Cannot make {}: {err}", dir.display()),
+        })?;
+        settle(&mut settings);
+        self.save_in(&mut current, settings).inspect_err(|_| {
+            // Saved nothing: the empty folder just made goes too.
+            let _ = std::fs::remove_dir(&dir);
+        })
+    }
+
+    /// Removes the Claude account whose folder is `dir` (22.3), as [`Store::set`] would, then
+    /// deletes the folder when `delete` and Hive made it (sessions, settings and skills; never
+    /// credentials kept elsewhere, #45). The settings then in use, and why the folder could not
+    /// be deleted. Refused, with nothing removed, for a folder Hive did not make.
+    pub fn remove_account(
+        &self,
+        dir: &str,
+        delete: bool,
+    ) -> Result<(Settings, Option<String>), String> {
+        if delete && !own(&self.accounts, dir) {
+            return Err(format!("Hive did not make {dir}: it is never deleted"));
+        }
+        let mut settings = self.get().0;
+        let before = settings.claude.accounts.len();
+        settings.claude.accounts.retain(|a| a.config_dir != dir);
+        if settings.claude.accounts.len() == before {
+            return Err(format!("No Claude account has the folder {dir}"));
+        }
+        let settings = self.set(settings)?;
+        let deleted = match delete {
+            // Not followed when it is a link: only the link goes.
+            true => std::fs::remove_dir_all(dir).err(),
+            false => None,
+        };
+        let why = deleted.map(|err| format!("Cannot delete {dir}: {err}"));
+        Ok((settings, why))
     }
 
     /// The current Claude account's config folder (12.2); `None`: the default account.
@@ -124,7 +204,12 @@ impl Store {
         for (name, config_dir) in legacy {
             if claude.accounts.iter().all(|a| a.config_dir != config_dir) {
                 let name = free_name(claude, &name);
-                claude.accounts.push(Account { name, config_dir });
+                let hive_folder = own(&self.accounts, &config_dir);
+                claude.accounts.push(Account {
+                    name,
+                    config_dir,
+                    hive_folder,
+                });
             }
         }
         if settings == current.0 {
@@ -229,6 +314,35 @@ fn settle(settings: &mut Settings) {
     if claude.account.as_ref().is_some_and(gone) {
         claude.account = None;
     }
+}
+
+/// Marks each Claude account whose folder Hive made (22.3): [`own`] in `accounts`.
+fn mark(settings: &mut Settings, accounts: &Path) {
+    for account in &mut settings.claude.accounts {
+        account.hive_folder = own(accounts, &account.config_dir);
+    }
+}
+
+/// Whether `dir` is a folder Hive makes for an account (22.3): right in `accounts`, named as
+/// [`slug`] names one (so never `..`).
+fn own(accounts: &Path, dir: &str) -> bool {
+    let dir = Path::new(dir);
+    let name = dir.file_name().and_then(|n| n.to_str());
+    dir.parent() == Some(accounts) && name.is_some_and(|n| slug(n) == n)
+}
+
+/// The folder name of an account named `name` (22.3): its letters and digits, lowercase, any
+/// run of other characters one `-` between them (`Work 2` is `work-2`); empty when it has none.
+fn slug(name: &str) -> String {
+    let mut slug = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_end_matches('-').to_owned()
 }
 
 /// `name`, or `name 2`, `name 3`… when an account, or the default one, has it.
@@ -695,6 +809,7 @@ mod tests {
         Account {
             name: name.into(),
             config_dir: dir.into(),
+            hive_folder: false,
         }
     }
 
@@ -954,5 +1069,155 @@ mod tests {
         let err = ignored.migrate(legacy(&[("Z", "/z")])).unwrap_err();
         assert!(err.starts_with("Ignoring "), "{err}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{");
+    }
+
+    /// A store in a temporary folder whose account folders go in `accounts/` there.
+    fn store_with_accounts() -> (tempfile::TempDir, Store, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let accounts = tmp.path().join("hive/accounts");
+        let file = tmp.path().join("hive/settings.json");
+        let store = Store::load(file).with_accounts(accounts.clone());
+        (tmp, store, accounts)
+    }
+
+    #[test]
+    fn an_account_folder_is_named_after_the_account() {
+        assert_eq!(slug("Work"), "work");
+        assert_eq!(slug("  Work 2 -- Client!  "), "work-2-client");
+        assert_eq!(slug("Ação"), "ação");
+        assert_eq!(slug("../.."), "");
+        assert_eq!(slug("/"), "");
+        let accounts = Path::new("/h/accounts");
+        assert!(own(accounts, "/h/accounts/work-2"));
+        assert!(!own(accounts, "/h/accounts/Work"));
+        assert!(!own(accounts, "/h/accounts/.."));
+        assert!(!own(accounts, "/h/accounts/work/inner"));
+        assert!(!own(accounts, "/h/accounts"));
+        assert!(!own(accounts, "/h/.claude-work"));
+    }
+
+    // Unix: the folder's mode, and absolute folders as `/`.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_account_gets_a_private_folder_of_its_own_and_keeps_it_marked() {
+        let (tmp, store, accounts) = store_with_accounts();
+        let settings = store.create_account("Work 2").unwrap();
+        let dir = accounts.join("work-2");
+        let made = Account {
+            name: "Work 2".into(),
+            config_dir: dir.display().to_string(),
+            hive_folder: true,
+        };
+        assert_eq!(settings.claude.accounts, std::slice::from_ref(&made));
+        assert_eq!(store.get().0, settings);
+        let mode = |dir: &Path| crate::mode::of(&std::fs::metadata(dir).unwrap()) & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&accounts), 0o700);
+        // Read back: marked by the service, whatever the file or the app says.
+        let file = tmp.path().join("hive/settings.json");
+        let saved = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, saved.replace("true", "false")).unwrap();
+        let again = Store::load(file.clone()).with_accounts(accounts.clone());
+        assert_eq!(again.get().0.claude.accounts, std::slice::from_ref(&made));
+        assert!(!Store::load(file).get().0.claude.accounts[0].hive_folder);
+        let mut unmarked = settings.clone();
+        unmarked.claude.accounts[0].hive_folder = false;
+        assert_eq!(again.set(unmarked), Ok(settings));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_taken_or_unsafe_account_name_makes_no_folder() {
+        let (tmp, store, accounts) = store_with_accounts();
+        let before = store.create_account("Work").unwrap();
+        // The name is taken, or the folder another account's.
+        assert_eq!(
+            store.create_account("Work"),
+            Err("Another account is named Work".into())
+        );
+        let dir = accounts.join("work").display().to_string();
+        assert_eq!(
+            store.create_account("work!"),
+            Err(format!(
+                "Another account has the Claude config folder {dir}"
+            ))
+        );
+        // A folder there already, though no account has it.
+        std::fs::create_dir(accounts.join("home")).unwrap();
+        let home = accounts.join("home").display().to_string();
+        assert_eq!(
+            store.create_account("Home"),
+            Err(format!(
+                "{home} exists already: give the account another name"
+            ))
+        );
+        // No letter or digit to name a folder after.
+        for name in ["../..", "/", "--"] {
+            assert_eq!(
+                store.create_account(name),
+                Err(format!(
+                    "{name:?} cannot name a folder: give the account a letter or a digit"
+                ))
+            );
+        }
+        assert_eq!(store.get().0, before);
+        let mut left: Vec<_> = std::fs::read_dir(&accounts)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["home", "work"]);
+        // A folder that cannot be made, or settings that cannot be saved, leave nothing.
+        std::fs::write(tmp.path().join("file"), "").unwrap();
+        let file = tmp.path().join("hive/b.json");
+        let blocked = Store::load(file).with_accounts(tmp.path().join("file/accounts"));
+        let err = blocked.create_account("Work").unwrap_err();
+        assert!(err.starts_with("Cannot make "), "{err}");
+        let file = tmp.path().join("file/settings.json");
+        let unsaved = Store::load(file).with_accounts(accounts.clone());
+        let err = unsaved.create_account("Other").unwrap_err();
+        assert!(err.starts_with("Cannot save "), "{err}");
+        assert!(!accounts.join("other").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_an_account_deletes_only_a_folder_hive_made() {
+        let (tmp, store, accounts) = store_with_accounts();
+        store.create_account("Work").unwrap();
+        store.create_account("Kept").unwrap();
+        let work = accounts.join("work");
+        std::fs::write(work.join(".claude.json"), "{}").unwrap();
+        let theirs = tmp.path().join(".claude-mine");
+        std::fs::create_dir(&theirs).unwrap();
+        let theirs = theirs.display().to_string();
+        let mut settings = store.get().0;
+        settings.claude.accounts.push(account("Mine", &theirs));
+        store.set(settings).unwrap();
+        // A folder Hive did not make is never deleted: refused, nothing removed.
+        assert_eq!(
+            store.remove_account(&theirs, true),
+            Err(format!("Hive did not make {theirs}: it is never deleted"))
+        );
+        assert_eq!(store.account_dirs().len(), 3);
+        // Removed and kept on disk, as before.
+        let (settings, why) = store.remove_account(&theirs, false).unwrap();
+        assert_eq!((settings.claude.accounts.len(), why), (2, None));
+        assert!(Path::new(&theirs).is_dir());
+        // Hive's own: deleted with what it holds.
+        let work = work.display().to_string();
+        let (settings, why) = store.remove_account(&work, true).unwrap();
+        assert_eq!((settings.claude.accounts.len(), why), (1, None));
+        assert!(!accounts.join("work").exists());
+        assert_eq!(
+            store.remove_account(&work, false),
+            Err(format!("No Claude account has the folder {work}"))
+        );
+        // Gone already: removed, and the reason said.
+        let kept = accounts.join("kept").display().to_string();
+        std::fs::remove_dir(&kept).unwrap();
+        let (settings, why) = store.remove_account(&kept, true).unwrap();
+        assert!(settings.claude.accounts.is_empty());
+        assert!(why.unwrap().starts_with(&format!("Cannot delete {kept}: ")));
     }
 }

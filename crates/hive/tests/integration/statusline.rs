@@ -101,6 +101,7 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
     settings.claude.accounts.push(Account {
         name: "Work".into(),
         config_dir: config_dir.clone(),
+        hive_folder: false,
     });
     settings.claude.account = Some(config_dir);
     let select = Control::SetSettings {

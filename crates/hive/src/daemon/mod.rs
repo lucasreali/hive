@@ -81,6 +81,10 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let paths = &moved;
     #[cfg(windows)]
     let warning = None;
+    // Private on every start (22.3), also when `HIVE_HOME` names it or it was there already: an
+    // existing folder keeps its mode.
+    crate::mode::folder(std::fs::DirBuilder::new().recursive(true), 0o700)
+        .create(paths.accounts_dir())?;
     wrapper::install(paths, &std::env::current_exe()?)?;
     // Handle SIGTERM before anyone can connect, so an early one still cleans up.
     #[cfg(unix)]
@@ -110,7 +114,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     std::thread::spawn(crate::git::resolved);
     let projects = Projects::load(paths.spaces(), &paths.projects());
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
-    let settings = settings::Store::load(paths.settings());
+    let settings = settings::Store::load(paths.settings()).with_accounts(paths.accounts_dir());
     projects.migrate_accounts(&mut |legacy| settings.migrate(legacy));
     let ports = Ports::new(paths.ports());
     let restore = Restore {

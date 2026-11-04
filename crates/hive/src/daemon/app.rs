@@ -240,6 +240,31 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             // An account switch shows another account's windows, also while the tick sleeps.
             state.send_usage().await;
         }
+        Ok(Control::CreateAccount { name }) => {
+            let reply = match tokio::task::block_in_place(|| state.settings.create_account(&name)) {
+                Ok(settings) => Control::Settings { settings },
+                Err(message) => Control::SettingsFailed { message },
+            };
+            state.to_app(0, &reply).await;
+        }
+        Ok(Control::RemoveAccount {
+            config_dir,
+            delete_folder,
+        }) => {
+            let removed = tokio::task::block_in_place(|| {
+                state.settings.remove_account(&config_dir, delete_folder)
+            });
+            let (settings, why) = match removed {
+                Ok((settings, why)) => (Some(settings), why),
+                Err(message) => (None, Some(message)),
+            };
+            if let Some(settings) = settings {
+                state.to_app(0, &Control::Settings { settings }).await;
+            }
+            if let Some(message) = why {
+                state.to_app(0, &Control::SettingsFailed { message }).await;
+            }
+        }
         Ok(Control::OpenSettingsFile) => {
             let located = tokio::task::block_in_place(|| {
                 file::windows(state.settings.ensure_file()?, OsStr::new("wslpath"))

@@ -994,6 +994,20 @@ pub enum Control {
     SetSettings {
         settings: Settings,
     },
+    /// App → service: a new Claude account named `name` (22.3, D22.1) whose folder Hive makes,
+    /// `accounts/<slug>` in Hive's folder (mode 0700); answered by `Settings`, or by
+    /// `SettingsFailed` with nothing made (a taken folder, or a name with no letter or digit).
+    CreateAccount {
+        name: String,
+    },
+    /// App → service: removes the Claude account whose folder is `config_dir` (22.3), and then
+    /// deletes that folder when `delete_folder` and Hive made it (a folder Hive did not make is
+    /// never deleted). Answered by `Settings`, then by `SettingsFailed` when the folder could
+    /// not be deleted; by `SettingsFailed` alone with nothing removed.
+    RemoveAccount {
+        config_dir: String,
+        delete_folder: bool,
+    },
     /// Settings not saved (a value out of range, or the write failed), or a settings file
     /// ignored for being invalid (sent after `Settings`, which then holds the defaults).
     /// Shown as is.
@@ -1104,6 +1118,10 @@ impl Default for ClaudeSettings {
 pub struct Account {
     pub name: String,
     pub config_dir: String,
+    /// Hive made its folder (22.3, D22.1): one in Hive's `accounts/`, which removing the account
+    /// may delete. Set by the service from `config_dir`, never taken from the file or the app.
+    #[serde(default)]
+    pub hive_folder: bool,
 }
 
 /// Whether the Claude account whose folder is `config_dir` (`None`: the default account) has
@@ -2982,6 +3000,7 @@ mod tests {
         expected.claude.accounts.push(Account {
             name: "Work".into(),
             config_dir: "/w".into(),
+            hive_folder: false,
         });
         expected.terminal.cursor_style = CursorStyle::Bar;
         expected.terminal.shell = TerminalShell::GitBash;
@@ -2990,6 +3009,21 @@ mod tests {
             .projects
             .insert("/r".into(), ProjectSettings::default());
         assert_eq!(partial, Control::SetSettings { settings: expected });
+        let create = r#"{"type":"create_account","name":"Work"}"#;
+        assert_eq!(
+            serde_json::from_str::<Control>(create).unwrap(),
+            Control::CreateAccount {
+                name: "Work".into()
+            }
+        );
+        let remove = r#"{"type":"remove_account","config_dir":"/w","delete_folder":true}"#;
+        assert_eq!(
+            serde_json::from_str::<Control>(remove).unwrap(),
+            Control::RemoveAccount {
+                config_dir: "/w".into(),
+                delete_folder: true
+            }
+        );
         assert_eq!(
             serde_json::from_str::<Theme>(r#""system""#).unwrap(),
             Theme::System
