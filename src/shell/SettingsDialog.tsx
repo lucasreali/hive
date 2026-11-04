@@ -10,7 +10,7 @@ import {
   TerminalWindowIcon,
   UserCircleIcon,
 } from "@phosphor-icons/react";
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
 import type { Account, AppMode, ClaudeLogin, ProjectScripts, Settings } from "../protocol";
 import { commandKeys, platformCommands } from "../shortcuts";
@@ -965,8 +965,9 @@ export function LogIn({ dir, name }: { dir: string | null; name: string }) {
  */
 function FolderCell({ path }: { path: string }) {
   const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const tail = { "--tail": path.length - cut } as CSSProperties;
   return (
-    <span className="folder-cell" title={path}>
+    <span className="folder-cell" title={path} style={tail}>
       <span className="folder-head">{path.slice(0, cut)}</span>
       <span className="folder-tail">{path.slice(cut)}</span>
     </span>
@@ -1125,8 +1126,9 @@ function Accounts() {
         ))}
       </div>
       {fresh && (
-        <p className="field-help account-made" role="status">
-          {fresh.name} is made: log in to it. <LogIn dir={fresh.config_dir} name={fresh.name} />
+        // Its row above has the "Log in…" (22.6).
+        <p className="field-help" role="status">
+          {fresh.name} is made: log in to it.
         </p>
       )}
       {adding ? (
@@ -1179,7 +1181,15 @@ function Accounts() {
             </p>
           )}
           <div className="form-buttons">
-            <button type="button" className="secondary" onClick={() => setAdding(false)}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setAdding(false);
+                setName("");
+                setDir("");
+              }}
+            >
               Cancel
             </button>
             <button

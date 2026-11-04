@@ -2343,11 +2343,15 @@ button.chevron:hover {
   font-size: var(--fs-mono);
   color: var(--text-2);
   white-space: nowrap;
+  container-type: inline-size;
 }
 
+/* The room left by the tail (`--tail` characters of a monospace font), rounded down to whole
+   characters: the ellipsis then meets the tail with no gap. */
 .folder-head {
   flex: 0 1 auto;
   min-width: 0;
+  max-width: round(down, calc(100cqw - var(--tail) * 1ch), 1ch);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2367,7 +2371,6 @@ button.chevron:hover {
   white-space: nowrap;
 }
 
-.account-made,
 .shared-row {
   display: flex;
   gap: 8px;

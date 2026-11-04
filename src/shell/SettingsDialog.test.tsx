@@ -338,21 +338,44 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   // No worktree to open a terminal in: "Log in…" waits for one.
   const logIns = () => screen.getAllByRole("button", { name: "Log in…" }) as HTMLButtonElement[];
   expect(logIns()[0]?.disabled).toBe(true);
-  // The form opens from "New account" (22.6), its name field focused.
+  // The form opens from "New account" (22.6), its name field focused; Cancel closes it,
+  // adding nothing.
   expect(screen.queryByLabelText("New account name")).toBeNull();
   newAccount();
+  expect(screen.queryByRole("button", { name: "New account" })).toBeNull();
   expect(document.activeElement).toBe(input("New account name"));
+  fireEvent.change(input("New account name"), { target: { value: "Dropped" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByLabelText("New account name")).toBeNull();
+  expect(accounts()).toEqual([]);
+  newAccount();
   const add = screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
+  expect(input("New account name").value).toBe("");
   expect(add.disabled).toBe(true);
   fireEvent.click(input("Use an existing folder"));
   fireEvent.change(input("New account name"), { target: { value: " Work " } });
   expect(add.disabled).toBe(true);
-  fireEvent.change(input("New account folder"), { target: { value: " /w " } });
+  // A clicked folder ends with `/`: the service keeps it without (22.2).
+  fireEvent.change(input("New account folder"), { target: { value: " /w/ " } });
   fireEvent.click(add);
   await waitFor(() => expect(accounts()).toEqual([{ name: "Work", config_dir: "/w" }]));
-  // Added, the form closes; the row shows the folder with the whole path as its tooltip.
+  // Added, the form closes and the button is back.
   expect(screen.queryByLabelText("New account name")).toBeNull();
-  expect(screen.getByTitle("/w").textContent).toBe("/w");
+  expect(screen.getByRole("button", { name: "New account" })).toBeDefined();
+  // One row per account in the same columns: name, folder (the whole path as its tooltip),
+  // status, "Log in…", remove; the default row's remove slot is empty.
+  const rows = [...document.querySelectorAll(".account-row")].map((row) =>
+    [...row.children].map((cell) => cell.getAttribute("aria-label") ?? cell.textContent),
+  );
+  expect(rows).toEqual([
+    ["Name of the default account", "~/.claude", "", "Log in…", ""],
+    // The mock: an added account never logged in.
+    ["Name of /w", "/w", "Not logged in", "Log in…", ""],
+  ]);
+  const cells = document.querySelectorAll(".account-row")[1]?.children;
+  expect(cells?.[1]?.getAttribute("title")).toBe("/w");
+  expect(cells?.[4]?.getAttribute("title")).toBe("Remove Work");
+  expect(document.querySelectorAll(".account-row")[0]?.children[4]?.tagName).toBe("SPAN");
   fireEvent.change(input("Name of /w"), { target: { value: "Job " } });
   await waitFor(() => expect(accounts()[0]?.name).toBe("Job"));
 
@@ -433,7 +456,9 @@ test("a new account named only gets a folder Hive makes, then is offered its log
   expect(screen.getByTitle(config_dir)).toBeDefined();
   const offer = screen.getByText(/Work 2 is made: log in to it/);
   expect(offer.getAttribute("role")).toBe("status");
-  expect(within(offer).getByRole("button", { name: "Log in…" })).toBeDefined();
+  // Only said: its row has the "Log in…" (22.6).
+  expect(within(offer).queryByRole("button")).toBeNull();
+  expect(screen.getAllByRole("button", { name: "Log in…" })).toHaveLength(2);
   // A taken name is refused: nothing made, nothing offered for it, the reason shown.
   newAccount();
   fireEvent.change(input("New account name"), { target: { value: "Default" } });

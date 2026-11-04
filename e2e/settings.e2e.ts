@@ -84,5 +84,65 @@ test("settings: a new account's folder is browsed from home, hidden ones include
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
   const made = "/home/mock/.hive/accounts/personal";
   await expect(dialog.getByTitle(made)).toHaveText(made);
-  await expect(dialog.getByRole("status").getByRole("button", { name: "Log in…" })).toBeVisible();
+  await expect(dialog.getByRole("status")).toHaveText("Personal is made: log in to it.");
+});
+
+test("settings: Accounts fits the dialog narrow and wide, no button clipped (22.6)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  await page.keyboard.press(`${mod}+Comma`);
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Accounts" }).click();
+  // Two accounts besides the default one, a long folder among them; the mock says neither
+  // logged in, so both rows carry the badge.
+  const long = "/home/user/clients/ai3-visus-consulting/claude-accounts/.claude-work-long";
+  await dialog.getByRole("button", { name: "New account" }).click();
+  await dialog.getByLabel("New account name").fill("Work");
+  await dialog.getByLabel("Use an existing folder").check();
+  await dialog.getByLabel("New account folder").fill(long);
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await dialog.getByRole("button", { name: "New account" }).click();
+  await dialog.getByLabel("Use an existing folder").uncheck();
+  await dialog.getByLabel("New account name").fill("Ai3 - Visus");
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(dialog.getByText("Not logged in")).toHaveCount(2);
+  const group = dialog.getByRole("region", { name: "Claude accounts" });
+  // The app's smallest window, a narrower one (the dialog shrinks below 792 px) and a wide one.
+  for (const [width, height] of [
+    [800, 500],
+    [640, 600],
+    [1440, 900],
+  ]) {
+    await page.setViewportSize({ width, height });
+    const box = await group.boundingBox();
+    const buttons = group.getByRole("button");
+    expect(await buttons.count()).toBe(6);
+    for (const button of await buttons.all()) {
+      const own = await button.boundingBox();
+      expect(own && box && own.x >= box.x && own.x + own.width <= box.x + box.width + 0.5).toBe(
+        true,
+      );
+      // Its label fits it.
+      expect(await button.evaluate((b) => b.scrollWidth <= b.clientWidth)).toBe(true);
+    }
+    // Each row's "Log in…" sits in the same column.
+    const xs = await group
+      .getByRole("button", { name: "Log in…" })
+      .evaluateAll((all) => all.map((b) => Math.round(b.getBoundingClientRect().x)));
+    expect(new Set(xs).size).toBe(1);
+    // The long folder keeps its last segment and is one path: no gap before it.
+    const folder = group.getByTitle(long);
+    await expect(folder).toContainText("/.claude-work-long");
+    // Its start is cut to whole characters, so the ellipsis meets the last segment.
+    const chars = await folder.evaluate((f) => {
+      const [head, tail] = [...f.children].map((c) => c.getBoundingClientRect().width);
+      return (head as number) / ((tail as number) / "/.claude-work-long".length);
+    });
+    expect(Math.abs(chars - Math.round(chars))).toBeLessThan(0.05);
+  }
 });
