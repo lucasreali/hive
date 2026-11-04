@@ -324,7 +324,13 @@ test("a worktree's pull request that ended is an inbox item offering to remove i
   ]);
 
   // With several spaces, the item names the worktree's.
-  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const env = {
+    git_name: null,
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+    claude_account: null,
+  };
   const spaces = [
     { id: "default", name: "Home", projects: [shop.id], env },
     { id: "w", name: "Work", projects: [api.id], env },

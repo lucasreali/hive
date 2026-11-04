@@ -2,7 +2,7 @@ import { afterEach, expect, jest, spyOn, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { notice, noticeKind } from "../test/notice";
 import { connect } from "./connect";
-import type { ServiceMessage } from "./protocol";
+import type { ServiceMessage, SpaceEnv } from "./protocol";
 import { apply } from "./reduce";
 import {
   ago,
@@ -31,6 +31,13 @@ afterEach(() => {
 });
 
 const [session, stopped] = MOCK_SESSIONS;
+const NO_ENV: SpaceEnv = {
+  git_name: null,
+  git_email: null,
+  gh_config_dir: null,
+  gh_account: null,
+  claude_account: null,
+};
 
 test("resume arguments go on with the session, or fork it", () => {
   expect(resumeArgs(session)).toBe(`--resume ${session.id}`);
@@ -92,14 +99,18 @@ test("shared sessions resume as the current account, their log moved there first
       ),
     );
   });
-  const claude = (share_sessions: boolean, account: string | null) => ({
+  const claude = (share_sessions: boolean) => ({
     accounts: [{ name: "Work", config_dir: "/w" }],
-    account,
     default_name: "Default",
     share_sessions,
   });
+  // The current space's account (22.5): the sessions listed are its projects'.
   const set = (share: boolean, account: string | null) =>
-    useHive.setState({ settings: { ...initialState.settings, claude: claude(share, account) } });
+    useHive.setState({
+      settings: { ...initialState.settings, claude: claude(share) },
+      spaces: [{ id: "s", name: "S", projects: [], env: { ...NO_ENV, claude_account: account } }],
+      currentSpace: "s",
+    });
   const asked = () => open.mock.calls.at(-1)?.[4];
 
   // Off: as the account it ran as, nothing moved.
@@ -107,12 +118,12 @@ test("shared sessions resume as the current account, their log moved there first
   await resume(stopped);
   expect(asked()).toEqual({ config_dir: null });
   expect(moved).not.toHaveBeenCalled();
-  // On: as the current account, its log moved there first.
+  // On: as its project's space's account, its log moved there first.
   set(true, "/w");
   await resume(stopped);
   expect(moved).toHaveBeenLastCalledWith(stopped.id, "/w");
   expect(asked()).toEqual({ config_dir: "/w" });
-  // A current account no account has is the default one: already its own, nothing moved.
+  // A space's account no account has is the default one: already its own, nothing moved.
   set(true, "/gone");
   await resume(stopped);
   expect(moved).toHaveBeenCalledTimes(1);
@@ -147,11 +158,15 @@ test("a move waits for its answer at most 30 s, and one move of a session at a t
   const moved = spyOn(transport, "moveSession").mockResolvedValue();
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
-    account: "/w",
     default_name: "Default",
   };
   const settings = { ...initialState.settings, claude: { ...claude, share_sessions: true } };
-  useHive.setState({ settings });
+  const env = { ...NO_ENV, claude_account: "/w" };
+  useHive.setState({
+    settings,
+    spaces: [{ id: "s", name: "S", projects: [], env }],
+    currentSpace: "s",
+  });
   const first = resume(stopped);
   await resume(stopped);
   expect(notice()).toBe("Cannot move the session: it is already being moved");

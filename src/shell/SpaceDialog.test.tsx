@@ -21,6 +21,7 @@ const NO_ENV = {
   git_email: null,
   gh_config_dir: null,
   gh_account: null,
+  claude_account: null,
 };
 const home: Space = { id: "default", name: "Home", projects: [shop.id], env: NO_ENV };
 const work: Space = {
@@ -94,6 +95,43 @@ test("a new space is created with its environment, and a refusal is shown", () =
   act(() => apply({ type: "spaces", spaces: [home, work], current: "w" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   create.mockRestore();
+});
+
+test("a space's Claude account is one of the accounts, kept as its folder (22.5)", () => {
+  const create = spyOn(transport, "createSpace").mockResolvedValue();
+  const update = spyOn(transport, "updateSpace").mockResolvedValue();
+  show([home, work], "default");
+  const accounts = [{ name: "Work account", config_dir: "/w" }];
+  act(() => {
+    const s = useHive.getState().settings;
+    apply({
+      type: "settings",
+      settings: { ...s, claude: { ...s.claude, accounts, default_name: "Mine" } },
+    });
+  });
+  const account = () => screen.getByRole("combobox", { name: "Claude account" });
+  // New: the default account unless another is picked.
+  pick("New space…");
+  expect(account().textContent).toBe("Mine");
+  fireEvent.mouseDown(account());
+  const options = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(options).toEqual(["Mine", "Work account"]);
+  fireEvent.click(screen.getByRole("option", { name: "Work account" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Other" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create space" }));
+  expect(create).toHaveBeenCalledWith("Other", { ...NO_ENV, claude_account: "/w" });
+  act(() => apply({ type: "spaces", spaces: [home, work], current: "default" }));
+  // A folder no account has is the default account, and saved as such.
+  act(() => {
+    const spaces = [home, { ...work, env: { ...work.env, claude_account: "/gone" } }];
+    apply({ type: "spaces", spaces, current: "w" });
+  });
+  pick("Edit space…");
+  expect(account().textContent).toBe("Mine");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(update).toHaveBeenCalledWith("w", "Work", { ...work.env, claude_account: null });
+  create.mockRestore();
+  update.mockRestore();
 });
 
 test("the current space is edited; only an empty one can be deleted", () => {

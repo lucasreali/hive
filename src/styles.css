@@ -1320,8 +1320,8 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
-/* Right-aligned, before the version: the Claude account select (12.2), quiet like the space
-   select, and its session usage (12.1). */
+/* Right-aligned, before the version: the current space's Claude account (22.5) and its session
+   usage (12.1). */
 .statusbar-account {
   display: flex;
   align-items: center;
@@ -2381,8 +2381,7 @@ button.chevron:hover {
 }
 
 .space-select .select-trigger,
-.pulls-bar .select-trigger,
-.account-select .select-trigger {
+.pulls-bar .select-trigger {
   height: 24px;
   cursor: pointer;
   background: transparent;
@@ -2392,14 +2391,16 @@ button.chevron:hover {
 }
 
 .space-select .select-trigger:hover,
-.pulls-bar .select-trigger:hover,
-.account-select .select-trigger:hover {
+.pulls-bar .select-trigger:hover {
   background: var(--hover);
 }
 
-/* In the 24 px status bar. */
-.account-select .select-trigger {
+/* The space's Claude account in the 24 px status bar (22.5), quiet like the space select. */
+.statusbar .space-account {
   height: 20px;
+  padding: 0 8px;
+  color: var(--text-2);
+  font-size: var(--fs-small);
 }
 
 .dialog footer .space-delete {

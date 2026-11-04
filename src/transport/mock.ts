@@ -15,6 +15,7 @@ import type {
   Session,
   Settings,
   Space,
+  SpaceEnv,
   Subagent,
   Worktree,
 } from "../protocol";
@@ -664,6 +665,7 @@ export function createMockTransport(
     git_email: null,
     gh_config_dir: null,
     gh_account: null,
+    claude_account: null,
   };
   // Two accounts logged in to `gh`, as the human has (9.30); "mock-work" is active.
   const ghLogins: GhLogin[] = ["mock-personal", "mock-work"].map((login) => ({
@@ -686,11 +688,17 @@ export function createMockTransport(
   let made = 0;
   const space = (id: string) => spaces.find((x) => x.id === id);
   const sendSpaces = () => later({ type: "spaces", spaces: structuredClone(spaces), current });
+  // As the service: a space's Claude account is one of the accounts, or the default one (22.5).
+  const unknownAccount = ({ claude_account: dir }: SpaceEnv) =>
+    dir && !settings.claude.accounts.some((a) => a.config_dir === dir)
+      ? `No Claude account has the folder ${dir}`
+      : null;
   // As the service: a refusal changes nothing; otherwise the spaces are sent.
   const changeSpaces = (change: () => string | null) => {
     const message = change();
-    if (message) later({ type: "space_failed", message });
-    else sendSpaces();
+    if (message) return later({ type: "space_failed", message });
+    sendSpaces();
+    sendUsage();
   };
   let last = 0;
   type MockTerminal = {
@@ -907,13 +915,22 @@ export function createMockTransport(
       for (const m of mockStates()) later(m);
       later({ type: "subagent_worktrees", worktrees: [MOCK_OWN_WORKTREE] });
     }
-    // The current account's session window (12.1), resetting in 2 hours, and its weekly one
-    // (15.3), in 3 days.
-    const now = Math.floor(Date.now() / 1000);
-    const usage = { used_percentage: 42, resets_at: now + 2 * 3600 };
-    const week = { used_percentage: 41, resets_at: now + 3 * 86400 };
-    later({ type: "session_usage", usage, week });
+    sendUsage(true);
   };
+  // The current space's account's windows (12.1, 22.5), when they changed: the default
+  // account's session window resets in 2 hours and its weekly one (15.3) in 3 days; another
+  // account has none yet.
+  let usageOther = false;
+  function sendUsage(always = false) {
+    const now = Math.floor(Date.now() / 1000);
+    const own = space(current)?.env.claude_account;
+    const other = settings.claude.accounts.some((a) => a.config_dir === own);
+    if (!always && other === usageOther) return;
+    usageOther = other;
+    const usage = other ? null : { used_percentage: 42, resets_at: now + 2 * 3600 };
+    const week = other ? null : { used_percentage: 41, resets_at: now + 3 * 86400 };
+    later({ type: "session_usage", usage, week });
+  }
 
   return {
     async connect(onMessage) {
@@ -933,6 +950,7 @@ export function createMockTransport(
     async createSpace(name, env) {
       changeSpaces(() => {
         if (!name.trim()) return "Enter a name for the space";
+        if (unknownAccount(env)) return unknownAccount(env);
         current = `space-${++made}`;
         spaces = [...spaces, { id: current, name: name.trim(), projects: [], env }];
         return null;
@@ -943,6 +961,7 @@ export function createMockTransport(
         const found = space(id);
         if (!found) return `no space "${id}"`;
         if (!name.trim()) return "Enter a name for the space";
+        if (unknownAccount(env)) return unknownAccount(env);
         Object.assign(found, { name: name.trim(), env });
         return null;
       });
@@ -1012,16 +1031,21 @@ export function createMockTransport(
       later({ type: "settings", settings });
     },
     async setSettings(next) {
-      // A current Claude account that is gone falls back to the default one, and an empty
-      // default account name is "Default", as in the service.
-      const { accounts, account, default_name } = next.claude;
-      const known = accounts.some((a) => a.config_dir === account);
-      const claude = {
-        ...next.claude,
-        account: known ? account : null,
-        default_name: default_name || "Default",
-      };
-      settings = { ...next, claude };
+      // As the service: an account a space uses is not removed (22.5), and an empty default
+      // account name is "Default".
+      const { accounts, default_name } = next.claude;
+      const gone = settings.claude.accounts.filter(
+        (a) => !accounts.some((b) => b.config_dir === a.config_dir),
+      );
+      for (const a of gone) {
+        const user = spaces.find((x) => x.env.claude_account === a.config_dir);
+        if (user) {
+          const message = `${a.name} is the Claude account of the space ${user.name}: choose another one for it first`;
+          later({ type: "settings_failed", message });
+          return;
+        }
+      }
+      settings = { ...next, claude: { ...next.claude, default_name: default_name || "Default" } };
       later({ type: "settings", settings });
     },
     async openSettingsFile() {
@@ -1345,7 +1369,14 @@ export function createMockTransport(
     },
     async openTerminal(cwd, _cols, _rows, onData, account) {
       const id = ++last;
-      const claude = account ? account.config_dir : settings.claude.account;
+      // The account asked for, else its project's space's (22.5); one no account has is the
+      // default one.
+      const worktree = place(cwd);
+      const project = projects.find((p) => p.worktrees.some((w) => w.id === worktree));
+      const top = project && (project.parent ?? project.id);
+      const own = spaces.find((x) => top && x.projects.includes(top))?.env.claude_account;
+      const known = settings.claude.accounts.some((a) => a.config_dir === own);
+      const claude = account ? account.config_dir : known ? (own ?? null) : null;
       terminals.set(id, { onData, line: "", cwd, agent: null, claude });
       // Named as `Store::account_name` names it.
       const named = settings.claude.accounts.find((a) => a.config_dir === claude);

@@ -1,6 +1,6 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 import type { GhAccount, GhIdentity, SpaceEnv } from "../protocol";
-import { ask, currentSpace, openModal, useHive } from "../store";
+import { ask, currentSpace, openModal, spaceAccount, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { homeText } from "../window";
@@ -8,7 +8,7 @@ import { CloseIcon } from "./icons";
 
 const close = () => openModal(null);
 
-type TextKey = Exclude<keyof SpaceEnv, "gh_account">;
+type TextKey = Exclude<keyof SpaceEnv, "gh_account" | "claude_account">;
 
 /** The environment fields, in the dialog's order: what each sets in the space's terminals. */
 const FIELDS: { key: TextKey; label: string; placeholder: string; help: string }[] = [
@@ -37,6 +37,7 @@ const NO_ENV: SpaceEnv = {
   git_email: null,
   gh_config_dir: null,
   gh_account: null,
+  claude_account: null,
 };
 
 /** An account's value in the select; "" is gh's active account. */
@@ -116,6 +117,33 @@ function GhAccountField({ env, setEnv }: { env: SpaceEnv; setEnv: (env: SpaceEnv
 }
 
 /**
+ * The space's Claude account (22.5, D22.15): one of the settings' accounts, kept as its folder so
+ * a rename keeps it; "" is the default account.
+ */
+function ClaudeAccountField({ env, setEnv }: { env: SpaceEnv; setEnv: (env: SpaceEnv) => void }) {
+  const { accounts, default_name } = useHive((s) => s.settings.claude);
+  const options = [
+    { value: "", label: default_name },
+    ...accounts.map((a) => ({ value: a.config_dir, label: a.name })),
+  ];
+  return (
+    <div className="field">
+      <span id="space-claude-account-label">Claude account</span>
+      <Select
+        aria-labelledby="space-claude-account-label"
+        value={env.claude_account ?? ""}
+        options={options}
+        onChange={(value) => setEnv({ ...env, claude_account: value || null })}
+      />
+      <p className="field-help">
+        CLAUDE_CONFIG_DIR: the account the space's terminals run Claude as. Accounts are added in
+        Settings → Accounts.
+      </p>
+    </div>
+  );
+}
+
+/**
  * A space with a GitHub account but no git name or email (21.5, D22.8) commits as git's own
  * guess while it pushes as the account: says so, and "Use the GitHub account's" asks the service
  * for the account's login and noreply email, which fill the empty fields.
@@ -188,7 +216,9 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
   const space = useHive((s) => (editing ? currentSpace(s) : undefined));
   const error = useHive((s) => s.spaceError);
   const [name, setName] = useState(space?.name ?? "");
-  const [env, setEnv] = useState<SpaceEnv>({ ...NO_ENV, ...space?.env });
+  // A Claude account no account has any more is the default one, saved as such.
+  const account = useHive((s) => spaceAccount(s, space));
+  const [env, setEnv] = useState<SpaceEnv>({ ...NO_ENV, ...space?.env, claude_account: account });
   const title = editing ? "Edit space" : "New space";
   const empty = space?.projects.length === 0;
   const listGh = (dir: string | null) => void transport.listGhAccounts(dir);
@@ -228,6 +258,7 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
               autoComplete="off"
             />
           </div>
+          <ClaudeAccountField env={env} setEnv={setEnv} />
           {FIELDS.map((f) => (
             <div className="field" key={f.key}>
               <label htmlFor={`space-${f.key}`}>{f.label}</label>

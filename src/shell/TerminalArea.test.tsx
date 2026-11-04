@@ -543,14 +543,22 @@ test("with more than one Claude account, the tab's tooltip and the menus name th
   expect(note()).toBeNull();
   fireEvent.keyDown(paneMenu(), { key: "Escape" });
 
+  // Two accounts in use by the spaces (22.5).
   const { settings } = useHive.getState();
-  const accounts = [{ name: "Work", config_dir: "/home/me/.claude-work" }];
-  act(() =>
+  const dir = "/home/me/.claude-work";
+  const accounts = [{ name: "Work", config_dir: dir }];
+  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const spaces = [
+    { id: "a", name: "A", projects: [shop.id, api.id], env: { ...env, claude_account: null } },
+    { id: "b", name: "B", projects: [], env: { ...env, claude_account: dir } },
+  ];
+  act(() => {
     apply({
       type: "settings",
       settings: { ...settings, claude: { ...settings.claude, accounts } },
-    }),
-  );
+    });
+    apply({ type: "spaces", spaces, current: "a" });
+  });
   expect(tip()).toBe(`${fixLogin.path}\nClaude account: Default`);
   fireEvent.contextMenu(inside);
   expect(note()).toBe("Claude account: Default");

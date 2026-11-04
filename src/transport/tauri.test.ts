@@ -67,6 +67,7 @@ test("terminal and project actions call their commands", async () => {
     git_email: null,
     gh_config_dir: null,
     gh_account: null,
+    claude_account: null,
   };
   await tauriTransport.createSpace("Work", env);
   await tauriTransport.updateSpace("w", "Job", env);

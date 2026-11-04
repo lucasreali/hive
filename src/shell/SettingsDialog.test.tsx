@@ -386,7 +386,6 @@ test("the accounts section marks an account that never logged in (21.6)", async 
   const ask = spyOn(transport, "listClaudeLogins");
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
-    account: null,
     default_name: "Default",
     share_sessions: false,
   };

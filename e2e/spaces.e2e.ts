@@ -58,6 +58,40 @@ test("the current space is edited; one with projects cannot be deleted", async (
   await expect(space).toHaveText("Personal");
 });
 
+test("the space's Claude account shows in the status bar and is changed in its dialog (22.5)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const bar = page.locator(".statusbar");
+  await expect(bar.getByRole("button", { name: /^Session 42%/ })).toBeVisible();
+  // An account besides the default one.
+  await page.keyboard.press(`${mod}+Comma`);
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts" }).click();
+  await settings.getByLabel("New account name").fill("Work");
+  await settings.getByLabel("New account folder").fill("/home/user/.claude-work");
+  await settings.getByRole("button", { name: "Add", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(settings).toBeHidden();
+
+  const account = bar.getByRole("button", { name: "Default", exact: true });
+  await expect(account).toHaveAttribute(
+    "title",
+    "Claude account of Default; change it in the space's settings",
+  );
+  await expect(bar.getByRole("combobox")).toHaveCount(0);
+  // Its click opens the space's dialog, where the account is picked.
+  await account.click();
+  const dialog = page.getByRole("dialog", { name: "Edit space" });
+  await dialog.getByRole("combobox", { name: "Claude account" }).click();
+  await page.getByRole("option", { name: "Work" }).click();
+  await dialog.getByRole("button", { name: /^Save/ }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(bar.getByRole("button", { name: "Work", exact: true })).toBeVisible();
+  // The usage follows the space's account: none yet for this one.
+  await expect(bar.getByRole("button", { name: /^No usage yet/ })).toBeVisible();
+});
+
 test("switching space shows the place last selected there, with its tabs", async ({ page }) => {
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });

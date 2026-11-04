@@ -1,9 +1,8 @@
 import { version } from "../../package.json";
-import { type Connection, useHive } from "../store";
-import { Select } from "../ui/Select";
+import { type Connection, currentSpace, openModal, spaceAccount, useHive } from "../store";
 import { usageLines } from "../usage";
 import { isMac } from "../window";
-import { LogIn, loggedIn, NotLoggedIn, saveSettings, useClaudeLogins } from "./SettingsDialog";
+import { LogIn, loggedIn, NotLoggedIn, useClaudeLogins } from "./SettingsDialog";
 
 const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
@@ -13,46 +12,38 @@ const LABEL: Record<Connection["status"], string> = {
 };
 
 /**
- * The current Claude account (12.2): new terminals get it, open ones keep theirs. Only shown when
- * there is an account besides the default one. The value "" is the default account. An account
- * that never logged in says so (21.6), and when it is the current one, "Log in…" is beside it.
+ * The current space's Claude account (22.5, D22.15), read-only: the space's terminals get it.
+ * Only shown when there is an account besides the default one. Pressed, it opens the space's
+ * dialog, where it is changed. An account that never logged in says so (21.6), with "Log in…".
  */
-function AccountSelect() {
-  const { accounts, account, default_name } = useHive((s) => s.settings.claude);
+function SpaceAccount() {
+  const { accounts, default_name } = useHive((s) => s.settings.claude);
   const logins = useHive((s) => s.claudeLogins);
-  if (accounts.length === 0) return null;
-  const label = (name: string, dir: string | null) =>
-    loggedIn(logins, dir) ? name : `${name} (not logged in)`;
-  const options = [
-    { value: "", label: label(default_name, null) },
-    ...accounts.map((a) => ({ value: a.config_dir, label: label(a.name, a.config_dir) })),
-  ];
-  const current = accounts.find((a) => a.config_dir === account);
-  const dir = current?.config_dir ?? null;
+  const space = useHive(currentSpace);
+  const dir = useHive((s) => spaceAccount(s, currentSpace(s)));
+  if (accounts.length === 0 || !space) return null;
+  const name = accounts.find((a) => a.config_dir === dir)?.name ?? default_name;
   return (
     <>
       {loggedIn(logins, dir) ? null : (
         <>
           <NotLoggedIn dir={dir} />
-          <LogIn dir={dir} name={current?.name ?? default_name} />
+          <LogIn dir={dir} name={name} />
         </>
       )}
-      <Select
-        className="account-select"
-        aria-label="Claude account"
-        value={account ?? ""}
-        options={options}
-        onChange={(value) =>
-          saveSettings((s) => {
-            s.claude.account = value || null;
-          })
-        }
-      />
+      <button
+        type="button"
+        className="ghost space-account"
+        title={`Claude account of ${space.name}; change it in the space's settings`}
+        onClick={() => openModal("edit-space")}
+      >
+        {name}
+      </button>
     </>
   );
 }
 
-// The place and connection state (#141), the Claude account (12.2) with its session usage
+// The place and connection state (#141), the space's Claude account (22.5) with its session usage
 // (12.1), and the app version; never a message (10.3: `Toasts`).
 export function StatusBar() {
   useClaudeLogins();
@@ -74,7 +65,7 @@ export function StatusBar() {
         <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
       <div className="statusbar-account">
-        <AccountSelect />
+        <SpaceAccount />
         <SessionUsage />
       </div>
       <span className="app-version">v{version}</span>

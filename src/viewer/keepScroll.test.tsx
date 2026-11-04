@@ -28,7 +28,13 @@ const [shop, api] = MOCK_REPOS;
 const [, fixLogin, checkout] = shop.worktrees;
 const W = fixLogin.path;
 const LONG = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
-const NO_ENV = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+const NO_ENV = {
+  git_name: null,
+  git_email: null,
+  gh_config_dir: null,
+  gh_account: null,
+  claude_account: null,
+};
 const spaces = (current: string) =>
   apply({
     type: "spaces",

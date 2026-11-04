@@ -13,7 +13,13 @@ const settle = async () => {
   for (let i = 0; i < 10; i++) await tick();
 };
 const type = (id: number, line: string) => transport.writeTerminal(id, `${line}\r`);
-const NO_ENV = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+const NO_ENV = {
+  git_name: null,
+  git_email: null,
+  gh_config_dir: null,
+  gh_account: null,
+  claude_account: null,
+};
 
 let stop = () => {};
 afterAll(() => {
