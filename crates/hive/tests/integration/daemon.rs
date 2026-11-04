@@ -325,8 +325,8 @@ async fn daemon_fails_when_the_wrapper_cannot_be_installed() {
 #[tokio::test]
 async fn settings_are_read_checked_and_saved_by_the_service() {
     let env = Env::new();
-    std::fs::create_dir_all(env.path("config/hive")).unwrap();
-    let file = env.path("config/hive/settings.json");
+    std::fs::create_dir_all(env.path("data/hive")).unwrap();
+    let file = env.path("data/hive/settings.json");
     std::fs::write(&file, "{").unwrap();
     let mut daemon = env.daemon();
     // An invalid file: the defaults, then why, and the file is left alone.
@@ -387,7 +387,7 @@ async fn diagnostics_find_a_claude_installed_after_none_was_found() {
     common::wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
     let mut app = env.connect(Role::App).await;
     let diagnostics = |claude: Option<String>| Control::Diagnostics {
-        settings_file: env.path("config/hive/settings.json").display().to_string(),
+        settings_file: env.path("data/hive/settings.json").display().to_string(),
         wrapper: env.path("data/hive/bin/claude").display().to_string(),
         claude,
         // This machine runs git.
@@ -476,7 +476,7 @@ async fn the_settings_file_is_written_to_be_opened_and_diagnostics_name_it() {
     let mut daemon = common::Daemon(child);
     common::wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
     let mut app = env.connect(Role::App).await;
-    let file = env.path("config/hive/settings.json");
+    let file = env.path("data/hive/settings.json");
     app.send(0, Control::OpenSettingsFile).await;
     #[cfg(target_os = "linux")]
     let windows_path = format!("W:{}", file.display());
@@ -500,12 +500,14 @@ async fn the_settings_file_is_written_to_be_opened_and_diagnostics_name_it() {
         git_error: None,
     };
     assert_eq!(app.control().await, (0, diagnostics));
-    // No directory for the file: why it cannot be opened.
+    // A folder the file cannot be written in: why it cannot be opened.
+    use std::os::unix::fs::PermissionsExt;
     std::fs::remove_file(&file).unwrap();
-    std::fs::remove_dir(env.path("config/hive")).unwrap();
-    std::fs::write(env.path("config/hive"), "").unwrap();
+    let folder = env.path("data/hive");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
     app.send(0, Control::OpenSettingsFile).await;
     let (_, failed) = app.control().await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         matches!(
             &failed,

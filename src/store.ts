@@ -71,7 +71,7 @@ export type AppliedTheme = Exclude<Settings["appearance"]["theme"], "system">;
 
 export type Connection =
   | { status: "connecting" }
-  | { status: "connected"; version: string; distro: string | null }
+  | { status: "connected"; version: string; distro: string | null; warning?: string | null }
   | {
       status: "version_mismatch";
       protocol: number;

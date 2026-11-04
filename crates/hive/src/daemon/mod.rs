@@ -69,6 +69,18 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     crate::fds::raise_at_start(&crate::fds::Process, &mut io::stderr());
     paths.prepare_runtime()?;
     let lock = lock(paths).await?;
+    // With the lock, so after the service before it and its terminals ended (22.1).
+    #[cfg(unix)]
+    let mut moved = paths.clone();
+    #[cfg(unix)]
+    let warning = Paths::legacy(|key| std::env::var_os(key)).and_then(|(data, config)| {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        crate::legacy::migrate(&mut moved, &data, &config, home.as_deref())
+    });
+    #[cfg(unix)]
+    let paths = &moved;
+    #[cfg(windows)]
+    let warning = None;
     wrapper::install(paths, &std::env::current_exe()?)?;
     // Handle SIGTERM before anyone can connect, so an early one still cleans up.
     #[cfg(unix)]
@@ -128,7 +140,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     )
     .with_power(power)
     .with_usage(usage::Usage::load(paths.usage()));
-    let state = Arc::new(state);
+    let state = Arc::new(State { warning, ..state });
     serve(listener, hold, terminated, state).await
 }
 
@@ -314,6 +326,9 @@ struct State {
     /// Wakes the terminals' tick, asleep while [`State::ticking`] is false (19.3): a terminal
     /// opened, the usage sent.
     tick: tokio::sync::Notify,
+    /// Why the old folders are still in use (22.1, [`crate::legacy::migrate`]), sent in
+    /// `welcome` for the status bar.
+    warning: Option<String>,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -365,6 +380,7 @@ impl State {
             usage: Default::default(),
             awake: std::sync::Mutex::new(power::Awake::new(None)),
             tick: Default::default(),
+            warning: None,
         }
     }
 

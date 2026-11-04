@@ -7,7 +7,9 @@ import type { JobLog, RunDetail, Runs } from "./runs";
 
 /** Service → app messages the store understands. Mirrors `hive_protocol::Control`. */
 export type ServiceMessage =
-  | { type: "welcome"; version: string; distro: string | null }
+  // `warning`: why the service still uses the folders of Hive before 22.1, its files not moved
+  // into `~/.hive` (shown in the status bar).
+  | { type: "welcome"; version: string; distro: string | null; warning?: string | null }
   | { type: "settings"; settings: Settings }
   // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
   // the defaults).

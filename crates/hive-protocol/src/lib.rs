@@ -145,11 +145,15 @@ pub enum Control {
         role: Role,
     },
     /// Handshake accepted. `distro` is the service's WSL distribution (`WSL_DISTRO_NAME`);
-    /// optional, so adding it kept protocol 1 compatible.
+    /// optional, so adding it kept protocol 1 compatible. `warning` says why the service still
+    /// uses the folders of Hive before 22.1 (its files could not be moved into `~/.hive`), for
+    /// the status bar; optional too.
     Welcome {
         version: String,
         #[serde(default)]
         distro: Option<String>,
+        #[serde(default)]
+        warning: Option<String>,
     },
     /// Handshake refused; the connection is closed after this message.
     VersionMismatch {
@@ -980,7 +984,7 @@ pub enum Control {
     /// App → service: the UI was reloaded over the same connection (18.21): every live agent
     /// again, as right after `Welcome` (`AgentDetected` first), and the session usage.
     Resync,
-    /// The service's settings (`$XDG_CONFIG_HOME/hive/settings.json`): sent to the app right
+    /// The service's settings (`~/.hive/settings.json`): sent to the app right
     /// after `Welcome`, and in answer to `GetSettings` and to a saved `SetSettings`.
     Settings {
         settings: Settings,
@@ -1003,7 +1007,7 @@ pub enum Control {
     /// App → service: what the settings' About section shows. Answered by `Diagnostics`.
     GetDiagnostics,
     Diagnostics {
-        /// The settings file (`$XDG_CONFIG_HOME/hive/settings.json`).
+        /// The settings file (`~/.hive/settings.json`).
         settings_file: String,
         /// The `claude` wrapper Hive terminals run first.
         wrapper: String,
@@ -2061,6 +2065,7 @@ mod tests {
         let welcome = Control::Welcome {
             version: "0.1.0".into(),
             distro: None,
+            warning: None,
         };
         assert_eq!(frame.to_control().unwrap(), welcome);
     }

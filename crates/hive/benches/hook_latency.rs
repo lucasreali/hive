@@ -34,7 +34,7 @@ fn hive(dir: &Path) -> Command {
     for (var, sub) in [
         ("HOME", "home"),
         ("XDG_RUNTIME_DIR", "run"),
-        ("XDG_DATA_HOME", "data"),
+        ("HIVE_HOME", "data"),
     ] {
         cmd.env(var, dir.join(sub));
     }

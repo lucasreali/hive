@@ -221,7 +221,7 @@ async fn the_account_selected_before_spaces_had_one_becomes_every_spaces() {
     let repo = Repo::new();
     let work = repo.env.path("home/.claude-work").display().to_string();
     let spaces_file = repo.env.path("data/hive/spaces.json");
-    let settings_file = repo.env.path("config/hive/settings.json");
+    let settings_file = repo.env.path("data/hive/settings.json");
     for file in [&spaces_file, &settings_file] {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     }

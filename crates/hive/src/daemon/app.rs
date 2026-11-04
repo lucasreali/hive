@@ -33,7 +33,7 @@ where
     let (read, write) = tokio::io::split(stream);
     let mut reader = FramedRead::new(read, FrameCodec);
     let mut writer = FramedWrite::new(write, FrameCodec);
-    let Some(role) = handshake(&mut reader, &mut writer).await else {
+    let Some(role) = handshake(&mut reader, &mut writer, state.warning.clone()).await else {
         return;
     };
     match role {
@@ -50,6 +50,7 @@ where
 async fn handshake<R, W>(
     reader: &mut FramedRead<R, FrameCodec>,
     writer: &mut FramedWrite<W, FrameCodec>,
+    warning: Option<String>,
 ) -> Option<Role>
 where
     R: AsyncRead + Unpin,
@@ -65,6 +66,7 @@ where
             Control::Welcome {
                 version: VERSION.to_owned(),
                 distro: std::env::var("WSL_DISTRO_NAME").ok(),
+                warning,
             },
             Some(role),
         ),

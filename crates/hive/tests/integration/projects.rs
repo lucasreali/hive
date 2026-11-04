@@ -844,7 +844,7 @@ async fn a_removed_project_takes_its_settings_and_ports_along_and_leaves_its_fil
     let ports = repo.env.path("data/hive/ports.json");
     // Where the settings and the ports are written before they replace their files.
     let blockers = [
-        repo.env.path("config/hive/settings.tmp/x"),
+        repo.env.path("data/hive/settings.tmp/x"),
         repo.env.path("data/hive/ports.tmp/x"),
     ];
     for round in 0..2 {

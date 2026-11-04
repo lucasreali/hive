@@ -45,20 +45,24 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// config) runs first; on macOS through `/bin/sh` directly. `$1` is the `HIVE_BRIDGE` override
 /// and `$2` the path of the `hive` the installer bundles (a Windows path under WSL, a POSIX one
 /// on macOS), each passed as an argument (maybe empty). The bundled one is copied into Hive's
-/// bin dir when it differs from the copy there, through a temporary file and a rename, so a
+/// bin dir (`$HIVE_HOME/bin` when that is absolute, else `~/.hive/bin`, 22.1; the folders it
+/// makes private, as the service's) when it differs from the copy there, through a temporary file and a rename, so a
 /// running `hive` keeps its file, and hooks keep a stable path even when macOS runs the app
 /// from a translocated one. `xattr` (macOS) drops the copy's quarantine; where it is missing the
 /// failure is ignored. Without either, `cargo install`'s (development).
 const BRIDGE_SCRIPT: &str = r#"[ -n "$1" ] && exec "$1" bridge
 hive=$HOME/.cargo/bin/hive
 if [ -n "$2" ]; then
-  hive=${XDG_DATA_HOME:-$HOME/.local/share}/hive/bin/hive
+  case "$HIVE_HOME" in
+    /*) hive=$HIVE_HOME/bin/hive ;;
+    *) hive=$HOME/.hive/bin/hive ;;
+  esac
   case "$2" in
     /*) src=$2 ;;
     *) src=$(wslpath -u "${2#'\\?\'}") || exit 1 ;;
   esac
   if ! cmp -s "$src" "$hive"; then
-    mkdir -p "${hive%/*}" && cp "$src" "$hive.new" && chmod 755 "$hive.new" || exit 1
+    (umask 077 && mkdir -p "${hive%/*}") && cp "$src" "$hive.new" && chmod 755 "$hive.new" || exit 1
     xattr -d com.apple.quarantine "$hive.new" 2>/dev/null
     mv -f "$hive.new" "$hive" || exit 1
   fi

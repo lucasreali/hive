@@ -53,6 +53,8 @@ export function StatusBar() {
   const windows = useHive((s) => s.appMode?.mode === "native");
   const distro = connection.status === "connected" ? connection.distro : null;
   const place = windows ? "Windows" : distro ? `WSL: ${distro}` : isMac() ? "macOS" : "WSL";
+  // The service's files could not move into `~/.hive` (22.1): it said why.
+  const warning = connection.status === "connected" ? connection.warning : null;
   return (
     <footer className="statusbar">
       <div
@@ -64,6 +66,11 @@ export function StatusBar() {
         <span>{place}</span>
         <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
+      {warning ? (
+        <span className="folder-warning" title={warning}>
+          Old folders in use
+        </span>
+      ) : null}
       <div className="statusbar-account">
         <SpaceAccount />
         <SessionUsage />

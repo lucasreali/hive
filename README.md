@@ -71,7 +71,7 @@ Download the latest release from [GitHub Releases](https://github.com/lucasreali
 
 1. Run `Hive_<version>_x64-setup.exe` (releases before 0.1.2 name it `hive_<version>_x64-setup.exe`).
 2. The installer is not signed, so SmartScreen may block it: click **More info → Run anyway**.
-3. On first launch Hive asks where its service runs if WSL is installed (see above), then starts it: in WSL it copies it to `~/.local/share/hive/bin/hive`, on Windows to `%LOCALAPPDATA%\hive\bin\hive.exe`. There is nothing to install by hand.
+3. On first launch Hive asks where its service runs if WSL is installed (see above), then starts it: in WSL it copies it to `~/.hive/bin/hive`, on Windows to `%LOCALAPPDATA%\hive\bin\hive.exe`. There is nothing to install by hand.
 
 If Hive shows **"The app and the hive service versions differ"**, an old service is still running. Stop it, then click **Reconnect**. In WSL:
 
@@ -181,7 +181,7 @@ Code behind a Linux-only `cfg` is checked by [`ci.yml`](.github/workflows/ci.yml
 
 ### Running
 
-- **macOS app:** `scripts/mac-dev.sh` builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`) and runs `bun run tauri dev` (Vite on port 1420, hot reload); an edit under `crates/hive` rebuilds the service and restarts the app on it (`scripts/mac-dev-runner.sh`, the `--runner` of `tauri dev`). The dev service gets its own data folder (`~/.local/share/hive-dev`, or `HIVE_DEV_DIR`) and runtime folder (under `$TMPDIR`), through `XDG_DATA_HOME` and `XDG_RUNTIME_DIR`, so it runs beside an installed Hive without sharing its service, projects or hooks. Its terminals inherit both variables; settings (`XDG_CONFIG_HOME`) are shared with the installed app.
+- **macOS app:** `scripts/mac-dev.sh` builds `target/debug/hive`, points the app's bridge at it (`HIVE_BRIDGE`) and runs `bun run tauri dev` (Vite on port 1420, hot reload); an edit under `crates/hive` rebuilds the service and restarts the app on it (`scripts/mac-dev-runner.sh`, the `--runner` of `tauri dev`). The dev service gets its own Hive folder (`~/.hive-dev`, or `HIVE_DEV_DIR`) and runtime folder (under `$TMPDIR`), through `HIVE_HOME` and `XDG_RUNTIME_DIR`, so it runs beside an installed Hive without sharing its service, settings, projects or hooks, and never takes the installed Hive's files. Its terminals inherit both variables.
 - **UI in a browser:** `bun run dev`, then open `http://localhost:1420`. Outside Tauri the mock transport stands in for the service. Scenarios: `?mock=empty`, `?mock=states` (every agent state), `?mock=mismatch`, `?mock=disconnected`, `?mock=update`, `?mock=load` (20-terminal load test).
 - **Service only:** `cargo build -p hive` gives `target/debug/hive`.
 

@@ -176,6 +176,8 @@ impl Env {
                 cmd.env_remove(key);
             }
         }
+        // Hive's folder (22.1), where the XDG data folder had it.
+        cmd.env("HIVE_HOME", self.path("data/hive"));
         // The tests' agents never keep this machine awake (17.17).
         cmd.env(hive::power::OFF, "1");
         // On macOS terminals run `$SHELL`; the tests' shell commands are fish's, as on WSL.
@@ -252,6 +254,7 @@ impl Env {
                 Control::Welcome {
                     version: hive::VERSION.into(),
                     distro: Some(DISTRO.into()),
+                    warning: None,
                 }
             )
         );

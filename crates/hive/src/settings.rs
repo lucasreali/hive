@@ -1,5 +1,5 @@
 //! The user's settings, owned by the service (#37) and kept in
-//! `$XDG_CONFIG_HOME/hive/settings.json`. The app reads and saves them whole through the
+//! `~/.hive/settings.json`. The app reads and saves them whole through the
 //! protocol (`get_settings`, `set_settings`); ranges are checked here.
 
 use std::io;
