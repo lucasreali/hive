@@ -1233,7 +1233,9 @@ mod tests {
         assert_eq!(slug("../.."), "");
         assert_eq!(slug("/"), "");
         let accounts = Path::new("/h/accounts");
-        assert!(own(accounts, "/h/accounts/work-2"));
+        // Spelled as Hive joins it (with `\` on Windows).
+        let made = accounts.join("work-2");
+        assert!(own(accounts, made.to_str().unwrap()));
         assert!(!own(accounts, "/h/accounts/Work"));
         assert!(!own(accounts, "/h/accounts/.."));
         assert!(!own(accounts, "/h/accounts/work/inner"));
