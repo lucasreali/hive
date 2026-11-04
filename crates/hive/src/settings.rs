@@ -118,6 +118,7 @@ impl Store {
         mut settings: Settings,
         using: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Settings, String> {
+        tidy(&mut settings);
         check(&settings)?;
         let mut current = self.current();
         let known = &current.0.claude.accounts;
@@ -367,6 +368,7 @@ fn read(file: &Path) -> io::Result<(Settings, Option<Option<String>>)> {
         dir.filter(|dir| accounts.iter().any(|a| a["config_dir"] == dir.as_str()))
     });
     let mut settings: Settings = serde_json::from_value(value).map_err(io::Error::other)?;
+    tidy(&mut settings);
     check(&settings).map_err(io::Error::other)?;
     settle(&mut settings);
     if settings.terminal.font_family == OLD_FONT_DEFAULT {
@@ -387,6 +389,14 @@ fn save(file: &Path, settings: &Settings) -> io::Result<()> {
 }
 
 /// An empty default account name is [`DEFAULT_ACCOUNT`] (21.4).
+/// Each account's folder without trailing separators ([`spaces::trimmed`], 22.2), as a space
+/// names it: before [`check`], which would take `/x/` for a blank or padded folder.
+fn tidy(settings: &mut Settings) {
+    for account in &mut settings.claude.accounts {
+        account.config_dir = spaces::trimmed(&account.config_dir).to_owned();
+    }
+}
+
 fn settle(settings: &mut Settings) {
     let claude = &mut settings.claude;
     if claude.default_name.is_empty() {
@@ -893,6 +903,24 @@ mod tests {
     }
 
     #[test]
+    fn an_account_folder_with_a_trailing_separator_is_kept_without_it() {
+        let (tmp, store) = store();
+        let work = tmp.path().join("work").display().to_string();
+        std::fs::create_dir(&work).unwrap();
+        let clicked = format!("{work}{}", std::path::MAIN_SEPARATOR);
+        let mut settings = Settings::default();
+        settings.claude.accounts.push(account("Work", &clicked));
+        let saved = store.set(settings).unwrap();
+        assert_eq!(saved.claude.accounts[0].config_dir, work);
+        // A file written before (22.2) reads the same way.
+        let file = tmp.path().join("old.json");
+        let mut old = saved.clone();
+        old.claude.accounts[0].config_dir = clicked;
+        std::fs::write(&file, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(read(&file).unwrap().0, saved);
+    }
+
+    #[test]
     fn accounts_are_saved_read_back_and_chosen_for_new_terminals() {
         let (tmp, store) = store();
         let work = tmp.path().join("work").display().to_string();
@@ -1344,10 +1372,20 @@ mod tests {
         let work = accounts.join("work");
         std::fs::write(work.join(".claude.json"), "{}").unwrap();
         let work = work.display().to_string();
-        let slash = format!("{work}/");
+        // A trailing separator is the same spelling (22.2): that folder is taken.
+        let mut settings = store.get().0;
+        settings
+            .claude
+            .accounts
+            .push(account("Slash", &format!("{work}/")));
+        assert_eq!(
+            store.set(settings),
+            Err(format!(
+                "Another account has the Claude config folder {work}"
+            ))
+        );
         let double = format!("{}//work", accounts.display());
         let mut settings = store.get().0;
-        settings.claude.accounts.push(account("Slash", &slash));
         settings.claude.accounts.push(account("Double", &double));
         let saved = store.set(settings).unwrap();
         // Not marked as Hive's, so never deleted: refused, nothing removed.
@@ -1357,26 +1395,22 @@ mod tests {
             .iter()
             .map(|a| a.hive_folder)
             .collect();
-        assert_eq!(marks, [true, false, false]);
-        for alias in [&slash, &double] {
-            assert_eq!(
-                store.remove_account(alias, true, &|_| None),
-                Err(format!("Hive did not make {alias}: it is never deleted"))
-            );
-        }
+        assert_eq!(marks, [true, false]);
+        assert_eq!(
+            store.remove_account(&double, true, &|_| None),
+            Err(format!("Hive did not make {double}: it is never deleted"))
+        );
         // The folder Hive spells is not deleted either while another spelling has it.
         assert_eq!(
             store.remove_account(&work, true, &|_| None),
             Err(format!(
-                "Slash has the folder {work} too: it is not deleted"
+                "Double has the folder {work} too: it is not deleted"
             ))
         );
-        assert_eq!(store.account_dirs().len(), 3);
-        // The aliases go without their folder; the real one and what it holds stay.
-        for alias in [&slash, &double] {
-            let (_, why) = store.remove_account(alias, false, &|_| None).unwrap();
-            assert_eq!(why, None);
-        }
+        assert_eq!(store.account_dirs().len(), 2);
+        // The alias goes without its folder; the real one and what it holds stay.
+        let (_, why) = store.remove_account(&double, false, &|_| None).unwrap();
+        assert_eq!(why, None);
         assert!(Path::new(&work).join(".claude.json").is_file());
         assert_eq!(store.account_dirs(), [work]);
     }

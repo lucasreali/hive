@@ -1068,7 +1068,13 @@ export function createMockTransport(
           return;
         }
       }
-      settings = { ...next, claude: { ...next.claude, default_name: default_name || "Default" } };
+      // A folder's trailing `/` goes, a root stays (22.2).
+      const kept = accounts.map((a) => ({
+        ...a,
+        config_dir: a.config_dir.replace(/(.)\/+$/, "$1"),
+      }));
+      const claude = { ...next.claude, accounts: kept, default_name: default_name || "Default" };
+      settings = { ...next, claude };
       later({ type: "settings", settings });
     },
     async createAccount(name) {

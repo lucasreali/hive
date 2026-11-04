@@ -253,9 +253,16 @@ fn text(field: &str, value: Option<String>, limit: usize) -> Result<Option<Strin
     }
 }
 
-/// A folder: like [`text`], and absolute; an existing directory too when `on_disk`.
+/// `path` without its trailing separators (22.2): `~/.claude-work/`, the spelling of a folder
+/// clicked in the app, and `~/.claude-work` are one folder. A root (`/`, `C:\`) stays.
+pub fn trimmed(path: &str) -> &str {
+    let kept = Path::new(path).components().as_path();
+    kept.to_str().unwrap_or(path)
+}
+
+/// A folder: like [`text`], [`trimmed`], and absolute; an existing directory too when `on_disk`.
 fn dir(field: &str, value: Option<String>, on_disk: bool) -> Result<Option<String>, String> {
-    let value = text(field, value, PATH_LIMIT)?;
+    let value = text(field, value, PATH_LIMIT)?.map(|dir| trimmed(&dir).to_owned());
     if let Some(dir) = &value {
         if !Path::new(dir).is_absolute() {
             return Err(format!("{field} must be an absolute path"));
@@ -576,6 +583,35 @@ mod tests {
         }
         let drive = Some(r"C:\gh".to_owned());
         assert_eq!(gh_config_dir(drive.clone(), false), Ok(drive));
+    }
+
+    #[test]
+    fn a_folder_with_trailing_separators_is_the_same_folder() {
+        for (typed, kept) in [
+            ("/a/b/", "/a/b"),
+            ("/a/b//", "/a/b"),
+            ("/a/b", "/a/b"),
+            ("/", "/"),
+        ] {
+            assert_eq!(trimmed(typed), kept, "{typed}");
+        }
+        #[cfg(windows)]
+        for (typed, kept) in [(r"C:\a\", r"C:\a"), (r"C:\a/", r"C:\a"), (r"C:\", r"C:\")] {
+            assert_eq!(trimmed(typed), kept, "{typed}");
+        }
+        let root = if cfg!(windows) { r"C:\" } else { "/" };
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().display().to_string();
+        let clicked = format!("{folder}{}", std::path::MAIN_SEPARATOR);
+        assert_eq!(
+            claude_config_dir(Some(clicked.clone()), true),
+            Ok(Some(folder.clone()))
+        );
+        assert_eq!(gh_config_dir(Some(clicked), true), Ok(Some(folder)));
+        assert_eq!(
+            claude_config_dir(Some(root.into()), true),
+            Ok(Some(root.into()))
+        );
     }
 
     #[test]
