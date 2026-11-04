@@ -43,6 +43,8 @@ function open() {
 const section = (name: string) =>
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name }));
 const input = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+/** Opens the new account form (22.6). */
+const newAccount = () => fireEvent.click(screen.getByRole("button", { name: "New account" }));
 const search = (value: string) =>
   fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), {
     target: { value },
@@ -307,11 +309,13 @@ test("the projects section edits each project's scripts", async () => {
 test("a new account's folder example is a home folder of the platform (18.25)", () => {
   open();
   section("Accounts");
+  newAccount();
   fireEvent.click(input("Use an existing folder"));
   expect(input("New account folder").placeholder).toBe("/home/you/.claude-work");
   asMac();
   section("Agents");
   section("Accounts");
+  newAccount();
   fireEvent.click(input("Use an existing folder"));
   expect(input("New account folder").placeholder).toBe("/Users/you/.claude-work");
 });
@@ -321,7 +325,7 @@ test("sharing sessions between accounts is off by default and turns on (21.10)",
   section("Accounts");
   const share = input("Share sessions between accounts");
   expect(share.checked).toBe(false);
-  expect(screen.getByText(/rewind checkpoints from before the move are lost/)).toBeDefined();
+  expect(screen.getByTitle(/rewind checkpoints from before the move are lost/)).toBeDefined();
   fireEvent.click(share);
   await waitFor(() => expect(settings().claude.share_sessions).toBe(true));
 });
@@ -330,10 +334,14 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   open();
   section("Accounts");
   const accounts = () => settings().claude.accounts;
-  expect(input("Folder of the default account").value).toBe("~/.claude");
+  expect(screen.getByTitle("~/.claude").textContent).toBe("~/.claude");
   // No worktree to open a terminal in: "Log in…" waits for one.
   const logIns = () => screen.getAllByRole("button", { name: "Log in…" }) as HTMLButtonElement[];
   expect(logIns()[0]?.disabled).toBe(true);
+  // The form opens from "New account" (22.6), its name field focused.
+  expect(screen.queryByLabelText("New account name")).toBeNull();
+  newAccount();
+  expect(document.activeElement).toBe(input("New account name"));
   const add = screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
   expect(add.disabled).toBe(true);
   fireEvent.click(input("Use an existing folder"));
@@ -342,8 +350,9 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   fireEvent.change(input("New account folder"), { target: { value: " /w " } });
   fireEvent.click(add);
   await waitFor(() => expect(accounts()).toEqual([{ name: "Work", config_dir: "/w" }]));
-  expect(input("New account name").value).toBe("");
-  expect(input("Folder of Work").value).toBe("/w");
+  // Added, the form closes; the row shows the folder with the whole path as its tooltip.
+  expect(screen.queryByLabelText("New account name")).toBeNull();
+  expect(screen.getByTitle("/w").textContent).toBe("/w");
   fireEvent.change(input("Name of /w"), { target: { value: "Job " } });
   await waitFor(() => expect(accounts()[0]?.name).toBe("Job"));
 
@@ -374,6 +383,7 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
 test("the new account's folder is browsed from home, hidden folders included (22.2)", async () => {
   open();
   section("Accounts");
+  newAccount();
   // Hive makes the folder unless an existing one is chosen (22.3).
   expect(screen.queryByLabelText("New account folder")).toBeNull();
   fireEvent.click(input("Use an existing folder"));
@@ -408,6 +418,7 @@ test("a new account named only gets a folder Hive makes, then is offered its log
   open();
   section("Accounts");
   const accounts = () => settings().claude.accounts;
+  newAccount();
   expect(screen.getByText(/Hive makes its folder/)).toBeDefined();
   const created = spyOn(transport, "createAccount");
   fireEvent.change(input("New account name"), { target: { value: " Work 2 " } });
@@ -418,12 +429,13 @@ test("a new account named only gets a folder Hive makes, then is offered its log
   );
   expect(created).toHaveBeenCalledWith("Work 2");
   created.mockRestore();
-  expect(input("New account name").value).toBe("");
-  expect(input("Folder of Work 2").value).toBe(config_dir);
+  expect(screen.queryByLabelText("New account name")).toBeNull();
+  expect(screen.getByTitle(config_dir)).toBeDefined();
   const offer = screen.getByText(/Work 2 is made: log in to it/);
   expect(offer.getAttribute("role")).toBe("status");
   expect(within(offer).getByRole("button", { name: "Log in…" })).toBeDefined();
   // A taken name is refused: nothing made, nothing offered for it, the reason shown.
+  newAccount();
   fireEvent.change(input("New account name"), { target: { value: "Default" } });
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   await waitFor(() => expect(settings().claude.accounts).toHaveLength(1));
@@ -438,9 +450,10 @@ test("removing an account Hive made asks whether to delete its folder too (22.3)
   section("Accounts");
   const accounts = () => settings().claude.accounts;
   for (const value of ["Work", "Kept"]) {
+    newAccount();
     fireEvent.change(input("New account name"), { target: { value } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(screen.queryByLabelText(`Folder of ${value}`)).not.toBeNull());
+    await waitFor(() => expect(screen.queryByTitle(`Remove ${value}`)).not.toBeNull());
   }
   const removed = spyOn(transport, "removeAccount");
   // It asks first, saying to log out: cancelled, nothing changes.
@@ -473,6 +486,7 @@ test("a save queued behind an account request builds on its answer (22.3)", asyn
   open();
   section("Accounts");
   const sent = spyOn(transport, "setSettings");
+  newAccount();
   fireEvent.change(input("New account name"), { target: { value: "Work" } });
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   // Sent while the account is being made: it waits, and keeps the new account.
@@ -584,12 +598,13 @@ test("the accounts section marks an account that never logged in (21.6)", async 
   // Asked again as the section opens: a `/login` may have finished in a Hive terminal.
   expect(ask.mock.calls.length).toBe(asked + 1);
   // The mock: the default account logged in, Work not.
-  const marks = () => [...document.querySelectorAll(".script-run")].map((row) => row.textContent);
+  const marks = () => [...document.querySelectorAll(".account-row")].map((row) => row.textContent);
   await waitFor(() => expect(marks()[1]).toContain("Not logged in"));
   expect(marks()[0]).not.toContain("Not logged in");
-  // The mark sits right before the row's "Log in…".
+  // A badge in its own column, right before the row's "Log in…" (22.6).
   const mark = screen.getByText("Not logged in");
-  expect(mark.nextElementSibling?.textContent).toBe("Log in…");
+  expect(mark.className).toBe("tab-badge warn");
+  expect(mark.parentElement?.nextElementSibling?.textContent).toBe("Log in…");
   ask.mockRestore();
 });
 
@@ -779,19 +794,22 @@ test("Accounts lists what the shared folder holds and opens it (21.9)", async ()
   open();
   section("Accounts");
   expect(ask).toHaveBeenCalledTimes(1);
-  expect(input("Shared folder").value).toBe("…");
-  await waitFor(() => expect(input("Shared folder").value).toBe(MOCK_SHARED.folder));
-  const help = () =>
-    [...document.querySelectorAll(".field-help")].map((p) => p.textContent).join("\n");
-  expect(help()).toContain("Skills: /hive-shared:review");
-  expect(help()).toContain("Commands: none");
-  expect(help()).toContain("Agents: hive-shared:tester");
-  expect(help()).toContain("MCP servers: db");
+  const folder = () => document.querySelector(".shared-row .folder-cell") as HTMLElement;
+  expect(folder().textContent).toBe("…");
+  await waitFor(() => expect(folder().title).toBe(MOCK_SHARED.folder));
+  expect(folder().textContent).toBe(MOCK_SHARED.folder);
+  // What it holds on one line, an empty kind left out (22.6).
+  const held = () => document.querySelector(".shared-held")?.textContent;
+  expect(held()).toBe("Skills: /hive-shared:review · Agents: hive-shared:tester · MCP servers: db");
   expect(document.querySelector(".field-error")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
   expect(openIt).toHaveBeenCalledTimes(1);
   act(() => apply({ type: "shared", ...MOCK_SHARED, error: ".mcp.json: not a file" }));
   expect(document.querySelector(".field-error")?.textContent).toBe(".mcp.json: not a file");
+  // Empty, "none" is said once.
+  const empty = { skills: [], agents: [], commands: [], mcp_servers: [], error: null };
+  act(() => apply({ type: "shared", ...MOCK_SHARED, ...empty }));
+  expect(held()).toBe("Skills, commands, agents and MCP servers: none");
   ask.mockRestore();
   openIt.mockRestore();
 });

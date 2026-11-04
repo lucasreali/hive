@@ -215,6 +215,8 @@ type Field = {
   section: Section;
   label: string;
   help?: string;
+  /** The rest of the help, in its tooltip (22.6: the help itself is one line). */
+  tip?: string;
   check?: boolean;
   /** Shown only where the app offers WSL or Windows (12.5.4). */
   modes?: boolean;
@@ -318,10 +320,11 @@ const FIELDS: Field[] = [
     section: "Accounts",
     label: "Share sessions between accounts",
     check: true,
-    help:
-      "Resuming a session from the history runs it as the account picked in the status bar, " +
-      "not the one it ran as: its log moves into that account's folder (rewind checkpoints " +
-      "from before the move are lost). Off, a session resumes as its own account.",
+    help: "A resumed session runs as the space's account; its log moves into that account's folder.",
+    tip:
+      "Resuming a session from the history runs it as the current space's account, not the " +
+      "one it ran as: its log moves into that account's folder (rewind checkpoints from before " +
+      "the move are lost). Off, a session resumes as its own account.",
     control: () => (
       <Toggle
         label="Share sessions between accounts"
@@ -634,7 +637,11 @@ function Fields({ fields }: { fields: Field[] }) {
           </label>
         )}
         {f.control(id, f.label)}
-        {f.help && <p className="field-help">{f.help}</p>}
+        {f.help && (
+          <p className="field-help" title={f.tip}>
+            {f.help}
+          </p>
+        )}
       </div>
     );
   });
@@ -905,34 +912,47 @@ export function useClaudeLogins() {
   }, [connected, accounts]);
 }
 
-/** "Not logged in" (21.6) beside an account that never finished its `/login`. */
+/**
+ * "Not logged in" (21.6) as a badge in its own column (22.6), for an account that never finished
+ * its `/login`; an empty cell when it did, so the row's actions stay in place.
+ */
 export function NotLoggedIn({ dir }: { dir: string | null }) {
   const logins = useHive((s) => s.claudeLogins);
-  if (loggedIn(logins, dir)) return null;
-  return <span className="not-logged-in">Not logged in</span>;
+  return (
+    <span className="account-status">
+      {loggedIn(logins, dir) ? null : <span className="tab-badge warn">Not logged in</span>}
+    </span>
+  );
 }
 
 /**
- * "Log in…" for the account whose folder is `dir` (null: the default one): a new terminal where
- * a new terminal would open (the files panel's worktree) running `claude` as that account, where
- * the user types `/login`. Hive never reads or writes credentials (#45).
+ * Opens a new terminal where a new terminal would open (the files panel's worktree) running
+ * `claude` as the account whose folder is `dir` (null: the default one), where the user types
+ * `/login`; null while no worktree is selected. Hive never reads or writes credentials (#45).
  */
-export function LogIn({ dir, name }: { dir: string | null; name: string }) {
+export function useLogIn(dir: string | null): (() => void) | null {
   const where = useHive((s) => panelWorktree(s)?.worktree.path ?? null);
+  if (where === null) return null;
+  return () => {
+    close();
+    showOpenFailure(openClaude(where, "", { config_dir: dir }));
+  };
+}
+
+/** "Log in…" for the account whose folder is `dir` (null: the default one), `useLogIn`. */
+export function LogIn({ dir, name }: { dir: string | null; name: string }) {
+  const logIn = useLogIn(dir);
   return (
     <button
       type="button"
       className="secondary"
-      disabled={where === null}
+      disabled={logIn === null}
       title={
-        where === null
+        logIn === null
           ? "Select a worktree to open the terminal in"
           : `A terminal running claude as ${name}: type /login there`
       }
-      onClick={() => {
-        close();
-        showOpenFailure(openClaude(where as string, "", { config_dir: dir }));
-      }}
+      onClick={logIn ?? undefined}
     >
       Log in…
     </button>
@@ -940,15 +960,36 @@ export function LogIn({ dir, name }: { dir: string | null; name: string }) {
 }
 
 /**
+ * A folder in a fixed-width cell (22.6): the start of the path gives way first, so its last
+ * segment (`.claude-work`) stays readable; the whole path in the tooltip.
+ */
+function FolderCell({ path }: { path: string }) {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return (
+    <span className="folder-cell" title={path}>
+      <span className="folder-head">{path.slice(0, cut)}</span>
+      <span className="folder-tail">{path.slice(cut)}</span>
+    </span>
+  );
+}
+
+/**
  * The Claude accounts (12.2): the default one (`~/.claude`, renamed here but never removed,
  * 21.4) and the user's, each a name and a `CLAUDE_CONFIG_DIR`, renamed, removed or added here
- * and picked in the status bar. The service checks them.
+ * and picked in each space's settings. The service checks them. One row per account in fixed
+ * columns (22.6): name, folder, status, "Log in…", remove (an empty slot on the default row).
  */
 function Accounts() {
   const accounts = useHive((s) => s.settings.claude.accounts);
   const defaultName = useHive((s) => s.settings.claude.default_name);
   // Asked again when the section opens: a `/login` may have finished in a Hive terminal.
   useEffect(() => void transport.listClaudeLogins(), []);
+  // The 22.3 form, opened by "New account".
+  const [adding, setAdding] = useState(false);
+  const nameField = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (adding) nameField.current?.focus();
+  }, [adding]);
   const [name, setName] = useState("");
   // An existing folder chosen (as before 22.3), else the service makes one.
   const [existing, setExisting] = useState(false);
@@ -972,6 +1013,7 @@ function Accounts() {
     }
     setName("");
     setDir("");
+    setAdding(false);
   };
   const remove = (a: Account) => {
     // Only a folder Hive made may be deleted (22.3): it asks first.
@@ -985,199 +1027,228 @@ function Accounts() {
     });
   };
   return (
-    <div className="field">
-      <span>Claude accounts</span>
-      <div className="script-run">
-        <Typed
-          id="setting-account-default"
-          aria-label="Name of the default account"
-          // An empty field is the default name (22.4): the service settles "" to "Default".
-          placeholder={DEFAULT_ACCOUNT}
-          value={defaultName === DEFAULT_ACCOUNT ? "" : defaultName}
-          onSave={(text) => {
-            if ((text.trim() || DEFAULT_ACCOUNT) === defaultName) return;
-            saveSettings((s) => {
-              s.claude.default_name = text.trim();
-            });
-          }}
-        />
-        <input aria-label="Folder of the default account" value="~/.claude" readOnly />
-        <NotLoggedIn dir={null} />
-        <LogIn dir={null} name={defaultName} />
-      </div>
-      {accounts.map((a) => (
-        <Fragment key={a.config_dir}>
-          <div className="script-run">
-            <Typed
-              id={`setting-account-${a.config_dir}`}
-              aria-label={`Name of ${a.config_dir}`}
-              value={a.name}
-              onSave={(text) =>
-                saveSettings((s) => {
-                  const renamed = s.claude.accounts.find((b) => b.config_dir === a.config_dir);
-                  if (renamed) renamed.name = text.trim();
-                })
-              }
-            />
-            <input aria-label={`Folder of ${a.name}`} value={a.config_dir} readOnly />
-            <NotLoggedIn dir={a.config_dir} />
-            <LogIn dir={a.config_dir} name={a.name} />
-            <button
-              type="button"
-              className="ghost"
-              title={`Remove ${a.name}`}
-              onClick={() => remove(a)}
-            >
-              <CloseIcon />
-            </button>
-          </div>
-          {removing === a.config_dir && (
-            <fieldset className="new-account" aria-label={`Remove ${a.name}`}>
-              <p className="field-help">
-                Hive made its folder, <code>{a.config_dir}</code>: deleting it loses the account's
-                sessions, settings and skills. Run <code>/logout</code> in its terminal first:
-                Claude Code keeps its credentials outside the folder (on macOS, in the Keychain),
-                and Hive never touches them.
-              </p>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={deleteFolder}
-                  onChange={(e) => setDeleteFolder(e.target.checked)}
-                />
-                Also delete its folder
-              </label>
-              <div className="script-run">
-                <button type="button" className="secondary" onClick={() => setRemoving(null)}>
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="primary danger"
-                  onClick={() => {
-                    setRemoving(null);
-                    requestSettings(() => transport.removeAccount(a.config_dir, deleteFolder));
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            </fieldset>
-          )}
-        </Fragment>
-      ))}
-      <form
-        className="new-account"
-        onSubmit={(e) => {
-          e.preventDefault();
-          add();
-        }}
+    <section className="field settings-group" aria-labelledby="accounts-title">
+      <h3 id="accounts-title">Claude accounts</h3>
+      <p
+        className="field-help"
+        title={
+          "The first one is ~/.claude itself: it can be renamed but not removed, and an empty " +
+          'name is "Default" again. An account a space uses cannot be removed; removing one ' +
+          "leaves a folder you chose on disk, and one Hive made may be deleted with it. Hive " +
+          "never reads or writes credentials."
+        }
       >
-        <div className="script-run">
+        Each account is a <code>CLAUDE_CONFIG_DIR</code> with its own login, settings and sessions;
+        each space picks one.
+      </p>
+      <div className="accounts">
+        <div className="account-row">
+          <Typed
+            id="setting-account-default"
+            aria-label="Name of the default account"
+            // An empty field is the default name (22.4): the service settles "" to "Default".
+            placeholder={DEFAULT_ACCOUNT}
+            value={defaultName === DEFAULT_ACCOUNT ? "" : defaultName}
+            onSave={(text) => {
+              if ((text.trim() || DEFAULT_ACCOUNT) === defaultName) return;
+              saveSettings((s) => {
+                s.claude.default_name = text.trim();
+              });
+            }}
+          />
+          <FolderCell path="~/.claude" />
+          <NotLoggedIn dir={null} />
+          <LogIn dir={null} name={defaultName} />
+          {/* The default account cannot be removed: its slot stays empty. */}
+          <span />
+        </div>
+        {accounts.map((a) => (
+          <Fragment key={a.config_dir}>
+            <div className="account-row">
+              <Typed
+                id={`setting-account-${a.config_dir}`}
+                aria-label={`Name of ${a.config_dir}`}
+                value={a.name}
+                onSave={(text) =>
+                  saveSettings((s) => {
+                    const renamed = s.claude.accounts.find((b) => b.config_dir === a.config_dir);
+                    if (renamed) renamed.name = text.trim();
+                  })
+                }
+              />
+              <FolderCell path={a.config_dir} />
+              <NotLoggedIn dir={a.config_dir} />
+              <LogIn dir={a.config_dir} name={a.name} />
+              <button
+                type="button"
+                className="ghost"
+                title={`Remove ${a.name}`}
+                onClick={() => remove(a)}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+            {removing === a.config_dir && (
+              <fieldset className="new-account account-wide" aria-label={`Remove ${a.name}`}>
+                <p className="field-help">
+                  Hive made its folder, <code>{a.config_dir}</code>: deleting it loses the account's
+                  sessions, settings and skills. Run <code>/logout</code> in its terminal first:
+                  Claude Code keeps its credentials outside the folder (on macOS, in the Keychain),
+                  and Hive never touches them.
+                </p>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={deleteFolder}
+                    onChange={(e) => setDeleteFolder(e.target.checked)}
+                  />
+                  Also delete its folder
+                </label>
+                <div className="script-run">
+                  <button type="button" className="secondary" onClick={() => setRemoving(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="primary danger"
+                    onClick={() => {
+                      setRemoving(null);
+                      requestSettings(() => transport.removeAccount(a.config_dir, deleteFolder));
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </fieldset>
+            )}
+          </Fragment>
+        ))}
+      </div>
+      {fresh && (
+        <p className="field-help account-made" role="status">
+          {fresh.name} is made: log in to it. <LogIn dir={fresh.config_dir} name={fresh.name} />
+        </p>
+      )}
+      {adding ? (
+        <form
+          className="new-account"
+          aria-label="New account"
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
+          }}
+        >
           <input
             aria-label="New account name"
-            placeholder="Work"
+            placeholder="Name, e.g. Work"
             value={name}
+            ref={nameField}
             onChange={(e) => setName(e.target.value)}
           />
-          <button
-            type="submit"
-            className="secondary"
-            disabled={!name.trim() || (existing && !dir.trim())}
-          >
-            Add
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={existing}
+              onChange={(e) => setExisting(e.target.checked)}
+            />
+            Use an existing folder
+          </label>
+          {existing ? (
+            <>
+              {/* Starts at the home folder; account folders are often hidden ones (22.2). */}
+              <FolderField
+                id="new-account-folder"
+                aria-label="New account folder"
+                value={dir}
+                onChange={setDir}
+                placeholder={homeText("/home/you/.claude-work")}
+                hidden
+                home
+              />
+              {listing?.path === dir && listing.claude && (
+                <p className="field-help" role="status">
+                  A Claude config folder: it has a <code>.claude.json</code> or{" "}
+                  <code>settings.json</code>.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="field-help">
+              Hive makes its folder, in <code>accounts</code> in Hive's folder (<code>~/.hive</code>
+              ).
+            </p>
+          )}
+          <div className="form-buttons">
+            <button type="button" className="secondary" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="primary"
+              disabled={!name.trim() || (existing && !dir.trim())}
+            >
+              Add
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div>
+          <button type="button" className="secondary" onClick={() => setAdding(true)}>
+            New account
           </button>
         </div>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={existing}
-            onChange={(e) => setExisting(e.target.checked)}
-          />
-          Use an existing folder
-        </label>
-        {existing ? (
-          <>
-            {/* Starts at the home folder; account folders are often hidden ones (22.2). */}
-            <FolderField
-              id="new-account-folder"
-              aria-label="New account folder"
-              value={dir}
-              onChange={setDir}
-              placeholder={homeText("/home/you/.claude-work")}
-              hidden
-              home
-            />
-            {listing?.path === dir && listing.claude && (
-              <p className="field-help" role="status">
-                A Claude config folder: it has a <code>.claude.json</code> or{" "}
-                <code>settings.json</code>.
-              </p>
-            )}
-          </>
-        ) : (
-          <p className="field-help">
-            Hive makes its folder, in <code>accounts</code> in Hive's folder (<code>~/.hive</code>).
-          </p>
-        )}
-        {fresh && (
-          <p className="field-help" role="status">
-            {fresh.name} is made: log in to it. <LogIn dir={fresh.config_dir} name={fresh.name} />
-          </p>
-        )}
-      </form>
-      <p className="field-help">
-        Each account is a <code>CLAUDE_CONFIG_DIR</code>, a folder Hive makes or one you choose: its
-        own login, settings and sessions. The first one is <code>~/.claude</code> itself: it can be
-        renamed but not removed, and an empty name is "Default" again. Each space picks the one its
-        terminals get, in its settings; open ones keep theirs, and an account a space uses cannot be
-        removed. "Log in…" opens a terminal running <code>claude</code> as the account: type{" "}
-        <code>/login</code> there; "Not logged in" marks an account whose <code>.claude.json</code>{" "}
-        has no login yet. Hive never reads or writes credentials. Removing an account leaves a
-        folder you chose on disk; one Hive made may be deleted with it.
-      </p>
-    </div>
+      )}
+    </section>
   );
 }
 
 /**
- * The folder every account shares (21.9): what the service found in it, asked when the
- * section opens, and a button that opens it in the file manager.
+ * The folder every account shares (21.9), a titled group (22.6): its path, a button that opens
+ * it in the file manager, and what the service found in it on one line, asked when the section
+ * opens.
  */
 function SharedPlugin() {
   const shared = useHive((s) => s.shared);
   useEffect(() => void transport.getShared(), []);
   const named = (names: string[]) => names.map((n) => `/${shared?.plugin}:${n}`);
-  const rows: [string, string[]][] = shared
-    ? [
-        ["Skills", named(shared.skills)],
-        ["Commands", named(shared.commands)],
-        ["Agents", shared.agents.map((n) => `${shared.plugin}:${n}`)],
-        ["MCP servers", shared.mcp_servers],
-      ]
+  const held = shared
+    ? (
+        [
+          ["Skills", named(shared.skills)],
+          ["Commands", named(shared.commands)],
+          ["Agents", shared.agents.map((n) => `${shared.plugin}:${n}`)],
+          ["MCP servers", shared.mcp_servers],
+        ] as const
+      ).filter(([, names]) => names.length)
     : [];
   return (
-    <div className="field">
-      <span>Shared</span>
-      <div className="script-run">
-        <input aria-label="Shared folder" value={shared?.folder ?? "…"} readOnly />
+    <section className="field settings-group" aria-labelledby="shared-title">
+      <h3 id="shared-title">Shared</h3>
+      <p
+        className="field-help"
+        title={
+          "Skills (skills/<name>/SKILL.md), agents (agents/), commands (commands/) and MCP " +
+          "servers (.mcp.json) in this folder reach every account's claude in Hive's terminals, " +
+          "as a plugin. Credentials are never shared: each account logs in on its own."
+        }
+      >
+        Skills, agents, commands and MCP servers here reach every account, as a plugin.
+      </p>
+      <div className="shared-row">
+        {shared ? <FolderCell path={shared.folder} /> : <span className="folder-cell">…</span>}
         <button type="button" className="secondary" onClick={openSharedFolder}>
           Open folder
         </button>
       </div>
       {shared?.error && <p className="field-error">{shared.error}</p>}
-      {rows.map(([label, names]) => (
-        <p className="field-help" key={label}>
-          {label}: {names.length ? names.join(", ") : "none"}
+      {shared && (
+        <p className="field-help shared-held">
+          {held.length
+            ? held.map(([label, names]) => `${label}: ${names.join(", ")}`).join(" · ")
+            : "Skills, commands, agents and MCP servers: none"}
         </p>
-      ))}
-      <p className="field-help">
-        Skills (<code>skills/&lt;name&gt;/SKILL.md</code>), agents (<code>agents/</code>), commands
-        (<code>commands/</code>) and MCP servers (<code>.mcp.json</code>) in this folder reach every
-        account's <code>claude</code> in Hive's terminals, as a plugin. Credentials are never
-        shared: each account logs in on its own.
-      </p>
-    </div>
+      )}
+    </section>
   );
 }
 
@@ -1229,7 +1300,10 @@ function Content({ section, query }: { section: Section; query: string }) {
     return (
       <>
         <Accounts />
-        {shown}
+        <section className="field settings-group" aria-labelledby="sessions-title">
+          <h3 id="sessions-title">Sessions</h3>
+          {shown}
+        </section>
         <SharedPlugin />
       </>
     );

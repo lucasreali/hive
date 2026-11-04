@@ -1,8 +1,9 @@
+import { WarningCircleIcon } from "@phosphor-icons/react";
 import { version } from "../../package.json";
 import { type Connection, currentSpace, openModal, spaceAccount, useHive } from "../store";
 import { usageLines } from "../usage";
 import { isMac } from "../window";
-import { LogIn, loggedIn, NotLoggedIn, useClaudeLogins } from "./SettingsDialog";
+import { loggedIn, useClaudeLogins, useLogIn } from "./SettingsDialog";
 
 const LABEL: Record<Connection["status"], string> = {
   connecting: "connecting",
@@ -14,23 +15,19 @@ const LABEL: Record<Connection["status"], string> = {
 /**
  * The current space's Claude account (22.5, D22.15), read-only: the space's terminals get it.
  * Only shown when there is an account besides the default one. Pressed, it opens the space's
- * dialog, where it is changed. An account that never logged in says so (21.6), with "Log in…".
+ * dialog, where it is changed. An account that never logged in (21.6) carries one small mark
+ * (22.6) whose click opens the log-in terminal (`useLogIn`).
  */
 function SpaceAccount() {
   const { accounts, default_name } = useHive((s) => s.settings.claude);
   const logins = useHive((s) => s.claudeLogins);
   const space = useHive(currentSpace);
   const dir = useHive((s) => spaceAccount(s, currentSpace(s)));
+  const logIn = useLogIn(dir);
   if (accounts.length === 0 || !space) return null;
   const name = accounts.find((a) => a.config_dir === dir)?.name ?? default_name;
   return (
-    <>
-      {loggedIn(logins, dir) ? null : (
-        <>
-          <NotLoggedIn dir={dir} />
-          <LogIn dir={dir} name={name} />
-        </>
-      )}
+    <span className="space-account-wrap">
       <button
         type="button"
         className="ghost space-account"
@@ -39,7 +36,23 @@ function SpaceAccount() {
       >
         {name}
       </button>
-    </>
+      {loggedIn(logins, dir) ? null : (
+        <button
+          type="button"
+          className="ghost not-logged-in-mark"
+          aria-label={`${name} is not logged in: click to log in`}
+          title={
+            logIn === null
+              ? "Not logged in: select a worktree to log in"
+              : "Not logged in: click to log in"
+          }
+          disabled={logIn === null}
+          onClick={logIn ?? undefined}
+        >
+          <WarningCircleIcon size={12} weight="fill" />
+        </button>
+      )}
+    </span>
   );
 }
 

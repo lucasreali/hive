@@ -2292,17 +2292,113 @@ button.chevron:hover {
   min-width: 0;
 }
 
-/* An account that never logged in (21.6), in Settings and in the status bar. */
-.not-logged-in {
-  color: var(--state-permission);
+/* Settings → Accounts (22.6): titled groups, and one grid for the accounts so every row's
+   columns line up: name, folder, status badge, "Log in…", remove (empty on the default row). */
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   font-size: var(--fs-small);
+  color: var(--text-2);
+}
+
+.settings-group + .settings-group {
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-group h3 {
+  margin: 0;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.accounts {
+  display: grid;
+  grid-template-columns: minmax(64px, 1fr) minmax(0, 2fr) auto auto 24px;
+  gap: 6px;
+  align-items: center;
+}
+
+.account-row {
+  display: contents;
+}
+
+.accounts input {
+  min-width: 0;
+}
+
+.account-wide {
+  grid-column: 1 / -1;
+  padding: 8px 0 4px;
+}
+
+/* A path cut from its start, so its last segment stays readable; the whole one in the tooltip. */
+.folder-cell {
+  display: flex;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--text-2);
   white-space: nowrap;
 }
 
-.statusbar-account .secondary {
+.folder-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-tail {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-status {
+  display: flex;
+}
+
+.account-status .tab-badge {
+  white-space: nowrap;
+}
+
+.account-made,
+.shared-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.shared-row .folder-cell {
+  flex: 1;
+}
+
+.form-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* The status bar's account that never logged in (21.6): one small mark beside it (22.6). */
+.space-account-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.statusbar .not-logged-in-mark {
+  display: flex;
   height: 20px;
-  padding: 0 8px;
-  font-size: var(--fs-small);
+  padding: 0 4px;
+  color: var(--state-permission);
+}
+
+.statusbar .not-logged-in-mark:hover:not(:disabled) {
+  color: var(--state-permission);
 }
 
 /* Select (src/ui/Select.tsx): a trigger like a field, a list like the context menu */

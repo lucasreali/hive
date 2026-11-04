@@ -1,10 +1,11 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { version } from "../../package.json";
 import { asMac } from "../../test/mac";
 import { apply } from "../reduce";
 import { DEFAULT_SETTINGS, initialState, showNotice, useHive } from "../store";
 import { transport } from "../transport";
+import { MOCK_REPOS } from "../transport/mock";
 import { StatusBar } from "./StatusBar";
 
 /** The empty ring's tooltip, while no window came (21.8). */
@@ -235,7 +236,7 @@ test("whether each account logged in is asked once connected, for new accounts a
   ask.mockRestore();
 });
 
-test("the space's account that never logged in says so, with Log in… (21.6)", () => {
+test("the space's account that never logged in carries one mark, whose click logs in (22.6)", async () => {
   const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
   render(<StatusBar />);
   act(() => {
@@ -243,27 +244,45 @@ test("the space's account that never logged in says so, with Log in… (21.6)", 
     apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: WORK_ACCOUNT } });
     spaces("work");
   });
-  const logIn = () => screen.queryByRole("button", { name: "Log in…" });
-  const mark = () => screen.queryByText("Not logged in");
+  const mark = () => screen.queryByRole("button", { name: /is not logged in: click to log in$/ });
   // Until the service answers, every account counts as logged in.
-  expect(logIn()).toBeNull();
+  expect(mark()).toBeNull();
   const logins = (work: boolean, def = true) => [
     { config_dir: null, logged_in: def },
     { config_dir: "/w", logged_in: work },
   ];
   act(() => apply({ type: "claude_logins", logins: logins(false) }));
-  expect(mark()?.className).toBe("not-logged-in");
-  expect(logIn()?.title).toBe("Select a worktree to open the terminal in");
+  // One mark right after the account's name, no text or "Log in…" button besides.
+  expect(mark()?.getAttribute("aria-label")).toBe("Work account is not logged in: click to log in");
+  expect(mark()?.previousElementSibling?.textContent).toBe("Work account");
+  expect(screen.queryByText("Not logged in")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Log in…" })).toBeNull();
+  // No worktree to open the terminal in: it waits for one.
+  expect((mark() as HTMLButtonElement).disabled).toBe(true);
+  expect(mark()?.title).toBe("Not logged in: select a worktree to log in");
+  // With one, its click opens claude there as the account.
+  const [shop] = MOCK_REPOS;
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    useHive.setState({ selection: shop.id });
+  });
+  expect(mark()?.title).toBe("Not logged in: click to log in");
+  const opened = spyOn(transport, "openTerminal").mockResolvedValue(9);
+  const typed = spyOn(transport, "writeTerminal").mockResolvedValue();
+  fireEvent.click(mark() as HTMLElement);
+  await waitFor(() => expect(typed).toHaveBeenCalledWith(9, "claude\r"));
+  expect(opened.mock.calls[0]?.[0]).toBe(shop.path);
+  expect(opened.mock.calls[0]?.[4]).toEqual({ config_dir: "/w" });
+  opened.mockRestore();
+  typed.mockRestore();
   // Logged in now: no mark.
   act(() => apply({ type: "claude_logins", logins: logins(true) }));
   expect(mark()).toBeNull();
-  expect(logIn()).toBeNull();
   // A space of the default account, never logged in.
   act(() => {
     spaces("default");
     apply({ type: "claude_logins", logins: logins(true, false) });
   });
-  expect(mark()).not.toBeNull();
-  expect(logIn()).not.toBeNull();
+  expect(mark()?.getAttribute("aria-label")).toBe("Default is not logged in: click to log in");
   ask.mockRestore();
 });
