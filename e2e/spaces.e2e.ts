@@ -69,6 +69,7 @@ test("the space's Claude account shows in the status bar and is changed in its d
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Accounts" }).click();
   await settings.getByLabel("New account name").fill("Work");
+  await settings.getByLabel("Use an existing folder").check();
   await settings.getByLabel("New account folder").fill("/home/user/.claude-work");
   await settings.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");
