@@ -1,4 +1,4 @@
-//! Browsing folders for "Add project": the subfolders of a typed folder, given as a Linux path
+//! Browsing folders for the folder fields (Add project, an account's, a space's `gh` one): the subfolders of a typed folder, given as a Linux path
 //! or, for the Windows side of WSL, as a Windows path converted with `wslpath -u`. A service on
 //! native Windows takes every path as a Windows one, as it is.
 
@@ -31,10 +31,17 @@ pub const WINDOWS: Windows<'static> = Windows {
 pub const HOME: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 
 /// Answers `ListDirs`: `path` (Windows when `windows`; the home folder when empty) as a Linux
-/// path, and the subfolders of the folder it ends in, or of the one holding its last name.
-pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windows) -> Control {
-    match list(&path, windows, home, programs) {
-        Ok((path, linux, parent, dirs, warning)) => Control::Dirs {
+/// path, and the subfolders of the folder it ends in, or of the one holding its last name;
+/// hidden ones too when `hidden` or when that last name starts with `.`.
+pub fn answer(
+    path: String,
+    windows: bool,
+    hidden: bool,
+    home: Option<&Path>,
+    programs: &Windows,
+) -> Control {
+    match list(&path, windows, hidden, home, programs) {
+        Ok((path, linux, parent, dirs, warning, claude)) => Control::Dirs {
             path,
             windows,
             linux_path: linux,
@@ -42,6 +49,7 @@ pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windo
             dirs,
             error: None,
             warning,
+            claude,
         },
         Err(err) => Control::Dirs {
             path,
@@ -51,21 +59,30 @@ pub fn answer(path: String, windows: bool, home: Option<&Path>, programs: &Windo
             dirs: Vec::new(),
             error: Some(err.to_string()),
             warning: None,
+            claude: false,
         },
     }
 }
 
 /// The path as typed (or the home folder), as a Linux path (none for the drives), the folder
-/// above the listed one, and the listed subfolders.
+/// above the listed one, the listed subfolders, the warning, and whether the path is a Claude
+/// config folder.
 type Listing = (
     String,
     Option<String>,
     Option<String>,
     Vec<Dir>,
     Option<String>,
+    bool,
 );
 
-fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> io::Result<Listing> {
+fn list(
+    path: &str,
+    windows: bool,
+    hidden: bool,
+    home: Option<&Path>,
+    programs: &Windows,
+) -> io::Result<Listing> {
     if path.len() > PATH_LIMIT {
         return Err(io::Error::other(format!(
             "paths are at most {PATH_LIMIT} bytes"
@@ -90,7 +107,7 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     // app filters by it as by any last name.
     #[cfg(windows)]
     if path.find(separators).is_none() {
-        return Ok((path, None, None, crate::windows::drives(), None));
+        return Ok((path, None, None, crate::windows::drives(), None, false));
     }
     let linux = if wsl {
         run(programs.wslpath, &["-u", &path])?
@@ -108,7 +125,13 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     } else {
         typed.parent().unwrap_or(typed)
     };
-    let dirs = subfolders(folder)?;
+    // As a shell completes: a last name starting with `.` asks for hidden folders.
+    let last = &path[path.rfind(separators).map_or(0, |i| i + 1)..];
+    let dirs = subfolders(folder, hidden || last.starts_with('.'))?;
+    // A Claude config folder (`CLAUDE_CONFIG_DIR`) holds one of these.
+    let claude = [".claude.json", "settings.json"]
+        .iter()
+        .any(|file| typed.join(file).is_file());
     // Only macOS checks for network and cloud folders (D18.9), on the folder listed: it exists,
     // so links and `..` resolve.
     #[cfg(target_os = "macos")]
@@ -119,7 +142,7 @@ fn list(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> i
     let above = path.rfind(separators).map_or("", |i| &path[..i]);
     let above = above.trim_end_matches(separators);
     let parent = above.rfind(separators).map(|i| path[..=i].to_owned());
-    Ok((path, Some(linux), parent, dirs, warning))
+    Ok((path, Some(linux), parent, dirs, warning, claude))
 }
 
 fn with_separator(mut path: String, separator: char) -> String {
@@ -129,15 +152,15 @@ fn with_separator(mut path: String, separator: char) -> String {
     path
 }
 
-/// The visible subfolders of `folder` (links to folders included), sorted ignoring case, at
-/// most [`DIR_LIMIT`].
-fn subfolders(folder: &Path) -> io::Result<Vec<Dir>> {
+/// The subfolders of `folder` (links to folders included; hidden ones only when `hidden`),
+/// sorted ignoring case, at most [`DIR_LIMIT`].
+fn subfolders(folder: &Path, hidden: bool) -> io::Result<Vec<Dir>> {
     let entries = fs::read_dir(folder)
         .map_err(|err| io::Error::other(format!("cannot open {}: {err}", folder.display())))?;
     let mut found: Vec<(String, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with('.') && is_dir(&entry) {
+        if (hidden || !name.starts_with('.')) && is_dir(&entry) {
             found.push((name, entry.path()));
         }
     }
@@ -209,7 +232,8 @@ mod tests {
 
     fn ask(path: &str, windows: bool, home: Option<&Path>, programs: &Windows) -> Answer {
         // Read as JSON: a `let … else` would leave a never-run line.
-        let got = serde_json::to_value(answer(path.into(), windows, home, programs)).unwrap();
+        let got =
+            serde_json::to_value(answer(path.into(), windows, false, home, programs)).unwrap();
         assert_eq!(
             (&got["type"], &got["windows"]),
             (&"dirs".into(), &windows.into())
@@ -250,7 +274,8 @@ mod tests {
         fs::create_dir_all(&cloud).unwrap();
         std::os::unix::fs::symlink(&cloud, home.join("shop")).unwrap();
         let warning = |typed: String| {
-            let got = serde_json::to_value(answer(typed, false, Some(&home), &WINDOWS)).unwrap();
+            let got =
+                serde_json::to_value(answer(typed, false, false, Some(&home), &WINDOWS)).unwrap();
             got["warning"].as_str().map(str::to_owned)
         };
         for typed in [cloud.clone(), home.join("shop")] {
@@ -321,6 +346,43 @@ mod tests {
     }
 
     #[test]
+    fn hidden_folders_only_when_asked_and_claude_folders_are_told() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for name in [".claude-work", ".config", "src"] {
+            fs::create_dir(root.join(name)).unwrap();
+        }
+        fs::write(root.join(".claude-work/.claude.json"), "{}").unwrap();
+        fs::create_dir(root.join("src/settings.json")).unwrap();
+        fs::write(root.join(".config/settings.json"), "{}").unwrap();
+        // (names listed, claude) for what was typed under `root`, with `hidden` asked or not.
+        let got = |typed: &str, hidden: bool| {
+            let path = format!("{}{MAIN_SEPARATOR}{typed}", root.display());
+            let got = serde_json::to_value(answer(path, false, hidden, None, &WINDOWS)).unwrap();
+            let dirs: Vec<Dir> = serde_json::from_value(got["dirs"].clone()).unwrap();
+            let names: Vec<_> = dirs.into_iter().map(|d| d.name).collect();
+            (names, got["claude"].as_bool().unwrap())
+        };
+        let all = vec![".claude-work".to_owned(), ".config".into(), "src".into()];
+        assert_eq!(got("", false), (vec!["src".to_owned()], false));
+        assert_eq!(got("", true), (all.clone(), false));
+        assert_eq!(got("s", false), (vec!["src".to_owned()], false));
+        // A last name starting with `.` asks for them, as a shell completes.
+        assert_eq!(got(".cl", false), (all.clone(), false));
+        // A folder holding `.claude.json` or a `settings.json` file is a Claude config folder.
+        assert_eq!(got(".claude-work", false), (all.clone(), true));
+        let sep = MAIN_SEPARATOR;
+        assert_eq!(got(&format!(".config{sep}"), false), (vec![], true));
+        // A folder named `settings.json` is not one.
+        assert_eq!(got(&format!("src{sep}"), false).1, false);
+        // The limits hold when hidden folders are asked.
+        let long = format!("{}{}", root.display(), "a".repeat(PATH_LIMIT));
+        let refused = serde_json::to_value(answer(long, false, true, None, &WINDOWS)).unwrap();
+        assert_eq!(refused["error"], "paths are at most 4096 bytes");
+        assert_eq!(refused["claude"], false);
+    }
+
+    #[test]
     fn at_most_the_cap_is_listed() {
         let tmp = tempfile::tempdir().unwrap();
         for i in 0..=DIR_LIMIT {
@@ -330,6 +392,12 @@ mod tests {
         let (.., dirs, _) = ask(&top, false, None, &WINDOWS);
         assert_eq!(dirs.len(), DIR_LIMIT);
         assert_eq!(dirs[DIR_LIMIT - 1].name, format!("d{:04}", DIR_LIMIT - 1));
+        // Hidden ones count towards the cap too.
+        fs::create_dir(tmp.path().join(".a")).unwrap();
+        let got = serde_json::to_value(answer(top, false, true, None, &WINDOWS)).unwrap();
+        let dirs: Vec<Dir> = serde_json::from_value(got["dirs"].clone()).unwrap();
+        assert_eq!((dirs.len(), dirs[0].name.as_str()), (DIR_LIMIT, ".a"));
+        assert_eq!(dirs[DIR_LIMIT - 1].name, format!("d{:04}", DIR_LIMIT - 2));
     }
 
     #[test]
