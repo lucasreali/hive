@@ -813,8 +813,6 @@ mod tests {
         assert_eq!(refused(&too_many), "At most 64 accounts can be added");
     }
 
-    // `/a` is no absolute path on Windows.
-    #[cfg(unix)]
     #[test]
     fn a_terminal_names_the_default_account_by_its_configured_name() {
         let (tmp, store) = store();
@@ -834,6 +832,8 @@ mod tests {
         assert_eq!(Store::load(file).account_name(None), "Default");
     }
 
+    // `/a` is no absolute path on Windows.
+    #[cfg(unix)]
     #[test]
     fn the_default_account_is_renamed_and_no_other_account_takes_its_name() {
         let (tmp, store) = store();
