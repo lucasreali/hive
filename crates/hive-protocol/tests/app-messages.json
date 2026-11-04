@@ -532,7 +532,8 @@
     "parent": null,
     "dirs": [],
     "error": null,
-    "warning": "m"
+    "warning": "m",
+    "claude": false
   },
   {
     "type": "file",

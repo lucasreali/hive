@@ -44,3 +44,33 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 });
+
+test("settings: a new account's folder is browsed from home, hidden ones included (22.2)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  // Once the app is up: the shortcut is the app's.
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  await page.keyboard.press(`${mod}+Comma`);
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Accounts" }).click();
+  const folder = dialog.getByLabel("New account folder");
+  await expect(folder).toHaveValue("/home/user/");
+  const folders = dialog.getByRole("list", { name: "Folders" });
+  await folders.getByRole("button", { name: ".claude-work" }).click();
+  await expect(folder).toHaveValue("/home/user/.claude-work/");
+  await expect(folder).toBeFocused();
+  const claude = dialog.getByText("A Claude config folder");
+  await expect(claude).toBeVisible();
+  await folders.getByTitle("Up a level").click();
+  await expect(folder).toHaveValue("/home/user/");
+  await expect(claude).toBeHidden();
+  // A typed path still works.
+  await folder.fill("/home/user/.claude-work");
+  await dialog.getByLabel("New account name").fill("Work");
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(dialog.getByLabel("Folder of Work")).toHaveValue("/home/user/.claude-work");
+});

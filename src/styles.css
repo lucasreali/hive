@@ -3152,7 +3152,14 @@ body[data-resizing] {
   user-select: none;
 }
 
-/* Add project: the folder field and the typed folder's subfolders under it */
+/* A folder field (Add project, an account's, a space's gh one): the field and the typed
+   folder's subfolders under it */
+.new-account {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .folder-picker {
   background: var(--bg);
   border: 1px solid var(--border);

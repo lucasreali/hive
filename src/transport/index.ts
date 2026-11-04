@@ -127,9 +127,10 @@ export interface Transport {
   actOnRun(project: string, run: number, action: RunAction, branch: string | null): Promise<void>;
   /**
    * The subfolders of the folder `path` ends in (Windows when `windows`; the home folder when
-   * empty); answered by `dirs`.
+   * empty), hidden ones too when `hidden` or when its last name starts with `.`; answered by
+   * `dirs`.
    */
-  listDirs(path: string, windows: boolean): Promise<void>;
+  listDirs(path: string, windows: boolean, hidden: boolean): Promise<void>;
   /** Answered by `branches`. */
   listBranches(project: string): Promise<void>;
   /** Checks a new worktree name with the CLI's rule; answered by `worktree_name_validated`. */

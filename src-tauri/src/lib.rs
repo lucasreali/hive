@@ -1421,8 +1421,15 @@ impl Hive {
     }
 
     /// The answer arrives as `dirs`.
-    pub fn list_dirs(&self, path: String, windows: bool) -> Result<(), String> {
-        self.link().send(0, &Control::ListDirs { path, windows })
+    pub fn list_dirs(&self, path: String, windows: bool, hidden: bool) -> Result<(), String> {
+        self.link().send(
+            0,
+            &Control::ListDirs {
+                path,
+                windows,
+                hidden,
+            },
+        )
     }
 
     /// The answer arrives as `search_results`.
@@ -2173,8 +2180,13 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn list_dirs(hive: State<'_, Hive>, path: String, windows: bool) -> Result<(), String> {
-        hive.list_dirs(path, windows)
+    pub fn list_dirs(
+        hive: State<'_, Hive>,
+        path: String,
+        windows: bool,
+        hidden: bool,
+    ) -> Result<(), String> {
+        hive.list_dirs(path, windows, hidden)
     }
 
     #[tauri::command]

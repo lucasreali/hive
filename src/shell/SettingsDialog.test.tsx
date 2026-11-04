@@ -8,7 +8,7 @@ import { apply } from "../reduce";
 import { COMMANDS } from "../shortcuts";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_DIAGNOSTICS, MOCK_REPOS, MOCK_SHARED } from "../transport/mock";
+import { MOCK_CLAUDE_DIR, MOCK_DIAGNOSTICS, MOCK_REPOS, MOCK_SHARED } from "../transport/mock";
 import { isMac } from "../window";
 import { SECTIONS } from "./SettingsDialog";
 
@@ -361,11 +361,43 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   await waitFor(() => expect(accounts()).toEqual([]));
 });
 
+test("the new account's folder is browsed from home, hidden folders included (22.2)", async () => {
+  open();
+  section("Accounts");
+  const folder = () => input("New account folder");
+  const folders = () =>
+    [...screen.getByRole("list", { name: "Folders" }).querySelectorAll("li")].map(
+      (li) => li.textContent,
+    );
+  await waitFor(() => expect(folder().value).toBe("/home/user/"));
+  await waitFor(() => expect(folders()).toContain(".claude-work"));
+  expect(screen.queryByText(/A Claude config folder/)).toBeNull();
+  // A click enters a folder; the service says it is a Claude config folder.
+  fireEvent.click(screen.getByRole("button", { name: ".claude-work" }));
+  expect(folder().value).toBe(`${MOCK_CLAUDE_DIR}/`);
+  await waitFor(() =>
+    expect(screen.getByText(/A Claude config folder/).getAttribute("role")).toBe("status"),
+  );
+  // ↑ goes up, and a typed path still works.
+  fireEvent.click(screen.getByTitle("Up a level"));
+  expect(folder().value).toBe("/home/user/");
+  fireEvent.change(folder(), { target: { value: "/home/user/.config/gh-work" } });
+  fireEvent.change(input("New account name"), { target: { value: "Work" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await waitFor(() =>
+    expect(settings().claude.accounts).toEqual([
+      { name: "Work", config_dir: "/home/user/.config/gh-work" },
+    ]),
+  );
+});
+
 test("the default account is renamed in place, and emptied it is Default again (21.4)", async () => {
   open();
   section("Accounts");
   const name = () => input("Name of the default account");
-  expect(name().value).toBe("Default");
+  // Not renamed: an empty field showing "Default" as its placeholder (22.4).
+  expect(name().value).toBe("");
+  expect(name().placeholder).toBe("Default");
   fireEvent.change(name(), { target: { value: " Personal " } });
   await waitFor(() => expect(settings().claude.default_name).toBe("Personal"));
   expect(name().value).toBe("Personal");
@@ -376,10 +408,61 @@ test("the default account is renamed in place, and emptied it is Default again (
   });
   const logIn = screen.getAllByRole("button", { name: "Log in…" })[0] as HTMLButtonElement;
   expect(logIn.title).toBe("A terminal running claude as Personal: type /login there");
-  // The service reads an empty name as "Default".
+  // The service reads an empty name as "Default", shown as the empty field.
   fireEvent.change(name(), { target: { value: " " } });
-  await waitFor(() => expect(name().value).toBe("Default"));
-  expect(settings().claude.default_name).toBe("Default");
+  await waitFor(() => expect(settings().claude.default_name).toBe("Default"));
+  expect(name().value).toBe("");
+  expect(logIn.title).toBe("A terminal running claude as Default: type /login there");
+});
+
+test("an emptied default account name stays empty while a new one is typed (22.4)", async () => {
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: null,
+    default_name: "Personal",
+    share_sessions: false,
+  };
+  await transport.setSettings({ ...DEFAULT_SETTINGS, claude });
+  open();
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
+  section("Accounts");
+  const name = () => input("Name of the default account");
+  const select = () => screen.getByRole("combobox", { name: "Claude account" });
+  expect(name().value).toBe("Personal");
+  // Emptied and saved: the mock settles it to "Default", the field keeps its empty text.
+  name().focus();
+  fireEvent.change(name(), { target: { value: "" } });
+  await waitFor(() => expect(settings().claude.default_name).toBe("Default"));
+  expect(name().value).toBe("");
+  expect(name().placeholder).toBe("Default");
+  expect(select().textContent).toBe("Default");
+  // Typed key by key, each pause saved and settled: no key is lost.
+  for (const text of ["W", "Wo", "Wor"]) {
+    fireEvent.change(name(), { target: { value: text } });
+    await waitFor(() => expect(settings().claude.default_name).toBe(text));
+    expect(name().value).toBe(text);
+  }
+  // A late answer (an earlier save's) while typing does not overwrite the draft.
+  fireEvent.change(name(), { target: { value: "Work2" } });
+  const late = { ...DEFAULT_SETTINGS, claude: { ...claude, default_name: "Wo" } };
+  act(() => apply({ type: "settings", settings: late }));
+  expect(name().value).toBe("Work2");
+  // Unfocused, the field follows the service again; "Default" shows as the empty field.
+  name().blur();
+  await waitFor(() => expect(settings().claude.default_name).toBe("Work2"));
+  act(() =>
+    apply({
+      type: "settings",
+      settings: { ...DEFAULT_SETTINGS, claude: { ...claude, default_name: "Default" } },
+    }),
+  );
+  expect(name().value).toBe("");
+  // Typing "Default" itself saves nothing new.
+  const set = spyOn(transport, "setSettings");
+  fireEvent.change(name(), { target: { value: "Default" } });
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  expect(set).not.toHaveBeenCalled();
+  set.mockRestore();
 });
 
 test("the accounts section marks an account that never logged in (21.6)", async () => {

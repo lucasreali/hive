@@ -1178,10 +1178,11 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         query: "q".into(),
     };
     assert_eq!(service.control().await, (0, search));
-    hive.list_dirs("C:\\".into(), true).unwrap();
+    hive.list_dirs("C:\\".into(), true, true).unwrap();
     let dirs = Control::ListDirs {
         path: "C:\\".into(),
         windows: true,
+        hidden: true,
     };
     assert_eq!(service.control().await, (0, dirs));
     hive.open_file("/r".into(), "a".into(), DiffBase::Head)
@@ -1670,7 +1671,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.open_settings_file(), not_connected);
     assert_eq!(hive.get_diagnostics(), not_connected);
     assert_eq!(hive.search_files("/r".into(), "q".into()), not_connected);
-    assert_eq!(hive.list_dirs(String::new(), false), not_connected);
+    assert_eq!(hive.list_dirs(String::new(), false, false), not_connected);
     assert_eq!(hive.list_sessions(), not_connected);
     assert_eq!(
         hive.locate_session("s".into(), SessionTarget::Folder),
@@ -1970,7 +1971,7 @@ fn commands_reach_the_managed_hive() {
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
     let editor = json!({"worktree": "/r", "path": "a", "reveal": true});
     let search = json!({"worktree": "/r", "query": "q"});
-    let dirs = json!({"path": "", "windows": false});
+    let dirs = json!({"path": "", "windows": false, "hidden": false});
     let locate = json!({"id": "s", "target": "log"});
     let delete = json!({"id": "s"});
     let move_session = json!({"id": "s", "configDir": "/w"});
