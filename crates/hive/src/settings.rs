@@ -1072,6 +1072,7 @@ mod tests {
     }
 
     /// A store in a temporary folder whose account folders go in `accounts/` there.
+    #[cfg(unix)]
     fn store_with_accounts() -> (tempfile::TempDir, Store, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let accounts = tmp.path().join("hive/accounts");
