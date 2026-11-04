@@ -57,6 +57,8 @@ test("settings: a new account's folder is browsed from home, hidden ones include
   await page.keyboard.press(`${mod}+Comma`);
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await dialog.getByRole("button", { name: "Accounts" }).click();
+  // Hive makes the folder unless an existing one is chosen (22.3).
+  await dialog.getByLabel("Use an existing folder").check();
   const folder = dialog.getByLabel("New account folder");
   await expect(folder).toHaveValue("/home/user/");
   const folders = dialog.getByRole("list", { name: "Folders" });
@@ -73,4 +75,12 @@ test("settings: a new account's folder is browsed from home, hidden ones include
   await dialog.getByLabel("New account name").fill("Work");
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
   await expect(dialog.getByLabel("Folder of Work")).toHaveValue("/home/user/.claude-work");
+  // By name only: Hive makes its folder, and offers to log in to it.
+  await dialog.getByLabel("Use an existing folder").uncheck();
+  await expect(folder).toBeHidden();
+  await dialog.getByLabel("New account name").fill("Personal");
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  const made = "/home/mock/.hive/accounts/personal";
+  await expect(dialog.getByLabel("Folder of Personal")).toHaveValue(made);
+  await expect(dialog.getByRole("status").getByRole("button", { name: "Log in…" })).toBeVisible();
 });

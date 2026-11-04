@@ -102,6 +102,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.openInEditor("/r", "a.ts", true);
   await tauriTransport.getSettings();
   await tauriTransport.setSettings(DEFAULT_SETTINGS);
+  await tauriTransport.createAccount("Work");
+  await tauriTransport.removeAccount("/w", true);
   await tauriTransport.openSettingsFile();
   await tauriTransport.getDiagnostics();
   await tauriTransport.getShared();
@@ -156,6 +158,8 @@ test("terminal and project actions call their commands", async () => {
     ["open_in_editor", { worktree: "/r", path: "a.ts", reveal: true }],
     ["get_settings", {}],
     ["set_settings", { settings: DEFAULT_SETTINGS }],
+    ["create_account", { name: "Work" }],
+    ["remove_account", { configDir: "/w", deleteFolder: true }],
     ["open_settings_file", {}],
     ["get_diagnostics", {}],
     ["get_shared", {}],

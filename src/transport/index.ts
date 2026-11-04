@@ -221,6 +221,17 @@ export interface Transport {
   /** Saves the whole settings; answered by `settings`, or `settings_failed` with nothing saved. */
   setSettings(settings: Settings): Promise<void>;
   /**
+   * A new Claude account named `name` whose folder the service makes (22.3); answered by
+   * `settings`, or `settings_failed` with nothing made.
+   */
+  createAccount(name: string): Promise<void>;
+  /**
+   * Removes the Claude account whose folder is `configDir`, deleting the folder too when
+   * `deleteFolder` and Hive made it (22.3); answered by `settings` and, when the folder could
+   * not be deleted, `settings_failed`; by `settings_failed` alone with nothing removed.
+   */
+  removeAccount(configDir: string, deleteFolder: boolean): Promise<void>;
+  /**
    * The settings file's Windows path, the file written first when missing; answered by
    * `editor_target` with an empty `worktree`.
    */

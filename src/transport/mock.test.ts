@@ -15,6 +15,7 @@ import {
   ECHO_MARK,
   LOAD_STAGGER_MS,
   LOAD_START_MS,
+  MOCK_ACCOUNTS_DIR,
   MOCK_BRANCHES,
   MOCK_CHANGES,
   MOCK_CLAUDE_DIR,
@@ -109,6 +110,43 @@ test("keeps the settings it is given in memory", async () => {
     { type: "settings", settings },
     { type: "settings", settings },
   ]);
+});
+
+test("makes an account's folder by its name and deletes only its own (22.3)", async () => {
+  const { transport, messages } = await connected();
+  const last = () => messages.at(-1);
+  const failed = (message: string) => ({ type: "settings_failed" as const, message });
+  const accounts = () => {
+    const m = last();
+    return m?.type === "settings" ? m.settings.claude.accounts : null;
+  };
+  const work = { name: "Work", config_dir: `${MOCK_ACCOUNTS_DIR}/work`, hive_folder: true };
+  await transport.createAccount("Work");
+  await tick();
+  expect(accounts()).toEqual([work]);
+  for (const [name, message] of [
+    ["Work", "Another account is named Work"],
+    ["Default", "Another account is named Default"],
+    ["work!", `${work.config_dir} exists already: give the account another name`],
+    ["../..", '"../.." cannot name a folder: give the account a letter or a digit'],
+  ]) {
+    await transport.createAccount(name as string);
+    await tick();
+    expect(last()).toEqual(failed(message as string));
+  }
+  // An account of a folder the user chose is removed, never its folder.
+  const mine = { name: "Mine", config_dir: "/home/user/.claude-mine" };
+  const claude = { ...DEFAULT_SETTINGS.claude, accounts: [work, mine] };
+  await transport.setSettings({ ...DEFAULT_SETTINGS, claude });
+  await transport.removeAccount(mine.config_dir, true);
+  await tick();
+  expect(last()).toEqual(failed(`Hive did not make ${mine.config_dir}: it is never deleted`));
+  await transport.removeAccount("/nope", false);
+  await tick();
+  expect(last()).toEqual(failed("No Claude account has the folder /nope"));
+  await transport.removeAccount(work.config_dir, true);
+  await tick();
+  expect(accounts()).toEqual([mine]);
 });
 
 test("new terminals get the current Claude account, or the one asked for (12.2)", async () => {

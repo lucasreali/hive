@@ -178,6 +178,8 @@ fn main() {
             commands::open_path,
             commands::get_settings,
             commands::set_settings,
+            commands::create_account,
+            commands::remove_account,
             commands::create_space,
             commands::update_space,
             commands::delete_space,

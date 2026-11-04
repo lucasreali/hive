@@ -1545,6 +1545,19 @@ impl Hive {
         self.link().send(0, &Control::SetSettings { settings })
     }
 
+    /// The answer to both arrives as `settings` or `settings_failed` (22.3).
+    pub fn create_account(&self, name: String) -> Result<(), String> {
+        self.link().send(0, &Control::CreateAccount { name })
+    }
+
+    pub fn remove_account(&self, config_dir: String, delete_folder: bool) -> Result<(), String> {
+        let remove = Control::RemoveAccount {
+            config_dir,
+            delete_folder,
+        };
+        self.link().send(0, &remove)
+    }
+
     /// The answer to each space request arrives as `spaces` or `space_failed`.
     pub fn create_space(&self, name: String, env: SpaceEnv) -> Result<(), String> {
         self.link().send(0, &Control::CreateSpace { name, env })
@@ -2331,6 +2344,20 @@ pub mod commands {
     #[tauri::command]
     pub fn set_settings(hive: State<'_, Hive>, settings: Settings) -> Result<(), String> {
         hive.set_settings(settings)
+    }
+
+    #[tauri::command]
+    pub fn create_account(hive: State<'_, Hive>, name: String) -> Result<(), String> {
+        hive.create_account(name)
+    }
+
+    #[tauri::command]
+    pub fn remove_account(
+        hive: State<'_, Hive>,
+        config_dir: String,
+        delete_folder: bool,
+    ) -> Result<(), String> {
+        hive.remove_account(config_dir, delete_folder)
     }
 
     #[tauri::command]

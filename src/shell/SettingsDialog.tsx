@@ -10,9 +10,9 @@ import {
   TerminalWindowIcon,
   UserCircleIcon,
 } from "@phosphor-icons/react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { version as appVersion } from "../../package.json";
-import type { AppMode, ClaudeLogin, ProjectScripts, Settings } from "../protocol";
+import type { Account, AppMode, ClaudeLogin, ProjectScripts, Settings } from "../protocol";
 import { commandKeys, platformCommands } from "../shortcuts";
 import { ask, openModal, panelWorktree, scriptsOf, useHive } from "../store";
 import { MAC_TERMINAL_KEYS, openClaude, showOpenFailure } from "../terminals";
@@ -57,8 +57,11 @@ const SECTION_ICON: Record<Section, Icon> = {
   About: InfoIcon,
 };
 
-/** Changes made while a save waits for its answer, sent together once it arrives. */
-let queued: ((next: Settings) => void)[] = [];
+/**
+ * Changes made while a save waits for its answer, sent together once it arrives, and requests
+ * answered by the settings too (22.3), each sent alone in its turn.
+ */
+const queued: (((next: Settings) => void) | { request: () => Promise<void> })[] = [];
 
 /**
  * Sends the whole settings with `change` made to the ones stored (#37: the service checks). One
@@ -70,11 +73,25 @@ export function saveSettings(change: (next: Settings) => void): void {
   if (!useHive.getState().settingsPending) send();
 }
 
+/**
+ * Sends `request`, answered by `settings` or `settings_failed` (22.3: an account made or
+ * removed by the service), in turn with the saves: a save after it builds on its answer.
+ */
+export function requestSettings(request: () => Promise<void>): void {
+  queued.push({ request });
+  if (!useHive.getState().settingsPending) send();
+}
+
 function send(): void {
-  const next = structuredClone(useHive.getState().settings);
-  for (const change of queued) change(next);
-  queued = [];
   useHive.setState({ settingsPending: true });
+  const first = queued[0];
+  if (typeof first === "object") {
+    queued.shift();
+    void first.request();
+    return;
+  }
+  const next = structuredClone(useHive.getState().settings);
+  while (typeof queued[0] === "function") (queued.shift() as (next: Settings) => void)(next);
   void transport.setSettings(next);
 }
 
@@ -933,15 +950,39 @@ function Accounts() {
   // Asked again when the section opens: a `/login` may have finished in a Hive terminal.
   useEffect(() => void transport.listClaudeLogins(), []);
   const [name, setName] = useState("");
+  // An existing folder chosen (as before 22.3), else the service makes one.
+  const [existing, setExisting] = useState(false);
   const [dir, setDir] = useState("");
   const listing = useFolderListing(dir);
+  // The account just made (22.3), offered its log in.
+  const [made, setMade] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [deleteFolder, setDeleteFolder] = useState(false);
+  const fresh = accounts.find((a) => a.hive_folder && a.name === made);
   const add = () => {
-    const account = { name: name.trim(), config_dir: dir.trim() };
-    saveSettings((s) => {
-      s.claude.accounts.push(account);
-    });
+    const trimmed = name.trim();
+    if (existing) {
+      const account = { name: trimmed, config_dir: dir.trim() };
+      saveSettings((s) => {
+        s.claude.accounts.push(account);
+      });
+    } else {
+      requestSettings(() => transport.createAccount(trimmed));
+      setMade(trimmed);
+    }
     setName("");
     setDir("");
+  };
+  const remove = (a: Account) => {
+    // Only a folder Hive made may be deleted (22.3): it asks first.
+    if (a.hive_folder) {
+      setRemoving(a.config_dir);
+      setDeleteFolder(false);
+      return;
+    }
+    saveSettings((s) => {
+      s.claude.accounts = s.claude.accounts.filter((b) => b.config_dir !== a.config_dir);
+    });
   };
   return (
     <div className="field">
@@ -965,34 +1006,65 @@ function Accounts() {
         <LogIn dir={null} name={defaultName} />
       </div>
       {accounts.map((a) => (
-        <div className="script-run" key={a.config_dir}>
-          <Typed
-            id={`setting-account-${a.config_dir}`}
-            aria-label={`Name of ${a.config_dir}`}
-            value={a.name}
-            onSave={(text) =>
-              saveSettings((s) => {
-                const renamed = s.claude.accounts.find((b) => b.config_dir === a.config_dir);
-                if (renamed) renamed.name = text.trim();
-              })
-            }
-          />
-          <input aria-label={`Folder of ${a.name}`} value={a.config_dir} readOnly />
-          <NotLoggedIn dir={a.config_dir} />
-          <LogIn dir={a.config_dir} name={a.name} />
-          <button
-            type="button"
-            className="ghost"
-            title={`Remove ${a.name}`}
-            onClick={() =>
-              saveSettings((s) => {
-                s.claude.accounts = s.claude.accounts.filter((b) => b.config_dir !== a.config_dir);
-              })
-            }
-          >
-            <CloseIcon />
-          </button>
-        </div>
+        <Fragment key={a.config_dir}>
+          <div className="script-run">
+            <Typed
+              id={`setting-account-${a.config_dir}`}
+              aria-label={`Name of ${a.config_dir}`}
+              value={a.name}
+              onSave={(text) =>
+                saveSettings((s) => {
+                  const renamed = s.claude.accounts.find((b) => b.config_dir === a.config_dir);
+                  if (renamed) renamed.name = text.trim();
+                })
+              }
+            />
+            <input aria-label={`Folder of ${a.name}`} value={a.config_dir} readOnly />
+            <NotLoggedIn dir={a.config_dir} />
+            <LogIn dir={a.config_dir} name={a.name} />
+            <button
+              type="button"
+              className="ghost"
+              title={`Remove ${a.name}`}
+              onClick={() => remove(a)}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+          {removing === a.config_dir && (
+            <fieldset className="new-account" aria-label={`Remove ${a.name}`}>
+              <p className="field-help">
+                Hive made its folder, <code>{a.config_dir}</code>: deleting it loses the account's
+                sessions, settings and skills. Run <code>/logout</code> in its terminal first:
+                Claude Code keeps its credentials outside the folder (on macOS, in the Keychain),
+                and Hive never touches them.
+              </p>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={deleteFolder}
+                  onChange={(e) => setDeleteFolder(e.target.checked)}
+                />
+                Also delete its folder
+              </label>
+              <div className="script-run">
+                <button type="button" className="secondary" onClick={() => setRemoving(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary danger"
+                  onClick={() => {
+                    setRemoving(null);
+                    requestSettings(() => transport.removeAccount(a.config_dir, deleteFolder));
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            </fieldset>
+          )}
+        </Fragment>
       ))}
       <form
         className="new-account"
@@ -1008,35 +1080,61 @@ function Accounts() {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button type="submit" className="secondary" disabled={!name.trim() || !dir.trim()}>
+          <button
+            type="submit"
+            className="secondary"
+            disabled={!name.trim() || (existing && !dir.trim())}
+          >
             Add
           </button>
         </div>
-        {/* Starts at the home folder; account folders are often hidden ones (22.2). */}
-        <FolderField
-          id="new-account-folder"
-          aria-label="New account folder"
-          value={dir}
-          onChange={setDir}
-          placeholder={homeText("/home/you/.claude-work")}
-          hidden
-          home
-        />
-        {listing?.path === dir && listing.claude && (
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={existing}
+            onChange={(e) => setExisting(e.target.checked)}
+          />
+          Use an existing folder
+        </label>
+        {existing ? (
+          <>
+            {/* Starts at the home folder; account folders are often hidden ones (22.2). */}
+            <FolderField
+              id="new-account-folder"
+              aria-label="New account folder"
+              value={dir}
+              onChange={setDir}
+              placeholder={homeText("/home/you/.claude-work")}
+              hidden
+              home
+            />
+            {listing?.path === dir && listing.claude && (
+              <p className="field-help" role="status">
+                A Claude config folder: it has a <code>.claude.json</code> or{" "}
+                <code>settings.json</code>.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="field-help">
+            Hive makes its folder, in <code>accounts</code> in Hive's folder (<code>~/.hive</code>).
+          </p>
+        )}
+        {fresh && (
           <p className="field-help" role="status">
-            A Claude config folder: it has a <code>.claude.json</code> or <code>settings.json</code>
-            .
+            {fresh.name} is made: log in to it. <LogIn dir={fresh.config_dir} name={fresh.name} />
           </p>
         )}
       </form>
       <p className="field-help">
-        Each account is a <code>CLAUDE_CONFIG_DIR</code> (an existing folder): its own login,
-        settings and sessions. The first one is <code>~/.claude</code> itself: it can be renamed but
-        not removed, and an empty name is "Default" again. The status bar picks the one new
-        terminals get; open ones keep theirs. "Log in…" opens a terminal running <code>claude</code>{" "}
-        as the account: type <code>/login</code> there; "Not logged in" marks an account whose{" "}
-        <code>.claude.json</code> has no login yet. Hive never reads or writes credentials. Removing
-        an account leaves its folder on disk.
+        Each account is a <code>CLAUDE_CONFIG_DIR</code>, a folder Hive makes or one you choose: its
+        own login, settings and sessions. The first one is <code>~/.claude</code> itself: it can be
+        renamed but not removed, and an empty name is "Default" again. The status bar picks the one
+        new terminals get; open ones keep theirs. "Log in…" opens a terminal running{" "}
+        <code>claude</code> as the account: type <code>/login</code> there; "Not logged in" marks an
+        account whose <code>.claude.json</code> has no login yet. Hive never reads or writes
+        credentials. Removing an account leaves a folder you chose on disk; one Hive made may be
+        deleted with it.
       </p>
     </div>
   );

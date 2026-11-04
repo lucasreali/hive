@@ -8,7 +8,13 @@ import { apply } from "../reduce";
 import { COMMANDS } from "../shortcuts";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_CLAUDE_DIR, MOCK_DIAGNOSTICS, MOCK_REPOS, MOCK_SHARED } from "../transport/mock";
+import {
+  MOCK_ACCOUNTS_DIR,
+  MOCK_CLAUDE_DIR,
+  MOCK_DIAGNOSTICS,
+  MOCK_REPOS,
+  MOCK_SHARED,
+} from "../transport/mock";
 import { isMac } from "../window";
 import { SECTIONS } from "./SettingsDialog";
 
@@ -301,10 +307,12 @@ test("the projects section edits each project's scripts", async () => {
 test("a new account's folder example is a home folder of the platform (18.25)", () => {
   open();
   section("Accounts");
+  fireEvent.click(input("Use an existing folder"));
   expect(input("New account folder").placeholder).toBe("/home/you/.claude-work");
   asMac();
   section("Agents");
   section("Accounts");
+  fireEvent.click(input("Use an existing folder"));
   expect(input("New account folder").placeholder).toBe("/Users/you/.claude-work");
 });
 
@@ -328,7 +336,9 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   expect(logIns()[0]?.disabled).toBe(true);
   const add = screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
   expect(add.disabled).toBe(true);
+  fireEvent.click(input("Use an existing folder"));
   fireEvent.change(input("New account name"), { target: { value: " Work " } });
+  expect(add.disabled).toBe(true);
   fireEvent.change(input("New account folder"), { target: { value: " /w " } });
   fireEvent.click(add);
   await waitFor(() => expect(accounts()).toEqual([{ name: "Work", config_dir: "/w" }]));
@@ -364,6 +374,9 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
 test("the new account's folder is browsed from home, hidden folders included (22.2)", async () => {
   open();
   section("Accounts");
+  // Hive makes the folder unless an existing one is chosen (22.3).
+  expect(screen.queryByLabelText("New account folder")).toBeNull();
+  fireEvent.click(input("Use an existing folder"));
   const folder = () => input("New account folder");
   const folders = () =>
     [...screen.getByRole("list", { name: "Folders" }).querySelectorAll("li")].map(
@@ -389,6 +402,87 @@ test("the new account's folder is browsed from home, hidden folders included (22
       { name: "Work", config_dir: "/home/user/.config/gh-work" },
     ]),
   );
+});
+
+test("a new account named only gets a folder Hive makes, then is offered its log in (22.3)", async () => {
+  open();
+  section("Accounts");
+  const accounts = () => settings().claude.accounts;
+  expect(screen.getByText(/Hive makes its folder/)).toBeDefined();
+  const created = spyOn(transport, "createAccount");
+  fireEvent.change(input("New account name"), { target: { value: " Work 2 " } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  const config_dir = `${MOCK_ACCOUNTS_DIR}/work-2`;
+  await waitFor(() =>
+    expect(accounts()).toEqual([{ name: "Work 2", config_dir, hive_folder: true }]),
+  );
+  expect(created).toHaveBeenCalledWith("Work 2");
+  created.mockRestore();
+  expect(input("New account name").value).toBe("");
+  expect(input("Folder of Work 2").value).toBe(config_dir);
+  const offer = screen.getByText(/Work 2 is made: log in to it/);
+  expect(offer.getAttribute("role")).toBe("status");
+  expect(within(offer).getByRole("button", { name: "Log in…" })).toBeDefined();
+  // A taken name is refused: nothing made, nothing offered for it, the reason shown.
+  fireEvent.change(input("New account name"), { target: { value: "Default" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await waitFor(() => expect(settings().claude.accounts).toHaveLength(1));
+  await waitFor(() =>
+    expect(useHive.getState().settingsError).toBe("Another account is named Default"),
+  );
+  expect(screen.queryByText(/is made: log in to it/)).toBeNull();
+});
+
+test("removing an account Hive made asks whether to delete its folder too (22.3)", async () => {
+  open();
+  section("Accounts");
+  const accounts = () => settings().claude.accounts;
+  for (const value of ["Work", "Kept"]) {
+    fireEvent.change(input("New account name"), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.queryByLabelText(`Folder of ${value}`)).not.toBeNull());
+  }
+  const removed = spyOn(transport, "removeAccount");
+  // It asks first, saying to log out: cancelled, nothing changes.
+  fireEvent.click(screen.getByTitle("Remove Work"));
+  const ask = () => screen.getByRole("group", { name: "Remove Work" });
+  expect(within(ask()).getByText(/\/logout/)).toBeDefined();
+  expect(within(ask()).getByText(/Keychain/)).toBeDefined();
+  fireEvent.click(within(ask()).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("group", { name: "Remove Work" })).toBeNull();
+  expect(removed).not.toHaveBeenCalled();
+  // Removed with its folder.
+  fireEvent.click(screen.getByTitle("Remove Work"));
+  fireEvent.click(within(ask()).getByLabelText("Also delete its folder"));
+  fireEvent.click(within(ask()).getByRole("button", { name: "Remove" }));
+  await waitFor(() => expect(accounts().map((a) => a.name)).toEqual(["Kept"]));
+  expect(removed).toHaveBeenCalledWith(`${MOCK_ACCOUNTS_DIR}/work`, true);
+  // Removed, its folder kept: the box starts unticked each time.
+  fireEvent.click(screen.getByTitle("Remove Kept"));
+  const keep = screen.getByRole("group", { name: "Remove Kept" });
+  expect((within(keep).getByLabelText("Also delete its folder") as HTMLInputElement).checked).toBe(
+    false,
+  );
+  fireEvent.click(within(keep).getByRole("button", { name: "Remove" }));
+  await waitFor(() => expect(accounts()).toEqual([]));
+  expect(removed).toHaveBeenLastCalledWith(`${MOCK_ACCOUNTS_DIR}/kept`, false);
+  removed.mockRestore();
+});
+
+test("a save queued behind an account request builds on its answer (22.3)", async () => {
+  open();
+  section("Accounts");
+  const sent = spyOn(transport, "setSettings");
+  fireEvent.change(input("New account name"), { target: { value: "Work" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  // Sent while the account is being made: it waits, and keeps the new account.
+  fireEvent.click(input("Share sessions between accounts"));
+  await waitFor(() => expect(sent).toHaveBeenCalledTimes(1));
+  const saved = sent.mock.calls[0]?.[0];
+  expect(saved?.claude.share_sessions).toBe(true);
+  expect(saved?.claude.accounts.map((a) => a.name)).toEqual(["Work"]);
+  sent.mockRestore();
+  await waitFor(() => expect(useHive.getState().settingsPending).toBe(false));
 });
 
 test("the default account is renamed in place, and emptied it is Default again (21.4)", async () => {

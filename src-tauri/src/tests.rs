@@ -1257,6 +1257,17 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.set_settings(settings.clone()).unwrap();
     let set = Control::SetSettings { settings };
     assert_eq!(service.control().await, (0, set));
+    hive.create_account("Work".into()).unwrap();
+    let create = Control::CreateAccount {
+        name: "Work".into(),
+    };
+    assert_eq!(service.control().await, (0, create));
+    hive.remove_account("/w".into(), true).unwrap();
+    let remove = Control::RemoveAccount {
+        config_dir: "/w".into(),
+        delete_folder: true,
+    };
+    assert_eq!(service.control().await, (0, remove));
     let env = SpaceEnv {
         git_name: Some("Me".into()),
         ..SpaceEnv::default()
@@ -1638,6 +1649,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.get_settings(), not_connected);
     assert_eq!(hive.set_settings(Settings::default()), not_connected);
+    assert_eq!(hive.create_account("W".into()), not_connected);
+    assert_eq!(hive.remove_account("/w".into(), false), not_connected);
     let env = SpaceEnv::default();
     assert_eq!(hive.create_space("W".into(), env.clone()), not_connected);
     assert_eq!(
@@ -1893,6 +1906,8 @@ fn commands_reach_the_managed_hive() {
             open_path,
             get_settings,
             set_settings,
+            create_account,
+            remove_account,
             create_space,
             update_space,
             delete_space,
@@ -2023,6 +2038,8 @@ fn commands_reach_the_managed_hive() {
         ("open_in_editor", &editor),
         ("get_settings", &json!({})),
         ("set_settings", &settings),
+        ("create_account", &json!({"name": "Work"})),
+        ("remove_account", &json!({"configDir": "/w", "deleteFolder": true})),
         ("create_space", &new_space),
         ("update_space", &update),
         ("delete_space", &space),

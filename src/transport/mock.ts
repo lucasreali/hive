@@ -319,6 +319,8 @@ export const MOCK_SHARE_WARNING =
   "This folder is on a network volume (smbfs): Hive may miss changes made elsewhere, and git may be slow.";
 /** A Claude config folder on the fake machine: it holds a `.claude.json`. */
 export const MOCK_CLAUDE_DIR = "/home/user/.claude-work";
+/** Where the mock service makes the Claude account folders (22.3). */
+export const MOCK_ACCOUNTS_DIR = "/home/mock/.hive/accounts";
 
 export const MOCK_FOLDERS = [
   ...MOCK_REPOS.map((p) => p.path),
@@ -1043,6 +1045,43 @@ export function createMockTransport(
         default_name: default_name || "Default",
       };
       settings = { ...next, claude };
+      later({ type: "settings", settings });
+    },
+    async createAccount(name) {
+      // As the service: its letters and digits, lowercase, `-` between them (22.3).
+      const slug = name
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, "-")
+        .replace(/^-|-$/g, "");
+      const config_dir = `${MOCK_ACCOUNTS_DIR}/${slug}`;
+      const { accounts, default_name } = settings.claude;
+      const message = !slug
+        ? `"${name}" cannot name a folder: give the account a letter or a digit`
+        : name === default_name || accounts.some((a) => a.name === name)
+          ? `Another account is named ${name}`
+          : accounts.some((a) => a.config_dir === config_dir)
+            ? `${config_dir} exists already: give the account another name`
+            : null;
+      if (message) {
+        later({ type: "settings_failed", message });
+        return;
+      }
+      const account = { name, config_dir, hive_folder: true };
+      settings = { ...settings, claude: { ...settings.claude, accounts: [...accounts, account] } };
+      later({ type: "settings", settings });
+    },
+    async removeAccount(configDir, deleteFolder) {
+      const { accounts } = settings.claude;
+      const account = accounts.find((a) => a.config_dir === configDir);
+      if (!account || (deleteFolder && !account.hive_folder)) {
+        const message = account
+          ? `Hive did not make ${configDir}: it is never deleted`
+          : `No Claude account has the folder ${configDir}`;
+        later({ type: "settings_failed", message });
+        return;
+      }
+      const kept = accounts.filter((a) => a !== account);
+      settings = { ...settings, claude: { ...settings.claude, accounts: kept } };
       later({ type: "settings", settings });
     },
     async openSettingsFile() {

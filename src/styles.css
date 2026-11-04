@@ -3160,6 +3160,14 @@ body[data-resizing] {
   gap: 6px;
 }
 
+/* Removing an account Hive made (22.3): a group of its own, no frame */
+fieldset.new-account {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
 .folder-picker {
   background: var(--bg);
   border: 1px solid var(--border);

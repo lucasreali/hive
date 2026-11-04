@@ -551,8 +551,12 @@ export type Settings = {
   };
 };
 
-/** Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`. */
-export type Account = { name: string; config_dir: string };
+/**
+ * Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`.
+ * `hive_folder`: Hive made the folder (22.3), so removing the account may delete it; always
+ * sent by the service, left out of the accounts the app adds.
+ */
+export type Account = { name: string; config_dir: string; hive_folder?: boolean };
 
 /**
  * Mirrors `hive_protocol::ClaudeLogin` (21.6): whether the account whose folder is `config_dir`
