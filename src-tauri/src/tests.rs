@@ -2039,7 +2039,10 @@ fn commands_reach_the_managed_hive() {
         ("get_settings", &json!({})),
         ("set_settings", &settings),
         ("create_account", &json!({"name": "Work"})),
-        ("remove_account", &json!({"configDir": "/w", "deleteFolder": true})),
+        (
+            "remove_account",
+            &json!({"configDir": "/w", "deleteFolder": true}),
+        ),
         ("create_space", &new_space),
         ("update_space", &update),
         ("delete_space", &space),
