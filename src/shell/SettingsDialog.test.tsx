@@ -512,16 +512,26 @@ test("the default account is renamed in place, and emptied it is Default again (
 test("an emptied default account name stays empty while a new one is typed (22.4)", async () => {
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
-    account: null,
     default_name: "Personal",
     share_sessions: false,
   };
   await transport.setSettings({ ...DEFAULT_SETTINGS, claude });
   open();
-  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
+  const env = {
+    git_name: null,
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+    claude_account: null,
+  };
+  act(() => {
+    apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } });
+    apply({ type: "spaces", spaces: [{ id: "d", name: "D", projects: [], env }], current: "d" });
+  });
   section("Accounts");
   const name = () => input("Name of the default account");
-  const select = () => screen.getByRole("combobox", { name: "Claude account" });
+  // The status bar's name of the space's account (22.5).
+  const select = () => document.querySelector(".space-account") as HTMLElement;
   expect(name().value).toBe("Personal");
   // Emptied and saved: the mock settles it to "Default", the field keeps its empty text.
   name().focus();
@@ -563,7 +573,6 @@ test("the accounts section marks an account that never logged in (21.6)", async 
   const ask = spyOn(transport, "listClaudeLogins");
   const claude = {
     accounts: [{ name: "Work", config_dir: "/w" }],
-    account: null,
     default_name: "Default",
     share_sessions: false,
   };

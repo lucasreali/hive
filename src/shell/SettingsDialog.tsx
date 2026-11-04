@@ -1129,12 +1129,12 @@ function Accounts() {
       <p className="field-help">
         Each account is a <code>CLAUDE_CONFIG_DIR</code>, a folder Hive makes or one you choose: its
         own login, settings and sessions. The first one is <code>~/.claude</code> itself: it can be
-        renamed but not removed, and an empty name is "Default" again. The status bar picks the one
-        new terminals get; open ones keep theirs. "Log in…" opens a terminal running{" "}
-        <code>claude</code> as the account: type <code>/login</code> there; "Not logged in" marks an
-        account whose <code>.claude.json</code> has no login yet. Hive never reads or writes
-        credentials. Removing an account leaves a folder you chose on disk; one Hive made may be
-        deleted with it.
+        renamed but not removed, and an empty name is "Default" again. Each space picks the one its
+        terminals get, in its settings; open ones keep theirs, and an account a space uses cannot be
+        removed. "Log in…" opens a terminal running <code>claude</code> as the account: type{" "}
+        <code>/login</code> there; "Not logged in" marks an account whose <code>.claude.json</code>{" "}
+        has no login yet. Hive never reads or writes credentials. Removing an account leaves a
+        folder you chose on disk; one Hive made may be deleted with it.
       </p>
     </div>
   );

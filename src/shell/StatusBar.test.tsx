@@ -161,43 +161,59 @@ test("holds no message:a failure or a confirmation shows elsewhere, as a toast (
   );
 });
 
-test("with an account besides the default one, a select picks the current account (12.2)", () => {
-  const set = spyOn(transport, "setSettings").mockResolvedValue();
+const NO_ENV = {
+  git_name: null,
+  git_email: null,
+  gh_config_dir: null,
+  gh_account: null,
+  claude_account: null,
+};
+
+/** Two spaces, "Work" with the account of folder `work` (22.5), `current` the current one. */
+const spaces = (current: string, work: string | null = "/w") =>
+  apply({
+    type: "spaces",
+    spaces: [
+      { id: "default", name: "Personal", projects: [], env: NO_ENV },
+      { id: "work", name: "Work", projects: [], env: { ...NO_ENV, claude_account: work } },
+    ],
+    current,
+  });
+
+const WORK_ACCOUNT = {
+  accounts: [{ name: "Work account", config_dir: "/w" }],
+  default_name: "Default",
+  share_sessions: false,
+};
+
+test("with an account besides the default one, the current space's account is shown (22.5)", () => {
   render(<StatusBar />);
-  const select = () => screen.queryByRole("combobox", { name: "Claude account" });
-  expect(select()).toBeNull();
-  const claude = {
-    accounts: [{ name: "Work", config_dir: "/w" }],
-    account: "/w",
-    default_name: "Default",
-    share_sessions: false,
-  };
-  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
-  expect(select()?.textContent).toBe("Work");
+  const shown = () => document.querySelector<HTMLButtonElement>(".space-account");
+  act(() => spaces("work"));
+  expect(shown()).toBeNull();
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: WORK_ACCOUNT } }));
+  expect(shown()?.textContent).toBe("Work account");
+  expect(shown()?.title).toBe("Claude account of Work; change it in the space's settings");
+  // No select left: it is the space's, changed in its dialog, which a click opens.
+  expect(screen.queryByRole("combobox")).toBeNull();
+  fireEvent.click(shown() as HTMLElement);
+  expect(useHive.getState().modal).toBe("edit-space");
   // Its session usage (12.1) sits right after it.
   act(() => apply({ type: "session_usage", usage: { used_percentage: 7, resets_at: 1 } }));
-  const group = select()?.closest(".statusbar-account");
+  const group = shown()?.closest(".statusbar-account");
   expect(group?.lastElementChild?.className).toBe("session-usage");
   // Next to the version, which stays last.
   expect(screen.getByRole("contentinfo").lastElementChild?.textContent).toBe(`v${version}`);
-  fireEvent.mouseDown(select() as HTMLElement);
-  fireEvent.click(screen.getByRole("option", { name: "Default" }));
-  const account = null;
-  expect(set).toHaveBeenCalledWith({ ...DEFAULT_SETTINGS, claude: { ...claude, account } });
-  act(() =>
-    apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: { ...claude, account } } }),
-  );
-  expect(select()?.textContent).toBe("Default");
-  fireEvent.mouseDown(select() as HTMLElement);
-  fireEvent.click(screen.getByRole("option", { name: "Work" }));
-  expect(set).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, claude });
+  // Another space, the default account; a folder no account has is the default one too.
+  act(() => spaces("default"));
+  expect(shown()?.textContent).toBe("Default");
+  expect(shown()?.title).toBe("Claude account of Personal; change it in the space's settings");
+  act(() => spaces("work", "/gone"));
+  expect(shown()?.textContent).toBe("Default");
   // The default account renamed (21.4) shows its name.
-  const personal = { ...claude, account, default_name: "Personal" };
+  const personal = { ...WORK_ACCOUNT, default_name: "Mine" };
   act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: personal } }));
-  expect(select()?.textContent).toBe("Personal");
-  fireEvent.mouseDown(select() as HTMLElement);
-  expect(screen.getByRole("option", { name: "Personal" })).toBeTruthy();
-  set.mockRestore();
+  expect(shown()?.textContent).toBe("Mine");
 });
 
 test("whether each account logged in is asked once connected, for new accounts and on focus (21.6)", () => {
@@ -206,13 +222,7 @@ test("whether each account logged in is asked once connected, for new accounts a
   expect(ask).not.toHaveBeenCalled();
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(ask).toHaveBeenCalledTimes(1);
-  const claude = {
-    accounts: [{ name: "Work", config_dir: "/w" }],
-    account: null,
-    default_name: "Default",
-    share_sessions: false,
-  };
-  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: WORK_ACCOUNT } }));
   expect(ask).toHaveBeenCalledTimes(2);
   // Back from the browser, where a `/login` finished.
   act(() => {
@@ -225,51 +235,35 @@ test("whether each account logged in is asked once connected, for new accounts a
   ask.mockRestore();
 });
 
-test("an account that never logged in says so in the select, with Log in… when current (21.6)", () => {
+test("the space's account that never logged in says so, with Log in… (21.6)", () => {
   const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
   render(<StatusBar />);
-  const claude = {
-    accounts: [{ name: "Work", config_dir: "/w" }],
-    account: "/w",
-    default_name: "Default",
-    share_sessions: false,
-  };
   act(() => {
     apply({ type: "welcome", version: "0.1.0", distro: null });
-    apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } });
+    apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: WORK_ACCOUNT } });
+    spaces("work");
   });
-  const select = () => screen.getByRole("combobox", { name: "Claude account" });
   const logIn = () => screen.queryByRole("button", { name: "Log in…" });
+  const mark = () => screen.queryByText("Not logged in");
   // Until the service answers, every account counts as logged in.
-  expect(select().textContent).toBe("Work");
   expect(logIn()).toBeNull();
   const logins = (work: boolean, def = true) => [
     { config_dir: null, logged_in: def },
     { config_dir: "/w", logged_in: work },
   ];
   act(() => apply({ type: "claude_logins", logins: logins(false) }));
-  expect(select().textContent).toBe("Work (not logged in)");
-  expect(screen.getByText("Not logged in").className).toBe("not-logged-in");
+  expect(mark()?.className).toBe("not-logged-in");
   expect(logIn()?.title).toBe("Select a worktree to open the terminal in");
-  fireEvent.mouseDown(select());
-  const options = screen.getAllByRole("option").map((o) => o.textContent);
-  expect(options).toEqual(["Default", "Work (not logged in)"]);
-  fireEvent.keyDown(select(), { key: "Escape" });
   // Logged in now: no mark.
   act(() => apply({ type: "claude_logins", logins: logins(true) }));
-  expect(select().textContent).toBe("Work");
+  expect(mark()).toBeNull();
   expect(logIn()).toBeNull();
-  // The default account, current and never logged in.
-  const def = { ...claude, account: null };
+  // A space of the default account, never logged in.
   act(() => {
-    apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: def } });
+    spaces("default");
     apply({ type: "claude_logins", logins: logins(true, false) });
   });
-  expect(select().textContent).toBe("Default (not logged in)");
+  expect(mark()).not.toBeNull();
   expect(logIn()).not.toBeNull();
-  // Renamed (21.4), it keeps the mark.
-  const personal = { ...def, default_name: "Personal" };
-  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: personal } }));
-  expect(select().textContent).toBe("Personal (not logged in)");
   ask.mockRestore();
 });

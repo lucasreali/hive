@@ -242,6 +242,7 @@ test("worktrees are the current space's only", () => {
     git_email: null,
     gh_config_dir: null,
     gh_account: null,
+    claude_account: null,
   };
   open();
   act(() =>

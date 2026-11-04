@@ -316,7 +316,7 @@ test("with accounts, a row names its account and the menu continues it in anothe
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
   const accounts = [{ name: "Work", config_dir: "/w" }];
-  const claude = { accounts, account: null, default_name: "Default", share_sessions: false };
+  const claude = { accounts, default_name: "Default", share_sessions: false };
   act(() => useHive.setState({ settings: { ...initialState.settings, claude } }));
   expect(meta()).toContain("Default");
   const worked = MOCK_SESSIONS.map((s) => (s === checkout ? { ...s, config_dir: "/w" } : s));

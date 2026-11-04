@@ -1088,13 +1088,10 @@ pub struct Settings {
 #[serde(default)]
 pub struct ClaudeSettings {
     pub accounts: Vec<Account>,
-    /// The current account's folder: new terminals get it as `CLAUDE_CONFIG_DIR`. `None`, or a
-    /// folder no account has: the default account.
-    pub account: Option<String>,
     /// The default account's name (21.4): [`DEFAULT_ACCOUNT`] when missing or empty in the file.
     pub default_name: String,
     /// Sessions are shared between the accounts (21.10, D22.5): resuming one from the history
-    /// runs as the current account, its log moved into that account's folder. Off: as the
+    /// runs as the account of its project's space (22.5), its log moved into that account's folder. Off: as the
     /// account it ran as.
     pub share_sessions: bool,
 }
@@ -1106,7 +1103,6 @@ impl Default for ClaudeSettings {
     fn default() -> Self {
         Self {
             accounts: Vec::new(),
-            account: None,
             default_name: DEFAULT_ACCOUNT.to_owned(),
             share_sessions: false,
         }
@@ -1365,6 +1361,9 @@ pub struct SpaceEnv {
     /// The `gh` account whose token its terminals and Hive's own `gh` calls get as `GH_TOKEN`
     /// (with `GH_HOST`), looked up in `gh_config_dir` when set; `None`: `gh`'s active account.
     pub gh_account: Option<GhAccount>,
+    /// `CLAUDE_CONFIG_DIR` (22.5, D22.15): the folder of one of the settings' Claude accounts.
+    /// `None`, or a folder no account has: the default account.
+    pub claude_account: Option<String>,
 }
 
 /// A `gh` login on a host, e.g. `lucasreali` on `github.com`.
@@ -2325,7 +2324,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&spaces).unwrap(),
-            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"git_name":null,"git_email":"a@b","gh_config_dir":null,"gh_account":null}}],"current":"default"}"#
+            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"git_name":null,"git_email":"a@b","gh_config_dir":null,"gh_account":null,"claude_account":null}}],"current":"default"}"#
         );
         let accounts = Control::GhAccounts {
             gh_config_dir: Some("/g".into()),
@@ -2990,10 +2989,10 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"account":null,"default_name":"Default","share_sessions":false}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false}}}"#
         );
         let partial: Control = serde_json::from_str(
-            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}]},"unknown":1}}"#,
+            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,
         )
         .unwrap();
         let mut expected = Settings::default();

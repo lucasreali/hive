@@ -183,8 +183,10 @@ fn fetches_carry_the_space_identity_without_a_token_gh_cannot_give() {
         program: tmp.path().join("no-gh").into(),
         path: tmp.path().into(),
     };
+    // A space's Claude account (22.5) is a terminal's only: a fetch gets no `CLAUDE_CONFIG_DIR`.
     let mut env = SpaceEnv {
         git_name: Some("Me".into()),
+        claude_account: Some("/c".into()),
         ..SpaceEnv::default()
     };
     let identity = vec![

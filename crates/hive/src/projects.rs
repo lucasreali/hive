@@ -196,6 +196,16 @@ impl Projects {
         }
     }
 
+    /// The current space's environment.
+    pub fn current_env(&self) -> SpaceEnv {
+        self.spaces().current().1
+    }
+
+    /// The name of the first space whose Claude account (22.5) has the folder `dir`.
+    pub fn using(&self, dir: &str) -> Option<String> {
+        self.spaces().using(dir).map(|s| s.name.clone())
+    }
+
     /// The current space's projects, each group followed by its repositories.
     pub fn current(&self) -> Vec<Project> {
         let (paths, _) = self.spaces().current();

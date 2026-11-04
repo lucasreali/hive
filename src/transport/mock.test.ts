@@ -144,44 +144,76 @@ test("makes an account's folder by its name and deletes only its own (22.3)", as
   await transport.removeAccount("/nope", false);
   await tick();
   expect(last()).toEqual(failed("No Claude account has the folder /nope"));
+  // One a space uses is refused (22.5).
+  await transport.updateSpace("default", "Default", { ...NO_ENV, claude_account: work.config_dir });
+  await transport.removeAccount(work.config_dir, true);
+  await tick();
+  const used = "Work is the Claude account of the space Default: choose another one for it first";
+  expect(last()).toEqual(failed(used));
+  await transport.updateSpace("default", "Default", NO_ENV);
   await transport.removeAccount(work.config_dir, true);
   await tick();
   expect(accounts()).toEqual([mine]);
 });
 
-test("new terminals get the current Claude account, or the one asked for (12.2)", async () => {
+test("terminals get their project's space's Claude account, or the one asked for", async () => {
   const { transport, messages } = await connected();
   const work = { name: "Work", config_dir: "/w/.claude" };
   const settings = {
     ...DEFAULT_SETTINGS,
-    claude: { ...DEFAULT_SETTINGS.claude, accounts: [work], account: "/w/.claude" },
+    claude: { ...DEFAULT_SETTINGS.claude, accounts: [work] },
   };
   await transport.setSettings(settings);
+  // A space's account must be an account (22.5); the usage shown follows the current space's.
+  const env = (claude_account: string | null) => ({ ...NO_ENV, claude_account });
+  await transport.updateSpace("default", "Default", env("/nope"));
+  await tick();
+  expect(messages.at(-1)).toEqual({
+    type: "space_failed",
+    message: "No Claude account has the folder /nope",
+  });
+  await transport.updateSpace("default", "Default", env("/w/.claude"));
+  await tick();
+  expect(messages.at(-1)).toEqual({ type: "session_usage", usage: null, week: null });
   const outputs: string[] = [];
   const decoder = new TextDecoder();
-  const open = async (account?: { config_dir: string | null }) => {
+  const open = async (cwd: string, account?: { config_dir: string | null }) => {
     const index = outputs.push("") - 1;
     const onData = (b: Uint8Array) => {
       outputs[index] += decoder.decode(b);
     };
-    const id = await transport.openTerminal("/w", 80, 24, onData, account);
+    const id = await transport.openTerminal(cwd, 80, 24, onData, account);
     await transport.writeTerminal(id, "echo $CLAUDE_CONFIG_DIR\r");
   };
-  await open();
-  await open({ config_dir: null });
+  await open(SHOP);
+  await open(SHOP, { config_dir: null });
+  await open("/w");
   await tick();
   expect(outputs[0]).toContain("echo $CLAUDE_CONFIG_DIR\r\n/w/.claude");
   expect(outputs[1]).not.toContain("/w/.claude");
-  // Removing the current account makes the default one current; its empty name is "Default".
-  await transport.setSettings({
+  expect(outputs[2]).not.toContain("/w/.claude");
+  // An account a space uses is not removed, naming the space.
+  const removed = {
     ...settings,
-    claude: { accounts: [], account: "/w/.claude", default_name: "", share_sessions: false },
+    claude: { accounts: [], default_name: "", share_sessions: false },
+  };
+  await transport.setSettings(removed);
+  await tick();
+  expect(messages.at(-1)).toEqual({
+    type: "settings_failed",
+    message: "Work is the Claude account of the space Default: choose another one for it first",
   });
+  // Used by none, it is; an empty default name is "Default".
+  await transport.updateSpace("default", "Default", env(null));
+  await tick();
+  expect(messages.at(-1)?.type === "session_usage" && messages.at(-1)).toMatchObject({
+    usage: { used_percentage: 42 },
+  });
+  await transport.setSettings(removed);
   await tick();
   const last = messages.at(-1);
   expect(last?.type === "settings" && last.settings.claude).toEqual({
     accounts: [],
-    account: null,
     default_name: "Default",
     share_sessions: false,
   });
@@ -1272,6 +1304,7 @@ const NO_ENV: SpaceEnv = {
   git_email: null,
   gh_config_dir: null,
   gh_account: null,
+  claude_account: null,
 };
 function space(id: string, name: string, projects: string[], env = NO_ENV): Space {
   return { id, name, projects, env };

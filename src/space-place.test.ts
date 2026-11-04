@@ -15,6 +15,7 @@ const NO_ENV = {
   git_email: null,
   gh_config_dir: null,
   gh_account: null,
+  claude_account: null,
 };
 const home: Space = { id: "default", name: "Home", projects: [shop.id], env: NO_ENV };
 const work: Space = { id: "w", name: "Work", projects: [dotfiles.id, api.id], env: NO_ENV };

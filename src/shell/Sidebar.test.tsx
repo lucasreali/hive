@@ -173,13 +173,22 @@ test("with more than one Claude account, an agent's tooltip names its terminal's
   // Only the default account: its folder alone.
   expect(tip()).toBe(cwd);
   const { settings } = useHive.getState();
-  const accounts = [{ name: "Work", config_dir: "/home/me/.claude-work" }];
+  const dir = "/home/me/.claude-work";
+  const accounts = [{ name: "Work", config_dir: dir }];
   act(() =>
     apply({
       type: "settings",
       settings: { ...settings, claude: { ...settings.claude, accounts } },
     }),
   );
+  // An account added but not in use by a space: still one account in use (22.5).
+  expect(tip()).toBe(cwd);
+  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const spaces = [
+    { id: "a", name: "A", projects: [shop.id], env: { ...env, claude_account: null } },
+    { id: "b", name: "B", projects: [], env: { ...env, claude_account: dir } },
+  ];
+  act(() => apply({ type: "spaces", spaces, current: "a" }));
   expect(tip()).toBe(`${cwd}\nClaude account: Work`);
 });
 
@@ -762,7 +771,13 @@ test("a group shows its own agents, then its projects one level in; collapsed, t
   const open = spyOn(transport, "openTerminal").mockResolvedValue(4);
   const write = spyOn(transport, "writeTerminal").mockResolvedValue();
   render(<App />);
-  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const env = {
+    git_name: null,
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+    claude_account: null,
+  };
   const space = { id: "default", name: "Default", projects: [shop.id, group.id], env };
   act(() => {
     useHive.setState({ connection: { status: "connected", version: "t", distro: null } });

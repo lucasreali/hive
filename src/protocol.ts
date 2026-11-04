@@ -233,8 +233,7 @@ export type ProjectError =
   | "storage";
 
 /**
- * Mirrors `hive_protocol::SpaceEnv`: what a space's terminals get; null leaves the user's own. The
- * Claude account is not the space's (12.2): see `Settings["claude"]`.
+ * Mirrors `hive_protocol::SpaceEnv`: what a space's terminals get; null leaves the user's own.
  */
 export type SpaceEnv = {
   git_name: string | null;
@@ -242,6 +241,11 @@ export type SpaceEnv = {
   gh_config_dir: string | null;
   /** The `gh` account whose token its terminals get (9.30); null: `gh`'s active account. */
   gh_account: GhAccount | null;
+  /**
+   * The folder of its Claude account (22.5), one of `Settings["claude"].accounts`:
+   * `CLAUDE_CONFIG_DIR`. Null, or a folder no account has: the default account.
+   */
+  claude_account: string | null;
 };
 
 /** Mirrors `hive_protocol::GhAccount`: a `gh` login on a host. */
@@ -536,16 +540,14 @@ export type Settings = {
   /** By project id. */
   projects: Record<string, { scripts: ProjectScripts }>;
   /**
-   * The Claude accounts (12.2) besides the default one (`~/.claude`, always there), and the
-   * current one's folder (null: the default one): new terminals get it as `CLAUDE_CONFIG_DIR`.
-   * `default_name`: the default account's name (21.4), "Default" unless renamed; the service
-   * turns an empty one back into "Default". `share_sessions` (21.10, D22.5): a session resumed
-   * from the history runs as the current account, its log moved into that account's folder;
-   * off, as the account it ran as.
+   * The Claude accounts (12.2) besides the default one (`~/.claude`, always there); each space
+   * names its own (`SpaceEnv.claude_account`, 22.5). `default_name`: the default account's name
+   * (21.4), "Default" unless renamed; the service turns an empty one back into "Default".
+   * `share_sessions` (21.10, D22.5): a session resumed from the history runs as its project's
+   * space's account, its log moved into that account's folder; off, as the account it ran as.
    */
   claude: {
     accounts: Account[];
-    account: string | null;
     default_name: string;
     share_sessions: boolean;
   };
@@ -566,7 +568,8 @@ export type ClaudeLogin = { config_dir: string | null; logged_in: boolean };
 
 /**
  * Mirrors `hive_protocol::AccountDir`: the Claude account a terminal is opened with (12.2),
- * `config_dir` null for the default one. A terminal opened without one gets the current account.
+ * `config_dir` null for the default one. A terminal opened without one gets its project's space's
+ * account (22.5).
  */
 export type AccountDir = { config_dir: string | null };
 

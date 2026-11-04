@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { OpenSession, ServiceMessage, Session, SessionTarget } from "./protocol";
-import { activateTab, ask, showNotice, useHive } from "./store";
+import { activateTab, ask, currentSpace, showNotice, spaceAccount, useHive } from "./store";
 import { openClaude } from "./terminals";
 import { transport } from "./transport";
 import { openPath } from "./viewer/external";
@@ -27,20 +27,15 @@ const moving = new Map<string, (error: string | null) => void>();
 export const MOVE_NOTE =
   "Its log moves into that account's folder: rewind checkpoints from before the move are lost.";
 
-/** The current Claude account's folder: null for the default one, or one no account has. */
-function currentAccount(): string | null {
-  const { accounts, account } = useHive.getState().settings.claude;
-  return accounts.some((a) => a.config_dir === account) ? account : null;
-}
-
 /**
- * The Claude account a session goes on as: `account` when one is asked ("Continue in"), the
- * current one when sessions are shared (21.10, D22.5), else the one it ran as (12.2).
+ * The Claude account a session goes on as: `account` when one is asked ("Continue in"), its
+ * project's space's when sessions are shared (21.10, D22.5; the history lists only the current
+ * space's projects, so the current space's, 22.5), else the one it ran as (12.2).
  */
 export function accountFor(session: Session, account?: string | null): string | null {
   if (account !== undefined) return account;
-  const shared = useHive.getState().settings.claude.share_sessions;
-  return shared ? currentAccount() : session.config_dir;
+  const s = useHive.getState();
+  return s.settings.claude.share_sessions ? spaceAccount(s, currentSpace(s)) : session.config_dir;
 }
 
 /** How long a move may wait for the service's answer. */

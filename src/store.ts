@@ -213,7 +213,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agents: { silence_secs: 5, confirm_close: true, keep_awake: true },
   worktrees: { default_base: null },
   projects: {},
-  claude: { accounts: [], account: null, default_name: "Default", share_sessions: false },
+  claude: { accounts: [], default_name: "Default", share_sessions: false },
 };
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
@@ -639,11 +639,12 @@ export const findWorktree = (projects: HiveState["projects"], id: string | null)
 
 /**
  * "Claude account: <name>" of terminal `id` (21.7), for its tooltips and menus: only with more
- * than one account (the default one and another), and once the service named it.
+ * than one account in use (the spaces' accounts, 22.5), and once the service named it.
  */
 export const accountLine = (s: HiveState, id: number | undefined): string | null => {
   const name = id === undefined ? null : s.terminals[id]?.account;
-  return name && s.settings.claude.accounts.length > 0 ? `Claude account: ${name}` : null;
+  const used = new Set((s.spaces ?? []).map((space) => spaceAccount(s, space)));
+  return name && used.size > 1 ? `Claude account: ${name}` : null;
 };
 
 /** Whether `path` is `folder` or inside it. */
@@ -1040,6 +1041,15 @@ export const spaceOf = (s: HiveState, project: string | null): Space | undefined
 /** The current space. */
 export const currentSpace = (s: HiveState): Space | undefined =>
   s.spaces?.find((space) => space.id === s.currentSpace);
+
+/**
+ * The Claude account of `space` (22.5): its folder, or null for the default account (also for a
+ * folder no account has, as the service takes it).
+ */
+export const spaceAccount = (s: HiveState, space: Space | undefined): string | null => {
+  const dir = space?.env.claude_account ?? null;
+  return s.settings.claude.accounts.some((a) => a.config_dir === dir) ? dir : null;
+};
 
 /** A space's remembered place (11.5): a project, worktree or agent id, and its project. */
 export type SpacePlace = { place: string; project: string | null };

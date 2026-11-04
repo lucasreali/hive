@@ -10,7 +10,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{
     Control, EventKind, Frame, FrameCodec, FrameError, FrameType, PROTOCOL_VERSION, Role,
-    SessionTarget,
+    SessionTarget, SpaceEnv,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -232,7 +232,9 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::GetSettings) => state.send_settings().await,
         Ok(Control::Resync) => resync(state).await,
         Ok(Control::SetSettings { settings }) => {
-            let reply = match tokio::task::block_in_place(|| state.settings.set(settings)) {
+            let using = |dir: &str| state.projects.using(dir);
+            let set = || state.settings.set_with(settings, &using);
+            let reply = match tokio::task::block_in_place(set) {
                 Ok(settings) => Control::Settings { settings },
                 Err(message) => Control::SettingsFailed { message },
             };
@@ -251,8 +253,11 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             config_dir,
             delete_folder,
         }) => {
+            let using = |dir: &str| state.projects.using(dir);
             let removed = tokio::task::block_in_place(|| {
-                state.settings.remove_account(&config_dir, delete_folder)
+                state
+                    .settings
+                    .remove_account(&config_dir, delete_folder, &using)
             });
             let (settings, why) = match removed {
                 Ok((settings, why)) => (Some(settings), why),
@@ -369,10 +374,16 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             });
         }
         Ok(Control::CreateSpace { name, env }) => {
-            state.change_spaces(|s| s.create(&name, env)).await
+            let known = state.settings.account_dirs();
+            state
+                .change_spaces(|s| s.create(&name, account_of(env, &known)?))
+                .await
         }
         Ok(Control::UpdateSpace { id, name, env }) => {
-            state.change_spaces(|s| s.update(&id, &name, env)).await
+            let known = state.settings.account_dirs();
+            state
+                .change_spaces(|s| s.update(&id, &name, account_of(env, &known)?))
+                .await
         }
         Ok(Control::DeleteSpace { id }) => state.change_spaces(|s| s.delete(&id)).await,
         Ok(Control::SelectSpace { id }) => state.change_spaces(|s| s.select(&id)).await,
@@ -627,6 +638,15 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             let message = "unexpected message from the app".to_owned();
             state.to_app(channel, &Control::Error { message }).await;
         }
+    }
+}
+
+/// A space's environment whose Claude account (22.5) is one of the `known` accounts' folders
+/// or the default one; another folder is refused.
+fn account_of(env: SpaceEnv, known: &[String]) -> Result<SpaceEnv, String> {
+    match &env.claude_account {
+        Some(dir) if !known.contains(dir) => Err(format!("No Claude account has the folder {dir}")),
+        _ => Ok(env),
     }
 }
 

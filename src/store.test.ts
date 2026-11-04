@@ -129,13 +129,26 @@ test("terminal messages update only their terminal", () => {
   });
 });
 
-test("a terminal's account line needs another account and its name (21.7)", () => {
+test("a terminal's account line needs two accounts in use by the spaces and its name (21.7, 22.5)", () => {
   const accounts = [{ name: "Work", config_dir: "/w" }];
   const s = useHive.getState();
-  const two = { ...s, settings: { ...s.settings, claude: { ...s.settings.claude, accounts } } };
+  const env = (claude_account: string | null) => ({
+    git_name: null,
+    git_email: null,
+    gh_config_dir: null,
+    gh_account: null,
+    claude_account,
+  });
+  const spaces = (...dirs: (string | null)[]) =>
+    dirs.map((dir, i) => ({ id: `${i}`, name: `${i}`, projects: [], env: env(dir) }));
+  const settings = { ...s.settings, claude: { ...s.settings.claude, accounts } };
+  const two = { ...s, settings, spaces: spaces(null, "/w") };
   const open = { id: 1, exited: false, code: null, unhooked: false, worktree: null };
   const named = { 1: { ...open, account: "Work" } };
   expect(accountLine({ ...two, terminals: named }, 1)).toBe("Claude account: Work");
+  // One account in use (a folder no account has is the default one): no line.
+  expect(accountLine({ ...two, spaces: spaces("/w", "/w"), terminals: named }, 1)).toBeNull();
+  expect(accountLine({ ...two, spaces: spaces(null, "/gone"), terminals: named }, 1)).toBeNull();
   expect(accountLine({ ...s, terminals: named }, 1)).toBeNull();
   expect(accountLine({ ...two, terminals: { 1: { ...open, account: null } } }, 1)).toBeNull();
   expect(accountLine(two, undefined)).toBeNull();
