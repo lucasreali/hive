@@ -400,6 +400,8 @@ export type Dirs = {
   error: string | null;
   /** Why a project there would be followed badly (a network or cloud folder): a warning. */
   warning: string | null;
+  /** `linux_path` is a Claude config folder: it holds `.claude.json` or `settings.json`. */
+  claude: boolean;
 };
 
 /** Mirrors `hive_protocol::SaveError`. */

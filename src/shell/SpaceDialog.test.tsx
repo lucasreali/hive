@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
 import { App } from "../App";
 import { agentPlace, notify } from "../notify";
@@ -8,7 +8,7 @@ import { apply } from "../reduce";
 import { goToAgent } from "../shortcuts";
 import { initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { agentStatus, MOCK_REPOS } from "../transport/mock";
+import { agentStatus, MOCK_REPOS, mockDirs } from "../transport/mock";
 
 afterEach(() => {
   cleanup();
@@ -132,6 +132,46 @@ test("a space's Claude account is one of the accounts, kept as its folder (22.5)
   expect(update).toHaveBeenCalledWith("w", "Work", { ...work.env, claude_account: null });
   create.mockRestore();
   update.mockRestore();
+});
+
+test("the gh config folder is browsed, hidden folders included; empty is gh's own (22.2)", async () => {
+  const create = spyOn(transport, "createSpace").mockResolvedValue();
+  const asked = spyOn(transport, "listDirs").mockResolvedValue();
+  try {
+    show([home], "default");
+    pick("New space…");
+    const gh = () => screen.getByLabelText("GitHub CLI config folder") as HTMLInputElement;
+    const folders = () =>
+      [...screen.getByRole("list", { name: "Folders" }).querySelectorAll("li")].map(
+        (li) => li.textContent,
+      );
+    const answer = async (path: string) => {
+      await waitFor(() => expect(asked).toHaveBeenLastCalledWith(path, false, true));
+      act(() => apply({ type: "dirs", ...mockDirs(path, false, false, true) }));
+    };
+    // Listed from home, the field left empty.
+    await answer("");
+    expect(gh().value).toBe("");
+    expect(folders()).toContain(".config");
+    fireEvent.click(screen.getByRole("button", { name: ".config" }));
+    await answer("/home/user/.config/");
+    fireEvent.click(screen.getByRole("button", { name: "gh-work" }));
+    expect(gh().value).toBe("/home/user/.config/gh-work/");
+    // ↑ goes up; a typed path still works.
+    await answer("/home/user/.config/gh-work/");
+    fireEvent.click(screen.getByTitle("Up a level"));
+    expect(gh().value).toBe("/home/user/.config/");
+    fireEvent.change(gh(), { target: { value: "/home/user/.config/gh-work" } });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Work" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create space" }));
+    expect(create).toHaveBeenCalledWith("Work", {
+      ...NO_ENV,
+      gh_config_dir: "/home/user/.config/gh-work",
+    });
+  } finally {
+    create.mockRestore();
+    asked.mockRestore();
+  }
 });
 
 test("the current space is edited; only an empty one can be deleted", () => {

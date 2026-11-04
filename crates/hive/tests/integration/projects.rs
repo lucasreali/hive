@@ -556,6 +556,7 @@ async fn folders_are_browsed_from_home() {
     let empty = Control::ListDirs {
         path: String::new(),
         windows: false,
+        hidden: false,
     };
     let home = format!("{}/", env.path("home").display());
     // `join("")` ends the path with a separator.
@@ -573,6 +574,7 @@ async fn folders_are_browsed_from_home() {
             }],
             error: None,
             warning: None,
+            claude: false,
         }
     );
     drop(conn);

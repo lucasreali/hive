@@ -2446,9 +2446,14 @@ mod tests {
         assert_eq!(err.to_string(), refused("remote-file"));
         let top = format!(r"{}\", root.display());
         // Read as JSON: a `let … else` would leave a never-run line.
-        let got =
-            serde_json::to_value(crate::dirs::answer(top, false, None, &crate::dirs::WINDOWS))
-                .unwrap();
+        let got = serde_json::to_value(crate::dirs::answer(
+            top,
+            false,
+            false,
+            None,
+            &crate::dirs::WINDOWS,
+        ))
+        .unwrap();
         assert_eq!(
             (&got["type"], &got["error"]),
             (&"dirs".into(), &serde_json::Value::Null)

@@ -21,6 +21,7 @@ import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { openSettingsFile, openSharedFolder } from "../viewer/external";
 import { homeText, isMac } from "../window";
+import { FolderField, useFolderListing } from "./FolderField";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
 
@@ -28,6 +29,8 @@ const close = () => openModal(null);
 
 /** How long typing in a text or number field must pause before the settings are saved. */
 export const SAVE_DELAY_MS = 400;
+/** The default account's name when it is not renamed (21.4). */
+const DEFAULT_ACCOUNT = "Default";
 
 export const SECTIONS = [
   "Terminal",
@@ -81,7 +84,8 @@ useHive.subscribe((s, before) => {
 
 /**
  * A text (or number) field saved once typing pauses. It keeps what was typed while the
- * service refuses it (the reason shows at the top) and follows the stored value when it changes.
+ * service refuses it (the reason shows at the top) and follows the stored value when it changes,
+ * except while focused: the service's answer never overwrites the text being typed (22.4).
  */
 function Typed(props: {
   id: string;
@@ -97,7 +101,9 @@ function Typed(props: {
 }) {
   const { value, onSave } = props;
   const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
+  useEffect(() => {
+    if (document.activeElement?.id !== props.id) setDraft(value);
+  }, [value, props.id]);
   useEffect(() => {
     if (draft === value) return;
     const later = setTimeout(() => onSave(draft), SAVE_DELAY_MS);
@@ -928,6 +934,7 @@ function Accounts() {
   useEffect(() => void transport.listClaudeLogins(), []);
   const [name, setName] = useState("");
   const [dir, setDir] = useState("");
+  const listing = useFolderListing(dir);
   const add = () => {
     const account = { name: name.trim(), config_dir: dir.trim() };
     saveSettings((s) => {
@@ -943,12 +950,15 @@ function Accounts() {
         <Typed
           id="setting-account-default"
           aria-label="Name of the default account"
-          value={defaultName}
-          onSave={(text) =>
+          // An empty field is the default name (22.4): the service settles "" to "Default".
+          placeholder={DEFAULT_ACCOUNT}
+          value={defaultName === DEFAULT_ACCOUNT ? "" : defaultName}
+          onSave={(text) => {
+            if ((text.trim() || DEFAULT_ACCOUNT) === defaultName) return;
             saveSettings((s) => {
               s.claude.default_name = text.trim();
-            })
-          }
+            });
+          }}
         />
         <input aria-label="Folder of the default account" value="~/.claude" readOnly />
         <NotLoggedIn dir={null} />
@@ -985,28 +995,39 @@ function Accounts() {
         </div>
       ))}
       <form
-        className="script-run"
+        className="new-account"
         onSubmit={(e) => {
           e.preventDefault();
           add();
         }}
       >
-        <input
-          aria-label="New account name"
-          placeholder="Work"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <input
+        <div className="script-run">
+          <input
+            aria-label="New account name"
+            placeholder="Work"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button type="submit" className="secondary" disabled={!name.trim() || !dir.trim()}>
+            Add
+          </button>
+        </div>
+        {/* Starts at the home folder; account folders are often hidden ones (22.2). */}
+        <FolderField
+          id="new-account-folder"
           aria-label="New account folder"
-          placeholder={homeText("/home/you/.claude-work")}
-          spellCheck={false}
           value={dir}
-          onChange={(e) => setDir(e.target.value)}
+          onChange={setDir}
+          placeholder={homeText("/home/you/.claude-work")}
+          hidden
+          home
         />
-        <button type="submit" className="secondary" disabled={!name.trim() || !dir.trim()}>
-          Add
-        </button>
+        {listing?.path === dir && listing.claude && (
+          <p className="field-help" role="status">
+            A Claude config folder: it has a <code>.claude.json</code> or <code>settings.json</code>
+            .
+          </p>
+        )}
       </form>
       <p className="field-help">
         Each account is a <code>CLAUDE_CONFIG_DIR</code> (an existing folder): its own login,

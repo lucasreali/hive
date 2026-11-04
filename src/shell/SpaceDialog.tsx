@@ -4,6 +4,7 @@ import { ask, currentSpace, openModal, spaceAccount, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { homeText } from "../window";
+import { FolderField } from "./FolderField";
 import { CloseIcon } from "./icons";
 
 const close = () => openModal(null);
@@ -262,15 +263,26 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
           {FIELDS.map((f) => (
             <div className="field" key={f.key}>
               <label htmlFor={`space-${f.key}`}>{f.label}</label>
-              <input
-                id={`space-${f.key}`}
-                value={env[f.key] ?? ""}
-                onChange={(e) => setEnv({ ...env, [f.key]: e.target.value || null })}
-                onBlur={f.key === "gh_config_dir" ? () => listGh(env.gh_config_dir) : undefined}
-                placeholder={homeText(f.placeholder)}
-                spellCheck={false}
-                autoComplete="off"
-              />
+              {f.key === "gh_config_dir" ? (
+                // `gh` config folders are often hidden ones (22.2); empty is gh's own.
+                <FolderField
+                  id={`space-${f.key}`}
+                  value={env.gh_config_dir ?? ""}
+                  onChange={(dir) => setEnv((env) => ({ ...env, gh_config_dir: dir || null }))}
+                  onBlur={() => listGh(env.gh_config_dir)}
+                  placeholder={homeText(f.placeholder)}
+                  hidden
+                />
+              ) : (
+                <input
+                  id={`space-${f.key}`}
+                  value={env[f.key] ?? ""}
+                  onChange={(e) => setEnv({ ...env, [f.key]: e.target.value || null })}
+                  placeholder={homeText(f.placeholder)}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              )}
               <p className="field-help">{f.help}</p>
             </div>
           ))}

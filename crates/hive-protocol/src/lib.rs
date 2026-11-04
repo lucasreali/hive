@@ -813,12 +813,15 @@ pub enum Control {
         /// Why nothing could be searched.
         error: Option<String>,
     },
-    /// App → service: the subfolders of the folder typed in "Add project", answered by `Dirs`.
+    /// App → service: the subfolders of the folder typed in a folder field, answered by `Dirs`.
     /// `path` is Linux, or Windows (`C:\Users\...`) when `windows`; empty is the home folder.
-    /// Without a trailing separator, the folder holding the last name is listed.
+    /// Without a trailing separator, the folder holding the last name is listed. Hidden folders
+    /// are listed when `hidden` or when that last name starts with `.`.
     ListDirs {
         path: String,
         windows: bool,
+        #[serde(default)]
+        hidden: bool,
     },
     Dirs {
         /// The request's `path`, or the home folder (ending with a separator) for an empty one.
@@ -828,13 +831,16 @@ pub enum Control {
         linux_path: Option<String>,
         /// The folder above the listed one, in the request's form; `None` at the top.
         parent: Option<String>,
-        /// Not hidden, sorted ignoring case, at most the service's cap.
+        /// Sorted ignoring case, at most the service's cap; hidden ones only when asked.
         dirs: Vec<Dir>,
         /// Why nothing could be listed.
         error: Option<String>,
         /// Why a project in `linux_path` would be followed badly (a network or cloud folder,
         /// D18.9), shown as a warning; it can still be added.
         warning: Option<String>,
+        /// `linux_path` is a Claude config folder: it holds `.claude.json` or `settings.json`.
+        #[serde(default)]
+        claude: bool,
     },
     /// App → service: one file of a worktree of a followed project for the viewer and diff
     /// (#31), answered by `File`. `path` is relative to the worktree and must stay inside it.
@@ -2664,16 +2670,31 @@ mod tests {
             }],
             error: None,
             warning: Some("w".into()),
+            claude: true,
         };
         assert_eq!(
             &Frame::control(0, &dirs).payload[..],
-            br#"{"type":"dirs","path":"C:\\","windows":true,"linux_path":"/mnt/c","parent":null,"dirs":[{"name":"Users","git":false}],"error":null,"warning":"w"}"#
+            br#"{"type":"dirs","path":"C:\\","windows":true,"linux_path":"/mnt/c","parent":null,"dirs":[{"name":"Users","git":false}],"error":null,"warning":"w","claude":true}"#
         );
         let list = Control::ListDirs {
             path: String::new(),
             windows: false,
+            hidden: true,
         };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+        // An app from before `hidden` asks for the visible ones.
+        let old = br#"{"type":"list_dirs","path":"","windows":false}"#;
+        let list = Control::ListDirs {
+            path: String::new(),
+            windows: false,
+            hidden: false,
+        };
+        let frame = Frame {
+            kind: FrameType::Control,
+            channel: 0,
+            payload: Bytes::from_static(old),
+        };
+        assert_eq!(frame.to_control().unwrap(), list);
     }
 
     #[test]

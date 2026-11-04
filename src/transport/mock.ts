@@ -318,6 +318,8 @@ export const MOCK_SHARE = "/mnt/share/wiki";
 /** What the service says of a folder on a network volume (`hive::macos::remote`). */
 export const MOCK_SHARE_WARNING =
   "This folder is on a network volume (smbfs): Hive may miss changes made elsewhere, and git may be slow.";
+/** A Claude config folder on the fake machine: it holds a `.claude.json`. */
+export const MOCK_CLAUDE_DIR = "/home/user/.claude-work";
 
 export const MOCK_FOLDERS = [
   ...MOCK_REPOS.map((p) => p.path),
@@ -327,6 +329,9 @@ export const MOCK_FOLDERS = [
   "/mnt/c/Users/user/Documents",
   // On a network volume: answered with the service's warning (D18.9).
   MOCK_SHARE,
+  // Hidden: listed only when asked (22.2). The first is a Claude config folder.
+  MOCK_CLAUDE_DIR,
+  "/home/user/.config/gh-work",
 ];
 
 /** The folder part of `path`: up to its last separator (`\` too on Windows), else empty. */
@@ -338,19 +343,28 @@ const folderPart = (path: string, windows: boolean) =>
  * (`native`) takes every path as a Windows one, answers it as it is, and lists the drives for a
  * name without a separator.
  */
-export function mockDirs(asked: string, windows: boolean, native = false): Dirs {
+export function mockDirs(asked: string, windows: boolean, native = false, hidden = false): Dirs {
   const win = windows || native;
   const path = asked || (win ? "C:\\Users\\user\\" : "/home/user/");
   if (native && !/[\\/]/.test(path)) {
     const dirs = [{ name: "C:", git: false }];
-    return { path, windows, linux_path: null, parent: null, dirs, error: null, warning: null };
+    const answer = { path, windows, linux_path: null, parent: null, dirs, claude: false };
+    return { ...answer, error: null, warning: null };
   }
   const unix = win
     ? path
         .replace(/^([A-Za-z]):/, (_, drive: string) => `/mnt/${drive.toLowerCase()}`)
         .replaceAll("\\", "/")
     : path;
-  const answer = { path, windows, linux_path: null, parent: null, dirs: [], warning: null };
+  const answer = {
+    path,
+    windows,
+    linux_path: null,
+    parent: null,
+    dirs: [],
+    warning: null,
+    claude: false,
+  };
   if (!unix.startsWith("/")) return { ...answer, error: "type a full path" };
   const folder = unix.slice(0, unix.lastIndexOf("/") + 1);
   const inside = MOCK_FOLDERS.filter((f) => `${f}/`.startsWith(folder));
@@ -358,14 +372,21 @@ export function mockDirs(asked: string, windows: boolean, native = false): Dirs 
     const error = `cannot open ${folder}: No such file or directory (os error 2)`;
     return { ...answer, error };
   }
-  const names = new Set(inside.map((f) => f.slice(folder.length).split("/")[0]).filter(Boolean));
+  const dotted = hidden || unix.slice(folder.length).startsWith(".");
+  const names = new Set(
+    inside
+      .map((f) => f.slice(folder.length).split("/")[0])
+      .filter((name) => name && (dotted || !name.startsWith("."))),
+  );
   const dirs = [...names]
     .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
     .map((name) => ({ name, git: MOCK_REPOS.some((p) => p.path === folder + name) }));
   const above = folderPart(path, win).replace(win ? /[\\/]+$/ : /\/+$/, "");
   const parent = folderPart(above, win) || null;
   const warning = unix.startsWith("/mnt/share/") ? MOCK_SHARE_WARNING : null;
-  return { ...answer, linux_path: native ? path : unix, parent, dirs, error: null, warning };
+  const claude = unix.replace(/\/+$/, "") === MOCK_CLAUDE_DIR;
+  const linux_path = native ? path : unix;
+  return { ...answer, linux_path, parent, dirs, error: null, warning, claude };
 }
 
 const MINUTE = 60_000;
@@ -1164,8 +1185,8 @@ export function createMockTransport(
       }
       for (const p of removed) later({ type: "project_removed", id: p.id });
     },
-    async listDirs(path, windows) {
-      later({ type: "dirs", ...mockDirs(path, windows, mode === "native") });
+    async listDirs(path, windows, hidden) {
+      later({ type: "dirs", ...mockDirs(path, windows, mode === "native", hidden) });
     },
     async listBranches(project) {
       const branches = MOCK_BRANCHES[project];
