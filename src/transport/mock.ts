@@ -46,14 +46,14 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
 export const LOAD_START_MS = 500;
 export const LOAD_STAGGER_MS = 100;
 export const MOCK_DIAGNOSTICS = {
-  settings_file: "/home/mock/.config/hive/settings.json",
-  wrapper: "/home/mock/.local/share/hive/bin/claude",
+  settings_file: "/home/mock/.hive/settings.json",
+  wrapper: "/home/mock/.hive/bin/claude",
   claude: "/home/mock/.local/bin/claude",
   git_error: null,
 };
 
 export const MOCK_SHARED = {
-  folder: "/home/mock/.local/share/hive/shared",
+  folder: "/home/mock/.hive/shared",
   plugin: "hive-shared",
   skills: ["review"],
   agents: ["tester"],

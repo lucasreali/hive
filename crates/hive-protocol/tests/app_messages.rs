@@ -202,6 +202,7 @@ fn samples() -> Vec<Control> {
         Welcome {
             version: s("0.4.0"),
             distro: Some(s("Ubuntu")),
+            warning: Some(s("cannot move Hive's files into /h/.hive")),
         },
         VersionMismatch {
             protocol: 1,
@@ -552,13 +553,13 @@ fn samples() -> Vec<Control> {
         },
         SettingsFailed { message: m() },
         Diagnostics {
-            settings_file: s("/h/.config/hive/settings.json"),
-            wrapper: s("/h/.local/share/hive/bin/claude"),
+            settings_file: s("/h/.hive/settings.json"),
+            wrapper: s("/h/.hive/bin/claude"),
             claude: None,
             git_error: Some(m()),
         },
         Shared {
-            folder: s("/h/.local/share/hive/shared"),
+            folder: s("/h/.hive/shared"),
             plugin: s("hive-shared"),
             skills: vec![s("review")],
             agents: vec![s("tester")],

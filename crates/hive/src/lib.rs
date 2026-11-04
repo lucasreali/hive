@@ -17,6 +17,8 @@ pub mod git;
 pub mod health;
 pub mod hook;
 #[cfg(unix)]
+pub mod legacy;
+#[cfg(unix)]
 pub mod locale;
 pub mod login_path;
 pub mod logins;

@@ -42,6 +42,16 @@ test("shows Windows while the service runs on Windows itself (12.5.4)", () => {
   expect(screen.getByTitle("WSL connection").textContent).toBe("WSL: Ubuntuconnected");
 });
 
+test("says when the service still uses the old folders, with why as its title (22.1)", () => {
+  asMac();
+  render(<StatusBar />);
+  const why = "cannot move Hive's files into /h/.hive (File exists)";
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, warning: why }));
+  expect(screen.getByText("Old folders in use").getAttribute("title")).toBe(why);
+  act(() => apply({ type: "welcome", version: "0.1.0", distro: null, warning: null }));
+  expect(screen.queryByText("Old folders in use")).toBeNull();
+});
+
 test("shows the current account's session usage as a ring, with its reset in local time (12.1, 15.3)", () => {
   render(<StatusBar />);
   const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;

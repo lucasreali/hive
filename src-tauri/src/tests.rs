@@ -101,11 +101,12 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
     let welcome = Control::Welcome {
         version: VERSION.into(),
         distro: Some("Ubuntu".into()),
+        warning: None,
     };
     service.send(0, welcome).await;
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
+        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "warning": null, "channel": 0})
     );
     // The projects are requested right after the handshake.
     assert_eq!(service.control().await, (0, Control::ListProjects));
@@ -777,12 +778,18 @@ impl ScriptHome {
 
     /// Runs the bridge script as `wsl.exe` would, with the given `$1` and `$2`.
     fn run(&self, over: &str, bundled: &str) -> String {
+        self.run_with(over, bundled, &[])
+    }
+
+    /// [`ScriptHome::run`] with `vars` in its environment too.
+    fn run_with(&self, over: &str, bundled: &str, vars: &[(&str, &str)]) -> String {
         let path = format!("{}:/usr/bin:/bin", self.0.join("fakebin").display());
         let out = std::process::Command::new("/bin/sh")
             .args(["-c", BRIDGE_SCRIPT, "sh", over, bundled])
             .env_clear()
             .env("HOME", &self.0)
             .env("PATH", path)
+            .envs(vars.iter().copied())
             .output()
             .unwrap();
         assert!(out.status.success(), "{out:?}");
@@ -790,7 +797,7 @@ impl ScriptHome {
     }
 
     fn installed(&self) -> std::path::PathBuf {
-        self.0.join(".local/share/hive/bin/hive")
+        self.0.join(".hive/bin/hive")
     }
 }
 
@@ -814,6 +821,10 @@ fn the_bridge_script_installs_the_bundled_hive_once_per_version() {
         home.run("", &bundled),
         format!("v1 {} bridge\n", installed.display())
     );
+    // Into Hive's folder (22.1), made private.
+    assert_eq!(installed, home.0.join(".hive/bin/hive"));
+    let mode = std::fs::metadata(home.0.join(".hive")).unwrap().mode();
+    assert_eq!(mode & 0o777, 0o700);
     let inode = std::fs::metadata(&installed).unwrap().ino();
     home.run("", &bundled);
     assert_eq!(
@@ -845,6 +856,25 @@ fn the_bridge_script_takes_a_posix_bundle_as_is_and_unquarantines_the_copy() {
     assert_eq!(
         std::fs::read_to_string(home.0.join("xattr.log")).unwrap(),
         format!("-d\ncom.apple.quarantine\n{}.new\n", installed.display())
+    );
+}
+
+#[test]
+fn the_bridge_script_installs_into_an_absolute_hive_home_only() {
+    let home = ScriptHome::new("hive-home");
+    let bundled = home.0.join("bundle/hive").display().to_string();
+    let dev = home.0.join("dev");
+    let vars = [("HIVE_HOME", dev.to_str().unwrap())];
+    assert_eq!(
+        home.run_with("", &bundled, &vars),
+        format!("v1 {} bridge\n", dev.join("bin/hive").display())
+    );
+    assert!(!home.installed().exists());
+    // A relative one is ignored, as the service ignores it.
+    let installed = home.installed();
+    assert_eq!(
+        home.run_with("", &bundled, &[("HIVE_HOME", "rel")]),
+        format!("v1 {} bridge\n", installed.display())
     );
 }
 
@@ -1400,7 +1430,7 @@ async fn a_reloaded_ui_gets_welcome_again_and_its_old_terminals_close() {
     hive.connect(channel);
     assert_eq!(
         next(&mut rx).await,
-        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "channel": 0})
+        json!({"type": "welcome", "version": VERSION, "distro": "Ubuntu", "warning": null, "channel": 0})
     );
     assert_eq!(service.control().await, (1, Control::CloseTerminal));
     // The new UI gets the settings and the projects again.
@@ -1483,6 +1513,7 @@ async fn a_ui_reloaded_during_the_handshake_waits_for_welcome() {
             Control::Welcome {
                 version: VERSION.into(),
                 distro: None,
+                warning: None,
             },
         )
         .await;
@@ -1498,6 +1529,7 @@ async fn welcome_waits_for_a_ui_that_connects_later() {
     let welcome = Control::Welcome {
         version: VERSION.into(),
         distro: Some("Ubuntu".into()),
+        warning: None,
     };
     service.send(0, welcome).await;
     let stored = async {

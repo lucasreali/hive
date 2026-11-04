@@ -21,9 +21,10 @@ pub struct Paths {
     /// `$XDG_RUNTIME_DIR/hive`; when it is unset, on macOS the user's own temporary folder's
     /// `hive` (`$TMPDIR/hive`, D17.5), elsewhere `/tmp/hive-<uid>`.
     pub runtime: PathBuf,
-    /// `$XDG_DATA_HOME/hive`, or `~/.local/share/hive`.
+    /// Hive's folder (D22.16): `$HIVE_HOME`, or `~/.hive`; on Windows `%LOCALAPPDATA%\hive`.
     pub data: PathBuf,
-    /// `$XDG_CONFIG_HOME/hive`, or `~/.config/hive`.
+    /// Where `settings.json` is: Hive's folder too ([`Paths::data`]); on Windows
+    /// `%APPDATA%\hive`.
     pub config: PathBuf,
     /// Where `daemon.log` goes: on macOS `~/Library/Logs/Hive` (D18.6), unless
     /// `XDG_RUNTIME_DIR` is set (tests, `scripts/mac-dev.sh`), so that a second service never
@@ -77,17 +78,42 @@ impl Paths {
             || PathBuf::from(format!("/tmp/hive-{uid}")),
             |dir| dir.join("hive"),
         );
-        let home = |xdg, under| var(xdg).or_else(|| var("HOME").map(|home| home.join(under)));
-        let data = home("XDG_DATA_HOME", ".local/share")
-            .map_or_else(|| runtime.join("data"), |dir| dir.join("hive"));
-        let config = home("XDG_CONFIG_HOME", ".config")
-            .map_or_else(|| runtime.join("config"), |dir| dir.join("hive"));
+        // The XDG folders no longer move it (D22.16).
+        let data = var("HIVE_HOME")
+            .or_else(|| var("HOME").map(|home| home.join(".hive")))
+            .unwrap_or_else(|| runtime.join("home"));
         Self {
             logs: logs.unwrap_or_else(|| runtime.clone()),
             runtime,
+            config: data.clone(),
             data,
-            config,
         }
+    }
+
+    /// The data and config folders of Hive before 22.1 (`$XDG_DATA_HOME/hive`, or
+    /// `~/.local/share/hive`, and `$XDG_CONFIG_HOME/hive`, or `~/.config/hive`), which
+    /// [`crate::legacy::migrate`] moves into Hive's folder; `None` without a `HOME` to find them,
+    /// and when `HIVE_HOME` names another folder (a development one, `scripts/mac-dev.sh`, must
+    /// never take the installed Hive's files).
+    #[cfg(unix)]
+    pub fn legacy(var: impl Fn(&str) -> Option<OsString>) -> Option<(PathBuf, PathBuf)> {
+        let var = |key| {
+            var(key)
+                .map(PathBuf::from)
+                .filter(|value| value.is_absolute())
+        };
+        if var("HIVE_HOME").is_some() {
+            return None;
+        }
+        let old = |xdg, under| {
+            var(xdg)
+                .or_else(|| var("HOME").map(|home| home.join(under)))
+                .map(|dir| dir.join("hive"))
+        };
+        Some((
+            old("XDG_DATA_HOME", ".local/share")?,
+            old("XDG_CONFIG_HOME", ".config")?,
+        ))
     }
 
     /// The service's socket; on Windows, the file naming its pipe (`windows::Listener::bind`).
@@ -118,6 +144,11 @@ impl Paths {
     /// `--plugin-dir` (21.9, see [`crate::shared`]).
     pub fn shared_dir(&self) -> PathBuf {
         self.data.join(crate::shared::FOLDER)
+    }
+
+    /// The Claude account folders Hive creates (22.3).
+    pub fn accounts_dir(&self) -> PathBuf {
+        self.data.join("accounts")
     }
 
     /// The projects the app followed before spaces (6.14): read only while `spaces` is missing.
@@ -433,15 +464,19 @@ mod tests {
     }
 
     #[test]
-    fn xdg_dirs_are_used_when_set() {
+    fn hive_home_replaces_the_hive_folder_and_xdg_no_longer_moves_it() {
         let paths = resolve(&[
             ("XDG_RUNTIME_DIR", "/run/user/1000"),
             ("XDG_DATA_HOME", "/d"),
             ("XDG_CONFIG_HOME", "/c"),
+            ("HIVE_HOME", "/d/hive"),
+            ("HOME", "/home/me"),
         ]);
         assert_eq!(paths.runtime, PathBuf::from("/run/user/1000/hive"));
         assert_eq!(paths.data, PathBuf::from("/d/hive"));
-        assert_eq!(paths.settings(), PathBuf::from("/c/hive/settings.json"));
+        assert_eq!(paths.config, PathBuf::from("/d/hive"));
+        assert_eq!(paths.settings(), PathBuf::from("/d/hive/settings.json"));
+        assert_eq!(paths.accounts_dir(), PathBuf::from("/d/hive/accounts"));
         assert_eq!(
             paths.socket(),
             PathBuf::from("/run/user/1000/hive/hive.sock")
@@ -466,37 +501,74 @@ mod tests {
             paths.open_sessions(),
             PathBuf::from("/d/hive/open-sessions.json")
         );
+        // Without `HIVE_HOME`, `~/.hive`, whatever the XDG folders say.
+        let paths = resolve(&[("XDG_DATA_HOME", "/d"), ("HOME", "/home/me")]);
+        assert_eq!(
+            paths.settings(),
+            PathBuf::from("/home/me/.hive/settings.json")
+        );
+        assert_eq!(paths.bin_dir(), PathBuf::from("/home/me/.hive/bin"));
     }
 
     #[test]
     fn fallbacks_use_uid_and_home() {
         let paths = resolve(&[("XDG_RUNTIME_DIR", ""), ("HOME", "/home/me")]);
         assert_eq!(paths.runtime, PathBuf::from("/tmp/hive-1000"));
-        assert_eq!(paths.data, PathBuf::from("/home/me/.local/share/hive"));
-        assert_eq!(paths.config, PathBuf::from("/home/me/.config/hive"));
+        assert_eq!(paths.data, PathBuf::from("/home/me/.hive"));
+        assert_eq!(paths.config, PathBuf::from("/home/me/.hive"));
     }
 
     #[test]
     fn relative_folders_are_ignored() {
         let paths = resolve(&[
             ("XDG_RUNTIME_DIR", "run"),
-            ("XDG_DATA_HOME", "./d"),
-            ("XDG_CONFIG_HOME", "c"),
+            ("HIVE_HOME", "./h"),
             ("HOME", "/home/me"),
         ]);
         assert_eq!(paths.runtime, PathBuf::from("/tmp/hive-1000"));
-        assert_eq!(paths.data, PathBuf::from("/home/me/.local/share/hive"));
-        assert_eq!(paths.config, PathBuf::from("/home/me/.config/hive"));
+        assert_eq!(paths.data, PathBuf::from("/home/me/.hive"));
+        assert_eq!(paths.config, PathBuf::from("/home/me/.hive"));
         // A relative home too: under the runtime folder.
-        let paths = resolve(&[("HOME", "me")]);
-        assert_eq!(paths.data, PathBuf::from("/tmp/hive-1000/data"));
+        let paths = resolve(&[("HOME", "me"), ("HIVE_HOME", "h")]);
+        assert_eq!(paths.data, PathBuf::from("/tmp/hive-1000/home"));
     }
 
     #[test]
     fn without_home_data_goes_under_runtime() {
         let paths = resolve(&[]);
-        assert_eq!(paths.data, PathBuf::from("/tmp/hive-1000/data"));
-        assert_eq!(paths.config, PathBuf::from("/tmp/hive-1000/config"));
+        assert_eq!(paths.data, PathBuf::from("/tmp/hive-1000/home"));
+        assert_eq!(paths.config, PathBuf::from("/tmp/hive-1000/home"));
+    }
+
+    #[test]
+    fn the_old_folders_are_the_xdg_ones() {
+        let legacy = |vars: &[(&str, &str)]| {
+            Paths::legacy(|key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into()))
+        };
+        assert_eq!(
+            legacy(&[("HOME", "/home/me")]),
+            Some((
+                PathBuf::from("/home/me/.local/share/hive"),
+                PathBuf::from("/home/me/.config/hive")
+            ))
+        );
+        let xdg = [("XDG_DATA_HOME", "/d"), ("XDG_CONFIG_HOME", "/c")];
+        assert_eq!(
+            legacy(&xdg),
+            Some((PathBuf::from("/d/hive"), PathBuf::from("/c/hive")))
+        );
+        // Relative ones are ignored, as before.
+        let relative = [
+            ("XDG_DATA_HOME", "d"),
+            ("XDG_CONFIG_HOME", "/c"),
+            ("HOME", "me"),
+        ];
+        assert_eq!(legacy(&relative), None);
+        assert_eq!(legacy(&[("XDG_DATA_HOME", "/d")]), None);
+        // Another Hive folder takes nothing; a relative one does not count.
+        assert_eq!(legacy(&[xdg[0], xdg[1], ("HIVE_HOME", "/dev")]), None);
+        assert!(legacy(&[xdg[0], xdg[1], ("HIVE_HOME", "dev")]).is_some());
+        assert_eq!(legacy(&[]), None);
     }
 
     fn paths_in(dir: &std::path::Path) -> Paths {

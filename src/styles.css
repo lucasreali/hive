@@ -1320,6 +1320,12 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
+/* The service still uses the folders of Hive before 22.1. */
+.folder-warning {
+  margin-left: 12px;
+  color: var(--state-permission);
+}
+
 /* Right-aligned, before the version: the Claude account select (12.2), quiet like the space
    select, and its session usage (12.1). */
 .statusbar-account {

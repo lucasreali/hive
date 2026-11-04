@@ -2,7 +2,8 @@
   {
     "type": "welcome",
     "version": "0.4.0",
-    "distro": "Ubuntu"
+    "distro": "Ubuntu",
+    "warning": "cannot move Hive's files into /h/.hive"
   },
   {
     "type": "version_mismatch",
@@ -637,14 +638,14 @@
   },
   {
     "type": "diagnostics",
-    "settings_file": "/h/.config/hive/settings.json",
-    "wrapper": "/h/.local/share/hive/bin/claude",
+    "settings_file": "/h/.hive/settings.json",
+    "wrapper": "/h/.hive/bin/claude",
     "claude": null,
     "git_error": "m"
   },
   {
     "type": "shared",
-    "folder": "/h/.local/share/hive/shared",
+    "folder": "/h/.hive/shared",
     "plugin": "hive-shared",
     "skills": [
       "review"

@@ -57,6 +57,9 @@ mod statusline;
 mod terminal;
 #[cfg(unix)]
 #[cfg(test)]
+mod upgrade;
+#[cfg(unix)]
+#[cfg(test)]
 mod watch;
 #[cfg(windows)]
 #[cfg(test)]
