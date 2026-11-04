@@ -323,13 +323,15 @@ mod tests {
     #[test]
     fn a_space_keeps_its_claude_account_and_the_old_selected_one_goes_to_every_space() {
         let mut spaces = Spaces::with(vec![]);
+        // An absolute folder on this platform (`/w` is not one on Windows).
+        let w = if cfg!(windows) { r"C:\w" } else { "/w" };
         let work = SpaceEnv {
-            claude_account: Some(" /w ".into()),
+            claude_account: Some(format!(" {w} ")),
             ..SpaceEnv::default()
         };
         spaces.create("Work", work).unwrap();
-        assert_eq!(spaces.current().1.claude_account.as_deref(), Some("/w"));
-        assert_eq!(spaces.using("/w").map(|s| s.name.as_str()), Some("Work"));
+        assert_eq!(spaces.current().1.claude_account.as_deref(), Some(w));
+        assert_eq!(spaces.using(w).map(|s| s.name.as_str()), Some("Work"));
         assert_eq!(spaces.using("/p"), None);
         let relative = SpaceEnv {
             claude_account: Some("w".into()),
