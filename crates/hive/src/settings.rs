@@ -2,6 +2,7 @@
 //! `~/.hive/settings.json`. The app reads and saves them whole through the
 //! protocol (`get_settings`, `set_settings`); ranges are checked here.
 
+use std::ffi::OsStr;
 use std::fs::DirBuilder;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -198,6 +199,22 @@ impl Store {
         if settings.claude.accounts.len() == before {
             return Err(format!("No Claude account has the folder {dir}"));
         }
+        // Another account spelling the same folder otherwise keeps it (and its spaces use it).
+        let same = |a: &&Account| Path::new(&a.config_dir) == Path::new(dir);
+        if let Some(other) = settings
+            .claude
+            .accounts
+            .iter()
+            .find(same)
+            .filter(|_| delete)
+        {
+            let other = &other.name;
+            return Err(format!(
+                "{other} has the folder {dir} too: it is not deleted"
+            ));
+        }
+        // shortcut: the folder is deleted after the settings lock is released; a
+        // `create_account` meanwhile finds it still there and is refused, so nothing is lost.
         let settings = self.set_with(settings, using)?;
         let deleted = match delete {
             // Not followed when it is a link: only the link goes.
@@ -385,11 +402,12 @@ fn mark(settings: &mut Settings, accounts: &Path) {
 }
 
 /// Whether `dir` is a folder Hive makes for an account (22.3): right in `accounts`, named as
-/// [`slug`] names one (so never `..`).
+/// [`slug`] names one (so never `..`), and spelled exactly as Hive spells it: another spelling
+/// of the same folder (`work/`, `//work`, `/./work`) is not, so it never deletes the folder of
+/// the account spelled the usual way.
 fn own(accounts: &Path, dir: &str) -> bool {
-    let dir = Path::new(dir);
-    let name = dir.file_name().and_then(|n| n.to_str());
-    dir.parent() == Some(accounts) && name.is_some_and(|n| slug(n) == n)
+    let name = Path::new(dir).file_name().and_then(|n| n.to_str());
+    name.is_some_and(|n| slug(n) == n && accounts.join(n).as_os_str() == OsStr::new(dir))
 }
 
 /// The folder name of an account named `name` (22.3): its letters and digits, lowercase, any
@@ -1221,6 +1239,15 @@ mod tests {
         assert!(!own(accounts, "/h/accounts/work/inner"));
         assert!(!own(accounts, "/h/accounts"));
         assert!(!own(accounts, "/h/.claude-work"));
+        // Only as Hive spells it.
+        for alias in [
+            "/h/accounts/work/",
+            "/h/accounts//work",
+            "/h/accounts/./work",
+            "/h//accounts/work",
+        ] {
+            assert!(!own(accounts, alias), "{alias}");
+        }
     }
 
     // Unix: the folder's mode, and absolute folders as `/`.
@@ -1305,6 +1332,51 @@ mod tests {
         let err = unsaved.create_account("Other").unwrap_err();
         assert!(err.starts_with("Cannot save "), "{err}");
         assert!(!accounts.join("other").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn another_spelling_of_a_hive_folder_never_deletes_it() {
+        let (_tmp, store, accounts) = store_with_accounts();
+        store.create_account("Work").unwrap();
+        let work = accounts.join("work");
+        std::fs::write(work.join(".claude.json"), "{}").unwrap();
+        let work = work.display().to_string();
+        let slash = format!("{work}/");
+        let double = format!("{}//work", accounts.display());
+        let mut settings = store.get().0;
+        settings.claude.accounts.push(account("Slash", &slash));
+        settings.claude.accounts.push(account("Double", &double));
+        let saved = store.set(settings).unwrap();
+        // Not marked as Hive's, so never deleted: refused, nothing removed.
+        let marks: Vec<_> = saved
+            .claude
+            .accounts
+            .iter()
+            .map(|a| a.hive_folder)
+            .collect();
+        assert_eq!(marks, [true, false, false]);
+        for alias in [&slash, &double] {
+            assert_eq!(
+                store.remove_account(alias, true, &|_| None),
+                Err(format!("Hive did not make {alias}: it is never deleted"))
+            );
+        }
+        // The folder Hive spells is not deleted either while another spelling has it.
+        assert_eq!(
+            store.remove_account(&work, true, &|_| None),
+            Err(format!(
+                "Slash has the folder {work} too: it is not deleted"
+            ))
+        );
+        assert_eq!(store.account_dirs().len(), 3);
+        // The aliases go without their folder; the real one and what it holds stay.
+        for alias in [&slash, &double] {
+            let (_, why) = store.remove_account(alias, false, &|_| None).unwrap();
+            assert_eq!(why, None);
+        }
+        assert!(Path::new(&work).join(".claude.json").is_file());
+        assert_eq!(store.account_dirs(), [work]);
     }
 
     #[cfg(unix)]
