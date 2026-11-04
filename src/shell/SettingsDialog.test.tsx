@@ -395,7 +395,9 @@ test("the default account is renamed in place, and emptied it is Default again (
   open();
   section("Accounts");
   const name = () => input("Name of the default account");
-  expect(name().value).toBe("Default");
+  // Not renamed: an empty field showing "Default" as its placeholder (22.4).
+  expect(name().value).toBe("");
+  expect(name().placeholder).toBe("Default");
   fireEvent.change(name(), { target: { value: " Personal " } });
   await waitFor(() => expect(settings().claude.default_name).toBe("Personal"));
   expect(name().value).toBe("Personal");
@@ -406,10 +408,61 @@ test("the default account is renamed in place, and emptied it is Default again (
   });
   const logIn = screen.getAllByRole("button", { name: "Log in…" })[0] as HTMLButtonElement;
   expect(logIn.title).toBe("A terminal running claude as Personal: type /login there");
-  // The service reads an empty name as "Default".
+  // The service reads an empty name as "Default", shown as the empty field.
   fireEvent.change(name(), { target: { value: " " } });
-  await waitFor(() => expect(name().value).toBe("Default"));
-  expect(settings().claude.default_name).toBe("Default");
+  await waitFor(() => expect(settings().claude.default_name).toBe("Default"));
+  expect(name().value).toBe("");
+  expect(logIn.title).toBe("A terminal running claude as Default: type /login there");
+});
+
+test("an emptied default account name stays empty while a new one is typed (22.4)", async () => {
+  const claude = {
+    accounts: [{ name: "Work", config_dir: "/w" }],
+    account: null,
+    default_name: "Personal",
+    share_sessions: false,
+  };
+  await transport.setSettings({ ...DEFAULT_SETTINGS, claude });
+  open();
+  act(() => apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude } }));
+  section("Accounts");
+  const name = () => input("Name of the default account");
+  const select = () => screen.getByRole("combobox", { name: "Claude account" });
+  expect(name().value).toBe("Personal");
+  // Emptied and saved: the mock settles it to "Default", the field keeps its empty text.
+  name().focus();
+  fireEvent.change(name(), { target: { value: "" } });
+  await waitFor(() => expect(settings().claude.default_name).toBe("Default"));
+  expect(name().value).toBe("");
+  expect(name().placeholder).toBe("Default");
+  expect(select().textContent).toBe("Default");
+  // Typed key by key, each pause saved and settled: no key is lost.
+  for (const text of ["W", "Wo", "Wor"]) {
+    fireEvent.change(name(), { target: { value: text } });
+    await waitFor(() => expect(settings().claude.default_name).toBe(text));
+    expect(name().value).toBe(text);
+  }
+  // A late answer (an earlier save's) while typing does not overwrite the draft.
+  fireEvent.change(name(), { target: { value: "Work2" } });
+  const late = { ...DEFAULT_SETTINGS, claude: { ...claude, default_name: "Wo" } };
+  act(() => apply({ type: "settings", settings: late }));
+  expect(name().value).toBe("Work2");
+  // Unfocused, the field follows the service again; "Default" shows as the empty field.
+  name().blur();
+  await waitFor(() => expect(settings().claude.default_name).toBe("Work2"));
+  act(() =>
+    apply({
+      type: "settings",
+      settings: { ...DEFAULT_SETTINGS, claude: { ...claude, default_name: "Default" } },
+    }),
+  );
+  expect(name().value).toBe("");
+  // Typing "Default" itself saves nothing new.
+  const set = spyOn(transport, "setSettings");
+  fireEvent.change(name(), { target: { value: "Default" } });
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  expect(set).not.toHaveBeenCalled();
+  set.mockRestore();
 });
 
 test("the accounts section marks an account that never logged in (21.6)", async () => {
