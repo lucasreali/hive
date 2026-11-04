@@ -21,6 +21,7 @@ import { NumberInput } from "../ui/NumberInput";
 import { Select } from "../ui/Select";
 import { openSettingsFile, openSharedFolder } from "../viewer/external";
 import { homeText, isMac } from "../window";
+import { FolderField, useFolderListing } from "./FolderField";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
 
@@ -928,6 +929,7 @@ function Accounts() {
   useEffect(() => void transport.listClaudeLogins(), []);
   const [name, setName] = useState("");
   const [dir, setDir] = useState("");
+  const listing = useFolderListing(dir);
   const add = () => {
     const account = { name: name.trim(), config_dir: dir.trim() };
     saveSettings((s) => {
@@ -985,28 +987,39 @@ function Accounts() {
         </div>
       ))}
       <form
-        className="script-run"
+        className="new-account"
         onSubmit={(e) => {
           e.preventDefault();
           add();
         }}
       >
-        <input
-          aria-label="New account name"
-          placeholder="Work"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <input
+        <div className="script-run">
+          <input
+            aria-label="New account name"
+            placeholder="Work"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button type="submit" className="secondary" disabled={!name.trim() || !dir.trim()}>
+            Add
+          </button>
+        </div>
+        {/* Starts at the home folder; account folders are often hidden ones (22.2). */}
+        <FolderField
+          id="new-account-folder"
           aria-label="New account folder"
-          placeholder={homeText("/home/you/.claude-work")}
-          spellCheck={false}
           value={dir}
-          onChange={(e) => setDir(e.target.value)}
+          onChange={setDir}
+          placeholder={homeText("/home/you/.claude-work")}
+          hidden
+          home
         />
-        <button type="submit" className="secondary" disabled={!name.trim() || !dir.trim()}>
-          Add
-        </button>
+        {listing?.path === dir && listing.claude && (
+          <p className="field-help" role="status">
+            A Claude config folder: it has a <code>.claude.json</code> or <code>settings.json</code>
+            .
+          </p>
+        )}
       </form>
       <p className="field-help">
         Each account is a <code>CLAUDE_CONFIG_DIR</code> (an existing folder): its own login,

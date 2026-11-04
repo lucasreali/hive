@@ -131,6 +131,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     dirs: true,
     error: true,
     warning: true,
+    claude: true,
   },
   sessions: { sessions: true, error: true, truncated: true },
   session_located: { id: true, target: true, windows_path: true, error: true },

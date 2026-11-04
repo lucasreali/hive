@@ -374,7 +374,7 @@ mod tests {
         let sep = MAIN_SEPARATOR;
         assert_eq!(got(&format!(".config{sep}"), false), (vec![], true));
         // A folder named `settings.json` is not one.
-        assert_eq!(got(&format!("src{sep}"), false).1, false);
+        assert!(!got(&format!("src{sep}"), false).1);
         // The limits hold when hidden folders are asked.
         let long = format!("{}{}", root.display(), "a".repeat(PATH_LIMIT));
         let refused = serde_json::to_value(answer(long, false, true, None, &WINDOWS)).unwrap();

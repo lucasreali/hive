@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import type { AgentState, Project, ServiceMessage, Settings, Space, SpaceEnv } from "../protocol";
+import type {
+  AgentState,
+  Dirs,
+  Project,
+  ServiceMessage,
+  Settings,
+  Space,
+  SpaceEnv,
+} from "../protocol";
 import { DEFAULT_SETTINGS } from "../store";
 import {
   agentStatus,
@@ -9,6 +17,7 @@ import {
   LOAD_START_MS,
   MOCK_BRANCHES,
   MOCK_CHANGES,
+  MOCK_CLAUDE_DIR,
   MOCK_DIAGNOSTICS,
   MOCK_FILES,
   MOCK_GROUP,
@@ -1136,7 +1145,7 @@ test("?mock=denied says notifications are off; the browser plays its own tone", 
 test("folders are browsed on both sides of the fake machine", async () => {
   const { transport, messages } = await connected();
   messages.length = 0;
-  await transport.listDirs("", false);
+  await transport.listDirs("", false, false);
   await tick();
   expect(messages).toEqual([
     {
@@ -1154,6 +1163,7 @@ test("folders are browsed on both sides of the fake machine", async () => {
       ],
       error: null,
       warning: null,
+      claude: false,
     },
   ]);
   const windows = mockDirs("", true);
@@ -1177,6 +1187,7 @@ test("folders are browsed on both sides of the fake machine", async () => {
     dirs: [],
     error: "cannot open /nowhere/: No such file or directory (os error 2)",
     warning: null,
+    claude: false,
   });
   // The service on Windows itself: Windows paths as they are, the drives for a bare name.
   const native = mockDirs("", false, true);
@@ -1194,8 +1205,26 @@ test("folders are browsed on both sides of the fake machine", async () => {
     dirs: [{ name: "C:", git: false }],
     error: null,
     warning: null,
+    claude: false,
   });
   expect(mockDirs("C:\\", false, true).parent).toBeNull();
+});
+
+test("hidden folders are listed when asked or for a dotted name; a Claude folder is told", () => {
+  const names = (dirs: Dirs) => dirs.dirs.map((d) => d.name);
+  expect(names(mockDirs("/home/user/", false))).not.toContain(".claude-work");
+  expect(names(mockDirs("/home/user/", false, false, true))).toEqual([
+    ".claude-work",
+    ".config",
+    "dotfiles",
+    "Downloads",
+    "projects",
+    "work",
+  ]);
+  expect(names(mockDirs("/home/user/.c", false))).toContain(".config");
+  expect(mockDirs("/home/user/", false).claude).toBe(false);
+  expect(mockDirs(MOCK_CLAUDE_DIR, false).claude).toBe(true);
+  expect(mockDirs(`${MOCK_CLAUDE_DIR}/`, false).claude).toBe(true);
 });
 
 const SHOP = "/home/user/projects/shop";

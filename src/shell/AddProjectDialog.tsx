@@ -1,23 +1,15 @@
-import { ArrowUpIcon, GitBranchIcon } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { safeStorage } from "../persist";
 import { clearAddProjectError, openModal, useHive } from "../store";
 import { transport } from "../transport";
-import { Select } from "../ui/Select";
 import { homeText } from "../window";
-import { CloseIcon, FolderIcon, ICON } from "./icons";
+import { FolderField, useFolderListing } from "./FolderField";
+import { CloseIcon } from "./icons";
 
 const close = () => openModal(null);
 
-/** How long typing must pause before the folder is listed. */
-export const LIST_DELAY_MS = 150;
 /** Where the last Windows | WSL choice is remembered (a UI preference, not service data). */
 const SIDE = "hive.folderSide";
-
-const SIDES = [
-  { value: "windows", label: "Windows" },
-  { value: "wsl", label: "WSL" },
-];
 
 /** Whether the last choice was Windows. */
 export const savedWindows = (storage: Pick<Storage, "getItem"> | null = safeStorage()) => {
@@ -37,10 +29,8 @@ const saveWindows = (windows: boolean) => {
 };
 
 /**
- * Asks the service to follow a folder. Under the field, the subfolders of the typed folder
- * (listed by the service once typing pauses) filtered by the text after its last separator:
- * a click enters one, ↑ goes up. With the service in WSL, a select picks WSL or Windows paths;
- * the service converts them. It answers the add with the project (the dialog closes) or the
+ * Asks the service to follow a folder, typed or browsed in a `FolderField`. With the service in
+ * WSL, a select picks WSL or Windows paths; the service converts them. It answers the add with the project (the dialog closes) or the
  * reason it was refused (shown under the field). With the service on Windows itself, every path
  * is a Windows one (`\` or `/`, drive letters), listed by the service as typed.
  */
@@ -52,34 +42,9 @@ export function AddProjectDialog() {
   // Windows paths: the WSL service's Windows side, or every path of the service on Windows.
   const backslash = useHive((s) => windows || s.appMode?.mode === "native");
   const [path, setPath] = useState("");
-  // The field shows the home folder once it is listed, until the user types.
-  const [fill, setFill] = useState(true);
-  const input = useRef<HTMLInputElement>(null);
-  const listing = useHive((s) =>
-    s.dirs?.windows === windows && (s.dirs.path === path || path === "") ? s.dirs : null,
-  );
-  useEffect(() => {
-    const later = setTimeout(() => void transport.listDirs(path, windows), LIST_DELAY_MS);
-    return () => clearTimeout(later);
-  }, [path, windows]);
-  useEffect(() => {
-    if (fill && listing && path === "") {
-      setPath(listing.path);
-      setFill(false);
-    }
-  }, [fill, listing, path]);
-
+  const listing = useFolderListing(path, windows);
   const typed = path || listing?.path || "";
-  const cut = Math.max(typed.lastIndexOf("/"), backslash ? typed.lastIndexOf("\\") : -1) + 1;
-  const filter = typed.slice(cut).toLowerCase();
-  const shown = listing?.dirs.filter((d) => d.name.toLowerCase().includes(filter)) ?? [];
   const target = listing?.path === typed ? listing.linux_path : null;
-  const go = (to: string) => {
-    setPath(to);
-    setFill(false);
-    clearAddProjectError();
-    input.current?.focus();
-  };
   return (
     // A native modal dialog: the page behind is inert and Esc closes it.
     <dialog
@@ -109,75 +74,24 @@ export function AddProjectDialog() {
         <div className="dialog-body">
           <div className="field">
             <label htmlFor="add-project-path">Folder</label>
-            <div className="folder-picker">
-              <div className="folder-path">
-                {wsl && (
-                  <Select
-                    aria-label="Folder kind"
-                    value={windows ? "windows" : "wsl"}
-                    options={SIDES}
-                    onChange={(value) => {
-                      const next = value === "windows";
-                      setSide(next);
-                      saveWindows(next);
-                      setPath("");
-                      setFill(true);
-                      clearAddProjectError();
-                    }}
-                  />
-                )}
-                <input
-                  id="add-project-path"
-                  ref={input}
-                  value={path}
-                  onChange={(e) => {
-                    setPath(e.target.value);
-                    setFill(false);
-                    clearAddProjectError();
-                  }}
-                  placeholder={
-                    backslash
-                      ? "C:\\Users\\you\\projects\\shop"
-                      : homeText("/home/you/projects/shop")
-                  }
-                  spellCheck={false}
-                  autoComplete="off"
-                  aria-invalid={error !== null}
-                />
-              </div>
-              <ul className="folder-list" aria-label="Folders">
-                {listing?.parent && (
-                  <li>
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      className="folder-row"
-                      title="Up a level"
-                      onClick={() => go(listing.parent as string)}
-                    >
-                      <ArrowUpIcon {...ICON} />
-                      <span className="folder-name">{listing.parent}</span>
-                    </button>
-                  </li>
-                )}
-                {shown.map((d) => (
-                  <li key={d.name}>
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      className="folder-row"
-                      onClick={() => go(`${typed.slice(0, cut)}${d.name}${backslash ? "\\" : "/"}`)}
-                    >
-                      {d.git ? <GitBranchIcon size={14} aria-label="Repository" /> : <FolderIcon />}
-                      <span className="folder-name">{d.name}</span>
-                    </button>
-                  </li>
-                ))}
-                {listing && shown.length === 0 && (
-                  <li className="folder-empty">{listing.error ?? "No folders here"}</li>
-                )}
-              </ul>
-            </div>
+            <FolderField
+              id="add-project-path"
+              value={path}
+              onChange={(to) => {
+                setPath(to);
+                clearAddProjectError();
+              }}
+              windows={windows}
+              onWindows={(next) => {
+                setSide(next);
+                saveWindows(next);
+              }}
+              home
+              placeholder={
+                backslash ? "C:\\Users\\you\\projects\\shop" : homeText("/home/you/projects/shop")
+              }
+              invalid={error !== null}
+            />
           </div>
           {error && (
             <span className="field-error" role="alert">
