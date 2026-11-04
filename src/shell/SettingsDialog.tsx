@@ -28,6 +28,8 @@ const close = () => openModal(null);
 
 /** How long typing in a text or number field must pause before the settings are saved. */
 export const SAVE_DELAY_MS = 400;
+/** The default account's name when it is not renamed (21.4). */
+const DEFAULT_ACCOUNT = "Default";
 
 export const SECTIONS = [
   "Terminal",
@@ -81,7 +83,8 @@ useHive.subscribe((s, before) => {
 
 /**
  * A text (or number) field saved once typing pauses. It keeps what was typed while the
- * service refuses it (the reason shows at the top) and follows the stored value when it changes.
+ * service refuses it (the reason shows at the top) and follows the stored value when it changes,
+ * except while focused: the service's answer never overwrites the text being typed (22.4).
  */
 function Typed(props: {
   id: string;
@@ -97,7 +100,9 @@ function Typed(props: {
 }) {
   const { value, onSave } = props;
   const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
+  useEffect(() => {
+    if (document.activeElement?.id !== props.id) setDraft(value);
+  }, [value, props.id]);
   useEffect(() => {
     if (draft === value) return;
     const later = setTimeout(() => onSave(draft), SAVE_DELAY_MS);
@@ -943,12 +948,15 @@ function Accounts() {
         <Typed
           id="setting-account-default"
           aria-label="Name of the default account"
-          value={defaultName}
-          onSave={(text) =>
+          // An empty field is the default name (22.4): the service settles "" to "Default".
+          placeholder={DEFAULT_ACCOUNT}
+          value={defaultName === DEFAULT_ACCOUNT ? "" : defaultName}
+          onSave={(text) => {
+            if ((text.trim() || DEFAULT_ACCOUNT) === defaultName) return;
             saveSettings((s) => {
               s.claude.default_name = text.trim();
-            })
-          }
+            });
+          }}
         />
         <input aria-label="Folder of the default account" value="~/.claude" readOnly />
         <NotLoggedIn dir={null} />
