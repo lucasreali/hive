@@ -231,7 +231,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::Resync) => resync(state).await,
         Ok(Control::SetSettings { settings }) => {
             let using = |dir: &str| state.projects.using(dir);
-            let set = || state.settings.set_with(settings, using);
+            let set = || state.settings.set_with(settings, &using);
             let reply = match tokio::task::block_in_place(set) {
                 Ok(settings) => Control::Settings { settings },
                 Err(message) => Control::SettingsFailed { message },

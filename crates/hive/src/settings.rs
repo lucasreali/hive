@@ -92,17 +92,18 @@ impl Store {
     /// [`Store::set_with`] where no space uses an account.
     #[cfg(test)]
     pub fn set(&self, settings: Settings) -> Result<Settings, String> {
-        self.set_with(settings, |_| None)
+        self.set_with(settings, &|_| None)
     }
 
     /// Checks and saves `settings`, which are then in use. Nothing changes on a failure. A
     /// Claude account's folder must exist when it is new; one whose folder `using` names a
     /// space of (22.5) cannot be removed. (`using` locks the spaces: they are never locked
-    /// before the settings.)
+    /// before the settings. Not generic: every caller shares one copy, whose coverage the
+    /// tests give.)
     pub fn set_with(
         &self,
         mut settings: Settings,
-        using: impl Fn(&str) -> Option<String>,
+        using: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Settings, String> {
         check(&settings)?;
         let mut current = self.current();
@@ -809,7 +810,7 @@ mod tests {
         removed.claude.accounts.clear();
         let used = |dir: &str| (dir == work).then(|| "Work".to_owned());
         assert_eq!(
-            store.set_with(removed.clone(), used),
+            store.set_with(removed.clone(), &used),
             Err(
                 "Work is the Claude account of the space Work: choose another one for it first"
                     .into()
@@ -817,8 +818,8 @@ mod tests {
         );
         assert_eq!(store.get().0, settings);
         // Kept, or used by no space: saved.
-        assert_eq!(store.set_with(settings.clone(), used), Ok(settings));
-        assert_eq!(store.set_with(removed.clone(), |_| None), Ok(removed));
+        assert_eq!(store.set_with(settings.clone(), &used), Ok(settings));
+        assert_eq!(store.set_with(removed.clone(), &|_| None), Ok(removed));
         assert_eq!(store.account_dirs(), Vec::<String>::new());
     }
 
