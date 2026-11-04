@@ -54,7 +54,11 @@ impl State {
             Err(message) => return self.to_app(channel, &Control::Error { message }).await,
         };
         let claude_dir = space.claude_account.clone();
-        let mut env = crate::spaces::vars(&space);
+        // Only a terminal gets `CLAUDE_CONFIG_DIR`, checked above: never git or `gh`.
+        let claude = claude_dir
+            .iter()
+            .map(|dir| ("CLAUDE_CONFIG_DIR", dir.clone()));
+        let mut env: Vec<_> = claude.chain(crate::spaces::vars(&space)).collect();
         if space.gh_account.is_some() {
             let gh = self.gh().await;
             match tokio::task::block_in_place(|| gh.vars(&space)) {

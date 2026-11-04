@@ -823,18 +823,20 @@ mod tests {
         assert_eq!(store.account_dirs(), Vec::<String>::new());
     }
 
-    // `/w` is no absolute path on Windows.
-    #[cfg(unix)]
     #[test]
     fn the_account_selected_before_spaces_had_one_goes_to_them_and_leaves_the_file() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("settings.json");
-        let old = r#"{"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"}}"#;
+        // An absolute folder on this platform (`/w` is not one on Windows).
+        let w = if cfg!(windows) { r"C:\w" } else { "/w" };
+        let accounts = serde_json::json!([{"name": "Work", "config_dir": w}]);
+        let old = serde_json::json!({"claude": {"accounts": accounts, "account": w}}).to_string();
+        let old = old.as_str();
         std::fs::write(&file, old).unwrap();
         // The old file still loads, as before.
         let store = Store::load(file.clone());
         let mut expected = Settings::default();
-        expected.claude.accounts.push(account("Work", "/w"));
+        expected.claude.accounts.push(account("Work", w));
         assert_eq!(store.get(), (expected.clone(), None));
         // The spaces refuse it: the file is kept, and the next start tries again.
         let given = std::cell::RefCell::new(Vec::new());
@@ -849,7 +851,7 @@ mod tests {
             Ok(())
         };
         store.migrate_account(&mut take);
-        assert_eq!(*given.borrow(), ["/w", "/w"]);
+        assert_eq!(*given.borrow(), [w, w]);
         let saved = std::fs::read_to_string(&file).unwrap();
         assert!(!saved.contains("\"account\""), "{saved}");
         assert_eq!(Store::load(file.clone()).get(), (expected, None));
