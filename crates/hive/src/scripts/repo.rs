@@ -9,7 +9,7 @@
 //! it are kept, and only names Hive can type as one shell word.
 
 use std::fmt;
-use std::fs::{Metadata, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io;
 use std::path::Path;
 
@@ -138,33 +138,43 @@ fn package_manager(found: &[&str]) -> &'static str {
 }
 
 /// The file `name` at the root of `dir`, when it is a regular file of at most [`FILE_LIMIT`]
-/// bytes. A link is refused, also one swapped in after the check (opened without following
-/// it); a FIFO does not block the read.
+/// bytes: a link or anything else is refused before it is opened, and again by
+/// [`open_plain`], should one be swapped in meanwhile.
 fn read(dir: &Path, name: &str) -> Result<Vec<u8>, String> {
     let path = dir.join(name);
-    let plain = |meta: io::Result<Metadata>| match meta {
+    let read = plain(path.symlink_metadata())
+        .and_then(|()| open_plain(&path))
+        .and_then(|mut file| read_limited(&mut file, FILE_LIMIT));
+    read.map_err(|err| err.to_string())
+}
+
+/// Nothing when `meta` is a regular file's (a link's own is not).
+fn plain(meta: io::Result<Metadata>) -> io::Result<()> {
+    match meta {
         Ok(meta) if meta.is_file() => Ok(()),
         _ => Err(io::Error::other("a link or not a regular file, not read")),
-    };
+    }
+}
+
+/// `path` opened for reading only when it is a regular file: a link at its end is not followed
+/// (on Windows the link itself is opened, then refused) and a FIFO does not block the open.
+fn open_plain(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::custom_flags(
-        &mut options,
-        nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
-    );
+    {
+        use nix::fcntl::OFlag;
+        let flags = OFlag::O_NOFOLLOW.union(OFlag::O_NONBLOCK);
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, flags.bits());
+    }
     #[cfg(windows)]
     std::os::windows::fs::OpenOptionsExt::custom_flags(
         &mut options,
         windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
     );
-    let read = plain(path.symlink_metadata())
-        .and_then(|()| options.open(&path))
-        .and_then(|mut file| {
-            plain(file.metadata())?;
-            read_limited(&mut file, FILE_LIMIT)
-        });
-    read.map_err(|err| err.to_string())
+    let file = options.open(path)?;
+    plain(file.metadata())?;
+    Ok(file)
 }
 
 /// The names that can be typed, each once, at most [`PER_FILE`] of them; and what was left out.
@@ -354,7 +364,10 @@ mod tests {
         let settings = [run("dev", "bun dev --port $PORT")];
         let (scripts, problems) = list(tmp.path(), &settings);
         let dev = script("dev", "bun dev --port $PORT", ScriptSource::Settings);
-        assert_eq!((scripts, problems), (vec![dev], Vec::new()));
+        assert_eq!((scripts, problems), (vec![dev.clone()], Vec::new()));
+        // A folder that cannot be listed (gone meanwhile): the settings' only.
+        let gone = tmp.path().join("gone");
+        assert_eq!(list(&gone, &settings), (vec![dev], Vec::new()));
     }
 
     #[test]
@@ -409,6 +422,10 @@ mod tests {
                 "{problems:?}"
             );
         }
+        std::fs::write(tmp.path().join("package.json"), r#"{"scripts":[]}"#).unwrap();
+        let problem = "package.json: not valid JSON (invalid type: sequence, expected an object at \
+                       line 1 column 11)";
+        assert_eq!(listed(tmp.path()).1, [problem]);
         std::fs::remove_file(tmp.path().join("package.json")).unwrap();
         for yaml in ["tasks: [", "tasks: 3"] {
             std::fs::write(tmp.path().join("Taskfile.yml"), yaml).unwrap();
@@ -465,7 +482,7 @@ mod tests {
         let make = "CC := cc\nFLAGS = -a:b\nOUT ::= x\nNEW :::= y\nSH != echo a:b\nX ?= a:b\n\
                     all: app\n\napp: main.o util.o\n\t$(CC) -o app $^ # not: a target\n\
                     %.o: %.c\n\t$(CC) -c $<\n.SUFFIXES:\nclean dist-clean:: # both\n\trm -f app\n\
-                    define RULE\nfake: x\nendef\nifeq ($(A),b:c)\nendif\ninclude other.mk\n\
+                    define RULE\nfake: x\nalso: y\nendef\nifeq ($(A),b:c)\nendif\ninclude other.mk\n\
                     long \\\n  wrapped: x\n$(OUT): x\napp: extra\n";
         std::fs::write(tmp.path().join("Makefile"), make).unwrap();
         let expect = ["all", "app", "clean", "dist-clean", "long", "wrapped"]
@@ -625,6 +642,23 @@ mod tests {
         std::fs::write(&file, &make).unwrap();
         let problem = format!("Makefile: input larger than {FILE_LIMIT} bytes");
         assert_eq!(listed(tmp.path()), (Vec::new(), vec![problem]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_open_itself_refuses_a_link_and_a_fifo_without_blocking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        assert!(open_plain(&file).is_ok());
+        // As if swapped in after the first check.
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(open_plain(&link).is_err());
+        let fifo = tmp.path().join("fifo");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        let err = open_plain(&fifo).unwrap_err();
+        assert_eq!(err.to_string(), "a link or not a regular file, not read");
     }
 
     #[cfg(unix)]
