@@ -1004,10 +1004,12 @@ mod tests {
         let places = Places::from_env(&paths);
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let home = home.filter(|home| home.is_absolute());
-        assert_eq!(places.as_ref().map(|p| &p.home), home.as_ref());
-        if let Some(places) = places {
-            assert_eq!(places.paths, paths);
-            assert_eq!(places.library, cfg!(target_os = "macos"));
-        }
+        let expected = home.map(|home| Places {
+            home,
+            paths: paths.clone(),
+            legacy: Paths::legacy(|key| std::env::var_os(key)),
+            library: cfg!(target_os = "macos"),
+        });
+        assert_eq!(places, expected);
     }
 }
