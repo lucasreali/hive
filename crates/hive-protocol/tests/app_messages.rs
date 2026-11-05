@@ -470,6 +470,7 @@ fn samples() -> Vec<Control> {
                 source: ScriptSource::PackageJson,
             }],
             problems: vec![m()],
+            port: Some(20_000),
         },
         Sessions {
             sessions: vec![],

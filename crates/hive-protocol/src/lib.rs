@@ -760,6 +760,9 @@ pub enum Control {
         scripts: Vec<Script>,
         /// Why a file was not read, or what was left out of it, one line each.
         problems: Vec<String>,
+        /// The first port of the worktree's block of ten (`HIVE_PORT`, and `PORT` unless the
+        /// service has its own); `None` when no block could be given.
+        port: Option<u16>,
     },
     /// App → service: Claude Code's sessions of the followed projects, answered by `Sessions`.
     ListSessions,
@@ -3040,8 +3043,9 @@ mod tests {
             .map(script)
             .into(),
             problems: vec!["Makefile: too large".into()],
+            port: Some(20_000),
         };
-        let json = r#"{"type":"scripts","path":"/r","scripts":[{"name":"dev","command":"bun run dev","source":"settings"},{"name":"dev","command":"bun run dev","source":"package_json"},{"name":"dev","command":"bun run dev","source":"taskfile"},{"name":"dev","command":"bun run dev","source":"makefile"}],"problems":["Makefile: too large"]}"#;
+        let json = r#"{"type":"scripts","path":"/r","scripts":[{"name":"dev","command":"bun run dev","source":"settings"},{"name":"dev","command":"bun run dev","source":"package_json"},{"name":"dev","command":"bun run dev","source":"taskfile"},{"name":"dev","command":"bun run dev","source":"makefile"}],"problems":["Makefile: too large"],"port":20000}"#;
         assert_eq!(&Frame::control(0, &scripts).payload[..], json.as_bytes());
         assert_eq!(Frame::control(0, &scripts).to_control().unwrap(), scripts);
     }

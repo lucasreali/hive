@@ -228,13 +228,17 @@ async fn git_and_scripts_get_the_users_login_path_once_it_is_known() {
 /// A script as `(name, command, source)`.
 type Row = (String, String, ScriptSource);
 
-/// The next `scripts` message, whatever else (files, changes, statuses, usage) comes first.
-async fn next_scripts(conn: &mut Conn) -> (Vec<Row>, Vec<String>) {
+/// The next `scripts` message, whatever else (files, changes, statuses, usage) comes first:
+/// its scripts, problems and port.
+async fn next_scripts(conn: &mut Conn) -> (Vec<Row>, Vec<String>, Option<u16>) {
     loop {
         if let (
             0,
             Control::Scripts {
-                scripts, problems, ..
+                scripts,
+                problems,
+                port,
+                ..
             },
         ) = conn.control().await
         {
@@ -242,7 +246,7 @@ async fn next_scripts(conn: &mut Conn) -> (Vec<Row>, Vec<String>) {
                 .into_iter()
                 .map(|s| (s.name, s.command, s.source))
                 .collect();
-            return (scripts, problems);
+            return (scripts, problems, port);
         }
     }
 }
@@ -275,7 +279,11 @@ async fn a_worktrees_scripts_come_from_the_settings_then_its_repository_and_foll
         row("up", "task up", Taskfile),
         row("build", "make build", Makefile),
     ];
-    assert_eq!(next_scripts(&mut app).await, (repository.to_vec(), vec![]));
+    let port = Some(20_000);
+    assert_eq!(
+        next_scripts(&mut app).await,
+        (repository.to_vec(), vec![], port)
+    );
 
     // A settings script comes first and replaces the repository's of the same name; the app,
     // which has this worktree's scripts, gets them again.
@@ -293,7 +301,7 @@ async fn a_worktrees_scripts_come_from_the_settings_then_its_repository_and_foll
     app.send(0, Control::SetSettings { settings }).await;
     let mut expect = vec![row("dev", "pnpm dev --port $PORT", Settings)];
     expect.extend_from_slice(&repository[1..]);
-    assert_eq!(next_scripts(&mut app).await, (expect.clone(), vec![]));
+    assert_eq!(next_scripts(&mut app).await, (expect.clone(), vec![], port));
 
     // Watched, a change to a script file is sent; a link is not followed out.
     let base = DiffBase::Head;
@@ -311,7 +319,19 @@ async fn a_worktrees_scripts_come_from_the_settings_then_its_repository_and_foll
     std::os::unix::fs::symlink(&outside, repo.root.join("Makefile")).unwrap();
     expect.pop();
     let problem = "Makefile: a link or not a regular file, not read".to_owned();
-    assert_eq!(next_scripts(&mut app).await, (expect, vec![problem]));
+    let problems = vec![problem];
+    assert_eq!(
+        next_scripts(&mut app).await,
+        (expect.clone(), problems.clone(), port)
+    );
+
+    // No block of ports can be saved: the scripts without a port.
+    let ports = repo.env.path("data/hive/ports.json");
+    std::fs::remove_file(&ports).unwrap();
+    std::fs::create_dir(&ports).unwrap();
+    app.send(0, Control::ListScripts { path: root.clone() })
+        .await;
+    assert_eq!(next_scripts(&mut app).await, (expect, problems, None));
 
     // A folder that is no worktree of a followed project is refused.
     let home = repo.env.path("home").display().to_string();

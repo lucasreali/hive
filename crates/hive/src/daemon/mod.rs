@@ -932,10 +932,14 @@ impl State {
         let project = projects.iter().find(mine).map_or("", |p| p.id.as_str());
         let run = self.settings.scripts(project).run;
         let (scripts, problems) = scripts::repo::list(&dir, &run);
+        let port = self.ports.port(path).inspect_err(|err| {
+            eprintln!("hive: warning: no ports for {path}: {err}");
+        });
         Control::Scripts {
             path: path.to_owned(),
             scripts,
             problems,
+            port: port.ok(),
         }
     }
 
@@ -1231,6 +1235,7 @@ mod tests {
             path: "/x".into(),
             scripts: Vec::new(),
             problems: Vec::new(),
+            port: None,
         };
         runtime.block_on(async {
             // Nothing asked: nothing read.
