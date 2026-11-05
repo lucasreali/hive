@@ -1941,7 +1941,12 @@ mod tests {
     fn the_home_folder_and_the_folders_of_hive_and_claude_are_never_followed() {
         let tmp = tempfile::tempdir().unwrap();
         let top = canonical(tmp.path()).unwrap();
-        let at = |p: &str| top.join(p).display().to_string();
+        let at = |p: &str| {
+            p.split('/')
+                .fold(top.clone(), |d, n| d.join(n))
+                .display()
+                .to_string()
+        };
         for dir in [
             "home/work",
             "data/accounts/a",
