@@ -113,8 +113,8 @@ jobs:
 
   macos:
     needs: ci-green
-    # Apple Silicon only (#39).
-    runs-on: macos-14
+    # Apple Silicon only (#39). macos-26 since GitHub retired macos-14 (the human, 2026-11-05).
+    runs-on: macos-26
     environment: release
     # Signing (TODO 17.11, D17.1): ad-hoc, unless the `release` environment holds every Developer
     # ID secret (README "Release"); then the app and its nested `hive` are signed with that identity

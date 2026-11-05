@@ -52,7 +52,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     # The newest arm64 macOS (TODO 18.13): the one the human runs, where the traffic lights,
-    # notifications and FSEvents were measured. The bundle stays on macos-14 (below).
+    # notifications and FSEvents were measured.
     runs-on: macos-26
     env:
       CARGO_TERM_COLOR: always
@@ -111,9 +111,9 @@ jobs:
   bundle:
     needs: changes
     if: needs.changes.outputs.bundle == 'true'
-    # As release.yml builds the shipped app: the SDK an app links against decides some of its
-    # AppKit behaviour (macOS 26 SDK: the new window style), so moving it is the release's call.
-    runs-on: macos-14
+    # As release.yml builds the shipped app. GitHub retired macos-14; the human moved both to
+    # macos-26 (2026-11-05), so the app links against the macOS 26 SDK (its new window style).
+    runs-on: macos-26
     # With release.yml's dSYMs (D18.6), so their check runs on every branch.
     env:
       CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
