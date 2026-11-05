@@ -108,7 +108,7 @@ fn parse_with(
             break;
         }
         start = end;
-        let room = (start + per_row).saturating_sub(given(&reader));
+        let room = per_row.saturating_sub(given(&reader) - start);
         reader.get_mut().set_limit(room);
         total += 1;
         // Its JSON takes at least its bytes, two quotes and a comma a cell, and its brackets: a
@@ -294,8 +294,8 @@ mod tests {
         // A row of exactly the limit is read whole.
         let whole = read(b"a,b\nccccc\n", 6).unwrap();
         assert_eq!(
-            (whole.rows.len(), whole.total, whole.partial),
-            (2, 2, false)
+            (whole.rows, whole.total, whole.partial),
+            (vec![row(&["a", "b"]), row(&["ccccc"])], 2, false)
         );
         let whole = read(b"abcde\nabcde\n", 6).unwrap();
         assert_eq!((whole.total, whole.partial), (2, false));
