@@ -1340,6 +1340,11 @@ impl Hive {
         self.link().send(0, &Control::RemoveProject { id })
     }
 
+    /// `git init` in the folder project `id` (23.1): `projects` follows, or an `error`.
+    pub fn init_git(&self, id: String) -> Result<(), String> {
+        self.link().send(0, &Control::InitGit { id })
+    }
+
     /// The answer arrives as `branches`.
     pub fn list_branches(&self, project: String) -> Result<(), String> {
         self.link().send(0, &Control::ListBranches { project })
@@ -2166,6 +2171,11 @@ pub mod commands {
     #[tauri::command]
     pub fn remove_project(hive: State<'_, Hive>, id: String) -> Result<(), String> {
         hive.remove_project(id)
+    }
+
+    #[tauri::command]
+    pub fn init_git(hive: State<'_, Hive>, id: String) -> Result<(), String> {
+        hive.init_git(id)
     }
 
     #[tauri::command]

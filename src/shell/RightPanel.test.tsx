@@ -24,7 +24,7 @@ import type { ChangedFile, Changes, FileText, SearchResults } from "../protocol"
 import { apply } from "../reduce";
 import { initialState, select, setOpenFile, setPanelView, setRightPanel, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_CHANGES, MOCK_REPOS } from "../transport/mock";
+import { MOCK_CHANGES, MOCK_FOLDER, MOCK_FOLDER_FILES, MOCK_REPOS } from "../transport/mock";
 import * as RightPanelModule from "./RightPanel";
 import {
   allFiles,
@@ -633,6 +633,32 @@ test("each panel tab keeps its label as its accessible name and title", () => {
     labels.map((l) => [l, l]),
   );
   for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
+});
+
+test("a folder project's panel has its files and sessions only, and asks for no changes", () => {
+  const asked = panel();
+  act(() => {
+    apply({ type: "projects", projects: [shop, MOCK_FOLDER] });
+    select(MOCK_FOLDER.id);
+  });
+  const tabs = screen.getByRole("tablist", { name: "Panel" }).querySelectorAll('[role="tab"]');
+  expect([...tabs].map((t) => t.getAttribute("aria-label"))).toEqual(["Files", "Sessions"]);
+  // The Diff view picked for a repository shows the folder's files instead.
+  expect(useHive.getState().panelView).toBe("changes");
+  expect(screen.getByRole("tab", { name: "Files" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByRole("region", { name: "Files" })).toBeDefined();
+  act(() => {
+    const files = { path: MOCK_FOLDER.path, files: MOCK_FOLDER_FILES, ignored: [] };
+    apply({ type: "files", ...files, truncated: false });
+  });
+  expect(rows().map(([name]) => name)).toEqual(["ideas.md", "todo.md"]);
+  expect(asked).not.toHaveBeenCalled();
+  // Sessions still show; back on a repository, every view does.
+  fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
+  expect(screen.getByRole("region", { name: "Sessions" })).toBeDefined();
+  act(() => select(shop.id));
+  expect(screen.getAllByRole("tab")).toHaveLength(5);
+  expect(asked).toHaveBeenCalledWith(shop.path, "head");
 });
 
 test("a folder sums the line counts of every changed file below it; binary files add none", () => {

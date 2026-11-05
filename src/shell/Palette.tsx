@@ -71,7 +71,7 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
   const project = currentProject(s);
   const extra: PaletteItem[] = [];
   // A group (14.1) has no worktrees; a group's repository leaves only with its group.
-  const { group = false, parent = null, name } = s.projects?.[project ?? ""] ?? {};
+  const { group = false, folder = false, parent = null, name } = s.projects?.[project ?? ""] ?? {};
   if (project && !group) {
     extra.push({
       label: "Remove merged worktrees…",
@@ -81,7 +81,7 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
   }
   if (project && !parent) {
     extra.push({
-      label: group ? "Remove group…" : "Remove project…",
+      label: group && !folder ? "Remove group…" : "Remove project…",
       detail: name,
       run: () => askRemoveProject(project),
     });

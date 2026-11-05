@@ -38,6 +38,7 @@ sort! {
         | ListProjects
         | AddProject
         | RemoveProject
+        | InitGit
         | CreateSpace
         | UpdateSpace
         | DeleteSpace
@@ -196,6 +197,7 @@ fn project() -> Project {
         }],
         error: None,
         group: false,
+        folder: false,
         parent: Some(s("/g")),
     }
 }

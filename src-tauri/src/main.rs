@@ -189,6 +189,7 @@ fn main() {
             commands::update_space,
             commands::delete_space,
             commands::remove_project,
+            commands::init_git,
             commands::select_space,
             commands::list_claude_logins,
             commands::list_gh_accounts,

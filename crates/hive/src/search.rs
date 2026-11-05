@@ -22,8 +22,13 @@ const TEXT_LIMIT: usize = 300;
 const OUTPUT_LIMIT: u64 = 16_777_216; // 16 MiB
 
 /// The lines of the worktree at `dir` holding `query`, in path order, and whether there were
-/// more than [`MATCH_LIMIT`].
-pub fn search(dir: &Path, query: &str) -> io::Result<(Vec<SearchMatch>, bool)> {
+/// more than [`MATCH_LIMIT`]. With `plain` (a folder project, 23.1), `dir` is in no repository
+/// and is searched as the work tree of that empty one ([`git::command_in`]).
+pub fn search(
+    dir: &Path,
+    plain: Option<&Path>,
+    query: &str,
+) -> io::Result<(Vec<SearchMatch>, bool)> {
     if query.trim().is_empty() || query.len() > QUERY_LIMIT || query.contains(['\n', '\r']) {
         return Err(io::Error::other(format!(
             "search for 1 to {QUERY_LIMIT} bytes on one line"
@@ -44,6 +49,15 @@ pub fn search(dir: &Path, query: &str) -> io::Result<(Vec<SearchMatch>, bool)> {
         query,
     ]
     .map(OsStr::new);
+    let tree = plain.map(|plain| {
+        [
+            OsStr::new("--git-dir"),
+            plain.as_os_str(),
+            OsStr::new("--work-tree"),
+            dir.as_os_str(),
+        ]
+    });
+    let args: Vec<&OsStr> = tree.iter().flatten().copied().chain(args).collect();
     // Exit code 1: nothing matched.
     let out = git::run(dir, &args, &[], &[0, 1], OUTPUT_LIMIT)?;
     Ok(parse(&out))
@@ -149,24 +163,46 @@ mod tests {
         assert!(init.success());
         std::fs::write(dir.path().join("a.txt"), "one\nTwo two\n").unwrap();
         assert_eq!(
-            search(dir.path(), "two").unwrap(),
+            search(dir.path(), None, "two").unwrap(),
             (vec![found("a.txt", 2, "Two two")], false)
         );
-        assert_eq!(search(dir.path(), "three").unwrap(), (vec![], false));
+        assert_eq!(search(dir.path(), None, "three").unwrap(), (vec![], false));
         // A query of exactly the limit is still searched.
         let longest = "x".repeat(QUERY_LIMIT);
-        assert_eq!(search(dir.path(), &longest).unwrap(), (vec![], false));
+        assert_eq!(search(dir.path(), None, &longest).unwrap(), (vec![], false));
+    }
+
+    #[test]
+    fn a_folder_in_no_repository_is_searched_with_an_empty_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (plain, dir) = (tmp.path().join("plain.git"), tmp.path().join("f"));
+        let init = git::command(tmp.path())
+            .unwrap()
+            .args(["init", "-q", "--bare", "plain.git"])
+            .status()
+            .unwrap();
+        assert!(init.success());
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        std::fs::write(dir.join("a.txt"), "one two\n").unwrap();
+        std::fs::write(dir.join("out/b.txt"), "two\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), "out/\n").unwrap();
+        // What `.gitignore` ignores is not searched.
+        assert_eq!(
+            search(&dir, Some(&plain), "two").unwrap(),
+            (vec![found("a.txt", 1, "one two")], false)
+        );
+        assert!(search(&dir, None, "two").is_err());
     }
 
     #[test]
     fn bad_queries_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         for query in ["", "  ", "a\nb", "a\rb", &"x".repeat(QUERY_LIMIT + 1)] {
-            let err = search(dir.path(), query).unwrap_err().to_string();
+            let err = search(dir.path(), None, query).unwrap_err().to_string();
             assert_eq!(err, "search for 1 to 256 bytes on one line", "{query:?}");
         }
         // Outside a git repository git fails, and says why.
-        let err = search(dir.path(), "x").unwrap_err().to_string();
+        let err = search(dir.path(), None, "x").unwrap_err().to_string();
         assert!(err.starts_with("git grep "), "{err}");
     }
 }

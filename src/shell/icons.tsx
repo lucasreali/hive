@@ -7,6 +7,7 @@ import {
   CircleDashedIcon,
   CirclesThreeIcon,
   FolderPlusIcon,
+  FolderSimpleDashedIcon,
   FolderSimpleIcon,
   FoldersIcon,
   GitBranchIcon,
@@ -83,6 +84,8 @@ export const FolderIcon = icon(FolderSimpleIcon);
 
 /** A group (14.1): a folder of projects. */
 export const GroupIcon = icon(FoldersIcon);
+/** A folder project (23.1): a folder in no repository. */
+export const PlainFolderIcon = icon(FolderSimpleDashedIcon);
 
 export const FileIcon = icon(PhosphorFileIcon);
 

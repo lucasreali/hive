@@ -1014,8 +1014,9 @@ export function selectedPlace(s: HiveState): string | null {
  * worktree, which shares its id) or the selected agent's; else the shown terminal's.
  */
 export function panelWorktree(s: HiveState): { project: Project; worktree: Worktree } | null {
-  // A group's folder is no repository (14.1): it has no files or changes panel.
-  const repos = Object.values(s.projects ?? {}).filter((p) => !p.group);
+  // A group's folder is no repository (14.1): it has no files or changes panel. A folder
+  // project's folder (23.1) has a files panel (`panelViews`).
+  const repos = Object.values(s.projects ?? {}).filter((p) => !p.group || p.folder);
   const all = repos.flatMap((project) =>
     project.worktrees.map((worktree) => ({ project, worktree })),
   );

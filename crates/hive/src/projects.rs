@@ -23,6 +23,9 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 const BUSY_SHOWN: usize = 5;
 /// Most entries of a group's folder read for its repositories (14.1).
 pub const GROUP_ENTRIES: usize = 1024;
+/// The empty repository, in Hive's folder, that git lists a folder project's files with (23.1):
+/// git has no listing without a repository.
+const PLAIN_GIT: &str = "plain.git";
 
 pub struct Projects {
     file: PathBuf,
@@ -30,10 +33,14 @@ pub struct Projects {
     /// Each project with its worktrees as git last listed them (9.14), until [`Projects::forget`].
     /// One lock per project, held while git lists it (9.20).
     listed: Mutex<HashMap<String, Arc<Mutex<Option<Project>>>>>,
-    /// Each group's repositories as its folder was last read ([`scan`], 14.1), or why it could
-    /// not be, until [`Projects::forget`] (its folder's watch): a slow folder
-    /// never slows every list.
-    scanned: Mutex<HashMap<String, Result<Vec<String>, String>>>,
+    /// What each group's folder held when last read ([`scan`], 14.1), or why it could not be
+    /// read, until [`Projects::forget`] (its folder's watch): a slow folder never slows every
+    /// list.
+    scanned: Mutex<HashMap<String, Result<Scan, String>>>,
+    /// Folders never followed as a group or a folder project (23.1).
+    protected: Vec<Protected>,
+    /// [`PLAIN_GIT`], next to the spaces file.
+    plain: PathBuf,
     /// The Claude config folders the file's spaces had before accounts (12.2), with their
     /// space's name, until they are accounts ([`Projects::migrate_accounts`]).
     legacy: Mutex<Vec<(String, String)>>,
@@ -61,13 +68,30 @@ impl Projects {
             }
             Err(err) => Spaces::with(set_aside(&file, err)),
         };
+        // Hive's folder, where the spaces file is, is never a folder project.
+        let data = file.parent().map(Path::to_path_buf);
+        let protected = data.map(|dir| Protected::new(dir, true, "Hive's folder"));
         Self {
+            plain: file.with_file_name(PLAIN_GIT),
             file,
             spaces: Mutex::new(spaces),
             listed: Mutex::default(),
             scanned: Mutex::default(),
+            protected: protected.into_iter().collect(),
             legacy: Mutex::new(accounts),
         }
+    }
+
+    /// Refuses as a group or a folder project (23.1) the home folder `home` itself, and the
+    /// folders `own` (Hive's and Claude's) with everything in them; `/` always is, and the
+    /// folder of the spaces file.
+    pub fn protect(mut self, home: Option<PathBuf>, own: Vec<(PathBuf, &'static str)>) -> Self {
+        let home = home.map(|home| Protected::new(home, false, "the home folder"));
+        let own = own
+            .into_iter()
+            .map(|(dir, what)| Protected::new(dir, true, what));
+        self.protected.extend(home.into_iter().chain(own));
+        self
     }
 
     /// Hands the Claude config folders spaces had (see `legacy`) to `make`, which makes them
@@ -121,10 +145,17 @@ impl Projects {
                 continue;
             }
             let (inside, error) = match self.scanned(path) {
-                Ok(inside) => (inside, None),
+                // A folder project that became a repository (`git init`, 23.1) is one now,
+                // before [`Projects::settle`] keeps it so.
+                Ok(scan) if scan.git && scan.repos.is_empty() => {
+                    entries.push(Entry::Repo(path.clone(), None));
+                    continue;
+                }
+                Ok(scan) => (scan.repos, None),
                 Err(error) => (Vec::new(), Some(error)),
             };
-            entries.push(Entry::Group(path.clone(), error));
+            let folder = error.is_none() && inside.is_empty();
+            entries.push(Entry::Group(path.clone(), error, folder));
             let inside = inside.into_iter().filter(|id| !taken.contains(id));
             entries.extend(inside.map(|id| Entry::Repo(id, Some(path.clone()))));
         }
@@ -134,7 +165,7 @@ impl Projects {
     /// The project of `entry`, with its worktrees.
     fn build(&self, entry: Entry) -> Project {
         match entry {
-            Entry::Group(path, error) => group(&path, error),
+            Entry::Group(path, error, folder) => group(&path, error, folder),
             Entry::Repo(id, parent) => Project {
                 parent,
                 ..self.listed(&id)
@@ -149,9 +180,49 @@ impl Projects {
         self.build(entry.unwrap_or(Entry::Repo(id.to_owned(), None)))
     }
 
-    /// Whether the followed project `id` is a group (14.1).
+    /// Whether the followed project `id` is a group (14.1), or a folder project (23.1).
     pub fn is_group(&self, id: &str) -> bool {
-        self.spaces().is_group(id)
+        let entries = self.entries(&[id.to_owned()]);
+        matches!(entries.first(), Some(Entry::Group(..)))
+    }
+
+    /// Keeps each folder project that became a repository (`git init`, 23.1) as a project of
+    /// its space, no longer a group; nothing changes when none did. The watch of the groups'
+    /// folders sees the `.git` made. The groups' folders are read again for it. A spaces file
+    /// that cannot be saved is a warning: it is tried again next time, and the list already
+    /// shows the repository.
+    pub fn settle(&self) {
+        (self.scanned.lock().unwrap_or_else(PoisonError::into_inner)).clear();
+        let entries = self.entries(&self.all()).into_iter();
+        let repos: Vec<String> = entries
+            .filter_map(|e| match e {
+                Entry::Repo(id, None) => Some(id),
+                _ => None,
+            })
+            .collect();
+        // Saved only when one was a group.
+        let saved = self.change_spaces(|spaces| {
+            repos.iter().for_each(|id| spaces.ungroup(id));
+            Ok(())
+        });
+        if let Err(err) = saved {
+            eprintln!("hive: warning: {err}");
+        }
+    }
+
+    /// Runs `git init` in the folder project `id` (23.1); what it turns into is for the watch
+    /// of its folder to tell.
+    pub fn init_git(&self, id: &str) -> io::Result<()> {
+        let folder = self.entries(&self.all()).into_iter().any(|e| match e {
+            Entry::Group(group, _, folder) => folder && group == id,
+            _ => false,
+        });
+        // Its `.git` may be made already, before the watch of its folder told.
+        if !folder || Path::new(id).join(".git").symlink_metadata().is_ok() {
+            return Err(io::Error::other(format!("{id} is not a folder project")));
+        }
+        self.still_followable(id)?;
+        git::output(Path::new(id), &["init", "-q"], &[0]).map(drop)
     }
 
     /// The repository `id` with its worktrees; git lists them only when they are not known.
@@ -174,7 +245,7 @@ impl Projects {
     }
 
     /// The group `path`'s repositories, read from its folder only when not known.
-    fn scanned(&self, path: &str) -> Result<Vec<String>, String> {
+    fn scanned(&self, path: &str) -> Result<Scan, String> {
         let known = self.scanned.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(known) = known.get(path) {
             return known.clone();
@@ -227,11 +298,13 @@ impl Projects {
         repos.collect()
     }
 
-    /// The current space's group folders (14.1).
+    /// The current space's group folders (14.1), and its folder projects' (23.1).
     pub fn groups(&self) -> Vec<String> {
-        let spaces = self.spaces();
-        let (paths, _) = spaces.current();
-        paths.into_iter().filter(|p| spaces.is_group(p)).collect()
+        let (paths, _) = self.spaces().current();
+        let entries = self.entries(&paths).into_iter();
+        let groups =
+            entries.filter_map(|e| matches!(e, Entry::Group(..)).then(|| e.id().to_owned()));
+        groups.collect()
     }
 
     /// The environment of the space of the project holding `cwd` (also what `gh` gets for a
@@ -285,19 +358,24 @@ impl Projects {
 
     /// Follows the git repository containing `path` in the current space; a folder outside
     /// git holding repositories becomes a group (14.1), into which the current space's
-    /// projects among them move. Adding one already there (a group's repository too) changes
-    /// nothing and answers the same project; one in another space is refused (a project is in
-    /// one space only).
+    /// projects among them move, and one holding none a folder project (23.1), unless it is
+    /// [`protected`](Projects::protect). Adding one already there (a group's repository too)
+    /// changes nothing and answers the same project; one in another space is refused (a
+    /// project is in one space only). The one way a folder is followed, for every request
+    /// that follows one.
     pub fn add(&self, path: &str) -> Result<Project, (ProjectError, String)> {
         let (id, inside) = match validate(path) {
             Ok(root) => (root.to_string_lossy().into_owned(), None),
             Err((ProjectError::NotAGitRepository, message)) => {
                 let dir = canonical(Path::new(path)).ok();
-                let inside = dir.as_deref().map(scan).and_then(Result::ok);
-                match dir.zip(inside.filter(|repos| !repos.is_empty())) {
-                    Some((dir, repos)) => (dir.to_string_lossy().into_owned(), Some(repos)),
-                    // No repository inside: refused as before.
-                    None => return Err((ProjectError::NotAGitRepository, message)),
+                let read = dir.as_deref().map(scan).and_then(Result::ok);
+                match dir.zip(read) {
+                    // A `.git` git refuses is no folder project.
+                    Some((dir, scan)) if !scan.git => {
+                        self.check_protected(&dir)?;
+                        (dir.to_string_lossy().into_owned(), Some(scan.repos))
+                    }
+                    _ => return Err((ProjectError::NotAGitRepository, message)),
                 }
             }
             Err(refused) => return Err(refused),
@@ -488,9 +566,55 @@ impl Projects {
         self.root(id).map(|_| self.project(id))
     }
 
-    /// `path` when it is a worktree of a followed project: the path comes from the app.
+    /// `path` when it is a worktree of a followed project, or a folder project's folder
+    /// (23.1): the path comes from the app.
     pub fn worktree(&self, path: &str) -> io::Result<PathBuf> {
-        followed(&self.list(), path).map(|(dir, _)| dir)
+        self.tree(path).map(|(dir, _)| dir)
+    }
+
+    /// [`Projects::worktree`], with the empty repository that git lists the files of a folder
+    /// project's folder with (made when missing); `None` for a worktree, which git lists.
+    pub fn tree(&self, path: &str) -> io::Result<(PathBuf, Option<PathBuf>)> {
+        let list = self.list();
+        if !list.iter().any(|p| p.folder && p.path == path) {
+            return followed(&list, path).map(|(dir, _)| (dir, None));
+        }
+        self.still_followable(path)?;
+        // Its `HEAD` is the last thing `git init` writes.
+        if !self.plain.join("HEAD").is_file() {
+            let dir = self.plain.parent().unwrap_or(Path::new("."));
+            std::fs::create_dir_all(dir)?;
+            git::output(dir, &["init", "-q", "--bare", PLAIN_GIT], &[0])?;
+        }
+        Ok((PathBuf::from(path), Some(self.plain.clone())))
+    }
+
+    /// Refuses acting on the folder project `id` once its folder no longer resolves to itself
+    /// (swapped for a link) or is protected: both were checked only when it was added.
+    fn still_followable(&self, id: &str) -> io::Result<()> {
+        if canonical(Path::new(id))? != Path::new(id) {
+            return Err(io::Error::other(format!(
+                "{id} is no longer the folder followed"
+            )));
+        }
+        self.check_protected(Path::new(id))
+            .map_err(|(_, message)| io::Error::other(message))
+    }
+
+    /// Refuses following the folder `dir` (canonical) when it is protected.
+    fn check_protected(&self, dir: &Path) -> Result<(), (ProjectError, String)> {
+        let shown = dir.display();
+        let what = match dir.parent() {
+            None => Some("the whole disk".to_owned()),
+            Some(_) => self.protected.iter().find_map(|p| p.covers(dir)),
+        };
+        match what {
+            None => Ok(()),
+            Some(what) => Err((
+                ProjectError::ProtectedFolder,
+                format!("{shown} is {what}: Hive does not follow it; choose a folder in it"),
+            )),
+        }
     }
 
     /// Only followed repositories are acted on (a group's too, never a group): the id comes
@@ -656,14 +780,57 @@ fn validate(path: &str) -> Result<PathBuf, (ProjectError, String)> {
 enum Entry {
     /// A repository, with the group holding it when it is a group's.
     Repo(String, Option<String>),
-    /// A group (14.1), with why its folder cannot be read, if it cannot.
-    Group(String, Option<String>),
+    /// A group (14.1), with why its folder cannot be read, if it cannot, and whether it is a
+    /// folder project (23.1): its folder holds no repository.
+    Group(String, Option<String>, bool),
 }
 
 impl Entry {
     fn id(&self) -> &str {
         match self {
-            Entry::Repo(id, _) | Entry::Group(id, _) => id,
+            Entry::Repo(id, _) | Entry::Group(id, ..) => id,
+        }
+    }
+}
+
+/// What a group's folder holds (14.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Scan {
+    /// Its repositories.
+    repos: Vec<String>,
+    /// The folder itself has a `.git` folder: a folder project that became a repository (23.1).
+    git: bool,
+}
+
+/// A folder never followed as a group or a folder project (23.1).
+#[derive(Debug)]
+struct Protected {
+    /// Resolved when it can be, as the folders compared with it are.
+    dir: PathBuf,
+    /// The folders in it too.
+    inside: bool,
+    /// What it is, for the refusal.
+    what: &'static str,
+}
+
+impl Protected {
+    fn new(dir: PathBuf, inside: bool, what: &'static str) -> Self {
+        let dir = canonical(&dir).unwrap_or(dir);
+        Self { dir, inside, what }
+    }
+
+    /// What the folder `dir` is, when this covers it: the folder, or one in it.
+    /// What the folder `dir` is, when this covers it: the folder, one in it, or one holding it
+    /// (its files panel would reach it).
+    fn covers(&self, dir: &Path) -> Option<String> {
+        if dir == self.dir {
+            Some(self.what.to_owned())
+        } else if self.inside && dir.starts_with(&self.dir) {
+            Some(format!("in {}", self.what))
+        } else if self.dir.starts_with(dir) {
+            Some(format!("a folder holding {}", self.what))
+        } else {
+            None
         }
     }
 }
@@ -672,10 +839,10 @@ fn not_followed(id: &str) -> io::Error {
     io::Error::other(format!("{id} is not a followed project"))
 }
 
-/// The repositories directly inside the folder `dir`, a group's (14.1): its subfolders (not
-/// links) holding a `.git` folder, sorted. Only the first [`GROUP_ENTRIES`] entries are read;
-/// a name that is not UTF-8 is skipped.
-fn scan(dir: &Path) -> io::Result<Vec<String>> {
+/// What the folder `dir`, a group's (14.1), holds: the repositories directly inside it, its
+/// subfolders (not links) holding a `.git` folder, sorted, and whether it has one itself. Only
+/// the first [`GROUP_ENTRIES`] entries are read; a name that is not UTF-8 is skipped.
+fn scan(dir: &Path) -> io::Result<Scan> {
     let mut repos = Vec::new();
     for entry in std::fs::read_dir(dir)?.take(GROUP_ENTRIES).flatten() {
         let folder = entry.file_type().is_ok_and(|t| t.is_dir());
@@ -689,14 +856,18 @@ fn scan(dir: &Path) -> io::Result<Vec<String>> {
         }
     }
     repos.sort();
-    Ok(repos)
+    let git = dir.join(".git").symlink_metadata();
+    Ok(Scan {
+        repos,
+        git: git.is_ok_and(|m| m.is_dir()),
+    })
 }
 
-/// A group (14.1): no repository, so its one worktree is its folder, where its own
-/// terminals and agents are placed, with no branch and no status.
-fn group(path: &str, error: Option<String>) -> Project {
+/// A group (14.1), or a folder project (`folder`, 23.1): no repository, so its one worktree
+/// is its folder, where its own terminals and agents are placed, with no branch and no status.
+fn group(path: &str, error: Option<String>, folder: bool) -> Project {
     let name = file_name(Path::new(path)).unwrap_or(path.to_owned());
-    let folder = Worktree {
+    let worktree = Worktree {
         id: path.to_owned(),
         name: name.clone(),
         path: path.to_owned(),
@@ -709,9 +880,10 @@ fn group(path: &str, error: Option<String>) -> Project {
         id: path.to_owned(),
         name,
         path: path.to_owned(),
-        worktrees: vec![folder],
+        worktrees: vec![worktree],
         error,
         group: true,
+        folder,
         parent: None,
     }
 }
@@ -729,6 +901,7 @@ fn project(path: &str) -> Project {
         worktrees,
         error,
         group: false,
+        folder: false,
         parent: None,
     }
 }
@@ -872,6 +1045,7 @@ mod tests {
             worktrees: worktrees(&root, list),
             error: None,
             group: false,
+            folder: false,
             parent: None,
         }];
         let proc = tempfile::tempdir().unwrap();
@@ -991,6 +1165,7 @@ mod tests {
             worktrees: worktrees(Path::new(root), list),
             error: None,
             group: false,
+            folder: false,
             parent: None,
         };
         let (r, a, r2) = (
@@ -1398,12 +1573,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(top.join("g/api"), top.join("g/link")).unwrap();
         repo(&top.join("other"));
-        std::fs::create_dir(top.join("empty")).unwrap();
         let projects = load(&top.join("data"));
-        // A folder with no repository inside is refused as before.
-        let (error, message) = projects.add(&at("empty")).unwrap_err();
-        assert_eq!(error, ProjectError::NotAGitRepository);
-        assert!(message.contains("is not in a git repository"), "{message}");
 
         // A repository followed on its own moves into the group added after it.
         projects.add(&at("g/web")).unwrap();
@@ -1412,6 +1582,8 @@ mod tests {
         let added = projects.add(&format!("{g}/api/..")).unwrap();
         assert_eq!(shown(std::slice::from_ref(&added)), [format!("+{g}")]);
         assert_eq!((added.name.as_str(), &added.error), ("g", &None));
+        // It holds repositories: no folder project.
+        assert!(!added.folder);
         let folder = &added.worktrees[..];
         assert_eq!(folder.len(), 1);
         assert_eq!(
@@ -1523,7 +1695,7 @@ mod tests {
         for i in 0..=GROUP_ENTRIES {
             std::fs::create_dir_all(tmp.path().join(format!("r{i:04}/.git"))).unwrap();
         }
-        assert_eq!(scan(tmp.path()).unwrap().len(), GROUP_ENTRIES);
+        assert_eq!(scan(tmp.path()).unwrap().repos.len(), GROUP_ENTRIES);
     }
 
     // macOS refuses a name that is not UTF-8.
@@ -1536,7 +1708,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join(name).join(".git")).unwrap();
         std::fs::create_dir_all(tmp.path().join("ok/.git")).unwrap();
         let ok = tmp.path().join("ok").display().to_string();
-        assert_eq!(scan(tmp.path()).unwrap(), [ok]);
+        assert_eq!(scan(tmp.path()).unwrap().repos, [ok]);
     }
 
     #[cfg(unix)]
@@ -1615,5 +1787,257 @@ mod tests {
             .unwrap();
         let saved = std::fs::read_to_string(&file).unwrap();
         assert!(!saved.contains("groups"), "{saved}");
+    }
+
+    #[test]
+    fn a_plain_folder_is_a_folder_project_until_git_init() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        let f = top.join("f").display().to_string();
+        std::fs::create_dir_all(top.join("f/docs")).unwrap();
+        std::fs::write(top.join("f/notes.md"), "notes").unwrap();
+        let projects = load(&top.join("data"));
+        let env = SpaceEnv {
+            git_name: Some("Folder".into()),
+            ..SpaceEnv::default()
+        };
+        projects
+            .change_spaces(|s| s.update("default", "D", env.clone()))
+            .unwrap();
+
+        // Followed as a folder project: a group of none, whose one worktree is its folder.
+        let added = projects.add(&format!("{f}/docs/..")).unwrap();
+        assert_eq!((added.group, added.folder), (true, true));
+        assert_eq!((added.id.as_str(), added.name.as_str()), (f.as_str(), "f"));
+        let w = &added.worktrees;
+        assert_eq!(w.len(), 1);
+        assert_eq!(
+            (w[0].path.as_str(), w[0].main, &w[0].branch),
+            (f.as_str(), true, &None)
+        );
+        assert_eq!(projects.list(), std::slice::from_ref(&added));
+        assert_eq!(projects.add(&f).unwrap(), added);
+        assert_eq!(projects.groups(), [f.as_str()]);
+        assert_eq!(projects.roots(), Vec::<String>::new());
+        assert!(projects.is_group(&f));
+        // Its terminals and agents are in it, with the space's environment.
+        let list = projects.list();
+        assert_eq!(
+            place(&list, &format!("{f}/docs")),
+            Some((f.clone(), f.clone()))
+        );
+        assert_eq!(projects.space_env(&format!("{f}/docs")), env);
+        // Its files are read as a worktree's, through an empty repository made once.
+        assert_eq!(projects.worktree(&f).unwrap(), PathBuf::from(&f));
+        let plain = top.join("data").join(PLAIN_GIT);
+        assert_eq!(
+            projects.tree(&f).unwrap(),
+            (PathBuf::from(&f), Some(plain.clone()))
+        );
+        assert!(plain.join("HEAD").is_file());
+        std::fs::write(plain.join("description"), "kept").unwrap();
+        projects.tree(&f).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(plain.join("description")).unwrap(),
+            "kept"
+        );
+        assert!(projects.worktree(&format!("{f}/docs")).is_err());
+        // But no changes, pull requests or worktrees: no repository.
+        assert!(followed(&list, &f).is_err());
+        assert!(projects.holding(&f).is_err());
+        assert!(projects.followed(&f).is_err());
+        assert!(projects.branches(&f).is_err());
+
+        // `git init` makes it a repository; the watch of its folder tells, as `forget`.
+        projects.init_git(&f).unwrap();
+        assert!(top.join("f/.git").is_dir());
+        let err = projects.init_git(&f).unwrap_err();
+        assert_eq!(err.to_string(), format!("{f} is not a folder project"));
+        let err = projects.init_git("/elsewhere").unwrap_err();
+        assert_eq!(err.to_string(), "/elsewhere is not a folder project");
+        projects.forget();
+        let listed = projects.list();
+        assert_eq!(shown(&listed), std::slice::from_ref(&f));
+        assert_eq!((listed[0].folder, listed[0].worktrees.len()), (false, 1));
+        assert!(!projects.is_group(&f));
+        assert_eq!(projects.roots(), [f.as_str()]);
+        assert_eq!(projects.groups(), Vec::<String>::new());
+        assert_eq!(projects.tree(&f).unwrap(), (PathBuf::from(&f), None));
+        assert!(projects.followed(&f).is_ok());
+        // Kept a project of its space, no longer a group, with nothing else changed.
+        assert!(projects.spaces().is_group(&f));
+        projects.settle();
+        let saved = load(&top.join("data"));
+        assert!(!saved.spaces().is_group(&f));
+        assert_eq!(saved.spaces().spaces[0].projects, [f.as_str()]);
+        assert_eq!(saved.spaces().spaces[0].env, env);
+        assert_eq!(shown(&saved.list()), std::slice::from_ref(&f));
+        // Nothing to settle: the file is not written again.
+        let file = top.join("data/spaces.json");
+        std::fs::remove_file(&file).unwrap();
+        projects.settle();
+        assert!(!file.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_project_settled_while_its_spaces_cannot_be_saved_stays_a_group() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        std::fs::create_dir_all(top.join("f")).unwrap();
+        let f = top.join("f").display().to_string();
+        let projects = load(&top.join("data"));
+        projects.add(&f).unwrap();
+        repo(&top.join("f"));
+        let data = top.join("data");
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+        projects.settle();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Kept a group until a later settle saves it; the list already shows a repository.
+        assert!(projects.spaces().is_group(&f));
+        assert!(!projects.list()[0].group);
+        projects.settle();
+        assert!(!projects.spaces().is_group(&f));
+    }
+
+    #[test]
+    fn a_repository_made_in_a_folder_project_makes_it_a_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        let f = top.join("f").display().to_string();
+        std::fs::create_dir_all(top.join("f")).unwrap();
+        let projects = load(&top.join("data"));
+        projects.add(&f).unwrap();
+        repo(&top.join("f/api"));
+        projects.forget();
+        let api = top.join("f").join("api").display().to_string();
+        let listed = projects.list();
+        assert_eq!(shown(&listed), [format!("+{f}"), format!("{api} in {f}")]);
+        assert!(!listed[0].folder);
+        // Its folder no longer has a files panel, its repository has.
+        assert!(projects.worktree(&f).is_err());
+        assert!(projects.worktree(&api).is_ok());
+        // Gone again: a folder project again.
+        std::fs::remove_dir_all(top.join("f/api")).unwrap();
+        projects.forget();
+        assert!(projects.list()[0].folder);
+        // A folder whose `.git` git refuses is none, nor is a folder that cannot be read.
+        std::fs::create_dir_all(top.join("broken/.git")).unwrap();
+        let (error, message) = projects
+            .add(&top.join("broken").display().to_string())
+            .unwrap_err();
+        assert_eq!(error, ProjectError::NotAGitRepository);
+        assert!(message.contains("is not in a git repository"), "{message}");
+        // Its folder gone, it shows why, and is no folder project.
+        std::fs::remove_dir_all(top.join("f")).unwrap();
+        projects.forget();
+        let listed = projects.list();
+        assert!(listed[0].error.is_some());
+        assert_eq!((listed[0].group, listed[0].folder), (true, false));
+    }
+
+    #[test]
+    fn the_home_folder_and_the_folders_of_hive_and_claude_are_never_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        let at = |p: &str| {
+            p.split('/')
+                .fold(top.clone(), |d, n| d.join(n))
+                .display()
+                .to_string()
+        };
+        for dir in [
+            "home/work",
+            "data/accounts/a",
+            "claude/projects",
+            "settings",
+        ] {
+            std::fs::create_dir_all(top.join(dir)).unwrap();
+        }
+        repo(&top.join("claude/repo"));
+        let own = vec![
+            (top.join("claude"), "Claude's folder"),
+            (top.join("settings"), "Hive's folder"),
+            (top.join("missing"), "Claude's folder"),
+        ];
+        let projects = load(&top.join("data")).protect(Some(top.join("home")), own);
+        let refused = |path: &str, what: &str| {
+            let (error, message) = projects.add(path).unwrap_err();
+            assert_eq!(error, ProjectError::ProtectedFolder, "{path}");
+            let shown = canonical(Path::new(path)).unwrap();
+            let shown = shown.display();
+            let said = format!("{shown} is {what}: Hive does not follow it; choose a folder in it");
+            assert_eq!(message, said);
+        };
+        refused(&at("home"), "the home folder");
+        refused(&format!("{}/work/..", at("home")), "the home folder");
+        refused(&at("data"), "Hive's folder");
+        refused(&at("data/accounts/a"), "in Hive's folder");
+        refused(&at("settings"), "Hive's folder");
+        refused(&at("claude"), "Claude's folder");
+        refused(&at("claude/projects"), "in Claude's folder");
+        #[cfg(unix)]
+        refused("/", "the whole disk");
+        // Nor a folder holding one: its files panel would reach it.
+        refused(&top.display().to_string(), "a folder holding Hive's folder");
+        assert_eq!(projects.list(), vec![]);
+        // A folder in the home folder is followed, and so is a repository anywhere.
+        assert!(projects.add(&at("home/work")).unwrap().folder);
+        assert!(!projects.add(&at("claude/repo")).unwrap().group);
+        // A folder that does not exist yet is protected as named.
+        std::fs::create_dir_all(top.join("missing/x")).unwrap();
+        let (error, _) = projects.add(&at("missing/x")).unwrap_err();
+        assert_eq!(error, ProjectError::ProtectedFolder);
+        // A followed folder swapped for a link is no longer acted on.
+        let work = at("home/work");
+        assert!(projects.tree(&work).is_ok());
+        std::fs::remove_dir(top.join("home/work")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(top.join("claude"), top.join("home/work")).unwrap();
+        #[cfg(unix)]
+        {
+            let said = format!("{work} is no longer the folder followed");
+            assert_eq!(projects.tree(&work).unwrap_err().to_string(), said);
+            assert_eq!(projects.init_git(&work).unwrap_err().to_string(), said);
+            assert!(!top.join("claude/.git").exists());
+        }
+    }
+
+    #[test]
+    fn a_folder_project_that_became_protected_is_no_longer_acted_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        std::fs::create_dir_all(top.join("f")).unwrap();
+        let f = top.join("f").display().to_string();
+        load(&top.join("data")).add(&f).unwrap();
+        // Protected since it was added (a hand edit, or a new Claude folder).
+        let projects =
+            load(&top.join("data")).protect(None, vec![(top.join("f"), "Claude's folder")]);
+        let said =
+            format!("{f} is Claude's folder: Hive does not follow it; choose a folder in it");
+        assert_eq!(projects.tree(&f).unwrap_err().to_string(), said);
+        assert_eq!(projects.init_git(&f).unwrap_err().to_string(), said);
+        assert!(!top.join("f/.git").exists());
+    }
+
+    #[test]
+    fn a_spaces_file_with_a_group_of_no_repository_loads_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        let f = top.join("f").display().to_string();
+        std::fs::create_dir_all(top.join("f")).unwrap();
+        let file = top.join("spaces.json");
+        // As JSON writes it (a Windows path's `\\` escaped).
+        let f = serde_json::to_string(&f).unwrap();
+        let old = format!(
+            r#"{{"current":"default","spaces":[{{"id":"default","name":"Default","projects":[{f}],"groups":[{f}],"env":{{"git_name":null,"git_email":null,"gh_config_dir":null,"gh_account":null}}}}]}}"#
+        );
+        std::fs::write(&file, &old).unwrap();
+        let projects = load(&top);
+        let listed = projects.list();
+        assert_eq!((listed[0].group, listed[0].folder), (true, true));
+        projects.settle();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), old);
     }
 }

@@ -121,6 +121,14 @@ impl Spaces {
         Ok(())
     }
 
+    /// Makes the group `id` a project of its space like any other (a folder project that
+    /// became a repository, 23.1).
+    pub fn ungroup(&mut self, id: &str) {
+        for space in &mut self.spaces {
+            space.groups.retain(|g| g != id);
+        }
+    }
+
     /// Whether the project `id` is a group (14.1).
     pub fn is_group(&self, id: &str) -> bool {
         self.spaces.iter().any(|s| s.groups.iter().any(|g| g == id))
