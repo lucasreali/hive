@@ -709,6 +709,24 @@ Created 2026-11-02 at the human's request, from a conversation with the human th
 
 ---
 
+## Stage 25 — Remote connections over SSH
+
+Created 2026-11-05 at the human's request: "I want something for remote connections, for now only over SSH, as Orca has; I want my agent to think about the best way to bring this". Planned after Stage 24, as **day 5**. **Changes `docs/hive.md`** (Hive today runs its service on this machine or in WSL, #1, #26, #29): the human updates it once 25.1's design is chosen. New dependencies need the human's approval (rule 3) before `cargo add`.
+
+- [ ] **25.1 Design: Hive over SSH.** No production code; a throwaway branch for experiments only, never the human's real hosts (a local `sshd` in a container or a temp user, with a temp `HOME` and keys). The agent **thinks through the best way** and presents it at the checkpoint, with a recommendation:
+  - **What Orca does** (its docs and source): how a remote is added, what runs on the remote, what the local app keeps, how it reconnects, what it does not support. Say what to copy and what not, and why.
+  - **The shape that fits Hive.** Hive already splits app and service and already reaches a service elsewhere through a stdio bridge: on Windows the app runs `wsl.exe --exec … hive bridge` (`bridge.rs`, `src-tauri/src/lib.rs`), and the service owns the PTYs, git, hooks and files (#37). The obvious candidate is the same bridge over `ssh <host> -- ~/.hive/bin/hive bridge` (22.1's folder), with the service, its terminals, worktrees, hooks and the `claude` wrapper all on the remote; compare it with the alternatives (the service local and only PTYs or git over SSH; SSH port forwarding of the socket; an SFTP or `sshfs` file layer) on latency, what keeps working when the link drops, and how much code changes.
+  - **One app, several services:** today the app talks to one service. Decide whether a remote is a separate window, a space (#48) bound to a host, or projects of any space on any host, and what the sidebar, status bar, notifications (#5), session history and the files panel show for a remote project; local and remote at the same time is the expected case.
+  - **Installing and updating the remote service:** the remote's OS and CPU (Linux x86_64 and arm64 first; macOS hosts too?), where the `hive` binary comes from (the release's builds, copied over SSH by the app as the bridge copies it into WSL, #29, and the versions handshake), what the remote needs (git, `claude` installed and logged in on the remote: Hive never copies credentials, #45).
+  - **The link:** the user's own `ssh` and `~/.ssh/config` (aliases, `ProxyJump`, keys, agent), never a password or key stored by Hive, separate arguments only, host keys always checked (an unknown or changed key asks or refuses, never `StrictHostKeyChecking=no`); dropped links and reconnects (the remote service keeps its terminals running, as `tmux` would; what the app shows meanwhile); laptop sleep; `ControlMaster` reuse.
+  - **What is out for now**, said plainly (e.g. Windows hosts, password prompts, a remote with no shell).
+  - **Risks and security** for `security-reviewer`: what a malicious or compromised remote could send the app, and the limits that already apply to the service's messages.
+  - **The plan:** the tasks 25.2… to build it, each sized like the other stages' tasks, written into this stage only after the human approves.
+
+  Deliver `docs/spike/ssh.md` (design, measurements of a terminal's echo latency over a local and a delayed link, e.g. `tc netem` or a proxy with 100 ms, and the open questions). ⏸ Checkpoint: the human picks the design; the agent then writes 25.2… here and the human updates `docs/hive.md`.
+
+---
+
 ## Not now (Fase 2)
 
 Kanban screen, rich interactions (permissions and choices answered in the app), live edit view, session history. Do not build any of it during v1.
