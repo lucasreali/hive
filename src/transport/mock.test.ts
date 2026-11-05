@@ -719,8 +719,17 @@ test("a worktree's scripts: the settings' first, shop's repository's, a port eac
     problems: MOCK_SCRIPT_PROBLEMS,
     port: 20_000 as number | null,
   };
-  const apiScripts = { type: "scripts" as const, path: api.path, scripts: [], problems: [], port: 20_010 };
-  const refused = { type: "error" as const, message: "/nowhere is not a worktree of a followed project" };
+  const apiScripts = {
+    type: "scripts" as const,
+    path: api.path,
+    scripts: [],
+    problems: [],
+    port: 20_010,
+  };
+  const refused = {
+    type: "error" as const,
+    message: "/nowhere is not a worktree of a followed project",
+  };
   expect(messages).toEqual([shopScripts, apiScripts, shopScripts, refused]);
   // The settings change: the scripts the app last asked for (a worktree) follow; one replaces
   // the repository's of the same name.
