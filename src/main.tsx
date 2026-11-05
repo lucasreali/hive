@@ -7,6 +7,7 @@ import { followOpenFile, followPanel, followView } from "./follow";
 import { appliedTheme, setFocused, setSystemTheme, setVisible, useHive } from "./store";
 import { transport } from "./transport";
 import { followTray } from "./tray";
+import { placeDialogs } from "./ui/dialogs";
 import { isMac, watchColorScheme, watchFocus, watchVisible } from "./window";
 
 // The update check answers on the channel `connect` gives, so it goes second.
@@ -19,6 +20,7 @@ followView(transport);
 followDock();
 followTray();
 watchColorScheme(setSystemTheme);
+placeDialogs(document.body);
 // Before the first render: the last run's theme (18.33), and macOS' own scrollbars and cursor.
 document.documentElement.dataset.theme = appliedTheme(useHive.getState());
 if (isMac()) document.documentElement.dataset.mac = "";
