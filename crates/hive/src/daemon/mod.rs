@@ -583,7 +583,8 @@ impl State {
 
     /// The `HIVE_*` environment (6.8) of a process in the `place` (`projects::place`) of its
     /// cwd: none outside the followed worktrees, nor in a group's folder (its scripts and ports
-    /// are not asked for, 14.1), and no `HIVE_PORT` when its block cannot be given.
+    /// are not asked for, 14.1), and no `HIVE_PORT` or `PORT` when its block cannot be given;
+    /// no `PORT` either when the service has one of its own (D22.14), which the process keeps.
     fn hive_env(&self, place: Option<(String, String)>) -> Vec<(&'static str, String)> {
         let Some((root, worktree)) = place.filter(|(root, _)| !self.projects.is_group(root)) else {
             return Vec::new();
@@ -591,7 +592,8 @@ impl State {
         let port = self.ports.port(&worktree).inspect_err(|err| {
             eprintln!("hive: warning: no ports for {worktree}: {err}");
         });
-        scripts::env(&root, &worktree, port.ok())
+        let inherited = std::env::var_os("PORT");
+        scripts::env(&root, &worktree, port.ok(), inherited.as_deref())
     }
 
     /// Runs the archive script of the project `root`, if it has one, in `worktree` (6.8).

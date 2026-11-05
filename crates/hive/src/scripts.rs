@@ -3,6 +3,7 @@
 //! scripts are the user's own, from the settings, never read from a repository.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -107,13 +108,26 @@ impl Ports {
 }
 
 /// The environment of a process in `worktree` of the project at `root`: `HIVE_PORT` (the
-/// first of its block, when it has one), `HIVE_WORKTREE_PATH` and `HIVE_ROOT_PATH`.
-pub fn env(root: &str, worktree: &str, port: Option<u16>) -> Vec<(&'static str, String)> {
+/// first of its block, when it has one), `HIVE_WORKTREE_PATH` and `HIVE_ROOT_PATH`; and the
+/// same port as `PORT` (D22.14), the one most dev servers read, unless `inherited` (the
+/// service's own `PORT`, which the process gets anyway) is set and not empty. A `PORT` the
+/// user's shell config exports wins in a terminal too, since the shell sets it after.
+pub fn env(
+    root: &str,
+    worktree: &str,
+    port: Option<u16>,
+    inherited: Option<&OsStr>,
+) -> Vec<(&'static str, String)> {
     let mut env = vec![
         ("HIVE_WORKTREE_PATH", worktree.to_owned()),
         ("HIVE_ROOT_PATH", root.to_owned()),
     ];
     env.extend(port.map(|port| ("HIVE_PORT", port.to_string())));
+    let unset = inherited.is_none_or(OsStr::is_empty);
+    env.extend(
+        port.filter(|_| unset)
+            .map(|port| ("PORT", port.to_string())),
+    );
     env
 }
 
@@ -320,15 +334,24 @@ mod tests {
 
     #[test]
     fn the_environment_names_the_worktree_its_root_and_port() {
-        assert_eq!(
-            env("/r", "/r/w", Some(20_010)),
-            vec![
-                ("HIVE_WORKTREE_PATH", "/r/w".to_owned()),
-                ("HIVE_ROOT_PATH", "/r".to_owned()),
-                ("HIVE_PORT", "20010".to_owned()),
-            ]
-        );
-        assert_eq!(env("/r", "/r", None).len(), 2);
+        let paths = [
+            ("HIVE_WORKTREE_PATH", "/r/w".to_owned()),
+            ("HIVE_ROOT_PATH", "/r".to_owned()),
+        ];
+        let hive = ("HIVE_PORT", "20010".to_owned());
+        let port = ("PORT", "20010".to_owned());
+        let env =
+            |port, inherited: Option<&str>| env("/r", "/r/w", port, inherited.map(OsStr::new));
+        // `PORT` too, when the service has none or an empty one.
+        let all = [&paths[..], &[hive.clone(), port]].concat();
+        assert_eq!(env(Some(20_010), None), all);
+        assert_eq!(env(Some(20_010), Some("")), all);
+        // The service's own `PORT` is kept: the process inherits it.
+        let kept = [&paths[..], &[hive]].concat();
+        assert_eq!(env(Some(20_010), Some("3000")), kept);
+        // No block: no port of either name.
+        assert_eq!(env(None, None), paths);
+        assert_eq!(env(None, Some("3000")), paths);
     }
 
     // The same `sh` scripts run on Windows in the Bash of Git for Windows (on the runner).
