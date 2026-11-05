@@ -61,6 +61,11 @@ export interface Transport {
    */
   removeProject(id: string): Promise<void>;
   /**
+   * `git init` in the folder project `id` (23.1). Nothing answers it: `projects` comes once the
+   * service sees the repository, an `error` when it failed.
+   */
+  initGit(id: string): Promise<void>;
+  /**
    * A new, empty space (6.14), made the current one. Answered by `spaces` or `space_failed`,
    * as are the three below.
    */

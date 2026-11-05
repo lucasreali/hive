@@ -1044,7 +1044,9 @@ async fn watch_files(
         watcher.open(open.borrow_and_update().iter().cloned());
         match tokio::task::block_in_place(|| watcher.list()) {
             Ok(listing) => {
-                let changed = last.as_ref() != Some(&listing);
+                // A folder project's (no `changes` to follow, 23.1) after every change: the
+                // app reads its open file again.
+                let changed = last.as_ref() != Some(&listing) || base.is_none();
                 state
                     .worktree_changed(&path, base, changed.then_some(&listing))
                     .await;

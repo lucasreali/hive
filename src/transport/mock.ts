@@ -310,6 +310,34 @@ export const MOCK_GROUP: Project[] = [
 ];
 
 /**
+ * A folder in no repository holding none (23.1): "Add project" follows it as a folder project,
+ * a group of no repository, as `projects::group` lists it.
+ */
+export const MOCK_FOLDER_PATH = "/home/user/projects/notes";
+export const MOCK_FOLDER: Project = {
+  ...structuredClone(MOCK_GROUP[0] as Project),
+  id: MOCK_FOLDER_PATH,
+  name: "notes",
+  path: MOCK_FOLDER_PATH,
+  worktrees: [
+    {
+      id: MOCK_FOLDER_PATH,
+      name: "notes",
+      path: MOCK_FOLDER_PATH,
+      branch: null,
+      main: true,
+      claude: false,
+      status: null,
+    },
+  ],
+  folder: true,
+};
+/** What the fake folder project holds. */
+export const MOCK_FOLDER_FILES = ["ideas.md", "todo.md"];
+/** The fake home folder, never followed as a folder project (23.1). */
+const MOCK_HOME = "/home/user";
+
+/**
  * The fake machine's folders for "Add project", besides the repositories (every folder above
  * one exists too): WSL's home and Windows' user folder (`C:\Users\user`, `/mnt/c/...`).
  */
@@ -327,7 +355,7 @@ export const MOCK_FOLDERS = [
   ...MOCK_REPOS.map((p) => p.path),
   ...MOCK_GROUP.map((p) => p.path),
   "/home/user/Downloads",
-  "/home/user/projects/notes",
+  MOCK_FOLDER_PATH,
   "/mnt/c/Users/user/Documents",
   // On a network volume: answered with the service's warning (D18.9).
   MOCK_SHARE,
@@ -853,7 +881,8 @@ export function createMockTransport(
     }
     const listed = files.get(path) as string[];
     later({ type: "files", path, files: listed, ignored: ignored.sort(), truncated: false });
-    later(changes(projects, path, watchedBase));
+    // A folder project's folder has no changes (23.1).
+    if (!holder(path)?.folder) later(changes(projects, path, watchedBase));
   };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
   const touch = (cwd: string, name: string) => {
@@ -1173,15 +1202,19 @@ export function createMockTransport(
       return copied;
     },
     async addProject(path) {
-      // The group (14.1): its repositories come in the list, before it.
-      if (path === MOCK_GROUP_PATH) {
+      if (path === MOCK_HOME) {
+        const message = `${path} is the home folder: Hive does not follow it; choose a folder in it`;
+        return void later({ type: "add_project_failed", path, error: "protected_folder", message });
+      }
+      // The group (14.1), and the folder project (23.1): the list comes before it.
+      if (path === MOCK_GROUP_PATH || path === MOCK_FOLDER_PATH) {
         const owner = spaces.find((x) => x.projects.includes(path));
         if (owner && owner.id !== current) {
           const message = `${path} is already in the space ${owner.name}`;
           return void later({ type: "add_project_failed", path, error: "in_other_space", message });
         }
         if (!owner) {
-          projects.push(...MOCK_GROUP);
+          projects.push(...(path === MOCK_GROUP_PATH ? MOCK_GROUP : [MOCK_FOLDER]));
           const here = space(current) as Space;
           here.projects.push(path);
           here.groups = [...(here.groups ?? []), path];
@@ -1229,6 +1262,14 @@ export function createMockTransport(
         later({ type: "settings", settings });
       }
       for (const p of removed) later({ type: "project_removed", id: p.id });
+    },
+    // A stand-in for `git init` and the watch of the folder that sees it (23.1).
+    async initGit(id) {
+      const at = projects.findIndex((p) => p.id === id && p.folder);
+      if (at < 0) return void later({ type: "error", message: `${id} is not a folder project` });
+      projects[at] = project(id, (projects[at] as Project).name, []);
+      for (const x of spaces) x.groups = x.groups?.filter((p) => p !== id);
+      later({ type: "projects", projects: structuredClone(projects) });
     },
     async listDirs(path, windows, hidden) {
       later({ type: "dirs", ...mockDirs(path, windows, mode === "native", hidden) });
@@ -1370,7 +1411,9 @@ export function createMockTransport(
       later({ type: "search_results", ...answer, matches, error: null });
     },
     async openFile(worktree, path) {
-      later({ type: "file", ...fileAt(worktree, path) });
+      // A folder project's file has no base (23.1).
+      const folder = holder(worktree)?.folder;
+      later({ type: "file", ...fileAt(worktree, path), ...(folder && { base: null }) });
     },
     async saveFile(worktree, path, content, version) {
       const now = fileAt(worktree, path);
@@ -1533,7 +1576,8 @@ export function createMockTransport(
         const message = `${path} is not a worktree of a followed project`;
         return void later({ type: "error", message });
       }
-      if (!files.has(path)) files.set(path, mockFiles(worktree));
+      const folder = holder(path)?.folder;
+      if (!files.has(path)) files.set(path, folder ? MOCK_FOLDER_FILES : mockFiles(worktree));
       sendFiles(path);
     },
     async unwatchWorktree() {

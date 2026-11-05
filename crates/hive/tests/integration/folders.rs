@@ -62,6 +62,12 @@ async fn a_folder_project_holds_its_agents_and_git_init_makes_it_a_project() {
         (content.as_deref(), base, error),
         (Some("- one\n"), None, None)
     );
+    // A file written there sends its files again, the same list: the app reads it again.
+    std::fs::write(dir.join("todo.md"), "- two\n").unwrap();
+    let (0, Control::Files { path, files, .. }) = app.control().await else {
+        panic!("expected files");
+    };
+    assert_eq!((path, files), (f.clone(), vec!["todo.md".to_owned()]));
 
     // A terminal in it runs there, without the worktrees' `HIVE_*`; its agent is under it.
     assert_eq!(app.open_terminal(1, &dir).await, Some(f.clone()));

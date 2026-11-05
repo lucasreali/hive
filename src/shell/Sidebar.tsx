@@ -45,6 +45,7 @@ import {
   ChevronIcon,
   FolderIcon,
   GroupIcon,
+  PlainFolderIcon,
   PlusIcon,
   RefreshIcon,
   STATE_LABEL,
@@ -189,7 +190,13 @@ function ProjectNode({
   return (
     <li className={inGroup ? "in-group" : undefined}>
       <div
-        className={project.group ? "tree-row project group" : "tree-row project"}
+        className={
+          project.folder
+            ? "tree-row project group folder"
+            : project.group
+              ? "tree-row project group"
+              : "tree-row project"
+        }
         title={project.path}
         data-selected={selection === project.id}
       >
@@ -210,7 +217,7 @@ function ProjectNode({
           onClick={() => select(project.id)}
           onContextMenu={(e) => openProjectMenu({ project: project.id, ...menuAt(e) })}
         >
-          {project.group ? <GroupIcon /> : <FolderIcon />}
+          {project.folder ? <PlainFolderIcon /> : project.group ? <GroupIcon /> : <FolderIcon />}
           <span className="label">{project.name}</span>
           {!open && <Rollup agents={(a) => places.has(a.worktree ?? "")} />}
         </button>
