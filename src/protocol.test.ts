@@ -112,6 +112,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     removed: true,
     error: true,
   },
+  scripts: { path: true, scripts: true, problems: true },
   file: {
     worktree: true,
     path: true,

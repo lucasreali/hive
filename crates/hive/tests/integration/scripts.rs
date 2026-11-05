@@ -1,4 +1,6 @@
-use hive_protocol::{Control, ProjectScripts, ProjectSettings, Role, Settings};
+use hive_protocol::{
+    Control, DiffBase, ProjectScripts, ProjectSettings, Role, RunScript, ScriptSource, Settings,
+};
 
 use crate::common::Conn;
 use crate::worktree::Repo;
@@ -219,6 +221,110 @@ async fn git_and_scripts_get_the_users_login_path_once_it_is_known() {
     assert_eq!(read(&log), "missing\nlogin tool ran\n");
     let git_runs = read(&runs);
     assert!(git_runs.contains("worktree remove"), "{git_runs}");
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+/// A script as `(name, command, source)`.
+type Row = (String, String, ScriptSource);
+
+/// The next `scripts` message, whatever else (files, changes, statuses, usage) comes first.
+async fn next_scripts(conn: &mut Conn) -> (Vec<Row>, Vec<String>) {
+    loop {
+        if let (
+            0,
+            Control::Scripts {
+                scripts, problems, ..
+            },
+        ) = conn.control().await
+        {
+            let scripts = scripts
+                .into_iter()
+                .map(|s| (s.name, s.command, s.source))
+                .collect();
+            return (scripts, problems);
+        }
+    }
+}
+
+fn row(name: &str, command: &str, source: ScriptSource) -> Row {
+    (name.into(), command.into(), source)
+}
+
+#[tokio::test]
+async fn a_worktrees_scripts_come_from_the_settings_then_its_repository_and_follow_changes() {
+    use ScriptSource::*;
+    let repo = Repo::new();
+    repo.write(
+        "package.json",
+        r#"{"scripts":{"dev":"vite","test":"vitest"}}"#,
+    );
+    repo.write("pnpm-lock.yaml", "");
+    repo.write("Taskfile.yml", "tasks:\n  up: docker compose up\n");
+    repo.write("Makefile", ".PHONY: build\nbuild:\n\tcc x.c\n");
+    let root = repo.root.display().to_string();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    follow(&mut app, &root).await;
+
+    app.send(0, Control::ListScripts { path: root.clone() })
+        .await;
+    let repository = [
+        row("dev", "pnpm run dev", PackageJson),
+        row("test", "pnpm run test", PackageJson),
+        row("up", "task up", Taskfile),
+        row("build", "make build", Makefile),
+    ];
+    assert_eq!(next_scripts(&mut app).await, (repository.to_vec(), vec![]));
+
+    // A settings script comes first and replaces the repository's of the same name; the app,
+    // which has this worktree's scripts, gets them again.
+    let mut settings = hive_protocol::Settings::default();
+    let scripts = ProjectScripts {
+        run: vec![RunScript {
+            name: "dev".into(),
+            command: "pnpm dev --port $PORT".into(),
+        }],
+        ..Default::default()
+    };
+    settings
+        .projects
+        .insert(root.clone(), ProjectSettings { scripts });
+    app.send(0, Control::SetSettings { settings }).await;
+    let mut expect = vec![row("dev", "pnpm dev --port $PORT", Settings)];
+    expect.extend_from_slice(&repository[1..]);
+    assert_eq!(next_scripts(&mut app).await, (expect.clone(), vec![]));
+
+    // Watched, a change to a script file is sent; a link is not followed out.
+    let base = DiffBase::Head;
+    app.send(
+        0,
+        Control::WatchWorktree {
+            path: root.clone(),
+            base,
+        },
+    )
+    .await;
+    let outside = repo.env.path("home/Makefile");
+    std::fs::write(&outside, "evil:\n").unwrap();
+    std::fs::remove_file(repo.root.join("Makefile")).unwrap();
+    std::os::unix::fs::symlink(&outside, repo.root.join("Makefile")).unwrap();
+    expect.pop();
+    let problem = "Makefile: a link or not a regular file, not read".to_owned();
+    assert_eq!(next_scripts(&mut app).await, (expect, vec![problem]));
+
+    // A folder that is no worktree of a followed project is refused.
+    let home = repo.env.path("home").display().to_string();
+    app.send(0, Control::ListScripts { path: home.clone() })
+        .await;
+    let refused = format!("{home} is not a worktree of a followed project");
+    loop {
+        match app.control().await.1 {
+            Control::Error { message } => break assert_eq!(message, refused),
+            Control::Scripts { .. } => panic!("scripts for {home}"),
+            _ => {}
+        }
+    }
     drop(app);
     assert!(daemon.wait_exit().success());
 }

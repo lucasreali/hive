@@ -482,6 +482,20 @@
     "error": null
   },
   {
+    "type": "scripts",
+    "path": "/r",
+    "scripts": [
+      {
+        "name": "dev",
+        "command": "bun run dev",
+        "source": "package_json"
+      }
+    ],
+    "problems": [
+      "m"
+    ]
+  },
+  {
     "type": "sessions",
     "sessions": [],
     "error": null,

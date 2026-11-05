@@ -171,6 +171,7 @@ where
         *app = Some(control_tx);
     }
     *state.listed() = None;
+    *state.scripted() = None;
     state.send_settings().await;
     resync(state).await;
     // Only the first app after a restart resumes the sessions the last one left.
@@ -238,9 +239,14 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
                 Ok(settings) => Control::Settings { settings },
                 Err(message) => Control::SettingsFailed { message },
             };
+            let saved = matches!(reply, Control::Settings { .. });
             state.to_app(0, &reply).await;
             // An account switch shows another account's windows, also while the tick sleeps.
             state.send_usage().await;
+            // A project's run scripts come first in its worktrees' scripts (23.4).
+            if saved {
+                state.rescript(None).await;
+            }
         }
         Ok(Control::CreateAccount { name }) => {
             let reply = match tokio::task::block_in_place(|| state.settings.create_account(&name)) {
@@ -506,6 +512,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::ListChanges { path, base }) => {
             state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
         }
+        Ok(Control::ListScripts { path }) => state.list_scripts(path),
         Ok(Control::ListSessions) => {
             // The accounts' folders may have changed: watched again.
             state.sessions_follow.notify_one();

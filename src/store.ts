@@ -42,6 +42,7 @@ import type {
   Space,
   Worktree,
   WorktreeFiles,
+  WorktreeScripts,
 } from "./protocol";
 import type { OpenPull, PullBusy, PullError, PullState, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
@@ -427,6 +428,8 @@ export type HiveState = {
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
   changes: Record<string, Changes>;
+  /** By worktree path: the last `scripts` the service sent for it (23.4). */
+  scripts: Record<string, WorktreeScripts>;
   /** By worktree path: how many `changes` arrived, equal ones too (the open file re-asks). */
   changesSeen: Record<string, number>;
   /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
@@ -543,6 +546,7 @@ export const initialState: HiveState = {
   subagentWorktrees: [],
   worktreeFiles: null,
   changes: {},
+  scripts: {},
   changesSeen: {},
   diffBases: {},
   file: null,

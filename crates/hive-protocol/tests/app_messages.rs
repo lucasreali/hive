@@ -65,6 +65,7 @@ sort! {
         | ExpandIgnored
         | View
         | ListChanges
+        | ListScripts
         | ListSessions
         | LocateSession
         | DeleteSession
@@ -139,6 +140,7 @@ sort! {
         | WorktreeStatus
         | Files
         | Changes
+        | Scripts
         | Sessions
         | RestoreSessions
         | SessionLocated
@@ -459,6 +461,15 @@ fn samples() -> Vec<Control> {
             added: 0,
             removed: 0,
             error: None,
+        },
+        Scripts {
+            path: s("/r"),
+            scripts: vec![Script {
+                name: s("dev"),
+                command: s("bun run dev"),
+                source: ScriptSource::PackageJson,
+            }],
+            problems: vec![m()],
         },
         Sessions {
             sessions: vec![],

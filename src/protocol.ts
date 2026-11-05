@@ -134,6 +134,7 @@ export type ServiceMessage =
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
+  | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
   | ({ type: "search_results" } & SearchResults)
   | ({ type: "dirs" } & Dirs)
@@ -582,6 +583,18 @@ export type ProjectScripts = {
   /** Run by the service before it removes a worktree. */
   archive: string | null;
 };
+
+/** Mirrors `hive_protocol::ScriptSource`: where a worktree's script comes from (23.4). */
+export type ScriptSource = "settings" | "package_json" | "taskfile" | "makefile";
+
+/** Mirrors `hive_protocol::Script`: `command` is what Hive types into a new terminal. */
+export type Script = { name: string; command: string; source: ScriptSource };
+
+/**
+ * A worktree's scripts (23.4, `scripts`): the project's run scripts from the settings first,
+ * then the repository's; `problems` says why a file was not read or what was left out.
+ */
+export type WorktreeScripts = { path: string; scripts: Script[]; problems: string[] };
 
 /**
  * Whether the OS lets Hive show notifications (17.19): `unknown` where the app cannot ask (a
