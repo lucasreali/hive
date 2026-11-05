@@ -1,6 +1,6 @@
 import { openLink } from "./shell/Markdown";
 import { COMMANDS, commandsBlocked } from "./shortcuts";
-import { toggleSidebar, useHive } from "./store";
+import { openModal, toggleSidebar, useHive } from "./store";
 import { transport } from "./transport";
 
 // The app menu (macOS, 17.13) is the app side's (`src-tauri/src/menu.rs`); a click on one of its
@@ -22,6 +22,7 @@ const ITEMS: Record<string, { run: () => void; always?: true }> = {
   "toggle-panel": { run: command("toggle-panel") },
   "close-tab": { run: command("close-tab") },
   "check-updates": { run: () => void transport.checkUpdate(true), always: true },
+  uninstall: { run: () => openModal("uninstall") },
   help: { run: () => void openLink(HELP_URL), always: true },
   "report-issue": { run: () => void openLink(ISSUE_URL), always: true },
 };

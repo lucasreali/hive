@@ -5,6 +5,7 @@ import type { ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
 import { onMoved, openLocated, restore } from "./sessions";
 import { requestQuit } from "./shell/CloseAppDialog";
+import { onUninstalled } from "./shell/UninstallDialog";
 import { dropFiles, reattachTerminal, showOpenFailure } from "./terminals";
 import { transport } from "./transport";
 import { openTarget } from "./viewer/external";
@@ -25,6 +26,7 @@ function onMessage(message: ServiceMessage): void {
     goToClicked(message.agent);
   }
   if (message.type === "quit_requested") requestQuit();
+  if (message.type === "uninstalled") onUninstalled(message.failed);
   if (message.type === "menu") runMenuItem(message.item);
   if (message.type === "files_dropped") dropFiles(message.text, message.x, message.y);
   if (message.type === "terminal_kept") {

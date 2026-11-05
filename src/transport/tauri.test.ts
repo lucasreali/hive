@@ -110,6 +110,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.getDiagnostics();
   await tauriTransport.getShared();
   await tauriTransport.openShared();
+  await tauriTransport.listUninstall(true, false);
+  await tauriTransport.uninstall(false, true);
   await tauriTransport.checkUpdate();
   await tauriTransport.checkUpdate(true);
   await tauriTransport.installUpdate();
@@ -167,6 +169,8 @@ test("terminal and project actions call their commands", async () => {
     ["get_diagnostics", {}],
     ["get_shared", {}],
     ["open_shared", {}],
+    ["list_uninstall", { keepData: true, accounts: false }],
+    ["uninstall", { keepData: false, accounts: true }],
     ["check_update", { manual: false }],
     ["check_update", { manual: true }],
     ["install_update", {}],

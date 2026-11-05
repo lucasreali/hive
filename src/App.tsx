@@ -17,6 +17,7 @@ import { TerminalArea } from "./shell/TerminalArea";
 import { TitleBar } from "./shell/TitleBar";
 import { Toasts } from "./shell/Toasts";
 import { TranslocatedDialog } from "./shell/TranslocatedDialog";
+import { UninstallDialog } from "./shell/UninstallDialog";
 import {
   ProjectMenu,
   RemoveMergedDialog,
@@ -81,6 +82,7 @@ export function App() {
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {modal === "translocated" && <TranslocatedDialog />}
+        {modal === "uninstall" && <UninstallDialog />}
         {!blocked && <WorktreeMenu />}
         {!blocked && <ProjectMenu />}
         {!blocked && <SessionMenu />}

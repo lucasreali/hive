@@ -129,6 +129,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...shared } = m;
       return { shared };
     }
+    case "uninstall_list": {
+      const { type: _, ...uninstallList } = m;
+      return { uninstallList };
+    }
+    case "uninstalled":
+      return { uninstallFailed: m.failed };
     case "notification_permission":
       return { notificationPermission: m.permission };
     case "update_ready":

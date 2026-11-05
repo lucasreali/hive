@@ -20,7 +20,7 @@ use super::State;
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::terminal::Input;
-use crate::{changes, dirs, file, procs, worktree};
+use crate::{changes, dirs, file, procs, uninstall, worktree};
 
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
@@ -98,6 +98,10 @@ async fn hook_connection<R: AsyncRead + Unpin>(
     let Some(Ok(frame)) = reader.next().await else {
         return;
     };
+    // Hive is being uninstalled: nothing is kept (`usage.json` would come back).
+    if state.uninstalling().is_some() {
+        return;
+    }
     match frame.to_control() {
         Ok(Control::Badge { text }) => {
             let channel = frame.channel;
@@ -191,6 +195,15 @@ where
     true
 }
 
+/// The app's uninstall choices; `app` is removed only when it is an app bundle.
+fn choice(keep_data: bool, accounts: bool, app: Option<String>) -> uninstall::Choice {
+    uninstall::Choice {
+        keep_data,
+        accounts,
+        app: uninstall::bundle(app.as_deref().map(Path::new)),
+    }
+}
+
 /// What a new app, or a reloaded UI (`Resync`, 18.21), gets of the live agents and the usage.
 async fn resync(state: &Arc<State>) {
     state.snapshot().await;
@@ -199,6 +212,10 @@ async fn resync(state: &Arc<State>) {
 }
 
 async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSender<Frame>) {
+    // Hive is being uninstalled: nothing more is done for the app.
+    if state.uninstalling().is_some() {
+        return;
+    }
     let channel = frame.channel;
     let message = match frame.kind {
         FrameType::Terminal => return state.input(channel, Input::Data(frame.payload)),
@@ -275,6 +292,29 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             if let Some(message) = why {
                 state.to_app(0, &Control::SettingsFailed { message }).await;
             }
+        }
+        Ok(Control::ListUninstall {
+            keep_data,
+            accounts,
+            app,
+        }) => {
+            let choice = choice(keep_data, accounts, app);
+            let plan = tokio::task::block_in_place(|| state.uninstall_plan(&choice));
+            let list = Control::UninstallList {
+                keep_data,
+                accounts,
+                items: plan.items,
+                account_folders: plan.account_folders,
+            };
+            state.to_app(0, &list).await;
+        }
+        Ok(Control::Uninstall {
+            keep_data,
+            accounts,
+            app,
+        }) => {
+            *state.uninstalling() = Some(choice(keep_data, accounts, app));
+            state.ending.notify_one();
         }
         Ok(Control::OpenSettingsFile) => {
             let located = tokio::task::block_in_place(|| {
