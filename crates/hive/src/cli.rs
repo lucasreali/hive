@@ -53,6 +53,21 @@ enum Command {
         #[command(subcommand)]
         command: WorktreeCommand,
     },
+    /// Remove Hive: lists what goes and asks first. On macOS it goes to the Trash. Never
+    /// touches ~/.claude, ~/.claude.json, the projects, their worktrees or branches.
+    #[cfg(unix)]
+    Uninstall {
+        /// Keep the settings, spaces and accounts: only the app, the program, the shortcut,
+        /// caches and logs go.
+        #[arg(long, conflicts_with = "accounts")]
+        keep_data: bool,
+        /// Also remove the Claude account folders Hive made (they hold their sessions).
+        #[arg(long)]
+        accounts: bool,
+        /// Do not ask.
+        #[arg(long, short)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -123,6 +138,16 @@ pub fn run() -> ExitCode {
             io::stdout().write_all(&out)
         }),
         Command::Worktree { command } => run_worktree(command, &paths),
+        #[cfg(unix)]
+        Command::Uninstall {
+            keep_data,
+            accounts,
+            yes,
+        } => match uninstall(&paths, keep_data, accounts, yes) {
+            Ok(true) => Ok(()),
+            Ok(false) => return ExitCode::FAILURE,
+            Err(err) => Err(err),
+        },
     };
     match result {
         Ok(()) => ExitCode::from(code),
@@ -176,6 +201,24 @@ fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
             Ok(())
         }
     }
+}
+
+/// `hive uninstall` (23.5): refused while the service runs; holds its lock meanwhile, so none
+/// starts. `Ok(false)` when the answer was not yes.
+#[cfg(unix)]
+fn uninstall(paths: &Paths, keep_data: bool, accounts: bool, yes: bool) -> io::Result<bool> {
+    use crate::uninstall::{self, Choice, Places};
+    let _lock = uninstall::not_running(paths)?;
+    let places = Places::from_env(paths).ok_or_else(|| io::Error::other("HOME is not set"))?;
+    let dirs = uninstall::app_dirs(|key| std::env::var_os(key), &places.home);
+    let choice = Choice {
+        keep_data,
+        accounts,
+        app: uninstall::find_app(&dirs),
+    };
+    let mut input = io::stdin().lock();
+    let how = &uninstall::System;
+    uninstall::command(&places, &choice, yes, &mut input, &mut io::stdout(), how)
 }
 
 /// Reports a worktree hook's work to the service like `hive hook` does, so the app's

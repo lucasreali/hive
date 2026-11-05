@@ -15,7 +15,7 @@ import {
 import { openWith, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
-import { composing, keyText } from "../window";
+import { composing, isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
 import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
@@ -98,6 +98,9 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
     }
   }
   if (!("why" in reviewTarget(s))) extra.push({ label: "Send review", run: sendReview });
+  // As the app menu's item (23.5): only macOS has an app to remove; Windows keeps its own
+  // uninstaller.
+  if (isMac()) extra.push({ label: "Uninstall Hive…", run: () => openModal("uninstall") });
   const commands = platformCommands()
     .filter((c) => c.id !== "palette" && (c.when?.(s) ?? true))
     .map((c) => ({ label: c.label, keys: commandKeys(c), run: c.run }));

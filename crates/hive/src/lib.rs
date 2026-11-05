@@ -45,6 +45,7 @@ pub mod statusline;
 pub mod table;
 pub mod terminal;
 pub mod transcript;
+pub mod uninstall;
 pub mod watch;
 #[cfg(windows)]
 pub mod windows;

@@ -41,6 +41,8 @@ import type {
   Shared,
   Space,
   TableText,
+  UninstallFailure,
+  UninstallList,
   Worktree,
   WorktreeFiles,
 } from "./protocol";
@@ -231,6 +233,7 @@ export type Modal =
   | "close-app"
   | "update-app"
   | "translocated"
+  | "uninstall"
   | "remove-worktree"
   | "rename-worktree"
   | "new-space"
@@ -393,6 +396,10 @@ export type HiveState = {
   diagnostics: Diagnostics | null;
   /** The last `shared` (21.9), or null until asked. */
   shared: Shared | null;
+  /** The last `uninstall_list` (23.5), or null until asked. */
+  uninstallList: UninstallList | null;
+  /** What could not be removed once Hive is uninstalled (`uninstalled`); null before. */
+  uninstallFailed: UninstallFailure[] | null;
   /** In the service's order; `null` until the service sent the list. */
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
@@ -522,6 +529,8 @@ export const initialState: HiveState = {
   settingsPending: false,
   diagnostics: null,
   shared: null,
+  uninstallList: null,
+  uninstallFailed: null,
   projects: null,
   addProjectError: null,
   spaces: null,

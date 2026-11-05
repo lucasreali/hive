@@ -54,9 +54,12 @@ fn main() {
             let handle = app.handle().clone();
             let exit = app.handle().clone();
             let translocated = hive_lib::translocated(macos, std::env::current_exe().ok());
+            let exe = std::env::current_exe().ok();
+            let app_bundle = hive_lib::app_bundle(macos, exe.as_deref());
             let hive = hive_lib::Hive::new(program, args)
                 .with_bundled(bundled)
                 .with_translocated(translocated)
+                .with_app_bundle(app_bundle)
                 .with_restart(move || handle.request_restart())
                 .with_exit(move || exit.exit(0))
                 .with_install(|update, bytes| update.install(bytes).map_err(|e| e.to_string()))
@@ -180,6 +183,8 @@ fn main() {
             commands::get_settings,
             commands::set_settings,
             commands::create_account,
+            commands::list_uninstall,
+            commands::uninstall,
             commands::remove_account,
             commands::create_space,
             commands::update_space,

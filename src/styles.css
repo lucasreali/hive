@@ -3009,6 +3009,34 @@ button.chevron:hover {
   overflow-wrap: anywhere;
 }
 
+/* Uninstall Hive (23.5): what goes, grouped by kind, one path per line. */
+.dialog.uninstall {
+  width: 560px;
+}
+
+.uninstall-kind {
+  margin: 4px 0 2px;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.uninstall-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  overflow-wrap: anywhere;
+}
+
+.uninstall-item {
+  display: flex;
+  flex-direction: column;
+}
+
 /* Notices (10.3): toasts in the bottom-right corner, above the status bar, as menus look. */
 .toasts {
   position: fixed;
