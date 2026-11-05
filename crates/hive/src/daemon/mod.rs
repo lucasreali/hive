@@ -43,7 +43,7 @@ use crate::settings;
 use crate::spaces::Spaces;
 use crate::states::Agent;
 use crate::terminal::{self, Input, Terminal};
-use crate::{bridge, changes, health, hook, procs, wrapper};
+use crate::{bridge, changes, health, hook, procs, uninstall, wrapper};
 use app::connection;
 #[cfg(unix)]
 use claim::Claim;
@@ -145,7 +145,15 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     )
     .with_power(power)
     .with_usage(usage::Usage::load(paths.usage()));
-    let state = Arc::new(State { warning, ..state });
+    #[cfg(unix)]
+    let places = crate::uninstall::Places::from_env(paths);
+    #[cfg(windows)]
+    let places = None;
+    let state = Arc::new(State {
+        warning,
+        places,
+        ..state
+    });
     serve(listener, hold, terminated, state).await
 }
 
@@ -218,6 +226,7 @@ async fn serve(
                     listener = bound;
                 },
                 _ = app_gone_rx.recv() => return Ok(()),
+                () = state.ending.notified() => return Ok(()),
                 () = &mut terminated => return Ok(()),
             }
         }
@@ -231,8 +240,12 @@ async fn serve(
     for task in [watcher, health, registry, logs].into_iter().chain(files) {
         stop(task).await;
     }
-    // Before the terminals end (and their sessions with them): what to resume next time.
-    state.save_open().await;
+    let uninstall = state.uninstalling().clone();
+    // Before the terminals end (and their sessions with them): what to resume next time;
+    // nothing when Hive is being uninstalled.
+    if uninstall.is_none() {
+        state.save_open().await;
+    }
     let sessions: Vec<i32> = state
         .terminals
         .lock()
@@ -241,6 +254,13 @@ async fn serve(
         .map(|t| t.session)
         .collect();
     terminal::end_sessions(&sessions).await;
+    if let Some(choice) = uninstall {
+        // Once the terminals ended and the socket is gone, so nothing puts back the runtime
+        // folder; then the service waits for the app to quit.
+        let failed = tokio::task::block_in_place(|| state.uninstall(&choice));
+        state.to_app(0, &Control::Uninstalled { failed }).await;
+        app_gone_rx.recv().await;
+    }
     // The lock goes last, with `hold`.
     ended
 }
@@ -334,6 +354,13 @@ struct State {
     /// Why the old folders are still in use (22.1, [`crate::legacy::migrate`]), sent in
     /// `welcome` for the status bar.
     warning: Option<String>,
+    /// Where Hive's things are, for uninstalling it (23.5); `None` without a `HOME`.
+    places: Option<uninstall::Places>,
+    /// What to uninstall, once the app asked (`uninstall`): the service then ignores the app
+    /// and ends ([`State::ending`]).
+    uninstalling: std::sync::Mutex<Option<uninstall::Choice>>,
+    /// Woken to end the service (an `uninstall`).
+    ending: tokio::sync::Notify,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -386,7 +413,30 @@ impl State {
             awake: std::sync::Mutex::new(power::Awake::new(None)),
             tick: Default::default(),
             warning: None,
+            places: None,
+            uninstalling: Default::default(),
+            ending: Default::default(),
         }
+    }
+
+    fn uninstalling(&self) -> std::sync::MutexGuard<'_, Option<uninstall::Choice>> {
+        self.uninstalling
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// What uninstalling with `choice` removes (nothing without a `HOME`).
+    fn uninstall_plan(&self, choice: &uninstall::Choice) -> uninstall::Plan {
+        (self.places.as_ref())
+            .map_or_else(Default::default, |places| uninstall::plan(places, choice))
+    }
+
+    /// Removes what uninstalling with `choice` removes; what could not go.
+    fn uninstall(&self, choice: &uninstall::Choice) -> Vec<hive_protocol::UninstallFailure> {
+        let plan = self.uninstall_plan(choice);
+        (self.places.as_ref()).map_or_else(Vec::new, |places| {
+            uninstall::remove(&plan, &places.paths, &uninstall::System)
+        })
     }
 
     /// Holds `power`'s assertion while agents work (17.17); none without it.

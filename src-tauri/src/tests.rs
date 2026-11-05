@@ -1262,6 +1262,20 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         name: "Work".into(),
     };
     assert_eq!(service.control().await, (0, create));
+    hive.list_uninstall(true, false).unwrap();
+    let list = Control::ListUninstall {
+        keep_data: true,
+        accounts: false,
+        app: None,
+    };
+    assert_eq!(service.control().await, (0, list));
+    hive.uninstall(false, true).unwrap();
+    let uninstall = Control::Uninstall {
+        keep_data: false,
+        accounts: true,
+        app: None,
+    };
+    assert_eq!(service.control().await, (0, uninstall));
     hive.remove_account("/w".into(), true).unwrap();
     let remove = Control::RemoveAccount {
         config_dir: "/w".into(),
@@ -1653,6 +1667,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.get_settings(), not_connected);
     assert_eq!(hive.set_settings(Settings::default()), not_connected);
     assert_eq!(hive.create_account("W".into()), not_connected);
+    assert_eq!(hive.list_uninstall(false, false), not_connected);
+    assert_eq!(hive.uninstall(false, false), not_connected);
     assert_eq!(hive.remove_account("/w".into(), false), not_connected);
     let env = SpaceEnv::default();
     assert_eq!(hive.create_space("W".into(), env.clone()), not_connected);
@@ -1911,6 +1927,8 @@ fn commands_reach_the_managed_hive() {
             get_settings,
             set_settings,
             create_account,
+            list_uninstall,
+            uninstall,
             remove_account,
             create_space,
             update_space,
@@ -2044,6 +2062,11 @@ fn commands_reach_the_managed_hive() {
         ("get_settings", &json!({})),
         ("set_settings", &settings),
         ("create_account", &json!({"name": "Work"})),
+        (
+            "list_uninstall",
+            &json!({"keepData": false, "accounts": true}),
+        ),
+        ("uninstall", &json!({"keepData": true, "accounts": false})),
         (
             "remove_account",
             &json!({"configDir": "/w", "deleteFolder": true}),
@@ -2398,6 +2421,22 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
 }
 
 #[tokio::test]
+async fn an_uninstalled_app_installs_no_update_when_it_quits() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    next(&mut rx).await;
+    // Another message keeps it.
+    hive.link()
+        .follow(&json!({"type": "agent_removed", "id": "a"}));
+    assert!(hive.link().update.is_some());
+    hive.link()
+        .follow(&json!({"type": "uninstalled", "failed": []}));
+    assert_eq!(hive.install_pending(), None);
+    assert!(installed.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
     let (hive, mut rx, installed) = hive_installing(Ok(()));
     let (tx, restarted) = std::sync::mpsc::channel();
@@ -2484,6 +2523,52 @@ fn translocation_is_told_from_the_app_path() {
     // Only macOS translocates; an executable path the OS cannot give is not translocated.
     assert!(!translocated(false, path(moved)));
     assert!(!translocated(true, None));
+}
+
+#[test]
+fn the_app_bundle_is_told_from_the_app_path() {
+    let exe = |p: &str| Some(std::path::PathBuf::from(p));
+    let installed = exe("/Applications/Hive.app/Contents/MacOS/hive-app");
+    let bundle = Some("/Applications/Hive.app".to_owned());
+    assert_eq!(app_bundle(true, installed.as_deref()), bundle);
+    for other in [
+        "/Users/me/src/hive/target/debug/hive-app",
+        "/Applications/Hive.app/Contents/Resources/hive-app",
+        "/Applications/Hive.app/Other/MacOS/hive-app",
+        "/Applications/Hive/Contents/MacOS/hive-app",
+        "/hive-app",
+        "",
+    ] {
+        assert_eq!(app_bundle(true, exe(other).as_deref()), None, "{other}");
+    }
+    assert_eq!(app_bundle(false, installed.as_deref()), None);
+    assert_eq!(app_bundle(true, None), None);
+}
+
+#[tokio::test]
+async fn a_bundled_app_names_its_bundle_to_the_service() {
+    let hive = hive().with_app_bundle(Some("/A/Hive.app".into()));
+    let (channel, _rx) = ui();
+    hive.link().ui = Some(channel);
+    let mut service = attach(&hive, "bridge gone");
+    assert_eq!(
+        service.control().await,
+        (0, Control::hello(Role::App, VERSION))
+    );
+    hive.uninstall(true, false).unwrap();
+    let uninstall = Control::Uninstall {
+        keep_data: true,
+        accounts: false,
+        app: Some("/A/Hive.app".into()),
+    };
+    assert_eq!(service.control().await, (0, uninstall));
+    hive.list_uninstall(false, false).unwrap();
+    let list = Control::ListUninstall {
+        keep_data: false,
+        accounts: false,
+        app: Some("/A/Hive.app".into()),
+    };
+    assert_eq!(service.control().await, (0, list));
 }
 
 #[tokio::test]
@@ -3332,6 +3417,7 @@ fn the_menu_bar_has_hives_menus_and_the_native_editing_items() {
         [
             ("settings", "Settings…", Some("CmdOrCtrl+,")),
             ("check-updates", "Check for Updates…", None),
+            ("uninstall", "Uninstall Hive…", None),
             ("quit", "Quit Hive", Some("CmdOrCtrl+Q")),
         ]
     );
@@ -3370,6 +3456,7 @@ fn only_hives_own_menu_items_have_an_action() {
     let ui = [
         "settings",
         "check-updates",
+        "uninstall",
         "toggle-sidebar",
         "toggle-panel",
         "close-tab",

@@ -1058,9 +1058,72 @@ pub enum Control {
     /// App → service: open the shared folder in the file manager, made when missing.
     /// Answered by `EditorTarget` with an empty `worktree` and the `path` `shared`.
     OpenShared,
+    /// App → service (23.5, D22.17): what uninstalling Hive would remove. `keep_data` keeps the
+    /// settings, spaces and accounts (only the app, the service's program files, the shortcut,
+    /// caches and logs go); `accounts` also takes the Claude account folders Hive made (22.3),
+    /// never with `keep_data`. `app` is the app's own bundle (`Hive.app`), set by the app side,
+    /// never by the UI. Answered by `UninstallList`.
+    ListUninstall {
+        keep_data: bool,
+        accounts: bool,
+        app: Option<String>,
+    },
+    /// What `uninstall` with the same choices removes, in the order it goes (`Hive.app` last);
+    /// `account_folders` are the account folders Hive made, whether they go or not, for the
+    /// dialog's box. Only what exists is listed.
+    UninstallList {
+        keep_data: bool,
+        accounts: bool,
+        items: Vec<UninstallItem>,
+        account_folders: Vec<String>,
+    },
+    /// App → service: uninstall Hive with these choices (as `list_uninstall`). The service
+    /// stops every terminal and stops serving, moves what `uninstall_list` names to the Trash
+    /// (on Linux, deletes it), answers `Uninstalled`, then ends when the app disconnects.
+    /// Every request after it is ignored.
+    Uninstall {
+        keep_data: bool,
+        accounts: bool,
+        app: Option<String>,
+    },
+    /// Hive is uninstalled: `failed` is what could not go, with why; the app then quits.
+    Uninstalled {
+        failed: Vec<UninstallFailure>,
+    },
     Error {
         message: String,
     },
+}
+
+/// One thing uninstalling removes (23.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UninstallItem {
+    pub path: String,
+    pub kind: UninstallKind,
+}
+
+/// What an [`UninstallItem`] is, for the dialog's grouping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UninstallKind {
+    /// The settings, spaces and the rest of Hive's folder (kept by `keep_data`).
+    Data,
+    /// A Claude account folder Hive made (22.3).
+    Account,
+    /// The service's program files (`bin/`, the shell startup files, the hooks settings) and
+    /// the `~/.local/bin/hive` shortcut.
+    Program,
+    /// Caches, logs and the runtime folder.
+    Cache,
+    /// The app itself.
+    App,
+}
+
+/// An [`UninstallItem`] that could not go.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UninstallFailure {
+    pub path: String,
+    pub error: String,
 }
 
 impl Control {
@@ -3038,6 +3101,47 @@ mod tests {
             Control::CreateAccount {
                 name: "Work".into()
             }
+        );
+        let list = r#"{"type":"list_uninstall","keep_data":true,"accounts":false,"app":null}"#;
+        assert_eq!(
+            serde_json::from_str::<Control>(list).unwrap(),
+            Control::ListUninstall {
+                keep_data: true,
+                accounts: false,
+                app: None
+            }
+        );
+        let uninstall = r#"{"type":"uninstall","keep_data":false,"accounts":true,"app":"/A.app"}"#;
+        assert_eq!(
+            serde_json::from_str::<Control>(uninstall).unwrap(),
+            Control::Uninstall {
+                keep_data: false,
+                accounts: true,
+                app: Some("/A.app".into())
+            }
+        );
+        let listed = Control::UninstallList {
+            keep_data: false,
+            accounts: false,
+            items: vec![UninstallItem {
+                path: "/h/.hive/bin".into(),
+                kind: UninstallKind::Program,
+            }],
+            account_folders: vec!["/h/.hive/accounts/work".into()],
+        };
+        assert_eq!(
+            &Frame::control(0, &listed).payload[..],
+            br#"{"type":"uninstall_list","keep_data":false,"accounts":false,"items":[{"path":"/h/.hive/bin","kind":"program"}],"account_folders":["/h/.hive/accounts/work"]}"#
+        );
+        let done = Control::Uninstalled {
+            failed: vec![UninstallFailure {
+                path: "/p".into(),
+                error: "e".into(),
+            }],
+        };
+        assert_eq!(
+            &Frame::control(0, &done).payload[..],
+            br#"{"type":"uninstalled","failed":[{"path":"/p","error":"e"}]}"#
         );
         let remove = r#"{"type":"remove_account","config_dir":"/w","delete_folder":true}"#;
         assert_eq!(

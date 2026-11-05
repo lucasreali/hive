@@ -16,6 +16,10 @@ export type ServiceMessage =
   | { type: "settings_failed"; message: string }
   | ({ type: "diagnostics" } & Diagnostics)
   | ({ type: "shared" } & Shared)
+  // 23.5: what uninstalling with these choices removes, and the account folders Hive made.
+  | ({ type: "uninstall_list" } & UninstallList)
+  // 23.5: Hive is uninstalled; `failed` is what could not go.
+  | { type: "uninstalled"; failed: UninstallFailure[] }
   // From the app side (Rust), not the service: a newer release on GitHub (4.19).
   | { type: "update_ready"; version: string }
   | { type: "update_failed"; error: string }
@@ -605,6 +609,24 @@ export type Diagnostics = {
   /** Why the service runs no git (Apple's Command Line Tools missing); null when git runs. */
   git_error: string | null;
 };
+
+/** What an item uninstalling removes is (23.5): the dialog groups them by it. */
+export type UninstallKind = "data" | "account" | "program" | "cache" | "app";
+
+/**
+ * What uninstalling Hive with `keep_data` and `accounts` removes (23.5, the service's
+ * `uninstall_list`): `items` in the order they go, the app last, only what exists;
+ * `account_folders` the account folders Hive made, whether they go or not.
+ */
+export type UninstallList = {
+  keep_data: boolean;
+  accounts: boolean;
+  items: { path: string; kind: UninstallKind }[];
+  account_folders: string[];
+};
+
+/** Something uninstalling could not remove, and why. */
+export type UninstallFailure = { path: string; error: string };
 
 /**
  * The folder every Claude account shares (21.9, the service's `shared`): a plugin Hive's

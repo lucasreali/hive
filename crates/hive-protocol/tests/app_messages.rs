@@ -88,7 +88,9 @@ sort! {
         | OpenSettingsFile
         | GetDiagnostics
         | GetShared
-        | OpenShared;
+        | OpenShared
+        | ListUninstall
+        | Uninstall;
     received:
         Welcome
         | VersionMismatch
@@ -162,6 +164,8 @@ sort! {
         | SettingsFailed
         | Diagnostics
         | Shared
+        | UninstallList
+        | Uninstalled
         | Error;
 }
 
@@ -571,6 +575,21 @@ fn samples() -> Vec<Control> {
             commands: vec![s("about")],
             mcp_servers: vec![s("db")],
             error: Some(m()),
+        },
+        UninstallList {
+            keep_data: false,
+            accounts: true,
+            items: vec![UninstallItem {
+                path: s("/h/.hive/accounts/work"),
+                kind: UninstallKind::Account,
+            }],
+            account_folders: vec![s("/h/.hive/accounts/work")],
+        },
+        Uninstalled {
+            failed: vec![UninstallFailure {
+                path: s("/Applications/Hive.app"),
+                error: m(),
+            }],
         },
         Error { message: m() },
     ]

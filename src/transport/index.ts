@@ -246,6 +246,16 @@ export interface Transport {
   /** What the folder every Claude account shares holds (21.9); answered by `shared`. */
   getShared(): Promise<void>;
   /**
+   * What uninstalling Hive would remove (23.5): `keepData` keeps the settings, spaces and
+   * accounts, `accounts` also takes the account folders Hive made. Answered by `uninstall_list`.
+   */
+  listUninstall(keepData: boolean, accounts: boolean): Promise<void>;
+  /**
+   * Uninstalls Hive with these choices: the service ends every terminal, removes the list and
+   * answers `uninstalled`; nothing else is answered after it.
+   */
+  uninstall(keepData: boolean, accounts: boolean): Promise<void>;
+  /**
    * The shared folder's Windows path, the folder made first when missing; answered by
    * `editor_target` with an empty `worktree` and the `path` `shared`.
    */

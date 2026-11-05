@@ -24,6 +24,8 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     mcp_servers: true,
     error: true,
   },
+  uninstall_list: { keep_data: true, accounts: true, items: true, account_folders: true },
+  uninstalled: { failed: true },
   update_ready: { version: true },
   update_failed: { error: true },
   translocated: { notice: true },

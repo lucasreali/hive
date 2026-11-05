@@ -60,6 +60,9 @@ mod statusline;
 mod terminal;
 #[cfg(unix)]
 #[cfg(test)]
+mod uninstall;
+#[cfg(unix)]
+#[cfg(test)]
 mod upgrade;
 #[cfg(unix)]
 #[cfg(test)]
