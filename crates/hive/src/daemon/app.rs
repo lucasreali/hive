@@ -324,9 +324,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             state.change_worktrees(|projects| {
                 projects.forget();
                 // A folder project `git init`ed (23.1) whose `.git` the watch missed.
-                if let Err(err) = projects.settle() {
-                    eprintln!("hive: warning: {err}");
-                }
+                projects.settle();
                 Control::Projects {
                     projects: projects.list(),
                 }

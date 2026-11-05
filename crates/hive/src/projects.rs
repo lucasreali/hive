@@ -188,8 +188,10 @@ impl Projects {
 
     /// Keeps each folder project that became a repository (`git init`, 23.1) as a project of
     /// its space, no longer a group; nothing changes when none did. The watch of the groups'
-    /// folders sees the `.git` made. The groups' folders are read again for it.
-    pub fn settle(&self) -> Result<(), String> {
+    /// folders sees the `.git` made. The groups' folders are read again for it. A spaces file
+    /// that cannot be saved is a warning: it is tried again next time, and the list already
+    /// shows the repository.
+    pub fn settle(&self) {
         (self.scanned.lock().unwrap_or_else(PoisonError::into_inner)).clear();
         let entries = self.entries(&self.all()).into_iter();
         let repos: Vec<String> = entries
@@ -199,10 +201,13 @@ impl Projects {
             })
             .collect();
         // Saved only when one was a group.
-        self.change_spaces(|spaces| {
+        let saved = self.change_spaces(|spaces| {
             repos.iter().for_each(|id| spaces.ungroup(id));
             Ok(())
-        })
+        });
+        if let Err(err) = saved {
+            eprintln!("hive: warning: {err}");
+        }
     }
 
     /// Runs `git init` in the folder project `id` (23.1); what it turns into is for the watch
@@ -1861,7 +1866,7 @@ mod tests {
         assert!(projects.followed(&f).is_ok());
         // Kept a project of its space, no longer a group, with nothing else changed.
         assert!(projects.spaces().is_group(&f));
-        projects.settle().unwrap();
+        projects.settle();
         let saved = load(&top.join("data"));
         assert!(!saved.spaces().is_group(&f));
         assert_eq!(saved.spaces().spaces[0].projects, [f.as_str()]);
@@ -1870,8 +1875,30 @@ mod tests {
         // Nothing to settle: the file is not written again.
         let file = top.join("data/spaces.json");
         std::fs::remove_file(&file).unwrap();
-        projects.settle().unwrap();
+        projects.settle();
         assert!(!file.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_project_settled_while_its_spaces_cannot_be_saved_stays_a_group() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        std::fs::create_dir_all(top.join("f")).unwrap();
+        let f = top.join("f").display().to_string();
+        let projects = load(&top.join("data"));
+        projects.add(&f).unwrap();
+        repo(&top.join("f"));
+        let data = top.join("data");
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+        projects.settle();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Kept a group until a later settle saves it; the list already shows a repository.
+        assert!(projects.spaces().is_group(&f));
+        assert!(!projects.list()[0].group);
+        projects.settle();
+        assert!(!projects.spaces().is_group(&f));
     }
 
     #[test]
@@ -2002,7 +2029,7 @@ mod tests {
         let projects = load(&top);
         let listed = projects.list();
         assert_eq!((listed[0].group, listed[0].folder), (true, true));
-        projects.settle().unwrap();
+        projects.settle();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), old);
     }
 }

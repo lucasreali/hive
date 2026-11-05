@@ -1080,9 +1080,7 @@ async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
     let mut refollowed = false;
     loop {
         // A folder project `git init`ed (23.1) is kept a project from now on.
-        if let Err(err) = state.projects.settle() {
-            eprintln!("hive: warning: {err}");
-        }
+        state.projects.settle();
         let (roots, groups) = (state.projects.roots(), state.projects.groups());
         // Before listing, so a change made meanwhile is seen next time.
         tokio::task::block_in_place(|| registry.follow(&roots, &groups));
