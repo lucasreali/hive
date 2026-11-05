@@ -412,7 +412,12 @@ mod tests {
     fn a_malformed_file_is_a_problem_and_the_others_still_count() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Makefile"), "build:\n\tcc x.c\n").unwrap();
-        for json in [r#"{"scripts":"#, r#""x""#, r#"{"scripts":[]}"#] {
+        for json in [
+            r#"{"scripts":"#,
+            r#""x""#,
+            r#"{"scripts":[]}"#,
+            r#"{"scripts":{"a":}}"#,
+        ] {
             std::fs::write(tmp.path().join("package.json"), json).unwrap();
             let (scripts, problems) = listed(tmp.path());
             assert_eq!(scripts, pairs(&[("build", "make build")]), "{json}");
@@ -465,6 +470,9 @@ mod tests {
             ("db:migrate", "task db:migrate"),
         ]);
         assert_eq!(listed(tmp.path()), (expect, Vec::new()));
+        let (scripts, _) = list(tmp.path(), &[]);
+        let sources: Vec<_> = scripts.iter().map(|s| s.source).collect();
+        assert_eq!(sources, [ScriptSource::Taskfile; 3]);
         // `Taskfile.yml` wins over `.yaml`, as in Task.
         std::fs::write(tmp.path().join("Taskfile.yml"), "tasks:\n  up: x\n").unwrap();
         assert_eq!(listed(tmp.path()).0, pairs(&[("up", "task up")]));
@@ -472,8 +480,6 @@ mod tests {
             std::fs::write(tmp.path().join("Taskfile.yml"), empty).unwrap();
             assert_eq!(listed(tmp.path()), (Vec::new(), Vec::new()), "{empty}");
         }
-        let (scripts, _) = list(tmp.path(), &[]);
-        assert!(scripts.iter().all(|s| s.source == ScriptSource::Taskfile));
     }
 
     #[test]
