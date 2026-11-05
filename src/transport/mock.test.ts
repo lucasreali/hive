@@ -805,6 +805,27 @@ test("files of a followed worktree as their status says, or why not", async () =
   ]);
 });
 
+test("a table file's rows, split on its delimiter, or why not", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api, dotfiles] = MOCK_REPOS;
+  messages.length = 0;
+  await transport.openTable(shop.path, "data/orders.csv");
+  await transport.openTable(shop.path, "a.tsv");
+  await transport.openTable(api.worktrees[1].path, "src/legacy/jwt.ts");
+  await transport.openTable(dotfiles.path, "a.csv");
+  await tick();
+  const [orders, tsv, gone, outside] = messages.map((m) => (m.type === "table" ? m : null));
+  const sheet = orders?.sheets[0];
+  expect([sheet?.rows.length, sheet?.total, sheet?.partial]).toEqual([42, 42, false]);
+  expect(sheet?.rows[0]).toEqual(["id", "customer", "total", "status"]);
+  expect(sheet?.rows[1]).toEqual(["1001", "Customer 1", "0.00", "paid"]);
+  expect(sheet?.rows[41]).toEqual(["1041", "Late"]);
+  expect(tsv?.sheets[0]?.rows).toEqual([["// a.tsv"], ["export const value = 1;"]]);
+  expect([gone?.sheets, gone?.error]).toEqual([[], "src/legacy/jwt.ts does not exist"]);
+  const error = `${dotfiles.path} is not a worktree of a followed project`;
+  expect([outside?.sheets, outside?.error]).toEqual([[], error]);
+});
+
 test("a save checks the version as the service does; write stands in for an agent", async () => {
   const { transport, messages } = await connected();
   const shop = MOCK_REPOS[0] as (typeof MOCK_REPOS)[number];

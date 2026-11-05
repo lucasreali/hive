@@ -35,6 +35,7 @@ import {
   diffBase,
   type FileTarget,
   isMarkdown,
+  isTable,
   type OpenFile,
   openFileMenu,
   type PanelView,
@@ -47,6 +48,8 @@ import {
   setPanelView,
   setRendered,
   setRightPanel,
+  setTableShown,
+  tableShown,
   useHive,
   within,
 } from "../store";
@@ -59,10 +62,19 @@ import { openInEditor } from "../viewer/external";
 import { useRenderedPlace } from "../viewer/place";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
+import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
 import { askDiscard } from "./ConfirmDialog";
 import { askDelete } from "./FileMenu";
-import { BranchIcon, ChevronIcon, CloseIcon, ExternalIcon, EyeIcon, TerminalIcon } from "./icons";
+import {
+  BranchIcon,
+  ChevronIcon,
+  CloseIcon,
+  ExternalIcon,
+  EyeIcon,
+  TableIcon,
+  TerminalIcon,
+} from "./icons";
 import { Markdown } from "./Markdown";
 import { PullsView } from "./PullsView";
 import { RunsView } from "./RunsView";
@@ -1011,6 +1023,10 @@ export function FileView({ worktree }: { worktree: string }) {
   const editorNotice = useHive((s) => s.editorNotice);
   const working = useHive((s) => agentWorkingIn(s, worktree));
   const rendered = useHive(renderedShown);
+  const asTable = useHive(tableShown);
+  const table = useHive((s) =>
+    s.table?.worktree === worktree && s.table.path === openFile?.path ? s.table : null,
+  );
   if (openFile?.worktree !== worktree) return null;
   const why = text && notice(text);
   const dirty = !!edit && isDirty(edit);
@@ -1057,6 +1073,7 @@ export function FileView({ worktree }: { worktree: string }) {
               disabled={text?.content == null || !!why}
               onClick={() => {
                 setRendered(false);
+                setTableShown(false);
                 setEditing(true);
               }}
             >
@@ -1073,6 +1090,25 @@ export function FileView({ worktree }: { worktree: string }) {
             onClick={() => setRendered(!rendered)}
           >
             <EyeIcon />
+          </button>
+        )}
+        {isTable(openFile.path) && (
+          <button
+            type="button"
+            className="ghost"
+            aria-label="Show as a table"
+            aria-pressed={asTable}
+            title={
+              asTable
+                ? "Show the text"
+                : dirty
+                  ? "Save or reload the file first"
+                  : "Show as a table"
+            }
+            disabled={!asTable && dirty}
+            onClick={() => setTableShown(!asTable)}
+          >
+            <TableIcon />
           </button>
         )}
         <CommentButton />
@@ -1102,7 +1138,9 @@ export function FileView({ worktree }: { worktree: string }) {
       <CommentInput worktree={worktree} path={openFile.path} />
       {editorNotice && <div className="files-error">{editorNotice}</div>}
       <div className="file-view-body">
-        {rendered ? (
+        {asTable ? (
+          table && <TableView key={`${worktree}\n${openFile.path}`} table={table} />
+        ) : rendered ? (
           why ? (
             <div className="hint">{why}</div>
           ) : (

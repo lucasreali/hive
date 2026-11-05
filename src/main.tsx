@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { connect } from "./connect";
 import { followDock } from "./dock";
-import { followOpenFile, followPanel, followView } from "./follow";
+import { followOpenFile, followOpenTable, followPanel, followView } from "./follow";
 import { appliedTheme, setFocused, setSystemTheme, setVisible, useHive } from "./store";
 import { transport } from "./transport";
 import { followTray } from "./tray";
@@ -12,6 +12,7 @@ import { isMac, watchColorScheme, watchFocus, watchVisible } from "./window";
 // The update check answers on the channel `connect` gives, so it goes second.
 void connect().then(() => void transport.checkUpdate());
 followOpenFile(transport);
+followOpenTable(transport);
 followPanel(transport);
 watchFocus(setFocused);
 watchVisible(setVisible);

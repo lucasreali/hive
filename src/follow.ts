@@ -1,6 +1,6 @@
 // Keep the service following what the files panel shows: the worktree it lists and the open file.
 
-import { diffBase, type HiveState, panelWorktree, useHive } from "./store";
+import { diffBase, type HiveState, panelWorktree, tableShown, useHive } from "./store";
 import type { Transport } from "./transport";
 
 /**
@@ -72,6 +72,24 @@ export function followOpenFile(transport: Transport): () => void {
     if (reasons.every((reason, i) => reason === asked[i])) return;
     asked = reasons;
     if (open && base) void transport.openFile(open.worktree, open.path, base);
+  };
+  sync(useHive.getState());
+  return useHive.subscribe(sync);
+}
+
+/**
+ * Keeps the open table file's table current (23.6) while it shows as one: asks the service for
+ * it when it shows, whenever a new list of its worktree's changes arrives and after a new
+ * `welcome`. Returns the unsubscribe.
+ */
+export function followOpenTable(transport: Transport): () => void {
+  let asked: unknown[] = [];
+  const sync = (s: HiveState) => {
+    const open = s.connection.status === "connected" && tableShown(s) ? s.openFile : null;
+    const reasons = [open, open && s.changesSeen[open.worktree], s.connection];
+    if (reasons.every((reason, i) => reason === asked[i])) return;
+    asked = reasons;
+    if (open) void transport.openTable(open.worktree, open.path);
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);

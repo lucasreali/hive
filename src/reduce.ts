@@ -403,6 +403,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const kept = s.file && sameFields(s.file, file) ? s.file : file;
       return { file: kept, edit: editFor(s, file) };
     }
+    case "table": {
+      const { type: _, ...table } = m;
+      return { table };
+    }
     case "file_saved":
       return patchEdits(s, m, (b) => saved(b, m.version));
     case "save_failed":

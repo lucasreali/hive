@@ -135,6 +135,7 @@ export type ServiceMessage =
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
   | ({ type: "file" } & FileText)
+  | ({ type: "table" } & TableText)
   | ({ type: "search_results" } & SearchResults)
   | ({ type: "dirs" } & Dirs)
   | { type: "sessions"; sessions: Session[]; error: string | null; truncated: boolean }
@@ -405,6 +406,16 @@ export type Dirs = {
   /** `linux_path` is a Claude config folder: it holds `.claude.json` or `settings.json`. */
   claude: boolean;
 };
+
+/**
+ * Mirrors `hive_protocol::Sheet`: one sheet of a table file (23.6), its first `rows` (each its
+ * cells; rows may differ in length) and how many it has (`total`, more when `partial`). `name`
+ * is empty for a CSV or TSV file.
+ */
+export type Sheet = { name: string; rows: string[][]; total: number; partial: boolean };
+
+/** Mirrors `Control::Table`: a table file's sheets, none when `error` says why. */
+export type TableText = { worktree: string; path: string; sheets: Sheet[]; error: string | null };
 
 /** Mirrors `hive_protocol::SaveError`. */
 export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";
