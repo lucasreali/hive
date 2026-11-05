@@ -21,6 +21,8 @@ use crate::git::read_limited;
 
 /// Largest script file read.
 pub const FILE_LIMIT: u64 = 512 * 1024;
+/// Most entries of a worktree's root looked at for the script files.
+const ROOT_SCAN: usize = 100_000;
 /// Most scripts kept from one file.
 pub const PER_FILE: usize = 100;
 /// Longest script name kept.
@@ -109,18 +111,20 @@ type Parser = fn(&[u8]) -> Result<Vec<String>, String>;
 
 /// The names of `wanted` that `dir` has an entry of (a link counts: it is refused when read),
 /// matched as the folder writes them, so a case-insensitive file system does not make a
-/// `makefile` of a `Makefile`.
+/// `makefile` of a `Makefile`. At most [`ROOT_SCAN`] entries are looked at, and only the wanted
+/// names are kept.
 fn present<'a>(dir: &Path, wanted: &[&'a str]) -> Vec<&'a str> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let names: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.file_name())
-        .collect();
+    let mut found = Vec::new();
+    for entry in entries.take(ROOT_SCAN).filter_map(Result::ok) {
+        let name = entry.file_name();
+        found.extend(wanted.iter().find(|w| name == **w).copied());
+    }
     wanted
         .iter()
-        .filter(|name| names.iter().any(|n| n == **name))
+        .filter(|w| found.contains(w))
         .copied()
         .collect()
 }
@@ -269,7 +273,8 @@ fn makefile(bytes: &[u8]) -> Result<Vec<String>, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_owned())?;
     let text = text.replace("\\\r\n", " ").replace("\\\n", " ");
     let mut targets = Vec::new();
-    let mut phony = Vec::new();
+    // A set: a file of many targets and many phony names stays linear.
+    let mut phony = std::collections::HashSet::new();
     let mut defining = false;
     for line in text.lines() {
         let first = line.split_whitespace().next().unwrap_or("");
@@ -478,6 +483,20 @@ mod tests {
         assert_eq!(listed(tmp.path()), (expect, Vec::new()));
         let (scripts, _) = list(tmp.path(), &[]);
         assert!(scripts.iter().all(|s| s.source == ScriptSource::Makefile));
+    }
+
+    #[test]
+    fn a_makefile_of_many_targets_and_phony_names_is_read() {
+        // Near the size limit: the phony names are a set, so this stays linear.
+        let names: Vec<String> = (0..20_000).map(|i| format!("t{i}")).collect();
+        let make = format!(
+            "{}:\n.PHONY: {} other\n",
+            names.join(":\n"),
+            names.join(" ")
+        );
+        assert!(make.len() < FILE_LIMIT as usize);
+        let found = makefile(make.as_bytes()).unwrap();
+        assert_eq!(found, names);
     }
 
     #[test]
