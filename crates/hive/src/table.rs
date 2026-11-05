@@ -74,7 +74,10 @@ pub fn parse(input: impl Read, delimiter: u8, budget: usize, limit: u64) -> io::
     parse_with(input, delimiter, budget, limit, RECORD_LIMIT)
 }
 
-/// [`parse`] with rows of at most `record` bytes.
+/// [`parse`] with rows of at most `record_limit` bytes, their line break included. The input is
+/// read through two `Take`s: the outer one holds the count limit, the inner one is set after
+/// each row so the next one gets one byte more than `record_limit` (the csv reader's memory
+/// grows with a row: its bytes and a `usize` a field); a row that took it is cut there.
 fn parse_with(
     input: impl Read,
     delimiter: u8,
@@ -82,30 +85,31 @@ fn parse_with(
     limit: u64,
     record_limit: u64,
 ) -> io::Result<Sheet> {
-    let capped = Capped {
-        input: input.take(limit.saturating_add(1)),
-        given: 0,
-        start: 0,
-        most: record_limit,
-        cut: false,
-    };
+    let most = limit.saturating_add(1);
+    let per_row = record_limit.saturating_add(1);
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
         .delimiter(delimiter)
-        .from_reader(capped);
+        .from_reader(input.take(most).take(per_row));
+    let given =
+        |reader: &csv::Reader<io::Take<io::Take<_>>>| most - reader.get_ref().get_ref().limit();
     let mut record = csv::ByteRecord::new();
     let (mut rows, mut total, mut left, mut full) = (Vec::new(), 0, budget, false);
+    let (mut start, mut cut) = (0, false);
     while reader
         .read_byte_record(&mut record)
         .map_err(io::Error::other)?
     {
-        // A row cut at the record limit is not one: the reading stops before it.
-        if reader.get_ref().cut {
+        // A row over the limit is not one: the reading stops before it.
+        let end = reader.position().byte();
+        cut = end - start > record_limit;
+        if cut {
             break;
         }
-        let end = reader.position().byte();
-        reader.get_mut().start = end;
+        start = end;
+        let room = (start + per_row).saturating_sub(given(&reader));
+        reader.get_mut().set_limit(room);
         total += 1;
         // Its JSON takes at least its bytes, two quotes and a comma a cell, and its brackets: a
         // row that cannot fit is never decoded.
@@ -126,40 +130,12 @@ fn parse_with(
             rows.push(row);
         }
     }
-    let capped = reader.get_ref();
     Ok(Sheet {
         name: String::new(),
         rows,
         total,
-        partial: capped.cut || capped.given > limit,
+        partial: cut || given(&reader) > limit,
     })
-}
-
-/// The input of [`parse`], which ends early when the row being read passes `most` bytes (the
-/// csv reader's memory grows with a row: its bytes and a `usize` a field).
-struct Capped<R> {
-    input: R,
-    /// Bytes handed to the reader so far.
-    given: u64,
-    /// Where the row being read starts.
-    start: u64,
-    most: u64,
-    /// The input was ended at a row over `most`.
-    cut: bool,
-}
-
-impl<R: Read> Read for Capped<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let room = (self.start.saturating_add(self.most)).saturating_sub(self.given);
-        if room == 0 {
-            self.cut = true;
-            return Ok(0);
-        }
-        let most = buf.len().min(usize::try_from(room).unwrap_or(usize::MAX));
-        let n = self.input.read(&mut buf[..most])?;
-        self.given += n as u64;
-        Ok(n)
-    }
 }
 
 /// The `table` answer for `path`: its sheet, or why it could not be read.
@@ -323,6 +299,15 @@ mod tests {
         );
         let whole = read(b"abcde\nabcde\n", 6).unwrap();
         assert_eq!((whole.total, whole.partial), (2, false));
+        // A last row without its newline that fills the limit, then the end of the input.
+        let last = read(b"a\nabcdef", 6).unwrap();
+        assert_eq!(
+            (last.rows, last.total, last.partial),
+            (vec![row(&["a"]), row(&["abcdef"])], 2, false)
+        );
+        // Its newline past the limit: cut.
+        let over = read(b"abcdef\n", 6).unwrap();
+        assert_eq!((over.total, over.partial), (0, true));
     }
 
     #[test]
