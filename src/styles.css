@@ -4182,6 +4182,30 @@ button.link:hover {
   line-height: 18px;
 }
 
+/* A code block's copy button (23.8): at its top right, shown on hover and on keyboard focus. */
+.md-code {
+  position: relative;
+}
+
+.md-code-copy {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 24px;
+  background: var(--panel);
+  opacity: 0;
+}
+
+.md-code:hover .md-code-copy,
+.md-code-copy:focus-visible,
+.md-code-copy[data-copied] {
+  opacity: 1;
+}
+
+.md-code-copy[data-copied] {
+  color: var(--state-idle);
+}
+
 .markdown-doc table {
   width: 100%;
 }

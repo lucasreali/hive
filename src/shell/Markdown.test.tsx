@@ -17,7 +17,7 @@ mock.module("react-markdown", () => ({
     return real(props);
   },
 }));
-const { Markdown, openLink, safeUrl } = await import("./Markdown");
+const { COPIED_MS, Markdown, openLink, safeUrl } = await import("./Markdown");
 
 afterEach(() => {
   cleanup();
@@ -288,11 +288,14 @@ test("a file's top-level blocks carry their first line, a raw `data-line` replac
     ["h1", "1"],
     ["p", "3"],
     ["ul", "6"],
-    ["pre", "9"],
+    ["div", "9"],
     ["div", "13"],
     ["p", "17"],
   ]);
   expect(view.querySelector(".md-table")?.getAttribute("data-line")).toBe("13");
+  // A code block's line is on its box (23.8), not on the block inside it.
+  expect(view.querySelector(".md-code")?.getAttribute("data-line")).toBe("9");
+  expect(view.querySelector("pre")?.hasAttribute("data-line")).toBe(false);
   // Only the top-level blocks: not a list's items, nor the table inside its box.
   expect(view.querySelectorAll("[data-line]")).toHaveLength(6);
 });
@@ -304,4 +307,77 @@ test("a chat's Markdown carries no line, not even one written in its HTML (21.3)
 
 test("a file with no blocks has no line (21.3)", () => {
   expect(doc("\n\n").querySelectorAll("[data-line]")).toHaveLength(0);
+});
+
+// 23.8: a document's code blocks have a copy button.
+const copyButtons = (view: HTMLElement) =>
+  [...view.querySelectorAll<HTMLButtonElement>(".md-code > button")].filter(
+    (b) => b.getAttribute("aria-label") === "Copy code",
+  );
+
+test("each code block of a file's preview has a copy button; inline code and a chat's do not", () => {
+  const view = doc("`inline`\n\n```ts\nconst a = 1;\n```\n\n```\nplain\n```");
+  const buttons = copyButtons(view);
+  expect(buttons).toHaveLength(2);
+  // At the box's top level, after its block, reachable by Tab.
+  for (const b of buttons) {
+    expect(b.previousElementSibling?.tagName).toBe("PRE");
+    expect(b.tabIndex).toBe(0);
+    expect(b.title).toBe("Copy code");
+  }
+  expect(view.querySelectorAll("p .md-code")).toHaveLength(0);
+  expect(copyButtons(md("```ts\nconst a = 1;\n```"))).toHaveLength(0);
+  expect(md("```ts\nconst a = 1;\n```").querySelector(".md-code")).toBeNull();
+});
+
+test("the copy button copies the block's own text, without its last newline", async () => {
+  const writeText = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const view = doc(
+    '```ts\nexport function f() {\n  return "a";\n}\n```\n\n```\none\n\ntwo  \n```\n\n~~~\nx\n~~~',
+  );
+  const buttons = copyButtons(view);
+  // Coloured or not, what is copied is the text, not the spans.
+  await waitFor(() => expect(view.querySelector(".tok-keyword")).not.toBeNull(), { timeout: 4000 });
+  for (const b of buttons) await act(async () => b.click());
+  expect(writeText.mock.calls).toEqual([
+    ['export function f() {\n  return "a";\n}'],
+    ["one\n\ntwo  "],
+    ["x"],
+  ]);
+  writeText.mockRestore();
+});
+
+test("once copied the icon is a check for a moment; a refused clipboard says so", async () => {
+  const writeText = spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const view = doc("```\nx\n```");
+  const [button] = copyButtons(view) as [HTMLButtonElement];
+  const icon = () => button.querySelector("svg")?.outerHTML;
+  const copyIcon = icon();
+  const later = spyOn(globalThis, "setTimeout");
+  await act(async () => button.click());
+  expect(button.dataset.copied).toBe("true");
+  expect(button.title).toBe("Copied");
+  expect(icon()).not.toBe(copyIcon);
+  // Copied again while it shows: the check stays its whole time from the last copy.
+  await act(async () => button.click());
+  const waits = later.mock.calls.filter(([, ms]) => ms === COPIED_MS);
+  expect(waits).toHaveLength(2);
+  const clear = spyOn(globalThis, "clearTimeout");
+  later.mockRestore();
+  const [hide] = waits.at(-1) as [() => void];
+  await act(async () => hide());
+  expect(button.dataset.copied).toBeUndefined();
+  expect(button.title).toBe("Copy code");
+  expect(icon()).toBe(copyIcon);
+  // Unmounted, its wait is cleared.
+  cleanup();
+  expect(clear).toHaveBeenCalled();
+  clear.mockRestore();
+
+  writeText.mockRejectedValue("denied");
+  const [again] = copyButtons(doc("```\nx\n```")) as [HTMLButtonElement];
+  await act(async () => again.click());
+  await waitFor(() => expect(notice()).toBe("Cannot copy the code: denied"));
+  expect(again.dataset.copied).toBeUndefined();
+  writeText.mockRestore();
 });
