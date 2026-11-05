@@ -24,25 +24,25 @@ async fn terminals_in_a_worktree_get_its_paths_and_a_stable_block_of_ports() {
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     follow(&mut app, &root).await;
-    let show = "echo \"port=$HIVE_PORT wt=$HIVE_WORKTREE_PATH root=$HIVE_ROOT_PATH.\"\r";
+    let show = "echo \"port=$HIVE_PORT/$PORT wt=$HIVE_WORKTREE_PATH root=$HIVE_ROOT_PATH.\"\r";
 
     app.open_terminal(1, &wt("a")).await;
     app.input(1, show).await;
     let a = wt("a").display().to_string();
-    app.output_until(1, &format!("port=20000 wt={a} root={root}."))
+    app.output_until(1, &format!("port=20000/20000 wt={a} root={root}."))
         .await;
     // The main worktree gets the next block; a second terminal in `a` the same one.
     app.open_terminal(2, &repo.root).await;
     app.input(2, show).await;
-    app.output_until(2, &format!("port=20010 wt={root} root={root}."))
+    app.output_until(2, &format!("port=20010/20010 wt={root} root={root}."))
         .await;
     app.open_terminal(3, &wt("a")).await;
     app.input(3, show).await;
-    app.output_until(3, "port=20000 wt=").await;
+    app.output_until(3, "port=20000/20000 wt=").await;
     // Outside every followed worktree: nothing.
     app.open_terminal(4, &repo.env.path("home")).await;
     app.input(4, show).await;
-    app.output_until(4, "port= wt= root=.").await;
+    app.output_until(4, "port=/ wt= root=.").await;
     // No block can be saved: the paths without a port.
     let ports = repo.env.path("data/hive/ports.json");
     std::fs::remove_file(&ports).unwrap();
@@ -50,8 +50,24 @@ async fn terminals_in_a_worktree_get_its_paths_and_a_stable_block_of_ports() {
     app.open_terminal(5, &wt("b")).await;
     app.input(5, show).await;
     let b = wt("b").display().to_string();
-    app.output_until(5, &format!("port= wt={b} root={root}."))
+    app.output_until(5, &format!("port=/ wt={b} root={root}."))
         .await;
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn a_port_the_service_already_has_is_kept_over_the_worktrees() {
+    let repo = Repo::new();
+    assert!(repo.hive(&["create", "a"]).status.success());
+    let root = repo.root.display().to_string();
+    let mut daemon = repo.env.daemon_with(repo.env.hive().env("PORT", "3000"));
+    let mut app = repo.env.connect(Role::App).await;
+    follow(&mut app, &root).await;
+    app.open_terminal(1, &repo.root.join(".claude/worktrees/a"))
+        .await;
+    app.input(1, "echo \"port=$HIVE_PORT/$PORT.\"\r").await;
+    app.output_until(1, "port=20000/3000.").await;
     drop(app);
     assert!(daemon.wait_exit().success());
 }
@@ -69,7 +85,7 @@ async fn the_archive_script_runs_before_a_removal_and_can_cancel_it() {
 
     let log = repo.env.path("home/archive.log");
     let archive = format!(
-        "echo \"$HIVE_WORKTREE_PATH $HIVE_ROOT_PATH $HIVE_PORT\" >> {}\n\
+        "echo \"$HIVE_WORKTREE_PATH $HIVE_ROOT_PATH $HIVE_PORT $PORT\" >> {}\n\
          if [ -e stop ]; then echo refused; exit 4; fi",
         log.display()
     );
@@ -110,7 +126,7 @@ async fn the_archive_script_runs_before_a_removal_and_can_cancel_it() {
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
         format!(
-            "{a} {root} 20000\n{a} {root} 20000\n{b} {root} 20000\n",
+            "{a} {root} 20000 20000\n{a} {root} 20000 20000\n{b} {root} 20000 20000\n",
             a = wt("a"),
             b = wt("b")
         )

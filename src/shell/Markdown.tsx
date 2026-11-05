@@ -1,15 +1,17 @@
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { highlightCode, tags as t, tagHighlighter } from "@lezer/highlight";
+import { CheckIcon, CopyIcon } from "@phosphor-icons/react";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Element, ElementContent, Root } from "hast";
-import { memo, type ReactNode, useEffect, useState } from "react";
+import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { type Options as Schema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { showNotice } from "../store";
+import { ICON } from "./icons";
 
 /**
  * Only these links open (8.6): anything else (`javascript:`, `file:`, relative) is plain text.
@@ -168,7 +170,54 @@ const REHYPE: Options["rehypePlugins"] = [
   () => pruneEmptyLinks,
 ];
 const DOC_REHYPE: Options["rehypePlugins"] = [...REHYPE, () => markLines];
+/** How long a code block's copy button shows its check once copied. */
+export const COPIED_MS = 1500;
+
+/**
+ * A document's code block (23.8) in a box with a copy button at its top right (shown on hover and
+ * on focus): it copies `text`, the block's own text without its last newline, as the worktree
+ * menu's "Copy path" does; a refused clipboard says so in the status bar.
+ */
+function CodeBlock({ text, line, children }: { text: string; line?: number; children: ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = () =>
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => setCopied(false), COPIED_MS);
+      })
+      .catch((error) => showNotice("error", `Cannot copy the code: ${error}`));
+  return (
+    <div className="md-code" data-line={line}>
+      <pre>{children}</pre>
+      <button
+        type="button"
+        className="ghost md-code-copy"
+        aria-label="Copy code"
+        title={copied ? "Copied" : "Copy code"}
+        data-copied={copied || undefined}
+        onClick={copy}
+      >
+        {copied ? <CheckIcon {...ICON} /> : <CopyIcon {...ICON} />}
+      </button>
+    </div>
+  );
+}
+
 const DOC_COMPONENTS: Components = {
+  // A document's block line (21.3) goes on the box, the top-level block.
+  pre: ({ node, children, ...props }) => (
+    <CodeBlock
+      text={(node ? shown(node) : "").replace(/\n$/, "")}
+      line={(props as { "data-line"?: number })["data-line"]}
+    >
+      {children}
+    </CodeBlock>
+  ),
   // A block's text ends with its newline, which would show as an empty last line.
   code: ({ className, children }) => {
     const lang = /language-(\S+)/.exec(className ?? "")?.[1];

@@ -736,7 +736,9 @@ function ProjectScriptsSection() {
         <p className="field-help">
           Scripts are kept in Hive's settings, never read from the repository. Hive's terminals in a
           worktree have <code>$HIVE_PORT</code> (the first of 10 ports kept for it),{" "}
-          <code>$HIVE_WORKTREE_PATH</code> and <code>$HIVE_ROOT_PATH</code>.
+          <code>$HIVE_WORKTREE_PATH</code> and <code>$HIVE_ROOT_PATH</code>. They also have that
+          port as <code>$PORT</code> (unless your shell already sets one), which most dev servers
+          read; Vite needs <code>server.port: Number(process.env.PORT)</code> in its config.
         </p>
       </div>
       <ScriptFields key={id} id={id} />
