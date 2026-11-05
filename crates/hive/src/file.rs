@@ -222,9 +222,19 @@ fn resolve(dir: &Path, rel: &Path) -> io::Result<Option<PathBuf>> {
     Ok(Some(real))
 }
 
+/// The regular file `path` of the worktree at `dir` opened for reading, checked as [`read`]
+/// checks it (23.6 reads a table through it); `None` when it does not exist.
+pub fn open_inside(dir: &Path, path: &str) -> io::Result<Option<File>> {
+    opened(dir, relative(path)?)
+}
+
+fn opened(dir: &Path, rel: &Path) -> io::Result<Option<File>> {
+    resolve(dir, rel)?.map(File::open).transpose()
+}
+
 fn on_disk(dir: &Path, rel: &Path) -> io::Result<Side> {
-    match resolve(dir, rel)? {
-        Some(real) => limited(&mut File::open(real)?),
+    match opened(dir, rel)? {
+        Some(mut file) => limited(&mut file),
         None => Ok(Side::Missing),
     }
 }

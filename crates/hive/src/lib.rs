@@ -42,6 +42,7 @@ pub mod shared;
 pub mod spaces;
 pub mod states;
 pub mod statusline;
+pub mod table;
 pub mod terminal;
 pub mod transcript;
 pub mod watch;

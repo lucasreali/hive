@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
+csv = "1.4.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 hive-protocol = { version = "0.1.0", path = "../hive-protocol" }
 notify = "9.0.0-rc.6"

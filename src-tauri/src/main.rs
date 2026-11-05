@@ -162,6 +162,7 @@ fn main() {
             commands::set_view,
             commands::list_changes,
             commands::open_file,
+            commands::open_table,
             commands::search_files,
             commands::list_dirs,
             commands::list_sessions,

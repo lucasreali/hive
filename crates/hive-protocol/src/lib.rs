@@ -873,6 +873,20 @@ pub enum Control {
         /// Why the file could not be read.
         error: Option<String>,
     },
+    /// App → service: a CSV or TSV file (23.6) of a worktree of a followed project as a table,
+    /// read on disk; answered by `Table`. `path` as for `OpenFile`.
+    OpenTable {
+        worktree: String,
+        path: String,
+    },
+    /// The file's sheets: one for a CSV or TSV file, empty when `error` says why it could not
+    /// be read.
+    Table {
+        worktree: String,
+        path: String,
+        sheets: Vec<Sheet>,
+        error: Option<String>,
+    },
     /// App → service: write `content` over the file (3.5, #31), only if its bytes on disk
     /// still have `version` (`None`: the file must not exist). Answered by `FileSaved` or
     /// `SaveFailed`.
@@ -1745,6 +1759,20 @@ pub struct Dir {
     pub name: String,
     /// Holds a `.git` entry: a repository (or a worktree) of its own.
     pub git: bool,
+}
+
+/// One sheet of a table file (23.6): its first rows and how many it has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sheet {
+    /// The sheet's name in a workbook; empty for a CSV or TSV file.
+    pub name: String,
+    /// The first rows (at most the service's cap, and what fits in one frame), each its cells
+    /// as text; rows may differ in length.
+    pub rows: Vec<Vec<String>>,
+    /// How many rows the sheet has, counting those not sent.
+    pub total: u64,
+    /// The file was counted only up to the service's cap: it has more than `total` rows.
+    pub partial: bool,
 }
 
 /// A line of a worktree's file holding the searched text.
@@ -2814,6 +2842,35 @@ mod tests {
             br#"{"type":"open_file","worktree":"/r","path":"a","base":"head"}"#
         );
         assert_eq!(Frame::control(0, &open).to_control().unwrap(), open);
+    }
+
+    #[test]
+    fn table_messages_are_tagged_json() {
+        let open = Control::OpenTable {
+            worktree: "/r".into(),
+            path: "a.csv".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &open).payload[..],
+            br#"{"type":"open_table","worktree":"/r","path":"a.csv"}"#
+        );
+        assert_eq!(Frame::control(0, &open).to_control().unwrap(), open);
+        let table = Control::Table {
+            worktree: "/r".into(),
+            path: "a.csv".into(),
+            sheets: vec![Sheet {
+                name: String::new(),
+                rows: vec![vec!["a".into(), "b".into()], vec!["1".into()]],
+                total: 3,
+                partial: false,
+            }],
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &table).payload[..],
+            br#"{"type":"table","worktree":"/r","path":"a.csv","sheets":[{"name":"","rows":[["a","b"],["1"]],"total":3,"partial":false}],"error":null}"#
+        );
+        assert_eq!(Frame::control(0, &table).to_control().unwrap(), table);
     }
 
     #[test]

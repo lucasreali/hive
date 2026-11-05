@@ -132,6 +132,82 @@ async fn a_file_is_read_on_disk_and_at_head() {
     stop(daemon);
 }
 
+/// The `table` answer for `path` of `worktree`: its sheets' `(rows, total, partial)`, or its
+/// error.
+async fn table(
+    conn: &mut Conn,
+    worktree: &str,
+    path: &str,
+) -> Result<Vec<(Vec<Vec<String>>, u64, bool)>, String> {
+    let (w, p) = (worktree.to_owned(), path.to_owned());
+    let open = Control::OpenTable {
+        worktree: w,
+        path: p,
+    };
+    conn.send(0, open).await;
+    match conn.control().await.1 {
+        Control::Table {
+            worktree: w,
+            path: p,
+            sheets,
+            error,
+        } => {
+            assert_eq!((w.as_str(), p.as_str()), (worktree, path));
+            match error {
+                Some(error) => Err(error),
+                None => Ok(sheets
+                    .into_iter()
+                    .map(|s| (s.rows, s.total, s.partial))
+                    .collect()),
+            }
+        }
+        other => panic!("expected a table, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_table_file_is_read_on_disk_whatever_its_size() {
+    let repo = Repo::new();
+    repo.write("a.csv", "id,\"name, full\"\n1,Ann\n");
+    // Past `TEXT_LIMIT`, and not UTF-8: its text is not shown, its first rows are.
+    let rows: String = (0..20_000).map(|i| format!("{i},caf\u{e9}\n")).collect();
+    let mut big = rows.into_bytes();
+    big.extend(b"last,caf\xe9\n".repeat(TEXT_LIMIT as usize / 10));
+    std::fs::write(repo.root.join("big.TSV"), &big).unwrap();
+    let root = repo.root.display().to_string();
+
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    let error = format!("{root} is not a worktree of a followed project");
+    assert_eq!(table(&mut conn, &root, "a.csv").await, Err(error));
+    follow(&mut conn, &root).await;
+
+    let cells = |row: &[&str]| row.iter().map(|&c| c.to_owned()).collect::<Vec<_>>();
+    let small = vec![cells(&["id", "name, full"]), cells(&["1", "Ann"])];
+    assert_eq!(
+        table(&mut conn, &root, "a.csv").await,
+        Ok(vec![(small, 2, false)])
+    );
+    let sheets = table(&mut conn, &root, "big.TSV").await.unwrap();
+    let [(rows, total, partial)] = &sheets[..] else {
+        panic!("one sheet: {sheets:?}");
+    };
+    assert_eq!(rows.len(), hive::table::TABLE_ROWS);
+    assert_eq!(rows[1], cells(&["1,caf\u{e9}"]));
+    let expected = 20_000 + TEXT_LIMIT / 10;
+    assert_eq!((*total, *partial), (expected, false));
+    assert_eq!(
+        table(&mut conn, &root, "a.txt").await,
+        Err("a.txt is not a CSV or TSV file".into())
+    );
+    assert_eq!(
+        table(&mut conn, &root, "gone.csv").await,
+        Err("gone.csv does not exist".into())
+    );
+    drop(conn);
+    stop(daemon);
+}
+
 #[tokio::test]
 async fn file_requests_list_the_worktrees_once() {
     let repo = Repo::new();

@@ -72,6 +72,7 @@ sort! {
         | SearchFiles
         | ListDirs
         | OpenFile
+        | OpenTable
         | SaveFile
         | CreateFile
         | RenameFile
@@ -149,6 +150,7 @@ sort! {
         | SearchResults
         | Dirs
         | File
+        | Table
         | FileSaved
         | SaveFailed
         | FileCreated
@@ -510,6 +512,17 @@ fn samples() -> Vec<Control> {
             version: Some(s("v")),
             binary: false,
             too_large: false,
+            error: None,
+        },
+        Table {
+            worktree: s("/r"),
+            path: s("a.csv"),
+            sheets: vec![Sheet {
+                name: s(""),
+                rows: vec![vec![s("a"), s("b")], vec![s("1")]],
+                total: 3,
+                partial: false,
+            }],
             error: None,
         },
         FileSaved {

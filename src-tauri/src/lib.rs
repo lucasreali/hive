@@ -1448,6 +1448,11 @@ impl Hive {
         self.link().send(0, &open)
     }
 
+    /// The answer arrives as `table`.
+    pub fn open_table(&self, worktree: String, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::OpenTable { worktree, path })
+    }
+
     /// The answer arrives as `file_saved` or `save_failed`.
     pub fn save_file(
         &self,
@@ -2257,6 +2262,11 @@ pub mod commands {
         base: DiffBase,
     ) -> Result<(), String> {
         hive.open_file(worktree, path, base)
+    }
+
+    #[tauri::command]
+    pub fn open_table(hive: State<'_, Hive>, worktree: String, path: String) -> Result<(), String> {
+        hive.open_table(worktree, path)
     }
 
     #[tauri::command]
