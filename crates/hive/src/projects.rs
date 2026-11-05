@@ -216,6 +216,7 @@ impl Projects {
         if !folder || Path::new(id).join(".git").symlink_metadata().is_ok() {
             return Err(io::Error::other(format!("{id} is not a folder project")));
         }
+        self.still_followable(id)?;
         git::output(Path::new(id), &["init", "-q"], &[0]).map(drop)
     }
 
@@ -573,6 +574,7 @@ impl Projects {
         if !list.iter().any(|p| p.folder && p.path == path) {
             return followed(&list, path).map(|(dir, _)| (dir, None));
         }
+        self.still_followable(path)?;
         // Its `HEAD` is the last thing `git init` writes.
         if !self.plain.join("HEAD").is_file() {
             let dir = self.plain.parent().unwrap_or(Path::new("."));
@@ -580,6 +582,18 @@ impl Projects {
             git::output(dir, &["init", "-q", "--bare", PLAIN_GIT], &[0])?;
         }
         Ok((PathBuf::from(path), Some(self.plain.clone())))
+    }
+
+    /// Refuses acting on the folder project `id` once its folder no longer resolves to itself
+    /// (swapped for a link) or is protected: both were checked only when it was added.
+    fn still_followable(&self, id: &str) -> io::Result<()> {
+        if canonical(Path::new(id))? != Path::new(id) {
+            return Err(io::Error::other(format!(
+                "{id} is no longer the folder followed"
+            )));
+        }
+        self.check_protected(Path::new(id))
+            .map_err(|(_, message)| io::Error::other(message))
     }
 
     /// Refuses following the folder `dir` (canonical) when it is protected.
@@ -801,11 +815,17 @@ impl Protected {
     }
 
     /// What the folder `dir` is, when this covers it: the folder, or one in it.
+    /// What the folder `dir` is, when this covers it: the folder, one in it, or one holding it
+    /// (its files panel would reach it).
     fn covers(&self, dir: &Path) -> Option<String> {
-        match (dir == self.dir, self.inside && dir.starts_with(&self.dir)) {
-            (true, _) => Some(self.what.to_owned()),
-            (false, true) => Some(format!("in {}", self.what)),
-            (false, false) => None,
+        if dir == self.dir {
+            Some(self.what.to_owned())
+        } else if self.inside && dir.starts_with(&self.dir) {
+            Some(format!("in {}", self.what))
+        } else if self.dir.starts_with(dir) {
+            Some(format!("a folder holding {}", self.what))
+        } else {
+            None
         }
     }
 }
@@ -1926,6 +1946,8 @@ mod tests {
         refused(&at("claude"), "Claude's folder");
         refused(&at("claude/projects"), "in Claude's folder");
         refused("/", "the whole disk");
+        // Nor a folder holding one: its files panel would reach it.
+        refused(&top.display().to_string(), "a folder holding Hive's folder");
         assert_eq!(projects.list(), vec![]);
         // A folder in the home folder is followed, and so is a repository anywhere.
         assert!(projects.add(&at("home/work")).unwrap().folder);
@@ -1934,6 +1956,36 @@ mod tests {
         std::fs::create_dir_all(top.join("missing/x")).unwrap();
         let (error, _) = projects.add(&at("missing/x")).unwrap_err();
         assert_eq!(error, ProjectError::ProtectedFolder);
+        // A followed folder swapped for a link is no longer acted on.
+        let work = at("home/work");
+        assert!(projects.tree(&work).is_ok());
+        std::fs::remove_dir(top.join("home/work")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(top.join("claude"), top.join("home/work")).unwrap();
+        #[cfg(unix)]
+        {
+            let said = format!("{work} is no longer the folder followed");
+            assert_eq!(projects.tree(&work).unwrap_err().to_string(), said);
+            assert_eq!(projects.init_git(&work).unwrap_err().to_string(), said);
+            assert!(!top.join("claude/.git").exists());
+        }
+    }
+
+    #[test]
+    fn a_folder_project_that_became_protected_is_no_longer_acted_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        std::fs::create_dir_all(top.join("f")).unwrap();
+        let f = top.join("f").display().to_string();
+        load(&top.join("data")).add(&f).unwrap();
+        // Protected since it was added (a hand edit, or a new Claude folder).
+        let projects =
+            load(&top.join("data")).protect(None, vec![(top.join("f"), "Claude's folder")]);
+        let said =
+            format!("{f} is Claude's folder: Hive does not follow it; choose a folder in it");
+        assert_eq!(projects.tree(&f).unwrap_err().to_string(), said);
+        assert_eq!(projects.init_git(&f).unwrap_err().to_string(), said);
+        assert!(!top.join("f/.git").exists());
     }
 
     #[test]
