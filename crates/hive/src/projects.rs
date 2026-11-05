@@ -1911,7 +1911,7 @@ mod tests {
         projects.add(&f).unwrap();
         repo(&top.join("f/api"));
         projects.forget();
-        let api = top.join("f/api").display().to_string();
+        let api = top.join("f").join("api").display().to_string();
         let listed = projects.list();
         assert_eq!(shown(&listed), [format!("+{f}"), format!("{api} in {f}")]);
         assert!(!listed[0].folder);
@@ -1972,6 +1972,7 @@ mod tests {
         refused(&at("settings"), "Hive's folder");
         refused(&at("claude"), "Claude's folder");
         refused(&at("claude/projects"), "in Claude's folder");
+        #[cfg(unix)]
         refused("/", "the whole disk");
         // Nor a folder holding one: its files panel would reach it.
         refused(&top.display().to_string(), "a folder holding Hive's folder");
@@ -2022,8 +2023,10 @@ mod tests {
         let f = top.join("f").display().to_string();
         std::fs::create_dir_all(top.join("f")).unwrap();
         let file = top.join("spaces.json");
+        // As JSON writes it (a Windows path's `\\` escaped).
+        let f = serde_json::to_string(&f).unwrap();
         let old = format!(
-            r#"{{"current":"default","spaces":[{{"id":"default","name":"Default","projects":["{f}"],"groups":["{f}"],"env":{{"git_name":null,"git_email":null,"gh_config_dir":null,"gh_account":null}}}}]}}"#
+            r#"{{"current":"default","spaces":[{{"id":"default","name":"Default","projects":[{f}],"groups":[{f}],"env":{{"git_name":null,"git_email":null,"gh_config_dir":null,"gh_account":null}}}}]}}"#
         );
         std::fs::write(&file, &old).unwrap();
         let projects = load(&top);
