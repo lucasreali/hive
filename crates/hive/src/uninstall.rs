@@ -311,16 +311,12 @@ pub fn command(
         writeln!(out, "  {}", item.path)?;
     }
     if !choice.accounts && !plan.account_folders.is_empty() && !choice.keep_data {
-        writeln!(
-            out,
-            "Kept: the account folders Hive made (--accounts removes them too)."
-        )?;
+        let kept = "Kept: the account folders Hive made (--accounts removes them too).";
+        writeln!(out, "{kept}")?;
     }
-    writeln!(
-        out,
-        "Never touched: ~/.claude, ~/.claude.json, your projects, their worktrees and branches. \
-         To remove Claude Code's login too, run /logout in claude first."
-    )?;
+    let never = "Never touched: ~/.claude, ~/.claude.json, your projects, their worktrees and \
+                 branches. To remove Claude Code's login too, run /logout in claude first.";
+    writeln!(out, "{never}")?;
     if !yes {
         write!(out, "Uninstall Hive? [y/N] ")?;
         out.flush()?;
@@ -355,14 +351,16 @@ pub fn find_app(dirs: &[PathBuf]) -> Option<PathBuf> {
 /// Where `hive uninstall` looks for the app: [`APPLICATIONS`] when absolute, else
 /// `/Applications` and `~/Applications` (macOS; elsewhere there is no app to remove).
 pub fn app_dirs(var: impl Fn(&str) -> Option<std::ffi::OsString>, home: &Path) -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let system = vec![PathBuf::from("/Applications"), home.join("Applications")];
+    #[cfg(not(target_os = "macos"))]
+    let system = {
+        let _ = home;
+        Vec::new()
+    };
     let over = var(APPLICATIONS).map(PathBuf::from);
-    match over.filter(|dir| dir.is_absolute()) {
-        Some(dir) => vec![dir],
-        None if cfg!(target_os = "macos") => {
-            vec![PathBuf::from("/Applications"), home.join("Applications")]
-        }
-        None => Vec::new(),
-    }
+    over.filter(|dir| dir.is_absolute())
+        .map_or(system, |dir| vec![dir])
 }
 
 /// The service's lock, held, when no service runs; an error when one does (it would put back
@@ -374,13 +372,13 @@ pub fn not_running(paths: &Paths) -> io::Result<Option<std::fs::File>> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
     };
-    match lock.try_lock() {
-        Ok(()) => Ok(Some(lock)),
-        Err(std::fs::TryLockError::WouldBlock) => Err(io::Error::other(
-            "Hive is running: quit it first, or choose Hive > Uninstall Hive… in the app",
-        )),
-        Err(std::fs::TryLockError::Error(err)) => Err(err),
+    let locked = lock.try_lock();
+    if let Err(std::fs::TryLockError::WouldBlock) = locked {
+        let running = "Hive is running: quit it first, or choose Hive > Uninstall Hive… in the app";
+        return Err(io::Error::other(running));
     }
+    locked.map_err(io::Error::from)?;
+    Ok(Some(lock))
 }
 
 #[cfg(test)]
@@ -782,14 +780,13 @@ mod tests {
         let home = Path::new("/h");
         let none = |_: &str| None;
         let dirs = app_dirs(none, home);
-        if cfg!(target_os = "macos") {
-            assert_eq!(
-                dirs,
-                [PathBuf::from("/Applications"), home.join("Applications")]
-            );
-        } else {
-            assert!(dirs.is_empty());
-        }
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            dirs,
+            [PathBuf::from("/Applications"), home.join("Applications")]
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert!(dirs.is_empty());
         let over = |key: &str| (key == APPLICATIONS).then(|| "/t/apps".into());
         assert_eq!(app_dirs(over, home), [PathBuf::from("/t/apps")]);
         let relative = |_: &str| Some("apps".into());
@@ -1005,14 +1002,12 @@ mod tests {
     fn the_places_come_from_home() {
         let paths = Paths::from_env();
         let places = Places::from_env(&paths);
-        match std::env::var_os("HOME").map(PathBuf::from) {
-            Some(home) if home.is_absolute() => {
-                let places = places.unwrap();
-                assert_eq!(places.home, home);
-                assert_eq!(places.paths, paths);
-                assert_eq!(places.library, cfg!(target_os = "macos"));
-            }
-            _ => assert!(places.is_none()),
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = home.filter(|home| home.is_absolute());
+        assert_eq!(places.as_ref().map(|p| &p.home), home.as_ref());
+        if let Some(places) = places {
+            assert_eq!(places.paths, paths);
+            assert_eq!(places.library, cfg!(target_os = "macos"));
         }
     }
 }
