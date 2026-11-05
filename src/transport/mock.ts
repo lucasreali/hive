@@ -17,6 +17,7 @@ import type {
   Space,
   SpaceEnv,
   Subagent,
+  UninstallList,
   Worktree,
 } from "../protocol";
 import { DEFAULT_SETTINGS } from "../store";
@@ -322,6 +323,37 @@ export const MOCK_SHARE_WARNING =
 export const MOCK_CLAUDE_DIR = "/home/user/.claude-work";
 /** Where the mock service makes the Claude account folders (22.3). */
 export const MOCK_ACCOUNTS_DIR = "/home/mock/.hive/accounts";
+
+/** The account folders Hive made in the mock (23.5). */
+export const MOCK_ACCOUNT_FOLDERS = [`${MOCK_ACCOUNTS_DIR}/work`];
+
+/** What the mock's uninstall would remove, as the service lists it on macOS (23.5). */
+export function mockUninstall(keepData: boolean, accounts: boolean): UninstallList {
+  const home = "/home/mock";
+  const data: UninstallList["items"] = keepData
+    ? []
+    : [
+        { path: `${home}/.hive/settings.json`, kind: "data" },
+        { path: `${home}/.hive/spaces.json`, kind: "data" },
+        { path: `${home}/Library/WebKit/com.lucas.hive`, kind: "data" },
+        ...(accounts
+          ? MOCK_ACCOUNT_FOLDERS.map((path) => ({ path, kind: "account" as const }))
+          : []),
+      ];
+  return {
+    keep_data: keepData,
+    accounts,
+    items: [
+      ...data,
+      { path: `${home}/.hive/bin`, kind: "program" },
+      { path: `${home}/.local/bin/hive`, kind: "program" },
+      { path: `${home}/Library/Caches/com.lucas.hive`, kind: "cache" },
+      { path: `${home}/Library/Logs/Hive`, kind: "cache" },
+      { path: "/Applications/Hive.app", kind: "app" },
+    ],
+    account_folders: MOCK_ACCOUNT_FOLDERS,
+  };
+}
 
 export const MOCK_FOLDERS = [
   ...MOCK_REPOS.map((p) => p.path),
@@ -1130,6 +1162,13 @@ export function createMockTransport(
     },
     async getShared() {
       later({ type: "shared", ...MOCK_SHARED });
+    },
+    async listUninstall(keepData, accounts) {
+      later({ type: "uninstall_list", ...mockUninstall(keepData, accounts) });
+    },
+    async uninstall() {
+      // The mock removes nothing (23.5).
+      later({ type: "uninstalled", failed: [] });
     },
     async openShared() {
       const windows_path = "\\\\wsl.localhost\\Ubuntu\\home\\mock\\.local\\share\\hive\\shared";

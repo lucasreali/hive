@@ -30,6 +30,7 @@ test("the UI knows every item of the app side's menu but Quit, which the app sid
     [
       "settings",
       "check-updates",
+      "uninstall",
       "toggle-sidebar",
       "toggle-panel",
       "close-tab",
@@ -64,6 +65,9 @@ test("a menu item from the app side runs its action", async () => {
   expect(lastNotice()).toBe("info:Hive is up to date.");
   await click("settings");
   expect(useHive.getState().modal).toBe("settings");
+  openModal(null);
+  await click("uninstall");
+  expect(useHive.getState().modal).toBe("uninstall");
 });
 
 test("Close Tab runs ⌘W's command; an unknown item does nothing", () => {

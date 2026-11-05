@@ -31,6 +31,7 @@ import {
   MOCK_STATES,
   MOCK_TEXTS,
   mockDirs,
+  mockUninstall,
   mockVersion,
 } from "./mock";
 
@@ -247,6 +248,29 @@ test("answers the settings file's path and the diagnostics", async () => {
       error: null,
     },
   ]);
+});
+
+test("lists what uninstalling would remove, and removes nothing (23.5)", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  await transport.listUninstall(false, true);
+  await transport.listUninstall(true, false);
+  await transport.uninstall(false, false);
+  await tick();
+  const [all, kept, done] = messages.slice(-3);
+  const paths = (m: ServiceMessage | undefined) =>
+    m?.type === "uninstall_list" ? m.items.map((i) => `${i.kind} ${i.path}`) : [];
+  expect(all).toMatchObject({ type: "uninstall_list", keep_data: false, accounts: true });
+  expect(paths(all)).toContain(`account ${MOCK_ACCOUNTS_DIR}/work`);
+  expect(paths(all)).toContain("data /home/mock/.hive/settings.json");
+  expect(paths(all).at(-1)).toBe("app /Applications/Hive.app");
+  expect(paths(kept).every((p) => !p.startsWith("data") && !p.startsWith("account"))).toBe(true);
+  expect(paths(kept)).toContain("program /home/mock/.hive/bin");
+  expect(mockUninstall(false, false).items.some((i) => i.kind === "account")).toBe(false);
+  expect(mockUninstall(false, false).account_folders).toEqual([`${MOCK_ACCOUNTS_DIR}/work`]);
+  expect(done).toEqual({ type: "uninstalled", failed: [] });
 });
 
 test("a scenario fails the connection instead", async () => {
