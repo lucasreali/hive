@@ -15,6 +15,8 @@ use crate::projects::Projects;
 pub const TABLE_ROWS: usize = 10_000;
 /// Most bytes of a file read to count its rows (64 MiB); past them the count is partial.
 pub const COUNT_LIMIT: u64 = 67_108_864;
+/// Longest row read, in bytes (1 MiB): the reading stops at a longer one, as at the count limit.
+pub const RECORD_LIMIT: u64 = 1_048_576;
 
 /// The field delimiter of a table file by its extension, in any case: `,` for `.csv`, a tab
 /// for `.tsv`.
@@ -50,12 +52,14 @@ fn budget(worktree: &str, path: &str) -> usize {
 }
 
 /// The sheet of the table file `path` of the worktree at `dir` (checked as the viewer's
-/// files are), its rows taking at most `budget` bytes of JSON.
+/// files are), its rows taking at most `budget` bytes of JSON. The path is checked before its
+/// extension, and no error repeats it: the answer has it already.
 pub fn read(dir: &Path, path: &str, budget: usize) -> io::Result<Sheet> {
+    let file = file::open_inside(dir, path)?;
     let Some(delimiter) = delimiter(path) else {
-        return Err(io::Error::other(format!("{path} is not a CSV or TSV file")));
+        return Err(io::Error::other("not a CSV or TSV file"));
     };
-    match file::open_inside(dir, path)? {
+    match file {
         Some(file) => parse(file, delimiter, budget, COUNT_LIMIT),
         None => Err(io::Error::other(format!("{path} does not exist"))),
     }
@@ -64,20 +68,49 @@ pub fn read(dir: &Path, path: &str, budget: usize) -> io::Result<Sheet> {
 /// The sheet of CSV `input` (TSV with a tab `delimiter`), quoted fields as RFC 4180 has them:
 /// rows of any length, each cell decoded as UTF-8 (an invalid byte shows as U+FFFD); at most
 /// [`TABLE_ROWS`] rows, while their JSON takes at most `budget` bytes. The rest is only
-/// counted, over at most `limit` bytes of `input`.
+/// counted, over at most `limit` bytes of `input`; a row longer than [`RECORD_LIMIT`] bytes
+/// ends the reading there, as the limit does.
 pub fn parse(input: impl Read, delimiter: u8, budget: usize, limit: u64) -> io::Result<Sheet> {
+    parse_with(input, delimiter, budget, limit, RECORD_LIMIT)
+}
+
+/// [`parse`] with rows of at most `record` bytes.
+fn parse_with(
+    input: impl Read,
+    delimiter: u8,
+    budget: usize,
+    limit: u64,
+    record_limit: u64,
+) -> io::Result<Sheet> {
+    let capped = Capped {
+        input: input.take(limit.saturating_add(1)),
+        given: 0,
+        start: 0,
+        most: record_limit,
+        cut: false,
+    };
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
         .delimiter(delimiter)
-        .from_reader(input.take(limit.saturating_add(1)));
+        .from_reader(capped);
     let mut record = csv::ByteRecord::new();
     let (mut rows, mut total, mut left, mut full) = (Vec::new(), 0, budget, false);
     while reader
         .read_byte_record(&mut record)
         .map_err(io::Error::other)?
     {
+        // A row cut at the record limit is not one: the reading stops before it.
+        if reader.get_ref().cut {
+            break;
+        }
+        let end = reader.position().byte();
+        reader.get_mut().start = end;
         total += 1;
+        // Its JSON takes at least its bytes, two quotes and a comma a cell, and its brackets: a
+        // row that cannot fit is never decoded.
+        let least = (record.as_slice().len() + 2).saturating_add(record.len().saturating_mul(3));
+        full = full || rows.len() == TABLE_ROWS || least > left;
         if full {
             continue;
         }
@@ -87,18 +120,46 @@ pub fn parse(input: impl Read, delimiter: u8, budget: usize, limit: u64) -> io::
             .collect();
         // With the comma before it in the list.
         let size = serde_json::to_vec(&row).map_or(usize::MAX, |json| json.len().saturating_add(1));
-        full = rows.len() == TABLE_ROWS || size > left;
+        full = size > left;
         if !full {
             left -= size;
             rows.push(row);
         }
     }
+    let capped = reader.get_ref();
     Ok(Sheet {
         name: String::new(),
         rows,
         total,
-        partial: reader.position().byte() > limit,
+        partial: capped.cut || capped.given > limit,
     })
+}
+
+/// The input of [`parse`], which ends early when the row being read passes `most` bytes (the
+/// csv reader's memory grows with a row: its bytes and a `usize` a field).
+struct Capped<R> {
+    input: R,
+    /// Bytes handed to the reader so far.
+    given: u64,
+    /// Where the row being read starts.
+    start: u64,
+    most: u64,
+    /// The input was ended at a row over `most`.
+    cut: bool,
+}
+
+impl<R: Read> Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let room = (self.start.saturating_add(self.most)).saturating_sub(self.given);
+        if room == 0 {
+            self.cut = true;
+            return Ok(0);
+        }
+        let most = buf.len().min(usize::try_from(room).unwrap_or(usize::MAX));
+        let n = self.input.read(&mut buf[..most])?;
+        self.given += n as u64;
+        Ok(n)
+    }
 }
 
 /// The `table` answer for `path`: its sheet, or why it could not be read.
@@ -246,6 +307,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_row_past_the_record_limit_ends_the_reading_before_it() {
+        let read = |input: &[u8], record| parse_with(input, b',', MAX_PAYLOAD, COUNT_LIMIT, record);
+        let cut = read(b"a,b\ncccccccccc\nd\n", 6).unwrap();
+        assert_eq!(
+            (cut.rows, cut.total, cut.partial),
+            (vec![row(&["a", "b"])], 1, true)
+        );
+        // A row of exactly the limit is read whole.
+        let whole = read(b"a,b\nccccc\n", 6).unwrap();
+        assert_eq!(
+            (whole.rows.len(), whole.total, whole.partial),
+            (2, 2, false)
+        );
+        let whole = read(b"abcde\nabcde\n", 6).unwrap();
+        assert_eq!((whole.total, whole.partial), (2, false));
+    }
+
+    #[test]
+    fn hostile_rows_cost_no_more_than_the_record_limit() {
+        // Commas only (a field each), NUL bytes, invalid UTF-8: each a single row far over
+        // the limit, first or after a row.
+        let limit = RECORD_LIMIT as usize;
+        for bytes in [
+            vec![b','; 4 * limit],
+            vec![0; 2 * limit],
+            vec![0xff; 2 * limit],
+        ] {
+            let alone = sheet(&bytes, b',');
+            assert_eq!((alone.rows.len(), alone.total, alone.partial), (0, 0, true));
+            let after = sheet(&[b"a\n".as_slice(), &bytes].concat(), b',');
+            assert_eq!(
+                (after.rows, after.total, after.partial),
+                (vec![row(&["a"])], 1, true)
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_that_cannot_fit_is_not_decoded() {
+        // Its least JSON is exact for plain cells: `["ab","c"]` and its comma, 11 bytes.
+        let fits = |budget| parse(&b"ab,c\n"[..], b',', budget, COUNT_LIMIT).unwrap();
+        assert_eq!(fits(11).rows.len(), 1);
+        assert!(fits(10).rows.is_empty());
+        // Escapes make it longer than the least: decoded, then left out.
+        let quoted = parse(&b"\"a\"\"\"\n"[..], b',', 7, COUNT_LIMIT).unwrap();
+        assert_eq!((quoted.rows.len(), quoted.total), (0, 1));
+        let quoted = parse(&b"\"a\"\"\"\n"[..], b',', 8, COUNT_LIMIT).unwrap();
+        assert_eq!(quoted.rows, [row(&["a\""])]);
+    }
+
     struct Broken;
 
     impl Read for Broken {
@@ -276,7 +388,9 @@ mod tests {
             read("a.csv").unwrap().rows,
             [row(&["a", "b"]), row(&["1", "2"])]
         );
-        assert_eq!(error("a.txt"), "a.txt is not a CSV or TSV file");
+        assert_eq!(error("a.txt"), "not a CSV or TSV file");
+        let long = format!("{}.csv", "a".repeat(5000));
+        assert_eq!(error(&long), "not a relative path inside the worktree");
         assert_eq!(error("gone.csv"), "gone.csv does not exist");
         assert_eq!(error("out.csv"), "the file resolves outside the worktree");
         assert_eq!(error("../x.csv"), "not a relative path inside the worktree");

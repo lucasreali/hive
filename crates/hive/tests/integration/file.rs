@@ -198,7 +198,7 @@ async fn a_table_file_is_read_on_disk_whatever_its_size() {
     assert_eq!((*total, *partial), (expected, false));
     assert_eq!(
         table(&mut conn, &root, "a.txt").await,
-        Err("a.txt is not a CSV or TSV file".into())
+        Err("not a CSV or TSV file".into())
     );
     assert_eq!(
         table(&mut conn, &root, "gone.csv").await,
