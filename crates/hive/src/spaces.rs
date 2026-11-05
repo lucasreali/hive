@@ -44,13 +44,16 @@ impl Spaces {
 
     /// The spaces as read from the file, when they follow the rules: at least one, unique
     /// ids, valid names and environments (folders are not required to exist still), each
-    /// project in one space only, and a current space that exists.
-    pub fn check(self) -> Result<Self, String> {
+    /// project in one space only, and a current space that exists. Each environment is kept as
+    /// [`check_env`] keeps it: an old file's `/x/` reads as `/x` (22.2), as its account does.
+    pub fn check(mut self) -> Result<Self, String> {
+        for space in &mut self.spaces {
+            space.env = check_env(space.env.clone(), false)?;
+        }
         let mut ids = std::collections::HashSet::new();
         let mut projects = std::collections::HashSet::new();
         for space in &self.spaces {
             check_name(&space.name)?;
-            check_env(space.env.clone(), false)?;
             if !ids.insert(&space.id) {
                 return Err(format!("the space id {:?} is used twice", space.id));
             }

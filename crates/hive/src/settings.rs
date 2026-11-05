@@ -276,6 +276,8 @@ impl Store {
         let mut settings = current.0.clone();
         let claude = &mut settings.claude;
         for (name, config_dir) in legacy {
+            // As every account folder is kept (22.2).
+            let config_dir = spaces::trimmed(&config_dir).to_owned();
             if claude.accounts.iter().all(|a| a.config_dir != config_dir) {
                 let name = free_name(claude, &name);
                 let hive_folder = own(&self.accounts, &config_dir);
@@ -360,16 +362,17 @@ const OLD_FONT_DEFAULT: &str = "\"IBM Plex Mono\", monospace";
 fn read(file: &Path) -> io::Result<(Settings, Option<Option<String>>)> {
     let bytes = read_limited(&mut std::fs::File::open(file)?, FILE_LIMIT)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    let selected = value.get("claude").and_then(|c| c.get("account")).map(|a| {
-        let dir = a.as_str().map(str::to_owned);
-        let accounts = value["claude"]["accounts"]
-            .as_array()
-            .map_or(&[][..], Vec::as_slice);
-        dir.filter(|dir| accounts.iter().any(|a| a["config_dir"] == dir.as_str()))
-    });
+    let selected = value
+        .get("claude")
+        .and_then(|c| c.get("account"))
+        .map(|a| a.as_str().map(|dir| spaces::trimmed(dir).to_owned()));
     let mut settings: Settings = serde_json::from_value(value).map_err(io::Error::other)?;
     tidy(&mut settings);
     check(&settings).map_err(io::Error::other)?;
+    // Compared as both are kept (22.2): `/x/` and `/x` are one folder.
+    let accounts = &settings.claude.accounts;
+    let selected =
+        selected.map(|dir| dir.filter(|dir| accounts.iter().any(|a| a.config_dir == *dir)));
     settle(&mut settings);
     if settings.terminal.font_family == OLD_FONT_DEFAULT {
         settings.terminal.font_family = Settings::default().terminal.font_family;
@@ -1040,6 +1043,65 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
     }
 
+    // `/x` is no absolute path on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn old_files_with_a_trailing_separator_still_give_a_space_its_account() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("settings.json");
+        let accounts = serde_json::json!([{"name": "Work", "config_dir": "/x/"}]);
+        let old = serde_json::json!({"claude": {"accounts": accounts}});
+        std::fs::write(&file, old.to_string()).unwrap();
+        let store = Store::load(file);
+        // An old `spaces.json` as read (`projects.rs`): parsed, then checked.
+        let env = r#"{"git_name":null,"git_email":null,"gh_config_dir":null,"gh_account":null,"claude_account":"/x/"}"#;
+        let json = format!(
+            r#"{{"current":"w","spaces":[{{"id":"w","name":"W","projects":[],"groups":[],"env":{env}}}]}}"#
+        );
+        let spaces = serde_json::from_str::<spaces::Spaces>(&json)
+            .unwrap()
+            .check()
+            .unwrap();
+        let account = spaces.spaces[0].env.claude_account.clone();
+        assert_eq!(account.as_deref(), Some("/x"));
+        // Its terminals get the account's folder as `CLAUDE_CONFIG_DIR`.
+        assert_eq!(store.claude_dir(None, account), Ok(Some("/x".into())));
+        // And the account cannot be removed while the space uses it (22.5).
+        let mut removed = store.get().0;
+        removed.claude.accounts.clear();
+        let using = |dir: &str| spaces.using(dir).map(|s| s.name.clone());
+        assert_eq!(
+            store.set_with(removed, &using),
+            Err(
+                "Work is the Claude account of the space W: choose another one for it first".into()
+            )
+        );
+    }
+
+    #[test]
+    fn a_selected_account_with_a_trailing_separator_goes_to_the_spaces_without_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("settings.json");
+        let w = if cfg!(windows) { r"C:\w" } else { "/w" };
+        let slash = format!("{w}{}", std::path::MAIN_SEPARATOR);
+        // Either side may have it (22.2): the account's folder, the selected one, or both.
+        for (folder, selected) in [
+            (&slash, w),
+            (&w.to_owned(), slash.as_str()),
+            (&slash, &slash),
+        ] {
+            let accounts = serde_json::json!([{"name": "Work", "config_dir": folder}]);
+            let old = serde_json::json!({"claude": {"accounts": accounts, "account": selected}});
+            std::fs::write(&file, old.to_string()).unwrap();
+            let given = std::cell::RefCell::new(Vec::new());
+            Store::load(file.clone()).migrate_account(&mut |dir: &str| {
+                given.borrow_mut().push(dir.to_owned());
+                Ok(())
+            });
+            assert_eq!(*given.borrow(), [w], "{folder} {selected}");
+        }
+    }
+
     // `/a` is no absolute path on Windows.
     #[cfg(unix)]
     #[test]
@@ -1201,9 +1263,10 @@ mod tests {
         let spaces = [
             ("Work", "/w"),
             ("Default", "/d"),
-            ("Also work", "/w"),
+            // A trailing separator is the same folder (22.2), kept without it.
+            ("Also work", "/w/"),
             ("Work", "/x"),
-            ("Default", "/y"),
+            ("Default", "/y/"),
         ];
         assert_eq!(store.migrate(legacy(&spaces)), Ok(()));
         let made = [
