@@ -663,6 +663,29 @@
     "error": "m"
   },
   {
+    "type": "uninstall_list",
+    "keep_data": false,
+    "accounts": true,
+    "items": [
+      {
+        "path": "/h/.hive/accounts/work",
+        "kind": "account"
+      }
+    ],
+    "account_folders": [
+      "/h/.hive/accounts/work"
+    ]
+  },
+  {
+    "type": "uninstalled",
+    "failed": [
+      {
+        "path": "/Applications/Hive.app",
+        "error": "m"
+      }
+    ]
+  },
+  {
     "type": "error",
     "message": "m"
   }

@@ -83,6 +83,11 @@ pub const MENUS: &[Menu] = &[
                 text: "Check for Updates…",
                 keys: None,
             },
+            Item::Own {
+                id: "uninstall",
+                text: "Uninstall Hive…",
+                keys: None,
+            },
             Item::Separator,
             Item::Native(Native::Services),
             Item::Separator,

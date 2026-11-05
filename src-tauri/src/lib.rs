@@ -301,6 +301,21 @@ pub fn translocated(macos: bool, exe: Option<std::path::PathBuf>) -> bool {
         })
 }
 
+/// The app bundle (`Hive.app`) holding the app's executable `exe`
+/// (`<bundle>.app/Contents/MacOS/<exe>`), which uninstalling removes last (23.5); `None` off
+/// macOS and for a development build, which runs from no bundle.
+pub fn app_bundle(macos: bool, exe: Option<&std::path::Path>) -> Option<String> {
+    let macos_dir = exe.filter(|_| macos)?.parent()?;
+    let contents = macos_dir
+        .parent()
+        .filter(|_| macos_dir.ends_with("MacOS"))?;
+    let bundle = contents
+        .parent()
+        .filter(|_| contents.ends_with("Contents"))?;
+    let named = bundle.extension().is_some_and(|ext| ext == "app");
+    named.then(|| bundle.to_string_lossy().into_owned())
+}
+
 /// Why an update does not install while translocated; the UI explains the fix (17.10).
 pub const TRANSLOCATED: &str =
     "Hive runs from a temporary read-only copy; move it to Applications to update";
@@ -340,6 +355,9 @@ pub struct Hive {
     defaults: (OsString, Vec<OsString>),
     /// The app runs translocated (`translocated`); given by `main.rs` (`with_translocated`).
     translocated: bool,
+    /// The app's own bundle ([`app_bundle`]), which the service removes last when Hive is
+    /// uninstalled; given by `main.rs` (`with_app_bundle`).
+    app_bundle: Option<String>,
     /// Shows the menu bar icon; given by `main.rs` (`with_tray`, 17.22).
     tray: Option<tray::Shown>,
     /// Reads the files copied to the clipboard; given by `main.rs` on macOS (`with_clipboard`,
@@ -800,6 +818,7 @@ impl Hive {
             url: None,
             defaults: (DEFAULTS.into(), Vec::new()),
             translocated: false,
+            app_bundle: None,
             tray: None,
             clipboard: None,
         }
@@ -824,6 +843,12 @@ impl Hive {
         let out = out.filter(|out| out.status.success());
         let setting = out.map(|out| String::from_utf8_lossy(&out.stdout).into_owned());
         double_click_action(setting.as_deref())
+    }
+
+    /// The app's own bundle, named to the service in `list_uninstall` and `uninstall` (23.5).
+    pub fn with_app_bundle(mut self, bundle: Option<String>) -> Self {
+        self.app_bundle = bundle;
+        self
     }
 
     /// Tells the UI the app runs translocated (17.10): `connect` sends `translocated`, and an
@@ -1556,6 +1581,30 @@ impl Hive {
             delete_folder,
         };
         self.link().send(0, &remove)
+    }
+
+    /// What uninstalling would remove (23.5), with the app's own bundle, never one the UI
+    /// names. The answer arrives as `uninstall_list`.
+    pub fn list_uninstall(&self, keep_data: bool, accounts: bool) -> Result<(), String> {
+        let app = self.app_bundle.clone();
+        let list = Control::ListUninstall {
+            keep_data,
+            accounts,
+            app,
+        };
+        self.link().send(0, &list)
+    }
+
+    /// Uninstalls Hive (23.5): the service ends every terminal, removes what `list_uninstall`
+    /// listed and answers `uninstalled`; the UI then quits.
+    pub fn uninstall(&self, keep_data: bool, accounts: bool) -> Result<(), String> {
+        let app = self.app_bundle.clone();
+        let uninstall = Control::Uninstall {
+            keep_data,
+            accounts,
+            app,
+        };
+        self.link().send(0, &uninstall)
     }
 
     /// The answer to each space request arrives as `spaces` or `space_failed`.
@@ -2349,6 +2398,20 @@ pub mod commands {
     #[tauri::command]
     pub fn create_account(hive: State<'_, Hive>, name: String) -> Result<(), String> {
         hive.create_account(name)
+    }
+
+    #[tauri::command]
+    pub fn list_uninstall(
+        hive: State<'_, Hive>,
+        keep_data: bool,
+        accounts: bool,
+    ) -> Result<(), String> {
+        hive.list_uninstall(keep_data, accounts)
+    }
+
+    #[tauri::command]
+    pub fn uninstall(hive: State<'_, Hive>, keep_data: bool, accounts: bool) -> Result<(), String> {
+        hive.uninstall(keep_data, accounts)
     }
 
     #[tauri::command]
