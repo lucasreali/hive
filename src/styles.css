@@ -1182,6 +1182,13 @@ label:has(> input[type="checkbox"]:disabled) {
   min-height: 0;
 }
 
+/* Every editor and code view is its own stacking context (23.11): CodeMirror's panels (the find
+   bar, z-index 300) and tooltips rise over its own text only, never over a menu, a select list,
+   a toast or a dialog. */
+.cm-editor {
+  isolation: isolate;
+}
+
 /* Editing (3.5): text buttons, the unsaved-edits dot, the agent badge, the conflict banner. */
 .file-view-bar .ghost.text {
   width: auto;
