@@ -718,7 +718,8 @@ const script = (text: string) => (text.trim() === "" ? null : text);
  */
 function ProjectScriptsSection() {
   const projects = Object.values(useHive((s) => s.projects) ?? {});
-  const [picked, setPicked] = useState<string | null>(null);
+  // Opened for a project (the Scripts tab's link, 23.4): that one first.
+  const [picked, setPicked] = useState<string | null>(() => useHive.getState().modalProject);
   const id = projects.find((p) => p.id === picked)?.id ?? projects[0]?.id;
   if (id === undefined) return <p className="field-help">Add a project to give it scripts.</p>;
   return (
@@ -734,8 +735,11 @@ function ProjectScriptsSection() {
           onChange={setPicked}
         />
         <p className="field-help">
-          Scripts are kept in Hive's settings, never read from the repository. Hive's terminals in a
-          worktree have <code>$HIVE_PORT</code> (the first of 10 ports kept for it),{" "}
+          These scripts are kept in Hive's settings. Run scripts also come from the repository's{" "}
+          <code>package.json</code>, <code>Taskfile.yml</code> and <code>Makefile</code> (the
+          Scripts tab); one here with the same name replaces it. Setup and archive come only from
+          here, and nothing runs until you click it. Hive's terminals in a worktree have{" "}
+          <code>$HIVE_PORT</code> (the first of 10 ports kept for it),{" "}
           <code>$HIVE_WORKTREE_PATH</code> and <code>$HIVE_ROOT_PATH</code>. They also have that
           port as <code>$PORT</code> (unless your shell already sets one), which most dev servers
           read; Vite needs <code>server.port: Number(process.env.PORT)</code> in its config.
@@ -1335,7 +1339,9 @@ function Content({ section, query }: { section: Section; query: string }) {
  * service's refusal shows at the top. Terminals and the theme follow the stored settings.
  */
 export function SettingsDialog() {
-  const [section, setSection] = useState<Section>("Terminal");
+  const [section, setSection] = useState<Section>(() =>
+    useHive.getState().modalProject ? "Projects" : "Terminal",
+  );
   const [query, setQuery] = useState("");
   const error = useHive((s) => s.settingsError);
   return (

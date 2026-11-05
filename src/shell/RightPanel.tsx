@@ -5,6 +5,7 @@ import {
   GitPullRequestIcon,
   MagnifyingGlassIcon,
   PlayCircleIcon,
+  TerminalIcon as PromptIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -67,6 +68,7 @@ import { Markdown } from "./Markdown";
 import { PullsView } from "./PullsView";
 import { RunsView } from "./RunsView";
 import { ResizeHandle } from "./resize";
+import { ScriptsView } from "./ScriptsView";
 import { SearchField } from "./SearchField";
 import { SessionsView } from "./SessionsView";
 
@@ -313,6 +315,7 @@ const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
   // 9.31 and 9.32.
   { view: "pulls", label: "PRs", icon: <GitPullRequestIcon size={14} aria-hidden="true" /> },
   { view: "actions", label: "Actions", icon: <PlayCircleIcon size={14} aria-hidden="true" /> },
+  { view: "scripts", label: "Scripts", icon: <PromptIcon size={14} aria-hidden="true" /> },
 ];
 
 /**
@@ -363,6 +366,9 @@ export function RightPanel() {
           {view === "changes" && <FileTree worktree={target.worktree.path} changedOnly />}
           {view === "sessions" && <SessionsView worktree={target.worktree.id} />}
           {view === "pulls" && <PullsView project={target.project} worktree={target.worktree} />}
+          {view === "scripts" && (
+            <ScriptsView project={target.project} worktree={target.worktree} />
+          )}
           {view === "actions" && (
             <RunsView
               key={target.worktree.id}

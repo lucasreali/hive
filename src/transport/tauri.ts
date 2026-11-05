@@ -61,6 +61,7 @@ export const tauriTransport: Transport = {
   expandIgnored: (path, folders) => send("expand_ignored", { path, folders }),
   setView: (terminal, focused, visible) => send("set_view", { terminal, focused, visible }),
   listChanges: (path, base) => send("list_changes", { path, base }),
+  listScripts: (path) => send("list_scripts", { path }),
   listSessions: () => send("list_sessions"),
   locateSession: (id, target) => send("locate_session", { id, target }),
   deleteSession: (id) => send("delete_session", { id }),

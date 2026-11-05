@@ -1,18 +1,18 @@
 import { FileTextIcon, GitBranchIcon, type Icon, LightningIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { runScript, worktreeScripts } from "../scripts";
 import { commandKeys, currentProject, goToAgent, platformCommands } from "../shortcuts";
 import {
   type HiveState,
   openModal,
   panelWorktree,
-  scriptsOf,
   select,
   spaceProjects,
   treeAgents,
   useHive,
 } from "../store";
-import { openWith, showOpenFailure } from "../terminals";
+import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { reviewTarget, sendReview } from "../viewer/review";
 import { composing, keyText } from "../window";
@@ -89,11 +89,12 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
   const place = panelWorktree(s);
   if (place) {
     const { worktree } = place;
-    for (const script of scriptsOf(s.settings, place.project.id).run) {
+    const listed = s.scripts[worktree.path];
+    for (const script of worktreeScripts(listed, s.settings, place.project.id)) {
       extra.push({
         label: `Run: ${script.name}`,
         detail: worktree.name,
-        run: () => showOpenFailure(openWith(worktree.path, script.command)),
+        run: () => showOpenFailure(runScript(worktree.path, script)),
       });
     }
   }
@@ -179,6 +180,10 @@ export function Palette() {
     }),
   );
   const { worktree, groups, searching } = paletteView(useHive.getState(), q);
+  // The shown worktree's scripts, the repository's too (23.4).
+  useEffect(() => {
+    if (worktree) void transport.listScripts(worktree);
+  }, [worktree]);
   useEffect(() => {
     if (!worktree || !q) return;
     const later = setTimeout(() => void transport.searchFiles(worktree, q), SEARCH_DELAY_MS);

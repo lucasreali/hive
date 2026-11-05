@@ -592,9 +592,15 @@ export type Script = { name: string; command: string; source: ScriptSource };
 
 /**
  * A worktree's scripts (23.4, `scripts`): the project's run scripts from the settings first,
- * then the repository's; `problems` says why a file was not read or what was left out.
+ * then the repository's; `problems` says why a file was not read or what was left out; `port`
+ * is the first of the worktree's 10 ports (null when it has no block).
  */
-export type WorktreeScripts = { path: string; scripts: Script[]; problems: string[] };
+export type WorktreeScripts = {
+  path: string;
+  scripts: Script[];
+  problems: string[];
+  port: number | null;
+};
 
 /**
  * Whether the OS lets Hive show notifications (17.19): `unknown` where the app cannot ask (a

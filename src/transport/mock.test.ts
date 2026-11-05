@@ -25,7 +25,9 @@ import {
   MOCK_IGNORED,
   MOCK_ISSUES,
   MOCK_OWN_WORKTREE,
+  MOCK_REPO_SCRIPTS,
   MOCK_REPOS,
+  MOCK_SCRIPT_PROBLEMS,
   MOCK_SESSIONS,
   MOCK_SHARED,
   MOCK_STATES,
@@ -698,6 +700,51 @@ test("a watched worktree lists its files and again after a touch in its terminal
   const [again, main2] = filesOf().slice(7);
   expect(again?.type === "files" && again.files).toEqual(["b.txt", ...touched].sort());
   expect(main2?.type === "files" && main2.files.includes("d.txt")).toBe(true);
+});
+
+test("a worktree's scripts: the settings' first, shop's repository's, a port each (23.4)", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api] = MOCK_REPOS;
+  const login = shop.worktrees[1].path;
+  messages.length = 0;
+  await transport.listScripts(login);
+  await transport.listScripts(api.path);
+  await transport.listScripts(login);
+  await transport.listScripts("/nowhere");
+  await tick();
+  const shopScripts = {
+    type: "scripts" as const,
+    path: login,
+    scripts: MOCK_REPO_SCRIPTS,
+    problems: MOCK_SCRIPT_PROBLEMS,
+    port: 20_000 as number | null,
+  };
+  const apiScripts = { type: "scripts" as const, path: api.path, scripts: [], problems: [], port: 20_010 };
+  const refused = { type: "error" as const, message: "/nowhere is not a worktree of a followed project" };
+  expect(messages).toEqual([shopScripts, apiScripts, shopScripts, refused]);
+  // The settings change: the scripts the app last asked for (a worktree) follow; one replaces
+  // the repository's of the same name.
+  await transport.listScripts(login);
+  await tick();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  const run = [{ name: "dev", command: "pnpm dev --port $PORT" }];
+  settings.projects[shop.id] = { scripts: { setup: null, run, archive: null } };
+  messages.length = 0;
+  await transport.setSettings(settings);
+  await tick();
+  const mine = { name: "dev", command: "pnpm dev --port $PORT", source: "settings" as const };
+  const rest = MOCK_REPO_SCRIPTS.filter((s) => s.name !== "dev");
+  expect(messages.find((m) => m.type === "scripts")).toEqual({
+    ...shopScripts,
+    scripts: [mine, ...rest],
+  });
+  // Asked for no worktree: nothing more.
+  await transport.listScripts("/nowhere");
+  await tick();
+  messages.length = 0;
+  await transport.setSettings(settings);
+  await tick();
+  expect(messages.some((m) => m.type === "scripts")).toBe(false);
 });
 
 test("changes of a followed worktree with their totals, or why not", async () => {

@@ -196,6 +196,18 @@ test("the selected worktree's run scripts are commands that type them into a new
   write.mockRestore();
 });
 
+test("the palette asks for the shown worktree's scripts, the repository's too (23.4)", () => {
+  const list = spyOn(transport, "listScripts").mockResolvedValue();
+  act(() => useHive.setState({ selection: fixLogin.id }));
+  open();
+  expect(list).toHaveBeenCalledWith(fixLogin.path);
+  const scripts = [{ name: "up", command: "task up", source: "taskfile" as const }];
+  act(() => apply({ type: "scripts", path: fixLogin.path, scripts, problems: [], port: null }));
+  type("run up");
+  expect(picked()?.textContent).toBe("Run: up");
+  list.mockRestore();
+});
+
 test("the palette renders only when what it shows changes; a row runs as the store is now (19.17)", async () => {
   const terminal = spyOn(transport, "openTerminal").mockResolvedValue(8);
   const write = spyOn(transport, "writeTerminal").mockResolvedValue();

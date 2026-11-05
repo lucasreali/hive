@@ -628,7 +628,7 @@ test("each panel tab keeps its label as its accessible name and title", () => {
   panel();
   act(() => setRightPanel("files"));
   const tabs = screen.getByRole("tablist", { name: "Panel" }).querySelectorAll('[role="tab"]');
-  const labels = ["Files", "Diff", "Sessions", "PRs", "Actions"];
+  const labels = ["Files", "Diff", "Sessions", "PRs", "Actions", "Scripts"];
   expect([...tabs].map((t) => [t.getAttribute("aria-label"), t.getAttribute("title")])).toEqual(
     labels.map((l) => [l, l]),
   );

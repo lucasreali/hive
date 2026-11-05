@@ -266,7 +266,7 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions";
+export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions" | "scripts";
 /** The key of a project's Actions runs on `branch` (all branches: null) in `HiveState.runs`. */
 export const runsKey = (project: string, branch: string | null) => `${project}\n${branch ?? ""}`;
 
@@ -430,6 +430,8 @@ export type HiveState = {
   changes: Record<string, Changes>;
   /** By worktree path: the last `scripts` the service sent for it (23.4). */
   scripts: Record<string, WorktreeScripts>;
+  /** By terminal id: the script it was opened to run (UI state, `src/scripts.ts`). */
+  scriptRuns: Record<number, { worktree: string; name: string; command: string }>;
   /** By worktree path: how many `changes` arrived, equal ones too (the open file re-asks). */
   changesSeen: Record<string, number>;
   /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
@@ -547,6 +549,7 @@ export const initialState: HiveState = {
   worktreeFiles: null,
   changes: {},
   scripts: {},
+  scriptRuns: {},
   changesSeen: {},
   diffBases: {},
   file: null,
@@ -869,7 +872,9 @@ export const removeTab = (id: number) =>
     const at = items.findIndex((t) => !("path" in t) && t.id === id);
     const beside = items.filter((_, j) => j !== at)[Math.min(at, items.length - 2)];
     const gone = [barKey(s, { id, cwd: "" }), `tab:${id}`];
+    const { [id]: _, ...scriptRuns } = s.scriptRuns;
     const removed = {
+      scriptRuns,
       tabs: s.tabs.filter((t) => t.id !== id),
       tabOrder: s.tabOrder.filter((k) => !gone.includes(k)),
       activeTab: s.activeTab === id ? next : s.activeTab,
