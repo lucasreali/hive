@@ -171,6 +171,8 @@ impl Env {
             .env_remove("CLAUDE_CONFIG_DIR");
         // Run from a Hive terminal, the tests would pass its `HIVE_*` on to the service and its
         // terminals.
+        // A `PORT` of the tests' shell would be kept over the worktree's (D22.14).
+        cmd.env_remove("PORT");
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().starts_with("HIVE_") {
                 cmd.env_remove(key);

@@ -1282,6 +1282,13 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
+/* Every editor and code view is its own stacking context (23.11): CodeMirror's panels (the find
+   bar, z-index 300) and tooltips rise over its own text only, never over a menu, a select list,
+   a toast or a dialog. */
+.cm-editor {
+  isolation: isolate;
+}
+
 /* Editing (3.5): text buttons, the unsaved-edits dot, the agent badge, the conflict banner. */
 .file-view-bar .ghost.text {
   width: auto;
@@ -2066,18 +2073,33 @@ button.chevron:hover {
   background: rgba(18, 20, 24, 0.55);
 }
 
+/* Placed (23.9): a short dialog sits `--dialog-top` from the top; one taller than the room under
+   that is centred, at least 24px from each edge, its body scrolling between header and footer.
+   `--dialog-height` is the tallest it has been since it opened (`placeDialogs`, src/ui/dialogs.ts),
+   so its top only ever moves up while open, gliding: a folder list filtered as one types, or a
+   warning that comes and goes, never makes it bob. */
 .dialog {
+  --dialog-top: 120px;
   width: 520px;
   max-width: calc(100% - 32px);
-  margin: 120px auto auto;
-  /* Below its top margin, so a tall one (the space dialog) scrolls and its footer stays on screen. */
-  max-height: calc(100vh - 144px);
+  margin: max(24px, min(var(--dialog-top), (100vh - var(--dialog-height, 0px)) / 2)) auto auto;
+  max-height: calc(100vh - 48px);
   padding: 0;
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.dialog[data-placed] {
+  transition: margin-top 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog[data-placed] {
+    transition: none;
+  }
 }
 
 .dialog header {
@@ -2215,6 +2237,37 @@ button.chevron:hover {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* An open dialog is a column whose body scrolls between its header and footer (23.9); the
+   pickers keep their own layout. */
+.dialog[open]:not(.picker) {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog[open]:not(.picker) > *,
+.dialog[open]:not(.picker) > form > * {
+  flex: none;
+}
+
+.dialog[open]:not(.picker) > form,
+.dialog[open]:not(.picker) > form > .dialog-body {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.dialog[open]:not(.picker) > form {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog[open]:not(.picker) > form > .dialog-body {
+  overflow-y: auto;
+}
+
+.dialog[open]:not(.picker) > form > .dialog-body > * {
+  flex-shrink: 0;
+}
+
 /* A worktree row's "+": a new chat (a terminal running claude), shown on hover. */
 .new-chat {
   display: none;
@@ -2262,8 +2315,8 @@ button.chevron:hover {
 
 /* Settings (6.2): sections on the left, the fields of one (or the search's) on the right. */
 .dialog.settings {
+  --dialog-top: 80px;
   width: 760px;
-  margin-top: 80px;
 }
 
 .settings-main {
@@ -2736,7 +2789,9 @@ button.chevron:hover {
 /* Worktree picker (Ctrl+Shift+T) */
 .dialog.picker {
   width: 560px;
+  /* Where it always was, whatever its height. */
   margin-top: 44px;
+  max-height: calc(100vh - 144px);
   background: var(--panel);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   overflow: hidden;
@@ -4227,6 +4282,30 @@ button.link:hover {
   line-height: 18px;
 }
 
+/* A code block's copy button (23.8): at its top right, shown on hover and on keyboard focus. */
+.md-code {
+  position: relative;
+}
+
+.md-code-copy {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 24px;
+  background: var(--panel);
+  opacity: 0;
+}
+
+.md-code:hover .md-code-copy,
+.md-code-copy:focus-visible,
+.md-code-copy[data-copied] {
+  opacity: 1;
+}
+
+.md-code-copy[data-copied] {
+  color: var(--state-idle);
+}
+
 .markdown-doc table {
   width: 100%;
 }
@@ -4275,4 +4354,102 @@ button.link:hover {
 
 .markdown-doc .tok-string {
   color: var(--syn-string);
+}
+
+/* The editor's find bar (23.10): CodeMirror's search panel with the app's fields and buttons.
+   Each row one line, its items centred with one gap; both fields one width; the close button
+   6px from the right edge, as the file header's actions above it. `.cm-editor` outweighs
+   CodeMirror's base theme for the panel. */
+.cm-editor .cm-panel.cm-search.find-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px 6px 3px 12px;
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-field {
+  flex: 0 1 280px;
+  min-width: 120px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 24px;
+  padding: 0 2px 0 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-field:focus-within {
+  border-color: var(--focus);
+}
+
+.cm-editor .cm-panel.cm-search.find-bar input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-small);
+}
+
+.cm-editor .cm-panel.cm-search.find-bar input::placeholder {
+  color: var(--text-4);
+}
+
+.cm-editor .cm-panel.cm-search.find-bar button {
+  margin: 0;
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-toggle {
+  flex: none;
+  width: 22px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-toggle[name="wholeWord"] {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-toggle:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-toggle[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .ghost {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .ghost.text {
+  width: auto;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.cm-editor .cm-panel.cm-search.find-bar .find-gap {
+  flex: 1;
 }

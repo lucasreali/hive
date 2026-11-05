@@ -269,6 +269,15 @@ test("the archive script's help names the shell it runs in", () => {
   expect(help()).toContain("Run by the service in Command Prompt (the Shell setting;");
 });
 
+test("the projects' hint names PORT and what Vite needs for it (23.3)", () => {
+  open();
+  section("Projects");
+  act(() => apply({ type: "projects", projects: [MOCK_REPOS[0]] }));
+  const help = screen.getByRole("combobox", { name: "Project" }).closest(".field")?.textContent;
+  expect(help).toContain("They also have that port as $PORT (unless your shell already sets one)");
+  expect(help).toContain("Vite needs server.port: Number(process.env.PORT) in its config.");
+});
+
 test("the projects section edits each project's scripts", async () => {
   open();
   section("Projects");
