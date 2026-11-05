@@ -323,6 +323,10 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             // with git's registry, so an older list of it never follows this one.
             state.change_worktrees(|projects| {
                 projects.forget();
+                // A folder project `git init`ed (23.1) whose `.git` the watch missed.
+                if let Err(err) = projects.settle() {
+                    eprintln!("hive: warning: {err}");
+                }
                 Control::Projects {
                     projects: projects.list(),
                 }
@@ -330,35 +334,15 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         }
         Ok(Control::AddProject { path }) => {
             let state = state.clone();
+            tokio::spawn(async move { state.add_project(path).await });
+        }
+        Ok(Control::InitGit { id }) => {
+            let state = state.clone();
             tokio::spawn(async move {
-                // In turn with git's registry, whose list may not have the project yet.
-                let _turn = state.changing.lock().await;
-                let added = tokio::task::block_in_place(|| {
-                    let project = state.projects.add(&path)?;
-                    // A group's repositories come in the list, before it (14.1).
-                    let list = project.group.then(|| Control::Projects {
-                        projects: state.projects.list(),
-                    });
-                    let mut replies: Vec<Control> = list.into_iter().collect();
-                    replies.push(Control::ProjectAdded { project });
-                    replies.iter_mut().for_each(|r| state.with_health(r));
-                    Ok(replies)
-                });
-                let replies = match added {
-                    Ok(replies) => {
-                        // It joined the current space.
-                        state.refollow.notify_one();
-                        state.to_app(0, &state.projects.spaces_message()).await;
-                        replies
-                    }
-                    Err((error, message)) => vec![Control::AddProjectFailed {
-                        path,
-                        error,
-                        message,
-                    }],
-                };
-                for reply in replies {
-                    state.to_app(0, &reply).await;
+                // The watch of its folder sees the `.git` made, and sends the projects.
+                let init = tokio::task::block_in_place(|| state.projects.init_git(&id));
+                if let Err(err) = init {
+                    state.to_app(0, &super::error(err)).await;
                 }
             });
         }

@@ -43,8 +43,8 @@ pub mod answer {
     /// `search_files`: `query` in the files of `worktree`.
     pub fn search(projects: &Projects, worktree: String, query: String) -> Control {
         let found = projects
-            .worktree(&worktree)
-            .and_then(|dir| search::search(&dir, &query));
+            .tree(&worktree)
+            .and_then(|(dir, plain)| search::search(&dir, plain.as_deref(), &query));
         let (matches, truncated, error) = match found {
             Ok((matches, truncated)) => (matches, truncated, None),
             Err(err) => (Vec::new(), false, Some(err.to_string())),
@@ -59,9 +59,13 @@ pub mod answer {
     }
 
     /// `open_file`: `path` of `worktree`, on disk and at `base`.
+    /// A folder project's file (23.1) has no base: its folder is in no repository.
     pub fn open(projects: &Projects, worktree: String, path: String, base: DiffBase) -> Control {
-        let read = changes::against(&projects.list(), &worktree, base)
-            .and_then(|against| super::read(&against.dir, &path, against.commit.as_deref()));
+        let read = match projects.tree(&worktree) {
+            Ok((dir, Some(_))) => super::read_plain(&dir, &path),
+            _ => changes::against(&projects.list(), &worktree, base)
+                .and_then(|against| super::read(&against.dir, &path, against.commit.as_deref())),
+        };
         super::message(worktree, path, read)
     }
 
@@ -188,6 +192,11 @@ pub mod answer {
 /// relative, without `..`, and must not resolve (through symlinks) outside `dir`.
 pub fn read(dir: &Path, path: &str, commit: Option<&str>) -> io::Result<(Side, Side)> {
     Ok((on_disk(dir, relative(path)?)?, at_base(dir, path, commit)?))
+}
+
+/// [`read`] in a folder in no repository (a folder project's, 23.1): no base.
+pub fn read_plain(dir: &Path, path: &str) -> io::Result<(Side, Side)> {
+    Ok((on_disk(dir, relative(path)?)?, Side::Missing))
 }
 
 /// `path` from the app: relative, without `.` or `..`, at most [`PATH_LIMIT`] bytes.

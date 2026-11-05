@@ -402,6 +402,9 @@ pub struct Watcher {
     watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<Event>>,
     git_dir: Option<PathBuf>,
+    /// The empty repository a folder project's folder (23.1) is listed with
+    /// ([`git::command_in`]); `None` for a worktree.
+    plain: Option<PathBuf>,
     strategy: Strategy,
     /// What counts, shared with the watcher's thread.
     filter: Arc<Mutex<Filter>>,
@@ -430,13 +433,22 @@ impl Watcher {
     /// Starts watching the worktree at `root`'s git dir; [`Watcher::list`] adds the rest.
     /// Blocks on git; must run inside the tokio runtime.
     pub fn new(root: &Path) -> io::Result<Self> {
-        Self::with(root, Strategy::NATIVE)
+        Self::with(root, Strategy::NATIVE, None)
+    }
+
+    /// [`Watcher::new`] for the folder `root` of a folder project (23.1), in no repository:
+    /// listed as the work tree of the empty repository `plain`, with no git dir to watch.
+    pub fn plain(root: &Path, plain: &Path) -> io::Result<Self> {
+        Self::with(root, Strategy::NATIVE, Some(plain))
     }
 
     /// [`Watcher::new`] with `strategy`; with [`Strategy::Root`] the worktree is watched
     /// at once.
-    fn with(root: &Path, strategy: Strategy) -> io::Result<Self> {
-        let (out, _) = git(root, &["rev-parse", "--absolute-git-dir"], 65_536)?;
+    fn with(root: &Path, strategy: Strategy, plain: Option<&Path>) -> io::Result<Self> {
+        let out = match plain {
+            None => git(root, None, &["rev-parse", "--absolute-git-dir"], 65_536)?.0,
+            Some(_) => Vec::new(),
+        };
         let root = canonical(root)?;
         let filter = Arc::new(Mutex::new(Filter {
             root: root.clone(),
@@ -451,8 +463,9 @@ impl Watcher {
         let mut watcher =
             RecommendedWatcher::new(handler, watch_config()).map_err(io::Error::other)?;
         let git_dir = PathBuf::from(String::from_utf8_lossy(&out).trim_end());
-        let git_dir = canonical(&git_dir)
-            .ok()
+        let git_dir = (plain.is_none())
+            .then(|| canonical(&git_dir).ok())
+            .flatten()
             .filter(|dir| watcher.watch(dir, RecursiveMode::NonRecursive).is_ok());
         if strategy == Strategy::Root {
             let root = root.as_path();
@@ -465,6 +478,7 @@ impl Watcher {
             watcher,
             events,
             git_dir,
+            plain: plain.map(Path::to_path_buf),
             strategy,
             filter,
             dirs: BTreeSet::new(),
@@ -491,7 +505,7 @@ impl Watcher {
             "--exclude-standard",
             "-z",
         ];
-        let (out, cut) = git(&self.root, &ls, GIT_LIMIT)?;
+        let (out, cut) = git(&self.root, self.plain.as_deref(), &ls, GIT_LIMIT)?;
         let mut listing = parse_capped(&out, cut, self.max_files);
         let ls = [
             "ls-files",
@@ -501,7 +515,7 @@ impl Watcher {
             "--directory",
             "-z",
         ];
-        let (out, cut) = git(&self.root, &ls, GIT_LIMIT)?;
+        let (out, cut) = git(&self.root, self.plain.as_deref(), &ls, GIT_LIMIT)?;
         let mut ignored: BTreeSet<String> =
             parse_ignored(&out).into_iter().map(str::to_owned).collect();
         // Parents first: a folder inside an open one is there once that one was listed.
@@ -540,7 +554,7 @@ impl Watcher {
             "--directory",
             "-z",
         ];
-        let (untracked, _) = git(&self.root, &ls, GIT_LIMIT)?;
+        let (untracked, _) = git(&self.root, self.plain.as_deref(), &ls, GIT_LIMIT)?;
         let untracked: Vec<&str> = parse_dirs(&untracked).take(MAX_WATCHES).collect();
         let files = listing.files.iter().map(String::as_str);
         let mut wanted = dirs(files.chain(untracked.iter().copied()));
@@ -724,9 +738,15 @@ fn parse_dirs(out: &[u8]) -> impl Iterator<Item = &str> {
         .filter(|p| p.ends_with('/'))
 }
 
-/// `git -C <root> <args>`'s output, at most `limit` bytes; true when it was cut off there.
-fn git(root: &Path, args: &[&str], limit: u64) -> io::Result<(Vec<u8>, bool)> {
-    let mut child = git::command(root)?
+/// `git -C <root> <args>`'s output (in no repository with `plain`, [`git::command_in`]), at
+/// most `limit` bytes; true when it was cut off there.
+fn git(
+    root: &Path,
+    plain: Option<&Path>,
+    args: &[&str],
+    limit: u64,
+) -> io::Result<(Vec<u8>, bool)> {
+    let mut child = git::command_in(root, plain)?
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -990,16 +1010,16 @@ pub(crate) mod tests {
     #[test]
     fn git_output_is_cut_at_the_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let (full, cut) = git(dir.path(), &["--version"], 1024).unwrap();
+        let (full, cut) = git(dir.path(), None, &["--version"], 1024).unwrap();
         assert!(full.starts_with(b"git version "), "{full:?}");
         assert!(!cut);
         assert_eq!(
-            git(dir.path(), &["--version"], 4).unwrap(),
+            git(dir.path(), None, &["--version"], 4).unwrap(),
             (b"git ".to_vec(), true)
         );
         let exact = full.len() as u64;
         assert_eq!(
-            git(dir.path(), &["--version"], exact).unwrap(),
+            git(dir.path(), None, &["--version"], exact).unwrap(),
             (full, false)
         );
     }
@@ -1082,6 +1102,36 @@ pub(crate) mod tests {
 
     const SOON: Duration = Duration::from_secs(5);
     const NEVER: Duration = Duration::from_millis(600);
+
+    #[tokio::test]
+    async fn a_folder_in_no_repository_is_listed_with_an_empty_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = canonical(dir.path()).unwrap();
+        let root = top.join("folder");
+        run_git(&top, &["init", "-q", "--bare", "plain.git"]);
+        write(&root, "a.txt");
+        write(&root, "src/b.rs");
+        write(&root, "out/c.o");
+        std::fs::write(root.join(".gitignore"), "out/\n").unwrap();
+        let mut watcher = Watcher::plain(&root, &top.join("plain.git")).unwrap();
+        // No git dir of its own is watched.
+        assert_eq!(watcher.git_dir, None);
+        let listing = watcher.list().unwrap();
+        // Every file is untracked: listed as in a worktree, ignored ones apart.
+        assert_eq!(names(&listing), [".gitignore", "a.txt", "src/b.rs"]);
+        assert_eq!(listing.ignored, ["out/"]);
+        assert_eq!(watched(&watcher), ["", "src"]);
+        changes(&mut watcher, NEVER).await;
+        write(&root, "src/d.rs");
+        assert!(changes(&mut watcher, SOON).await);
+        let listing = watcher.list().unwrap();
+        assert_eq!(
+            names(&listing),
+            [".gitignore", "a.txt", "src/b.rs", "src/d.rs"]
+        );
+        // Without the empty repository, git refuses the folder.
+        assert!(Watcher::new(&root).is_err());
+    }
 
     #[tokio::test]
     async fn ignored_trees_are_neither_listed_nor_watched() {
@@ -1546,7 +1596,7 @@ pub(crate) mod tests {
             std::fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
             write(&root, "ignored/x.txt");
             write(&root, "src/a.rs");
-            let mut watcher = Watcher::with(&root, strategy).unwrap();
+            let mut watcher = Watcher::with(&root, strategy, None).unwrap();
             assert_eq!(watcher.strategy, strategy);
             watcher.list().unwrap();
             assert_eq!(watched(&watcher), ["", "src"], "{strategy:?}");
@@ -1595,7 +1645,7 @@ pub(crate) mod tests {
     #[test]
     fn a_failing_git_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let err = git(dir.path(), &["no-such-command"], 1024).unwrap_err();
+        let err = git(dir.path(), None, &["no-such-command"], 1024).unwrap_err();
         let want = format!("git no-such-command failed in {}", dir.path().display());
         assert_eq!(err.to_string(), want);
     }
