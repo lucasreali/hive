@@ -98,6 +98,10 @@ async fn hook_connection<R: AsyncRead + Unpin>(
     let Some(Ok(frame)) = reader.next().await else {
         return;
     };
+    // Hive is being uninstalled: nothing is kept (`usage.json` would come back).
+    if state.uninstalling().is_some() {
+        return;
+    }
     match frame.to_control() {
         Ok(Control::Badge { text }) => {
             let channel = frame.channel;

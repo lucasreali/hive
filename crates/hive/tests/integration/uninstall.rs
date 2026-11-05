@@ -234,6 +234,8 @@ async fn the_app_uninstalls_hive_after_its_terminals_ended() {
         );
     }
 
+    // A hook connection already open: what it sends after the uninstall is not kept.
+    let mut hook = home.env.connect(Role::Hook).await;
     app.send(
         0,
         Control::Uninstall {
@@ -253,6 +255,19 @@ async fn the_app_uninstalls_hive_after_its_terminals_ended() {
         }
     };
     assert_eq!(failed, []);
+    let window = hive_protocol::SessionWindow {
+        used_percentage: 7,
+        resets_at: u64::MAX / 2,
+    };
+    let report = Control::StatuslineUsage {
+        claude_dir: home.path(".claude").display().to_string(),
+        usage: window,
+        week: None,
+    };
+    hook.send(0, report).await;
+    // Its connection ends without a word, and nothing came back.
+    assert!(hook.next().await.is_none());
+    assert!(!home.has(".hive/usage.json"));
     // Its terminals ended before anything was removed; only the service is left.
     let pid = daemon.0.id() as i32;
     let left: Vec<_> = home

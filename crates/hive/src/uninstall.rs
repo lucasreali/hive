@@ -28,6 +28,46 @@ pub const APPLICATIONS: &str = "HIVE_APPLICATIONS";
 /// when the data is kept.
 const PROGRAM: [&str; 3] = ["bin", "shell", "hive-hooks.json"];
 
+/// What else Hive writes in its folder ([`Paths`]), and nothing else is removed from it: a
+/// `HIVE_HOME` naming another folder (`~/.claude`, a projects folder) loses nothing of its own.
+/// A name followed by a `.` and more is that file's own (`spaces.json.corrupt`, a `.tmp`).
+const DATA: [&str; 9] = [
+    "settings.json",
+    "spaces.json",
+    "projects.json",
+    "ports.json",
+    "offered-pulls.json",
+    "usage.json",
+    "open-sessions.json",
+    "shared",
+    "accounts",
+];
+
+/// Whether `entry` (of Hive's folder) is one of `names` or a file of one of them.
+fn named(entry: &Path, names: &[&str]) -> bool {
+    let name = entry
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    let own = |known: &&str| {
+        name == **known
+            || name
+                .strip_prefix(*known)
+                .is_some_and(|rest| rest.starts_with('.'))
+    };
+    names.iter().any(own)
+}
+
+/// Whether `data` is Hive's folder: `~/.hive` itself, or one holding the hooks settings the
+/// service writes at every start (a `HIVE_HOME`); never the home nor one holding it (compared
+/// once links are resolved).
+fn hives(data: &Path, home: &Path) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+    let hooks = std::fs::symlink_metadata(data.join("hive-hooks.json")).is_ok_and(|m| m.is_file());
+    let marked = data == home.join(".hive") || hooks;
+    marked && !real(home).starts_with(real(data))
+}
+
 /// The system's folders (under `~/Library`) for the app id that hold the app's own data: the
 /// WebView's storage, the window's place and the preferences. Kept with the data.
 const LIBRARY_DATA: [&str; 3] = ["Application Support/", "WebKit/", "Preferences/"];
@@ -81,10 +121,10 @@ pub struct Plan {
 }
 
 /// `path` as the app bundle to remove: an absolute path to a folder (not a link) named
-/// `*.app`; anything else is not removed.
+/// `Hive.app`; anything else is not removed.
 pub fn bundle(path: Option<&Path>) -> Option<PathBuf> {
     let path = path.filter(|p| p.is_absolute())?;
-    let named = path.extension().is_some_and(|ext| ext == "app");
+    let named = path.file_name().is_some_and(|name| name == APP_NAME);
     let folder = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
     (named && folder).then(|| path.to_owned())
 }
@@ -95,10 +135,13 @@ pub fn plan(places: &Places, choice: &Choice) -> Plan {
     let data = &places.paths.data;
     let mut found = Found::default();
     let accounts_dir = places.paths.accounts_dir();
-    // A Hive folder that is the home or holds it (a mistaken `HIVE_HOME`) is never emptied.
-    let own_folder = !home.starts_with(data);
-    let listed = if own_folder {
+    // A folder that is not Hive's (a mistaken `HIVE_HOME`) is never emptied.
+    let own_folder = hives(data, home);
+    let listed: Vec<PathBuf> = if own_folder {
         entries(data)
+            .into_iter()
+            .filter(|e| named(e, &PROGRAM) || named(e, &DATA))
+            .collect()
     } else {
         Vec::new()
     };
@@ -107,7 +150,7 @@ pub fn plan(places: &Places, choice: &Choice) -> Plan {
     } else {
         Vec::new()
     };
-    let program = |entry: &Path| PROGRAM.iter().any(|name| entry.ends_with(name));
+    let program = |entry: &Path| named(entry, &PROGRAM);
     if !choice.keep_data {
         for entry in listed.iter().filter(|e| !program(e) && **e != accounts_dir) {
             found.add(entry, UninstallKind::Data);
@@ -620,27 +663,76 @@ mod tests {
     }
 
     #[test]
-    fn a_hive_folder_holding_the_home_is_never_emptied() {
+    fn a_folder_that_is_not_hives_is_never_emptied() {
         let s = Setup::new(false);
-        for data in [s.home().to_owned(), s.tmp.path().to_owned()] {
+        // The home, or a folder holding it, even marked as Hive's or spelled with `..`.
+        std::fs::write(s.home().join("hive-hooks.json"), "{}").unwrap();
+        std::fs::write(s.home().join("settings.json"), "{}").unwrap();
+        let link = s.tmp.path().join("hive-link");
+        std::os::unix::fs::symlink(s.home(), &link).unwrap();
+        // A folder that is not marked as Hive's: Claude's, with a `settings.json` of its own.
+        std::fs::write(s.home().join(".claude/settings.json"), "{}").unwrap();
+        for data in [
+            s.home().to_owned(),
+            s.tmp.path().to_owned(),
+            s.home().join("src/.."),
+            link,
+            s.home().join(".claude"),
+        ] {
             let mut places = s.places.clone();
-            places.paths.data = data;
-            let plan = plan(
-                &places,
-                &Choice {
-                    accounts: true,
-                    ..Choice::default()
-                },
-            );
+            places.paths.data = data.clone();
+            places.legacy = None;
+            let choice = Choice {
+                accounts: true,
+                ..Choice::default()
+            };
+            let plan = plan(&places, &choice);
             assert!(
                 plan.items
                     .iter()
-                    .all(|i| !i.path.contains("src") && !i.path.contains(".hive")),
-                "{:?}",
+                    .all(|i| Path::new(&i.path).parent() != Some(&data)),
+                "{data:?}: {:?}",
                 plan.items
             );
-            assert!(plan.account_folders.is_empty());
+            assert!(plan.account_folders.is_empty(), "{data:?}");
         }
+    }
+
+    #[test]
+    fn only_what_hive_writes_in_its_folder_goes() {
+        let s = Setup::new(false);
+        for name in ["notes.txt", "spaces.jsonx", "binary"] {
+            std::fs::write(s.home().join(".hive").join(name), "mine").unwrap();
+        }
+        std::fs::write(s.home().join(".hive/spaces.json.corrupt"), "{").unwrap();
+        let listed = s.listed(&Choice::default());
+        assert!(listed.contains(&("~/.hive/spaces.json.corrupt".to_owned(), Data)));
+        for mine in ["notes.txt", "spaces.jsonx", "binary"] {
+            let path = format!("~/.hive/{mine}");
+            assert!(listed.iter().all(|(p, _)| *p != path), "{mine}");
+        }
+        // `~/.hive` is Hive's without its hooks settings too (gone with a `--keep-data`).
+        std::fs::remove_file(s.home().join(".hive/hive-hooks.json")).unwrap();
+        let listed = s.listed(&Choice::default());
+        assert!(listed.contains(&("~/.hive/settings.json".to_owned(), Data)));
+        // Another folder (a `HIVE_HOME`) only with them.
+        let mut places = s.places.clone();
+        places.paths.data = s.home().join("dev-hive");
+        std::fs::create_dir(&places.paths.data).unwrap();
+        std::fs::write(places.paths.data.join("settings.json"), "{}").unwrap();
+        let some = |places: &Places| {
+            !plan(places, &Choice::default())
+                .items
+                .iter()
+                .all(|i| !i.path.contains("dev-hive"))
+        };
+        assert!(!some(&places));
+        std::fs::write(places.paths.data.join("hive-hooks.json"), "{}").unwrap();
+        assert!(some(&places));
+        // What is left keeps Hive's folder.
+        let plan = plan(&s.places, &Choice::default());
+        remove(&plan, &s.places.paths, &Recorder::default());
+        assert!(s.home().join(".hive/notes.txt").exists());
     }
 
     #[test]
@@ -666,6 +758,9 @@ mod tests {
         assert_eq!(bundle(Some(&app)), Some(app.clone()));
         assert_eq!(bundle(Some(Path::new("Hive.app"))), None);
         assert_eq!(bundle(None), None);
+        let other_app = tmp.path().join("other/Safari.app");
+        std::fs::create_dir_all(&other_app).unwrap();
+        assert_eq!(bundle(Some(&other_app)), None);
         let other = tmp.path().join("debug");
         std::fs::create_dir(&other).unwrap();
         assert_eq!(bundle(Some(&other)), None);

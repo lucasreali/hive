@@ -740,6 +740,9 @@ impl Link {
                 }
             }
             (Some("agent_removed"), Some(id)) => drop(self.at_risk.remove(&id)),
+            // Hive is uninstalled (23.5): quitting must not install an update, which would put
+            // the app back.
+            (Some("uninstalled"), _) => self.update = None,
             (Some("settings"), _) => {
                 self.confirm_close = message["settings"]["agents"]["confirm_close"].as_bool();
             }

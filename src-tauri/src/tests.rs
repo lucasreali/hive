@@ -2414,6 +2414,22 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
 }
 
 #[tokio::test]
+async fn an_uninstalled_app_installs_no_update_when_it_quits() {
+    let (hive, mut rx, installed) = hive_installing(Ok(()));
+    let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    next(&mut rx).await;
+    // Another message keeps it.
+    hive.link()
+        .follow(&json!({"type": "agent_removed", "id": "a"}));
+    assert!(hive.link().update.is_some());
+    hive.link()
+        .follow(&json!({"type": "uninstalled", "failed": []}));
+    assert_eq!(hive.install_pending(), None);
+    assert!(installed.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
     let (hive, mut rx, installed) = hive_installing(Ok(()));
     let (tx, restarted) = std::sync::mpsc::channel();
