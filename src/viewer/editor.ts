@@ -24,6 +24,7 @@ import {
 } from "@codemirror/view";
 import type { Lines } from "../store";
 import { changeMarkers } from "./gutterMarkers";
+import { createSearchPanel } from "./searchPanel";
 
 /** What the viewer shows: `content`, and as a unified diff against `original` when given. */
 export type Doc = { content: string; original: string | null };
@@ -84,10 +85,6 @@ const theme = Prec.highest(
         "&:hover": { backgroundColor: "var(--hover)", color: "var(--text)" },
         "&:active": { backgroundColor: "var(--selected)", backgroundImage: "none" },
       },
-      ".cm-panel.cm-search label": { color: "var(--text-2)", fontSize: "var(--fs-meta)" },
-      ".cm-search input[type=checkbox]": { accentColor: "var(--accent)" },
-      '.cm-panel.cm-search [name="close"]': { color: "var(--text-3)" },
-      '.cm-panel.cm-search [name="close"]:hover': { color: "var(--text)" },
       ".cm-searchMatch": {
         backgroundColor: "color-mix(in srgb, var(--state-permission) 25%, transparent)",
         outline: "none",
@@ -380,7 +377,7 @@ export function createEditor(
           ...historyKeymap,
           ...editorSearchKeymap,
         ]),
-        search({ top: true }),
+        search({ top: true, createPanel: createSearchPanel }),
         drawSelection(),
         markers.of(marked()),
         lineNumbers(),
