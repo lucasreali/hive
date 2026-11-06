@@ -772,7 +772,7 @@ fn save(file: &Path, spaces: &Spaces) -> io::Result<()> {
 /// The main worktree of the repository containing `path`: not blank, absolute, an existing
 /// directory, inside a git repository with a working tree.
 fn validate(path: &str) -> Result<PathBuf, (ProjectError, String)> {
-    let path = dirs::existing(path)?;
+    let (path, _) = dirs::existing(path)?;
     worktree::main_root(path).map_err(|err| {
         let shown = path.display();
         let message = format!("{shown} is not in a git repository with a working tree: {err}");

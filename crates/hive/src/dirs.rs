@@ -231,8 +231,8 @@ const NAME_RULE: &str =
     "A name is one folder: no leading dot, no control characters, none of / \\ : * ? \" < > |";
 
 /// The folder `path` names, after the checks of an added project's (absolute, local on
-/// Windows, an existing folder), as it is.
-pub fn existing(path: &str) -> Result<&Path, (ProjectError, String)> {
+/// Windows, an existing folder): as it is, and resolved ([`crate::paths::canonical`]).
+pub fn existing(path: &str) -> Result<(&Path, PathBuf), (ProjectError, String)> {
     if path.trim().is_empty() {
         return Err((ProjectError::EmptyPath, "Enter a folder".to_owned()));
     }
@@ -244,16 +244,16 @@ pub fn existing(path: &str) -> Result<&Path, (ProjectError, String)> {
     }
     #[cfg(windows)]
     crate::windows::local(path).map_err(|err| (ProjectError::NotFound, err.to_string()))?;
-    match fs::metadata(path) {
+    match crate::paths::canonical(path) {
         Err(err) => Err((
             ProjectError::NotFound,
             format!("cannot open {shown}: {err}"),
         )),
-        Ok(meta) if !meta.is_dir() => Err((
+        Ok(real) if !real.is_dir() => Err((
             ProjectError::NotADirectory,
             format!("{shown} is not a directory"),
         )),
-        Ok(_) => Ok(path),
+        Ok(real) => Ok((path, real)),
     }
 }
 
@@ -261,11 +261,7 @@ pub fn existing(path: &str) -> Result<&Path, (ProjectError, String)> {
 /// exist, see [`existing`]) with `name` ([`check_name`]) in it. Nothing is created.
 pub fn target(parent: &str, name: &str) -> Result<PathBuf, (ProjectError, String)> {
     check_name(name).map_err(|message| (ProjectError::InvalidName, message))?;
-    let dir = existing(parent)?;
-    let dir = crate::paths::canonical(dir).map_err(|err| {
-        let message = format!("cannot open {}: {err}", dir.display());
-        (ProjectError::NotFound, message)
-    })?;
+    let (_, dir) = existing(parent)?;
     Ok(dir.join(name))
 }
 
