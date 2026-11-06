@@ -1345,6 +1345,17 @@ impl Hive {
         self.link().send(0, &Control::InitGit { id })
     }
 
+    /// A new project (23.2): the answer arrives as `project_created` or `add_project_failed`.
+    pub fn create_project(&self, parent: String, name: String, git: bool) -> Result<(), String> {
+        let create = Control::CreateProject { parent, name, git };
+        self.link().send(0, &create)
+    }
+
+    /// A new folder in a folder field (23.2): `dir_created` or `create_dir_failed` follows.
+    pub fn create_dir(&self, parent: String, name: String) -> Result<(), String> {
+        self.link().send(0, &Control::CreateDir { parent, name })
+    }
+
     /// The answer arrives as `branches`.
     pub fn list_branches(&self, project: String) -> Result<(), String> {
         self.link().send(0, &Control::ListBranches { project })
@@ -2176,6 +2187,21 @@ pub mod commands {
     #[tauri::command]
     pub fn init_git(hive: State<'_, Hive>, id: String) -> Result<(), String> {
         hive.init_git(id)
+    }
+
+    #[tauri::command]
+    pub fn create_project(
+        hive: State<'_, Hive>,
+        parent: String,
+        name: String,
+        git: bool,
+    ) -> Result<(), String> {
+        hive.create_project(parent, name, git)
+    }
+
+    #[tauri::command]
+    pub fn create_dir(hive: State<'_, Hive>, parent: String, name: String) -> Result<(), String> {
+        hive.create_dir(parent, name)
     }
 
     #[tauri::command]
