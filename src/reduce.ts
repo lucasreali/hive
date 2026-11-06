@@ -246,6 +246,17 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       };
     case "add_project_failed":
       return { addProjectError: m.message };
+    case "project_created":
+      // The add-project dialog opens its terminal, then closes (23.2).
+      return {
+        projects: { ...s.projects, [m.project.id]: m.project },
+        addProjectError: null,
+        projectCreated: { project: m.project, path: m.path },
+      };
+    case "dir_created":
+      return { newDir: { parent: m.parent, name: m.name, error: null } };
+    case "create_dir_failed":
+      return { newDir: { parent: m.parent, name: m.name, error: m.message } };
     case "project_removed":
       return removedProject(s, m.id);
     case "remove_project_failed":

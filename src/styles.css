@@ -912,8 +912,10 @@ label:has(> input[type="checkbox"]:disabled) {
   opacity: 0.5;
 }
 
-/* The new worktree dialog's "New branch / From issue" choice. */
-.new-worktree-from {
+/* The new worktree dialog's "New branch / From issue" choice, and the add-project dialog's
+   "Existing folder / New project" (23.2). */
+.new-worktree-from,
+.add-project-mode {
   margin: 0;
   padding: 0;
   min-width: 0;
@@ -3420,6 +3422,28 @@ fieldset.new-account {
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
   color: var(--text);
+}
+
+/* "New folder" (23.2): the button after the path, and the name typed in a row of the list. */
+.folder-path .folder-new {
+  flex: none;
+  padding: 0 8px;
+  border-left: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+
+.field .folder-naming input,
+.field .folder-naming input:focus {
+  height: 20px;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.folder-naming .field-error {
+  display: block;
+  padding: 0 8px 4px;
 }
 
 .folder-empty {

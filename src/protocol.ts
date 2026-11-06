@@ -98,6 +98,10 @@ export type ServiceMessage =
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
+  /** A new project's folder `path` was made, and `project` (the one holding it) follows it. */
+  | { type: "project_created"; project: Project; path: string }
+  | { type: "dir_created"; parent: string; name: string }
+  | { type: "create_dir_failed"; parent: string; name: string; message: string }
   | { type: "project_removed"; id: string }
   | { type: "remove_project_failed"; id: string; message: string }
   | { type: "spaces"; spaces: Space[]; current: string }
@@ -240,7 +244,10 @@ export type ProjectError =
   | "not_a_git_repository"
   | "protected_folder"
   | "in_other_space"
-  | "storage";
+  | "storage"
+  | "invalid_name"
+  | "name_taken"
+  | "create_failed";
 
 /**
  * Mirrors `hive_protocol::SpaceEnv`: what a space's terminals get; null leaves the user's own.

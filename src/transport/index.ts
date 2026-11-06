@@ -66,6 +66,14 @@ export interface Transport {
    */
   initGit(id: string): Promise<void>;
   /**
+   * A new project (23.2): the folder `name` made in `parent` (a Linux path, `dirs`'
+   * `linux_path`), `git init` in it when `git`, then followed. Answered by `project_created` or
+   * `add_project_failed`.
+   */
+  createProject(parent: string, name: string, git: boolean): Promise<void>;
+  /** The folder `name` made in `parent` (23.2); answered by `dir_created` or `create_dir_failed`. */
+  createDir(parent: string, name: string): Promise<void>;
+  /**
    * A new, empty space (6.14), made the current one. Answered by `spaces` or `space_failed`,
    * as are the three below.
    */

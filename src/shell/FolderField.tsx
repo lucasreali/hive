@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
-import { FolderIcon, ICON } from "./icons";
+import { FolderIcon, ICON, NewFolderIcon } from "./icons";
 
 /** How long typing must pause before the folder is listed. */
 export const LIST_DELAY_MS = 150;
@@ -38,6 +38,8 @@ export type FolderFieldProps = {
   home?: boolean;
   invalid?: boolean;
   onBlur?: () => void;
+  /** A "New folder" button (23.2): a folder made in the typed one, which the field then enters. */
+  newFolder?: boolean;
 };
 
 /**
@@ -73,6 +75,24 @@ export function FolderField(props: FolderFieldProps) {
     setFill(false);
     input.current?.focus();
   };
+  // "New folder": its name while typed (null: closed), and the request last sent.
+  const [naming, setNaming] = useState<string | null>(null);
+  const [asked, setAsked] = useState<{ parent: string; name: string } | null>(null);
+  const answer = useHive((s) => s.newDir);
+  const answered = asked && answer?.parent === asked.parent && answer.name === asked.name;
+  // The folder typed (ending with a separator), as the service has it.
+  const parent = cut === typed.length && listing?.path === typed ? listing.linux_path : null;
+  const sep = backslash ? "\\" : "/";
+  const made = answered && answer.error === null;
+  useEffect(() => {
+    if (!made || !asked) return;
+    setAsked(null);
+    setNaming(null);
+    onChange(`${typed}${asked.name}${sep}`);
+    setFill(false);
+    input.current?.focus();
+  }, [made, asked, typed, sep, onChange]);
+  const nameError = answered ? answer.error : null;
   return (
     <div className="folder-picker">
       <div className="folder-path">
@@ -103,8 +123,61 @@ export function FolderField(props: FolderFieldProps) {
           autoComplete="off"
           aria-invalid={props.invalid}
         />
+        {props.newFolder && (
+          <button
+            type="button"
+            className="ghost folder-new"
+            title={parent ? "New folder" : "Type or pick a folder first"}
+            aria-label="New folder"
+            disabled={!parent}
+            onClick={() => setNaming("")}
+          >
+            <NewFolderIcon />
+          </button>
+        )}
       </div>
       <ul className="folder-list" aria-label="Folders">
+        {naming !== null && (
+          <li className="folder-naming">
+            <div className="folder-row">
+              <FolderIcon />
+              <input
+                aria-label="New folder name"
+                className="folder-name"
+                value={naming}
+                ref={(el) => el?.focus()}
+                onChange={(e) => {
+                  setNaming(e.target.value);
+                  setAsked(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    // Only the name closes, not the dialog.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setNaming(null);
+                    setAsked(null);
+                    input.current?.focus();
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (!parent) return;
+                    setAsked({ parent, name: naming });
+                    void transport.createDir(parent, naming);
+                  }
+                }}
+                placeholder="Folder name, then Enter"
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={nameError !== null}
+              />
+            </div>
+            {nameError && (
+              <span className="field-error" role="alert">
+                {nameError}
+              </span>
+            )}
+          </li>
+        )}
         {listing?.parent && (
           <li>
             <button
