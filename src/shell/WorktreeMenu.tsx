@@ -18,17 +18,17 @@ import {
   useState,
 } from "react";
 import type { Worktree } from "../protocol";
+import { runScript, worktreeScripts } from "../scripts";
 import {
   findWorktree,
   openMenu,
   openModal,
   openProjectMenu,
   owner,
-  scriptsOf,
   showNotice,
   useHive,
 } from "../store";
-import { openTerminal, openWith, showOpenFailure } from "../terminals";
+import { openTerminal, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { openInEditor } from "../viewer/external";
 import { isMac, keyText } from "../window";
@@ -121,9 +121,17 @@ export function ContextMenu(props: {
 export function WorktreeMenu() {
   const menu = useHive((s) => s.menu);
   const w = useHive((s) => findWorktree(s.projects, s.menu?.worktree ?? null));
-  const runs = useHive((s) => scriptsOf(s.settings, owner(s.projects, w?.id ?? null)?.id).run);
+  const project = useHive((s) => owner(s.projects, w?.id ?? null)?.id);
+  const listed = useHive((s) => (w ? s.scripts[w.path] : undefined));
+  const settings = useHive((s) => s.settings);
+  const path = menu && w?.path;
+  // The repository's scripts too (23.4); the settings' until the service answers.
+  useEffect(() => {
+    if (path) void transport.listScripts(path);
+  }, [path]);
 
   if (!menu || !w) return null;
+  const runs = worktreeScripts(listed, settings, project);
   const act = (action: () => void) => () => {
     closeMenu();
     action();
@@ -154,7 +162,7 @@ export function WorktreeMenu() {
           role="menuitem"
           key={run.name}
           title={run.command}
-          onClick={act(() => showOpenFailure(openWith(w.path, run.command)))}
+          onClick={act(() => showOpenFailure(runScript(w.path, run)))}
         >
           <PlayIcon {...ICON} />
           Run: {run.name}

@@ -487,6 +487,21 @@
     "error": null
   },
   {
+    "type": "scripts",
+    "path": "/r",
+    "scripts": [
+      {
+        "name": "dev",
+        "command": "bun run dev",
+        "source": "package_json"
+      }
+    ],
+    "problems": [
+      "m"
+    ],
+    "port": 20000
+  },
+  {
     "type": "sessions",
     "sessions": [],
     "error": null,

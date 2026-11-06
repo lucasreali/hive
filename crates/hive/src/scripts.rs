@@ -1,6 +1,9 @@
 //! Project scripts (6.8): each worktree's block of ports, the `HIVE_*` environment of its
-//! terminals and scripts, and the archive script the service runs before removing it. The
-//! scripts are the user's own, from the settings, never read from a repository.
+//! terminals and scripts, and the archive script the service runs before removing it. Setup
+//! and archive are the user's own, from the settings, never read from a repository; the run
+//! scripts may also come from the repository ([`repo`], 23.4), typed only when picked.
+
+pub mod repo;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;

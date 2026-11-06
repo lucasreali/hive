@@ -4384,6 +4384,125 @@ button.link:hover {
   color: var(--syn-string);
 }
 
+/* The right panel's Scripts tab (23.4) */
+.scripts {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.scripts ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scripts-ports {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.scripts-code {
+  font-family: var(--font-mono);
+  color: var(--text-2);
+}
+
+.scripts-group h3 {
+  margin: 0;
+  padding: 10px 12px 4px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.script {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+}
+
+.script:hover {
+  background: var(--hover);
+}
+
+.script-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  text-align: left;
+}
+
+.script-play {
+  flex: none;
+  align-self: center;
+  color: var(--text-3);
+}
+
+.script-main:hover .script-play {
+  color: var(--state-idle);
+}
+
+.script-name {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.script-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.script.running {
+  gap: 8px;
+  padding: 3px 6px 3px 14px;
+}
+
+.script-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-idle);
+}
+
+.scripts-problem {
+  margin: 8px 12px 0;
+  font-size: var(--fs-meta);
+  color: var(--state-permission);
+}
+
+.scripts-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
 /* The editor's find bar (23.10): CodeMirror's search panel with the app's fields and buttons.
    Each row one line, its items centred with one gap; both fields one width; the close button
    6px from the right edge, as the file header's actions above it. `.cm-editor` outweighs

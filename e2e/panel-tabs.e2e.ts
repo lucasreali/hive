@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const LABELS = ["Files", "Diff", "Sessions", "PRs", "Actions"];
+const LABELS = ["Files", "Diff", "Sessions", "PRs", "Actions", "Scripts"];
 
 // 10.4: every view tab and the collapse button fit the right panel's bar at every width; a
 // narrow panel shows the tabs' icons only.

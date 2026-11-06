@@ -389,6 +389,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const seen = { ...s.changesSeen, [m.path]: (s.changesSeen[m.path] ?? 0) + 1 };
       return { changes: { ...s.changes, [m.path]: kept }, changesSeen: seen };
     }
+    case "scripts": {
+      const { type: _, ...scripts } = m;
+      return { scripts: { ...s.scripts, [m.path]: scripts } };
+    }
     case "sessions":
       return { sessions: m.sessions, sessionsError: m.error, sessionsTruncated: m.truncated };
     case "session_deleted":

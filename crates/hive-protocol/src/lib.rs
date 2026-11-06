@@ -751,6 +751,25 @@ pub enum Control {
         /// Why nothing could be listed, or why the list was cut short.
         error: Option<String>,
     },
+    /// App → service: the scripts of a worktree of a followed project (23.4), answered by
+    /// `Scripts`.
+    ListScripts {
+        path: String,
+    },
+    /// The scripts the user can run in the worktree `path` (23.4): the project's run scripts
+    /// from the settings first, then those read from the repository (`package.json`,
+    /// `Taskfile.yml`, the Makefile) that no settings script of the same name replaces.
+    /// Sent when asked, and for the watched worktree right after `WatchWorktree`, when its
+    /// scripts change and when the settings change. Nothing runs until the user picks one.
+    Scripts {
+        path: String,
+        scripts: Vec<Script>,
+        /// Why a file was not read, or what was left out of it, one line each.
+        problems: Vec<String>,
+        /// The first port of the worktree's block of ten (`HIVE_PORT`, and `PORT` unless the
+        /// service has its own); `None` when no block could be given.
+        port: Option<u16>,
+    },
     /// App → service: Claude Code's sessions of the followed projects, answered by `Sessions`.
     ListSessions,
     /// The most recent first, at most the service's cap (`truncated` when older ones were
@@ -1413,6 +1432,28 @@ pub struct ProjectScripts {
 pub struct RunScript {
     pub name: String,
     pub command: String,
+}
+
+/// A script of a worktree (23.4): `command` is what Hive types into a new terminal there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Script {
+    pub name: String,
+    pub command: String,
+    pub source: ScriptSource,
+}
+
+/// Where a [`Script`] comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptSource {
+    /// The project's run scripts in Hive's settings.
+    Settings,
+    /// `package.json`'s `scripts`, run with the package manager its lockfile names.
+    PackageJson,
+    /// The tasks of `Taskfile.yml` (or `.yaml`), run with `task`.
+    Taskfile,
+    /// The Makefile's targets, run with `make`.
+    Makefile,
 }
 
 /// A group of projects (6.14) with an optional identity for the terminals opened in them (the
@@ -3120,6 +3161,37 @@ mod tests {
             serde_json::to_string(&read).unwrap(),
             r#"{"scripts":{"setup":null,"run":[{"name":"dev","command":"bun dev"}],"archive":null}}"#
         );
+    }
+
+    #[test]
+    fn scripts_messages_are_tagged_json() {
+        let list = Control::ListScripts { path: "/r".into() };
+        assert_eq!(
+            &Frame::control(0, &list).payload[..],
+            br#"{"type":"list_scripts","path":"/r"}"#
+        );
+        assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+        let script = |source| Script {
+            name: "dev".into(),
+            command: "bun run dev".into(),
+            source,
+        };
+        let scripts = Control::Scripts {
+            path: "/r".into(),
+            scripts: [
+                ScriptSource::Settings,
+                ScriptSource::PackageJson,
+                ScriptSource::Taskfile,
+                ScriptSource::Makefile,
+            ]
+            .map(script)
+            .into(),
+            problems: vec!["Makefile: too large".into()],
+            port: Some(20_000),
+        };
+        let json = r#"{"type":"scripts","path":"/r","scripts":[{"name":"dev","command":"bun run dev","source":"settings"},{"name":"dev","command":"bun run dev","source":"package_json"},{"name":"dev","command":"bun run dev","source":"taskfile"},{"name":"dev","command":"bun run dev","source":"makefile"}],"problems":["Makefile: too large"],"port":20000}"#;
+        assert_eq!(&Frame::control(0, &scripts).payload[..], json.as_bytes());
+        assert_eq!(Frame::control(0, &scripts).to_control().unwrap(), scripts);
     }
 
     #[test]

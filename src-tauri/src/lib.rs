@@ -1432,6 +1432,11 @@ impl Hive {
         self.link().send(0, &Control::ListChanges { path, base })
     }
 
+    /// The answer arrives as `scripts` (23.4).
+    pub fn list_scripts(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListScripts { path })
+    }
+
     /// The answer arrives as `sessions`.
     pub fn list_sessions(&self) -> Result<(), String> {
         self.link().send(0, &Control::ListSessions)
@@ -2314,6 +2319,11 @@ pub mod commands {
     #[tauri::command]
     pub fn list_changes(hive: State<'_, Hive>, path: String, base: DiffBase) -> Result<(), String> {
         hive.list_changes(path, base)
+    }
+
+    #[tauri::command]
+    pub fn list_scripts(hive: State<'_, Hive>, path: String) -> Result<(), String> {
+        hive.list_scripts(path)
     }
 
     #[tauri::command]

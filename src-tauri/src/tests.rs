@@ -1155,6 +1155,9 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: DiffBase::Branch,
     };
     assert_eq!(service.control().await, (0, changes));
+    hive.list_scripts("/r".into()).unwrap();
+    let scripts = Control::ListScripts { path: "/r".into() };
+    assert_eq!(service.control().await, (0, scripts));
     hive.list_sessions().unwrap();
     assert_eq!(service.control().await, (0, Control::ListSessions));
     hive.locate_session("s".into(), SessionTarget::Log).unwrap();
@@ -1641,6 +1644,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.list_changes("/r".into(), DiffBase::Head),
         not_connected
     );
+    assert_eq!(hive.list_scripts("/r".into()), not_connected);
     assert_eq!(
         hive.open_file("/r".into(), "a".into(), DiffBase::Head),
         not_connected
@@ -1916,6 +1920,7 @@ fn commands_reach_the_managed_hive() {
             expand_ignored,
             set_view,
             list_changes,
+            list_scripts,
             open_file,
             open_table,
             search_files,
@@ -2014,6 +2019,7 @@ fn commands_reach_the_managed_hive() {
     let expand = json!({"path": "/r", "folders": ["target"]});
     let view = json!({"terminal": 1, "focused": true, "visible": true});
     let changes = json!({"path": "/r", "base": "head"});
+    let scripts = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
     let table = json!({"worktree": "/r", "path": "a.csv"});
     let editor = json!({"worktree": "/r", "path": "a", "reveal": true});
@@ -2054,6 +2060,7 @@ fn commands_reach_the_managed_hive() {
         ("expand_ignored", &expand),
         ("set_view", &view),
         ("list_changes", &changes),
+        ("list_scripts", &scripts),
         ("open_file", &file),
         ("open_table", &table),
         ("search_files", &search),
@@ -2145,6 +2152,7 @@ fn commands_reach_the_managed_hive() {
         ("expand_ignored", expand),
         ("set_view", view),
         ("list_changes", changes),
+        ("list_scripts", scripts),
         ("open_file", file.clone()),
         ("open_table", table),
         ("search_files", search),

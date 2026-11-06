@@ -164,6 +164,7 @@ fn main() {
             commands::expand_ignored,
             commands::set_view,
             commands::list_changes,
+            commands::list_scripts,
             commands::open_file,
             commands::open_table,
             commands::search_files,

@@ -319,6 +319,8 @@ struct State {
     sent: std::sync::Mutex<health::Sent>,
     /// The sessions list the app has (`Sessions`), so an unchanged one is not sent again.
     listed: std::sync::Mutex<Option<Control>>,
+    /// The scripts the app has (`Scripts`, 23.4), so a change to them is sent unasked.
+    scripted: std::sync::Mutex<Option<Control>>,
     /// The last `subagent_worktrees` sent, so only changes are sent.
     owned: std::sync::Mutex<Vec<String>>,
     /// Each project's worktrees as last sent to the app (without status), so a change of
@@ -399,6 +401,7 @@ impl State {
             restore,
             sent: Default::default(),
             listed: Default::default(),
+            scripted: Default::default(),
             owned: Default::default(),
             worktrees_sent: Default::default(),
             refollow: Default::default(),
@@ -1002,6 +1005,71 @@ impl State {
         });
     }
 
+    /// The scripts of the worktree `path` (23.4): its project's run scripts from the settings,
+    /// then its repository's. Refused, as `watch_worktree` is, for a path that is no worktree
+    /// of a followed project.
+    fn scripts(&self, path: &str) -> Control {
+        let projects = self.projects.list();
+        let dir = match projects::followed(&projects, path) {
+            Ok((dir, _)) => dir,
+            Err(err) => return error(err),
+        };
+        let project = projects::place(&projects, path).map(|(project, _)| project);
+        let run = self.settings.scripts(&project.unwrap_or_default()).run;
+        let (scripts, problems) = scripts::repo::list(&dir, &run);
+        let port = self.ports.port(path).inspect_err(|err| {
+            eprintln!("hive: warning: no ports for {path}: {err}");
+        });
+        Control::Scripts {
+            path: path.to_owned(),
+            scripts,
+            problems,
+            port: port.ok(),
+        }
+    }
+
+    /// Answers `list_scripts` off the frame loop; the answer is remembered as what the app
+    /// has, so a change to those scripts is sent unasked ([`State::rescript`]).
+    fn list_scripts(self: &Arc<Self>, path: String) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let reply = tokio::task::block_in_place(|| state.scripts(&path));
+            *state.scripted() = scripts_only(reply.clone());
+            state.to_app(0, &reply).await;
+        });
+    }
+
+    /// The scripts the app last asked for (23.4), whose worktree's changes the app is sent
+    /// (`None`: it asked for none since it connected, or that worktree is gone).
+    fn scripted(&self) -> std::sync::MutexGuard<'_, Option<Control>> {
+        self.scripted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The scripts the app has, read again (after a change in the watched worktree `path`, or
+    /// any worktree when `None`: the settings changed) and sent when they differ.
+    async fn rescript(&self, path: Option<&str>) {
+        let changed = tokio::task::block_in_place(|| self.rescripted(path));
+        if let Some(now) = changed {
+            self.to_app(0, &now).await;
+        }
+    }
+
+    /// [`State::rescript`]'s reading: the scripts to send, when they changed.
+    fn rescripted(&self, path: Option<&str>) -> Option<Control> {
+        let asked = match &*self.scripted() {
+            Some(Control::Scripts { path: asked, .. }) => asked.clone(),
+            _ => return None,
+        };
+        if path.is_some_and(|path| path != asked) {
+            return None;
+        }
+        let now = scripts_only(self.scripts(&asked));
+        let had = std::mem::replace(&mut *self.scripted(), now.clone());
+        now.filter(|now| had.as_ref() != Some(now))
+    }
+
     /// The ignored folders open in the files tree of the watched worktree `path`; nothing when
     /// another one is watched (the app asked before it switched). Refused, as `watch_worktree`
     /// is, for a path that is no worktree of a followed project (a group's folder, 14.1).
@@ -1107,6 +1175,8 @@ async fn watch_files(
             // E.g. the worktree was removed; it is listed again on the next change.
             Err(err) => state.to_app(0, &error(err)).await,
         }
+        // Its scripts (23.4), when the app has them, read again after every change.
+        state.rescript(Some(&path)).await;
         // A folder opened or closed mid-burst ends the wait too: the re-list covers both, and
         // the changes go with it as after any change.
         watching = tokio::select! {
@@ -1188,6 +1258,14 @@ async fn watch_sessions(state: Arc<State>, watch: io::Result<session_watch::Watc
             }
             () = watch.changed(folders) => true,
         };
+    }
+}
+
+/// `reply` when it is a `scripts` message (not a refusal).
+fn scripts_only(reply: Control) -> Option<Control> {
+    match reply {
+        Control::Scripts { .. } => Some(reply),
+        _ => None,
     }
 }
 
@@ -1303,6 +1381,34 @@ mod tests {
         });
         assert!(blocked.load(Ordering::SeqCst));
         runtime.shutdown_background();
+    }
+
+    #[test]
+    fn scripts_are_read_again_only_for_the_worktree_the_app_has_them_of() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let had = Control::Scripts {
+            path: "/x".into(),
+            scripts: Vec::new(),
+            problems: Vec::new(),
+            port: None,
+        };
+        runtime.block_on(async {
+            // Nothing asked: nothing read.
+            state.rescript(None).await;
+            assert_eq!(*state.scripted(), None);
+            // A change in another worktree leaves them be.
+            *state.scripted() = Some(had.clone());
+            state.rescript(Some("/y")).await;
+            assert_eq!(*state.scripted(), Some(had));
+            // That worktree is no longer followed: forgotten, nothing sent.
+            state.rescript(Some("/x")).await;
+            assert_eq!(*state.scripted(), None);
+        });
     }
 
     #[test]
