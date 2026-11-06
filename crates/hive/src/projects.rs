@@ -2033,7 +2033,14 @@ mod tests {
         std::fs::create_dir_all(top.join("claude")).unwrap();
         let own = vec![(top.join("claude"), "Claude's folder")];
         let projects = load(&top.join("data")).protect(Some(top.join("home")), own);
-        let at = |sub: &str| top.join(sub).display().to_string();
+        // One component at a time: on Windows `join("home/work")` keeps the `/`, and the
+        // paths the service gives back have `\`.
+        let at = |sub: &str| {
+            let path = sub
+                .split('/')
+                .fold(top.clone(), |path, part| path.join(part));
+            path.display().to_string()
+        };
 
         // With git: a repository, that `add` follows as a project.
         let shop = projects.create(&at("home/work"), "shop", true).unwrap();
