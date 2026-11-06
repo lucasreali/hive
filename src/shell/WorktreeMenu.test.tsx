@@ -8,7 +8,7 @@ import type { Project, Session } from "../protocol";
 import { apply } from "../reduce";
 import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, select, useHive } from "../store";
 import { transport } from "../transport";
-import { MOCK_GROUP, MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
+import { MOCK_FOLDER, MOCK_GROUP, MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
 import { type EditBuffer, toText } from "../viewer/buffer";
 
 afterEach(() => {
@@ -509,6 +509,32 @@ test("a group's menu only removes it, with its projects; its projects' menus can
   );
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
   expect(remove).toHaveBeenCalledWith(group.id);
+  remove.mockRestore();
+});
+
+test("a folder project's menu initializes git or removes it, as a project", () => {
+  const init = spyOn(transport, "initGit").mockResolvedValue();
+  const remove = spyOn(transport, "removeProject").mockResolvedValue();
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [MOCK_FOLDER] }));
+  fireEvent.contextMenu(row("notes"), { clientX: 10, clientY: 20 });
+  // No worktrees: no new or merged worktree.
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+    "Initialize git",
+    "Remove project…",
+  ]);
+  fireEvent.click(item("Initialize git"));
+  expect(init).toHaveBeenCalledWith(MOCK_FOLDER.id);
+  expect(menu()).toBeNull();
+  fireEvent.contextMenu(row("notes"), { clientX: 10, clientY: 20 });
+  fireEvent.click(item("Remove project…"));
+  const asked = screen.getByRole("dialog", { name: "Remove project?" });
+  expect(asked.textContent).toBe(
+    "Remove project?Remove notes from Hive? Its files stay on disk: the folder is not deleted.CancelRemove",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  expect(remove).toHaveBeenCalledWith(MOCK_FOLDER.id);
+  init.mockRestore();
   remove.mockRestore();
 });
 

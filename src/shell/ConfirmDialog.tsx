@@ -26,12 +26,15 @@ export function askRemoveProject(id: string): void {
     return places.includes(f.worktree) && !!edit && isDirty(edit);
   });
   const lost = unsaved ? " Unsaved changes in its open files will be lost." : "";
-  // A group (14.1) leaves with its repositories.
-  const kept = project.group
-    ? "with its projects? Its files stay on disk: the folder and its repositories are not deleted."
-    : "from Hive? Its files stay on disk: the repository and its worktrees are not deleted.";
+  // A group (14.1) leaves with its repositories; a folder project (23.1) is a plain folder.
+  const group = project.group && !project.folder;
+  const kept = project.folder
+    ? "from Hive? Its files stay on disk: the folder is not deleted."
+    : group
+      ? "with its projects? Its files stay on disk: the folder and its repositories are not deleted."
+      : "from Hive? Its files stay on disk: the repository and its worktrees are not deleted.";
   ask({
-    title: project.group ? "Remove group?" : "Remove project?",
+    title: group ? "Remove group?" : "Remove project?",
     text: `Remove ${project.name} ${kept}${lost}`,
     action: "Remove",
     run: () => void transport.removeProject(id),

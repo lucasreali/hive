@@ -94,6 +94,21 @@ pub fn command(dir: &Path) -> io::Result<Command> {
     command_with(dir, current()?)
 }
 
+/// [`command`] in `dir`; with `plain`, an empty repository, `dir` is its work tree (a folder
+/// project's folder, 23.1, in no repository): its index is empty, so git lists every file there
+/// as untracked, and what `.gitignore` files ignore as ignored.
+pub fn command_in(dir: &Path, plain: Option<&Path>) -> io::Result<Command> {
+    let mut command = command(dir)?;
+    if let Some(plain) = plain {
+        command
+            .arg("--git-dir")
+            .arg(plain)
+            .arg("--work-tree")
+            .arg(dir);
+    }
+    Ok(command)
+}
+
 /// `git -C <dir>` run as `program`.
 fn command_with(dir: &Path, program: OsString) -> io::Result<Command> {
     let mut command = Command::new(program);

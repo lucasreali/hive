@@ -21,6 +21,8 @@ import {
   MOCK_CLAUDE_DIR,
   MOCK_DIAGNOSTICS,
   MOCK_FILES,
+  MOCK_FOLDER,
+  MOCK_FOLDER_FILES,
   MOCK_GROUP,
   MOCK_IGNORED,
   MOCK_ISSUES,
@@ -1573,6 +1575,60 @@ test("a folder of repositories is added as a group, and removed with them", asyn
     ["project_removed", group.id],
   ]);
   expect(messages[0]).toMatchObject({ message: refused });
+});
+
+test("a plain folder is a folder project: files without changes, until git init", async () => {
+  const { transport, messages } = await connected();
+  const folder = MOCK_FOLDER.path;
+  messages.length = 0;
+  await transport.addProject("/home/user");
+  await tick();
+  expect(messages).toEqual([
+    {
+      type: "add_project_failed",
+      path: "/home/user",
+      error: "protected_folder",
+      message: "/home/user is the home folder: Hive does not follow it; choose a folder in it",
+    },
+  ]);
+  messages.length = 0;
+  await transport.addProject(folder);
+  await tick();
+  const added = { ...space("default", "Default", [SHOP, API, folder]), groups: [folder] };
+  expect(messages).toEqual([
+    { type: "spaces", spaces: [added], current: "default" },
+    { type: "projects", projects: [...MOCK_REPOS.slice(0, 2), MOCK_FOLDER] },
+    { type: "project_added", project: MOCK_FOLDER },
+  ]);
+  // Its files, with no changes; a file of it has no base.
+  messages.length = 0;
+  await transport.watchWorktree(folder, "head");
+  await transport.openFile(folder, "todo.md", "head");
+  await tick();
+  expect(messages.map((m) => m.type)).toEqual(["files", "file"]);
+  expect(messages[0]).toMatchObject({ files: MOCK_FOLDER_FILES });
+  expect(messages[1]).toMatchObject({ path: "todo.md", base: null, error: null });
+  // A repository's file keeps its base.
+  messages.length = 0;
+  await transport.openFile(SHOP, "README.md", "head");
+  await tick();
+  expect(messages[0]).toMatchObject({ base: expect.any(String) });
+  // `git init` makes it a project, out of the groups; again it is refused.
+  messages.length = 0;
+  await transport.initGit(folder);
+  await transport.initGit(folder);
+  await tick();
+  const [listed, refused] = messages as [ServiceMessage, ServiceMessage];
+  expect(listed.type === "projects" && listed.projects.at(-1)).toMatchObject({
+    id: folder,
+    name: "notes",
+  });
+  expect(listed.type === "projects" && listed.projects.at(-1)?.folder).toBeUndefined();
+  expect(refused).toEqual({ type: "error", message: `${folder} is not a folder project` });
+  messages.length = 0;
+  await transport.selectSpace("default");
+  await tick();
+  expect(messages[0]).toMatchObject({ spaces: [{ groups: [] }] });
 });
 
 test("a project is removed with its settings, never while a terminal works in it", async () => {

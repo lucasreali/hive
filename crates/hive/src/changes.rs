@@ -666,6 +666,7 @@ garbage\0\
             worktrees,
             error: None,
             group: false,
+            folder: false,
             parent: None,
         }
     }

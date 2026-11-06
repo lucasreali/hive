@@ -9,7 +9,7 @@ import { COMMANDS } from "../shortcuts";
 import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
-import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
+import { agentStatus, MOCK_FOLDER, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
 import { FILE_LIMIT, fuzzy, Palette, type PaletteItem, paletteCommands, rank } from "./Palette";
 
 beforeAll(async () => {
@@ -142,6 +142,16 @@ test("removing the current project from the palette asks first", () => {
   key("Enter");
   const asked = screen.getByRole("dialog", { name: "Remove project?" });
   expect(asked.textContent).toContain(`Remove ${shop.name} from Hive?`);
+});
+
+test("a folder project is removed from the palette as a project, with no worktrees", () => {
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [MOCK_FOLDER] }));
+  act(() => useHive.setState({ selection: MOCK_FOLDER.id }));
+  const labels = paletteCommands(useHive.getState()).map((c) => c.label);
+  expect(labels).toContain("Remove project…");
+  expect(labels).not.toContain("Remove group…");
+  expect(labels).not.toContain("Remove merged worktrees…");
 });
 
 test("a group can be removed from the palette, not its projects; their worktrees open it", () => {

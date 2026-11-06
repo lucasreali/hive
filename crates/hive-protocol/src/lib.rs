@@ -352,6 +352,12 @@ pub enum Control {
         /// Readable explanation, shown as is.
         message: String,
     },
+    /// App → service: `git init` in the folder project `id` (23.1). Nothing answers it: once
+    /// the folder is a repository, the watch of git's registry sends `Projects`, with `id`
+    /// a project; a failure is an `Error`.
+    InitGit {
+        id: String,
+    },
     /// App → service: stop following the project `id` (9.28); its files stay on disk.
     /// Answered by `Spaces`, `Settings` (when it had settings), then `ProjectRemoved`, or by
     /// `RemoveProjectFailed`.
@@ -1699,7 +1705,8 @@ pub struct GhLogin {
 }
 
 /// A git repository inside WSL that the app follows (#4), or a group: a folder holding
-/// repositories (14.1). Paths are the service's, never derived by the app.
+/// repositories (14.1), or a folder project: a folder in no repository, holding none (23.1).
+/// Paths are the service's, never derived by the app.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     /// Stable id: the repository's top-level path (the group's folder).
@@ -1715,6 +1722,11 @@ pub struct Project {
     /// projects with it as `parent`. Optional, so adding it kept protocol 1 compatible.
     #[serde(default)]
     pub group: bool,
+    /// A folder project (23.1): a group (`group` is true too) whose folder holds no
+    /// repository. Its folder has a files panel, but no changes, pull requests, runs or new
+    /// worktree; "Initialize git" (`InitGit`) makes it a repository.
+    #[serde(default)]
+    pub folder: bool,
     /// The group holding this project; `None` for one followed on its own.
     #[serde(default)]
     pub parent: Option<String>,
@@ -1922,6 +1934,9 @@ pub enum ProjectError {
     NotFound,
     NotADirectory,
     NotAGitRepository,
+    /// The home folder, `/`, or a folder of Hive's or Claude's own (23.1): never followed
+    /// as a folder project or a group.
+    ProtectedFolder,
     /// Already followed in another space.
     InOtherSpace,
     /// The project list could not be saved.
@@ -2501,6 +2516,7 @@ mod tests {
                 },
             },
             Control::RemoveProject { id: "/r".into() },
+            Control::InitGit { id: "/f".into() },
             Control::ProjectRemoved { id: "/r".into() },
             Control::RemoveProjectFailed {
                 id: "/r".into(),
@@ -2514,6 +2530,10 @@ mod tests {
         assert_eq!(json, r#"{"type":"remove_project","id":"/r"}"#);
         let other = serde_json::to_string(&ProjectError::InOtherSpace).unwrap();
         assert_eq!(other, r#""in_other_space""#);
+        let init = serde_json::to_string(&Control::InitGit { id: "/f".into() }).unwrap();
+        assert_eq!(init, r#"{"type":"init_git","id":"/f"}"#);
+        let kept = serde_json::to_string(&ProjectError::ProtectedFolder).unwrap();
+        assert_eq!(kept, r#""protected_folder""#);
     }
 
     #[test]
@@ -2535,6 +2555,7 @@ mod tests {
                 worktrees: vec![worktree],
                 error: None,
                 group: false,
+                folder: false,
                 parent: None,
             },
         };
@@ -2542,7 +2563,10 @@ mod tests {
         // From a service without groups (14.1): neither a group nor in one.
         let older = br#"{"id":"/r","name":"r","path":"/r","worktrees":[],"error":null}"#;
         let project: Project = serde_json::from_slice(older).unwrap();
-        assert_eq!((project.group, project.parent), (false, None));
+        assert_eq!(
+            (project.group, project.folder, project.parent),
+            (false, false, None)
+        );
         let failed = Control::AddProjectFailed {
             path: "x".into(),
             error: ProjectError::NotAGitRepository,

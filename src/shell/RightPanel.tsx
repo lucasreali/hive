@@ -28,6 +28,7 @@ import type {
   Changes,
   DiffBase,
   FileStatus,
+  Project,
   SearchMatch,
   Worktree,
 } from "../protocol";
@@ -294,7 +295,8 @@ function WorktreeInfo(props: { worktree: Worktree; children?: ReactNode }) {
  */
 function useShownWorktree() {
   const target = useHive(useShallow(panelWorktree));
-  const path = target?.worktree.path;
+  // A folder project's folder (23.1) has no changes.
+  const path = target?.project.folder ? undefined : target?.worktree.path;
   const base = useHive((s) => (path ? diffBase(s, path) : null));
   useEffect(() => {
     if (path && base) void transport.listChanges(path, base);
@@ -318,6 +320,10 @@ const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
   { view: "scripts", label: "Scripts", icon: <PromptIcon size={14} aria-hidden="true" /> },
 ];
 
+/** The panel's views for `project`: a folder project (23.1) has only its files and sessions. */
+export const panelViews = (project: Project | undefined) =>
+  project?.folder ? VIEWS.filter((v) => v.view === "files" || v.view === "sessions") : VIEWS;
+
 /**
  * The right panel (screen 1g, grown), toggled by Ctrl+Shift+B: for the shown worktree, every
  * file with a search ("Files"), the changed files with their totals ("Changes"), or its Claude
@@ -325,15 +331,18 @@ const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
  */
 export function RightPanel() {
   const target = useShownWorktree();
-  const view = useHive((s) => s.panelView);
+  const selected = useHive((s) => s.panelView);
+  const views = panelViews(target?.project);
+  // A view the shown place lacks shows its files.
+  const shown = (views.find((v) => v.view === selected) ?? views[0]) as (typeof VIEWS)[number];
+  const view = shown.view;
   const width = useHive((s) => s.panelWidth);
-  const shown = VIEWS.find((v) => v.view === view) as (typeof VIEWS)[number];
   return (
     <aside className="right-panel" aria-label="Side panel" style={{ width }}>
       <ResizeHandle side="panel" />
       <div className="bar">
         <div className="panel-views" role="tablist" aria-label="Panel">
-          {VIEWS.map((v) => (
+          {views.map((v) => (
             <button
               key={v.view}
               type="button"

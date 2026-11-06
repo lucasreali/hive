@@ -225,6 +225,11 @@ export type Project = {
    * terminals and agents); its repositories have it as `parent`. Absent from an older service.
    */
   group?: boolean;
+  /**
+   * A folder project (23.1): a group whose folder holds no repository. It has a files panel,
+   * but no changes, pull requests, runs or new worktree; "Initialize git" makes it a project.
+   */
+  folder?: boolean;
   parent?: string | null;
 };
 
@@ -234,6 +239,7 @@ export type ProjectError =
   | "not_found"
   | "not_a_directory"
   | "not_a_git_repository"
+  | "protected_folder"
   | "in_other_space"
   | "storage";
 

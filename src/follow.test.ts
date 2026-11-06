@@ -14,7 +14,7 @@ import {
   useHive,
 } from "./store";
 import type { Transport } from "./transport";
-import { MOCK_REPOS } from "./transport/mock";
+import { MOCK_FOLDER, MOCK_REPOS } from "./transport/mock";
 
 beforeEach(() => useHive.setState(initialState, true));
 
@@ -165,6 +165,27 @@ test("asks for the open file when it opens, its worktree changes, or the service
   stop();
   setOpenFile({ worktree: "/w", path: "c.ts" });
   expect(openFile).toHaveBeenCalledTimes(6);
+});
+
+test("a folder project's open file is asked for again with each listing of its folder", () => {
+  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
+  const folder = MOCK_FOLDER.path;
+  welcome();
+  apply({ type: "projects", projects: [MOCK_FOLDER, ...MOCK_REPOS] });
+  setOpenFile({ worktree: folder, path: "todo.md" });
+  const stop = followOpenFile({ openFile } as unknown as Transport);
+  const listing = { files: ["todo.md"], ignored: [], truncated: false };
+  apply({ type: "files", path: folder, ...listing });
+  apply({ type: "files", path: folder, ...listing });
+  expect(openFile).toHaveBeenCalledTimes(3);
+  // A repository's open file waits for its changes, not its listing.
+  const shop = (MOCK_REPOS[0] as (typeof MOCK_REPOS)[number]).path;
+  setOpenFile({ worktree: shop, path: "a.ts" });
+  apply({ type: "files", path: shop, ...listing });
+  expect(openFile).toHaveBeenCalledTimes(4);
+  changes(shop);
+  expect(openFile).toHaveBeenCalledTimes(5);
+  stop();
 });
 
 test("asks for the open file again at the base picked for its worktree", () => {
