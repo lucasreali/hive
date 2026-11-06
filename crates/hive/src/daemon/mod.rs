@@ -978,9 +978,8 @@ impl State {
             Ok((dir, _)) => dir,
             Err(err) => return error(err),
         };
-        let mine = |p: &&Project| p.worktrees.iter().any(|w| w.path == path);
-        let project = projects.iter().find(mine).map_or("", |p| p.id.as_str());
-        let run = self.settings.scripts(project).run;
+        let project = projects::place(&projects, path).map(|(project, _)| project);
+        let run = self.settings.scripts(&project.unwrap_or_default()).run;
         let (scripts, problems) = scripts::repo::list(&dir, &run);
         let port = self.ports.port(path).inspect_err(|err| {
             eprintln!("hive: warning: no ports for {path}: {err}");
