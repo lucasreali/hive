@@ -90,7 +90,7 @@ impl Drop for Env {
     fn drop(&mut self) {
         use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
         let mine = format!("LOCALAPPDATA={}", self.path("local").display());
-        let mut system = System::new();
+        let mut system = System::new().unwrap();
         let environ = ProcessRefreshKind::nothing().with_environ(UpdateKind::Always);
         system.refresh_processes_specifics(ProcessesToUpdate::All, true, environ);
         for process in system.processes().values() {

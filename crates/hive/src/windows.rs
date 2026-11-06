@@ -1415,26 +1415,28 @@ fn resolved(path: &Path) -> PathBuf {
 
 /// The processes `keep` keeps, read as `kind` says. Only the terminals' processes get their
 /// command line read (one read of the process's memory each), which names npm's `claude`, a
-/// `node`.
+/// `node`. None when `sysinfo` cannot make its `System` (it always can on Windows).
 fn table(kind: ProcessRefreshKind, keep: impl Fn(&Process) -> bool) -> Vec<Proc> {
     let sessions = terminal::jobs();
-    let mut system = System::new();
-    system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
-    let terminals: Vec<Pid> = sessions.keys().map(|&pid| Pid::from_u32(pid)).collect();
-    let args = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
-    system.refresh_processes_specifics(ProcessesToUpdate::Some(&terminals), false, args);
-    let kept = system.processes().values().filter(|process| keep(process));
-    kept.map(|process| {
-        let pid = process.pid().as_u32();
-        let name = process.name().to_string_lossy();
-        Proc {
-            pid: pid as i32,
-            pgrp: pid as i32,
-            session: sessions.get(&pid).copied().unwrap_or_default(),
-            comm: conpty::comm(&name, process.cmd()).to_owned(),
-        }
-    })
-    .collect()
+    let read = |mut system: System| {
+        system.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+        let terminals: Vec<Pid> = sessions.keys().map(|&pid| Pid::from_u32(pid)).collect();
+        let args = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
+        system.refresh_processes_specifics(ProcessesToUpdate::Some(&terminals), false, args);
+        let kept = system.processes().values().filter(|process| keep(process));
+        kept.map(|process| {
+            let pid = process.pid().as_u32();
+            let name = process.name().to_string_lossy();
+            Proc {
+                pid: pid as i32,
+                pgrp: pid as i32,
+                session: sessions.get(&pid).copied().unwrap_or_default(),
+                comm: conpty::comm(&name, process.cmd()).to_owned(),
+            }
+        })
+        .collect()
+    };
+    System::new().map(read).unwrap_or_default()
 }
 
 /// Whether `path` is `dir` or inside it, names compared ignoring (ASCII) case as Windows does
