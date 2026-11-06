@@ -91,6 +91,8 @@ export const PlainFolderIcon = icon(FolderSimpleDashedIcon);
 export const FileIcon = icon(PhosphorFileIcon);
 
 /** The empty state's large "add folder" icon. */
+/** The folder browser's "New folder" (23.2). */
+export const NewFolderIcon = icon(FolderPlusIcon);
 export const AddFolderIcon = () => <FolderPlusIcon size={28} weight="light" aria-hidden="true" />;
 
 export const BranchIcon = icon(GitBranchIcon);

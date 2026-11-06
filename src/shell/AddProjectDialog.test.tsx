@@ -6,9 +6,10 @@ import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { initialState, openModal, useHive } from "../store";
+import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SHARE, MOCK_SHARE_WARNING } from "../transport/mock";
-import { savedWindows } from "./AddProjectDialog";
+import { savedParent, savedWindows } from "./AddProjectDialog";
 
 beforeAll(async () => {
   // The mock service answers listings and adds.
@@ -284,4 +285,173 @@ test("the dialog stays closed while the connection is blocked", () => {
   open();
   act(() => apply({ type: "disconnected", reason: "gone", bundled: false }));
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+// "New project" (23.2).
+const toNew = () => fireEvent.click(screen.getByRole("button", { name: "New project" }));
+const parentField = () => screen.getByLabelText("Parent folder") as HTMLInputElement;
+const nameField = () => screen.getByLabelText("Name") as HTMLInputElement;
+const create = () => screen.getByRole("button", { name: "Create project" }) as HTMLButtonElement;
+const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+const named = (value: string) => fireEvent.change(nameField(), { target: { value } });
+
+test("New project asks for a parent folder, a name, git and claude", async () => {
+  open();
+  const existing = screen.getByRole("button", { name: "Existing folder" });
+  expect(existing.getAttribute("aria-pressed")).toBe("true");
+  toNew();
+  const fresh = screen.getByRole("button", { name: "New project" });
+  expect(fresh.getAttribute("aria-pressed")).toBe("true");
+  // The parent starts at the home folder when no project was made yet.
+  await waitFor(() => expect(parentField().value).toBe("/home/user/"));
+  expect(box("Initialize git").checked).toBe(true);
+  expect(box("Open a terminal running claude").checked).toBe(true);
+  expect(screen.queryByText(/A git repository, or any folder inside one/)).toBeNull();
+  // A name is needed.
+  expect(create().disabled).toBe(true);
+  named("shop-two");
+  expect(create().disabled).toBe(false);
+  // Back to an existing folder.
+  fireEvent.click(existing);
+  expect(screen.getByLabelText("Folder")).toBeDefined();
+  await waitFor(() => expect(submit().disabled).toBe(false));
+});
+
+test("a new project is made in the parent, selected, and opens a terminal running claude", async () => {
+  const createProject = spyOn(transport, "createProject");
+  const openTerminal = spyOn(transport, "openTerminal");
+  const write = spyOn(transport, "writeTerminal");
+  open();
+  toNew();
+  await waitFor(() => expect(parentField().value).toBe("/home/user/"));
+  fireEvent.change(parentField(), { target: { value: "/home/user/projects/" } });
+  named("market");
+  await waitFor(() => expect(create().disabled).toBe(false));
+  fireEvent.click(create());
+  expect(createProject).toHaveBeenCalledWith("/home/user/projects/", "market", true);
+  const path = "/home/user/projects/market";
+  await waitFor(() => expect(useHive.getState().modal).toBeNull());
+  expect(useHive.getState().projects?.[path]?.folder).toBeUndefined();
+  expect(useHive.getState().selection).toBe(path);
+  expect(openTerminal.mock.calls[0]?.slice(0, 3)).toEqual([path, 80, 24]);
+  const id = useHive.getState().tabs[0]?.id as number;
+  await waitFor(() => expect(write).toHaveBeenCalledWith(id, "claude\r"));
+  closeTerminal(id);
+  // The next one starts in the same parent.
+  act(() => openModal("add-project"));
+  toNew();
+  expect(parentField().value).toBe("/home/user/projects/");
+  createProject.mockRestore();
+  openTerminal.mockRestore();
+  write.mockRestore();
+});
+
+test("without git it is a folder project, and without the box no terminal opens", async () => {
+  const createProject = spyOn(transport, "createProject");
+  const openTerminal = spyOn(transport, "openTerminal");
+  open();
+  toNew();
+  await waitFor(() => expect(parentField().value).toBe("/home/user/"));
+  named("ideas");
+  fireEvent.click(box("Initialize git"));
+  fireEvent.click(box("Open a terminal running claude"));
+  await waitFor(() => expect(create().disabled).toBe(false));
+  fireEvent.click(create());
+  expect(createProject).toHaveBeenCalledWith("/home/user/", "ideas", false);
+  await waitFor(() => expect(useHive.getState().modal).toBeNull());
+  expect(useHive.getState().projects?.["/home/user/ideas"]?.folder).toBe(true);
+  expect(useHive.getState().selection).toBe("/home/user/ideas");
+  expect(openTerminal).not.toHaveBeenCalled();
+  createProject.mockRestore();
+  openTerminal.mockRestore();
+});
+
+test("the service's refusal of a name shows under it until it is edited", async () => {
+  open();
+  toNew();
+  await waitFor(() => expect(parentField().value).toBe("/home/user/"));
+  const refused = async (name: string, message: string) => {
+    named(name);
+    await waitFor(() => expect(create().disabled).toBe(false));
+    fireEvent.click(create());
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(message));
+    expect(nameField().getAttribute("aria-invalid")).toBe("true");
+    expect(useHive.getState().modal).toBe("add-project");
+  };
+  const one =
+    'A name is one folder: no leading dot, no control characters, none of / \\ : * ? " < > |';
+  await refused(".hidden", one);
+  await refused("projects", "/home/user/projects already exists");
+  named("fresh");
+  expect(screen.queryByRole("alert")).toBeNull();
+  // A parent 23.1 refuses: in a Claude folder.
+  fireEvent.change(parentField(), { target: { value: "/home/user/.claude-work/" } });
+  const claude = "/home/user/.claude-work/x is in Claude's folder";
+  await refused("x", `${claude}: Hive does not follow it; choose a folder in it`);
+  fireEvent.change(parentField(), { target: { value: "/home/user/" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a blocked storage only loses the remembered parent", async () => {
+  const fail = () => {
+    throw new Error("blocked");
+  };
+  expect(savedParent({ getItem: fail })).toBe("");
+  expect(savedParent(null)).toBe("");
+  expect(savedParent({ getItem: () => "/p/" })).toBe("/p/");
+  const real = Object.getOwnPropertyDescriptor(window, "localStorage") as PropertyDescriptor;
+  const blocked = { getItem: () => null, setItem: fail };
+  Object.defineProperty(window, "localStorage", { configurable: true, get: () => blocked });
+  try {
+    open();
+    toNew();
+    await waitFor(() => expect(parentField().value).toBe("/home/user/"));
+    named("blocked");
+    fireEvent.click(box("Open a terminal running claude"));
+    await waitFor(() => expect(create().disabled).toBe(false));
+    fireEvent.click(create());
+    await waitFor(() => expect(useHive.getState().modal).toBeNull());
+  } finally {
+    Object.defineProperty(window, "localStorage", real);
+  }
+});
+
+test("New folder makes a folder in the typed one and enters it", async () => {
+  const createDir = spyOn(transport, "createDir");
+  open();
+  await waitFor(() => expect(field().value).toBe("/home/user/"));
+  const button = () => screen.getByRole("button", { name: "New folder" }) as HTMLButtonElement;
+  // Only for a folder typed, not a name being typed.
+  type("/home/user/proj");
+  await waitFor(() => expect(button().disabled).toBe(true));
+  expect(button().title).toBe("Type or pick a folder first");
+  type("/home/user/");
+  await waitFor(() => expect(button().disabled).toBe(false));
+  fireEvent.click(button());
+  const input = () => screen.getByLabelText("New folder name") as HTMLInputElement;
+  expect(document.activeElement).toBe(input());
+  // Esc closes the name, not the dialog.
+  fireEvent.keyDown(input(), { key: "Escape" });
+  expect(screen.queryByLabelText("New folder name")).toBeNull();
+  expect(useHive.getState().modal).toBe("add-project");
+  fireEvent.click(button());
+  // A taken name is refused under it; editing clears it.
+  fireEvent.change(input(), { target: { value: "projects" } });
+  fireEvent.keyDown(input(), { key: "Enter" });
+  expect(createDir).toHaveBeenCalledWith("/home/user/", "projects");
+  const taken = "/home/user/projects already exists";
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(taken));
+  expect(input().getAttribute("aria-invalid")).toBe("true");
+  fireEvent.change(input(), { target: { value: "games" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.keyDown(input(), { key: "a" });
+  fireEvent.keyDown(input(), { key: "Enter" });
+  await waitFor(() => expect(field().value).toBe("/home/user/games/"));
+  expect(screen.queryByLabelText("New folder name")).toBeNull();
+  expect(document.activeElement).toBe(field());
+  await waitFor(() => expect(folders()).toEqual(["/home/user/", "No folders here"]));
+  // Listed in its folder from now on.
+  type("/home/user/");
+  await waitFor(() => expect(folders()).toContain("games"));
+  createDir.mockRestore();
 });

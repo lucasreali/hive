@@ -1318,6 +1318,19 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.init_git("/f".into()).unwrap();
     let init = Control::InitGit { id: "/f".into() };
     assert_eq!(service.control().await, (0, init));
+    hive.create_project("/p".into(), "n".into(), true).unwrap();
+    let create = Control::CreateProject {
+        parent: "/p".into(),
+        name: "n".into(),
+        git: true,
+    };
+    assert_eq!(service.control().await, (0, create));
+    hive.create_dir("/p".into(), "d".into()).unwrap();
+    let dir = Control::CreateDir {
+        parent: "/p".into(),
+        name: "d".into(),
+    };
+    assert_eq!(service.control().await, (0, dir));
     hive.select_space("w".into()).unwrap();
     let select = Control::SelectSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, select));
@@ -1690,6 +1703,11 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.delete_space("w".into()), not_connected);
     assert_eq!(hive.remove_project("/r".into()), not_connected);
     assert_eq!(hive.init_git("/f".into()), not_connected);
+    assert_eq!(
+        hive.create_project("/p".into(), "n".into(), false),
+        not_connected
+    );
+    assert_eq!(hive.create_dir("/p".into(), "d".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
     assert_eq!(hive.list_claude_logins(), not_connected);
     assert_eq!(hive.list_gh_accounts(None), not_connected);
@@ -1948,6 +1966,8 @@ fn commands_reach_the_managed_hive() {
             delete_space,
             remove_project,
             init_git,
+            create_project,
+            create_dir,
             select_space,
             list_claude_logins,
             list_gh_accounts,
@@ -2037,6 +2057,8 @@ fn commands_reach_the_managed_hive() {
     let new_space = json!({"name": "W", "env": {}});
     let update = json!({"id": "w", "name": "W", "env": {"git_name": "Me"}});
     let space = json!({"id": "w"});
+    let new_project = json!({"parent": "/p", "name": "n", "git": true});
+    let new_dir = json!({"parent": "/p", "name": "d"});
     let switch_gh = json!({"account": {"host": "h", "login": "me"}});
     let list_pulls = json!({"project": "/r", "force": false});
     let open_pull = json!({"project": "/r", "number": 7});
@@ -2093,6 +2115,8 @@ fn commands_reach_the_managed_hive() {
         ("delete_space", &space),
         ("remove_project", &space),
         ("init_git", &space),
+        ("create_project", &new_project),
+        ("create_dir", &new_dir),
         ("select_space", &space),
         ("list_claude_logins", &json!({})),
         ("list_gh_accounts", &json!({"ghConfigDir": null})),
@@ -2175,6 +2199,8 @@ fn commands_reach_the_managed_hive() {
         ("delete_space", space.clone()),
         ("remove_project", space.clone()),
         ("init_git", space.clone()),
+        ("create_project", new_project),
+        ("create_dir", new_dir),
         ("select_space", space),
         ("list_pulls", list_pulls),
         ("open_pull", open_pull),

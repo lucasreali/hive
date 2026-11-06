@@ -63,6 +63,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.addProject("/r");
   await tauriTransport.removeProject("/r");
   await tauriTransport.initGit("/f");
+  await tauriTransport.createProject("/p", "n", true);
+  await tauriTransport.createDir("/p", "d");
   const env = {
     git_name: "Me",
     git_email: null,
@@ -131,6 +133,8 @@ test("terminal and project actions call their commands", async () => {
     ["add_project", { path: "/r" }],
     ["remove_project", { id: "/r" }],
     ["init_git", { id: "/f" }],
+    ["create_project", { parent: "/p", name: "n", git: true }],
+    ["create_dir", { parent: "/p", name: "d" }],
     ["create_space", { name: "Work", env }],
     ["update_space", { id: "w", name: "Job", env }],
     ["delete_space", { id: "w" }],

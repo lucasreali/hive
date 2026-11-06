@@ -352,6 +352,39 @@ pub enum Control {
         /// Readable explanation, shown as is.
         message: String,
     },
+    /// App → service: create the folder `name` (one path segment, `CreateDir`'s rules) in the
+    /// folder `parent` (a Linux path, `Dirs`' `linux_path`), run `git init` in it when `git`,
+    /// and follow it in the current space as `AddProject` does (23.2). Never over an existing
+    /// entry. Answered by `ProjectCreated` (after `Spaces`) or `AddProjectFailed`.
+    CreateProject {
+        parent: String,
+        name: String,
+        git: bool,
+    },
+    /// The folder `path` was created and `project` follows it (the project holding it).
+    ProjectCreated {
+        project: Project,
+        path: String,
+    },
+    /// App → service: create the folder `name` in the folder `parent` (a Linux path, `Dirs`'
+    /// `linux_path`), for a folder field (23.2). `name` is one path segment: not empty, none of
+    /// `/ \ : * ? " < > |`, no leading `.`, no control character. Never over an existing entry. Answered
+    /// by `DirCreated` or `CreateDirFailed`.
+    CreateDir {
+        parent: String,
+        name: String,
+    },
+    /// The folder `name` was created in `parent` (as the request had them).
+    DirCreated {
+        parent: String,
+        name: String,
+    },
+    CreateDirFailed {
+        parent: String,
+        name: String,
+        /// Shown as is.
+        message: String,
+    },
     /// App → service: `git init` in the folder project `id` (23.1). Nothing answers it: once
     /// the folder is a repository, the watch of git's registry sends `Projects`, with `id`
     /// a project; a failure is an `Error`.
@@ -1967,6 +2000,12 @@ pub enum ProjectError {
     ProtectedFolder,
     /// Already followed in another space.
     InOtherSpace,
+    /// A new project's name is not one path segment (23.2).
+    InvalidName,
+    /// A new project's folder exists already (23.2).
+    NameTaken,
+    /// Creating a new project's folder, or its `git init`, failed (23.2).
+    CreateFailed,
     /// The project list could not be saved.
     Storage,
 }
@@ -2545,6 +2584,24 @@ mod tests {
             },
             Control::RemoveProject { id: "/r".into() },
             Control::InitGit { id: "/f".into() },
+            Control::CreateProject {
+                parent: "/p".into(),
+                name: "n".into(),
+                git: true,
+            },
+            Control::CreateDir {
+                parent: "/p".into(),
+                name: "n".into(),
+            },
+            Control::DirCreated {
+                parent: "/p".into(),
+                name: "n".into(),
+            },
+            Control::CreateDirFailed {
+                parent: "/p".into(),
+                name: "n".into(),
+                message: "m".into(),
+            },
             Control::ProjectRemoved { id: "/r".into() },
             Control::RemoveProjectFailed {
                 id: "/r".into(),
@@ -2562,6 +2619,32 @@ mod tests {
         assert_eq!(init, r#"{"type":"init_git","id":"/f"}"#);
         let kept = serde_json::to_string(&ProjectError::ProtectedFolder).unwrap();
         assert_eq!(kept, r#""protected_folder""#);
+        let create = Control::CreateProject {
+            parent: "/p".into(),
+            name: "n".into(),
+            git: false,
+        };
+        let json = serde_json::to_string(&create).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"create_project","parent":"/p","name":"n","git":false}"#
+        );
+        let dir = Control::CreateDir {
+            parent: "/p".into(),
+            name: "n".into(),
+        };
+        let json = serde_json::to_string(&dir).unwrap();
+        assert_eq!(json, r#"{"type":"create_dir","parent":"/p","name":"n"}"#);
+        let errors = [
+            ProjectError::InvalidName,
+            ProjectError::NameTaken,
+            ProjectError::CreateFailed,
+        ]
+        .map(|e| serde_json::to_string(&e).unwrap());
+        assert_eq!(
+            errors,
+            [r#""invalid_name""#, r#""name_taken""#, r#""create_failed""#]
+        );
     }
 
     #[test]
@@ -2575,19 +2658,28 @@ mod tests {
             claude: false,
             status: None,
         };
+        let project = Project {
+            id: "/r".into(),
+            name: "r".into(),
+            path: "/r".into(),
+            worktrees: vec![worktree],
+            error: None,
+            group: false,
+            folder: false,
+            parent: None,
+        };
         let msg = Control::ProjectAdded {
-            project: Project {
-                id: "/r".into(),
-                name: "r".into(),
-                path: "/r".into(),
-                worktrees: vec![worktree],
-                error: None,
-                group: false,
-                folder: false,
-                parent: None,
-            },
+            project: project.clone(),
         };
         assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
+        let created = Control::ProjectCreated {
+            project,
+            path: "/r".into(),
+        };
+        assert_eq!(Frame::control(0, &created).to_control().unwrap(), created);
+        let json = serde_json::to_string(&created).unwrap();
+        assert!(json.starts_with(r#"{"type":"project_created","project":{"#));
+        assert!(json.ends_with(r#","path":"/r"}"#));
         // From a service without groups (14.1): neither a group nor in one.
         let older = br#"{"id":"/r","name":"r","path":"/r","worktrees":[],"error":null}"#;
         let project: Project = serde_json::from_slice(older).unwrap();

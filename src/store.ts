@@ -405,6 +405,10 @@ export type HiveState = {
   projects: Record<string, Project> | null;
   /** Why the last add-project request was refused. */
   addProjectError: string | null;
+  /** The last new project the service made (23.2), until the dialog opens again. */
+  projectCreated: { project: Project; path: string } | null;
+  /** The folder field's last "New folder" answer (23.2): made, or why not. */
+  newDir: { parent: string; name: string; error: string | null } | null;
   /** Every space and the current one's id (whose projects show); null until the service sent them. */
   spaces: Space[] | null;
   currentSpace: string | null;
@@ -538,6 +542,8 @@ export const initialState: HiveState = {
   uninstallFailed: null,
   projects: null,
   addProjectError: null,
+  projectCreated: null,
+  newDir: null,
   spaces: null,
   currentSpace: null,
   spaceError: null,
@@ -683,6 +689,8 @@ export const openModal = (
     modalProject,
     modalWorktree,
     addProjectError: null,
+    projectCreated: null,
+    newDir: null,
     spaceError: null,
     worktreeDialog: initialState.worktreeDialog,
   });

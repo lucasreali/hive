@@ -15,7 +15,7 @@ use crate::paths::canonical;
 use crate::spaces::Spaces;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
-use crate::{git, health, procs};
+use crate::{dirs, git, health, procs};
 
 /// Largest spaces or project list file read.
 const FILE_LIMIT: u64 = 1024 * 1024;
@@ -223,6 +223,29 @@ impl Projects {
         }
         self.still_followable(id)?;
         git::output(Path::new(id), &["init", "-q"], &[0]).map(drop)
+    }
+
+    /// Creates the new project's folder `name` in `parent` (23.2, [`dirs::target`]), unless it
+    /// would be [`protected`](Projects::protect) (a folder project or not), and runs `git init`
+    /// in it when `git`. Answers its path, for [`Projects::add`] to follow; a folder made whose
+    /// `git init` failed stays.
+    pub fn create(
+        &self,
+        parent: &str,
+        name: &str,
+        git: bool,
+    ) -> Result<String, (ProjectError, String)> {
+        let path = dirs::target(parent, name)?;
+        self.check_protected(&path)?;
+        dirs::make(&path)?;
+        if git {
+            git::output(&path, &["init", "-q"], &[0]).map_err(|err| {
+                let shown = path.display();
+                let message = format!("{shown} was created, but git init failed: {err}");
+                (ProjectError::CreateFailed, message)
+            })?;
+        }
+        Ok(path.to_string_lossy().into_owned())
     }
 
     /// The repository `id` with its worktrees; git lists them only when they are not known.
@@ -749,31 +772,12 @@ fn save(file: &Path, spaces: &Spaces) -> io::Result<()> {
 /// The main worktree of the repository containing `path`: not blank, absolute, an existing
 /// directory, inside a git repository with a working tree.
 fn validate(path: &str) -> Result<PathBuf, (ProjectError, String)> {
-    if path.trim().is_empty() {
-        return Err((ProjectError::EmptyPath, "Enter a folder".to_owned()));
-    }
-    let path = Path::new(path);
-    let shown = path.display();
-    if !path.is_absolute() {
-        let message = format!("{shown} is not an absolute path");
-        return Err((ProjectError::NotAbsolute, message));
-    }
-    #[cfg(windows)]
-    crate::windows::local(path).map_err(|err| (ProjectError::NotFound, err.to_string()))?;
-    match std::fs::metadata(path) {
-        Err(err) => Err((
-            ProjectError::NotFound,
-            format!("cannot open {shown}: {err}"),
-        )),
-        Ok(meta) if !meta.is_dir() => Err((
-            ProjectError::NotADirectory,
-            format!("{shown} is not a directory"),
-        )),
-        Ok(_) => worktree::main_root(path).map_err(|err| {
-            let message = format!("{shown} is not in a git repository with a working tree: {err}");
-            (ProjectError::NotAGitRepository, message)
-        }),
-    }
+    let (path, _) = dirs::existing(path)?;
+    worktree::main_root(path).map_err(|err| {
+        let shown = path.display();
+        let message = format!("{shown} is not in a git repository with a working tree: {err}");
+        (ProjectError::NotAGitRepository, message)
+    })
 }
 
 /// What a space's project id holds.
@@ -2019,6 +2023,62 @@ mod tests {
         assert_eq!(projects.tree(&f).unwrap_err().to_string(), said);
         assert_eq!(projects.init_git(&f).unwrap_err().to_string(), said);
         assert!(!top.join("f/.git").exists());
+    }
+
+    #[test]
+    fn a_new_project_is_made_with_or_without_git_never_over_a_folder_nor_protected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = canonical(tmp.path()).unwrap();
+        std::fs::create_dir_all(top.join("home/work")).unwrap();
+        std::fs::create_dir_all(top.join("claude")).unwrap();
+        let own = vec![(top.join("claude"), "Claude's folder")];
+        let projects = load(&top.join("data")).protect(Some(top.join("home")), own);
+        let at = |sub: &str| top.join(sub).display().to_string();
+
+        // With git: a repository, that `add` follows as a project.
+        let shop = projects.create(&at("home/work"), "shop", true).unwrap();
+        assert_eq!(shop, at("home/work/shop"));
+        assert!(top.join("home/work/shop/.git").is_dir());
+        assert!(!projects.add(&shop).unwrap().group);
+        // Without: a plain folder, a folder project; in the home folder itself too.
+        let notes = projects.create(&at("home"), "notes", false).unwrap();
+        assert_eq!(notes, at("home/notes"));
+        assert!(!top.join("home/notes/.git").exists());
+        assert!(projects.add(&notes).unwrap().folder);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&notes).unwrap();
+            assert_eq!(meta.permissions().mode() & 0o700, 0o700);
+        }
+
+        // A taken name: refused, nothing in it changes.
+        std::fs::write(top.join("home/notes/a"), "kept").unwrap();
+        let (error, message) = projects.create(&at("home"), "notes", true).unwrap_err();
+        assert_eq!(error, ProjectError::NameTaken);
+        assert_eq!(message, format!("{notes} already exists"));
+        assert!(!top.join("home/notes/.git").exists());
+        assert_eq!(
+            std::fs::read_to_string(top.join("home/notes/a")).unwrap(),
+            "kept"
+        );
+        // A missing parent, never made; a bad name.
+        let (error, _) = projects.create(&at("home/gone"), "x", false).unwrap_err();
+        assert_eq!(error, ProjectError::NotFound);
+        assert!(!top.join("home/gone").exists());
+        let (error, _) = projects.create(&at("home"), "..", false).unwrap_err();
+        assert_eq!(error, ProjectError::InvalidName);
+        // In a folder 23.1 refuses: refused before anything is made, with git or not.
+        for git in [true, false] {
+            let (error, message) = projects.create(&at("claude"), "x", git).unwrap_err();
+            assert_eq!(error, ProjectError::ProtectedFolder);
+            let said = format!(
+                "{} is in Claude's folder: Hive does not follow it; choose a folder in it",
+                at("claude/x")
+            );
+            assert_eq!(message, said);
+            assert!(!top.join("claude/x").exists());
+        }
     }
 
     #[test]

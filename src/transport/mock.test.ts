@@ -26,6 +26,7 @@ import {
   MOCK_GROUP,
   MOCK_IGNORED,
   MOCK_ISSUES,
+  MOCK_NAME_RULE,
   MOCK_OWN_WORKTREE,
   MOCK_REPO_SCRIPTS,
   MOCK_REPOS,
@@ -1650,6 +1651,72 @@ test("a plain folder is a folder project: files without changes, until git init"
   await transport.selectSpace("default");
   await tick();
   expect(messages[0]).toMatchObject({ spaces: [{ groups: [] }] });
+});
+
+test("a new folder and a new project are made as the service makes them (23.2)", async () => {
+  const { transport, messages } = await connected();
+  await tick();
+  messages.length = 0;
+  await transport.createDir("/home/user/", "games");
+  await transport.createDir("/home/user", "games");
+  await transport.createDir("/nowhere", "x");
+  await transport.createDir("/home/user", "a/b");
+  await transport.createDir("/home/user", "");
+  // On Windows a path on drive D:, not a name.
+  await transport.createDir("/home/user", "D:x");
+  await tick();
+  const one =
+    'A name is one folder: no leading dot, no control characters, none of / \\ : * ? " < > |';
+  expect(MOCK_NAME_RULE).toBe(one);
+  expect(messages).toEqual([
+    { type: "dir_created", parent: "/home/user/", name: "games" },
+    {
+      type: "create_dir_failed",
+      parent: "/home/user",
+      name: "games",
+      message: "/home/user/games already exists",
+    },
+    {
+      type: "create_dir_failed",
+      parent: "/nowhere",
+      name: "x",
+      message: "cannot open /nowhere: No such file or directory (os error 2)",
+    },
+    { type: "create_dir_failed", parent: "/home/user", name: "a/b", message: one },
+    { type: "create_dir_failed", parent: "/home/user", name: "", message: "Type a name" },
+    { type: "create_dir_failed", parent: "/home/user", name: "D:x", message: one },
+  ]);
+  // Listed in its folder.
+  messages.length = 0;
+  await transport.listDirs("/home/user/", false, false);
+  await tick();
+  expect(messages[0]).toMatchObject({
+    dirs: expect.arrayContaining([{ name: "games", git: false }]),
+  });
+  // A project with git, then a folder project (the list before it); refusals change nothing.
+  messages.length = 0;
+  await transport.createProject("/home/user/games", "chess", true);
+  await tick();
+  const chess = "/home/user/games/chess";
+  expect(messages.map((m) => m.type)).toEqual(["spaces", "project_created"]);
+  expect(messages[1]).toMatchObject({ path: chess, project: { id: chess, name: "chess" } });
+  messages.length = 0;
+  await transport.createProject("/home/user/games/", "go", false);
+  await tick();
+  const go = "/home/user/games/go";
+  expect(messages.map((m) => m.type)).toEqual(["spaces", "projects", "project_created"]);
+  expect(messages[2]).toMatchObject({ path: go, project: { id: go, folder: true } });
+  expect(messages[0]).toMatchObject({ spaces: [{ groups: [go] }] });
+  messages.length = 0;
+  await transport.createProject("/home/user/games", "go", true);
+  await transport.createProject("/gone", "x", true);
+  await transport.createProject("/home/user/.claude-work", "x", true);
+  await tick();
+  expect(messages.map((m) => m.type === "add_project_failed" && m.error)).toEqual([
+    "name_taken",
+    "not_found",
+    "protected_folder",
+  ]);
 });
 
 test("a project is removed with its settings, never while a terminal works in it", async () => {

@@ -398,6 +398,13 @@ export const MOCK_FOLDERS = [
   "/home/user/.config/gh-work",
 ];
 
+/** As `hive::dirs::check_name` (23.2): why `name` is not one plain folder name, or null. */
+export const mockNameError = (name: string) =>
+  name === "" ? "Type a name" : /^\.|[/\\:*?"<>|\p{Cc}]/u.test(name) ? MOCK_NAME_RULE : null;
+/** `hive::dirs::check_name`'s refusal of a name. */
+export const MOCK_NAME_RULE =
+  'A name is one folder: no leading dot, no control characters, none of / \\ : * ? " < > |';
+
 /** The folder part of `path`: up to its last separator (`\` too on Windows), else empty. */
 const folderPart = (path: string, windows: boolean) =>
   path.slice(0, Math.max(path.lastIndexOf("/"), windows ? path.lastIndexOf("\\") : -1) + 1);
@@ -407,7 +414,13 @@ const folderPart = (path: string, windows: boolean) =>
  * (`native`) takes every path as a Windows one, answers it as it is, and lists the drives for a
  * name without a separator.
  */
-export function mockDirs(asked: string, windows: boolean, native = false, hidden = false): Dirs {
+export function mockDirs(
+  asked: string,
+  windows: boolean,
+  native = false,
+  hidden = false,
+  extra: string[] = [],
+): Dirs {
   const win = windows || native;
   const path = asked || (win ? "C:\\Users\\user\\" : "/home/user/");
   if (native && !/[\\/]/.test(path)) {
@@ -431,7 +444,7 @@ export function mockDirs(asked: string, windows: boolean, native = false, hidden
   };
   if (!unix.startsWith("/")) return { ...answer, error: "type a full path" };
   const folder = unix.slice(0, unix.lastIndexOf("/") + 1);
-  const inside = MOCK_FOLDERS.filter((f) => `${f}/`.startsWith(folder));
+  const inside = [...MOCK_FOLDERS, ...extra].filter((f) => `${f}/`.startsWith(folder));
   if (inside.length === 0) {
     const error = `cannot open ${folder}: No such file or directory (os error 2)`;
     return { ...answer, error };
@@ -820,6 +833,24 @@ export function createMockTransport(
   ];
   let current = "default";
   let made = 0;
+  // The folders made by `create_dir` and `create_project` (23.2), listed with the fake ones.
+  const madeDirs: string[] = [];
+  const isDir = (path: string) =>
+    [...MOCK_FOLDERS, ...madeDirs].some((f) => f === path || f.startsWith(`${path}/`));
+  /** Where `name` goes in `parent`, or why not, as `hive::dirs::target` and `make` say. */
+  const newDir = (parent: string, name: string) => {
+    const base = parent.replace(/\/+$/, "");
+    const path = `${base}/${name}`;
+    const nameError = mockNameError(name);
+    if (nameError) return { path, error: "invalid_name" as const, message: nameError };
+    if (!isDir(base)) {
+      const message = `cannot open ${base}: No such file or directory (os error 2)`;
+      return { path, error: "not_found" as const, message };
+    }
+    if (isDir(path))
+      return { path, error: "name_taken" as const, message: `${path} already exists` };
+    return { path, error: null, message: "" };
+  };
   const space = (id: string) => spaces.find((x) => x.id === id);
   const sendSpaces = () => later({ type: "spaces", spaces: structuredClone(spaces), current });
   // As the service: a space's Claude account is one of the accounts, or the default one (22.5).
@@ -1385,7 +1416,39 @@ export function createMockTransport(
       later({ type: "projects", projects: structuredClone(projects) });
     },
     async listDirs(path, windows, hidden) {
-      later({ type: "dirs", ...mockDirs(path, windows, mode === "native", hidden) });
+      later({ type: "dirs", ...mockDirs(path, windows, mode === "native", hidden, madeDirs) });
+    },
+    async createDir(parent, name) {
+      const { path, error, message } = newDir(parent, name);
+      if (error) return void later({ type: "create_dir_failed", parent, name, message });
+      madeDirs.push(path);
+      later({ type: "dir_created", parent, name });
+    },
+    // As the service: the folder made, `git init` in it when asked, then followed (23.2).
+    async createProject(parent, name, git) {
+      const made = newDir(parent, name);
+      const { path } = made;
+      if (path.startsWith(`${MOCK_CLAUDE_DIR}/`)) {
+        const message = `${path} is in Claude's folder: Hive does not follow it; choose a folder in it`;
+        return void later({ type: "add_project_failed", path, error: "protected_folder", message });
+      }
+      if (made.error) {
+        const { error, message } = made;
+        return void later({ type: "add_project_failed", path, error, message });
+      }
+      madeDirs.push(path);
+      const folder = structuredClone(MOCK_FOLDER);
+      const worktree = { ...(folder.worktrees[0] as Worktree), id: path, name, path };
+      const created = git
+        ? project(path, name, [])
+        : { ...folder, id: path, name, path, worktrees: [worktree] };
+      projects.push(created);
+      const here = space(current) as Space;
+      here.projects.push(path);
+      if (!git) here.groups = [...(here.groups ?? []), path];
+      sendSpaces();
+      if (!git) later({ type: "projects", projects: structuredClone(projects) });
+      later({ type: "project_created", project: structuredClone(created), path });
     },
     async listBranches(project) {
       const branches = MOCK_BRANCHES[project];

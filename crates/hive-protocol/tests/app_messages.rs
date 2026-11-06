@@ -39,6 +39,8 @@ sort! {
         | AddProject
         | RemoveProject
         | InitGit
+        | CreateProject
+        | CreateDir
         | CreateSpace
         | UpdateSpace
         | DeleteSpace
@@ -114,6 +116,9 @@ sort! {
         | Projects
         | ProjectAdded
         | AddProjectFailed
+        | ProjectCreated
+        | DirCreated
+        | CreateDirFailed
         | ProjectRemoved
         | RemoveProjectFailed
         | Spaces
@@ -303,6 +308,19 @@ fn samples() -> Vec<Control> {
         AddProjectFailed {
             path: s("/x"),
             error: ProjectError::NotFound,
+            message: m(),
+        },
+        ProjectCreated {
+            project: project(),
+            path: s("/r"),
+        },
+        DirCreated {
+            parent: s("/p"),
+            name: s("n"),
+        },
+        CreateDirFailed {
+            parent: s("/p"),
+            name: s("n"),
             message: m(),
         },
         ProjectRemoved { id: s("/r") },
