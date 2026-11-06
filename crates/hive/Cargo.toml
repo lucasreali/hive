@@ -30,12 +30,12 @@ harness = false
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2.189"
-libproc = "0.14.11"
+libproc = "0.15.0"
 
 [target."cfg(unix)".dependencies]
 nix = { version = "0.31.3", features = ["signal", "user", "process", "fs", "time", "dir", "resource"] }
 pty-process = { version = "0.5.3", features = ["async"] }
 
 [target."cfg(windows)".dependencies]
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Performance", "Win32_System_Threading"] }

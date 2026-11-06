@@ -269,16 +269,16 @@ label:has(> input[type="checkbox"]:disabled) {
 
 /* macOS controls keep the arrow, as native apps do (D18.10 d): every pointer of this file. */
 :root[data-mac]
-:is(
-  button,
-  input[type="checkbox"],
-  input[type="range"],
-  label:has(> input[type="checkbox"]),
-  .file-row,
-  .select-list [role="option"],
-  .select-trigger,
-  .run-job summary
-) {
+  :is(
+    button,
+    input[type="checkbox"],
+    input[type="range"],
+    label:has(> input[type="checkbox"]),
+    .file-row,
+    .select-list [role="option"],
+    .select-trigger,
+    .run-job summary
+  ) {
   cursor: default;
 }
 

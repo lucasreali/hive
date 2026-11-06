@@ -42,8 +42,8 @@ import { TerminalArea } from "./TerminalArea";
 beforeAll(() => {
   // happy-dom has no layout: give the tree its CSS size so the virtualizer shows rows.
   for (const [key, size] of [
-    ["offsetHeight", 400],
-    ["offsetWidth", 380],
+    ["clientHeight", 400],
+    ["clientWidth", 380],
   ] as const) {
     const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)?.get;
     Object.defineProperty(HTMLElement.prototype, key, {

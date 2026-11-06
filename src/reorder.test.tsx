@@ -171,22 +171,24 @@ test("dragging an agent shows a drop line and drops it there; another worktree r
   expect(rowTitles()).toEqual(["s4", "s2", "s3", "s1"]);
 });
 
+function List({ items, onMove }: { items: string[]; onMove: Parameters<typeof useReorder>[1] }) {
+  const drag = useReorder("test", onMove, true);
+  return (
+    <div data-testid="list" {...drag.end(items.at(-1))}>
+      {items.map((id) => (
+        <span key={id} data-testid={id} {...drag(id)}>
+          <b>{id}</b>
+        </span>
+      ))}
+      <i data-testid="plus" />
+    </div>
+  );
+}
+
 test("a dragged item is dimmed; the list's empty end drops it last; another item keeps the line", async () => {
   const moves: unknown[] = [];
-  function List({ items }: { items: string[] }) {
-    const drag = useReorder("test", (...move) => moves.push(move), true);
-    return (
-      <div data-testid="list" {...drag.end(items.at(-1))}>
-        {items.map((id) => (
-          <span key={id} data-testid={id} {...drag(id)}>
-            <b>{id}</b>
-          </span>
-        ))}
-        <i data-testid="plus" />
-      </div>
-    );
-  }
-  const view = render(<List items={["a", "b", "c"]} />);
+  const onMove: Parameters<typeof useReorder>[1] = (...move) => moves.push(move);
+  const view = render(<List items={["a", "b", "c"]} onMove={onMove} />);
   const el = (id: string) => screen.getByTestId(id);
   const data = { setData: () => {} };
   const fire = (target: HTMLElement, type: "dragOver" | "drop" | "dragLeave", fields = {}) => {
@@ -230,7 +232,7 @@ test("a dragged item is dimmed; the list's empty end drops it last; another item
   fireEvent.dragEnd(el("a"), { dataTransfer: data });
   await act(() => new Promise((done) => setTimeout(done)));
   expect(el("a").dataset.dragging).toBeUndefined();
-  view.rerender(<List items={[]} />);
+  view.rerender(<List items={[]} onMove={onMove} />);
   fireEvent.dragStart(el("plus"), { dataTransfer: data });
   expect(fire(el("list"), "dragOver")).toBe(true);
   expect(moves).toHaveLength(2);

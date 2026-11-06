@@ -5,8 +5,8 @@ import { columns, rowsNote, TableView } from "./TableView";
 
 beforeAll(() => {
   // happy-dom has no layout: give the scroller a height so the virtualizer shows rows.
-  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")?.get;
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight")?.get;
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
     configurable: true,
     get(this: HTMLElement) {
       return this.classList.contains("table-view") ? 240 : original?.call(this);

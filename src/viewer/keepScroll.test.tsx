@@ -80,9 +80,11 @@ function scrollDown(): ViewSnapshot {
   return snapshot(view);
 }
 
-/** The line at the top of a snapshot's scroll. */
-const topLine = (saved: ViewSnapshot) =>
-  shown().state.doc.lineAt((saved.scroll.value as { range: { head: number } }).range.head).number;
+/**
+ * The line at the top of a snapshot's scroll. Not its scroll effect's anchor: CodeMirror anchors
+ * that on the first line starting below the top (6.43.15), a line further down.
+ */
+const topLine = (saved: ViewSnapshot) => Math.floor(saved.top);
 
 beforeEach(() => {
   useHive.setState(initialState, true);

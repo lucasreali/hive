@@ -12,28 +12,38 @@ const OPTIONS = [
   { value: "d", label: "Cherry" },
 ];
 
+/** A select that keeps its value, reporting changes to `changed`; `onKey` sees what reaches the parent. */
+function Host({
+  value,
+  onKey,
+  changed,
+}: {
+  value: string;
+  onKey: (event: React.KeyboardEvent) => void;
+  changed: (next: string) => void;
+}) {
+  const [v, setV] = useState(value);
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: a stand-in for the dialog.
+    <div onKeyDown={onKey}>
+      <Select
+        aria-label="Fruit"
+        value={v}
+        options={OPTIONS}
+        onChange={(next) => {
+          changed(next);
+          setV(next);
+        }}
+      />
+      <button type="button">Other</button>
+    </div>
+  );
+}
+
 /** A select that keeps its value, with a spy on changes; `onKey` sees what reaches the parent. */
 function setup(value = "b", onKey = (_: React.KeyboardEvent) => {}) {
   const changed = mock((_: string) => {});
-  function Host() {
-    const [v, setV] = useState(value);
-    return (
-      // biome-ignore lint/a11y/noStaticElementInteractions: a stand-in for the dialog.
-      <div onKeyDown={onKey}>
-        <Select
-          aria-label="Fruit"
-          value={v}
-          options={OPTIONS}
-          onChange={(next) => {
-            changed(next);
-            setV(next);
-          }}
-        />
-        <button type="button">Other</button>
-      </div>
-    );
-  }
-  render(<Host />);
+  render(<Host value={value} onKey={onKey} changed={changed} />);
   const trigger = screen.getByRole("combobox", { name: "Fruit" });
   return { trigger, changed };
 }

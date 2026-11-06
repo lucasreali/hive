@@ -15,8 +15,8 @@ import { issueNumber } from "./NewWorktreeDialog";
 beforeAll(async () => {
   // happy-dom has no layout: give the branch list its CSS size so the virtualizer shows rows.
   for (const [key, size] of [
-    ["offsetHeight", 156],
-    ["offsetWidth", 486],
+    ["clientHeight", 156],
+    ["clientWidth", 486],
   ] as const) {
     const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)?.get;
     Object.defineProperty(HTMLElement.prototype, key, {

@@ -12,14 +12,18 @@ import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
 
 beforeAll(() => {
   // happy-dom has no layout: give the list and its rows a height so the virtualizer shows rows.
-  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")?.get;
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-    configurable: true,
-    get(this: HTMLElement) {
-      if (this.classList.contains("sessions")) return 400;
-      return this.classList.contains("session") ? 72 : original?.call(this);
-    },
-  });
+  for (const [key, cls, size] of [
+    ["clientHeight", "sessions", 400],
+    ["offsetHeight", "session", 72],
+  ] as const) {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)?.get;
+    Object.defineProperty(HTMLElement.prototype, key, {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains(cls) ? size : original?.call(this);
+      },
+    });
+  }
 });
 
 afterEach(() => {
