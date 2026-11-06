@@ -20,7 +20,6 @@ afterEach(async () => {
 
 /** A view of `doc` with the find bar open (as ⌘F opens it), the cursor at the start. */
 function opened(doc: string, readOnly = false) {
-  // Several selections allowed, to see each match "Select all matches" selects.
   view = new EditorView({
     parent: document.body,
     state: EditorState.create({
@@ -29,7 +28,6 @@ function opened(doc: string, readOnly = false) {
         keymap.of(editorSearchKeymap),
         search({ top: true, createPanel: createSearchPanel }),
         EditorState.readOnly.of(readOnly),
-        EditorState.allowMultipleSelections.of(true),
       ],
     }),
   });
@@ -51,7 +49,7 @@ const selected = (v: EditorView) => {
   return [from, to];
 };
 
-test("the bar: a find field with its toggles, arrows, select all, close, and a replace row", () => {
+test("the bar: a find field with its toggles, arrows, close, and a replace row", () => {
   const v = opened("foo\n");
   const bar = screen.getByRole("search", { name: "Find in the file" });
   // CodeMirror's panel class (the editor's own styles and its focus lookup) and ours.
@@ -70,7 +68,6 @@ test("the bar: a find field with its toggles, arrows, select all, close, and a r
     "Match whole word",
     "Previous match",
     "Next match",
-    "Select all matches",
     "Close search",
     "Replace",
     "Replace",
@@ -84,7 +81,6 @@ test("the bar: a find field with its toggles, arrows, select all, close, and a r
   // Tooltips name each control and its key; every icon is decoration only.
   expect(button("Previous match").title).toBe("Previous match (Shift+Enter)");
   expect(button("Next match").title).toBe("Next match (Enter)");
-  expect(button("Select all matches").title).toBe("Select all matches");
   expect(button("Close search").title).toBe("Close (Esc)");
   expect(button("Match case").title).toBe("Match case");
   expect(button("Replace").title).toBe("Replace the current match (Enter)");
@@ -142,7 +138,7 @@ test("a query set elsewhere shows in the bar", () => {
   expect(document.activeElement).toBe(field("Find"));
 });
 
-test("next, previous and select all run CodeMirror's commands, by button and by key", () => {
+test("next and previous run CodeMirror's commands, by button and by key", () => {
   const v = opened("foo\nbar foo\nfoo\n");
   type("Find", "foo");
   click("Next match");
@@ -161,15 +157,9 @@ test("next, previous and select all run CodeMirror's commands, by button and by 
   // Enter while composing (an IME) is the composition's.
   key("Find", { key: "Enter", isComposing: true });
   expect(selected(v)).toEqual([8, 11]);
-  click("Select all matches");
-  expect(v.state.selection.ranges.map((r) => [r.from, r.to])).toEqual([
-    [0, 3],
-    [8, 11],
-    [12, 15],
-  ]);
   // Another key in the field is just typing.
   key("Find", { key: "a" });
-  expect(v.state.selection.ranges).toHaveLength(3);
+  expect(selected(v)).toEqual([8, 11]);
 });
 
 test("replace replaces the current match, by button or Enter in its field; replace all, every one", () => {

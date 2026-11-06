@@ -6,11 +6,10 @@ import {
   replaceAll,
   replaceNext,
   SearchQuery,
-  selectMatches,
   setSearchQuery,
 } from "@codemirror/search";
 import { type EditorView, type Panel, runScopeHandlers, type ViewUpdate } from "@codemirror/view";
-import { ArrowDownIcon, ArrowUpIcon, SelectionAllIcon, XIcon } from "@phosphor-icons/react";
+import { ArrowDownIcon, ArrowUpIcon, XIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -95,12 +94,6 @@ function FindBar({ view, query }: { view: EditorView; query: SearchQuery }) {
           "Next match (Enter)",
           () => findNext(view),
           <ArrowDownIcon {...ICON} />,
-        )}
-        {button(
-          "Select all matches",
-          "Select all matches",
-          () => selectMatches(view),
-          <SelectionAllIcon {...ICON} />,
         )}
         <span className="find-gap" />
         {button("Close search", "Close (Esc)", () => closeSearchPanel(view), <XIcon {...ICON} />)}
