@@ -71,20 +71,21 @@ pub fn read(dir: &Path, path: &str, budget: usize) -> io::Result<Sheet> {
 /// counted, over at most `limit` bytes of `input`; a row longer than [`RECORD_LIMIT`] bytes
 /// ends the reading there, as the limit does.
 pub fn parse(input: impl Read, delimiter: u8, budget: usize, limit: u64) -> io::Result<Sheet> {
-    parse_with(input, delimiter, budget, limit, RECORD_LIMIT)
+    parse_with(input, delimiter, budget, limit, RECORD_LIMIT).map(|(sheet, _)| sheet)
 }
 
 /// [`parse`] with rows of at most `record_limit` bytes, their line break included. The input is
 /// read through two `Take`s: the outer one holds the count limit, the inner one is set after
 /// each row so the next one gets one byte more than `record_limit` (the csv reader's memory
-/// grows with a row: its bytes and a `usize` a field); a row that took it is cut there.
+/// grows with a row: its bytes and a `usize` a field); a row that took it is cut there. Also
+/// how many bytes of `input` were read.
 fn parse_with(
     input: impl Read,
     delimiter: u8,
     budget: usize,
     limit: u64,
     record_limit: u64,
-) -> io::Result<Sheet> {
+) -> io::Result<(Sheet, u64)> {
     let most = limit.saturating_add(1);
     let per_row = record_limit.saturating_add(1);
     let mut reader = csv::ReaderBuilder::new()
@@ -130,12 +131,14 @@ fn parse_with(
             rows.push(row);
         }
     }
-    Ok(Sheet {
+    let read = given(&reader);
+    let sheet = Sheet {
         name: String::new(),
         rows,
         total,
-        partial: cut || given(&reader) > limit,
-    })
+        partial: cut || read > limit,
+    };
+    Ok((sheet, read))
 }
 
 /// The `table` answer for `path`: its sheet, or why it could not be read.
@@ -285,7 +288,9 @@ mod tests {
 
     #[test]
     fn a_row_past_the_record_limit_ends_the_reading_before_it() {
-        let read = |input: &[u8], record| parse_with(input, b',', MAX_PAYLOAD, COUNT_LIMIT, record);
+        let read = |input: &[u8], record| {
+            parse_with(input, b',', MAX_PAYLOAD, COUNT_LIMIT, record).map(|(sheet, _)| sheet)
+        };
         let cut = read(b"a,b\ncccccccccc\nd\n", 6).unwrap();
         assert_eq!(
             (cut.rows, cut.total, cut.partial),
@@ -308,6 +313,16 @@ mod tests {
         // Its newline past the limit: cut.
         let over = read(b"abcdef\n", 6).unwrap();
         assert_eq!((over.total, over.partial), (0, true));
+    }
+
+    #[test]
+    fn a_row_is_read_no_further_than_one_byte_past_the_limit() {
+        // After `a,b\n` (4 bytes), the long row gets 7 bytes: 11 read in all.
+        let input = [b"a,b\n".as_slice(), &[b'c'; 20]].concat();
+        let (sheet, read) = parse_with(&input[..], b',', MAX_PAYLOAD, COUNT_LIMIT, 6).unwrap();
+        assert_eq!((sheet.total, sheet.partial, read), (1, true, 11));
+        let (_, read) = parse_with(&b"ab\ncd\n"[..], b',', MAX_PAYLOAD, COUNT_LIMIT, 6).unwrap();
+        assert_eq!(read, 6);
     }
 
     #[test]
