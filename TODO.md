@@ -730,9 +730,9 @@ Created 2026-11-05 at the human's request: "I want something for remote connecti
   - **The link:** the user's own `ssh` and `~/.ssh/config` (aliases, `ProxyJump`, keys, agent), never a password or key stored by Hive, separate arguments only, host keys always checked (an unknown or changed key asks or refuses, never `StrictHostKeyChecking=no`); dropped links and reconnects (the remote service keeps its terminals running, as `tmux` would; what the app shows meanwhile); laptop sleep; `ControlMaster` reuse.
   - **What is out for now**, said plainly (e.g. Windows hosts, password prompts, a remote with no shell).
   - **Risks and security** for `security-reviewer`: what a malicious or compromised remote could send the app, and the limits that already apply to the service's messages.
-  - **The plan:** the tasks 25.13… to build it, each sized like the other stages' tasks, written into this stage only after the human approves.
+  - **The plan:** the tasks 25.14… to build it, each sized like the other stages' tasks, written into this stage only after the human approves.
 
-  Deliver `docs/spike/ssh.md` (design, measurements of a terminal's echo latency over a local and a delayed link, e.g. `tc netem` or a proxy with 100 ms, and the open questions). ⏸ Checkpoint: the human picks the design; the agent then writes 25.13… here and the human updates `docs/hive.md`.
+  Deliver `docs/spike/ssh.md` (design, measurements of a terminal's echo latency over a local and a delayed link, e.g. `tc netem` or a proxy with 100 ms, and the open questions). ⏸ Checkpoint: the human picks the design; the agent then writes 25.14… here and the human updates `docs/hive.md`.
 
 ### Carried over from earlier stages
 
@@ -755,6 +755,7 @@ Moved here 2026-11-06 at the human's request: every task still open in the stage
 ### New
 
 - [ ] **25.12 The remove-merged dialog's error overlaps its row.** Seen by the human, 2026-11-06 (screenshot): in "Remove merged worktrees", a worktree that cannot be removed shows its long error ("in use by fish (22367), claude (22404), mcp (22440), mcp@latest (22441), node (22477), 1 more: close its terminals first") drawn over the checkbox's name and "last commit" date. The row `.merged-item` is one flex line (`src/styles.css:1779`), so the error `span` (`WorktreeMenu.tsx:345`) squeezes the label (`flex: 1; min-width: 0`) to nothing and the label's text spills under it. Put the error on its own line below the name and date (wrapping), leaving the checkbox, name and date readable. Tests: bun, the error is rendered outside the label; Playwright against the mock, a failed removal with a long message does not overlap the row's name (bounding boxes).
+- [ ] **25.13 The folder field's "New folder": a way back, and the button's look.** Seen by the human, 2026-11-06 (screenshot of Add project): (1) once "New folder" is clicked, the "Folder name, then Enter" row stays; only Escape in the name closes it (`FolderField.tsx:154`), nothing does with the mouse. Clicking the button again closes the row (it toggles, `aria-pressed`), and so does leaving the name empty (blur with nothing typed); a typed name is kept until Escape or the button. (2) The icon is not centred in the button (`.folder-path .folder-new`, `src/styles.css:3528`). (3) The button's vertical separator (`border-left`) runs to the field's bottom edge and touches the line under the path, while the path's own separator stops short of it: the separator stops short of both lines, the same on both sides. Tests: bun, the button closes an open row, a blur with an empty name closes it and one with a name keeps it; Playwright against the mock, the icon's centre is the button's centre and the separator does not reach the field's border (bounding boxes).
 
 
 ---
