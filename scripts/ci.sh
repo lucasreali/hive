@@ -1,8 +1,9 @@
 #!/bin/sh
 # Push the current task branch and follow its CI, with the personal account's token (CLAUDE.md
-# rule 4): the active gh account is the work one and is never switched. Push, watch and dispatch
-# only on task/* branches.
+# rule 4): the active gh account is the work one and is never switched. Push on task/* branches and
+# main, watch and dispatch only on task/* branches.
 #   scripts/ci.sh push          push the branch (sets upstream)
+#   scripts/ci.sh push [v<x.y.z>]  on main: push main, and the release tag when given
 #   scripts/ci.sh watch [--all] wait for HEAD's ci and macos runs, the two a merge needs (Windows
 #                               is frozen, D17.0; --all adds windows); exit 1 if one failed
 #   scripts/ci.sh green [<rev>] print the green `ci` and `macos` runs of a commit (default HEAD,
@@ -21,8 +22,8 @@
 set -eu
 branch=$(git rev-parse --abbrev-ref HEAD)
 case "${1:-}:$branch" in
-  push:task/* | watch:task/* | dispatch:task/*) ;;
-  push:* | watch:* | dispatch:*) echo "ci.sh: only task/* branches (on $branch)" >&2; exit 2 ;;
+  push:task/* | push:main | watch:task/* | dispatch:task/*) ;;
+  push:* | watch:* | dispatch:*) echo "ci.sh: only task/* branches, or push on main (on $branch)" >&2; exit 2 ;;
 esac
 GH_TOKEN=$(gh auth token -u lucasreali)
 export GH_TOKEN
@@ -34,7 +35,17 @@ runs() {
 }
 
 case "${1:-}" in
-  push) git push -u origin "$branch" ;;
+  push)
+    if [ "$branch" = main ]; then
+      case "${2:-}" in
+        "") git push origin main ;;
+        v[0-9]*.[0-9]*.[0-9]*) git push origin main "$2" ;;
+        *) echo "usage: scripts/ci.sh push [v<x.y.z>] (on main)" >&2; exit 2 ;;
+      esac
+    else
+      git push -u origin "$branch"
+    fi
+    ;;
   watch)
     case "${2:-}" in
       "") want="ci macos" ;;
@@ -121,5 +132,5 @@ case "${1:-}" in
     # --json: gh 2.46's plain view asks for the retired Projects (classic) and fails.
     [ -z "$n" ] || gh issue view "$n" --json url,body,comments -q '.url, .body, (.comments[] | .body)'
     ;;
-  *) echo "usage: scripts/ci.sh push | watch [--all] | green [<rev>] | dispatch <workflow file> | runs [<rev>] | logs <run-id> | cancel <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
+  *) echo "usage: scripts/ci.sh push [v<x.y.z>] | watch [--all] | green [<rev>] | dispatch <workflow file> | runs [<rev>] | logs <run-id> | cancel <run-id> | jobs <run-id> | log <job-id> | survivors" >&2; exit 2 ;;
 esac
