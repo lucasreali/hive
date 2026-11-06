@@ -562,6 +562,7 @@ impl State {
                 (projects.as_mut_slice(), true)
             }
             Control::ProjectAdded { project }
+            | Control::ProjectCreated { project, .. }
             | Control::WorktreeCreated { project, .. }
             | Control::WorktreeRemoved { project, .. }
             | Control::WorktreeRenamed { project, .. } => (std::slice::from_mut(project), false),
@@ -919,10 +920,36 @@ impl State {
         })
     }
 
+    /// Creates the new project's folder `name` in `parent` (23.2, [`Projects::create`]) and
+    /// follows it as [`State::add_project`] does, answering `ProjectCreated` in place of
+    /// `ProjectAdded`; a refusal is `AddProjectFailed`.
+    async fn create_project(&self, parent: String, name: String, git: bool) {
+        let made = tokio::task::block_in_place(|| self.projects.create(&parent, &name, git));
+        match made {
+            Ok(path) => self.follow(path, true).await,
+            Err((error, message)) => {
+                let path = Path::new(&parent).join(&name);
+                let path = path.to_string_lossy().into_owned();
+                let failed = Control::AddProjectFailed {
+                    path,
+                    error,
+                    message,
+                };
+                self.to_app(0, &failed).await
+            }
+        }
+    }
+
     /// Follows the folder `path` in the current space ([`Projects::add`]: a project, a group or
     /// a folder project): answers `ProjectAdded` (after `Projects` for a group, whose
     /// repositories come in the list) and `Spaces`, or `AddProjectFailed`.
     async fn add_project(&self, path: String) {
+        self.follow(path, false).await
+    }
+
+    /// [`State::add_project`]; for the folder `path` just `created`, its project comes as
+    /// `ProjectCreated`.
+    async fn follow(&self, path: String, created: bool) {
         // In turn with git's registry, whose list may not have the project yet.
         let _turn = self.changing.lock().await;
         let added = tokio::task::block_in_place(|| {
@@ -932,7 +959,13 @@ impl State {
                 projects: self.projects.list(),
             });
             let mut replies: Vec<Control> = list.into_iter().collect();
-            replies.push(Control::ProjectAdded { project });
+            replies.push(match created {
+                true => Control::ProjectCreated {
+                    project,
+                    path: path.clone(),
+                },
+                false => Control::ProjectAdded { project },
+            });
             replies.iter_mut().for_each(|r| self.with_health(r));
             Ok(replies)
         });

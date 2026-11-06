@@ -374,6 +374,13 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             let state = state.clone();
             tokio::spawn(async move { state.add_project(path).await });
         }
+        Ok(Control::CreateProject { parent, name, git }) => {
+            let state = state.clone();
+            tokio::spawn(async move { state.create_project(parent, name, git).await });
+        }
+        Ok(Control::CreateDir { parent, name }) => {
+            state.projects(move |_| dirs::create(parent, name))
+        }
         Ok(Control::InitGit { id }) => {
             let state = state.clone();
             tokio::spawn(async move {

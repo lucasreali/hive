@@ -7,10 +7,12 @@ use std::io;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use hive_protocol::{Control, Dir};
+use hive_protocol::{Control, Dir, ProjectError};
 
 /// Longest path accepted, in bytes.
 pub const PATH_LIMIT: usize = 4096;
+/// Longest name of a new folder, in bytes (as most file systems).
+pub const NAME_LIMIT: usize = 255;
 /// Most subfolders sent.
 pub const DIR_LIMIT: usize = 1000;
 
@@ -203,6 +205,92 @@ fn run(program: &str, args: &[&str]) -> io::Result<String> {
     Ok(line.to_owned())
 }
 
+/// Refuses `name` for a new folder (23.2) unless it is one path segment: not empty, at most
+/// [`NAME_LIMIT`] bytes, no separator (`/`, or `\` for Windows), no leading `.` (so neither `.`,
+/// `..` nor a hidden folder) and no control character.
+pub fn check_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Type a name".to_owned());
+    }
+    if name.len() > NAME_LIMIT {
+        return Err(format!("A name is at most {NAME_LIMIT} bytes"));
+    }
+    let odd = name.starts_with('.') || name.contains(['/', '\\']);
+    if odd || name.chars().any(char::is_control) {
+        return Err(
+            "A name is one folder: no /, no \\, no leading dot, no control characters".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// The folder `path` names, after the checks of an added project's (absolute, local on
+/// Windows, an existing folder), as it is.
+pub fn existing(path: &str) -> Result<&Path, (ProjectError, String)> {
+    if path.trim().is_empty() {
+        return Err((ProjectError::EmptyPath, "Enter a folder".to_owned()));
+    }
+    let path = Path::new(path);
+    let shown = path.display();
+    if !path.is_absolute() {
+        let message = format!("{shown} is not an absolute path");
+        return Err((ProjectError::NotAbsolute, message));
+    }
+    #[cfg(windows)]
+    crate::windows::local(path).map_err(|err| (ProjectError::NotFound, err.to_string()))?;
+    match fs::metadata(path) {
+        Err(err) => Err((
+            ProjectError::NotFound,
+            format!("cannot open {shown}: {err}"),
+        )),
+        Ok(meta) if !meta.is_dir() => Err((
+            ProjectError::NotADirectory,
+            format!("{shown} is not a directory"),
+        )),
+        Ok(_) => Ok(path),
+    }
+}
+
+/// Where the new folder `name` in the folder `parent` goes (23.2): `parent` resolved (it must
+/// exist, see [`existing`]) with `name` ([`check_name`]) in it. Nothing is created.
+pub fn target(parent: &str, name: &str) -> Result<PathBuf, (ProjectError, String)> {
+    check_name(name).map_err(|message| (ProjectError::InvalidName, message))?;
+    let dir = existing(parent)?;
+    let dir = crate::paths::canonical(dir).map_err(|err| {
+        let message = format!("cannot open {}: {err}", dir.display());
+        (ProjectError::NotFound, message)
+    })?;
+    Ok(dir.join(name))
+}
+
+/// Creates the folder `path` (0755, less the umask) in a folder that exists: never its
+/// parents, never over an existing entry (a dangling link included).
+pub fn make(path: &Path) -> Result<(), (ProjectError, String)> {
+    let shown = path.display();
+    let made = crate::mode::folder(&mut fs::DirBuilder::new(), 0o755).create(path);
+    made.map_err(|err| match err.kind() {
+        io::ErrorKind::AlreadyExists => {
+            (ProjectError::NameTaken, format!("{shown} already exists"))
+        }
+        _ => (
+            ProjectError::CreateFailed,
+            format!("cannot create {shown}: {err}"),
+        ),
+    })
+}
+
+/// Answers `CreateDir`: the folder `name` made in `parent` ([`target`], [`make`]).
+pub fn create(parent: String, name: String) -> Control {
+    match target(&parent, &name).and_then(|path| make(&path)) {
+        Ok(()) => Control::DirCreated { parent, name },
+        Err((_, message)) => Control::CreateDirFailed {
+            parent,
+            name,
+            message,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +301,118 @@ mod tests {
     } else {
         ("/", "tmp")
     };
+
+    #[test]
+    fn a_new_folder_name_is_one_plain_segment() {
+        let one = "A name is one folder: no /, no \\, no leading dot, no control characters";
+        let long = "x".repeat(NAME_LIMIT + 1);
+        for (bad, said) in [
+            ("", "Type a name"),
+            (long.as_str(), "A name is at most 255 bytes"),
+            (".", one),
+            ("..", one),
+            (".hidden", one),
+            ("a/b", one),
+            ("/", one),
+            ("a\\b", one),
+            ("a\nb", one),
+            ("a\u{7f}", one),
+            ("a\0", one),
+        ] {
+            assert_eq!(check_name(bad), Err(said.to_owned()), "{bad:?}");
+        }
+        let longest = "x".repeat(NAME_LIMIT);
+        for good in [
+            "shop",
+            "a.b",
+            "a..b",
+            "my project",
+            "café",
+            longest.as_str(),
+        ] {
+            assert_eq!(check_name(good), Ok(()), "{good:?}");
+        }
+    }
+
+    #[test]
+    fn a_new_folder_goes_in_an_existing_folder_resolved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = crate::paths::canonical(tmp.path()).unwrap();
+        fs::write(top.join("file"), "").unwrap();
+        let at = |sub: &str| top.join(sub).display().to_string();
+        assert_eq!(target(&at(""), "x"), Ok(top.join("x")));
+        // `..` in the parent resolves.
+        fs::create_dir(top.join("a")).unwrap();
+        assert_eq!(target(&format!("{}/..", at("a")), "x"), Ok(top.join("x")));
+        let refused = |parent: &str, name: &str| target(parent, name).unwrap_err().0;
+        assert_eq!(refused(&at(""), ".x"), ProjectError::InvalidName);
+        assert_eq!(refused(" ", "x"), ProjectError::EmptyPath);
+        assert_eq!(refused("rel", "x"), ProjectError::NotAbsolute);
+        assert_eq!(refused(&at("gone"), "x"), ProjectError::NotFound);
+        let (error, message) = target(&at("file"), "x").unwrap_err();
+        assert_eq!(error, ProjectError::NotADirectory);
+        assert_eq!(message, format!("{} is not a directory", at("file")));
+        // A link to a folder is the folder.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(top.join("a"), top.join("link")).unwrap();
+            assert_eq!(target(&at("link"), "x"), Ok(top.join("a/x")));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_folder_is_made_once_never_its_parents_nor_over_an_entry() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let top = crate::paths::canonical(tmp.path()).unwrap();
+        make(&top.join("x")).unwrap();
+        let mode = fs::metadata(top.join("x")).unwrap().permissions().mode();
+        // 0755 less the umask: never more.
+        assert_eq!(mode & 0o7777 & !0o755, 0);
+        assert_eq!(mode & 0o700, 0o700);
+        let shown = top.join("x").display().to_string();
+        let taken = (ProjectError::NameTaken, format!("{shown} already exists"));
+        assert_eq!(make(&top.join("x")), Err(taken));
+        // A dangling link is an entry too.
+        std::os::unix::fs::symlink(top.join("nowhere"), top.join("l")).unwrap();
+        assert_eq!(make(&top.join("l")).unwrap_err().0, ProjectError::NameTaken);
+        assert!(!top.join("nowhere").exists());
+        // Its parent is never made.
+        let (error, message) = make(&top.join("a/b")).unwrap_err();
+        assert_eq!(error, ProjectError::CreateFailed);
+        let shown = top.join("a/b").display().to_string();
+        assert!(
+            message.starts_with(&format!("cannot create {shown}: ")),
+            "{message}"
+        );
+        assert!(!top.join("a").exists());
+    }
+
+    #[test]
+    fn create_dir_answers_the_folder_made_or_why_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = crate::paths::canonical(tmp.path()).unwrap();
+        let parent = top.display().to_string();
+        let made = Control::DirCreated {
+            parent: parent.clone(),
+            name: "x".into(),
+        };
+        assert_eq!(create(parent.clone(), "x".into()), made);
+        assert!(top.join("x").is_dir());
+        let taken = Control::CreateDirFailed {
+            parent: parent.clone(),
+            name: "x".into(),
+            message: format!("{} already exists", top.join("x").display()),
+        };
+        assert_eq!(create(parent.clone(), "x".into()), taken);
+        let bad = Control::CreateDirFailed {
+            parent: parent.clone(),
+            name: "".into(),
+            message: "Type a name".into(),
+        };
+        assert_eq!(create(parent, "".into()), bad);
+    }
 
     fn dir(name: &str, git: bool) -> Dir {
         Dir {

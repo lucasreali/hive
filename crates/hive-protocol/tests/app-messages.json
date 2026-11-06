@@ -183,6 +183,49 @@
     "message": "m"
   },
   {
+    "type": "project_created",
+    "project": {
+      "id": "/r",
+      "name": "r",
+      "path": "/r",
+      "worktrees": [
+        {
+          "id": "/r",
+          "name": "main",
+          "path": "/r",
+          "branch": "main",
+          "main": true,
+          "claude": false,
+          "status": {
+            "changes": 1,
+            "added": 3,
+            "removed": 4,
+            "ahead": null,
+            "behind": null,
+            "merged": false,
+            "last_commit_ms": 2
+          }
+        }
+      ],
+      "error": null,
+      "group": false,
+      "folder": false,
+      "parent": "/g"
+    },
+    "path": "/r"
+  },
+  {
+    "type": "dir_created",
+    "parent": "/p",
+    "name": "n"
+  },
+  {
+    "type": "create_dir_failed",
+    "parent": "/p",
+    "name": "n",
+    "message": "m"
+  },
+  {
     "type": "project_removed",
     "id": "/r"
   },
