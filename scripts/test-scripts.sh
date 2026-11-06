@@ -191,7 +191,7 @@ check "ci.sh dispatch: on this task branch" \
   'has "$o" "exit=0" && grep -qx "workflow run release.yml --ref task/1.0-test" "$tmp/gh.log"'
 git -C "$tmp/ci" switch -q -c other
 o=$(ci "" "" dispatch release.yml)
-check "ci.sh dispatch: only task branches" 'has "$o" "ci.sh: only task/\* branches (on other)" "exit=2"'
+check "ci.sh dispatch: only task branches" 'has "$o" "ci.sh: only task/\* branches, or push on main (on other)" "exit=2"'
 git -C "$tmp/ci" switch -q task/1.0-test
 # green: a release needs ci and macos green (D18.1); windows does not count.
 o=$(ci "$three" "3" green)
