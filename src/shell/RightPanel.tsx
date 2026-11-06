@@ -37,6 +37,7 @@ import {
   type FileTarget,
   isMarkdown,
   isTable,
+  isWorkbook,
   type OpenFile,
   openFileMenu,
   type PanelView,
@@ -1101,7 +1102,7 @@ export function FileView({ worktree }: { worktree: string }) {
             <EyeIcon />
           </button>
         )}
-        {isTable(openFile.path) && (
+        {isTable(openFile.path) && !isWorkbook(openFile.path) && (
           <button
             type="button"
             className="ghost"

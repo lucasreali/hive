@@ -790,14 +790,21 @@ export const setRendered = (rendered: boolean) =>
     ),
   }));
 
-/** A table file (23.6), by its name: the service reads it as a table (`hive::table`). */
-export const isTable = (path: string) => /\.(csv|tsv)$/i.test(path);
+/**
+ * A table file (23.6), by its name: the service reads it as a table (`hive::table`): CSV and
+ * TSV, and the workbooks of 23.7.
+ */
+export const isTable = (path: string) => /\.(csv|tsv|xlsx|xls|ods)$/i.test(path);
 
-/** The open file is a table file shown as its table (23.6), as it opens. */
+/** A workbook (23.7): binary, so it has no text to show and always shows as its table. */
+export const isWorkbook = (path: string) => /\.(xlsx|xls|ods)$/i.test(path);
+
+/** The open file is a table file shown as its table (23.6), as it opens; a workbook always. */
 export const tableShown = (s: HiveState) =>
   !!s.openFile &&
   isTable(s.openFile.path) &&
-  !s.openFiles.find((t) => s.openFile && isFor(t, s.openFile))?.asText;
+  (isWorkbook(s.openFile.path) ||
+    !s.openFiles.find((t) => s.openFile && isFor(t, s.openFile))?.asText);
 
 /** Shows the open table file as its table or as text (23.6), in its tab. */
 export const setTableShown = (shown: boolean) =>
