@@ -146,8 +146,7 @@ pub fn run() -> ExitCode {
             code = status;
             io::stdout().write_all(&out)
         }),
-        Command::Sheets { format, budget } => crate::workbook::limit_memory()
-            .and_then(|()| crate::workbook::worker(&format, budget, io::stdin(), io::stdout())),
+        Command::Sheets { format, budget } => crate::workbook::child(&format, budget),
         Command::Worktree { command } => run_worktree(command, &paths),
         #[cfg(unix)]
         Command::Uninstall {

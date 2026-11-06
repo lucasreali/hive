@@ -201,7 +201,15 @@ fn watch(child: &mut Child, worker: &Worker) -> io::Result<Outcome> {
     Ok(Outcome::OverTime)
 }
 
-/// `hive sheets <format> <budget>`, after [`limit_memory`]: the workbook on `input` read as
+/// `hive sheets <format> <budget>`: [`worker`] on stdin and stdout, within [`MEMORY_LIMIT`] on
+/// Linux.
+pub fn child(format: &str, budget: usize) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    limit_memory()?;
+    worker(format, budget, io::stdin(), io::stdout())
+}
+
+/// The workbook on `input` read as
 /// [`sheets`] does, the answer (its sheets, or why not) written to `output` as JSON.
 pub fn worker(format: &str, budget: usize, input: impl Read, output: impl Write) -> io::Result<()> {
     let format =
@@ -219,18 +227,12 @@ pub fn worker(format: &str, budget: usize, input: impl Read, output: impl Write)
 /// The child's address space capped at [`MEMORY_LIMIT`] (or the lower limit it already has):
 /// an allocation past it fails, and the child ends, leaving no core dump of the workbook.
 #[cfg(target_os = "linux")]
-pub fn limit_memory() -> io::Result<()> {
+fn limit_memory() -> io::Result<()> {
     use nix::sys::resource::{Resource, getrlimit, setrlimit};
     setrlimit(Resource::RLIMIT_CORE, 0, 0)?;
     let (_, hard) = getrlimit(Resource::RLIMIT_AS)?;
     let most = MEMORY_LIMIT.min(hard);
     Ok(setrlimit(Resource::RLIMIT_AS, most, most)?)
-}
-
-/// Not possible on macOS (the service watches the child's footprint instead) nor Windows.
-#[cfg(not(target_os = "linux"))]
-pub fn limit_memory() -> io::Result<()> {
-    Ok(())
 }
 
 /// The worksheets of the workbook `bytes` in `format`, in their order (chart, dialog and macro
@@ -364,12 +366,7 @@ impl Grid {
         let mut kept = self.rows;
         for at in 0..shown {
             let cells = kept.remove(&at).unwrap_or_default();
-            // Its brackets and comma, and two quotes and a comma a cell: the least its JSON
-            // takes, checked before the row is made.
-            let width = cells
-                .last_key_value()
-                .map_or(0, |(&col, _)| col as usize + 1);
-            let least = cells.values().map(String::len).sum::<usize>() + width * 3 + 2;
+            let (width, least) = least(&cells);
             if least > *left {
                 break;
             }
@@ -388,6 +385,17 @@ impl Grid {
         sheets.push(sheet);
         true
     }
+}
+
+/// A row's width (its last cell's column, plus one) and the least bytes its JSON takes, its
+/// comma included: its text, two quotes and a comma a cell, its brackets. Checked before the
+/// row is made: a cell far to the right makes a wide row.
+fn least(cells: &BTreeMap<u32, String>) -> (usize, usize) {
+    let width = cells
+        .last_key_value()
+        .map_or(0, |(&col, _)| col as usize + 1);
+    let text = cells.values().map(String::len).sum::<usize>();
+    (width, text + width * 3 + 2)
 }
 
 fn text_ref(value: &DataRef<'_>) -> String {
@@ -646,6 +654,19 @@ mod tests {
     }
 
     #[test]
+    fn a_rows_least_json_is_counted_from_its_cells() {
+        let cells = |list: &[(u32, &str)]| -> BTreeMap<u32, String> {
+            list.iter()
+                .map(|&(col, text)| (col, text.to_owned()))
+                .collect()
+        };
+        assert_eq!(least(&cells(&[])), (0, 2));
+        // `["ab","","c"]` and its comma: 14 bytes.
+        assert_eq!(least(&cells(&[(0, "ab"), (2, "c")])), (3, 14));
+        assert_eq!(least(&cells(&[(9, "")])), (10, 32));
+    }
+
+    #[test]
     fn a_wide_row_that_cannot_fit_is_never_made() {
         // `["","x"]` and its comma: 9 bytes, its least too; `["y"]`, 6.
         let grid = || {
@@ -810,6 +831,7 @@ mod tests {
         fn a_child_that_fails_or_says_nonsense_could_not_read_it() {
             for script in [
                 "exit 3",
+                r#"echo '{"Ok":[]}'; exit 3"#,
                 "kill -9 $$",
                 "echo nonsense",
                 "head -c 9000000 /dev/zero",
@@ -849,6 +871,12 @@ mod tests {
             let never = shell("exit 1");
             let err = read(&b""[..], WORKBOOK_LIMIT + 1, Format::Xlsx, 0, &never).unwrap_err();
             assert_eq!(err.to_string(), "the workbook is larger than 32 MiB");
+            // At the limit is read.
+            let empty = shell(r#"echo '{"Ok":[]}'"#);
+            assert_eq!(
+                read(&b""[..], WORKBOOK_LIMIT, Format::Xlsx, 0, &empty).unwrap(),
+                []
+            );
             let missing = Worker::new("/nonexistent/hive".into());
             let err = read(&b""[..], 0, Format::Xlsx, 0, &missing).unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::NotFound);
