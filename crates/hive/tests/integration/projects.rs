@@ -117,6 +117,9 @@ async fn folders_that_are_not_projects_are_refused() {
     let env = Env::new();
     let file = env.path("home/file");
     std::fs::write(&file, "").unwrap();
+    // A `.git` that is no repository.
+    std::fs::create_dir_all(env.path("home/broken/.git")).unwrap();
+    let broken = env.path("home/broken").display().to_string();
     let mut daemon = env.daemon();
     let mut conn = env.connect(Role::App).await;
     let home = env.path("home").display().to_string();
@@ -125,16 +128,22 @@ async fn folders_that_are_not_projects_are_refused() {
         ("home".to_owned(), ProjectError::NotAbsolute),
         (format!("{home}/missing"), ProjectError::NotFound),
         (file.display().to_string(), ProjectError::NotADirectory),
-        (home.clone(), ProjectError::NotAGitRepository),
+        (broken.clone(), ProjectError::NotAGitRepository),
+        // Never the home folder itself (23.1).
+        (home.clone(), ProjectError::ProtectedFolder),
     ];
     for (path, error) in cases {
         assert_eq!(refused(&mut conn, &path).await.0, error, "{path}");
     }
-    let (_, message) = refused(&mut conn, &home).await;
+    let (_, message) = refused(&mut conn, &broken).await;
     assert!(
-        message.starts_with(&format!("{home} is not in a git repository")),
+        message.starts_with(&format!("{broken} is not in a git repository")),
         "{message}"
     );
+    let (_, message) = refused(&mut conn, &home).await;
+    let shown = env.path("home").canonicalize().unwrap();
+    let said = "is the home folder: Hive does not follow it; choose a folder in it";
+    assert_eq!(message, format!("{} {said}", shown.display()));
     assert_eq!(list(&mut conn).await, vec![]);
     drop(conn);
     assert!(daemon.wait_exit().success());

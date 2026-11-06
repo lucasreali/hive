@@ -2,6 +2,7 @@ import {
   BroomIcon,
   CopyIcon,
   FolderOpenIcon,
+  GitBranchIcon,
   PencilSimpleIcon,
   PlayIcon,
   PlusIcon,
@@ -204,10 +205,29 @@ export function ProjectMenu() {
     closeProjectMenu();
     openModal(modal, menu.project);
   };
-  // A group (14.1) has no worktrees; a group's repository leaves only with its group.
+  // A group (14.1) has no worktrees; a group's repository leaves only with its group. A folder
+  // project (23.1) can become a repository.
   const group = !!project?.group;
+  const folder = !!project?.folder;
   return (
     <ContextMenu at={menu} label="Project" onClose={closeProjectMenu}>
+      {folder && (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            title="Run git init in this folder: it becomes a git project"
+            onClick={() => {
+              closeProjectMenu();
+              void transport.initGit(menu.project);
+            }}
+          >
+            <GitBranchIcon {...ICON} />
+            Initialize git
+          </button>
+          <hr />
+        </>
+      )}
       {!group && (
         <>
           <button type="button" role="menuitem" onClick={dialog("new-worktree")}>
@@ -233,7 +253,7 @@ export function ProjectMenu() {
             }}
           >
             <TrashIcon {...ICON} />
-            {group ? "Remove group…" : "Remove project…"}
+            {group && !folder ? "Remove group…" : "Remove project…"}
           </button>
         </>
       )}

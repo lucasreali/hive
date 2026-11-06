@@ -1312,6 +1312,9 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.remove_project("/r".into()).unwrap();
     let remove = Control::RemoveProject { id: "/r".into() };
     assert_eq!(service.control().await, (0, remove));
+    hive.init_git("/f".into()).unwrap();
+    let init = Control::InitGit { id: "/f".into() };
+    assert_eq!(service.control().await, (0, init));
     hive.select_space("w".into()).unwrap();
     let select = Control::SelectSpace { id: "w".into() };
     assert_eq!(service.control().await, (0, select));
@@ -1682,6 +1685,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.delete_space("w".into()), not_connected);
     assert_eq!(hive.remove_project("/r".into()), not_connected);
+    assert_eq!(hive.init_git("/f".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
     assert_eq!(hive.list_claude_logins(), not_connected);
     assert_eq!(hive.list_gh_accounts(None), not_connected);
@@ -1938,6 +1942,7 @@ fn commands_reach_the_managed_hive() {
             update_space,
             delete_space,
             remove_project,
+            init_git,
             select_space,
             list_claude_logins,
             list_gh_accounts,
@@ -2080,6 +2085,7 @@ fn commands_reach_the_managed_hive() {
         ("update_space", &update),
         ("delete_space", &space),
         ("remove_project", &space),
+        ("init_git", &space),
         ("select_space", &space),
         ("list_claude_logins", &json!({})),
         ("list_gh_accounts", &json!({"ghConfigDir": null})),
@@ -2160,6 +2166,7 @@ fn commands_reach_the_managed_hive() {
         ("update_space", update),
         ("delete_space", space.clone()),
         ("remove_project", space.clone()),
+        ("init_git", space.clone()),
         ("select_space", space),
         ("list_pulls", list_pulls),
         ("open_pull", open_pull),

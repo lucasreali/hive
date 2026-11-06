@@ -140,6 +140,7 @@
         ],
         "error": null,
         "group": false,
+        "folder": false,
         "parent": "/g"
       }
     ]
@@ -171,6 +172,7 @@
       ],
       "error": null,
       "group": false,
+      "folder": false,
       "parent": "/g"
     }
   },
@@ -368,6 +370,7 @@
       ],
       "error": null,
       "group": false,
+      "folder": false,
       "parent": "/g"
     },
     "path": "/r/.claude/worktrees/x",
@@ -406,6 +409,7 @@
       ],
       "error": null,
       "group": false,
+      "folder": false,
       "parent": "/g"
     },
     "path": "/r/.claude/worktrees/x"
@@ -442,6 +446,7 @@
       ],
       "error": null,
       "group": false,
+      "folder": false,
       "parent": "/g"
     },
     "from": "/r/.claude/worktrees/x",

@@ -1634,6 +1634,7 @@ not json
             ],
             error: None,
             group: false,
+            folder: false,
             parent: None,
         }
     }

@@ -31,6 +31,7 @@ export const tauriTransport: Transport = {
   listProjects: () => send("list_projects"),
   addProject: (path) => send("add_project", { path }),
   removeProject: (id) => send("remove_project", { id }),
+  initGit: (id) => send("init_git", { id }),
   createSpace: (name, env) => send("create_space", { name, env }),
   updateSpace: (id, name, env) => send("update_space", { id, name, env }),
   deleteSpace: (id) => send("delete_space", { id }),

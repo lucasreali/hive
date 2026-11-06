@@ -112,7 +112,8 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     std::thread::spawn(crate::terminal::locale_env);
     // The git to run (D18.3), resolved once now, in the background: `xcrun` may be slow.
     std::thread::spawn(crate::git::resolved);
-    let projects = Projects::load(paths.spaces(), &paths.projects());
+    let (home, own) = protected(paths, |key| std::env::var_os(key));
+    let projects = Projects::load(paths.spaces(), &paths.projects()).protect(home, own);
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings()).with_accounts(paths.accounts_dir());
     projects.migrate_accounts(&mut |legacy| settings.migrate(legacy));
@@ -918,6 +919,41 @@ impl State {
         })
     }
 
+    /// Follows the folder `path` in the current space ([`Projects::add`]: a project, a group or
+    /// a folder project): answers `ProjectAdded` (after `Projects` for a group, whose
+    /// repositories come in the list) and `Spaces`, or `AddProjectFailed`.
+    async fn add_project(&self, path: String) {
+        // In turn with git's registry, whose list may not have the project yet.
+        let _turn = self.changing.lock().await;
+        let added = tokio::task::block_in_place(|| {
+            let project = self.projects.add(&path)?;
+            // A group's repositories come in the list, before it (14.1).
+            let list = project.group.then(|| Control::Projects {
+                projects: self.projects.list(),
+            });
+            let mut replies: Vec<Control> = list.into_iter().collect();
+            replies.push(Control::ProjectAdded { project });
+            replies.iter_mut().for_each(|r| self.with_health(r));
+            Ok(replies)
+        });
+        let replies = match added {
+            Ok(replies) => {
+                // It joined the current space.
+                self.refollow.notify_one();
+                self.to_app(0, &self.projects.spaces_message()).await;
+                replies
+            }
+            Err((error, message)) => vec![Control::AddProjectFailed {
+                path,
+                error,
+                message,
+            }],
+        };
+        for reply in replies {
+            self.to_app(0, &reply).await;
+        }
+    }
+
     /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
     /// process of Hive's terminals (their `sessions`) works in it; their settings and their
     /// worktrees' port blocks go with them. A group's repositories are removed before it.
@@ -983,8 +1019,13 @@ impl State {
     /// The one place a change in the watched worktree `path` is reported to the app, after
     /// the debounce: `files` when the listing changed (`None` when it did not), then its
     /// `changes` against `base` every time, since an edit changes the diff but not the list,
-    /// then its status if it changed.
-    async fn worktree_changed(&self, path: &str, base: DiffBase, listing: Option<&Listing>) {
+    /// then its status if it changed; neither without `base` (a folder project's, 23.1).
+    async fn worktree_changed(
+        &self,
+        path: &str,
+        base: Option<DiffBase>,
+        listing: Option<&Listing>,
+    ) {
         if let Some(listing) = listing {
             let files = Control::Files {
                 path: path.to_owned(),
@@ -994,6 +1035,7 @@ impl State {
             };
             self.to_app(0, &files).await;
         }
+        let Some(base) = base else { return };
         // One listing of the projects gives both the changes' base and the status, and one
         // `git status` both the changes and the status's count (9.14).
         let (changes, statuses) = tokio::task::block_in_place(|| {
@@ -1039,12 +1081,13 @@ async fn watch_files(
     base: DiffBase,
     mut open: tokio::sync::watch::Receiver<Vec<String>>,
 ) {
-    let started = tokio::task::block_in_place(|| {
-        let root = state.projects.worktree(&path)?;
-        Watcher::new(&root)
+    let started = tokio::task::block_in_place(|| match state.projects.tree(&path)? {
+        (root, None) => Watcher::new(&root).map(|w| (w, false)),
+        // A folder project's folder (23.1), in no repository: no changes to tell.
+        (root, Some(plain)) => Watcher::plain(&root, &plain).map(|w| (w, true)),
     });
-    let mut watcher = match started {
-        Ok(watcher) => watcher,
+    let (mut watcher, base) = match started {
+        Ok((watcher, folder)) => (watcher, (!folder).then_some(base)),
         Err(err) => return state.to_app(0, &error(err)).await,
     };
     let mut last = None;
@@ -1053,7 +1096,9 @@ async fn watch_files(
         watcher.open(open.borrow_and_update().iter().cloned());
         match tokio::task::block_in_place(|| watcher.list()) {
             Ok(listing) => {
-                let changed = last.as_ref() != Some(&listing);
+                // A folder project's (no `changes` to follow, 23.1) after every change: the
+                // app reads its open file again.
+                let changed = last.as_ref() != Some(&listing) || base.is_none();
                 state
                     .worktree_changed(&path, base, changed.then_some(&listing))
                     .await;
@@ -1084,6 +1129,8 @@ async fn watch_registry(state: Arc<State>, registry: io::Result<Registry>) {
     let mut started = false;
     let mut refollowed = false;
     loop {
+        // A folder project `git init`ed (23.1) is kept a project from now on.
+        state.projects.settle();
         let (roots, groups) = (state.projects.roots(), state.projects.groups());
         // Before listing, so a change made meanwhile is seen next time.
         tokio::task::block_in_place(|| registry.follow(&roots, &groups));
@@ -1144,6 +1191,23 @@ async fn watch_sessions(state: Arc<State>, watch: io::Result<session_watch::Watc
     }
 }
 
+/// The folders never followed as a group or a folder project (23.1), besides `/` and Hive's
+/// own (the spaces file's): the home folder itself, and Hive's settings folder and Claude's
+/// config folders (`$CLAUDE_CONFIG_DIR` and `~/.claude`) with what they hold.
+fn protected(
+    paths: &Paths,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> (Option<PathBuf>, Vec<(PathBuf, &'static str)>) {
+    let home = var(crate::dirs::HOME)
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from);
+    let mut own = vec![(paths.config.clone(), "Hive's folder")];
+    let claude = sessions::claude_dir(&var).into_iter();
+    let default = home.iter().map(|home| home.join(".claude"));
+    own.extend(claude.chain(default).map(|dir| (dir, "Claude's folder")));
+    (home, own)
+}
+
 fn error(err: io::Error) -> Control {
     Control::Error {
         message: err.to_string(),
@@ -1180,6 +1244,40 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_home_folder_and_hives_and_claudes_folders_are_protected() {
+        let paths = Paths {
+            runtime: "/run".into(),
+            data: "/h/.hive".into(),
+            config: "/h/config".into(),
+            logs: "/run".into(),
+        };
+        let vars = |vars: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                let found = vars.iter().find(|(k, _)| *k == key);
+                found.map(|(_, v)| OsString::from(v))
+            }
+        };
+        let hive = (PathBuf::from("/h/config"), "Hive's folder");
+        let claude = |dir: &str| (PathBuf::from(dir), "Claude's folder");
+        const SET: &[(&str, &str)] = &[(crate::dirs::HOME, "/h"), ("CLAUDE_CONFIG_DIR", "/c")];
+        assert_eq!(
+            protected(&paths, vars(SET)),
+            (
+                Some(PathBuf::from("/h")),
+                vec![hive.clone(), claude("/c"), claude("/h/.claude")]
+            )
+        );
+        // An empty home is none; Claude's folder is then the one set, if any.
+        const EMPTY: &[(&str, &str)] = &[(crate::dirs::HOME, ""), ("CLAUDE_CONFIG_DIR", "/c")];
+        assert_eq!(
+            protected(&paths, vars(EMPTY)),
+            (None, vec![hive.clone(), claude("/c")])
+        );
+        assert_eq!(protected(&paths, vars(&[])), (None, vec![hive]));
+    }
+
     #[test]
     fn a_stopped_task_is_out_of_its_blocking_work_before_the_runtime_shuts_down() {
         let runtime = tokio::runtime::Builder::new_multi_thread()

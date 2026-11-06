@@ -226,6 +226,7 @@ pub(crate) mod tests {
             ],
             error: None,
             group: false,
+            folder: false,
             parent: None,
         };
         fill(&mut project);

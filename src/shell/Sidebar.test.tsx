@@ -7,7 +7,7 @@ import { apply } from "../reduce";
 import { initialState, setVisible, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
-import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
+import { agentStatus, MOCK_FOLDER, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
 import * as icons from "./icons";
 import { STATE_LABEL } from "./icons";
 import { elapsed } from "./Sidebar";
@@ -763,6 +763,38 @@ test("a hook event re-renders only its own agent's row, not other worktrees' row
     branch.mockRestore();
     state.mockRestore();
   }
+});
+
+test("a folder project shows its own agents and a new chat, but no worktrees or pull requests", async () => {
+  const pulls = spyOn(transport, "listPulls").mockResolvedValue();
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(4);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  render(<App />);
+  act(() => {
+    useHive.setState({ connection: { status: "connected", version: "t", distro: null } });
+    apply({ type: "projects", projects: [shop, MOCK_FOLDER] });
+    const placed = { project: MOCK_FOLDER.id, worktree: MOCK_FOLDER.path, cwd: MOCK_FOLDER.path };
+    apply({ type: "agent_detected", channel: 1, id: "s1", ...placed });
+    apply({ type: "agent_state", id: "s1", ...agentStatus("working"), subagents: [] });
+  });
+  const rows = [...tree().querySelectorAll(".tree-row")].map((r) => [
+    r.className,
+    r.querySelector(".label")?.textContent,
+  ]);
+  expect(rows.slice(4)).toEqual([
+    ["tree-row project group folder", "notes"],
+    ["tree-row agent", "Claude"],
+  ]);
+  // Its own icon: neither a repository's nor a group's.
+  const icon = screen.getByRole("button", { name: /^notes/ }).querySelector("svg");
+  const repo = screen.getByRole("button", { name: /^shop/ }).querySelector("svg");
+  expect(icon?.innerHTML).not.toBe(repo?.innerHTML);
+  expect(pulls.mock.calls.map((c) => c[0])).toEqual([shop.id]);
+  fireEvent.click(screen.getByRole("button", { name: "New chat in notes" }));
+  await waitFor(() => expect(write).toHaveBeenCalledWith(4, "claude\r"));
+  expect(open.mock.calls[0]?.[0]).toBe(MOCK_FOLDER.path);
+  closeTerminal(4);
+  for (const spy of [pulls, open, write]) spy.mockRestore();
 });
 
 test("a group shows its own agents, then its projects one level in; collapsed, the most urgent of all", async () => {
