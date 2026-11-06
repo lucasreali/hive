@@ -49,6 +49,7 @@ pub mod uninstall;
 pub mod watch;
 #[cfg(windows)]
 pub mod windows;
+pub mod workbook;
 pub mod worktree;
 pub mod wrapper;
 

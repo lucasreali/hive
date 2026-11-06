@@ -1,14 +1,25 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { apply } from "../reduce";
-import { initialState, isTable, pinFile, select, setOpenFile, useHive } from "../store";
+import {
+  initialState,
+  isTable,
+  isWorkbook,
+  pinFile,
+  select,
+  setOpenFile,
+  setTableShown,
+  tableShown,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
 import { toText } from "../viewer/buffer";
 import { RightPanel } from "./RightPanel";
 import { TerminalArea } from "./TerminalArea";
 
-// 23.6: a CSV or TSV file's tab shows as a table, or as its text.
+// 23.6: a CSV or TSV file's tab shows as a table, or as its text. 23.7: a workbook's, always
+// as its table, a tab per sheet.
 
 beforeAll(() => {
   // happy-dom has no layout: give the table's scroller a height so its rows show.
@@ -78,13 +89,60 @@ const grid = () => body().querySelector("table");
 const editor = () => body().querySelector(".cm-editor");
 
 test("table files are known by their name", () => {
-  expect(["a.csv", "B.TSV", "d/c.Csv"].map(isTable)).toEqual([true, true, true]);
-  expect(["a.txt", "a.csv.bak", "csv", "a.xlsx"].map(isTable)).toEqual([
-    false,
-    false,
-    false,
-    false,
-  ]);
+  const tables = ["a.csv", "B.TSV", "d/c.Csv", "b.xlsx", "C.XLS", "d/e.Ods"];
+  expect(tables.map(isTable)).toEqual(tables.map(() => true));
+  const others = ["a.txt", "a.csv.bak", "csv", "a.xlsm", "a.xlsx.bak", "xls", "a.odt"];
+  expect(others.map(isTable)).toEqual(others.map(() => false));
+  expect(tables.map(isWorkbook)).toEqual([false, false, false, true, true, true]);
+  expect(others.map(isWorkbook)).toEqual(others.map(() => false));
+});
+
+test("a workbook always shows as its table, a tab per sheet, with no text to switch to", () => {
+  panel();
+  const BOOK = "data/budget.xlsx";
+  open(BOOK, true);
+  expect(useHive.getState().openFile?.path).toBe(BOOK);
+  expect(tableShown(useHive.getState())).toBe(true);
+  expect(toggle()).toBeNull();
+  act(() =>
+    apply({
+      type: "table",
+      worktree: refactor.path,
+      path: BOOK,
+      sheets: [
+        { name: "Orders", rows: [["Item"], ["Pen"]], total: 2, partial: false },
+        { name: "Notes", rows: [["Hello"]], total: 1, partial: false },
+      ],
+      error: null,
+    }),
+  );
+  const tabs = within(screen.getByRole("tablist", { name: "Sheets" })).getAllByRole("tab");
+  expect(tabs.map((t) => t.textContent)).toEqual(["Orders", "Notes"]);
+  expect(screen.getAllByRole("columnheader").map((c) => c.textContent)).toEqual(["Item"]);
+  fireEvent.click(tabs[1]);
+  expect(screen.getAllByRole("columnheader").map((c) => c.textContent)).toEqual(["Hello"]);
+  // Asking for its text (as Edit does) changes nothing.
+  act(() => setTableShown(false));
+  expect(useHive.getState().openFiles.find((t) => t.path === BOOK)?.asText).toBe(true);
+  expect(tableShown(useHive.getState())).toBe(true);
+  expect(grid()).not.toBeNull();
+  expect(editor()).toBeNull();
+});
+
+test("a broken workbook says why in its place", () => {
+  panel();
+  open("old.xls");
+  act(() =>
+    apply({
+      type: "table",
+      worktree: refactor.path,
+      path: "old.xls",
+      sheets: [],
+      error: "the workbook could not be read",
+    }),
+  );
+  expect(body().querySelector(".hint")?.textContent).toBe("the workbook could not be read");
+  expect(toggle()).toBeNull();
 });
 
 test("a CSV file opens as its table and the button switches it to the text and back", () => {

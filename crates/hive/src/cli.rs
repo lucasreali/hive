@@ -48,6 +48,15 @@ enum Command {
     /// Claude Code's statusline in Hive's terminals (JSON on stdin): reports the 5-hour usage
     /// to the service, then runs the user's own statusline and prints what it prints.
     Statusline,
+    /// Read the workbook on stdin as the service's table (23.7): run by the service, which
+    /// keeps a workbook's parsing out of its own process.
+    #[command(hide = true)]
+    Sheets {
+        /// `xlsx`, `xls` or `ods`.
+        format: String,
+        /// The bytes of JSON the rows may take.
+        budget: usize,
+    },
     /// Manage git worktrees in `.claude/worktrees/` (Claude Code's convention).
     Worktree {
         #[command(subcommand)]
@@ -137,6 +146,7 @@ pub fn run() -> ExitCode {
             code = status;
             io::stdout().write_all(&out)
         }),
+        Command::Sheets { format, budget } => crate::workbook::child(&format, budget),
         Command::Worktree { command } => run_worktree(command, &paths),
         #[cfg(unix)]
         Command::Uninstall {

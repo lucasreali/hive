@@ -1,7 +1,8 @@
 //! A CSV or TSV file of a worktree as a table (23.6): its first [`TABLE_ROWS`] rows and how
 //! many it has, for the viewer's table. Read on disk with the file viewer's checks
 //! ([`file::open_inside`]), whatever its size: a file over `file::TEXT_LIMIT` still shows its
-//! first rows. A workbook (23.7) answers the same `table` message, one [`Sheet`] per sheet.
+//! first rows. A workbook (23.7, [`workbook`]) answers the same `table` message, one [`Sheet`]
+//! per sheet.
 
 use std::io::{self, Read};
 use std::path::Path;
@@ -10,6 +11,7 @@ use hive_protocol::{Control, MAX_PAYLOAD, Sheet};
 
 use crate::file;
 use crate::projects::Projects;
+use crate::workbook::{self, Format, Worker};
 
 /// Most rows sent of a sheet.
 pub const TABLE_ROWS: usize = 10_000;
@@ -29,40 +31,67 @@ pub fn delimiter(path: &str) -> Option<u8> {
     }
 }
 
-/// `open_table`: `path` of `worktree` as a table, its rows within one frame.
+/// `open_table`: `path` of `worktree` as a table, its rows within one frame. A workbook is
+/// read by this binary run again ([`workbook::Worker`]).
 pub fn answer(projects: &Projects, worktree: String, path: String) -> Control {
     let budget = budget(&worktree, &path);
-    let read = projects
-        .worktree(&worktree)
-        .and_then(|dir| read(&dir, &path, budget));
+    let read = projects.worktree(&worktree).and_then(|dir| {
+        let worker = Worker::new(std::env::current_exe()?);
+        read(&dir, &path, budget, &worker)
+    });
     message(worktree, path, read)
 }
 
-/// The bytes of one frame left for the rows of the `table` answer for `path` of `worktree`.
+/// The bytes of one frame left for the sheets of the `table` answer for `path` of `worktree`.
 fn budget(worktree: &str, path: &str) -> usize {
+    let envelope = message(worktree.into(), path.into(), Ok(Vec::new()));
+    let used = serde_json::to_vec(&envelope).map_or(MAX_PAYLOAD, |json| json.len());
+    MAX_PAYLOAD.saturating_sub(used)
+}
+
+/// The bytes of a CSV's sheet record with no rows, as large as its count can make it.
+fn record() -> usize {
     let empty = Sheet {
         name: String::new(),
         rows: Vec::new(),
         total: u64::MAX,
         partial: false,
     };
-    let envelope = message(worktree.into(), path.into(), Ok(empty));
-    let used = serde_json::to_vec(&envelope).map_or(MAX_PAYLOAD, |json| json.len());
-    MAX_PAYLOAD.saturating_sub(used)
+    serde_json::to_vec(&empty).map_or(MAX_PAYLOAD, |json| json.len())
 }
 
-/// The sheet of the table file `path` of the worktree at `dir` (checked as the viewer's
-/// files are), its rows taking at most `budget` bytes of JSON. The path is checked before its
-/// extension, and no error repeats it: the answer has it already.
-pub fn read(dir: &Path, path: &str, budget: usize) -> io::Result<Sheet> {
+/// The sheets of the table file `path` of the worktree at `dir` (checked as the viewer's
+/// files are), taking at most `budget` bytes of JSON: a CSV or TSV file's one, or a
+/// workbook's, read by `worker`. The path is checked before its extension, and no error
+/// repeats it: the answer has it already.
+pub fn read(dir: &Path, path: &str, budget: usize, worker: &Worker) -> io::Result<Vec<Sheet>> {
     let file = file::open_inside(dir, path)?;
-    let Some(delimiter) = delimiter(path) else {
-        return Err(io::Error::other("not a CSV or TSV file"));
+    let kind = delimiter(path)
+        .map(Kind::Text)
+        .or_else(|| Format::of(path).map(Kind::Workbook));
+    let Some(kind) = kind else {
+        return Err(io::Error::other("not a table file"));
     };
-    match file {
-        Some(file) => parse(file, delimiter, budget, COUNT_LIMIT),
-        None => Err(io::Error::other(format!("{path} does not exist"))),
+    let Some(file) = file else {
+        return Err(io::Error::other(format!("{path} does not exist")));
+    };
+    match kind {
+        Kind::Text(delimiter) => {
+            let rows = budget.saturating_sub(record());
+            Ok(vec![parse(file, delimiter, rows, COUNT_LIMIT)?])
+        }
+        Kind::Workbook(format) => {
+            let size = file.metadata()?.len();
+            workbook::read(&mut { file }, size, format, budget, worker)
+        }
     }
+}
+
+/// How a table file is read, by its extension.
+enum Kind {
+    /// CSV or TSV, with its delimiter.
+    Text(u8),
+    Workbook(Format),
 }
 
 /// The sheet of CSV `input` (TSV with a tab `delimiter`), quoted fields as RFC 4180 has them:
@@ -141,10 +170,10 @@ fn parse_with(
     Ok((sheet, read))
 }
 
-/// The `table` answer for `path`: its sheet, or why it could not be read.
-pub fn message(worktree: String, path: String, read: io::Result<Sheet>) -> Control {
+/// The `table` answer for `path`: its sheets, or why it could not be read.
+pub fn message(worktree: String, path: String, read: io::Result<Vec<Sheet>>) -> Control {
     let (sheets, error) = match read {
-        Ok(sheet) => (vec![sheet], None),
+        Ok(sheets) => (sheets, None),
         Err(err) => (Vec::new(), Some(err.to_string())),
     };
     Control::Table {
@@ -382,13 +411,19 @@ mod tests {
             .unwrap();
         std::fs::write(dir.path().join("a.csv"), "a,b\n1,2\n").unwrap();
         std::fs::write(dir.path().join("a.txt"), "a,b\n").unwrap();
-        let read = |path: &str| read(dir.path(), path, MAX_PAYLOAD);
+        std::fs::write(dir.path().join("a.xlsx"), "PK").unwrap();
+        // A workbook goes to the worker, which is missing here.
+        let worker = Worker::new("/nonexistent/hive".into());
+        let read = |path: &str| read(dir.path(), path, MAX_PAYLOAD, &worker);
         let error = |path: &str| read(path).unwrap_err().to_string();
         assert_eq!(
-            read("a.csv").unwrap().rows,
+            read("a.csv").unwrap()[0].rows,
             [row(&["a", "b"]), row(&["1", "2"])]
         );
-        assert_eq!(error("a.txt"), "not a CSV or TSV file");
+        assert_eq!(error("a.txt"), "not a table file");
+        assert_eq!(error("gone.xlsx"), "gone.xlsx does not exist");
+        let missing = read("a.xlsx").unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
         let long = format!("{}.csv", "a".repeat(5000));
         assert_eq!(error(&long), "not a relative path inside the worktree");
         assert_eq!(error("gone.csv"), "gone.csv does not exist");
@@ -397,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn the_answer_holds_one_sheet_or_the_error() {
+    fn the_answer_holds_the_sheets_or_the_error() {
         let ok = Sheet {
             name: String::new(),
             rows: vec![row(&["a"])],
@@ -405,11 +440,15 @@ mod tests {
             partial: false,
         };
         assert_eq!(
-            message("/w".into(), "a.csv".into(), Ok(ok.clone())),
+            message(
+                "/w".into(),
+                "a.csv".into(),
+                Ok(vec![ok.clone(), ok.clone()])
+            ),
             Control::Table {
                 worktree: "/w".into(),
                 path: "a.csv".into(),
-                sheets: vec![ok],
+                sheets: vec![ok.clone(), ok],
                 error: None,
             }
         );
@@ -426,8 +465,11 @@ mod tests {
 
     #[test]
     fn the_rows_get_what_the_frame_leaves() {
-        let envelope = r#"{"type":"table","worktree":"/w","path":"a.csv","sheets":[{"name":"","rows":[],"total":18446744073709551615,"partial":false}],"error":null}"#;
+        let envelope =
+            r#"{"type":"table","worktree":"/w","path":"a.csv","sheets":[],"error":null}"#;
         assert_eq!(budget("/w", "a.csv"), MAX_PAYLOAD - envelope.len());
+        let record = r#"{"name":"","rows":[],"total":18446744073709551615,"partial":false}"#;
+        assert_eq!(super::record(), record.len());
         let huge = "x".repeat(MAX_PAYLOAD);
         assert_eq!(budget(&huge, ""), 0);
     }
