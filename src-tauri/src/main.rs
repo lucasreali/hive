@@ -166,6 +166,7 @@ fn main() {
             commands::list_changes,
             commands::list_scripts,
             commands::open_file,
+            commands::open_table,
             commands::search_files,
             commands::list_dirs,
             commands::list_sessions,

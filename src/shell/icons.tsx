@@ -19,6 +19,7 @@ import {
   FileIcon as PhosphorFileIcon,
   type Icon as PhosphorIcon,
   PlusIcon as PhosphorPlusIcon,
+  TableIcon as PhosphorTableIcon,
   QuestionIcon,
   ShieldWarningIcon,
   SidebarSimpleIcon,
@@ -150,5 +151,7 @@ export const TerminalIcon = icon(TerminalWindowIcon);
 export const ExternalIcon = icon(ArrowSquareOutIcon);
 
 export const EyeIcon = icon(PhosphorEyeIcon);
+
+export const TableIcon = icon(PhosphorTableIcon);
 
 export const SearchIcon = icon(MagnifyingGlassIcon);

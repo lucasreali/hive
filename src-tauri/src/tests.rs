@@ -1196,6 +1196,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: DiffBase::Head,
     };
     assert_eq!(service.control().await, (0, open));
+    hive.open_table("/r".into(), "a.csv".into()).unwrap();
+    let table = Control::OpenTable {
+        worktree: "/r".into(),
+        path: "a.csv".into(),
+    };
+    assert_eq!(service.control().await, (0, table));
     hive.save_file("/r".into(), "a".into(), "x".into(), Some("v".into()))
         .unwrap();
     let save = Control::SaveFile {
@@ -1643,6 +1649,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.open_file("/r".into(), "a".into(), DiffBase::Head),
         not_connected
     );
+    assert_eq!(hive.open_table("/r".into(), "a".into()), not_connected);
     assert_eq!(
         hive.save_file("/r".into(), "a".into(), "x".into(), None),
         not_connected
@@ -1915,6 +1922,7 @@ fn commands_reach_the_managed_hive() {
             list_changes,
             list_scripts,
             open_file,
+            open_table,
             search_files,
             list_dirs,
             list_sessions,
@@ -2013,6 +2021,7 @@ fn commands_reach_the_managed_hive() {
     let changes = json!({"path": "/r", "base": "head"});
     let scripts = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
+    let table = json!({"worktree": "/r", "path": "a.csv"});
     let editor = json!({"worktree": "/r", "path": "a", "reveal": true});
     let search = json!({"worktree": "/r", "query": "q"});
     let dirs = json!({"path": "", "windows": false, "hidden": false});
@@ -2053,6 +2062,7 @@ fn commands_reach_the_managed_hive() {
         ("list_changes", &changes),
         ("list_scripts", &scripts),
         ("open_file", &file),
+        ("open_table", &table),
         ("search_files", &search),
         ("list_dirs", &dirs),
         ("list_sessions", &json!({})),
@@ -2144,6 +2154,7 @@ fn commands_reach_the_managed_hive() {
         ("list_changes", changes),
         ("list_scripts", scripts),
         ("open_file", file.clone()),
+        ("open_table", table),
         ("search_files", search),
         ("list_dirs", dirs),
         ("list_sessions", json!({})),

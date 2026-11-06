@@ -1,5 +1,5 @@
 import { beforeEach, expect, mock, test } from "bun:test";
-import { followOpenFile, followPanel, followView } from "./follow";
+import { followOpenFile, followOpenTable, followPanel, followView } from "./follow";
 import { apply } from "./reduce";
 import {
   addTab,
@@ -10,6 +10,7 @@ import {
   setFocused,
   setOpenFile,
   setRightPanel,
+  setTableShown,
   setVisible,
   useHive,
 } from "./store";
@@ -255,4 +256,34 @@ test("tells the service the terminal in view, the window focus and visibility, o
   stop();
   setFocused(false);
   expect(setView).toHaveBeenCalledTimes(9);
+});
+
+test("asks for the open table file's table while it shows as one", () => {
+  const openTable = mock(async (_worktree: string, _path: string) => {});
+  setOpenFile({ worktree: "/w", path: "a.csv" });
+  pinFile({ worktree: "/w", path: "a.csv" });
+  const stop = followOpenTable({ openTable } as unknown as Transport);
+  expect(openTable).not.toHaveBeenCalled(); // Not connected yet.
+  welcome();
+  expect(openTable.mock.calls).toEqual([["/w", "a.csv"]]);
+  changes("/other");
+  expect(openTable).toHaveBeenCalledTimes(1);
+  changes("/w");
+  expect(openTable).toHaveBeenCalledTimes(2);
+  // As text it is not asked for; as a table again, it is.
+  setTableShown(false);
+  changes("/w");
+  expect(openTable).toHaveBeenCalledTimes(2);
+  setTableShown(true);
+  expect(openTable).toHaveBeenCalledTimes(3);
+  // Any other file is no table.
+  setOpenFile({ worktree: "/w", path: "b.ts" });
+  welcome();
+  expect(openTable).toHaveBeenCalledTimes(3);
+  setOpenFile({ worktree: "/w", path: "a.csv" });
+  expect(openTable.mock.calls.at(-1)).toEqual(["/w", "a.csv"]);
+  expect(openTable).toHaveBeenCalledTimes(4);
+  stop();
+  welcome();
+  expect(openTable).toHaveBeenCalledTimes(4);
 });

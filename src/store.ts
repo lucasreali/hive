@@ -40,6 +40,7 @@ import type {
   Settings,
   Shared,
   Space,
+  TableText,
   UninstallFailure,
   UninstallList,
   Worktree,
@@ -120,6 +121,8 @@ export type FileTab = OpenFile & {
    */
   preview?: boolean;
   rendered?: boolean;
+  /** A table file (23.6, `isTable`) shows as text, not as its table. */
+  asText?: boolean;
   /** The rendered view's scroll as it was last seen (21.3), in pixels. */
   renderedScroll?: number;
   /**
@@ -445,6 +448,8 @@ export type HiveState = {
   diffBases: Record<string, DiffBase>;
   /** The last `file` the service sent; shown only while it is the open file. */
   file: FileText | null;
+  /** The last `table` the service sent (23.6); shown only while it is the open file's. */
+  table: TableText | null;
   /** The open file shows as editable text (UI state), not as its read-only diff. */
   editing: boolean;
   /** The open file's edit buffer while editing (UI state, kept when the panel closes). */
@@ -562,6 +567,7 @@ export const initialState: HiveState = {
   changesSeen: {},
   diffBases: {},
   file: null,
+  table: null,
   editing: false,
   edit: null,
   editorNotice: null,
@@ -788,6 +794,23 @@ export const setRendered = (rendered: boolean) =>
   useHive.setState((s) => ({
     openFiles: s.openFiles.map((t) =>
       s.openFile && isFor(t, s.openFile) ? { ...t, rendered } : t,
+    ),
+  }));
+
+/** A table file (23.6), by its name: the service reads it as a table (`hive::table`). */
+export const isTable = (path: string) => /\.(csv|tsv)$/i.test(path);
+
+/** The open file is a table file shown as its table (23.6), as it opens. */
+export const tableShown = (s: HiveState) =>
+  !!s.openFile &&
+  isTable(s.openFile.path) &&
+  !s.openFiles.find((t) => s.openFile && isFor(t, s.openFile))?.asText;
+
+/** Shows the open table file as its table or as text (23.6), in its tab. */
+export const setTableShown = (shown: boolean) =>
+  useHive.setState((s) => ({
+    openFiles: s.openFiles.map((t) =>
+      s.openFile && isFor(t, s.openFile) ? { ...t, asText: !shown } : t,
     ),
   }));
 

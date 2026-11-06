@@ -69,6 +69,7 @@ export const tauriTransport: Transport = {
   moveSession: (id, configDir) => send("move_session", { id, configDir }),
   searchFiles: (worktree, query) => send("search_files", { worktree, query }),
   openFile: (worktree, path, base) => send("open_file", { worktree, path, base }),
+  openTable: (worktree, path) => send("open_table", { worktree, path }),
   saveFile: (worktree, path, content, version) =>
     invoke("save_file", { worktree, path, content, version }),
   createFile: (worktree, folder, name) => send("create_file", { worktree, folder, name }),

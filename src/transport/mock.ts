@@ -18,6 +18,7 @@ import type {
   Space,
   SpaceEnv,
   Subagent,
+  TableText,
   UninstallList,
   Worktree,
 } from "../protocol";
@@ -582,6 +583,7 @@ export const MOCK_FILES = [
   ".gitignore",
   "README.md",
   "config/shipping.json",
+  "data/orders.csv",
   "docs/api.md",
   "package.json",
   "src/App.tsx",
@@ -687,7 +689,40 @@ export const MOCK_TEXTS: Record<string, [string, string]> = {
       "",
     ].join("\n"),
   ) as [string, string],
+  // A table file (23.6), one row short of its header's columns.
+  "data/orders.csv": Array(2).fill(
+    [
+      "id,customer,total,status",
+      ...Array.from(
+        { length: 40 },
+        (_, i) => `${1001 + i},Customer ${i + 1},${(i * 7.5).toFixed(2)},paid`,
+      ),
+      "1041,Late",
+      "",
+    ].join("\n"),
+  ) as [string, string],
 };
+
+/** Most rows the fake service sends of a sheet, as `hive::table::TABLE_ROWS`. */
+const TABLE_ROWS = 10_000;
+
+/**
+ * A stand-in for `hive::table::answer`: the fake file's lines split on commas (tabs in a TSV),
+ * without the quoting the `csv` crate reads; the real reader lives in Rust.
+ */
+function table(text: FileText): TableText {
+  const { worktree, path, content, error } = text;
+  if (error || content === null) {
+    return { worktree, path, sheets: [], error: error ?? `${path} does not exist` };
+  }
+  const split = path.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+  const rows = content
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split(split));
+  const sheet = { name: "", rows: rows.slice(0, TABLE_ROWS), total: rows.length, partial: false };
+  return { worktree, path, sheets: [sheet], error: null };
+}
 
 /**
  * A stand-in for `hive::file`: the fake worktree's file as its status in `MOCK_CHANGES` says
@@ -1496,6 +1531,9 @@ export function createMockTransport(
       // A folder project's file has no base (23.1).
       const folder = holder(worktree)?.folder;
       later({ type: "file", ...fileAt(worktree, path), ...(folder && { base: null }) });
+    },
+    async openTable(worktree, path) {
+      later({ type: "table", ...table(fileAt(worktree, path)) });
     },
     async saveFile(worktree, path, content, version) {
       const now = fileAt(worktree, path);

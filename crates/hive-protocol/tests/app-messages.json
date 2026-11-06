@@ -568,6 +568,28 @@
     "error": null
   },
   {
+    "type": "table",
+    "worktree": "/r",
+    "path": "a.csv",
+    "sheets": [
+      {
+        "name": "",
+        "rows": [
+          [
+            "a",
+            "b"
+          ],
+          [
+            "1"
+          ]
+        ],
+        "total": 3,
+        "partial": false
+      }
+    ],
+    "error": null
+  },
+  {
     "type": "file_saved",
     "worktree": "/r",
     "path": "a.rs",

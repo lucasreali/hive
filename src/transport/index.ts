@@ -188,6 +188,8 @@ export interface Transport {
   searchFiles(worktree: string, query: string): Promise<void>;
   /** A file of a followed worktree on disk and at `base`; answered by `file`. */
   openFile(worktree: string, path: string, base: DiffBase): Promise<void>;
+  /** A CSV or TSV file of a followed worktree on disk as a table (23.6); answered by `table`. */
+  openTable(worktree: string, path: string): Promise<void>;
   /**
    * Writes `content` over the file if its bytes on disk still have `version` (null: the file
    * must not exist); answered by `file_saved` or `save_failed`.
