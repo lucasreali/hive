@@ -759,19 +759,34 @@ async fn the_health_tick_runs_git_for_the_current_space_only_and_lists_nothing()
     let repo = Repo::new();
     let git = repo.env.counting_git();
     let every = std::time::Duration::from_millis(1000);
-    let mut hive = repo.env.hive();
-    hive.env("PATH", git.path())
-        .env(hive::health::INTERVAL_MS, every.as_millis().to_string());
-    let mut daemon = repo.env.daemon_with(&mut hive);
+    let hive = || {
+        let mut hive = repo.env.hive();
+        hive.env("PATH", git.path())
+            .env(hive::health::INTERVAL_MS, every.as_millis().to_string());
+        hive
+    };
+    let mut daemon = repo.env.daemon_with(&mut hive());
     let mut conn = repo.env.connect(Role::App).await;
     let (root, _) = in_two_spaces(&repo, &mut conn).await;
+    // Followed before the service starts: adding them and making the space each have the
+    // registry's watch follow the projects again, list them and read the space's health, on
+    // its own task, as late as a loaded machine runs it, beside the ticks. Started with them
+    // followed, its watch only reads their git dir once (`rev-parse`), and the list the app
+    // asks for carries their health before it comes: then only the ticks run git.
+    drop(conn);
+    assert!(daemon.wait_exit().success());
+    let followed = git.count("rev-parse");
+    let mut daemon = repo.env.daemon_with(&mut hive());
+    let mut conn = repo.env.connect(Role::App).await;
+    list(&mut conn).await;
+    wait_until(|| git.count("rev-parse") > followed);
 
     // Counted from a tick's first call, reading the last commit's time, to the first call of
     // the tick `n` later: ticks run one after another, so that holds `n` whole ticks however
     // long each takes (a loaded machine may take more than half an interval for one). From
-    // the second time read from now on: the next one may still be the adding's.
+    // the next time read from now on: the one before may be the list's or the first tick's.
     let ticks = |k: usize| git.before("--format=%ct", k);
-    let (start, n) = (git.count("--format=%ct") + 2, 3);
+    let (start, n) = (git.count("--format=%ct") + 1, 3);
     let calls = ticks(start + n) - ticks(start);
     // `root`'s one worktree, clean: its last commit and its status, nothing else.
     assert_eq!(calls, 2 * n, "{n} ticks");
