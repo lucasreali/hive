@@ -766,20 +766,15 @@ async fn the_health_tick_runs_git_for_the_current_space_only_and_lists_nothing()
     let mut conn = repo.env.connect(Role::App).await;
     let (root, _) = in_two_spaces(&repo, &mut conn).await;
 
-    // Counted between ticks: a tick runs right after the last commit's time is read, and
-    // takes far less than half an interval.
-    let ticks = || git.count("--format=%ct");
-    let between = |at: usize| {
-        wait_until(|| ticks() > at);
-        std::thread::sleep(every / 2);
-        (ticks(), git.count(""))
-    };
-    let (start, calls) = between(ticks());
-    let (end, after) = between(start + 2);
-    let n = end - start;
-    assert!(n >= 3, "{n} ticks");
+    // Counted from a tick's first call, reading the last commit's time, to the first call of
+    // the tick `n` later: ticks run one after another, so that holds `n` whole ticks however
+    // long each takes (a loaded machine may take more than half an interval for one). From
+    // the second time read from now on: the next one may still be the adding's.
+    let ticks = |k: usize| git.before("--format=%ct", k);
+    let (start, n) = (git.count("--format=%ct") + 2, 3);
+    let calls = ticks(start + n) - ticks(start);
     // `root`'s one worktree, clean: its last commit and its status, nothing else.
-    assert_eq!(after - calls, 2 * n, "{n} ticks");
+    assert_eq!(calls, 2 * n, "{n} ticks");
     // Not even when the projects were added: their worktrees were clean.
     assert_eq!(git.count("diff"), 0);
 
