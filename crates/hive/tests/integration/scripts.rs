@@ -266,6 +266,7 @@ async fn a_worktrees_scripts_come_from_the_settings_then_its_repository_and_foll
     repo.write("pnpm-lock.yaml", "");
     repo.write("Taskfile.yml", "tasks:\n  up: docker compose up\n");
     repo.write("Makefile", ".PHONY: build\nbuild:\n\tcc x.c\n");
+    assert!(repo.hive(&["create", "a"]).status.success());
     let root = repo.root.display().to_string();
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
@@ -324,6 +325,29 @@ async fn a_worktrees_scripts_come_from_the_settings_then_its_repository_and_foll
         next_scripts(&mut app).await,
         (expect.clone(), problems.clone(), port)
     );
+
+    // A change in another watched worktree sends nothing: the app has the root's scripts.
+    let a = repo.root.join(".claude/worktrees/a").display().to_string();
+    app.send(
+        0,
+        Control::WatchWorktree {
+            path: a.clone(),
+            base,
+        },
+    )
+    .await;
+    std::fs::write(format!("{a}/new.txt"), "x").unwrap();
+    loop {
+        match app.control().await.1 {
+            Control::Changes { path, files, .. }
+                if path == a && files.iter().any(|f| f.path == "new.txt") =>
+            {
+                break;
+            }
+            Control::Scripts { path, .. } => panic!("scripts for {path}"),
+            _ => {}
+        }
+    }
 
     // No block of ports can be saved: the scripts without a port.
     let ports = repo.env.path("data/hive/ports.json");

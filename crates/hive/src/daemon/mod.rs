@@ -999,7 +999,7 @@ impl State {
         let state = self.clone();
         tokio::spawn(async move {
             let reply = tokio::task::block_in_place(|| state.scripts(&path));
-            *state.scripted() = matches!(reply, Control::Scripts { .. }).then(|| reply.clone());
+            *state.scripted() = scripts_only(reply.clone());
             state.to_app(0, &reply).await;
         });
     }
@@ -1015,19 +1015,24 @@ impl State {
     /// The scripts the app has, read again (after a change in the watched worktree `path`, or
     /// any worktree when `None`: the settings changed) and sent when they differ.
     async fn rescript(&self, path: Option<&str>) {
-        let asked = match &*self.scripted() {
-            Some(Control::Scripts { path: asked, .. }) => asked.clone(),
-            _ => return,
-        };
-        if path.is_some_and(|path| path != asked) {
-            return;
-        }
-        let now = tokio::task::block_in_place(|| self.scripts(&asked));
-        let now = matches!(now, Control::Scripts { .. }).then_some(now);
-        let had = std::mem::replace(&mut *self.scripted(), now.clone());
-        if let Some(now) = now.filter(|now| had.as_ref() != Some(now)) {
+        let changed = tokio::task::block_in_place(|| self.rescripted(path));
+        if let Some(now) = changed {
             self.to_app(0, &now).await;
         }
+    }
+
+    /// [`State::rescript`]'s reading: the scripts to send, when they changed.
+    fn rescripted(&self, path: Option<&str>) -> Option<Control> {
+        let asked = match &*self.scripted() {
+            Some(Control::Scripts { path: asked, .. }) => asked.clone(),
+            _ => return None,
+        };
+        if path.is_some_and(|path| path != asked) {
+            return None;
+        }
+        let now = scripts_only(self.scripts(&asked));
+        let had = std::mem::replace(&mut *self.scripted(), now.clone());
+        now.filter(|now| had.as_ref() != Some(now))
     }
 
     /// The ignored folders open in the files tree of the watched worktree `path`; nothing when
@@ -1207,6 +1212,14 @@ async fn watch_sessions(state: Arc<State>, watch: io::Result<session_watch::Watc
             }
             () = watch.changed(folders) => true,
         };
+    }
+}
+
+/// `reply` when it is a `scripts` message (not a refusal).
+fn scripts_only(reply: Control) -> Option<Control> {
+    match reply {
+        Control::Scripts { .. } => Some(reply),
+        _ => None,
     }
 }
 
