@@ -105,7 +105,7 @@ static READING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// The sheets of the workbook `file` in `format`, their rows taking at most `budget` bytes of
 /// JSON in all, read by `worker`.
 pub fn read(
-    file: impl Read,
+    file: &mut dyn Read,
     size: u64,
     format: Format,
     budget: usize,
@@ -216,12 +216,17 @@ fn watch(child: &mut Child, worker: &Worker) -> io::Result<Outcome> {
 pub fn child(format: &str, budget: usize) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     limit_memory()?;
-    worker(format, budget, io::stdin(), io::stdout())
+    worker(format, budget, &mut io::stdin(), &mut io::stdout())
 }
 
 /// The workbook on `input` read as
 /// [`sheets`] does, the answer (its sheets, or why not) written to `output` as JSON.
-pub fn worker(format: &str, budget: usize, input: impl Read, output: impl Write) -> io::Result<()> {
+pub fn worker(
+    format: &str,
+    budget: usize,
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+) -> io::Result<()> {
     let format =
         Format::named(format).ok_or_else(|| io::Error::other("unknown workbook format"))?;
     let mut bytes = Vec::new();
@@ -763,7 +768,7 @@ mod tests {
 
     fn worker_answer(format: &str, input: &[u8]) -> Result<Vec<Sheet>, String> {
         let mut out = Vec::new();
-        worker(format, MAX_PAYLOAD, input, &mut out).unwrap();
+        worker(format, MAX_PAYLOAD, &mut &*input, &mut out).unwrap();
         serde_json::from_slice(&out).unwrap()
     }
 
@@ -776,7 +781,7 @@ mod tests {
                 .unwrap_err()
                 .starts_with("not a readable")
         );
-        let err = worker("csv", MAX_PAYLOAD, &b""[..], Vec::new()).unwrap_err();
+        let err = worker("csv", MAX_PAYLOAD, &mut &b""[..], &mut Vec::new()).unwrap_err();
         assert_eq!(err.to_string(), "unknown workbook format");
     }
 
@@ -821,7 +826,7 @@ mod tests {
         }
 
         fn read_with(worker: &Worker, input: &[u8]) -> io::Result<Vec<Sheet>> {
-            read(input, input.len() as u64, Format::Ods, 77, worker)
+            read(&mut &*input, input.len() as u64, Format::Ods, 77, worker)
         }
 
         #[test]
@@ -879,21 +884,21 @@ mod tests {
         #[test]
         fn a_workbook_over_the_limit_is_not_read() {
             let never = shell("exit 1");
-            let err = read(&b""[..], WORKBOOK_LIMIT + 1, Format::Xlsx, 0, &never).unwrap_err();
+            let err = read(&mut &b""[..], WORKBOOK_LIMIT + 1, Format::Xlsx, 0, &never).unwrap_err();
             assert_eq!(err.to_string(), "the workbook is larger than 32 MiB");
             // At the limit is read.
             let empty = shell(r#"echo '{"Ok":[]}'"#);
             assert_eq!(
-                read(&b""[..], WORKBOOK_LIMIT, Format::Xlsx, 0, &empty).unwrap(),
+                read(&mut &b""[..], WORKBOOK_LIMIT, Format::Xlsx, 0, &empty).unwrap(),
                 []
             );
             let missing = Worker::new("/nonexistent/hive".into());
-            let err = read(&b""[..], 0, Format::Xlsx, 0, &missing).unwrap_err();
+            let err = read(&mut &b""[..], 0, Format::Xlsx, 0, &missing).unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::NotFound);
             // At most the limit is given, even when the file grew since its size was taken.
             let echo = shell(r#"[ "$(wc -c)" -eq 33554432 ] && echo '{"Ok":[]}'"#);
             assert_eq!(
-                read(io::repeat(b'x'), 0, Format::Xlsx, 0, &echo).unwrap(),
+                read(&mut io::repeat(b'x'), 0, Format::Xlsx, 0, &echo).unwrap(),
                 []
             );
         }

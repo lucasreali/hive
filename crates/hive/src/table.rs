@@ -82,7 +82,7 @@ pub fn read(dir: &Path, path: &str, budget: usize, worker: &Worker) -> io::Resul
         }
         Kind::Workbook(format) => {
             let size = file.metadata()?.len();
-            workbook::read(file, size, format, budget, worker)
+            workbook::read(&mut { file }, size, format, budget, worker)
         }
     }
 }
