@@ -213,7 +213,7 @@ async fn a_workbook_is_read_by_a_child_and_its_failures_only_end_that() {
     let repo = Repo::new();
     let fixtures =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workbooks");
-    for name in ["book.xlsx", "book.xls", "book.ods", "huge.xls"] {
+    for name in ["book.xlsx", "book.xls", "book.ods", "huge.xls", "big.xls"] {
         std::fs::copy(fixtures.join(name), repo.root.join(name)).unwrap();
     }
     repo.write("broken.ODS", "not a zip");
@@ -247,6 +247,15 @@ async fn a_workbook_is_read_by_a_child_and_its_failures_only_end_that() {
         Err("the workbook could not be read".into())
     );
     assert_eq!(table(&mut conn, &root, "book.ods").await.unwrap().len(), 2);
+    // Its dimensions make the child reserve about 2.7 GB it never touches: past Linux's
+    // `RLIMIT_AS` of 1 GiB, so it ends there; elsewhere the reservation stays virtual and
+    // the footprint small, so it is read.
+    let big = table(&mut conn, &root, "big.xls").await;
+    if cfg!(target_os = "linux") {
+        assert_eq!(big, Err("the workbook could not be read".into()));
+    } else {
+        assert_eq!(big, Ok(vec![(vec![cells(&["a"])], 1, false)]));
+    }
     drop(conn);
     stop(daemon);
 }

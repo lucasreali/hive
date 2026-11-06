@@ -411,7 +411,8 @@ mod tests {
             .unwrap();
         std::fs::write(dir.path().join("a.csv"), "a,b\n1,2\n").unwrap();
         std::fs::write(dir.path().join("a.txt"), "a,b\n").unwrap();
-        // Never run: no workbook is read here.
+        std::fs::write(dir.path().join("a.xlsx"), "PK").unwrap();
+        // A workbook goes to the worker, which is missing here.
         let worker = Worker::new("/nonexistent/hive".into());
         let read = |path: &str| read(dir.path(), path, MAX_PAYLOAD, &worker);
         let error = |path: &str| read(path).unwrap_err().to_string();
@@ -421,6 +422,8 @@ mod tests {
         );
         assert_eq!(error("a.txt"), "not a table file");
         assert_eq!(error("gone.xlsx"), "gone.xlsx does not exist");
+        let missing = read("a.xlsx").unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
         let long = format!("{}.csv", "a".repeat(5000));
         assert_eq!(error(&long), "not a relative path inside the worktree");
         assert_eq!(error("gone.csv"), "gone.csv does not exist");

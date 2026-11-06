@@ -17,7 +17,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use calamine::{Data, DataRef, ExcelDateTime, Ods, Range, Reader, SheetType, Xls, Xlsx};
-use hive_protocol::{MAX_PAYLOAD, Sheet};
+use hive_protocol::Sheet;
 
 use crate::table::TABLE_ROWS;
 
@@ -29,6 +29,9 @@ pub const MEMORY_LIMIT: u64 = 1_073_741_824;
 pub const TIME_LIMIT: Duration = Duration::from_secs(30);
 /// How often the reading child is checked.
 const POLL: Duration = Duration::from_millis(20);
+/// Most bytes of the child's answer read (8 MiB, two frames): past them it is cut, so not
+/// JSON, and the child's next write fails.
+const OUTPUT_LIMIT: u64 = 8_388_608;
 /// Longest error kept from `calamine`, in characters (it may quote the file).
 const ERROR_CHARS: usize = 200;
 
@@ -65,14 +68,15 @@ impl Format {
     }
 }
 
-/// How a workbook is read: the program run as `<program> sheets …` (the service's own
-/// binary), and the limits it runs within.
+/// How a workbook is read: the program run as `<program> <args…> sheets …` (the service's own
+/// binary, with no arguments before), and the limits it runs within.
 pub struct Worker {
     pub program: PathBuf,
+    pub args: Vec<String>,
     pub memory_limit: u64,
     pub time_limit: Duration,
-    /// The memory a process takes, by its pid, where the system says (macOS).
-    pub memory: fn(u32) -> Option<u64>,
+    /// The memory a process takes, by its pid, where the service watches it (macOS).
+    pub memory: Option<fn(u32) -> Option<u64>>,
 }
 
 impl Worker {
@@ -80,21 +84,23 @@ impl Worker {
     pub fn new(program: PathBuf) -> Worker {
         Worker {
             program,
+            args: Vec::new(),
             memory_limit: MEMORY_LIMIT,
             time_limit: TIME_LIMIT,
-            memory: footprint,
+            memory: FOOTPRINT,
         }
     }
 }
 
 #[cfg(target_os = "macos")]
-use crate::macos::footprint;
-
+const FOOTPRINT: Option<fn(u32) -> Option<u64>> = Some(crate::macos::footprint);
 /// Linux bounds the child by its own `RLIMIT_AS`; Windows only by time.
 #[cfg(not(target_os = "macos"))]
-fn footprint(_pid: u32) -> Option<u64> {
-    None
-}
+const FOOTPRINT: Option<fn(u32) -> Option<u64>> = None;
+
+/// One workbook read at a time: a viewer asking again while agents change the worktree, or
+/// several workbooks open, never run more than one child (and its memory) at once.
+static READING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The sheets of the workbook `file` in `format`, their rows taking at most `budget` bytes of
 /// JSON in all, read by `worker`.
@@ -108,11 +114,18 @@ pub fn read(
     if size > WORKBOOK_LIMIT {
         return Err(io::Error::other(too_large()));
     }
+    // A file that grew since its size was taken is cut, so broken.
     let mut bytes = Vec::new();
-    file.take(WORKBOOK_LIMIT + 1).read_to_end(&mut bytes)?;
+    file.take(WORKBOOK_LIMIT).read_to_end(&mut bytes)?;
     let mut command = Command::new(&worker.program);
+    command.args(&worker.args);
     command.args(["sheets", format.name(), &budget.to_string()]);
-    let out = run(command, bytes, worker)?;
+    let out = {
+        let _turn = READING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        run(command, bytes, worker)?
+    };
     let answer: Result<Vec<Sheet>, String> =
         serde_json::from_slice(&out).map_err(|_| io::Error::other(UNREADABLE))?;
     answer.map_err(io::Error::other)
@@ -131,7 +144,7 @@ enum Outcome {
     OverTime,
 }
 
-/// The output of `command` given `input` on stdin, at most one frame of it, if it exits well
+/// The output of `command` given `input` on stdin, at most [`OUTPUT_LIMIT`] of it, if it exits well
 /// within the worker's limits.
 fn run(mut command: Command, input: Vec<u8>, worker: &Worker) -> io::Result<Vec<u8>> {
     let mut child = command
@@ -145,7 +158,7 @@ fn run(mut command: Command, input: Vec<u8>, worker: &Worker) -> io::Result<Vec<
     let writer = std::thread::spawn(move || stdin.map(|mut pipe| pipe.write_all(&input)));
     let reader = std::thread::spawn(move || {
         let mut out = Vec::new();
-        let read = stdout.map(|pipe| pipe.take(MAX_PAYLOAD as u64 * 2).read_to_end(&mut out));
+        let read = stdout.map(|pipe| pipe.take(OUTPUT_LIMIT).read_to_end(&mut out));
         read.map(|_| out)
     });
     let outcome = watch(&mut child, worker);
@@ -179,7 +192,8 @@ fn watch(child: &mut Child, worker: &Worker) -> io::Result<Outcome> {
         if let Some(status) = child.try_wait()? {
             return Ok(Outcome::Exited(status));
         }
-        if (worker.memory)(child.id()).is_some_and(|used| used > worker.memory_limit) {
+        let used = worker.memory.and_then(|memory| memory(child.id()));
+        if used.is_some_and(|used| used > worker.memory_limit) {
             return Ok(Outcome::OverMemory);
         }
         std::thread::sleep(POLL);
@@ -202,12 +216,15 @@ pub fn worker(format: &str, budget: usize, input: impl Read, output: impl Write)
     serde_json::to_writer(output, &answer).map_err(io::Error::other)
 }
 
-/// The child's address space capped at [`MEMORY_LIMIT`]: an allocation past it fails, and the
-/// child ends.
+/// The child's address space capped at [`MEMORY_LIMIT`] (or the lower limit it already has):
+/// an allocation past it fails, and the child ends, leaving no core dump of the workbook.
 #[cfg(target_os = "linux")]
 pub fn limit_memory() -> io::Result<()> {
-    use nix::sys::resource::{Resource, setrlimit};
-    Ok(setrlimit(Resource::RLIMIT_AS, MEMORY_LIMIT, MEMORY_LIMIT)?)
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+    setrlimit(Resource::RLIMIT_CORE, 0, 0)?;
+    let (_, hard) = getrlimit(Resource::RLIMIT_AS)?;
+    let most = MEMORY_LIMIT.min(hard);
+    Ok(setrlimit(Resource::RLIMIT_AS, most, most)?)
 }
 
 /// Not possible on macOS (the service watches the child's footprint instead) nor Windows.
@@ -465,6 +482,7 @@ fn iso_duration(iso: &str) -> Option<String> {
 mod tests {
     use super::*;
     use calamine::{CellErrorType, ExcelDateTimeType};
+    use hive_protocol::MAX_PAYLOAD;
 
     const XLSX: &[u8] = include_bytes!("../tests/fixtures/workbooks/book.xlsx");
     const XLS: &[u8] = include_bytes!("../tests/fixtures/workbooks/book.xls");
@@ -528,7 +546,8 @@ mod tests {
             assert!(err.chars().count() <= ERROR_CHARS, "{err}");
         }
         // An xlsx read as an ods: its parts are not there.
-        assert!(sheets(XLSX.to_vec(), Format::Ods, MAX_PAYLOAD).is_err());
+        let err = sheets(XLSX.to_vec(), Format::Ods, MAX_PAYLOAD).unwrap_err();
+        assert!(err.starts_with("not a readable workbook: "), "{err}");
         let long = broken("x".repeat(1000));
         assert_eq!(long.chars().count(), ERROR_CHARS);
     }
@@ -758,31 +777,20 @@ mod tests {
     mod child {
         use super::*;
 
-        /// A worker running `script` with `sh`, `sheets <format> <budget>` as `$1 $2 $3`; the
-        /// script lives as long as its folder.
-        fn shell(script: &str) -> (tempfile::TempDir, Worker) {
-            use std::os::unix::fs::PermissionsExt;
-            let dir = tempfile::tempdir().unwrap();
-            let program = dir.path().join("worker");
-            std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let worker = Worker {
-                program,
+        /// A worker running `script` with `sh -c`, `sheets <format> <budget>` as `$1 $2 $3`
+        /// (the system's own `sh`: no new executable for macOS to scan first).
+        fn shell(script: &str) -> Worker {
+            Worker {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), script.into(), "sh".into()],
                 memory_limit: MEMORY_LIMIT,
                 time_limit: Duration::from_secs(10),
-                memory: |_| None,
-            };
-            (dir, worker)
+                memory: None,
+            }
         }
 
-        /// The script just written may still be open in a child another test forks
-        /// (`ETXTBSY` on Linux): tried again then, as `wrapper`'s tests do.
         fn read_with(worker: &Worker, input: &[u8]) -> io::Result<Vec<Sheet>> {
-            let busy = Some(io::ErrorKind::ExecutableFileBusy);
-            (0..20)
-                .map(|_| read(input, input.len() as u64, Format::Ods, 77, worker))
-                .find(|read| read.as_ref().err().map(io::Error::kind) != busy)
-                .unwrap()
+            read(input, input.len() as u64, Format::Ods, 77, worker)
         }
 
         #[test]
@@ -791,10 +799,10 @@ mod tests {
             let script = format!(
                 "[ \"$(cat)\" = bytes ] && [ \"$1 $2 $3\" = 'sheets ods 77' ] && echo '{sheet}'"
             );
-            let (_dir, echo) = shell(&script);
+            let echo = shell(&script);
             let sheets = read_with(&echo, b"bytes").unwrap();
             assert_eq!(sheets[0].rows, [row(&["a"])]);
-            let (_dir, refused) = shell(r#"cat > /dev/null; echo '{"Err":"no good"}'"#);
+            let refused = shell(r#"cat > /dev/null; echo '{"Err":"no good"}'"#);
             assert_eq!(read_with(&refused, b"").unwrap_err().to_string(), "no good");
         }
 
@@ -806,43 +814,69 @@ mod tests {
                 "echo nonsense",
                 "head -c 9000000 /dev/zero",
             ] {
-                let (_dir, worker) = shell(script);
+                let worker = shell(script);
                 let err = read_with(&worker, b"x").unwrap_err();
                 assert_eq!(err.to_string(), UNREADABLE, "{script}");
             }
             // It never reads its input: the write fails, the answer stands.
-            let (_dir, deaf) = shell(r#"echo '{"Ok":[]}'"#);
+            let deaf = shell(r#"echo '{"Ok":[]}'"#);
             assert_eq!(read_with(&deaf, &vec![0; 4 << 20]).unwrap(), []);
         }
 
         #[test]
         fn a_child_past_its_limits_is_stopped() {
-            let (_dir, mut slow) = shell("sleep 30");
+            let mut slow = shell("exec sleep 30");
             slow.time_limit = Duration::from_millis(100);
             let started = std::time::Instant::now();
             let err = read_with(&slow, b"").unwrap_err().to_string();
             assert_eq!(err, format!("{UNREADABLE}: it takes longer than 100ms"));
             assert!(started.elapsed() < Duration::from_secs(10));
-            let (_dir, mut hungry) = shell("sleep 30");
-            hungry.memory = |_| Some(MEMORY_LIMIT + 1);
+            let mut hungry = shell("exec sleep 30");
+            hungry.memory = Some(|_| Some(MEMORY_LIMIT + 1));
             let err = read_with(&hungry, b"").unwrap_err().to_string();
             assert_eq!(
                 err,
                 format!("{UNREADABLE}: it needs more than 1024 MiB of memory")
             );
             // At the limit is within it.
-            let (_dir, mut full) = shell(r#"echo '{"Ok":[]}'"#);
-            full.memory = |_| Some(MEMORY_LIMIT);
+            let mut full = shell(r#"echo '{"Ok":[]}'"#);
+            full.memory = Some(|_| Some(MEMORY_LIMIT));
             assert_eq!(read_with(&full, b"").unwrap(), []);
         }
 
         #[test]
         fn a_workbook_over_the_limit_is_not_read() {
-            let (_dir, never) = shell("exit 1");
+            let never = shell("exit 1");
             let err = read(&b""[..], WORKBOOK_LIMIT + 1, Format::Xlsx, 0, &never).unwrap_err();
             assert_eq!(err.to_string(), "the workbook is larger than 32 MiB");
             let missing = Worker::new("/nonexistent/hive".into());
-            assert!(read(&b""[..], 0, Format::Xlsx, 0, &missing).is_err());
+            let err = read(&b""[..], 0, Format::Xlsx, 0, &missing).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::NotFound);
+            // At most the limit is given, even when the file grew since its size was taken.
+            let echo = shell(r#"[ "$(wc -c)" -eq 33554432 ] && echo '{"Ok":[]}'"#);
+            assert_eq!(
+                read(io::repeat(b'x'), 0, Format::Xlsx, 0, &echo).unwrap(),
+                []
+            );
+        }
+
+        #[test]
+        fn an_answer_is_read_up_to_two_frames() {
+            // A valid answer of `size` bytes: a sheet named with that many `a`s, less its JSON.
+            let empty = r#"{"Ok":[{"name":"","rows":[],"total":0,"partial":false}]}"#.len();
+            let answer = |size: usize| {
+                let name = size - empty;
+                shell(&format!(
+                    r#"cat > /dev/null; printf '{{"Ok":[{{"name":"'; head -c {name} /dev/zero | tr '\0' a; printf '","rows":[],"total":0,"partial":false}}]}}'"#
+                ))
+            };
+            let big = answer(OUTPUT_LIMIT as usize);
+            assert_eq!(
+                read_with(&big, b"").unwrap()[0].name.len(),
+                OUTPUT_LIMIT as usize - empty
+            );
+            let over = answer(OUTPUT_LIMIT as usize + 1);
+            assert_eq!(read_with(&over, b"").unwrap_err().to_string(), UNREADABLE);
         }
     }
 }
