@@ -367,8 +367,8 @@ pub enum Control {
         path: String,
     },
     /// App → service: create the folder `name` in the folder `parent` (a Linux path, `Dirs`'
-    /// `linux_path`), for a folder field (23.2). `name` is one path segment: not empty, no `/`
-    /// or `\`, no leading `.`, no control character. Never over an existing entry. Answered
+    /// `linux_path`), for a folder field (23.2). `name` is one path segment: not empty, none of
+    /// `/ \ : * ? " < > |`, no leading `.`, no control character. Never over an existing entry. Answered
     /// by `DirCreated` or `CreateDirFailed`.
     CreateDir {
         parent: String,

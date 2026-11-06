@@ -378,7 +378,8 @@ test("the service's refusal of a name shows under it until it is edited", async 
     expect(nameField().getAttribute("aria-invalid")).toBe("true");
     expect(useHive.getState().modal).toBe("add-project");
   };
-  const one = "A name is one folder: no /, no \\, no leading dot, no control characters";
+  const one =
+    'A name is one folder: no leading dot, no control characters, none of / \\ : * ? " < > |';
   await refused(".hidden", one);
   await refused("projects", "/home/user/projects already exists");
   named("fresh");

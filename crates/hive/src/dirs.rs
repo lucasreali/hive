@@ -206,8 +206,10 @@ fn run(program: &str, args: &[&str]) -> io::Result<String> {
 }
 
 /// Refuses `name` for a new folder (23.2) unless it is one path segment: not empty, at most
-/// [`NAME_LIMIT`] bytes, no separator (`/`, or `\` for Windows), no leading `.` (so neither `.`,
-/// `..` nor a hidden folder) and no control character.
+/// [`NAME_LIMIT`] bytes, no separator (`/`, or `\` for Windows), none of the other characters
+/// Windows refuses ([`WINDOWS_ONLY`]: `D:x` is a path on drive D:, not a name), no leading `.`
+/// (so neither `.`, `..` nor a hidden folder) and no control character. The same rules on every
+/// system.
 pub fn check_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Type a name".to_owned());
@@ -215,14 +217,18 @@ pub fn check_name(name: &str) -> Result<(), String> {
     if name.len() > NAME_LIMIT {
         return Err(format!("A name is at most {NAME_LIMIT} bytes"));
     }
-    let odd = name.starts_with('.') || name.contains(['/', '\\']);
+    let odd = name.starts_with('.') || name.contains(['/', '\\']) || name.contains(WINDOWS_ONLY);
     if odd || name.chars().any(char::is_control) {
-        return Err(
-            "A name is one folder: no /, no \\, no leading dot, no control characters".to_owned(),
-        );
+        return Err(NAME_RULE.to_owned());
     }
     Ok(())
 }
+
+/// The characters, besides the separators, that Windows refuses in a name.
+const WINDOWS_ONLY: [char; 7] = [':', '*', '?', '"', '<', '>', '|'];
+/// Why a name is refused by [`check_name`], but for its length.
+const NAME_RULE: &str =
+    "A name is one folder: no leading dot, no control characters, none of / \\ : * ? \" < > |";
 
 /// The folder `path` names, after the checks of an added project's (absolute, local on
 /// Windows, an existing folder), as it is.
@@ -304,8 +310,14 @@ mod tests {
 
     #[test]
     fn a_new_folder_name_is_one_plain_segment() {
-        let one = "A name is one folder: no /, no \\, no leading dot, no control characters";
+        let one = "A name is one folder: no leading dot, no control characters, none of / \\ : * ? \" < > |";
         let long = "x".repeat(NAME_LIMIT + 1);
+        // On Windows `D:x` is a path on drive D:, which a join would put in place of the parent.
+        for bad in ["D:x", "a*", "a?", "a\"b", "<a", "a>", "a|b"] {
+            assert_eq!(check_name(bad), Err(one.to_owned()), "{bad:?}");
+        }
+        let (error, _) = target("/", "C:x").unwrap_err();
+        assert_eq!(error, ProjectError::InvalidName);
         for (bad, said) in [
             ("", "Type a name"),
             (long.as_str(), "A name is at most 255 bytes"),

@@ -26,6 +26,7 @@ import {
   MOCK_GROUP,
   MOCK_IGNORED,
   MOCK_ISSUES,
+  MOCK_NAME_RULE,
   MOCK_OWN_WORKTREE,
   MOCK_REPOS,
   MOCK_SESSIONS,
@@ -1584,8 +1585,12 @@ test("a new folder and a new project are made as the service makes them (23.2)",
   await transport.createDir("/nowhere", "x");
   await transport.createDir("/home/user", "a/b");
   await transport.createDir("/home/user", "");
+  // On Windows a path on drive D:, not a name.
+  await transport.createDir("/home/user", "D:x");
   await tick();
-  const one = "A name is one folder: no /, no \\, no leading dot, no control characters";
+  const one =
+    'A name is one folder: no leading dot, no control characters, none of / \\ : * ? " < > |';
+  expect(MOCK_NAME_RULE).toBe(one);
   expect(messages).toEqual([
     { type: "dir_created", parent: "/home/user/", name: "games" },
     {
@@ -1602,6 +1607,7 @@ test("a new folder and a new project are made as the service makes them (23.2)",
     },
     { type: "create_dir_failed", parent: "/home/user", name: "a/b", message: one },
     { type: "create_dir_failed", parent: "/home/user", name: "", message: "Type a name" },
+    { type: "create_dir_failed", parent: "/home/user", name: "D:x", message: one },
   ]);
   // Listed in its folder.
   messages.length = 0;

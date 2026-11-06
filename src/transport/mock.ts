@@ -398,11 +398,10 @@ export const MOCK_FOLDERS = [
 
 /** As `hive::dirs::check_name` (23.2): why `name` is not one plain folder name, or null. */
 export const mockNameError = (name: string) =>
-  name === ""
-    ? "Type a name"
-    : /^\.|[/\\\p{Cc}]/u.test(name)
-      ? "A name is one folder: no /, no \\, no leading dot, no control characters"
-      : null;
+  name === "" ? "Type a name" : /^\.|[/\\:*?"<>|\p{Cc}]/u.test(name) ? MOCK_NAME_RULE : null;
+/** `hive::dirs::check_name`'s refusal of a name. */
+export const MOCK_NAME_RULE =
+  'A name is one folder: no leading dot, no control characters, none of / \\ : * ? " < > |';
 
 /** The folder part of `path`: up to its last separator (`\` too on Windows), else empty. */
 const folderPart = (path: string, windows: boolean) =>
