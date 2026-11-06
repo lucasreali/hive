@@ -117,6 +117,17 @@ pub fn read(
     // A file that grew since its size was taken is cut, so broken.
     let mut bytes = Vec::new();
     file.take(WORKBOOK_LIMIT).read_to_end(&mut bytes)?;
+    read_bytes(bytes, format, budget, worker)
+}
+
+/// [`read`] once the file is read: one function for every kind of file, so none of its code
+/// is left unrun for one of them.
+fn read_bytes(
+    bytes: Vec<u8>,
+    format: Format,
+    budget: usize,
+    worker: &Worker,
+) -> io::Result<Vec<Sheet>> {
     let mut command = Command::new(&worker.program);
     command.args(&worker.args);
     command.args(["sheets", format.name(), &budget.to_string()]);
@@ -168,11 +179,10 @@ fn run(mut command: Command, input: Vec<u8>, worker: &Worker) -> io::Result<Vec<
         let _ = child.wait();
     }
     let _ = writer.join();
-    let out = reader.join().ok().flatten();
+    // Nothing if the reader failed: not JSON, so unreadable.
+    let out = reader.join().ok().flatten().unwrap_or_default();
     match outcome? {
-        Outcome::Exited(status) if status.success() => {
-            out.ok_or_else(|| io::Error::other(UNREADABLE))
-        }
+        Outcome::Exited(status) if status.success() => Ok(out),
         Outcome::Exited(_) => Err(io::Error::other(UNREADABLE)),
         Outcome::OverMemory => Err(io::Error::other(format!(
             "{UNREADABLE}: it needs more than {} MiB of memory",
