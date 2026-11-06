@@ -657,7 +657,7 @@ test("a folder project's panel has its files and sessions only, and asks for no 
   fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
   expect(screen.getByRole("region", { name: "Sessions" })).toBeDefined();
   act(() => select(shop.id));
-  expect(screen.getAllByRole("tab")).toHaveLength(5);
+  expect(screen.getAllByRole("tab")).toHaveLength(6);
   expect(asked).toHaveBeenCalledWith(shop.path, "head");
 });
 
