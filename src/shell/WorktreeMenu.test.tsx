@@ -200,6 +200,33 @@ test("each run script of the project is a menu item typing it into a new termina
   write.mockRestore();
 });
 
+test("the menu asks for the worktree's scripts and lists the repository's too (23.4)", async () => {
+  const list = spyOn(transport, "listScripts").mockResolvedValue();
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(8);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  show();
+  rightClick("fix-login");
+  expect(list).toHaveBeenCalledWith(login.path);
+  const scripts = [
+    { name: "dev", command: "pnpm run dev", source: "package_json" as const },
+    { name: "up", command: "task up", source: "taskfile" as const },
+  ];
+  act(() => apply({ type: "scripts", path: login.path, scripts, problems: [], port: 20_000 }));
+  const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+  expect(items.slice(0, 4)).toEqual(["New terminal here", "Run: dev", "Run: up", "Copy path"]);
+  fireEvent.click(item("Run: up"));
+  await waitFor(() => expect(write).toHaveBeenCalledWith(8, "task up\r"));
+  // Remembered as running in that worktree, for the Scripts tab.
+  expect(useHive.getState().scriptRuns[8]).toEqual({
+    worktree: login.path,
+    name: "up",
+    command: "task up",
+  });
+  list.mockRestore();
+  open.mockRestore();
+  write.mockRestore();
+});
+
 test("on macOS the folder is revealed in the Finder", () => {
   const finder = spyOn(transport, "openInEditor").mockResolvedValue();
   asMac();

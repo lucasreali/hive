@@ -1443,6 +1443,11 @@ impl Hive {
         self.link().send(0, &Control::ListChanges { path, base })
     }
 
+    /// The answer arrives as `scripts` (23.4).
+    pub fn list_scripts(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListScripts { path })
+    }
+
     /// The answer arrives as `sessions`.
     pub fn list_sessions(&self) -> Result<(), String> {
         self.link().send(0, &Control::ListSessions)
@@ -1490,6 +1495,11 @@ impl Hive {
             base,
         };
         self.link().send(0, &open)
+    }
+
+    /// The answer arrives as `table`.
+    pub fn open_table(&self, worktree: String, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::OpenTable { worktree, path })
     }
 
     /// The answer arrives as `file_saved` or `save_failed`.
@@ -2338,6 +2348,11 @@ pub mod commands {
     }
 
     #[tauri::command]
+    pub fn list_scripts(hive: State<'_, Hive>, path: String) -> Result<(), String> {
+        hive.list_scripts(path)
+    }
+
+    #[tauri::command]
     pub fn open_file(
         hive: State<'_, Hive>,
         worktree: String,
@@ -2345,6 +2360,11 @@ pub mod commands {
         base: DiffBase,
     ) -> Result<(), String> {
         hive.open_file(worktree, path, base)
+    }
+
+    #[tauri::command]
+    pub fn open_table(hive: State<'_, Hive>, worktree: String, path: String) -> Result<(), String> {
+        hive.open_table(worktree, path)
     }
 
     #[tauri::command]

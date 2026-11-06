@@ -400,6 +400,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const seen = { ...s.changesSeen, [m.path]: (s.changesSeen[m.path] ?? 0) + 1 };
       return { changes: { ...s.changes, [m.path]: kept }, changesSeen: seen };
     }
+    case "scripts": {
+      const { type: _, ...scripts } = m;
+      return { scripts: { ...s.scripts, [m.path]: scripts } };
+    }
     case "sessions":
       return { sessions: m.sessions, sessionsError: m.error, sessionsTruncated: m.truncated };
     case "session_deleted":
@@ -419,6 +423,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...file } = m;
       const kept = s.file && sameFields(s.file, file) ? s.file : file;
       return { file: kept, edit: editFor(s, file) };
+    }
+    case "table": {
+      const { type: _, ...table } = m;
+      return { table };
     }
     case "file_saved":
       return patchEdits(s, m, (b) => saved(b, m.version));

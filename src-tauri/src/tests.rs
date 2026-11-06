@@ -1155,6 +1155,9 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: DiffBase::Branch,
     };
     assert_eq!(service.control().await, (0, changes));
+    hive.list_scripts("/r".into()).unwrap();
+    let scripts = Control::ListScripts { path: "/r".into() };
+    assert_eq!(service.control().await, (0, scripts));
     hive.list_sessions().unwrap();
     assert_eq!(service.control().await, (0, Control::ListSessions));
     hive.locate_session("s".into(), SessionTarget::Log).unwrap();
@@ -1193,6 +1196,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: DiffBase::Head,
     };
     assert_eq!(service.control().await, (0, open));
+    hive.open_table("/r".into(), "a.csv".into()).unwrap();
+    let table = Control::OpenTable {
+        worktree: "/r".into(),
+        path: "a.csv".into(),
+    };
+    assert_eq!(service.control().await, (0, table));
     hive.save_file("/r".into(), "a".into(), "x".into(), Some("v".into()))
         .unwrap();
     let save = Control::SaveFile {
@@ -1648,10 +1657,12 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.list_changes("/r".into(), DiffBase::Head),
         not_connected
     );
+    assert_eq!(hive.list_scripts("/r".into()), not_connected);
     assert_eq!(
         hive.open_file("/r".into(), "a".into(), DiffBase::Head),
         not_connected
     );
+    assert_eq!(hive.open_table("/r".into(), "a".into()), not_connected);
     assert_eq!(
         hive.save_file("/r".into(), "a".into(), "x".into(), None),
         not_connected
@@ -1927,7 +1938,9 @@ fn commands_reach_the_managed_hive() {
             expand_ignored,
             set_view,
             list_changes,
+            list_scripts,
             open_file,
+            open_table,
             search_files,
             list_dirs,
             list_sessions,
@@ -2026,7 +2039,9 @@ fn commands_reach_the_managed_hive() {
     let expand = json!({"path": "/r", "folders": ["target"]});
     let view = json!({"terminal": 1, "focused": true, "visible": true});
     let changes = json!({"path": "/r", "base": "head"});
+    let scripts = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
+    let table = json!({"worktree": "/r", "path": "a.csv"});
     let editor = json!({"worktree": "/r", "path": "a", "reveal": true});
     let search = json!({"worktree": "/r", "query": "q"});
     let dirs = json!({"path": "", "windows": false, "hidden": false});
@@ -2067,7 +2082,9 @@ fn commands_reach_the_managed_hive() {
         ("expand_ignored", &expand),
         ("set_view", &view),
         ("list_changes", &changes),
+        ("list_scripts", &scripts),
         ("open_file", &file),
+        ("open_table", &table),
         ("search_files", &search),
         ("list_dirs", &dirs),
         ("list_sessions", &json!({})),
@@ -2159,7 +2176,9 @@ fn commands_reach_the_managed_hive() {
         ("expand_ignored", expand),
         ("set_view", view),
         ("list_changes", changes),
+        ("list_scripts", scripts),
         ("open_file", file.clone()),
+        ("open_table", table),
         ("search_files", search),
         ("list_dirs", dirs),
         ("list_sessions", json!({})),

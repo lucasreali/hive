@@ -142,7 +142,9 @@ export type ServiceMessage =
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
+  | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
+  | ({ type: "table" } & TableText)
   | ({ type: "search_results" } & SearchResults)
   | ({ type: "dirs" } & Dirs)
   | { type: "sessions"; sessions: Session[]; error: string | null; truncated: boolean }
@@ -423,6 +425,16 @@ export type Dirs = {
   claude: boolean;
 };
 
+/**
+ * Mirrors `hive_protocol::Sheet`: one sheet of a table file (23.6), its first `rows` (each its
+ * cells; rows may differ in length) and how many it has (`total`, more when `partial`). `name`
+ * is empty for a CSV or TSV file.
+ */
+export type Sheet = { name: string; rows: string[][]; total: number; partial: boolean };
+
+/** Mirrors `Control::Table`: a table file's sheets, none when `error` says why. */
+export type TableText = { worktree: string; path: string; sheets: Sheet[]; error: string | null };
+
 /** Mirrors `hive_protocol::SaveError`. */
 export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";
 
@@ -598,6 +610,24 @@ export type ProjectScripts = {
   run: { name: string; command: string }[];
   /** Run by the service before it removes a worktree. */
   archive: string | null;
+};
+
+/** Mirrors `hive_protocol::ScriptSource`: where a worktree's script comes from (23.4). */
+export type ScriptSource = "settings" | "package_json" | "taskfile" | "makefile";
+
+/** Mirrors `hive_protocol::Script`: `command` is what Hive types into a new terminal. */
+export type Script = { name: string; command: string; source: ScriptSource };
+
+/**
+ * A worktree's scripts (23.4, `scripts`): the project's run scripts from the settings first,
+ * then the repository's; `problems` says why a file was not read or what was left out; `port`
+ * is the first of the worktree's 10 ports (null when it has no block).
+ */
+export type WorktreeScripts = {
+  path: string;
+  scripts: Script[];
+  problems: string[];
+  port: number | null;
 };
 
 /**

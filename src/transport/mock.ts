@@ -11,16 +11,18 @@ import type {
   ProgressState,
   Project,
   SaveError,
+  Script,
   ServiceMessage,
   Session,
   Settings,
   Space,
   SpaceEnv,
   Subagent,
+  TableText,
   UninstallList,
   Worktree,
 } from "../protocol";
-import { DEFAULT_SETTINGS } from "../store";
+import { DEFAULT_SETTINGS, scriptsOf } from "../store";
 import type { Tray } from "../tray";
 import type { Transport } from ".";
 import { createMockPulls } from "./mockPulls";
@@ -571,6 +573,21 @@ export const MOCK_BRANCHES: Record<string, { local: string[]; remote: string[] }
   "/home/user/dotfiles": { local: ["main"], remote: ["origin/main"] },
 };
 
+/** The fake service's repository scripts of shop's worktrees (23.4), as the service reads them. */
+export const MOCK_REPO_SCRIPTS: Script[] = [
+  { name: "dev", command: "pnpm run dev", source: "package_json" as const },
+  { name: "build", command: "pnpm run build", source: "package_json" as const },
+  { name: "test", command: "pnpm run test", source: "package_json" as const },
+  { name: "lint", command: "pnpm run lint", source: "package_json" as const },
+  { name: "db:up", command: "task db:up", source: "taskfile" as const },
+  { name: "db:seed", command: "task db:seed", source: "taskfile" as const },
+  { name: "docker", command: "make docker", source: "makefile" as const },
+];
+/** What the fake service finds wrong in shop's script files. */
+export const MOCK_SCRIPT_PROBLEMS = [
+  "Makefile: 1 script left out (a name Hive cannot type as one word)",
+];
+
 /**
  * What the fake service lists in every worktree: a small web app, plus enough generated
  * files in a project's main worktree to need scrolling.
@@ -579,6 +596,7 @@ export const MOCK_FILES = [
   ".gitignore",
   "README.md",
   "config/shipping.json",
+  "data/orders.csv",
   "docs/api.md",
   "package.json",
   "src/App.tsx",
@@ -684,7 +702,40 @@ export const MOCK_TEXTS: Record<string, [string, string]> = {
       "",
     ].join("\n"),
   ) as [string, string],
+  // A table file (23.6), one row short of its header's columns.
+  "data/orders.csv": Array(2).fill(
+    [
+      "id,customer,total,status",
+      ...Array.from(
+        { length: 40 },
+        (_, i) => `${1001 + i},Customer ${i + 1},${(i * 7.5).toFixed(2)},paid`,
+      ),
+      "1041,Late",
+      "",
+    ].join("\n"),
+  ) as [string, string],
 };
+
+/** Most rows the fake service sends of a sheet, as `hive::table::TABLE_ROWS`. */
+const TABLE_ROWS = 10_000;
+
+/**
+ * A stand-in for `hive::table::answer`: the fake file's lines split on commas (tabs in a TSV),
+ * without the quoting the `csv` crate reads; the real reader lives in Rust.
+ */
+function table(text: FileText): TableText {
+  const { worktree, path, content, error } = text;
+  if (error || content === null) {
+    return { worktree, path, sheets: [], error: error ?? `${path} does not exist` };
+  }
+  const split = path.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+  const rows = content
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split(split));
+  const sheet = { name: "", rows: rows.slice(0, TABLE_ROWS), total: rows.length, partial: false };
+  return { worktree, path, sheets: [sheet], error: null };
+}
 
 /**
  * A stand-in for `hive::file`: the fake worktree's file as its status in `MOCK_CHANGES` says
@@ -826,6 +877,27 @@ export function createMockTransport(
   const terminals = new Map<number, MockTerminal>();
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
+  /** The worktree whose scripts the app last asked for (23.4), and each worktree's first port. */
+  let scriptsAsked: string | null = null;
+  const ports = new Map<string, number>();
+  /** As the service: the project's run scripts first, then shop's repository's not replaced. */
+  const scriptsOfWorktree = (path: string): ServiceMessage => {
+    const project = holder(path);
+    if (!project) {
+      return { type: "error", message: `${path} is not a worktree of a followed project` };
+    }
+    const run = scriptsOf(settings, project.id).run;
+    const names = new Set(run.map((r) => r.name));
+    const repo = project.name === "shop" ? MOCK_REPO_SCRIPTS : [];
+    const scripts: Script[] = [
+      ...run.map((r) => ({ ...r, source: "settings" as const })),
+      ...repo.filter((s) => !names.has(s.name)),
+    ];
+    const problems = repo.length ? MOCK_SCRIPT_PROBLEMS : [];
+    const port = ports.get(path) ?? 20_000 + 10 * ports.size;
+    ports.set(path, port);
+    return { type: "scripts", path, scripts, problems, port };
+  };
   const print = (id: number, text: string) => terminals.get(id)?.onData(encoder.encode(text));
   /**
    * Stand-ins for what the service reads from a terminal's OSC sequences (17.25), typed in a
@@ -1168,6 +1240,8 @@ export function createMockTransport(
       const claude = { ...next.claude, accounts: kept, default_name: default_name || "Default" };
       settings = { ...next, claude };
       later({ type: "settings", settings });
+      // As the service: the scripts the app has follow the settings (23.4).
+      if (scriptsAsked) later(scriptsOfWorktree(scriptsAsked));
     },
     async createAccount(name) {
       // As the service: its letters and digits, lowercase, `-` between them (22.3).
@@ -1461,6 +1535,10 @@ export function createMockTransport(
     async listChanges(path, base) {
       later(changes(projects, path, base));
     },
+    async listScripts(path) {
+      scriptsAsked = holder(path) ? path : null;
+      later(scriptsOfWorktree(path));
+    },
     async listSessions() {
       listSessions();
     },
@@ -1516,6 +1594,9 @@ export function createMockTransport(
       // A folder project's file has no base (23.1).
       const folder = holder(worktree)?.folder;
       later({ type: "file", ...fileAt(worktree, path), ...(folder && { base: null }) });
+    },
+    async openTable(worktree, path) {
+      later({ type: "table", ...table(fileAt(worktree, path)) });
     },
     async saveFile(worktree, path, content, version) {
       const now = fileAt(worktree, path);

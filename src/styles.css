@@ -1184,6 +1184,106 @@ label:has(> input[type="checkbox"]:disabled) {
   min-height: 0;
 }
 
+/* A table file (23.6, src/viewer/TableView.tsx): its sheets' tabs, then a grid that scrolls
+   both ways with the header row kept in view, and the note on the rows not shown. Rows are
+   one line of a fixed height (the virtualizer's `ROW`); a long cell is cut, its title whole. */
+.table-file {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.table-sheets {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.table-sheet {
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--text-2);
+}
+
+.table-sheet[aria-selected="true"] {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.table-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.table-grid {
+  display: block;
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+.table-grid :is(thead, tbody) {
+  display: block;
+}
+
+.table-row {
+  display: grid;
+  height: 24px;
+  width: 100%;
+}
+
+.table-grid tbody .table-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* Sticky on the head itself: a sticky box stays inside its parent, here the whole table. */
+.table-grid thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+
+.table-cell,
+.table-number {
+  display: block;
+  padding: 0 8px;
+  line-height: 23px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.table-grid th {
+  font-weight: 600;
+}
+
+.table-number {
+  color: var(--text-4);
+  text-align: right;
+  user-select: none;
+}
+
+.table-note {
+  flex: none;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-small);
+  color: var(--text-3);
+}
+
 /* Every editor and code view is its own stacking context (23.11): CodeMirror's panels (the find
    bar, z-index 300) and tooltips rise over its own text only, never over a menu, a select list,
    a toast or a dialog. */
@@ -4306,6 +4406,125 @@ button.link:hover {
 
 .markdown-doc .tok-string {
   color: var(--syn-string);
+}
+
+/* The right panel's Scripts tab (23.4) */
+.scripts {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.scripts ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scripts-ports {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.scripts-code {
+  font-family: var(--font-mono);
+  color: var(--text-2);
+}
+
+.scripts-group h3 {
+  margin: 0;
+  padding: 10px 12px 4px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.script {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+}
+
+.script:hover {
+  background: var(--hover);
+}
+
+.script-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  text-align: left;
+}
+
+.script-play {
+  flex: none;
+  align-self: center;
+  color: var(--text-3);
+}
+
+.script-main:hover .script-play {
+  color: var(--state-idle);
+}
+
+.script-name {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.script-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.script.running {
+  gap: 8px;
+  padding: 3px 6px 3px 14px;
+}
+
+.script-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-idle);
+}
+
+.scripts-problem {
+  margin: 8px 12px 0;
+  font-size: var(--fs-meta);
+  color: var(--state-permission);
+}
+
+.scripts-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 /* The editor's find bar (23.10): CodeMirror's search panel with the app's fields and buttons.

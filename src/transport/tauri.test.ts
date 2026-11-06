@@ -92,11 +92,13 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.expandIgnored("/r", ["target"]);
   await tauriTransport.setView(3, true, false);
   await tauriTransport.listChanges("/r", "head");
+  await tauriTransport.listScripts("/r");
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
   await tauriTransport.deleteSession("s");
   await tauriTransport.searchFiles("/r", "q");
   await tauriTransport.openFile("/r", "a.ts", "head");
+  await tauriTransport.openTable("/r", "a.csv");
   await tauriTransport.saveFile("/r", "a.ts", "x", "v");
   await tauriTransport.createFile("/r", "src", "b.ts");
   await tauriTransport.renameFile("/r", "a.ts", "c.ts");
@@ -153,11 +155,13 @@ test("terminal and project actions call their commands", async () => {
     ["expand_ignored", { path: "/r", folders: ["target"] }],
     ["set_view", { terminal: 3, focused: true, visible: false }],
     ["list_changes", { path: "/r", base: "head" }],
+    ["list_scripts", { path: "/r" }],
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],
     ["delete_session", { id: "s" }],
     ["search_files", { worktree: "/r", query: "q" }],
     ["open_file", { worktree: "/r", path: "a.ts", base: "head" }],
+    ["open_table", { worktree: "/r", path: "a.csv" }],
     ["save_file", { worktree: "/r", path: "a.ts", content: "x", version: "v" }],
     ["create_file", { worktree: "/r", folder: "src", name: "b.ts" }],
     ["rename_file", { worktree: "/r", path: "a.ts", name: "c.ts" }],

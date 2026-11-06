@@ -117,6 +117,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     removed: true,
     error: true,
   },
+  scripts: { path: true, scripts: true, problems: true, port: true },
   file: {
     worktree: true,
     path: true,
@@ -127,6 +128,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     too_large: true,
     error: true,
   },
+  table: { worktree: true, path: true, sheets: true, error: true },
   search_results: { worktree: true, query: true, matches: true, truncated: true, error: true },
   dirs: {
     path: true,

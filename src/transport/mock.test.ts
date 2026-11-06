@@ -28,7 +28,9 @@ import {
   MOCK_ISSUES,
   MOCK_NAME_RULE,
   MOCK_OWN_WORKTREE,
+  MOCK_REPO_SCRIPTS,
   MOCK_REPOS,
+  MOCK_SCRIPT_PROBLEMS,
   MOCK_SESSIONS,
   MOCK_SHARED,
   MOCK_STATES,
@@ -727,6 +729,60 @@ test("a watched worktree lists its files and again after a touch in its terminal
   expect(main2?.type === "files" && main2.files.includes("d.txt")).toBe(true);
 });
 
+test("a worktree's scripts: the settings' first, shop's repository's, a port each (23.4)", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api] = MOCK_REPOS;
+  const login = shop.worktrees[1].path;
+  messages.length = 0;
+  await transport.listScripts(login);
+  await transport.listScripts(api.path);
+  await transport.listScripts(login);
+  await transport.listScripts("/nowhere");
+  await tick();
+  const shopScripts = {
+    type: "scripts" as const,
+    path: login,
+    scripts: MOCK_REPO_SCRIPTS,
+    problems: MOCK_SCRIPT_PROBLEMS,
+    port: 20_000 as number | null,
+  };
+  const apiScripts = {
+    type: "scripts" as const,
+    path: api.path,
+    scripts: [],
+    problems: [],
+    port: 20_010,
+  };
+  const refused = {
+    type: "error" as const,
+    message: "/nowhere is not a worktree of a followed project",
+  };
+  expect(messages).toEqual([shopScripts, apiScripts, shopScripts, refused]);
+  // The settings change: the scripts the app last asked for (a worktree) follow; one replaces
+  // the repository's of the same name.
+  await transport.listScripts(login);
+  await tick();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  const run = [{ name: "dev", command: "pnpm dev --port $PORT" }];
+  settings.projects[shop.id] = { scripts: { setup: null, run, archive: null } };
+  messages.length = 0;
+  await transport.setSettings(settings);
+  await tick();
+  const mine = { name: "dev", command: "pnpm dev --port $PORT", source: "settings" as const };
+  const rest = MOCK_REPO_SCRIPTS.filter((s) => s.name !== "dev");
+  expect(messages.find((m) => m.type === "scripts")).toEqual({
+    ...shopScripts,
+    scripts: [mine, ...rest],
+  });
+  // Asked for no worktree: nothing more.
+  await transport.listScripts("/nowhere");
+  await tick();
+  messages.length = 0;
+  await transport.setSettings(settings);
+  await tick();
+  expect(messages.some((m) => m.type === "scripts")).toBe(false);
+});
+
 test("changes of a followed worktree with their totals, or why not", async () => {
   const { transport, messages } = await connected();
   const [shop, api, dotfiles] = MOCK_REPOS;
@@ -830,6 +886,27 @@ test("files of a followed worktree as their status says, or why not", async () =
     ["assets/logo.png", null, null, true, null, null],
     ["a", null, null, false, `${dotfiles.path} is not a worktree of a followed project`, null],
   ]);
+});
+
+test("a table file's rows, split on its delimiter, or why not", async () => {
+  const { transport, messages } = await connected();
+  const [shop, api, dotfiles] = MOCK_REPOS;
+  messages.length = 0;
+  await transport.openTable(shop.path, "data/orders.csv");
+  await transport.openTable(shop.path, "a.tsv");
+  await transport.openTable(api.worktrees[1].path, "src/legacy/jwt.ts");
+  await transport.openTable(dotfiles.path, "a.csv");
+  await tick();
+  const [orders, tsv, gone, outside] = messages.map((m) => (m.type === "table" ? m : null));
+  const sheet = orders?.sheets[0];
+  expect([sheet?.rows.length, sheet?.total, sheet?.partial]).toEqual([42, 42, false]);
+  expect(sheet?.rows[0]).toEqual(["id", "customer", "total", "status"]);
+  expect(sheet?.rows[1]).toEqual(["1001", "Customer 1", "0.00", "paid"]);
+  expect(sheet?.rows[41]).toEqual(["1041", "Late"]);
+  expect(tsv?.sheets[0]?.rows).toEqual([["// a.tsv"], ["export const value = 1;"]]);
+  expect([gone?.sheets, gone?.error]).toEqual([[], "src/legacy/jwt.ts does not exist"]);
+  const error = `${dotfiles.path} is not a worktree of a followed project`;
+  expect([outside?.sheets, outside?.error]).toEqual([[], error]);
 });
 
 test("a save checks the version as the service does; write stands in for an agent", async () => {

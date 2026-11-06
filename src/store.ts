@@ -40,10 +40,12 @@ import type {
   Settings,
   Shared,
   Space,
+  TableText,
   UninstallFailure,
   UninstallList,
   Worktree,
   WorktreeFiles,
+  WorktreeScripts,
 } from "./protocol";
 import type { OpenPull, PullBusy, PullError, PullState, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
@@ -119,6 +121,8 @@ export type FileTab = OpenFile & {
    */
   preview?: boolean;
   rendered?: boolean;
+  /** A table file (23.6, `isTable`) shows as text, not as its table. */
+  asText?: boolean;
   /** The rendered view's scroll as it was last seen (21.3), in pixels. */
   renderedScroll?: number;
   /**
@@ -268,7 +272,7 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions";
+export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions" | "scripts";
 /** The key of a project's Actions runs on `branch` (all branches: null) in `HiveState.runs`. */
 export const runsKey = (project: string, branch: string | null) => `${project}\n${branch ?? ""}`;
 
@@ -438,12 +442,18 @@ export type HiveState = {
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
   changes: Record<string, Changes>;
+  /** By worktree path: the last `scripts` the service sent for it (23.4). */
+  scripts: Record<string, WorktreeScripts>;
+  /** By terminal id: the script it was opened to run (UI state, `src/scripts.ts`). */
+  scriptRuns: Record<number, { worktree: string; name: string; command: string }>;
   /** By worktree path: how many `changes` arrived, equal ones too (the open file re-asks). */
   changesSeen: Record<string, number>;
   /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
   diffBases: Record<string, DiffBase>;
   /** The last `file` the service sent; shown only while it is the open file. */
   file: FileText | null;
+  /** The last `table` the service sent (23.6); shown only while it is the open file's. */
+  table: TableText | null;
   /** The open file shows as editable text (UI state), not as its read-only diff. */
   editing: boolean;
   /** The open file's edit buffer while editing (UI state, kept when the panel closes). */
@@ -558,9 +568,12 @@ export const initialState: HiveState = {
   subagentWorktrees: [],
   worktreeFiles: null,
   changes: {},
+  scripts: {},
+  scriptRuns: {},
   changesSeen: {},
   diffBases: {},
   file: null,
+  table: null,
   editing: false,
   edit: null,
   editorNotice: null,
@@ -792,6 +805,23 @@ export const setRendered = (rendered: boolean) =>
     ),
   }));
 
+/** A table file (23.6), by its name: the service reads it as a table (`hive::table`). */
+export const isTable = (path: string) => /\.(csv|tsv)$/i.test(path);
+
+/** The open file is a table file shown as its table (23.6), as it opens. */
+export const tableShown = (s: HiveState) =>
+  !!s.openFile &&
+  isTable(s.openFile.path) &&
+  !s.openFiles.find((t) => s.openFile && isFor(t, s.openFile))?.asText;
+
+/** Shows the open table file as its table or as text (23.6), in its tab. */
+export const setTableShown = (shown: boolean) =>
+  useHive.setState((s) => ({
+    openFiles: s.openFiles.map((t) =>
+      s.openFile && isFor(t, s.openFile) ? { ...t, asText: !shown } : t,
+    ),
+  }));
+
 /** Ctrl+Shift+V (11.2): only while the shown tab is a Markdown file's. */
 export const markdownShown = (s: HiveState) =>
   s.fileShown && !!s.openFile && isMarkdown(s.openFile.path);
@@ -882,7 +912,9 @@ export const removeTab = (id: number) =>
     const at = items.findIndex((t) => !("path" in t) && t.id === id);
     const beside = items.filter((_, j) => j !== at)[Math.min(at, items.length - 2)];
     const gone = [barKey(s, { id, cwd: "" }), `tab:${id}`];
+    const { [id]: _, ...scriptRuns } = s.scriptRuns;
     const removed = {
+      scriptRuns,
       tabs: s.tabs.filter((t) => t.id !== id),
       tabOrder: s.tabOrder.filter((k) => !gone.includes(k)),
       activeTab: s.activeTab === id ? next : s.activeTab,

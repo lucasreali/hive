@@ -68,6 +68,7 @@ sort! {
         | ExpandIgnored
         | View
         | ListChanges
+        | ListScripts
         | ListSessions
         | LocateSession
         | DeleteSession
@@ -75,6 +76,7 @@ sort! {
         | SearchFiles
         | ListDirs
         | OpenFile
+        | OpenTable
         | SaveFile
         | CreateFile
         | RenameFile
@@ -147,6 +149,7 @@ sort! {
         | WorktreeStatus
         | Files
         | Changes
+        | Scripts
         | Sessions
         | RestoreSessions
         | SessionLocated
@@ -157,6 +160,7 @@ sort! {
         | SearchResults
         | Dirs
         | File
+        | Table
         | FileSaved
         | SaveFailed
         | FileCreated
@@ -484,6 +488,16 @@ fn samples() -> Vec<Control> {
             removed: 0,
             error: None,
         },
+        Scripts {
+            path: s("/r"),
+            scripts: vec![Script {
+                name: s("dev"),
+                command: s("bun run dev"),
+                source: ScriptSource::PackageJson,
+            }],
+            problems: vec![m()],
+            port: Some(20_000),
+        },
         Sessions {
             sessions: vec![],
             error: None,
@@ -534,6 +548,17 @@ fn samples() -> Vec<Control> {
             version: Some(s("v")),
             binary: false,
             too_large: false,
+            error: None,
+        },
+        Table {
+            worktree: s("/r"),
+            path: s("a.csv"),
+            sheets: vec![Sheet {
+                name: s(""),
+                rows: vec![vec![s("a"), s("b")], vec![s("1")]],
+                total: 3,
+                partial: false,
+            }],
             error: None,
         },
         FileSaved {

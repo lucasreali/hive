@@ -530,6 +530,21 @@
     "error": null
   },
   {
+    "type": "scripts",
+    "path": "/r",
+    "scripts": [
+      {
+        "name": "dev",
+        "command": "bun run dev",
+        "source": "package_json"
+      }
+    ],
+    "problems": [
+      "m"
+    ],
+    "port": 20000
+  },
+  {
     "type": "sessions",
     "sessions": [],
     "error": null,
@@ -593,6 +608,28 @@
     "version": "v",
     "binary": false,
     "too_large": false,
+    "error": null
+  },
+  {
+    "type": "table",
+    "worktree": "/r",
+    "path": "a.csv",
+    "sheets": [
+      {
+        "name": "",
+        "rows": [
+          [
+            "a",
+            "b"
+          ],
+          [
+            "1"
+          ]
+        ],
+        "total": 3,
+        "partial": false
+      }
+    ],
     "error": null
   },
   {
