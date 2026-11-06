@@ -11,6 +11,27 @@ async fn ask(conn: &mut Conn, message: Control) -> Control {
     conn.any_control().await.1
 }
 
+/// The next control message but a sessions list pushed meanwhile, `spaces` included: once the
+/// app has a list, the service sends it again whenever a burst in Claude's folders makes it
+/// change (D19.4), as a session watch followed again (each `list_sessions`) may report later
+/// on a loaded machine. Such a list holds only the session `s`, or nothing.
+async fn past_sessions(conn: &mut Conn) -> Control {
+    loop {
+        match conn.any_control().await.1 {
+            Control::Sessions { sessions, .. } => {
+                assert!(sessions.iter().all(|s| s.id == "s"), "{sessions:?}");
+            }
+            other => return other,
+        }
+    }
+}
+
+/// [`ask`] past a sessions list pushed meanwhile ([`past_sessions`]).
+async fn ask_past_sessions(conn: &mut Conn, message: Control) -> Control {
+    conn.send(0, message).await;
+    past_sessions(conn).await
+}
+
 fn spaces(spaces: &[&Space], current: &str) -> Control {
     Control::Spaces {
         spaces: spaces.iter().map(|s| (*s).clone()).collect(),
@@ -129,7 +150,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     // Another space shows none of them, and cannot take its project.
     let select = |id: &str| Control::SelectSpace { id: id.into() };
     assert_eq!(
-        ask(&mut app, select("default")).await,
+        ask_past_sessions(&mut app, select("default")).await,
         spaces(&[&default, &work], "default")
     );
     let listed = ask(&mut app, Control::ListSessions).await;
@@ -139,7 +160,7 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         truncated: false,
     };
     assert_eq!(listed, empty);
-    let refused = ask(&mut app, add(&root)).await;
+    let refused = ask_past_sessions(&mut app, add(&root)).await;
     let other = Control::AddProjectFailed {
         path: root.clone(),
         error: ProjectError::InOtherSpace,
@@ -147,17 +168,17 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     };
     assert_eq!(refused, other);
     // Adding it again to its own space changes nothing.
-    ask(&mut app, select("space-1")).await;
+    ask_past_sessions(&mut app, select("space-1")).await;
     assert_eq!(
-        ask(&mut app, add(&root)).await,
+        ask_past_sessions(&mut app, add(&root)).await,
         spaces(&[&default, &work], "space-1")
     );
-    let again = app.control().await.1;
+    let again = past_sessions(&mut app).await;
     assert!(matches!(again, Control::ProjectAdded { .. }), "{again:?}");
 
     // Only an empty space can be deleted.
     let delete = |id: &str| Control::DeleteSpace { id: id.into() };
-    let kept = ask(&mut app, delete("space-1")).await;
+    let kept = ask_past_sessions(&mut app, delete("space-1")).await;
     assert_eq!(
         kept,
         failed("Work has projects: only an empty space can be deleted")
@@ -169,11 +190,11 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     };
     default.name = "Personal".into();
     assert_eq!(
-        ask(&mut app, rename).await,
+        ask_past_sessions(&mut app, rename).await,
         spaces(&[&default, &work], "space-1")
     );
     assert_eq!(
-        ask(&mut app, delete("default")).await,
+        ask_past_sessions(&mut app, delete("default")).await,
         spaces(&[&work], "space-1")
     );
     drop(app);

@@ -397,6 +397,22 @@ impl CountingGit {
         let calls = std::fs::read_to_string(&self.log).unwrap_or_default();
         calls.lines().filter(|call| call.contains(pattern)).count()
     }
+
+    /// How many calls came before the `k`-th (from 1) with `pattern` in its arguments, once
+    /// that one ran.
+    pub fn before(&self, pattern: &str, k: usize) -> usize {
+        let mut before = None;
+        wait_until(|| {
+            let calls = std::fs::read_to_string(&self.log).unwrap_or_default();
+            let mut found = calls
+                .lines()
+                .enumerate()
+                .filter(|(_, c)| c.contains(pattern));
+            before = found.nth(k - 1).map(|(i, _)| i);
+            before.is_some()
+        });
+        before.unwrap()
+    }
 }
 
 /// A running daemon; killed on drop so a failing test never leaks it.

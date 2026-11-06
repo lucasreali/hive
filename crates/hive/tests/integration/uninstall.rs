@@ -234,6 +234,10 @@ async fn the_app_uninstalls_hive_after_its_terminals_ended() {
         );
     }
 
+    // The diagnostics wait for the git resolved at start (D18.3): on macOS `xcrun`, and the
+    // `xcodebuild` it may start, run in the background for up to 2 s, so without this they may
+    // still be running when the processes are counted below.
+    assert_eq!(crate::agents::settled(&mut app).await, []);
     // A hook connection already open: what it sends after the uninstall is not kept.
     let mut hook = home.env.connect(Role::Hook).await;
     app.send(
