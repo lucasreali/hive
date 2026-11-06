@@ -208,6 +208,15 @@ impl PIDInfo for VnodePathInfo {
     }
 }
 
+/// The memory process `pid` takes: its physical footprint, as Activity Monitor shows it.
+pub fn footprint(pid: u32) -> Option<u64> {
+    use libproc::pid_rusage::{RUsageInfoV2, pidrusage};
+    let pid = i32::try_from(pid).ok()?;
+    pidrusage::<RUsageInfoV2>(pid)
+        .ok()
+        .map(|usage| usage.ri_phys_footprint)
+}
+
 pub fn cwd(pid: i32) -> Option<PathBuf> {
     let info = pidinfo::<VnodePathInfo>(pid, 0).ok()?;
     text(&info.cdir.path).map(PathBuf::from)
@@ -696,6 +705,17 @@ mod trash {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_footprint_is_its_memory() {
+        // 64 MiB written: counted, whatever the other tests hold.
+        let held = vec![1u8; 64 << 20];
+        let used = footprint(std::process::id()).unwrap();
+        assert!(used >= 64 << 20, "{used}");
+        assert_eq!(held.len(), 64 << 20);
+        assert_eq!(footprint(u32::MAX), None);
+        assert_eq!(footprint(999_999), None);
+    }
 
     #[test]
     fn network_and_cloud_folders_get_a_warning() {

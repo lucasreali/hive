@@ -198,12 +198,55 @@ async fn a_table_file_is_read_on_disk_whatever_its_size() {
     assert_eq!((*total, *partial), (expected, false));
     assert_eq!(
         table(&mut conn, &root, "a.txt").await,
-        Err("not a CSV or TSV file".into())
+        Err("not a table file".into())
     );
     assert_eq!(
         table(&mut conn, &root, "gone.csv").await,
         Err("gone.csv does not exist".into())
     );
+    drop(conn);
+    stop(daemon);
+}
+
+#[tokio::test]
+async fn a_workbook_is_read_by_a_child_and_its_failures_only_end_that() {
+    let repo = Repo::new();
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workbooks");
+    for name in ["book.xlsx", "book.xls", "book.ods", "huge.xls"] {
+        std::fs::copy(fixtures.join(name), repo.root.join(name)).unwrap();
+    }
+    repo.write("broken.ODS", "not a zip");
+    let root = repo.root.display().to_string();
+
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    follow(&mut conn, &root).await;
+
+    let cells = |row: &[&str]| row.iter().map(|&c| c.to_owned()).collect::<Vec<_>>();
+    let orders = vec![
+        cells(&["Item", "Date", "Amount", "Note"]),
+        cells(&["Pen", "2024-03-15", "", "blue"]),
+        cells(&["Ink", "2024-03-16 14:30:00", "7", "TRUE"]),
+        cells(&["Total", "", "14"]),
+    ];
+    let notes = vec![cells(&["Hello"]), cells(&["12:00:00"])];
+    for name in ["book.xlsx", "book.xls", "book.ods"] {
+        assert_eq!(
+            table(&mut conn, &root, name).await,
+            Ok(vec![(orders.clone(), 4, false), (notes.clone(), 2, false)]),
+            "{name}"
+        );
+    }
+    let broken = table(&mut conn, &root, "broken.ODS").await.unwrap_err();
+    assert!(broken.starts_with("not a readable workbook: "), "{broken}");
+    // Its dimensions claim 2^32 rows of 2^16 columns: the child's reservation fails and ends
+    // it, the service answers and goes on.
+    assert_eq!(
+        table(&mut conn, &root, "huge.xls").await,
+        Err("the workbook could not be read".into())
+    );
+    assert_eq!(table(&mut conn, &root, "book.ods").await.unwrap().len(), 2);
     drop(conn);
     stop(daemon);
 }
