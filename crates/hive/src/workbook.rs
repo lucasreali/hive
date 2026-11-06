@@ -8,7 +8,8 @@
 //! <budget>` ([`worker`]), gives it the file's bytes on stdin (at most [`WORKBOOK_LIMIT`]) and
 //! reads its answer. A child that crashes, takes more than [`MEMORY_LIMIT`] (Linux: its own
 //! `RLIMIT_AS`; macOS: its footprint, watched) or more than [`TIME_LIMIT`] is the error "could
-//! not be read", and the service keeps running.
+//! not be read", and the service keeps running. A native Windows service has no way to cap the
+//! child's memory, so it reads no workbook (23.14): [`UNSUPPORTED`], with no child started.
 
 use std::collections::BTreeMap;
 use std::io::{self, Cursor, Read, Write};
@@ -69,8 +70,10 @@ impl Format {
 }
 
 /// How a workbook is read: the program run as `<program> <args…> sheets …` (the service's own
-/// binary, with no arguments before), and the limits it runs within.
+/// binary, with no arguments before), the limits it runs within, and whether it may run at all.
 pub struct Worker {
+    /// Whether workbooks are read here: when not, each one is [`UNSUPPORTED`] (23.14).
+    pub supported: bool,
     pub program: PathBuf,
     pub args: Vec<String>,
     pub memory_limit: u64,
@@ -80,9 +83,10 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// `program` within [`MEMORY_LIMIT`] and [`TIME_LIMIT`].
+    /// `program` within [`MEMORY_LIMIT`] and [`TIME_LIMIT`], where this platform can cap it.
     pub fn new(program: PathBuf) -> Worker {
         Worker {
+            supported: SUPPORTED,
             program,
             args: Vec::new(),
             memory_limit: MEMORY_LIMIT,
@@ -94,9 +98,16 @@ impl Worker {
 
 #[cfg(target_os = "macos")]
 const FOOTPRINT: Option<fn(u32) -> Option<u64>> = Some(crate::macos::footprint);
-/// Linux bounds the child by its own `RLIMIT_AS`; Windows only by time.
+/// Linux bounds the child by its own `RLIMIT_AS`.
 #[cfg(not(target_os = "macos"))]
 const FOOTPRINT: Option<fn(u32) -> Option<u64>> = None;
+
+/// Whether this service reads workbooks: not on native Windows, where nothing caps the child's
+/// memory, only its time (23.14). A service in WSL is a Linux one.
+const SUPPORTED: bool = !cfg!(windows);
+
+/// The answer for a workbook where they are not read.
+pub const UNSUPPORTED: &str = "Spreadsheets are not supported on Windows yet";
 
 /// One workbook read at a time: a viewer asking again while agents change the worktree, or
 /// several workbooks open, never run more than one child (and its memory) at once.
@@ -111,6 +122,9 @@ pub fn read(
     budget: usize,
     worker: &Worker,
 ) -> io::Result<Vec<Sheet>> {
+    if !worker.supported {
+        return Err(io::Error::other(UNSUPPORTED));
+    }
     if size > WORKBOOK_LIMIT {
         return Err(io::Error::other(too_large()));
     }
@@ -766,6 +780,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_worker_not_supported_here_starts_no_child() {
+        // A program that cannot start: an error other than the refusal would mean it was tried.
+        let mut worker = Worker::new("/nonexistent/hive".into());
+        worker.supported = false;
+        for (format, size) in [(Format::Xlsx, 2), (Format::Xls, 2), (Format::Ods, u64::MAX)] {
+            let err = read(&mut &b"PK"[..], size, format, 0, &worker).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Spreadsheets are not supported on Windows yet"
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn workbooks_are_read_on_linux_and_macos() {
+        assert!(Worker::new("/nonexistent/hive".into()).supported);
+    }
+
+    /// 23.14: nothing caps the child's memory on native Windows, so no workbook is read there.
+    #[cfg(windows)]
+    #[test]
+    fn workbooks_are_refused_on_native_windows() {
+        let worker = Worker::new(std::env::current_exe().unwrap());
+        assert!(!worker.supported);
+        let err = read(
+            &mut &XLSX[..],
+            XLSX.len() as u64,
+            Format::Xlsx,
+            MAX_PAYLOAD,
+            &worker,
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), UNSUPPORTED);
+    }
+
     fn worker_answer(format: &str, input: &[u8]) -> Result<Vec<Sheet>, String> {
         let mut out = Vec::new();
         worker(format, MAX_PAYLOAD, &mut &*input, &mut out).unwrap();
@@ -817,6 +868,7 @@ mod tests {
         /// (the system's own `sh`: no new executable for macOS to scan first).
         fn shell(script: &str) -> Worker {
             Worker {
+                supported: true,
                 program: "/bin/sh".into(),
                 args: vec!["-c".into(), script.into(), "sh".into()],
                 memory_limit: MEMORY_LIMIT,
