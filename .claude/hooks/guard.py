@@ -23,12 +23,16 @@ BASH_RULES = [
     (re.compile(r"\bgit\b[^;&|]*\s(--force\b|--force-with-lease\b)", re.I), "never force (rule 4)"),
     (re.compile(r"\bgit\s+config\b[^;&|]*--global", re.I), "never change the global git config (rule 4)"),
 ]
-# Agents push only task branches, so CI runs the heavy gates (rule 4); main and tags are the human's.
+# Agents push task branches (so CI runs the heavy gates), main and release tags (rule 4; the human,
+# 2026-11-06); never another branch, `--tags` or a force.
 # Any git command whose subcommand is push, after git's own options (`-C <dir>`, `-c <k=v>`, `--git-dir=…`).
 WORD = r"""(?:"[^"]*"|'[^']*'|\S+)"""
 GIT_OPTIONS = rf"(?:\s+(?:-[Cc]\s*{WORD}|--(?:git-dir|work-tree|namespace|exec-path|config-env)\s+{WORD}|-{{1,2}}[\w-]+(?:=\S*)?))*"
 PUSH = re.compile(rf"""\bgit{GIT_OPTIONS}\s+["']?push["']?(?![\w-])([^;&|]*)""", re.I)
-TASK_PUSH = re.compile(r"^\s+(-u\s+)?origin\s+task/[A-Za-z0-9._/-]+\s*$")
+TAG = r"v\d+\.\d+\.\d+"
+ALLOWED_PUSH = re.compile(
+    rf"^\s+(-u\s+)?origin\s+(task/[A-Za-z0-9._/-]+|main|main\s+{TAG}|{TAG})\s*$"
+)
 
 # Bash commands that write the read-only docs (rule 1), as Edit/Write on them are blocked above.
 # ponytail: covers the usual shell writers (redirection, tee, sed/perl -i, cp/mv/install/ln); a
@@ -69,8 +73,11 @@ def blocked(event: dict) -> str | None:
     elif tool == "Bash":
         command = args.get("command", "")
         for push in PUSH.finditer(command):
-            if not TASK_PUSH.match(push.group(1)):
-                return "agents push only task branches: git push [-u] origin task/<id>-<slug> (rule 4)"
+            if not ALLOWED_PUSH.match(push.group(1)):
+                return (
+                    "agents push only task branches, main and release tags:"
+                    " git push [-u] origin task/<id>-<slug> | main [v<x.y.z>] (rule 4)"
+                )
         if any(write.search(command) for write in DOC_WRITES):
             return "docs/hive.md and docs/prototype/ are read-only for agents (CLAUDE.md rule 1)"
         for pattern, reason in BASH_RULES:
