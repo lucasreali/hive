@@ -434,6 +434,9 @@ test("the project menu removes merged worktrees without changes, each with its r
     ["Removed", "field-help"],
     ["in use by fish (1)", "field-error"],
   ]);
+  // On its own line, outside the label, so it never covers the name and date (24.9).
+  expect(results[1].closest("label")).toBeNull();
+  expect(results[1].parentElement?.className).toBe("merged-item");
   expect(submit().disabled).toBe(true);
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(useHive.getState().modal).toBeNull();
