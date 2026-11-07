@@ -421,6 +421,9 @@ unsafe extern "C" {
         types: *const c_char,
     ) -> *const c_void;
     fn method_getTypeEncoding(method: Id) -> *const c_char;
+    fn objc_copyClassList(count: *mut u32) -> *mut Id;
+    fn class_getName(class: Id) -> *const c_char;
+    fn free(pointer: *mut c_void);
 }
 
 #[link(name = "AppKit", kind = "framework")]
@@ -735,16 +738,16 @@ type Receive = unsafe extern "C" fn(Id, Sel, Id, Id);
 /// of `ipc://` must carry an `Origin` `from_app` admits (WebKit sets it; `null` for a
 /// sandboxed frame). Anything else is dropped (the message) or failed (the fetch).
 ///
-/// `delegate` is wry's script message handler class (`WryWebViewDelegate`), which WebKit
-/// hides; should it be missing, the `ipc` message handler is removed instead: the app keeps
-/// `ipc://`, losing only Tauri's fallback. Only the first `from_app` is kept; false when both
+/// `delegate` is part of the name of wry's script message handler class, which WebKit hides
+/// (objc2 names it `wry::…::WryWebViewDelegate<version>`); should it be missing, the `ipc`
+/// message handler is removed instead: the app keeps `ipc://`, losing only Tauri's fallback. Only the first `from_app` is kept; false when both
 /// ways in were not guarded.
 ///
 /// # Safety
 /// `webview` is a `WKWebView` or nil, used on the main thread.
 pub unsafe fn guard_ipc(
     webview: *mut c_void,
-    delegate: &CStr,
+    delegate: &str,
     from_app: impl Fn(&str) -> bool + Send + Sync + 'static,
 ) -> bool {
     let _ = FROM_APP.set(Box::new(from_app));
@@ -770,7 +773,7 @@ pub unsafe fn guard_ipc(
                 &START_TASK,
             );
         let messages = replace(
-            objc_getClass(delegate.as_ptr()),
+            class_named(delegate),
             c"userContentController:didReceiveScriptMessage:",
             script_message as *const c_void,
             &SCRIPT_MESSAGE,
@@ -785,6 +788,25 @@ pub unsafe fn guard_ipc(
         }
         objc_autoreleasePoolPop(pool);
         fetches && messages
+    }
+}
+
+/// The first class whose name holds `part`; null when none does.
+fn class_named(part: &str) -> Id {
+    let mut count = 0;
+    // SAFETY: the runtime's list of `count` classes, freed once read; each name a C string.
+    unsafe {
+        let list = objc_copyClassList(&mut count);
+        let classes = std::ptr::NonNull::new(list)
+            .map(|list| std::slice::from_raw_parts(list.as_ptr(), count as usize))
+            .unwrap_or_default();
+        let class = classes.iter().copied().find(|&class| {
+            CStr::from_ptr(class_getName(class))
+                .to_str()
+                .is_ok_and(|name| name.contains(part))
+        });
+        free(list.cast());
+        class.unwrap_or(null_mut())
     }
 }
 
@@ -2127,13 +2149,13 @@ mod tests {
             crate::ipc_from_app(text, true, None)
         };
         // No wry delegate class: its message handler is removed; the scheme is guarded.
-        assert!(!unsafe { guard_ipc(webview, c"HiveMissingDelegate", check) });
+        assert!(!unsafe { guard_ipc(webview, "HiveMissingDelegate", check) });
         assert_eq!(REMOVED.load(SeqCst), 1);
         // No `ipc` scheme handler: only the messages are guarded.
-        assert!(!unsafe { guard_ipc(bare, c"HiveIpcDelegate", |_: &str| true) });
+        assert!(!unsafe { guard_ipc(bare, "HiveIpcDelegate", |_: &str| true) });
         assert_eq!(REMOVED.load(SeqCst), 1);
         // Both: guarded (again, harmlessly), the first check kept.
-        assert!(unsafe { guard_ipc(webview, c"HiveIpcDelegate", |_: &str| true) });
+        assert!(unsafe { guard_ipc(webview, "HiveIpcDelegate", |_: &str| true) });
 
         // Messages: only the main frame at the app's URL is handed on.
         let send = message::<unsafe extern "C" fn(Id, Sel, Id, Id)>;

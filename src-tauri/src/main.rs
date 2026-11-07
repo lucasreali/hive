@@ -139,7 +139,7 @@ fn main() {
                     if !taken {
                         eprintln!("hive-app: files dropped from Finder cannot reach a terminal");
                     }
-                    let delegate = c"WryWebViewDelegate";
+                    let delegate = "WryWebViewDelegate";
                     // SAFETY: as above.
                     let guarded =
                         unsafe { hive_lib::macos::guard_ipc(webview.inner(), delegate, from_app) };
