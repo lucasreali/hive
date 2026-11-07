@@ -834,10 +834,9 @@ unsafe fn replace(class: Id, name: &CStr, imp: *const c_void, own: &OnceLock<usi
 /// # Safety
 /// `own` holds the very method being called, of signature [`Receive`].
 unsafe fn forward(own: &OnceLock<usize>, this: Id, name: Sel, first: Id, second: Id) {
-    if let Some(&own) = own.get() {
-        // SAFETY: the caller's promise.
-        unsafe { std::mem::transmute::<usize, Receive>(own)(this, name, first, second) }
-    }
+    let Some(&own) = own.get() else { return };
+    // SAFETY: the caller's promise.
+    unsafe { std::mem::transmute::<usize, Receive>(own)(this, name, first, second) }
 }
 
 /// The replaced `userContentController:didReceiveScriptMessage:`: wry's, for a message of the
@@ -2048,13 +2047,10 @@ mod tests {
     extern "C" fn this(object: Id, _: Sel) -> Id {
         object
     }
-    /// The handler for the scheme `ipc` only.
+    /// The handler of the scheme `ipc`, the only one asked for (a panic here aborts the test).
     extern "C" fn scheme_handler(_: Id, _: Sel, scheme: Id) -> Id {
-        if unsafe { from_utf8(scheme) }.as_deref() == Some("ipc") {
-            HANDLER.load(SeqCst) as Id
-        } else {
-            null_mut()
-        }
+        assert_eq!(unsafe { from_utf8(scheme) }.as_deref(), Some("ipc"));
+        HANDLER.load(SeqCst) as Id
     }
     extern "C" fn no_handler(_: Id, _: Sel, _: Id) -> Id {
         null_mut()
