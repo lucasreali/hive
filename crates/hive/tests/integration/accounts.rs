@@ -220,6 +220,17 @@ async fn the_spaces_claude_folders_become_accounts_once() {
         assert!(saved.contains("\"git_name\": \"Me\""), "{saved}");
         let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
         assert_eq!(saved["spaces"][1]["env"]["gh_account"]["config_dir"], gh);
+        // A gh folder a space's account is in cannot be removed, naming the space.
+        let mut removed = expected.clone();
+        removed.gh.config_dirs.clear();
+        let message = format!(
+            "The GitHub account of the space Work is in {gh}: choose another one for it first"
+        );
+        let set = Control::SetSettings { settings: removed };
+        assert_eq!(
+            request(&mut app, set).await,
+            Control::SettingsFailed { message }
+        );
         drop(app);
         assert!(daemon.wait_exit().success());
     }
