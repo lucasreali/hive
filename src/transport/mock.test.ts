@@ -557,15 +557,15 @@ test("agent states carry the service's urgency and pending flag", () => {
   ] as const;
   const doing = { activity: null, since_ms: 0, interrupted: false, alert: null, notify: false };
   expect([...calm, ...pending].map((s) => agentStatus(s))).toEqual([
-    { state: "ended", urgency: 0, pending: false, writing: false, ...doing },
-    { state: "idle", urgency: 1, pending: false, writing: false, ...doing },
-    { state: "working", urgency: 2, pending: false, writing: true, ...doing },
-    { state: "with_subagents", urgency: 3, pending: false, writing: true, ...doing },
-    { state: "waiting_you", urgency: 4, pending: true, writing: false, ...doing },
-    { state: "error", urgency: 5, pending: true, writing: false, ...doing },
-    { state: "waiting_answer", urgency: 6, pending: true, writing: true, ...doing },
-    { state: "waiting_plan", urgency: 7, pending: true, writing: true, ...doing },
-    { state: "waiting_permission", urgency: 8, pending: true, writing: true, ...doing },
+    { state: "ended", urgency: 0, pending: false, ...doing },
+    { state: "idle", urgency: 1, pending: false, ...doing },
+    { state: "working", urgency: 2, pending: false, ...doing },
+    { state: "with_subagents", urgency: 3, pending: false, ...doing },
+    { state: "waiting_you", urgency: 4, pending: true, ...doing },
+    { state: "error", urgency: 5, pending: true, ...doing },
+    { state: "waiting_answer", urgency: 6, pending: true, ...doing },
+    { state: "waiting_plan", urgency: 7, pending: true, ...doing },
+    { state: "waiting_permission", urgency: 8, pending: true, ...doing },
   ]);
   expect(agentStatus("working", "Run tests", 7)).toMatchObject({
     activity: "Run tests",

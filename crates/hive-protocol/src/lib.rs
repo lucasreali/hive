@@ -295,9 +295,6 @@ pub enum Control {
         /// Show an OS notification for this `alert` (hive.md item 5, 13.4): it has one and the
         /// agent's terminal is not the one in view of the focused window (see `View`).
         notify: bool,
-        /// `state` may be writing files ([`AgentState::writes`]): the file view's "Agent
-        /// working here" in the agent's worktree.
-        writing: bool,
         subagents: Vec<SubagentState>,
         /// What the agent itself is doing (its current tool call), cleared when its turn ends.
         activity: Option<String>,
@@ -2159,7 +2156,8 @@ impl AgentState {
         self > AgentState::WaitingYou
     }
 
-    /// May be writing files: working, with subagents, or on a dialog about to go on.
+    /// May be writing files: working, with subagents, or on a dialog about to go on. Quitting
+    /// asks first for these (#18).
     pub fn writes(self) -> bool {
         matches!(
             self,
@@ -2225,8 +2223,6 @@ pub struct SubagentState {
     pub activity: Option<String>,
     /// Wall clock (ms since the Unix epoch) when its `state` began.
     pub since_ms: u64,
-    /// Its `state` may be writing files ([`AgentState::writes`]), in its own `worktree`.
-    pub writing: bool,
 }
 
 #[cfg(test)]
@@ -2380,7 +2376,6 @@ mod tests {
             interrupted: false,
             alert: Some(Alert::Action),
             notify: true,
-            writing: true,
             subagents: vec![SubagentState {
                 id: "a".into(),
                 agent_type: None,
@@ -2388,16 +2383,21 @@ mod tests {
                 worktree: Some("/r/.claude/worktrees/w".into()),
                 activity: Some("Reading a.rs".into()),
                 since_ms: 7,
-                writing: true,
             }],
             activity: None,
             since_ms: 5,
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
+        // An older service's `writing` (24.11) is an unknown key now, and ignored.
+        let old: Control = serde_json::from_str(
+            r#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"writing":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7,"writing":true}],"activity":null,"since_ms":5}"#,
+        )
+        .unwrap();
+        assert_eq!(old, msg);
         let alerts = [Some(Alert::Finished), Some(Alert::Waiting), None];
         let alerts = serde_json::to_string(&alerts).unwrap();
         assert_eq!(alerts, r#"["finished","waiting",null]"#);

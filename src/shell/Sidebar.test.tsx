@@ -212,7 +212,6 @@ test("agents and their subagents show the state the service sent, named for scre
           agent_type: "Explore",
           state: "working",
           worktree: null,
-          writing: true,
           ...none,
         },
         {
@@ -220,7 +219,6 @@ test("agents and their subagents show the state the service sent, named for scre
           agent_type: null,
           state: "waiting_permission",
           worktree: null,
-          writing: true,
           ...none,
         },
       ],
@@ -317,7 +315,6 @@ test("rows show the time in the state and the activity, all ticking on one timer
             agent_type: "Explore",
             state: "working",
             worktree: null,
-            writing: true,
             activity: "Reading src/y.ts",
             since_ms: now - 5_000,
           },
@@ -326,7 +323,6 @@ test("rows show the time in the state and the activity, all ticking on one timer
             agent_type: "Plan",
             state: "idle",
             worktree: null,
-            writing: false,
             activity: null,
             since_ms: now - 65_000,
           },
@@ -404,7 +400,6 @@ test("a tick renders only the rows whose time text changed (19.15)", () => {
             agent_type: "Explore",
             state: "working",
             worktree: null,
-            writing: false,
             activity: null,
             since_ms: Date.now() - sub,
           },
@@ -604,7 +599,6 @@ test("a subagent's own worktree has no row; its path is the subagent line's tool
       worktree,
       activity: null,
       since_ms: 0,
-      writing: true,
     }) as const;
   // The worktrees the service says subagents own, where no agent or terminal of the human's is.
   const owned = (...worktrees: string[]) => apply({ type: "subagent_worktrees", worktrees });

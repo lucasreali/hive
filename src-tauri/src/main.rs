@@ -117,6 +117,8 @@ fn main() {
             let dev = tauri::is_dev()
                 .then(|| app.config().build.dev_url.clone())
                 .flatten();
+            #[cfg(target_os = "macos")]
+            let ipc_dev = dev.clone();
             let _window = tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
                 .on_navigation(move |url| hive_lib::app_url(url, macos, dev.as_ref()))
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
@@ -128,11 +130,21 @@ fn main() {
                 let drop = move |paths: Vec<String>, x, y| {
                     hive_lib::files_dropped(&handle, &paths, x, y);
                 };
+                // Only the app's top document reaches Tauri's IPC (24.14).
+                let from_app =
+                    move |text: &str| hive_lib::ipc_from_app(text, true, ipc_dev.as_ref());
                 _window.with_webview(move |webview| {
                     // SAFETY: the window's WKWebView, on the main thread (`with_webview`).
                     let taken = unsafe { hive_lib::macos::take_file_drops(webview.inner(), drop) };
                     if !taken {
                         eprintln!("hive-app: files dropped from Finder cannot reach a terminal");
+                    }
+                    let delegate = "WryWebViewDelegate";
+                    // SAFETY: as above.
+                    let guarded =
+                        unsafe { hive_lib::macos::guard_ipc(webview.inner(), delegate, from_app) };
+                    if !guarded {
+                        eprintln!("hive-app: Tauri's IPC is not guarded from framed pages");
                     }
                 })?;
             }

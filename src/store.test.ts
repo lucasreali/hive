@@ -1,13 +1,12 @@
 import { beforeEach, expect, test } from "bun:test";
 import { renderHook } from "@testing-library/react";
 import { notice, noticeKind } from "../test/notice";
-import type { AgentState, FileText, ServiceMessage, Subagent } from "./protocol";
+import type { AgentState, FileText, ServiceMessage } from "./protocol";
 import { apply } from "./reduce";
 import {
   accountLine,
   activateTab,
   addTab,
-  agentWorkingIn,
   DEFAULT_SETTINGS,
   dismissNotice,
   initialState,
@@ -281,7 +280,6 @@ test("agent states are stored as sent, before or after the agent, and go with it
     worktree: null,
     activity: null,
     since_ms: 0,
-    writing: true,
   } as const;
   const doing = { activity: null, since_ms: 0 } as const;
   const permission = {
@@ -291,7 +289,6 @@ test("agent states are stored as sent, before or after the agent, and go with it
     interrupted: false,
     alert: "action",
     notify: true,
-    writing: true,
     ...doing,
   } as const;
   const idle = {
@@ -301,7 +298,6 @@ test("agent states are stored as sent, before or after the agent, and go with it
     interrupted: false,
     alert: null,
     notify: false,
-    writing: false,
     ...doing,
   } as const;
   apply({
@@ -313,7 +309,6 @@ test("agent states are stored as sent, before or after the agent, and go with it
     interrupted: false,
     alert: null,
     notify: false,
-    writing: true,
     subagents: [],
     activity: null,
     since_ms: 0,
@@ -692,51 +687,6 @@ test("Edit starts the buffer from the last answer; Diff drops it", () => {
   expect(useHive.getState().edit?.doc.toString()).toBe("one\n");
   setEditorNotice("why");
   expect(useHive.getState().editorNotice).toBe("why");
-});
-
-test("an agent is working in a worktree while it (or its subagent there) may write", () => {
-  const worktree = "/w";
-  const place = (id: string, at: string | null) =>
-    apply({ type: "agent_detected", channel: 1, id, project: "/p", worktree: at, cwd: at });
-  const none = { activity: null, since_ms: 0 };
-  // The service says whether each may be writing; the state does not matter here.
-  const state = (id: string, writing: boolean, subagents: Subagent[] = []) =>
-    apply({
-      type: "agent_state",
-      id,
-      state: "idle",
-      urgency: 0,
-      pending: false,
-      interrupted: false,
-      alert: null,
-      notify: false,
-      writing,
-      subagents,
-      ...none,
-    });
-  const sub = (at: string, writing: boolean): Subagent => ({
-    id: "s",
-    agent_type: null,
-    state: "idle",
-    worktree: at,
-    writing,
-    ...none,
-  });
-  const working = () => agentWorkingIn(useHive.getState(), worktree);
-  place("a", worktree);
-  expect(working()).toBe(false); // No state yet.
-  state("a", false);
-  expect(working()).toBe(false);
-  state("a", true);
-  expect(working()).toBe(true);
-  state("a", false);
-  place("b", "/elsewhere");
-  state("b", true, [sub("/other", true)]);
-  expect(working()).toBe(false);
-  state("b", true, [sub(worktree, false)]);
-  expect(working()).toBe(false);
-  state("b", false, [sub(worktree, true)]);
-  expect(working()).toBe(true);
 });
 
 test("a pane is outlined for its agent pending on a dialog or an error, by the service's fields (17.26)", () => {

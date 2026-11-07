@@ -81,7 +81,6 @@ const sub = (
   worktree,
   activity,
   since_ms: Date.now() - 42_000,
-  writing: WRITES.includes(state),
 });
 /** A stand-in for `AgentState::urgency`/`pending`, least urgent first; the real rule lives in Rust. */
 const URGENCY: AgentState[] = [
@@ -95,14 +94,6 @@ const URGENCY: AgentState[] = [
   "waiting_plan",
   "waiting_permission",
 ];
-/** A stand-in for `AgentState::writes`. */
-const WRITES: AgentState[] = [
-  "working",
-  "with_subagents",
-  "waiting_permission",
-  "waiting_plan",
-  "waiting_answer",
-];
 export const agentStatus = (
   state: AgentState,
   activity: string | null = null,
@@ -111,7 +102,6 @@ export const agentStatus = (
 ) => {
   const urgency = URGENCY.indexOf(state);
   const pending = urgency >= URGENCY.indexOf("waiting_you");
-  const writing = WRITES.includes(state);
   // Mock agents have no view: every alert notifies.
   const notify = alert !== null;
   return {
@@ -121,7 +111,6 @@ export const agentStatus = (
     interrupted: false,
     alert,
     notify,
-    writing,
     activity,
     since_ms,
   };

@@ -161,7 +161,6 @@ test("states: a seen and an unseen agent waiting for you side by side, dark and 
       interrupted: false,
       alert: null,
       notify: false,
-      writing: false,
       subagents: [],
       activity: null,
       since_ms: Date.now() - 60_000,

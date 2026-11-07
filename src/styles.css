@@ -1339,13 +1339,6 @@ label:has(> input[type="checkbox"]:disabled) {
   display: block;
 }
 
-.tab-badge.working {
-  flex: none;
-  white-space: nowrap;
-  border-color: var(--state-working);
-  color: var(--state-working);
-}
-
 .file-view > .files-error,
 .file-view-body > .files-error {
   padding: 4px 12px;

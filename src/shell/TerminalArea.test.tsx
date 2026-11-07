@@ -175,9 +175,10 @@ test("tabs switch and show exit and missing hooks", () => {
   act(() => apply({ type: "unhooked_agent", channel: 1 }));
   act(() => apply({ type: "terminal_exited", channel: 2, code: 3 }));
   act(() => apply({ type: "terminal_exited", channel: 3, code: null }));
-  expect(screen.getByText("no hooks").getAttribute("title")).toBe(
-    "Claude runs in this terminal without Hive's hooks: its state is not observed",
-  );
+  // An unhooked terminal's tab shows no badge (24.11); Settings' About still counts it.
+  expect(useHive.getState().terminals[1]?.unhooked).toBe(true);
+  expect(tabs()[0].textContent).toBe("main");
+  expect(screen.queryByText("no hooks")).toBeNull();
   expect(tabs()[1].textContent).toBe("mainexited");
   expect(screen.getAllByText("exited").map((b) => b.getAttribute("title"))).toEqual([
     "Exit code: 3",
@@ -240,7 +241,6 @@ test("a tab running Claude shows the agent's state and its session's name", () =
       interrupted: false,
       alert: null,
       notify: false,
-      writing: true,
       subagents: [],
       activity: null,
       since_ms: 0,
