@@ -40,7 +40,7 @@ Hive is a desktop companion for Claude Code agents: a Tauri app (macOS, the main
 
 **Mutation testing (TODO 7.1):** CI tests every mutant of the branch's diff in shards (`.github/workflows/mutants.yml`: about one shard per 25 mutants, 1–20, so a large change takes about as long as a small one); the nightly `mutants-full.yml` tests every mutant of `main` and opens an issue for the survivors. The macOS and Windows files (`macos.yml`, `windows.yml`) also test only the mutants of their diff on a branch; their full run is nightly too. Both use `.cargo/mutants.toml` (nextest, `[profile.mutants]`), so a local run needs `cargo-nextest`.
 
-**CI runs only what the change needs (human decision 2026-10-20):** a branch whose diff is only docs (Markdown, `docs/` except `docs/architecture.md`, `.claude/skills|agents/`) runs no gate job, and a platform's mutants run only when the branch changed that platform's files. A simple task (docs, `TODO.md`, a small fix in one area) needs no branch and no CI wait: it goes straight to `main` with the local fast gates (D4), and CI runs when the human pushes `main`.
+**CI runs only what the change needs (human decision 2026-10-20):** a branch whose diff is only docs (Markdown, `docs/` except `docs/architecture.md`, `.claude/skills|agents/`) runs no gate job, and a platform's mutants run only when the branch changed that platform's files. A simple task (docs, `TODO.md`, a small fix in one area) needs no branch and no CI wait: it goes straight to `main` with the local fast gates (D4) — plus `MUTANTS=0 scripts/gates.sh` when it touches `*.rs` and `scripts/test-scripts.sh` when it touches `scripts/`, since a red `main` turns every branch red — and CI runs when the human pushes `main`.
 
 Rust:
 

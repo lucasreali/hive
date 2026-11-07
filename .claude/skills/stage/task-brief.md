@@ -30,7 +30,7 @@ CI is the authority: a task merges only when CI is green on its branch tip. The 
 
 ## Finishing (CLAUDE.md rule 4: you own your work, conflicts included)
 1. Tick the task in `TODO.md` (branch name + a short italic note, same style as earlier entries; each default you took also gets a `pending` row in its "Defaults ledger") and commit (small Conventional Commits throughout).
-2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, run the fast checks, then push and wait for green CI (Gates, above).
+2. `git merge main` in your worktree, resolve every conflict keeping the other agents' work intact, `cargo fmt --all` (the format hook does not run on a merge), then, before the push, the gates CI fails on most: `BASE=main scripts/gates.sh` when the diff has Rust (100% coverage and the diff's mutants), `scripts/test-scripts.sh` when it changed `scripts/`, and `E2E_PORT=<port> bun run e2e` on the specs of the files and components you touched. Then push and wait for green CI (Gates, above).
 3. Leave the worktree clean on your branch and report. You cannot run git in the main checkout; the orchestrator fast-forwards `main` to your branch, or merges it into a `main` that moved meanwhile and runs the fast gates on the result. Only a conflict or a red gate in that merge sends you back to step 2.
 
 ## Stop instead of guessing
