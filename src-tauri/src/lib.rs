@@ -289,6 +289,13 @@ pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool 
     bundled || dev.is_some_and(|dev| dev.origin() == url.origin())
 }
 
+/// Whether an IPC call from `text`, its caller's URL or `Origin`, comes from the app (24.14):
+/// an allow-list of [`app_url`]'s origins, so a framed page (`null`, `hive-file:`, a dev
+/// server) never reaches Tauri.
+pub fn ipc_from_app(text: &str, macos: bool, dev: Option<&tauri::Url>) -> bool {
+    tauri::Url::parse(text).is_ok_and(|url| app_url(&url, macos, dev))
+}
+
 /// Whether the app at `exe` runs translocated (17.10): macOS runs a quarantined app opened
 /// where it was downloaded from a random read-only copy under `…/AppTranslocation/…`, where
 /// the updater cannot replace it. A path check is enough: that folder exists only for this.

@@ -163,6 +163,29 @@ fn the_webview_navigates_only_within_the_app() {
     }
 }
 
+#[test]
+fn only_the_apps_own_origin_reaches_the_ipc() {
+    // A frame's URL (`postMessage`) or an `Origin` header (`fetch` of `ipc://`).
+    for text in ["tauri://localhost", "tauri://localhost/index.html#x"] {
+        assert!(ipc_from_app(text, true, None), "{text}");
+    }
+    let dev = tauri::Url::parse("http://localhost:1420").unwrap();
+    assert!(ipc_from_app("http://localhost:1420", true, Some(&dev)));
+    // A sandboxed frame's `null`, the files' scheme, a dev server, another platform's origin.
+    for text in [
+        "null",
+        "",
+        "hive-file://localhost",
+        "hive-file://localhost/token/page.html",
+        "http://hive-file.localhost",
+        "http://localhost:5173",
+        "http://tauri.localhost",
+        "about:srcdoc",
+    ] {
+        assert!(!ipc_from_app(text, true, Some(&dev)), "{text}");
+    }
+}
+
 #[tokio::test]
 async fn only_a_path_the_service_sent_opens_and_only_once() {
     let (hive, mut service, mut rx) = welcomed().await;

@@ -717,6 +717,219 @@ unsafe fn take_drop(view: Id, info: Id) -> bool {
     true
 }
 
+/// Whether an IPC call comes from the app, given its caller's URL or origin ([`guard_ipc`]).
+type FromApp = Box<dyn Fn(&str) -> bool + Send + Sync>;
+static FROM_APP: OnceLock<FromApp> = OnceLock::new();
+/// wry's `userContentController:didReceiveScriptMessage:` and the `ipc` scheme handler's
+/// `webView:startURLSchemeTask:` before [`guard_ipc`] replaced them.
+static SCRIPT_MESSAGE: OnceLock<usize> = OnceLock::new();
+static START_TASK: OnceLock<usize> = OnceLock::new();
+/// Both messages' signature: nothing from self, _cmd and two objects.
+type Receive = unsafe extern "C" fn(Id, Sel, Id, Id);
+
+/// Lets only the app's top document reach Tauri's IPC (24.14). WebKit gives every frame the
+/// `ipc` message handler, a sandboxed one too, and Tauri counts a registered scheme
+/// (`hive-file`) as the app: its invoke key would be the only barrier, and a wrong one is
+/// written to the log with the right one. So both ways in are checked before Tauri sees a
+/// call: a `postMessage` must come from the main frame whose URL `from_app` admits, a `fetch`
+/// of `ipc://` must carry an `Origin` `from_app` admits (WebKit sets it; `null` for a
+/// sandboxed frame). Anything else is dropped (the message) or failed (the fetch).
+///
+/// `delegate` is wry's script message handler class (`WryWebViewDelegate`), which WebKit
+/// hides; should it be missing, the `ipc` message handler is removed instead: the app keeps
+/// `ipc://`, losing only Tauri's fallback. Only the first `from_app` is kept; false when both
+/// ways in were not guarded.
+///
+/// # Safety
+/// `webview` is a `WKWebView` or nil, used on the main thread.
+pub unsafe fn guard_ipc(
+    webview: *mut c_void,
+    delegate: &CStr,
+    from_app: impl Fn(&str) -> bool + Send + Sync + 'static,
+) -> bool {
+    let _ = FROM_APP.set(Box::new(from_app));
+    // SAFETY: `WKWebView`'s, `WKWebViewConfiguration`'s and `WKUserContentController`'s
+    // messages, with their signatures, in a pool of their own; the replacements keep each
+    // method's own type encoding (`replace`).
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let with = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+        let configuration = object(webview, selector(c"configuration"));
+        let ipc = ns_string(c"ipc");
+        let handler = with(
+            configuration,
+            selector(c"urlSchemeHandlerForURLScheme:"),
+            ipc,
+        );
+        let fetches = !handler.is_null()
+            && replace(
+                object_getClass(handler),
+                c"webView:startURLSchemeTask:",
+                start_task as *const c_void,
+                &START_TASK,
+            );
+        let messages = replace(
+            objc_getClass(delegate.as_ptr()),
+            c"userContentController:didReceiveScriptMessage:",
+            script_message as *const c_void,
+            &SCRIPT_MESSAGE,
+        );
+        if !messages {
+            let controller = object(configuration, selector(c"userContentController"));
+            with(
+                controller,
+                selector(c"removeScriptMessageHandlerForName:"),
+                ipc,
+            );
+        }
+        objc_autoreleasePoolPop(pool);
+        fetches && messages
+    }
+}
+
+/// Replaces `class`'s method `name` with `imp`, keeping the first one replaced in `own`; false
+/// when the class (Nil) or its method is missing.
+///
+/// # Safety
+/// `class` is a class or null; `imp` has the method's signature.
+unsafe fn replace(class: Id, name: &CStr, imp: *const c_void, own: &OnceLock<usize>) -> bool {
+    let name = selector(name);
+    // SAFETY: the runtime's own class, method and type encoding; Nil has no method.
+    unsafe {
+        let method = class_getInstanceMethod(class, name);
+        if method.is_null() {
+            return false;
+        }
+        let _ = own.set(class_getMethodImplementation(class, name) as usize);
+        class_replaceMethod(class, name, imp, method_getTypeEncoding(method));
+    }
+    true
+}
+
+/// Calls the method `own` kept by [`replace`].
+///
+/// # Safety
+/// `own` holds the very method being called, of signature [`Receive`].
+unsafe fn forward(own: &OnceLock<usize>, this: Id, name: Sel, first: Id, second: Id) {
+    if let Some(&own) = own.get() {
+        // SAFETY: the caller's promise.
+        unsafe { std::mem::transmute::<usize, Receive>(own)(this, name, first, second) }
+    }
+}
+
+/// The replaced `userContentController:didReceiveScriptMessage:`: wry's, for a message of the
+/// app's top document only. Nothing unwinds into WebKit: a panic drops the message.
+unsafe extern "C" fn script_message(this: Id, name: Sel, controller: Id, script: Id) {
+    // SAFETY: WebKit calls this with a `WKScriptMessage`.
+    let admitted = catch_unwind(AssertUnwindSafe(|| unsafe { from_top(script) }));
+    if admitted.unwrap_or(false) {
+        // SAFETY: the method `guard_ipc` replaced, with its own arguments.
+        unsafe { forward(&SCRIPT_MESSAGE, this, name, controller, script) };
+    }
+}
+
+/// Whether `script` (a `WKScriptMessage`) comes from the main frame, at a URL of the app.
+///
+/// # Safety
+/// `script` is a `WKScriptMessage` or nil.
+unsafe fn from_top(script: Id) -> bool {
+    // SAFETY: `WKFrameInfo`'s, `NSURLRequest`'s and `NSURL`'s messages, nil answering nil and
+    // NO; in a pool of their own.
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let frame = object(script, selector(c"frameInfo"));
+        let main = message::<unsafe extern "C" fn(Id, Sel) -> Bool>();
+        let admitted = main(frame, selector(c"isMainFrame")) != NO && {
+            let url = object(object(frame, selector(c"request")), selector(c"URL"));
+            from_app(object(url, selector(c"absoluteString")))
+        };
+        objc_autoreleasePoolPop(pool);
+        admitted
+    }
+}
+
+/// The replaced `webView:startURLSchemeTask:` of the `ipc` scheme: Tauri's, for a request
+/// whose `Origin` is the app's; any other fails. A panic fails it too.
+unsafe extern "C" fn start_task(this: Id, name: Sel, webview: Id, task: Id) {
+    // SAFETY: WebKit calls this with a `WKURLSchemeTask`.
+    let admitted = catch_unwind(AssertUnwindSafe(|| unsafe { from_app_origin(task) }));
+    if admitted.unwrap_or(false) {
+        // SAFETY: the method `guard_ipc` replaced, with its own arguments.
+        unsafe { forward(&START_TASK, this, name, webview, task) };
+        return;
+    }
+    // SAFETY: `+[NSError errorWithDomain:code:userInfo:]` and the task's
+    // `didFailWithError:`, which ends it; in a pool of their own.
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let error = message::<unsafe extern "C" fn(Id, Sel, Id, isize, Id) -> Id>();
+        let error = error(
+            objc_getClass(c"NSError".as_ptr()),
+            selector(c"errorWithDomain:code:userInfo:"),
+            ns_string(c"Hive"),
+            403,
+            null_mut(),
+        );
+        message::<unsafe extern "C" fn(Id, Sel, Id)>()(task, selector(c"didFailWithError:"), error);
+        objc_autoreleasePoolPop(pool);
+    }
+}
+
+/// Whether `task`'s request (a `WKURLSchemeTask`'s) has an `Origin` of the app.
+///
+/// # Safety
+/// `task` is a `WKURLSchemeTask` or nil.
+unsafe fn from_app_origin(task: Id) -> bool {
+    // SAFETY: `WKURLSchemeTask`'s and `NSURLRequest`'s messages, nil answering nil; in a pool
+    // of their own.
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let request = message::<unsafe extern "C" fn(Id, Sel) -> Id>()(task, selector(c"request"));
+        let header = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>()(
+            request,
+            selector(c"valueForHTTPHeaderField:"),
+            ns_string(c"Origin"),
+        );
+        let admitted = from_app(header);
+        objc_autoreleasePoolPop(pool);
+        admitted
+    }
+}
+
+/// Whether the string `text` (an `NSString` or nil) is what [`guard_ipc`]'s check admits.
+///
+/// # Safety
+/// `text` is an `NSString` or nil.
+unsafe fn from_app(text: Id) -> bool {
+    // SAFETY: `UTF8String`, nil answering null.
+    let utf8 = unsafe { message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>() }(
+        text,
+        selector(c"UTF8String"),
+    );
+    // SAFETY: a NUL-terminated string the object keeps while it lives.
+    let text = (!utf8.is_null()).then(|| unsafe { CStr::from_ptr(utf8) }.to_string_lossy());
+    text.zip(FROM_APP.get())
+        .is_some_and(|(text, check)| check(&text))
+}
+
+/// An autoreleased `NSString` of `text`.
+///
+/// # Safety
+/// Inside an autorelease pool.
+unsafe fn ns_string(text: &CStr) -> Id {
+    // SAFETY: `+[NSString stringWithUTF8String:]` with a C string.
+    unsafe {
+        let make = message::<unsafe extern "C" fn(Id, Sel, *const c_char) -> Id>();
+        make(
+            objc_getClass(c"NSString".as_ptr()),
+            selector(c"stringWithUTF8String:"),
+            text.as_ptr(),
+        )
+    }
+}
+
 /// The file paths on `pasteboard` (`NSFilenamesPboardType`): of the first [`DROP_LIMIT`]
 /// strings, those of at most [`PATH_LIMIT`] bytes that may be typed (`quote::usable`:
 /// absolute, no control character); none when it has none or its serialized list is over
@@ -1791,5 +2004,171 @@ mod tests {
             );
         }
         assert_eq!(DONE.load(SeqCst), 2);
+    }
+
+    /// What the IPC stand-ins saw: messages and tasks handed on, handlers removed, the code of
+    /// the last failed task, whether the message is from the main frame, the request they hold.
+    static MESSAGES: AtomicUsize = AtomicUsize::new(0);
+    static TASKS: AtomicUsize = AtomicUsize::new(0);
+    static REMOVED: AtomicUsize = AtomicUsize::new(0);
+    static FAILED: AtomicIsize = AtomicIsize::new(0);
+    static MAIN_FRAME: AtomicU8 = AtomicU8::new(0);
+    static REQUEST: AtomicUsize = AtomicUsize::new(0);
+    /// The stand-in webview's `ipc` scheme handler.
+    static HANDLER: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn received(_: Id, _: Sel, _: Id, _: Id) {
+        MESSAGES.fetch_add(1, SeqCst);
+    }
+    extern "C" fn started(_: Id, _: Sel, _: Id, _: Id) {
+        TASKS.fetch_add(1, SeqCst);
+    }
+    extern "C" fn this(object: Id, _: Sel) -> Id {
+        object
+    }
+    /// The handler for the scheme `ipc` only.
+    extern "C" fn scheme_handler(_: Id, _: Sel, scheme: Id) -> Id {
+        if unsafe { from_utf8(scheme) }.as_deref() == Some("ipc") {
+            HANDLER.load(SeqCst) as Id
+        } else {
+            null_mut()
+        }
+    }
+    extern "C" fn no_handler(_: Id, _: Sel, _: Id) -> Id {
+        null_mut()
+    }
+    extern "C" fn remove(_: Id, _: Sel, name: Id) {
+        if unsafe { from_utf8(name) }.as_deref() == Some("ipc") {
+            REMOVED.fetch_add(1, SeqCst);
+        }
+    }
+    extern "C" fn main_frame(_: Id, _: Sel) -> Bool {
+        MAIN_FRAME.load(SeqCst) as Bool
+    }
+    extern "C" fn request_of(_: Id, _: Sel) -> Id {
+        REQUEST.load(SeqCst) as Id
+    }
+    extern "C" fn failed(_: Id, _: Sel, error: Id) {
+        // SAFETY: `-[NSError code]`.
+        let code = unsafe { message::<unsafe extern "C" fn(Id, Sel) -> isize>() };
+        FAILED.store(unsafe { code(error, selector(c"code")) }, SeqCst);
+    }
+
+    /// `text`'s characters; none for nil.
+    unsafe fn from_utf8(text: Id) -> Option<String> {
+        unsafe {
+            let utf8 = message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>();
+            let utf8 = utf8(text, selector(c"UTF8String"));
+            (!utf8.is_null()).then(|| CStr::from_ptr(utf8).to_string_lossy().into_owned())
+        }
+    }
+
+    /// Makes the stand-ins' request one for `url`, with the `Origin` header `origin` if any.
+    fn set_request(url: &str, origin: Option<&str>) {
+        // SAFETY: `NSURL`'s and `NSMutableURLRequest`'s messages; never released (a test's).
+        unsafe {
+            let make = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+            let class = objc_getClass(c"NSURL".as_ptr());
+            let url = make(class, selector(c"URLWithString:"), string(url));
+            assert!(!url.is_null());
+            let class = objc_getClass(c"NSMutableURLRequest".as_ptr());
+            let request = make(class, selector(c"requestWithURL:"), url);
+            if let Some(origin) = origin {
+                let set = message::<unsafe extern "C" fn(Id, Sel, Id, Id)>();
+                let name = selector(c"setValue:forHTTPHeaderField:");
+                set(request, name, string(origin), string("Origin"));
+            }
+            REQUEST.store(request as usize, SeqCst);
+        }
+    }
+
+    #[test]
+    fn only_the_apps_top_document_reaches_the_ipc() {
+        let webview_methods = |handler: *const c_void| {
+            [
+                (c"configuration", this as *const c_void, c"@@:"),
+                (c"userContentController", this as *const c_void, c"@@:"),
+                (c"urlSchemeHandlerForURLScheme:", handler, c"@@:@"),
+                (
+                    c"removeScriptMessageHandlerForName:",
+                    remove as *const c_void,
+                    c"v@:@",
+                ),
+            ]
+        };
+        let webview = webview_methods(scheme_handler as *const c_void);
+        let webview = instance(c"HiveIpcWebView", &webview);
+        let bare = webview_methods(no_handler as *const c_void);
+        let bare = instance(c"HiveIpcBareWebView", &bare);
+        let start_task = c"webView:startURLSchemeTask:";
+        let handler = [(start_task, started as *const c_void, c"v@:@@")];
+        let handler = instance(c"HiveIpcSchemeHandler", &handler);
+        HANDLER.store(handler as usize, SeqCst);
+        let receive = c"userContentController:didReceiveScriptMessage:";
+        let delegate = [(receive, received as *const c_void, c"v@:@@")];
+        let delegate = instance(c"HiveIpcDelegate", &delegate);
+        let script = instance(
+            c"HiveIpcScriptMessage",
+            &[
+                (c"frameInfo", this as *const c_void, c"@@:"),
+                (c"isMainFrame", main_frame as *const c_void, c"c@:"),
+                (c"request", request_of as *const c_void, c"@@:"),
+            ],
+        );
+        let task = instance(
+            c"HiveIpcTask",
+            &[
+                (c"request", request_of as *const c_void, c"@@:"),
+                (c"didFailWithError:", failed as *const c_void, c"v@:@"),
+            ],
+        );
+        let check = |text: &str| {
+            assert_ne!(text, "tauri://panic", "a broken check");
+            crate::ipc_from_app(text, true, None)
+        };
+        // No wry delegate class: its message handler is removed; the scheme is guarded.
+        assert!(!unsafe { guard_ipc(webview, c"HiveMissingDelegate", check) });
+        assert_eq!(REMOVED.load(SeqCst), 1);
+        // No `ipc` scheme handler: only the messages are guarded.
+        assert!(!unsafe { guard_ipc(bare, c"HiveIpcDelegate", |_: &str| true) });
+        assert_eq!(REMOVED.load(SeqCst), 1);
+        // Both: guarded (again, harmlessly), the first check kept.
+        assert!(unsafe { guard_ipc(webview, c"HiveIpcDelegate", |_: &str| true) });
+
+        // Messages: only the main frame at the app's URL is handed on.
+        let send = message::<unsafe extern "C" fn(Id, Sel, Id, Id)>;
+        let messages = [
+            (1, "tauri://localhost/index.html", 1),
+            (0, "tauri://localhost/index.html", 0),
+            (1, "hive-file://localhost/token/page.html", 0),
+            (1, "tauri://panic", 0),
+        ];
+        for (main, url, handed) in messages {
+            MAIN_FRAME.store(main, SeqCst);
+            set_request(url, None);
+            let before = MESSAGES.load(SeqCst);
+            // SAFETY: the replaced method, with a stand-in script message.
+            unsafe { send()(delegate, selector(receive), null_mut(), script) };
+            assert_eq!(MESSAGES.load(SeqCst) - before, handed, "{main} {url}");
+        }
+
+        // Fetches of `ipc://`: only with the app's `Origin`; any other fails.
+        let fetches = [
+            (Some("tauri://localhost"), 1),
+            (Some("null"), 0),
+            (Some("hive-file://localhost"), 0),
+            (Some("tauri://panic"), 0),
+            (None, 0),
+        ];
+        for (origin, handed) in fetches {
+            set_request("ipc://localhost/plugin%3Aopener%7Copen_url", origin);
+            FAILED.store(0, SeqCst);
+            let before = TASKS.load(SeqCst);
+            // SAFETY: the replaced method, with a stand-in task.
+            unsafe { send()(handler, selector(start_task), null_mut(), task) };
+            assert_eq!(TASKS.load(SeqCst) - before, handed, "{origin:?}");
+            let code = if handed == 1 { 0 } else { 403 };
+            assert_eq!(FAILED.load(SeqCst), code, "{origin:?}");
+        }
     }
 }
