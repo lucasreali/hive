@@ -243,14 +243,6 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
         </span>
       )}
       {state?.progress && <ProgressHint {...state.progress} />}
-      {state?.unhooked && (
-        <span
-          className="tab-badge warn"
-          title="Claude runs in this terminal without Hive's hooks: its state is not observed"
-        >
-          no hooks
-        </span>
-      )}
       {state?.exited && (
         <span className="tab-badge" title={`Exit code: ${state.code ?? "none (killed)"}`}>
           exited
