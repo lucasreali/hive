@@ -899,6 +899,21 @@ test("files of a followed worktree as their status says, or why not", async () =
     mime: "application/pdf",
     url: expect.stringMatching(/^data:application\/pdf;base64,JVBERi0x/),
   });
+  // An HTML page keeps its text and has its media, at its scheme URL.
+  messages.length = 0;
+  await transport.openFile(refactor, "site/a b.html", "head");
+  await tick();
+  const [page] = messages;
+  expect(page?.type === "file" && [page.binary, !!page.content, page.media]).toEqual([
+    false,
+    true,
+    {
+      mime: "text/html; charset=utf-8",
+      token: "mock",
+      version: "1-0",
+      url: "http://hive-file.localhost/mock/site/a%20b.html?v=1-0",
+    },
+  ]);
 });
 
 test("a table file's rows, split on its delimiter, or why not", async () => {

@@ -423,6 +423,26 @@ test("the open file's text shows as a diff when changed, else as is, or why not"
   act(() => apply({ type: "file", ...text("src/legacy/jwt.ts", { media: pdf }) }));
   expect(body().querySelector("iframe.media-view")?.getAttribute("src")).toBe(url);
   expect(editor()).toBeNull();
+
+  // An HTML page (24.4) shows as its text, its Preview a sandboxed frame, and back.
+  const eye = () => screen.queryByRole("button", { name: "Preview the page" });
+  act(() => apply({ type: "file", ...text("src/legacy/jwt.ts") }));
+  expect(eye()).toBeNull();
+  const page = { ...media, mime: "text/html; charset=utf-8" };
+  act(() => apply({ type: "file", ...text("src/legacy/jwt.ts", { media: page }) }));
+  expect(body().querySelector(".media-view")).toBeNull();
+  expect(editor()).not.toBeNull();
+  act(() => eye()?.click());
+  expect(eye()?.getAttribute("aria-pressed")).toBe("true");
+  const frame = body().querySelector("iframe.media-view");
+  expect([frame?.getAttribute("src"), frame?.getAttribute("sandbox")]).toEqual([
+    url,
+    "allow-scripts",
+  ]);
+  expect(editor()).toBeNull();
+  act(() => eye()?.click());
+  expect(body().querySelector(".media-view")).toBeNull();
+  expect(editor()).not.toBeNull();
 });
 
 test("the Files tree opens a changed file as editable text, the Diff tab as its diff", () => {

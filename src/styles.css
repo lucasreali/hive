@@ -1206,6 +1206,13 @@ div.media-view {
   object-fit: contain;
 }
 
+/* A web page's frame (24.4: an HTML file's Preview, a dev server): white under the page, as a
+   browser draws one without a background of its own. */
+.page-frame {
+  border: 0;
+  background: #fff;
+}
+
 /* A table file (23.6, src/viewer/TableView.tsx): its sheets' tabs, then a grid that scrolls
    both ways with the header row kept in view, and the note on the rows not shown. Rows are
    one line of a fixed height (the virtualizer's `ROW`); a long cell is cut, its title whole. */
@@ -4488,6 +4495,31 @@ button.link:hover {
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-meta);
   color: var(--text-3);
+}
+
+.scripts-preview-toggle {
+  margin-left: auto;
+}
+
+/* The dev server's Preview (24.4): its port and reload, then the page filling the tab. */
+.scripts-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.scripts-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.scripts-preview .page-frame {
+  flex: 1;
+  min-height: 0;
 }
 
 .scripts-code {
