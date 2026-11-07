@@ -181,6 +181,7 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
 
     // Two asks at once: one browser, started once (the browser answers only once both asked).
     let (go, wait) = tokio::sync::oneshot::channel::<()>();
+    let (stopped, unwatched) = tokio::sync::oneshot::channel::<()>();
     let cast = tokio::spawn({
         let listener = listener.clone();
         async move {
@@ -204,6 +205,7 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
             // The panel no longer shows it: its screencast stops.
             assert_eq!(read(&mut ws).await["method"], "Page.stopScreencast");
             assert_eq!(read(&mut ws).await["method"], "Target.detachFromTarget");
+            stopped.send(()).unwrap();
             // Until the browser is stopped.
             closed(&mut ws).await;
         }
@@ -257,6 +259,10 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     assert_eq!(browser(&mut app).await, frame);
     app.send(0, Control::BrowserDrawn).await;
     app.send(0, watch(None)).await;
+    tokio::time::timeout(TIMEOUT, unwatched)
+        .await
+        .unwrap()
+        .unwrap();
     app.send(0, watch(Some(&root))).await;
     assert_eq!(browser(&mut app).await, shown);
 
