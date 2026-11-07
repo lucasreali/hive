@@ -498,8 +498,6 @@ export type Subagent = {
   agent_type: string | null;
   state: AgentState;
   worktree: string | null;
-  /** Its state may be writing files, in its own worktree. */
-  writing: boolean;
 } & Doing;
 
 /** What an agent or subagent is doing (its current tool call) and since when (ms since the epoch) its state lasts. */
@@ -513,7 +511,7 @@ export type Alert = "finished" | "waiting" | "action";
 
 /**
  * What `agent_state` says about an agent, stored by its session id. `urgency` (higher wins),
- * `pending` (needs the user), `alert` and `writing` are the service's, so the app keeps no
+ * `pending` (needs the user) and `alert` are the service's, so the app keeps no
  * table of its own.
  */
 export type AgentStatus = {
@@ -526,8 +524,6 @@ export type AgentStatus = {
   alert: Alert | null;
   /** Show an OS notification for `alert`: the service's call (out of the focused window's view). */
   notify: boolean;
-  /** Its state may be writing files, in its worktree: "Agent working here". */
-  writing: boolean;
   subagents: Subagent[];
 } & Doing;
 

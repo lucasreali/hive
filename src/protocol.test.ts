@@ -62,7 +62,6 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     interrupted: true,
     alert: true,
     notify: true,
-    writing: true,
     subagents: true,
     activity: true,
     since_ms: true,

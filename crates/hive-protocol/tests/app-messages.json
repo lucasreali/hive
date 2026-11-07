@@ -58,7 +58,6 @@
     "interrupted": false,
     "alert": null,
     "notify": false,
-    "writing": true,
     "subagents": [
       {
         "id": "a",
@@ -66,8 +65,7 @@
         "state": "working",
         "worktree": null,
         "activity": null,
-        "since_ms": 1,
-        "writing": false
+        "since_ms": 1
       }
     ],
     "activity": "Reading a.rs",

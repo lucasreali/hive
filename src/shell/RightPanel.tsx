@@ -34,7 +34,6 @@ import type {
   Worktree,
 } from "../protocol";
 import {
-  agentWorkingIn,
   diffBase,
   type FileTarget,
   isMarkdown,
@@ -1032,7 +1031,7 @@ export function closeFile(f: OpenFile): void {
  * else its text (CodeMirror, `src/viewer/`), shown in the open file's tab of the terminal area
  * (whose × closes it). While `editing` it is editable text (the diff stays read-only, #31):
  * a changed file switches with Edit / Diff, the header has Save
- * (Ctrl+S in the editor; its tab marks unsaved edits), "Agent working here" warns that an agent may write it meanwhile, and
+ * (Ctrl+S in the editor; its tab marks unsaved edits), and
  * "Open in external editor" hands it to Windows.
  */
 export function FileView({ worktree }: { worktree: string }) {
@@ -1048,7 +1047,6 @@ export function FileView({ worktree }: { worktree: string }) {
   const editing = useHive((s) => s.editing);
   const edit = useHive((s) => s.edit);
   const editorNotice = useHive((s) => s.editorNotice);
-  const working = useHive((s) => agentWorkingIn(s, worktree));
   const rendered = useHive(renderedShown);
   const asTable = useHive(tableShown);
   const table = useHive((s) =>
@@ -1065,11 +1063,6 @@ export function FileView({ worktree }: { worktree: string }) {
         </span>
         <span className="path">{openFile.path}</span>
         {file && <Counts added={file.added} removed={file.removed} />}
-        {working && (
-          <span className="tab-badge working" title="An agent in this worktree may write this file">
-            Agent working here
-          </span>
-        )}
         {edit && (
           <button
             type="button"
