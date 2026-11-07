@@ -73,7 +73,6 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         interrupted: false,
         alert: Alert::entering(state),
         notify: state.pending(),
-        writing: state.writes(),
         subagents,
         activity: None,
         since_ms: 0,
@@ -97,7 +96,6 @@ fn sub(id: &str, state: AgentState) -> SubagentState {
         worktree: None,
         activity: None,
         since_ms: 0,
-        writing: state.writes(),
     }
 }
 
@@ -606,7 +604,6 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             interrupted: false,
             alert: Some(Alert::Finished),
             notify: pending,
-            writing: false,
             subagents: vec![],
             activity: None,
             since_ms: 0,
@@ -666,7 +663,6 @@ async fn looking_at_an_agent_waiting_for_you_makes_it_not_pending_until_its_next
             interrupted: false,
             alert: None,
             notify: false,
-            writing: false,
             subagents: vec![],
             activity: None,
             since_ms: 0,

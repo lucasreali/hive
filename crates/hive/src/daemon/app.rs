@@ -956,7 +956,6 @@ mod tests {
             interrupted: false,
             alert: None,
             notify: false,
-            writing: false,
             subagents: vec![],
             activity: None,
             since_ms: 0,
