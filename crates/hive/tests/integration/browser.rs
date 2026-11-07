@@ -11,7 +11,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::agents::hook;
-use crate::common::{Conn, wait_until};
+use crate::common::{Conn, TIMEOUT, wait_until};
 use crate::worktree::Repo;
 
 fn exe(path: &Path, text: &str) {
@@ -54,13 +54,23 @@ fn failed(out: &Output) -> String {
 
 /// The service's CDP connection to the fake browser: the test plays the browser.
 async fn cdp(listener: &TcpListener) -> WebSocketStream<TcpStream> {
-    let (stream, _) = listener.accept().await.unwrap();
+    let accepted = tokio::time::timeout(TIMEOUT, listener.accept()).await;
+    let (stream, _) = accepted.expect("no browser connection").unwrap();
     tokio_tungstenite::accept_async(stream).await.unwrap()
 }
 
 async fn read(ws: &mut WebSocketStream<TcpStream>) -> Value {
-    let message = ws.next().await.unwrap().unwrap();
+    let next = tokio::time::timeout(TIMEOUT, ws.next()).await;
+    let message = next.expect("no CDP message").unwrap().unwrap();
     serde_json::from_str(message.to_text().unwrap()).unwrap()
+}
+
+/// Waits until the service closes the connection (the browser is stopped).
+async fn closed(ws: &mut WebSocketStream<TcpStream>) {
+    let drained = async { while let Some(Ok(_)) = ws.next().await {} };
+    tokio::time::timeout(TIMEOUT, drained)
+        .await
+        .expect("still connected");
 }
 
 async fn write(ws: &mut WebSocketStream<TcpStream>, message: Value) {
@@ -191,19 +201,38 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
             let ack = read(&mut ws).await;
             assert_eq!(ack["method"], "Page.screencastFrameAck");
             assert_eq!(ack["params"], json!({ "sessionId": 1 }));
+            // The panel no longer shows it: its screencast stops.
+            assert_eq!(read(&mut ws).await["method"], "Page.stopScreencast");
+            assert_eq!(read(&mut ws).await["method"], "Target.detachFromTarget");
             // Until the browser is stopped.
-            while let Some(Ok(_)) = ws.next().await {}
+            closed(&mut ws).await;
         }
     });
     let dot_claude = repo.root.join(".claude");
-    let asks = async { tokio::join!(mcp(&repo, &dot_claude, &bin), mcp(&repo, &repo.root, &bin)) };
+    // Another worktree's ask meanwhile: the starting one counts against `browser.max`.
+    let other = async {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        mcp(&repo, &fix_a, &bin).await
+    };
+    let asks = async {
+        tokio::join!(
+            mcp(&repo, &dot_claude, &bin),
+            mcp(&repo, &repo.root, &bin),
+            other
+        )
+    };
     let release = async {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         go.send(()).unwrap();
     };
-    let ((a, b), ()) = tokio::join!(asks, release);
+    let ((a, b, c), ()) = tokio::join!(asks, release);
     assert!(a.status.success(), "{a:?}");
     assert!(b.status.success(), "{b:?}");
+    let starting = failed(&c);
+    assert!(
+        starting.contains("No more browsers: browser.max is 1"),
+        "{starting}"
+    );
     let endpoint = format!("http://127.0.0.1:{port}");
     let expected = format!("@playwright/mcp@latest\n--cdp-endpoint\n{endpoint}\n");
     assert_eq!(std::fs::read_to_string(&ran).unwrap(), expected);
@@ -213,6 +242,11 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
         "{line}"
     );
     let first_profile = profile(&args);
+    // A new profile each time, in the runtime folder.
+    assert!(
+        first_profile.ends_with("run/hive/browsers/1"),
+        "{first_profile:?}"
+    );
     assert_eq!(browser(&mut app).await, status(&root, true, None, None));
     let shown = status(&root, true, Some("http://localhost:5173/"), None);
     assert_eq!(browser(&mut app).await, shown);
@@ -222,6 +256,9 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     };
     assert_eq!(browser(&mut app).await, frame);
     app.send(0, Control::BrowserDrawn).await;
+    app.send(0, watch(None)).await;
+    app.send(0, watch(Some(&root))).await;
+    assert_eq!(browser(&mut app).await, shown);
 
     // Without bunx or npx the MCP cannot run.
     let none = failed(&mcp(&repo, &repo.root, &empty).await);
@@ -278,6 +315,8 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     assert!(mcp(&repo, &repo.root, &bin).await.status.success());
     closes.await.unwrap();
     ended(&pid);
+    // The third browser asked for (the second failed to start).
+    assert!(profile(&args).ends_with("browsers/3"));
     wait_until(|| !profile(&args).exists());
 
     // Turned off with one running and watched: it stops, and the wrapper passes no MCP server.
@@ -285,7 +324,7 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
         let listener = listener.clone();
         async move {
             let mut ws = cdp(&listener).await;
-            while let Some(Ok(_)) = ws.next().await {}
+            closed(&mut ws).await;
         }
     });
     assert!(mcp(&repo, &repo.root, &bin).await.status.success());
