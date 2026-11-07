@@ -246,6 +246,11 @@ impl Store {
         accounts.map(|a| a.config_dir.clone()).collect()
     }
 
+    /// The gh config folders (24.13) besides `gh`'s own.
+    pub fn gh_dirs(&self) -> Vec<String> {
+        self.current().0.gh.config_dirs.clone()
+    }
+
     /// `dir` when it is one of the accounts' folders; else `None`, the default account (a
     /// space's account, 22.5, may name a folder no account has any more in a hand-edited file).
     pub fn known(&self, dir: Option<String>) -> Option<String> {

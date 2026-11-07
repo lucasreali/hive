@@ -363,6 +363,33 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
     };
     replies.push(ask(&mut app, add(&other)).await);
     replies.push(app.control().await.1);
+    // Only a folder of the settings' (24.13).
+    let unknown = Control::CreateSpace {
+        name: "Work".into(),
+        env: space("octo-work"),
+    };
+    let refused =
+        format!("{folder} is not a gh config folder of Settings → Accounts: add it there first");
+    let refused = Control::SpaceFailed { message: refused };
+    assert_eq!(ask(&mut app, unknown).await, refused);
+    // A blank folder is gh's own config.
+    let mut own = space("octo-personal");
+    if let Some(account) = &mut own.gh_account {
+        account.config_dir = Some(" ".into());
+    }
+    let blank = Control::UpdateSpace {
+        id: "default".into(),
+        name: "Personal".into(),
+        env: own,
+    };
+    let Control::Spaces { spaces, .. } = ask(&mut app, blank).await else {
+        panic!("expected spaces")
+    };
+    assert_eq!(spaces[0].env, space("octo-personal"));
+    let mut settings = hive_protocol::Settings::default();
+    settings.gh.config_dirs.push(format!("{folder}/"));
+    let saved = ask(&mut app, Control::SetSettings { settings }).await;
+    assert!(matches!(saved, Control::Settings { .. }), "{saved:?}");
     let create = Control::CreateSpace {
         name: "Work".into(),
         env: space("octo-work"),

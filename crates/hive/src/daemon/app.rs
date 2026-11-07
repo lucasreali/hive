@@ -410,16 +410,12 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             });
         }
         Ok(Control::CreateSpace { name, env }) => {
-            let known = state.settings.account_dirs();
-            state
-                .change_spaces(|s| s.create(&name, account_of(env, &known)?))
-                .await
+            let env = account_of(env, &state.settings);
+            state.change_spaces(|s| s.create(&name, env?)).await
         }
         Ok(Control::UpdateSpace { id, name, env }) => {
-            let known = state.settings.account_dirs();
-            state
-                .change_spaces(|s| s.update(&id, &name, account_of(env, &known)?))
-                .await
+            let env = account_of(env, &state.settings);
+            state.change_spaces(|s| s.update(&id, &name, env?)).await
         }
         Ok(Control::DeleteSpace { id }) => state.change_spaces(|s| s.delete(&id)).await,
         Ok(Control::SelectSpace { id }) => state.change_spaces(|s| s.select(&id)).await,
@@ -681,13 +677,26 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
     }
 }
 
-/// A space's environment whose Claude account (22.5) is one of the `known` accounts' folders
-/// or the default one; another folder is refused.
-fn account_of(env: SpaceEnv, known: &[String]) -> Result<SpaceEnv, String> {
-    match &env.claude_account {
-        Some(dir) if !known.contains(dir) => Err(format!("No Claude account has the folder {dir}")),
-        _ => Ok(env),
+/// A space's environment whose Claude account (22.5) is one of the settings' accounts' folders
+/// or the default one, and whose GitHub account is in `gh`'s own config or one of the
+/// settings' gh config folders (24.13); another folder is refused.
+fn account_of(env: SpaceEnv, settings: &crate::settings::Store) -> Result<SpaceEnv, String> {
+    if let Some(dir) = &env.claude_account {
+        if !settings.account_dirs().contains(dir) {
+            return Err(format!("No Claude account has the folder {dir}"));
+        }
     }
+    if let Some(dir) = crate::spaces::gh_dir(&env) {
+        // As the settings keep it (22.2): `/x/` is `/x`.
+        let kept = crate::spaces::trimmed(dir.trim());
+        // A blank one is `gh`'s own config (`spaces::check_env`).
+        if !kept.is_empty() && !settings.gh_dirs().iter().any(|d| d == kept) {
+            return Err(format!(
+                "{dir} is not a gh config folder of Settings → Accounts: add it there first"
+            ));
+        }
+    }
+    Ok(env)
 }
 
 /// Writes queued frames, always draining control frames before terminal frames. Terminal

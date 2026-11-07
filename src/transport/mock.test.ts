@@ -1456,6 +1456,25 @@ test("gh's accounts are listed, and the active one switched", async () => {
   ]);
 });
 
+test("a space's GitHub account must be in gh's own config or a settings' folder (24.13)", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  const dir = "/home/user/.config/gh-work";
+  const gh_account = { host: "github.com", login: "mock-gh-work", config_dir: dir };
+  await transport.updateSpace("default", "Default", { ...NO_ENV, gh_account });
+  await tick();
+  expect(messages.at(-1)).toEqual({
+    type: "space_failed",
+    message: `${dir} is not a gh config folder of Settings → Accounts: add it there first`,
+  });
+  await transport.setSettings({ ...DEFAULT_SETTINGS, gh: { config_dirs: [dir] } });
+  await transport.updateSpace("default", "Default", { ...NO_ENV, gh_account });
+  await tick();
+  expect(messages.at(-1)?.type).toBe("spaces");
+});
+
 test("the default account has logged in, and an account added in the mock has not", async () => {
   const transport = createMockTransport();
   const messages: ServiceMessage[] = [];

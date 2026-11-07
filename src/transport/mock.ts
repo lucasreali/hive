@@ -867,10 +867,16 @@ export function createMockTransport(
   const space = (id: string) => spaces.find((x) => x.id === id);
   const sendSpaces = () => later({ type: "spaces", spaces: structuredClone(spaces), current });
   // As the service: a space's Claude account is one of the accounts, or the default one (22.5).
-  const unknownAccount = ({ claude_account: dir }: SpaceEnv) =>
-    dir && !settings.claude.accounts.some((a) => a.config_dir === dir)
-      ? `No Claude account has the folder ${dir}`
+  const unknownAccount = ({ claude_account: dir, gh_account }: SpaceEnv) => {
+    const gh = gh_account?.config_dir;
+    if (dir && !settings.claude.accounts.some((a) => a.config_dir === dir)) {
+      return `No Claude account has the folder ${dir}`;
+    }
+    // As the service (24.13): only a gh config folder of the settings'.
+    return gh && !settings.gh.config_dirs.includes(gh)
+      ? `${gh} is not a gh config folder of Settings → Accounts: add it there first`
       : null;
+  };
   // As the service: a refusal changes nothing; otherwise the spaces are sent.
   const changeSpaces = (change: () => string | null) => {
     const message = change();
