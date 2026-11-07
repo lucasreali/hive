@@ -150,18 +150,14 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let places = crate::uninstall::Places::from_env(paths);
     #[cfg(windows)]
     let places = None;
-    let exe = std::env::current_exe()?;
-    if let Err(err) =
-        crate::browser::configure(&paths.bin_dir(), &exe, state.settings.browser().enabled)
-    {
-        eprintln!("hive: warning: cannot set up the agent's browser: {err}");
-    }
     let state = Arc::new(State {
         warning,
         places,
         browsers_dir: paths.runtime.join("browsers"),
         ..state
     });
+    // The MCP server the wrapper passes while the agent's browser is on (24.6).
+    state.browser_settings_changed().await;
     serve(listener, hold, terminated, state).await
 }
 

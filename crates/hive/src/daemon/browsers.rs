@@ -144,13 +144,10 @@ impl State {
         settings: &BrowserSettings,
         id: u64,
     ) -> Result<(Process, WebSocketStream<TcpStream>, u16), String> {
-        let candidates = match settings.path {
-            Some(_) => Vec::new(),
-            None => {
-                let home = std::env::var_os("HOME").map(PathBuf::from);
-                browser::candidates(home.as_deref(), Some(&self.users_path().await))
-            }
-        };
+        // The service's own `PATH`: the browsers install in the system's folders.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let path = std::env::var_os("PATH");
+        let candidates = browser::candidates(home.as_deref(), path.as_deref());
         let program = browser::find(settings.path.as_deref(), candidates, Path::new(SNAP))?;
         browser::start(&program, self.browsers_dir.join(id.to_string())).await
     }
@@ -189,22 +186,20 @@ impl State {
     async fn browser_event(&self, worktree: &str, id: u64, event: Event) {
         let mut browsers = self.browsers.lock().await;
         let watched = browsers.watched.as_deref() == Some(worktree);
-        let Some(running) = browsers.running.get_mut(worktree).filter(|r| r.id == id) else {
-            return;
-        };
-        match event {
-            Event::Url(url) => {
-                running.url = url;
-                if watched {
-                    self.to_app(0, &browsers.status(worktree)).await;
+        if let Some(running) = browsers.running.get_mut(worktree).filter(|r| r.id == id) {
+            let message = match event {
+                Event::Url(url) => {
+                    running.url = url;
+                    browsers.status(worktree)
                 }
+                Event::Frame(data) => Control::BrowserFrame {
+                    worktree: worktree.to_owned(),
+                    data,
+                },
+            };
+            if watched {
+                self.to_app(0, &message).await;
             }
-            Event::Frame(data) if watched => {
-                let worktree = worktree.to_owned();
-                self.to_app(0, &Control::BrowserFrame { worktree, data })
-                    .await;
-            }
-            Event::Frame(_) => {}
         }
     }
 
@@ -293,4 +288,21 @@ impl State {
 /// The CDP endpoint of a browser on `port`.
 fn endpoint(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_state;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_config_that_cannot_change_is_reported_and_the_service_goes_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path());
+        // A folder where the config goes (the bin folder is `tmp`): it is not a file to remove.
+        let config = tmp.path().join(crate::browser::MCP_CONFIG);
+        std::fs::create_dir(&config).unwrap();
+        state.browser_settings_changed().await;
+        assert!(config.is_dir());
+        assert!(state.browsers.lock().await.running.is_empty());
+    }
 }

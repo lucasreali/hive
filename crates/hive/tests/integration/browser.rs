@@ -1,10 +1,13 @@
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use hive_protocol::{Control, Settings};
 use serde_json::{Value, json};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::agents::hook;
@@ -19,9 +22,10 @@ fn exe(path: &Path, text: &str) {
 /// The next browser message the app gets, others skipped.
 async fn browser(app: &mut Conn) -> Control {
     loop {
-        match app.control().await {
-            (0, m @ (Control::BrowserStatus { .. } | Control::BrowserFrame { .. })) => return m,
-            _ => {}
+        if let (0, m @ (Control::BrowserStatus { .. } | Control::BrowserFrame { .. })) =
+            app.control().await
+        {
+            return m;
         }
     }
 }
@@ -42,14 +46,68 @@ async fn mcp(repo: &Repo, cwd: &Path, bin: &Path) -> Output {
     tokio::process::Command::from(hive).output().await.unwrap()
 }
 
+/// What a failed `hive browser-mcp` printed.
+fn failed(out: &Output) -> String {
+    assert!(!out.status.success());
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// The service's CDP connection to the fake browser: the test plays the browser.
+async fn cdp(listener: &TcpListener) -> WebSocketStream<TcpStream> {
+    let (stream, _) = listener.accept().await.unwrap();
+    tokio_tungstenite::accept_async(stream).await.unwrap()
+}
+
+async fn read(ws: &mut WebSocketStream<TcpStream>) -> Value {
+    let message = ws.next().await.unwrap().unwrap();
+    serde_json::from_str(message.to_text().unwrap()).unwrap()
+}
+
+async fn write(ws: &mut WebSocketStream<TcpStream>, message: Value) {
+    ws.send(Message::text(message.to_string())).await.unwrap();
+}
+
+/// The browser settings on, with `path` and at most one browser.
+fn on(path: &Path) -> Settings {
+    let mut settings = Settings::default();
+    settings.browser.enabled = true;
+    settings.browser.path = Some(path.display().to_string());
+    settings.browser.max = 1;
+    settings
+}
+
+async fn set(app: &mut Conn, settings: Settings) {
+    app.send(0, Control::SetSettings { settings }).await;
+}
+
+/// Waits until the process whose pid the fake browser last wrote is gone.
+fn ended(pid: &Path) {
+    let pid: i32 = std::fs::read_to_string(pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    wait_until(|| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err());
+}
+
+/// The profile the fake browser was last started with.
+fn profile(args: &Path) -> PathBuf {
+    let line = std::fs::read_to_string(args).unwrap();
+    let dir = line
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("--user-data-dir=");
+    PathBuf::from(dir.unwrap())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stops_with_it() {
     let repo = Repo::new();
     assert!(repo.hive(&["create", "fix-a"]).status.success());
     let root = repo.root.display().to_string();
     let fix_a = repo.root.join(".claude/worktrees/fix-a");
-    // The CDP side of a fake browser: the test plays the browser.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
     let port = listener.local_addr().unwrap().port();
     let pid = repo.env.path("browser.pid");
     let args = repo.env.path("browser.args");
@@ -62,12 +120,8 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     exe(&fake, &script);
     // Run once now: macOS checks a new program on its first run, seconds on a loaded machine,
     // which would count against the browser's start.
-    assert!(
-        std::process::Command::new(&fake)
-            .status()
-            .unwrap()
-            .success()
-    );
+    let first = std::process::Command::new(&fake).status().unwrap();
+    assert!(first.success());
     // The MCP's runner: records its arguments.
     let bin = repo.env.path("mcp-bin");
     std::fs::create_dir(&bin).unwrap();
@@ -76,6 +130,8 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
         &bin.join("bunx"),
         &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", ran.display()),
     );
+    let empty = repo.env.path("empty-bin");
+    std::fs::create_dir(&empty).unwrap();
 
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.app().await;
@@ -88,78 +144,75 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     let config = repo.env.path("data/hive/bin/hive-browser.json");
     // Off by default: no MCP server, and its ask is refused.
     assert!(!config.exists());
-    let out = mcp(&repo, &repo.root, &bin).await;
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("the agent's browser is off"), "{stderr}");
+    let off = failed(&mcp(&repo, &repo.root, &bin).await);
+    assert!(off.contains("the agent's browser is off"), "{off}");
 
-    let mut settings = Settings::default();
-    settings.browser.enabled = true;
-    settings.browser.path = Some(fake.display().to_string());
-    settings.browser.max = 1;
-    let set = Control::SetSettings {
-        settings: settings.clone(),
-    };
-    app.send(0, set).await;
+    let settings = on(&fake);
+    set(&mut app, settings.clone()).await;
     assert_eq!(app.control().await, (0, Control::Settings { settings }));
     wait_until(|| config.exists());
     let written: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
     let server = &written["mcpServers"]["hive-browser"];
     assert_eq!(server["command"], env!("CARGO_BIN_EXE_hive"));
     assert_eq!(server["args"], json!(["browser-mcp"]));
+    let home = repo.env.path("home");
+    let outside = failed(&mcp(&repo, &home, &bin).await);
+    assert!(
+        outside.contains("is in no worktree Hive follows"),
+        "{outside}"
+    );
 
-    app.open_terminal(1, &repo.root).await;
-    let start = json!({"session_id": "s1", "cwd": root, "source": "startup"});
-    hook(&repo, &mut app, "1", "SessionStart", start).await;
     // The panel shows the main worktree before its browser runs.
-    let watch = Control::WatchBrowser {
-        worktree: Some(root.clone()),
+    let watch = |worktree: Option<&str>| Control::WatchBrowser {
+        worktree: worktree.map(Into::into),
     };
-    app.send(0, watch).await;
+    app.send(0, watch(Some(&root))).await;
     assert_eq!(browser(&mut app).await, status(&root, false, None, None));
 
-    let cdp = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-        let read = async |ws: &mut tokio_tungstenite::WebSocketStream<_>| -> Value {
-            let message = ws.next().await.unwrap().unwrap();
-            serde_json::from_str(message.to_text().unwrap()).unwrap()
-        };
-        assert_eq!(read(&mut ws).await["method"], "Target.setDiscoverTargets");
-        let page = json!({ "method": "Target.targetCreated", "params": { "targetInfo": {
-            "targetId": "p1", "type": "page", "url": "http://localhost:5173/" } } });
-        ws.send(Message::text(page.to_string())).await.unwrap();
-        let attach = read(&mut ws).await;
-        assert_eq!(attach["method"], "Target.attachToTarget");
-        let attached = json!({ "id": attach["id"], "result": { "sessionId": "s" } });
-        ws.send(Message::text(attached.to_string())).await.unwrap();
-        assert_eq!(read(&mut ws).await["method"], "Page.startScreencast");
-        let frame = json!({ "method": "Page.screencastFrame", "sessionId": "s",
-            "params": { "data": "AAAA", "sessionId": 1, "metadata": {} } });
-        ws.send(Message::text(frame.to_string())).await.unwrap();
-        let ack = read(&mut ws).await;
-        assert_eq!(ack["method"], "Page.screencastFrameAck");
-        assert_eq!(ack["params"], json!({ "sessionId": 1 }));
-        // Until the browser is stopped.
-        while let Some(Ok(_)) = ws.next().await {}
+    // Two asks at once: one browser, started once (the browser answers only once both asked).
+    let (go, wait) = tokio::sync::oneshot::channel::<()>();
+    let cast = tokio::spawn({
+        let listener = listener.clone();
+        async move {
+            wait.await.unwrap();
+            let mut ws = cdp(&listener).await;
+            assert_eq!(read(&mut ws).await["method"], "Target.setDiscoverTargets");
+            let page = json!({ "method": "Target.targetCreated", "params": { "targetInfo": {
+                "targetId": "p1", "type": "page", "url": "http://localhost:5173/" } } });
+            write(&mut ws, page).await;
+            let attach = read(&mut ws).await;
+            assert_eq!(attach["method"], "Target.attachToTarget");
+            let attached = json!({ "id": attach["id"], "result": { "sessionId": "s" } });
+            write(&mut ws, attached).await;
+            assert_eq!(read(&mut ws).await["method"], "Page.startScreencast");
+            let frame = json!({ "method": "Page.screencastFrame", "sessionId": "s",
+                "params": { "data": "AAAA", "sessionId": 1, "metadata": {} } });
+            write(&mut ws, frame).await;
+            let ack = read(&mut ws).await;
+            assert_eq!(ack["method"], "Page.screencastFrameAck");
+            assert_eq!(ack["params"], json!({ "sessionId": 1 }));
+            // Until the browser is stopped.
+            while let Some(Ok(_)) = ws.next().await {}
+        }
     });
-
-    let out = mcp(&repo, &repo.root.join(".claude"), &bin).await;
-    assert!(out.status.success(), "{out:?}");
+    let dot_claude = repo.root.join(".claude");
+    let asks = async { tokio::join!(mcp(&repo, &dot_claude, &bin), mcp(&repo, &repo.root, &bin)) };
+    let release = async {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        go.send(()).unwrap();
+    };
+    let ((a, b), ()) = tokio::join!(asks, release);
+    assert!(a.status.success(), "{a:?}");
+    assert!(b.status.success(), "{b:?}");
     let endpoint = format!("http://127.0.0.1:{port}");
     let expected = format!("@playwright/mcp@latest\n--cdp-endpoint\n{endpoint}\n");
     assert_eq!(std::fs::read_to_string(&ran).unwrap(), expected);
     let line = std::fs::read_to_string(&args).unwrap();
-    let profile = line
-        .lines()
-        .next()
-        .unwrap()
-        .strip_prefix("--user-data-dir=");
-    let profile = Path::new(profile.unwrap()).to_owned();
     assert!(
         line.contains("\n--headless=new\n--remote-debugging-port=0\n"),
         "{line}"
     );
+    let first_profile = profile(&args);
     assert_eq!(browser(&mut app).await, status(&root, true, None, None));
     let shown = status(&root, true, Some("http://localhost:5173/"), None);
     assert_eq!(browser(&mut app).await, shown);
@@ -170,43 +223,81 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     assert_eq!(browser(&mut app).await, frame);
     app.send(0, Control::BrowserDrawn).await;
 
+    // Without bunx or npx the MCP cannot run.
+    let none = failed(&mcp(&repo, &repo.root, &empty).await);
+    assert!(none.contains("neither bunx nor npx is on PATH"), "{none}");
     // Another worktree's ask: one browser at most.
-    let out = mcp(&repo, &fix_a, &bin).await;
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let most = failed(&mcp(&repo, &fix_a, &bin).await);
     assert!(
-        stderr.contains("No more browsers: browser.max is 1"),
-        "{stderr}"
+        most.contains("No more browsers: browser.max is 1"),
+        "{most}"
     );
-    // The same worktree's again: the running one.
-    assert!(mcp(&repo, &repo.root, &bin).await.status.success());
 
-    // Its worktree's last agent ends: the browser stops, its profile goes.
+    // Its agent is detected after its MCP asked; the worktree's last agent ends: it stops.
+    app.open_terminal(1, &repo.root).await;
+    let start = json!({"session_id": "s1", "cwd": root, "source": "startup"});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
     let end = json!({"session_id": "s1", "reason": "prompt_input_exit"});
     let seen = hook(&repo, &mut app, "1", "SessionEnd", end).await;
     assert!(
         seen.contains(&(0, status(&root, false, None, None))),
         "{seen:?}"
     );
-    cdp.await.unwrap();
-    let pid: i32 = std::fs::read_to_string(&pid)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let gone = || nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err();
-    wait_until(gone);
-    wait_until(|| !profile.exists());
+    cast.await.unwrap();
+    ended(&pid);
+    wait_until(|| !first_profile.exists());
 
-    // Turned off: the wrapper passes no MCP server.
-    app.send(
-        0,
-        Control::SetSettings {
-            settings: Settings::default(),
-        },
-    )
-    .await;
+    // A browser that cannot start says why in the panel.
+    let mut missing = on(Path::new("/nonexistent/browser"));
+    set(&mut app, missing.clone()).await;
+    let why = failed(&mcp(&repo, &repo.root, &bin).await);
+    let not = "browser.path /nonexistent/browser is not a program Hive can run";
+    assert!(why.contains(not), "{why}");
+    assert_eq!(
+        browser(&mut app).await,
+        status(&root, false, None, Some(not))
+    );
+
+    // Unwatched, a browser whose connection closes is stopped.
+    missing.browser.path = Some(fake.display().to_string());
+    set(&mut app, missing).await;
+    app.send(0, watch(None)).await;
+    let closes = tokio::spawn({
+        let listener = listener.clone();
+        async move {
+            let mut ws = cdp(&listener).await;
+            assert_eq!(read(&mut ws).await["method"], "Target.setDiscoverTargets");
+        }
+    });
+    assert!(mcp(&repo, &repo.root, &bin).await.status.success());
+    closes.await.unwrap();
+    ended(&pid);
+    wait_until(|| !profile(&args).exists());
+
+    // Turned off with one running and watched: it stops, and the wrapper passes no MCP server.
+    let held = tokio::spawn({
+        let listener = listener.clone();
+        async move {
+            let mut ws = cdp(&listener).await;
+            while let Some(Ok(_)) = ws.next().await {}
+        }
+    });
+    assert!(mcp(&repo, &repo.root, &bin).await.status.success());
+    app.send(0, watch(Some(&root))).await;
+    loop {
+        if let Control::BrowserStatus { running: true, .. } = browser(&mut app).await {
+            break;
+        }
+    }
+    set(&mut app, Settings::default()).await;
+    loop {
+        if let Control::BrowserStatus { running: false, .. } = browser(&mut app).await {
+            break;
+        }
+    }
+    held.await.unwrap();
+    ended(&pid);
     wait_until(|| !config.exists());
-    app.send(0, Control::WatchBrowser { worktree: None }).await;
     drop(app);
     assert!(daemon.wait_exit().success());
 }

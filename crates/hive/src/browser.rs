@@ -23,6 +23,7 @@ use crate::VERSION;
 use crate::paths::Paths;
 
 /// The macOS apps looked for, in this order, in `/Applications` and `~/Applications`.
+#[cfg(target_os = "macos")]
 const APPS: [&str; 4] = [
     "Google Chrome.app/Contents/MacOS/Google Chrome",
     "Chromium.app/Contents/MacOS/Chromium",
@@ -31,6 +32,7 @@ const APPS: [&str; 4] = [
 ];
 
 /// The programs looked for on `PATH` on Linux (and in WSL), in this order.
+#[cfg(not(target_os = "macos"))]
 const PROGRAMS: [&str; 6] = [
     "google-chrome",
     "google-chrome-stable",
@@ -121,31 +123,26 @@ pub fn find(
     })
 }
 
-/// Where this platform's browsers install (see [`find`]).
-pub fn candidates(home: Option<&Path>, path: Option<&OsStr>) -> Vec<PathBuf> {
-    if cfg!(target_os = "macos") {
-        let roots = [
-            Some(PathBuf::from("/Applications")),
-            home.map(|h| h.join("Applications")),
-        ];
-        app_candidates(roots.into_iter().flatten())
-    } else if cfg!(target_os = "linux") {
-        path_candidates(path)
-    } else {
-        // Native Windows gets no browser (D17.0): the service in WSL finds one there.
-        Vec::new()
-    }
-}
-
-/// Each app of [`APPS`] in each of `roots`, folder by folder.
-fn app_candidates(roots: impl Iterator<Item = PathBuf>) -> Vec<PathBuf> {
+/// Where browsers install on macOS: each app of [`APPS`] in `/Applications`, then in
+/// `~/Applications`.
+#[cfg(target_os = "macos")]
+pub fn candidates(home: Option<&Path>, _path: Option<&OsStr>) -> Vec<PathBuf> {
+    let roots = [
+        Some(PathBuf::from("/Applications")),
+        home.map(|h| h.join("Applications")),
+    ];
     roots
+        .into_iter()
+        .flatten()
         .flat_map(|root| APPS.iter().map(move |app| root.join(app)))
         .collect()
 }
 
-/// Each program of [`PROGRAMS`] in each absolute folder of `path`, program by program.
-fn path_candidates(path: Option<&OsStr>) -> Vec<PathBuf> {
+/// Where browsers install elsewhere: each program of [`PROGRAMS`] in each absolute folder of
+/// `path`, program by program. Native Windows finds none (no `.exe` is looked for, D17.0): the
+/// service in WSL finds one there.
+#[cfg(not(target_os = "macos"))]
+pub fn candidates(_home: Option<&Path>, path: Option<&OsStr>) -> Vec<PathBuf> {
     let dirs: Vec<PathBuf> = path
         .map(|p| {
             std::env::split_paths(p)
@@ -569,9 +566,8 @@ pub async fn screencast<S>(
     let mut out = screen.start();
     loop {
         for message in out.cdp.drain(..) {
-            if ws.send(Message::text(message.to_string())).await.is_err() {
-                return;
-            }
+            // A connection that fails to write ends at the next read.
+            let _ = ws.send(Message::text(message.to_string())).await;
         }
         out.events.drain(..).for_each(&mut events);
         out = tokio::select! {
@@ -592,8 +588,8 @@ pub async fn screencast<S>(
 }
 
 /// `hive browser-mcp`'s question to the service: the CDP endpoint of the browser of the
-/// worktree holding `cwd`, started first if needed.
-pub async fn endpoint(paths: &Paths, cwd: &str) -> Result<String, String> {
+/// worktree holding `cwd`, started first if needed, within `wait`.
+pub async fn endpoint(paths: &Paths, cwd: &str, wait: Duration) -> Result<String, String> {
     let asked = async {
         let stream = paths
             .connect()
@@ -624,7 +620,7 @@ pub async fn endpoint(paths: &Paths, cwd: &str) -> Result<String, String> {
         }
         Err("the Hive service closed the connection".to_owned())
     };
-    tokio::time::timeout(ENDPOINT_TIMEOUT, asked)
+    tokio::time::timeout(wait, asked)
         .await
         .unwrap_or_else(|_| Err("the Hive service did not start the browser in time".to_owned()))
 }
@@ -653,7 +649,7 @@ pub fn mcp_command(path: Option<&OsStr>, endpoint: &str) -> Option<(PathBuf, Vec
 /// stdio the agent's; its exit code.
 pub async fn mcp(paths: &Paths) -> io::Result<u8> {
     let cwd = std::env::current_dir()?;
-    let endpoint = endpoint(paths, &cwd.to_string_lossy())
+    let endpoint = endpoint(paths, &cwd.to_string_lossy(), ENDPOINT_TIMEOUT)
         .await
         .map_err(io::Error::other)?;
     let path = std::env::var_os("PATH");
@@ -782,37 +778,31 @@ mod tests {
         assert_eq!(found(&[&link, &script, &other]), Ok(other.clone()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn candidates_are_the_platforms_install_places() {
         let home = Path::new("/h");
         let path = std::env::join_paths(["/usr/bin", "rel", "/opt/b"]).unwrap();
         let found = candidates(Some(home), Some(&path));
-        if cfg!(target_os = "macos") {
+        #[cfg(target_os = "macos")]
+        {
+            let app = |root: &str, app: &str| Path::new(root).join(app);
             assert_eq!(found.len(), 8);
-            assert_eq!(
-                found[0],
-                Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-            );
-            assert_eq!(
-                found[4],
-                Path::new("/h/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-            );
-            assert_eq!(
-                found[7],
-                Path::new("/h/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")
-            );
-        } else if cfg!(target_os = "linux") {
+            let chrome = "Google Chrome.app/Contents/MacOS/Google Chrome";
+            assert_eq!(found[0], app("/Applications", chrome));
+            assert_eq!(found[4], app("/h/Applications", chrome));
+            let brave = "Brave Browser.app/Contents/MacOS/Brave Browser";
+            assert_eq!(found[7], app("/h/Applications", brave));
+            assert_eq!(candidates(None, None).len(), 4);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
             assert_eq!(found.len(), 12);
             assert_eq!(found[0], Path::new("/usr/bin/google-chrome"));
             assert_eq!(found[1], Path::new("/opt/b/google-chrome"));
             assert_eq!(found[11], Path::new("/opt/b/brave-browser"));
-        } else {
-            assert!(found.is_empty());
+            assert_eq!(candidates(None, None), Vec::<PathBuf>::new());
         }
-        // Both forms, whatever the platform.
-        assert_eq!(app_candidates([PathBuf::from("/A")].into_iter()).len(), 4);
-        assert_eq!(path_candidates(None), Vec::<PathBuf>::new());
-        assert_eq!(path_candidates(Some(&path)).len(), 12);
     }
 
     #[test]
@@ -1031,10 +1021,9 @@ mod tests {
         let mut screen = Screen::default();
         let long = format!("https://a.test/{}", "x".repeat(3000));
         let out = screen.message(&page("Target.targetCreated", "p", &long));
-        let Event::Url(Some(url)) = &out.events[0] else {
-            panic!()
-        };
+        let url = crate::adapter::clip(&long, MAX_URL);
         assert_eq!(url.chars().count(), MAX_URL);
+        assert_eq!(out.events, [Event::Url(Some(url))]);
         for i in 0..=MAX_PAGES {
             screen.message(&page(
                 "Target.targetCreated",
@@ -1070,6 +1059,88 @@ mod tests {
                 .to_vec(),
         );
         assert_eq!(mcp_command(Some(&path), end), Some(bunx));
+    }
+
+    /// A service at `paths`' socket that answers each connection with `reply` (none: closes).
+    #[cfg(unix)]
+    fn service(paths: &Paths, reply: Option<Control>) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(paths.socket()).unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut framed = Framed::new(stream, FrameCodec);
+            let hello = framed.next().await.unwrap().unwrap().to_control().unwrap();
+            assert!(matches!(hello, Control::Hello { .. }));
+            let ask = framed.next().await.unwrap().unwrap().to_control().unwrap();
+            assert_eq!(ask, Control::BrowserEndpoint { cwd: "/w".into() });
+            if let Some(reply) = reply {
+                framed
+                    .send(Frame::control(0, &Control::Resync))
+                    .await
+                    .unwrap();
+                framed.send(Frame::control(0, &reply)).await.unwrap();
+                // Holds the connection until the client gives up.
+                let _ = framed.next().await;
+            }
+        })
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_endpoint_ask_reports_each_answer_of_the_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run = tmp.path().join("run");
+        crate::mode::folder(std::fs::DirBuilder::new().recursive(true), 0o700)
+            .create(&run)
+            .unwrap();
+        let paths = Paths {
+            logs: run.clone(),
+            runtime: run,
+            data: tmp.path().join("data"),
+            config: tmp.path().join("config"),
+        };
+        let wait = Duration::from_secs(10);
+        let err = endpoint(&paths, "/w", wait).await.unwrap_err();
+        assert!(err.starts_with("cannot reach the Hive service: "), "{err}");
+        let answers = [
+            (
+                Some(Control::BrowserReady {
+                    endpoint: "http://127.0.0.1:9".into(),
+                }),
+                Ok("http://127.0.0.1:9".to_owned()),
+            ),
+            (
+                Some(Control::Error {
+                    message: "off".into(),
+                }),
+                Err("off".to_owned()),
+            ),
+            (
+                Some(Control::VersionMismatch {
+                    protocol: 0,
+                    version: "0.0.0".into(),
+                }),
+                Err(format!("the Hive service is version 0.0.0, not {VERSION}")),
+            ),
+            (
+                None,
+                Err("the Hive service closed the connection".to_owned()),
+            ),
+        ];
+        for (reply, expected) in answers {
+            let server = service(&paths, reply);
+            assert_eq!(endpoint(&paths, "/w", wait).await, expected);
+            server.await.unwrap();
+            std::fs::remove_file(paths.socket()).unwrap();
+        }
+        // A service that never answers.
+        let listener = tokio::net::UnixListener::bind(paths.socket()).unwrap();
+        let held = tokio::spawn(async move { listener.accept().await.map(|(stream, _)| stream) });
+        let slow = endpoint(&paths, "/w", Duration::from_millis(100)).await;
+        assert_eq!(
+            slow,
+            Err("the Hive service did not start the browser in time".to_owned())
+        );
+        drop(held);
     }
 
     #[tokio::test]
