@@ -191,10 +191,8 @@ impl State {
             };
             tokio::join!(cast, forward);
             let mut browsers = state.browsers.lock().await;
-            // Unless it was stopped meanwhile (and maybe another started).
-            let gone: Vec<_> = (browsers.running)
-                .extract_if(|w, r| *w == worktree && r.id == id)
-                .collect();
+            // Unless it was stopped meanwhile (and maybe another started): ids are never reused.
+            let gone: Vec<_> = browsers.running.extract_if(|_, r| r.id == id).collect();
             for (worktree, running) in gone {
                 state.stop_browser(&browsers, &worktree, running).await;
             }

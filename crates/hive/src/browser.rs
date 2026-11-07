@@ -1387,10 +1387,14 @@ mod tests {
         reap(&dir, source);
         assert!(!dir.exists());
         let pid = nix::unistd::Pid::from_raw(group as i32);
-        let ended = tokio::task::spawn_blocking(move || nix::sys::wait::waitpid(pid, None));
-        let ended = tokio::time::timeout(Duration::from_secs(10), ended).await;
+        // A thread of its own: a test runtime would wait for it on a failure.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(nix::sys::wait::waitpid(pid, None)));
+        let ended = rx.recv_timeout(Duration::from_secs(10));
+        // Not left running when the test fails.
+        let _ = nix::sys::signal::killpg(pid, nix::sys::signal::SIGKILL);
         let killed = nix::sys::wait::WaitStatus::Signaled(pid, nix::sys::signal::SIGKILL, false);
-        assert_eq!(ended.unwrap().unwrap(), Ok(killed));
+        assert_eq!(ended, Ok(Ok(killed)));
         assert!(alive(stranger), "{stranger} was killed");
         drop(other);
         // No folder: nothing to do.
