@@ -241,30 +241,25 @@ fn opened(dir: &Path, rel: &Path) -> io::Result<Option<File>> {
     opened_with(dir, rel, || {})
 }
 
-/// [`opened`] with `between` run after the path is checked and before the file is opened, so
-/// a file swapped in there can be tested: the open itself refuses a link or a special file.
+/// [`opened`] with `between` run after the path and the worktree are checked and before the
+/// file is opened, so a file or worktree swapped in there can be tested: the open itself
+/// refuses a link or a special file.
 fn opened_with(dir: &Path, rel: &Path, between: impl FnOnce()) -> io::Result<Option<File>> {
     let Some(real) = resolve(dir, rel)? else {
         return Ok(None);
     };
-    between();
     let root = canonical(dir)?;
+    between();
     // Outside the root (moved meanwhile), `real` stays absolute, which [`open_plain`] refuses.
     open_plain(&root, real.strip_prefix(&root).unwrap_or(&real)).map(Some)
 }
 
-/// The regular file `rel` (normal parts only) of the folder `root`, opened for reading, for
-/// a path checked before (TODO 24.7): no part of `rel` may be a link, even one swapped in
-/// after the check, and a FIFO or a device is refused at once instead of blocking the open.
+/// The regular file `rel` (normal parts only) of the canonical folder `root`, opened for
+/// reading, for a path checked before (TODO 24.7): no part of `root` or `rel` may be a link,
+/// even one swapped in after the check, and a FIFO or a device is refused at once instead of
+/// blocking the open.
 pub(crate) fn open_plain(root: &Path, rel: &Path) -> io::Result<File> {
-    let names: Option<Vec<&OsStr>> = rel
-        .components()
-        .map(|part| match part {
-            Component::Normal(name) => Some(name),
-            _ => None,
-        })
-        .collect();
-    let names = names.unwrap_or_default();
+    let names = plain_names(rel).unwrap_or_default();
     let Some((name, folders)) = names.split_last() else {
         return Err(io::Error::other("not a relative path inside the worktree"));
     };
@@ -275,22 +270,31 @@ pub(crate) fn open_plain(root: &Path, rel: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// `root`'s `folders`, then `name` in the last, each opened from the one before without
-/// following a link (`O_NOFOLLOW`): one swapped in at any time fails the open instead of
-/// leading out of `root`. `O_NONBLOCK`: a FIFO opens at once, without waiting for a writer.
+/// The parts of `path`, `None` unless each is a name (no root, `.` or `..`).
+fn plain_names(path: &Path) -> Option<Vec<&OsStr>> {
+    path.components()
+        .map(|part| match part {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
+/// From `/`, the folders of `root` and then its `folders`, and `name` in the last, each
+/// opened from the one before without following a link (`O_NOFOLLOW`): one swapped in at any
+/// time, the worktree folder itself included, fails the open instead of leading out of `root`.
+/// `O_NONBLOCK`: a FIFO opens at once, without waiting for a writer.
 #[cfg(unix)]
 fn open_parts(root: &Path, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
     use nix::fcntl::{AT_FDCWD, OFlag, openat};
     use nix::sys::stat::Mode;
+    let Some(base) = root.strip_prefix("/").ok().and_then(plain_names) else {
+        return Err(io::Error::other("not a canonical worktree path"));
+    };
     let read = OFlag::O_RDONLY.union(OFlag::O_CLOEXEC);
-    let mut fd = openat(
-        AT_FDCWD,
-        root,
-        read.union(OFlag::O_DIRECTORY),
-        Mode::empty(),
-    )?;
+    let mut fd = openat(AT_FDCWD, "/", read.union(OFlag::O_DIRECTORY), Mode::empty())?;
     let nofollow = read.union(OFlag::O_NOFOLLOW);
-    for folder in folders {
+    for folder in base.iter().chain(folders) {
         fd = openat(
             &fd,
             *folder,
@@ -1280,16 +1284,37 @@ mod tests {
     #[test]
     fn only_a_path_of_names_is_opened_plain() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a"), "a").unwrap();
-        assert!(open_plain(dir.path(), Path::new("a")).is_ok());
-        let absolute = dir.path().join("a");
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("a"), "a").unwrap();
+        assert!(open_plain(&root, Path::new("a")).is_ok());
+        let absolute = root.join("a");
         for rel in [Path::new(""), Path::new("../a"), &absolute] {
-            let err = open_plain(dir.path(), rel).unwrap_err();
+            let err = open_plain(&root, rel).unwrap_err();
             assert_eq!(err.to_string(), "not a relative path inside the worktree");
         }
-        let gone = dir.path().join("gone");
+        let gone = root.join("gone");
         let err = open_plain(&gone, Path::new("a")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_canonical_root_is_opened_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("a"), "a").unwrap();
+        // Not from the current folder, nor through `..`, nor through a link (macOS: `/var`).
+        for bad in [Path::new("relative"), &root.join("sub/..")] {
+            let err = open_plain(bad, Path::new("a")).unwrap_err();
+            assert_eq!(err.to_string(), "not a canonical worktree path", "{bad:?}");
+        }
+        std::os::unix::fs::symlink(&root, root.join("link")).unwrap();
+        let code = open_plain(&root.join("link"), Path::new("a"))
+            .unwrap_err()
+            .raw_os_error();
+        let refused = matches!(code, Some(nix::libc::ELOOP | nix::libc::ENOTDIR));
+        assert!(refused, "{code:?}");
     }
 
     /// The names in `dir`, sorted: a save leaves no temporary file behind.
@@ -1442,19 +1467,25 @@ mod tests {
     #[test]
     fn a_worktree_moved_after_the_check_is_not_read() {
         let tmp = tempfile::tempdir().unwrap();
-        for folder in ["a", "b"] {
+        for folder in ["wt", "out"] {
             std::fs::create_dir(tmp.path().join(folder)).unwrap();
             std::fs::write(tmp.path().join(folder).join("f"), folder).unwrap();
         }
-        let dir = tmp.path().join("dir");
-        std::os::unix::fs::symlink("a", &dir).unwrap();
-        let link = dir.clone();
+        let dir = tmp.path().join("wt");
+        // Moved away, then a link to another folder put in its place.
+        let (wt, out) = (dir.clone(), tmp.path().join("out"));
         let err = swapped(&dir, "f", move || {
-            std::fs::remove_file(&link).unwrap();
-            std::os::unix::fs::symlink("b", &link).unwrap();
+            std::fs::rename(&wt, wt.with_file_name("old")).unwrap();
+            std::os::unix::fs::symlink(&out, &wt).unwrap();
         });
-        let message = "not a relative path inside the worktree";
-        assert_eq!(err.unwrap_err().to_string(), message);
+        let code = err.unwrap_err().raw_os_error();
+        let refused = matches!(code, Some(nix::libc::ELOOP | nix::libc::ENOTDIR));
+        assert!(refused, "{code:?}");
+        // Moved away only.
+        let (old, gone) = (tmp.path().join("old"), tmp.path().join("gone"));
+        let moved = old.clone();
+        let err = swapped(&old, "f", move || std::fs::rename(&moved, gone).unwrap());
+        assert_eq!(err.unwrap_err().kind(), io::ErrorKind::NotFound);
     }
 
     #[cfg(target_os = "linux")]

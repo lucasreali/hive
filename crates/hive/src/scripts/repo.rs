@@ -19,6 +19,7 @@ use serde::de::{MapAccess, Visitor};
 
 use crate::file;
 use crate::git::read_limited;
+use crate::paths::canonical;
 
 /// Largest script file read.
 pub const FILE_LIMIT: u64 = 512 * 1024;
@@ -143,7 +144,8 @@ fn package_manager(found: &[&str]) -> &'static str {
 /// [`file::open_plain`], should one be swapped in meanwhile.
 fn read(dir: &Path, name: &str) -> Result<Vec<u8>, String> {
     let read = plain(dir.join(name).symlink_metadata())
-        .and_then(|()| file::open_plain(dir, Path::new(name)))
+        .and_then(|()| canonical(dir))
+        .and_then(|root| file::open_plain(&root, Path::new(name)))
         .and_then(|mut file| read_limited(&mut file, FILE_LIMIT));
     read.map_err(|err| err.to_string())
 }
