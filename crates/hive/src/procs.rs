@@ -95,6 +95,11 @@ impl Source<'_> {
     }
 }
 
+/// The process `pid`'s arguments, `argv[0]` first; `None` when unreadable or too long.
+pub fn args(source: Source, pid: i32) -> Option<Vec<String>> {
+    source.args(pid)
+}
+
 /// Live processes. Zombies and unreadable entries are skipped.
 pub fn list(source: Source) -> Vec<Proc> {
     source.list()

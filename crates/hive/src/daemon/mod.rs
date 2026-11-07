@@ -150,6 +150,9 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let places = crate::uninstall::Places::from_env(paths);
     #[cfg(windows)]
     let places = None;
+    // Before any browser of this run: the ones an earlier run left (24.6).
+    #[cfg(unix)]
+    crate::browser::reap(&paths.runtime.join("browsers"), procs::Source::System);
     let state = Arc::new(State {
         warning,
         places,

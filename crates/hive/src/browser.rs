@@ -76,6 +76,39 @@ pub fn configure(bin: &Path, hive: &Path, enabled: bool) -> io::Result<()> {
     crate::wrapper::write_atomic(&file, format!("{config:#}\n").as_bytes(), 0o644)
 }
 
+/// In a browser's profile: its process group, as decimal digits.
+const GROUP_FILE: &str = "hive-browser-group";
+
+/// Ends the browsers an earlier service left running (killed before it could stop them: their
+/// DevTools port has no password) and removes `dir`, their profiles' folder. A profile's
+/// [`GROUP_FILE`] names the group killed, and only while its leader still runs with that
+/// profile: a number the system gave another process since is left alone.
+#[cfg(unix)]
+pub fn reap(dir: &Path, source: crate::procs::Source) {
+    for profile in std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+    {
+        let mut text = String::new();
+        let read = std::fs::File::open(profile.join(GROUP_FILE))
+            .and_then(|f| f.take(32).read_to_string(&mut text));
+        let group = read.ok().and_then(|_| text.trim().parse::<i32>().ok());
+        let mut flag = OsString::from("--user-data-dir=");
+        flag.push(&profile);
+        let flag = flag.to_string_lossy().into_owned();
+        let leader = group
+            .filter(|&g| g > 1)
+            .filter(|&g| crate::procs::args(source, g).is_some_and(|args| args.contains(&flag)));
+        if let Some(group) = leader {
+            use nix::sys::signal::{Signal, killpg};
+            let _ = killpg(nix::unistd::Pid::from_raw(group), Signal::SIGKILL);
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The browser to run: `setting` (`browser.path`) when set, else the first installed one of
 /// `candidates`. A snap Chromium (under `snap`) is skipped: its confinement cannot use Hive's
 /// temporary profile.
@@ -231,6 +264,10 @@ pub async fn start(
             return Err(format!("Cannot start {}: {err}", program.display()));
         }
     };
+    // Its process group (its own: `process_group(0)`), for a later service to end it should this
+    // one be killed before it could ([`reap`]).
+    let group = child.id().unwrap_or(0).to_string();
+    let _ = std::fs::write(profile.join(GROUP_FILE), group);
     let mut process = Process { child, profile };
     match connect(&mut process, wait).await {
         Ok((ws, port)) => Ok((process, ws, port)),
@@ -241,14 +278,15 @@ pub async fn start(
     }
 }
 
-/// Waits at most `wait` for the browser's `DevToolsActivePort`, then opens its CDP connection.
+/// Waits for the browser's `DevToolsActivePort`, then opens its CDP connection, all within
+/// `wait`: a port that takes the connection and never answers counts as no port.
 async fn connect(
     process: &mut Process,
     wait: Duration,
 ) -> Result<(WebSocketStream<TcpStream>, u16), String> {
     let file = process.profile.join("DevToolsActivePort");
-    let written = async {
-        loop {
+    let connecting = async {
+        let (port, path) = loop {
             if let Ok(Some(status)) = process.child.try_wait() {
                 return Err(format!("The browser exited as it started ({status})"));
             }
@@ -256,27 +294,27 @@ async fn connect(
             let read = std::fs::File::open(&file)
                 .and_then(|f| f.take(MAX_PORT_FILE).read_to_string(&mut text));
             if let Some(found) = read.ok().and_then(|_| active_port(&text)) {
-                return Ok(found);
+                break found;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        };
+        let lost = |err: &dyn std::fmt::Display| format!("Cannot connect to the browser: {err}");
+        // Only to the loopback address: the URL never picks the host.
+        let stream = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .map_err(|e| lost(&e))?;
+        let config = WebSocketConfig::default()
+            .max_message_size(Some(MAX_MESSAGE))
+            .max_frame_size(Some(MAX_MESSAGE));
+        let url = format!("ws://127.0.0.1:{port}{path}");
+        let (ws, _) = tokio_tungstenite::client_async_with_config(url, stream, Some(config))
+            .await
+            .map_err(|e| lost(&e))?;
+        Ok((ws, port))
     };
-    let (port, path) = tokio::time::timeout(wait, written)
+    tokio::time::timeout(wait, connecting)
         .await
-        .map_err(|_| "The browser did not open its DevTools port in time".to_owned())??;
-    let lost = |err: &dyn std::fmt::Display| format!("Cannot connect to the browser: {err}");
-    // Only to the loopback address: the URL never picks the host.
-    let stream = TcpStream::connect(("127.0.0.1", port))
-        .await
-        .map_err(|e| lost(&e))?;
-    let config = WebSocketConfig::default()
-        .max_message_size(Some(MAX_MESSAGE))
-        .max_frame_size(Some(MAX_MESSAGE));
-    let url = format!("ws://127.0.0.1:{port}{path}");
-    let (ws, _) = tokio_tungstenite::client_async_with_config(url, stream, Some(config))
-        .await
-        .map_err(|e| lost(&e))?;
-    Ok((ws, port))
+        .map_err(|_| "The browser did not open its DevTools port in time".to_owned())?
 }
 
 impl Process {
@@ -1253,6 +1291,15 @@ mod tests {
             .unwrap();
         assert!(err.starts_with("Cannot connect to the browser"), "{err}");
         closer.join().unwrap();
+        // A port that takes the connection and never answers: the whole start is bounded.
+        let mute = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::fs::write(&port_file, mute.local_addr().unwrap().port().to_string()).unwrap();
+        let held = tokio::spawn(async move { mute.accept().await.map(|(stream, _)| stream) });
+        let wait = Duration::from_millis(500);
+        let err = start(&fake, profile.clone(), wait).await.err().unwrap();
+        assert_eq!(err, "The browser did not open its DevTools port in time");
+        assert!(!profile.exists());
+        drop(held);
         // A browser that never writes its port.
         let silent = tmp.path().join("silent");
         exe(
@@ -1279,6 +1326,66 @@ mod tests {
             err.starts_with("Cannot make the browser's profile"),
             "{err}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn browsers_an_earlier_service_left_are_killed_and_their_profiles_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("browsers");
+        let alive =
+            |pid: u32| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
+        // One left running with its profile, as `start` runs it; it waits in a loop, so its
+        // arguments stay its own.
+        let fake = tmp.path().join("left");
+        exe(&fake, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+        let profile = dir.join("1");
+        std::fs::create_dir_all(&profile).unwrap();
+        let left = tokio::process::Command::new(&fake)
+            .args(args(&profile))
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let group = left.id().unwrap();
+        std::fs::write(profile.join(GROUP_FILE), group.to_string()).unwrap();
+        // Another process now has the number another profile names: not ours, left alone.
+        let other = tokio::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stranger = other.id().unwrap();
+        std::fs::create_dir_all(dir.join("2")).unwrap();
+        std::fs::write(dir.join("2").join(GROUP_FILE), stranger.to_string()).unwrap();
+        // Unreadable numbers and a profile without one: nothing to kill.
+        for (name, text) in [("3", "x"), ("4", "1"), ("5", "-7")] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+            std::fs::write(dir.join(name).join(GROUP_FILE), text).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("6")).unwrap();
+        // Until it runs its loop with its arguments read.
+        let source = crate::procs::Source::System;
+        let flag = format!("--user-data-dir={}", profile.display());
+        let started = std::time::Instant::now();
+        while !crate::procs::args(source, group as i32).is_some_and(|a| a.contains(&flag)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{group} never ran"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        reap(&dir, source);
+        assert!(!dir.exists());
+        let mut left = left;
+        let ended = tokio::time::timeout(Duration::from_secs(10), left.wait()).await;
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(ended.unwrap().unwrap().signal(), Some(9));
+        assert!(alive(stranger), "{stranger} was killed");
+        drop(other);
+        // No folder: nothing to do.
+        reap(&dir, source);
     }
 
     #[cfg(unix)]

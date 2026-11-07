@@ -191,8 +191,12 @@ impl State {
             };
             tokio::join!(cast, forward);
             let mut browsers = state.browsers.lock().await;
-            if browsers.running.get(&worktree).is_some_and(|r| r.id == id) {
-                state.stop_browser(&mut browsers, &worktree).await;
+            // Unless it was stopped meanwhile (and maybe another started).
+            let gone: Vec<_> = (browsers.running)
+                .extract_if(|w, r| *w == worktree && r.id == id)
+                .collect();
+            for (worktree, running) in gone {
+                state.stop_browser(&browsers, &worktree, running).await;
             }
         });
         commands
@@ -233,27 +237,24 @@ impl State {
     pub(super) async fn browsers_follow(&self, agents: &HashMap<String, Agent>) {
         let mut browsers = self.browsers.lock().await;
         browsers.places = agents.values().filter_map(|a| a.worktree.clone()).collect();
-        let mut ended = Vec::new();
         let Browsers {
             running, places, ..
         } = &mut *browsers;
-        for (worktree, running) in running {
-            if places.contains(worktree) {
-                running.agent_seen = true;
-            } else if running.agent_seen {
-                ended.push(worktree.clone());
-            }
-        }
-        for worktree in ended {
-            self.stop_browser(&mut browsers, &worktree).await;
+        let ended: Vec<_> = running
+            .extract_if(|worktree, running| {
+                running.agent_seen |= places.contains(worktree);
+                running.agent_seen && !places.contains(worktree)
+            })
+            .collect();
+        for (worktree, running) in ended {
+            self.stop_browser(&browsers, &worktree, running).await;
         }
     }
 
-    /// Stops `worktree`'s browser in the background; its panel says so.
-    async fn stop_browser(&self, browsers: &mut Browsers, worktree: &str) {
-        // Always running: its callers found it.
-        let running = browsers.running.remove(worktree).into_iter();
-        running.for_each(|r| drop(tokio::spawn(r.process.stop())));
+    /// Stops `worktree`'s browser, already taken out of `browsers`, in the background; its panel
+    /// says so.
+    async fn stop_browser(&self, browsers: &Browsers, worktree: &str, running: Running) {
+        tokio::spawn(running.process.stop());
         if browsers.watched.as_deref() == Some(worktree) {
             self.to_app(0, &browsers.status(worktree)).await;
         }
