@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
-// The CSP the app's scheme gives an HTML page, read from its one place (`scheme::policy`).
+// The CSP the app's scheme gives an HTML page on Windows, whose scheme URL the mock gives,
+// read from its one place (`scheme::policy`).
 const scheme = readFileSync(new URL("../src-tauri/src/scheme.rs", import.meta.url), "utf8");
-const policy = scheme.match(/const HTML_POLICY: &str =\s*"([^"]+)";/)?.[1] ?? "";
+const policy = scheme.match(/const HTML_POLICY_WINDOWS: &str =\s*"([^"]+)";/)?.[1] ?? "";
 
 const PAGE = `<!doctype html><title>Page</title>
 <img id="dot" src="img/dot.png" alt="dot">

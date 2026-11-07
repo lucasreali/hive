@@ -89,6 +89,8 @@ const MODE_LIMIT: u64 = 16;
 /// The most reads of [`READ_LIMIT`] after the first a `hive-file:` answer takes (24.2): the
 /// service serves at most 100 MiB of a file (a PDF's cap).
 const READS: usize = 100;
+/// The `hive-file:` answers read at once (24.4), so the files held in memory stay a few.
+pub const SERVING: usize = 4;
 
 /// A read of a file for the `hive-file:` scheme (24.2): its size, type and version, and the
 /// bytes read.
@@ -361,6 +363,9 @@ pub struct Hive {
     /// Held through a whole `reconnect`, so two mode switches never overlap: one would start its
     /// bridge while the other still ends the old one, whose end then cuts the new connection.
     reconnecting: tokio::sync::Mutex<()>,
+    /// The `hive-file:` answers being read at once (24.4): a page's scripts can ask for many
+    /// files of up to 100 MiB each, so only [`SERVING`] are held in memory, the rest wait.
+    serving: tokio::sync::Semaphore,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
     restart: Option<Box<dyn Fn() + Send + Sync>>,
     /// Ends the app (Tauri's `exit`); given by `main.rs` (`with_exit`).
@@ -873,6 +878,7 @@ impl Hive {
             modes: None,
             link: Arc::default(),
             reconnecting: tokio::sync::Mutex::default(),
+            serving: tokio::sync::Semaphore::new(SERVING),
             restart: None,
             exit: None,
             install: None,
@@ -1563,9 +1569,11 @@ impl Hive {
     /// The answer arrives as `table`.
     /// The `hive-file:` scheme's answer for the URL path `path` (`/<token>/<path>`, 24.2): the
     /// whole file, pulled from the service in reads of [`READ_LIMIT`], as the type the service
-    /// read from its bytes; a file that changes meanwhile fails.
+    /// read from its bytes; a file that changes meanwhile fails. At most [`SERVING`] at once.
     pub async fn serve_file(&self, path: &str) -> Response<Vec<u8>> {
-        scheme::response(self.whole_file(path).await)
+        // Never closed, so this always holds a permit until the answer is built.
+        let _held = self.serving.acquire().await;
+        scheme::response(self.whole_file(path).await, cfg!(target_os = "macos"))
     }
 
     async fn whole_file(&self, path: &str) -> Result<(String, Vec<u8>), String> {
@@ -2184,7 +2192,7 @@ pub fn files_dropped<R: Runtime>(app: &AppHandle<R>, paths: &[String], x: f64, y
 pub async fn serve_file<R: Runtime>(app: AppHandle<R>, path: String) -> Response<Vec<u8>> {
     match app.try_state::<Hive>() {
         Some(hive) => hive.serve_file(&path).await,
-        None => scheme::response(Err(NOT_CONNECTED.to_owned())),
+        None => scheme::response(Err(NOT_CONNECTED.to_owned()), cfg!(target_os = "macos")),
     }
 }
 

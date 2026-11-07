@@ -90,26 +90,31 @@ pub fn with_url(file: &mut Value, macos: bool) {
     media["url"] = url.into();
 }
 
-/// An HTML page's CSP (24.4, the human at 24.1): its inline scripts and styles run, and it loads
-/// its own files through the scheme only; no network, no form, and a sandbox (origin `null`,
-/// no top navigation, no popup) even when not framed, so it never fetches the worktree's files.
-const HTML_POLICY: &str = "default-src 'none'; script-src hive-file: http://hive-file.localhost 'unsafe-inline'; style-src hive-file: http://hive-file.localhost 'unsafe-inline'; img-src hive-file: http://hive-file.localhost data:; font-src hive-file: http://hive-file.localhost; connect-src 'none'; form-action 'none'; sandbox allow-scripts";
+/// An HTML page's CSP (24.4, the human at 24.1) on macOS: its inline scripts and styles run, and
+/// it loads its own files through the scheme only; no network, no form, and a sandbox (origin
+/// `null`, no top navigation, no popup) even when not framed, so it never fetches the
+/// worktree's files. Only this platform's scheme origin: on macOS `http://hive-file.localhost`
+/// is a loopback host, which would carry a request out.
+const HTML_POLICY: &str = "default-src 'none'; script-src hive-file: 'unsafe-inline'; style-src hive-file: 'unsafe-inline'; img-src hive-file: data:; font-src hive-file:; connect-src 'none'; form-action 'none'; sandbox allow-scripts";
+/// [`HTML_POLICY`] on Windows, where WebView2 reaches the scheme as `http://hive-file.localhost`.
+const HTML_POLICY_WINDOWS: &str = "default-src 'none'; script-src http://hive-file.localhost 'unsafe-inline'; style-src http://hive-file.localhost 'unsafe-inline'; img-src http://hive-file.localhost data:; font-src http://hive-file.localhost; connect-src 'none'; form-action 'none'; sandbox allow-scripts";
 
 /// The CSP of a scheme answer of type `mime`, one place for every type.
 /// Anything shown as a document (an SVG opened from a PDF's link, a 404) is sandboxed, with
 /// no script and no network: in the scheme's origin it could read the token from its URL and
 /// fetch the worktree's files. A PDF is drawn by the WebView's viewer, which a sandbox blanks.
-pub fn policy(mime: &str) -> &'static str {
+pub fn policy(mime: &str, macos: bool) -> &'static str {
     match mime {
         "application/pdf" => "default-src 'none'",
-        hive_protocol::HTML_TYPE => HTML_POLICY,
+        hive_protocol::HTML_TYPE if macos => HTML_POLICY,
+        hive_protocol::HTML_TYPE => HTML_POLICY_WINDOWS,
         _ => "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
     }
 }
 
 /// The scheme's answer: the file's bytes as the service's type `mime`, or why not (404), with
-/// its [`policy`]. Never sniffed by the webview.
-pub fn response(read: Result<(String, Vec<u8>), String>) -> Response<Vec<u8>> {
+/// its [`policy`] on this platform (`macos`). Never sniffed by the webview.
+pub fn response(read: Result<(String, Vec<u8>), String>, macos: bool) -> Response<Vec<u8>> {
     let (status, mime, body) = match read {
         Ok((mime, body)) => (200, mime, body),
         Err(error) => (
@@ -120,7 +125,7 @@ pub fn response(read: Result<(String, Vec<u8>), String>) -> Response<Vec<u8>> {
     };
     Response::builder()
         .status(status)
-        .header("Content-Security-Policy", policy(&mime))
+        .header("Content-Security-Policy", policy(&mime, macos))
         .header("Content-Type", mime)
         .header("X-Content-Type-Options", "nosniff")
         .body(body)
@@ -208,12 +213,12 @@ mod tests {
 
     #[test]
     fn the_answer_carries_the_service_s_type_and_is_never_sniffed() {
-        let ok = response(Ok(("image/png".into(), vec![1, 2])));
+        let ok = response(Ok(("image/png".into(), vec![1, 2])), true);
         assert_eq!(ok.status(), 200);
         assert_eq!(ok.headers()["Content-Type"], "image/png");
         assert_eq!(ok.headers()["X-Content-Type-Options"], "nosniff");
         assert_eq!(ok.body(), &[1, 2]);
-        let failed = response(Err("a.png does not exist".into()));
+        let failed = response(Err("a.png does not exist".into()), false);
         assert_eq!(failed.status(), 404);
         assert_eq!(
             failed.headers()["Content-Type"],
@@ -226,7 +231,7 @@ mod tests {
         for answer in [&ok, &failed] {
             assert_eq!(answer.headers()["Content-Security-Policy"], sandboxed);
         }
-        let pdf = response(Ok(("application/pdf".into(), vec![])));
+        let pdf = response(Ok(("application/pdf".into(), vec![])), true);
         let csp = &pdf.headers()["Content-Security-Policy"];
         assert_eq!(csp, "default-src 'none'");
     }
@@ -235,37 +240,42 @@ mod tests {
     fn an_svg_or_any_other_file_shown_as_a_document_runs_nothing() {
         // An SVG opened from a PDF's link would run its scripts in the scheme's origin.
         for mime in ["image/svg+xml", "application/octet-stream", "text/plain"] {
-            let csp = response(Ok((mime.into(), vec![])));
+            let csp = response(Ok((mime.into(), vec![])), true);
             let csp = csp.headers()["Content-Security-Policy"].to_str().unwrap();
             assert!(csp.ends_with("; sandbox"), "{mime}: {csp}");
             assert!(csp.starts_with("default-src 'none';"), "{mime}: {csp}");
             assert!(!csp.contains("script"), "{mime}: {csp}");
         }
-        assert_eq!(policy("application/pdf"), "default-src 'none'");
+        assert_eq!(policy("application/pdf", false), "default-src 'none'");
     }
 
     #[test]
     fn an_html_page_runs_its_own_scripts_sandboxed_and_off_the_network() {
-        let page = response(Ok((hive_protocol::HTML_TYPE.into(), vec![])));
-        let csp = page.headers()["Content-Security-Policy"].to_str().unwrap();
-        assert_eq!(csp, HTML_POLICY);
-        let directives: Vec<&str> = csp.split("; ").collect();
-        for directive in [
-            "default-src 'none'",
-            "connect-src 'none'",
-            "form-action 'none'",
-            "sandbox allow-scripts",
+        for (macos, expected, scheme) in [
+            (true, HTML_POLICY, "hive-file:"),
+            (false, HTML_POLICY_WINDOWS, "http://hive-file.localhost"),
         ] {
-            assert!(directives.contains(&directive), "{directive}: {csp}");
-        }
-        // Nothing but the scheme, inline code and `data:` images: no remote host, no `'self'`.
-        for source in csp.split([';', ' ']).filter(|s| s.contains(':')) {
-            let known = ["hive-file:", "http://hive-file.localhost", "data:"];
-            assert!(known.contains(&source), "{source}: {csp}");
-        }
-        // Only the exact type: a page served as anything else gets the sandbox without scripts.
-        for mime in ["text/html", "text/html; charset=utf-16", "text/javascript"] {
-            assert!(policy(mime).ends_with("; sandbox"), "{mime}");
+            let page = response(Ok((hive_protocol::HTML_TYPE.into(), vec![])), macos);
+            let csp = page.headers()["Content-Security-Policy"].to_str().unwrap();
+            assert_eq!(csp, expected);
+            let directives: Vec<&str> = csp.split("; ").collect();
+            for directive in [
+                "default-src 'none'",
+                "connect-src 'none'",
+                "form-action 'none'",
+                "sandbox allow-scripts",
+            ] {
+                assert!(directives.contains(&directive), "{directive}: {csp}");
+            }
+            // Only this platform's scheme, inline code and `data:` images: no other host (on
+            // macOS `http://hive-file.localhost` is loopback), no `'self'`.
+            for source in csp.split([';', ' ']).filter(|s| s.contains(':')) {
+                assert!([scheme, "data:"].contains(&source), "{source}: {csp}");
+            }
+            // Only the exact type: served as anything else, a page gets no script.
+            for mime in ["text/html", "text/html; charset=utf-16", "text/javascript"] {
+                assert!(policy(mime, macos).ends_with("; sandbox"), "{mime}");
+            }
         }
     }
 }

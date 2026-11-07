@@ -3889,6 +3889,56 @@ async fn a_file_url_is_read_from_the_service_in_ranges() {
 }
 
 #[tokio::test]
+async fn only_a_few_file_urls_are_read_at_once() {
+    // A page's scripts can ask for many large files: past `SERVING`, they wait their turn.
+    assert_eq!(SERVING, 4, "five pages below");
+    let (hive, mut service, _rx) = welcomed().await;
+    let reads = async {
+        let mut asked = Vec::new();
+        for _ in 0..SERVING {
+            let (0, Control::ReadFile { id, .. }) = service.control().await else {
+                panic!("expected read_file");
+            };
+            asked.push(id);
+        }
+        let more = tokio::time::timeout(Duration::from_millis(200), service.control()).await;
+        assert!(more.is_err(), "a read past the limit: {more:?}");
+        for id in asked {
+            let reply = Control::FileRange {
+                id,
+                size: 1,
+                mime: "text/javascript".into(),
+                version: "v".into(),
+                error: None,
+            };
+            service.send(0, reply).await;
+            service.writer.send(Frame::data(id, vec![1])).await.unwrap();
+        }
+        // One answered, the last one is read.
+        answer_read(
+            &mut service,
+            Some((1, "text/javascript", "v")),
+            None,
+            Some(vec![2]),
+        )
+        .await;
+    };
+    let all = async {
+        let (a, b, c, d, e, ()) = tokio::join!(
+            hive.serve_file("/t/a.js"),
+            hive.serve_file("/t/b.js"),
+            hive.serve_file("/t/c.js"),
+            hive.serve_file("/t/d.js"),
+            hive.serve_file("/t/e.js"),
+            reads
+        );
+        [a, b, c, d, e].map(|answer| answer.status().as_u16())
+    };
+    let statuses = tokio::time::timeout(WAIT, all).await.unwrap();
+    assert_eq!(statuses, [200; 5]);
+}
+
+#[tokio::test]
 async fn a_file_url_without_a_service_or_a_hive_fails() {
     let (status, body, _) = served(&hive(), "/t/a.png", async {}).await;
     assert_eq!((status, &body[..]), (404, NOT_CONNECTED.as_bytes()));
