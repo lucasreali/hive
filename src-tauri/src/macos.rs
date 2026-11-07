@@ -724,7 +724,9 @@ unsafe fn take_drop(view: Id, info: Id) -> bool {
 type FromApp = Box<dyn Fn(&str) -> bool + Send + Sync>;
 static FROM_APP: OnceLock<FromApp> = OnceLock::new();
 /// wry's `userContentController:didReceiveScriptMessage:` and the `ipc` scheme handler's
-/// `webView:startURLSchemeTask:` before [`guard_ipc`] replaced them.
+/// `webView:startURLSchemeTask:` before [`guard_ipc`] replaced them. Only the first class's is
+/// kept: right while there is one webview, and with more only because wry gives every scheme
+/// handler class the same `start_task`.
 static SCRIPT_MESSAGE: OnceLock<usize> = OnceLock::new();
 static START_TASK: OnceLock<usize> = OnceLock::new();
 /// Both messages' signature: nothing from self, _cmd and two objects.
@@ -740,8 +742,10 @@ type Receive = unsafe extern "C" fn(Id, Sel, Id, Id);
 ///
 /// `delegate` is part of the name of wry's script message handler class, which WebKit hides
 /// (objc2 names it `wry::…::WryWebViewDelegate<version>`); should it be missing, the `ipc`
-/// message handler is removed instead: the app keeps `ipc://`, losing only Tauri's fallback. Only the first `from_app` is kept; false when both
-/// ways in were not guarded.
+/// message handler is removed instead: the app keeps `ipc://`, losing only Tauri's fallback.
+/// Should the `ipc` scheme handler be missing, `ipc://` stays unguarded (fails open; the caller
+/// can only log it). Only the first `from_app` is kept; false when both ways in were not
+/// guarded.
 ///
 /// # Safety
 /// `webview` is a `WKWebView` or nil, used on the main thread.
@@ -840,7 +844,8 @@ unsafe fn forward(own: &OnceLock<usize>, this: Id, name: Sel, first: Id, second:
 }
 
 /// The replaced `userContentController:didReceiveScriptMessage:`: wry's, for a message of the
-/// app's top document only. Nothing unwinds into WebKit: a panic drops the message.
+/// app's top document only. The check must stay panic-free: `catch_unwind` drops the message
+/// on a panic in a debug build, but the release build aborts (`panic = "abort"`).
 unsafe extern "C" fn script_message(this: Id, name: Sel, controller: Id, script: Id) {
     // SAFETY: WebKit calls this with a `WKScriptMessage`.
     let admitted = catch_unwind(AssertUnwindSafe(|| unsafe { from_top(script) }));
@@ -872,7 +877,8 @@ unsafe fn from_top(script: Id) -> bool {
 }
 
 /// The replaced `webView:startURLSchemeTask:` of the `ipc` scheme: Tauri's, for a request
-/// whose `Origin` is the app's; any other fails. A panic fails it too.
+/// whose `Origin` is the app's; any other fails. The check must stay panic-free: `catch_unwind`
+/// fails the task on a panic in a debug build, but the release build aborts.
 unsafe extern "C" fn start_task(this: Id, name: Sel, webview: Id, task: Id) {
     // SAFETY: WebKit calls this with a `WKURLSchemeTask`.
     let admitted = catch_unwind(AssertUnwindSafe(|| unsafe { from_app_origin(task) }));
