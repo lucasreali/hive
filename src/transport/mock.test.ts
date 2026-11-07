@@ -17,6 +17,8 @@ import {
   LOAD_START_MS,
   MOCK_ACCOUNTS_DIR,
   MOCK_BRANCHES,
+  MOCK_BROWSER_FRAME,
+  MOCK_BROWSER_URL,
   MOCK_CHANGES,
   MOCK_CLAUDE_DIR,
   MOCK_DIAGNOSTICS,
@@ -727,6 +729,30 @@ test("a watched worktree lists its files and again after a touch in its terminal
   const [again, main2] = filesOf().slice(7);
   expect(again?.type === "files" && again.files).toEqual(["b.txt", ...touched].sort());
   expect(main2?.type === "files" && main2.files.includes("d.txt")).toBe(true);
+});
+
+test("a watched browser runs only while the setting is on, with one frame (24.6)", async () => {
+  const { transport, messages } = await connected();
+  const worktree = MOCK_REPOS[0].path;
+  messages.length = 0;
+  await transport.watchBrowser(worktree);
+  await transport.watchBrowser(null);
+  await transport.browserDrawn();
+  await tick();
+  const off = { type: "browser_status" as const, worktree, running: false, url: null, error: null };
+  expect(messages).toEqual([off]);
+  await transport.setSettings({
+    ...DEFAULT_SETTINGS,
+    browser: { enabled: true, path: null, max: 3 },
+  });
+  await tick();
+  messages.length = 0;
+  await transport.watchBrowser(worktree);
+  await tick();
+  expect(messages).toEqual([
+    { type: "browser_status", worktree, running: true, url: MOCK_BROWSER_URL, error: null },
+    { type: "browser_frame", worktree, data: MOCK_BROWSER_FRAME },
+  ]);
 });
 
 test("a worktree's scripts: the settings' first, shop's repository's, a port each (23.4)", async () => {

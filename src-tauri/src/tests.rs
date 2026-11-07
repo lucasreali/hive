@@ -1158,6 +1158,13 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.list_scripts("/r".into()).unwrap();
     let scripts = Control::ListScripts { path: "/r".into() };
     assert_eq!(service.control().await, (0, scripts));
+    hive.watch_browser(Some("/r".into())).unwrap();
+    let watch = Control::WatchBrowser {
+        worktree: Some("/r".into()),
+    };
+    assert_eq!(service.control().await, (0, watch));
+    hive.browser_drawn().unwrap();
+    assert_eq!(service.control().await, (0, Control::BrowserDrawn));
     hive.list_sessions().unwrap();
     assert_eq!(service.control().await, (0, Control::ListSessions));
     hive.locate_session("s".into(), SessionTarget::Log).unwrap();
@@ -1658,6 +1665,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.list_scripts("/r".into()), not_connected);
+    assert_eq!(hive.watch_browser(None), not_connected);
+    assert_eq!(hive.browser_drawn(), not_connected);
     assert_eq!(
         hive.open_file("/r".into(), "a".into(), DiffBase::Head),
         not_connected

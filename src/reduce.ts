@@ -208,6 +208,12 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "subagent_worktrees":
       return { subagentWorktrees: m.worktrees };
+    case "browser_status": {
+      const { type: _, worktree, ...status } = m;
+      return { browsers: { ...s.browsers, [worktree]: status } };
+    }
+    case "browser_frame":
+      return { browserFrame: { worktree: m.worktree, data: m.data } };
     case "agent_state": {
       const { type: _, id, ...status } = m;
       const agentStates = { ...s.agentStates, [id]: status };

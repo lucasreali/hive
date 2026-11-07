@@ -633,6 +633,15 @@ test("each panel tab keeps its label as its accessible name and title", () => {
     labels.map((l) => [l, l]),
   );
   for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
+  // The agent's browser (24.6) while its setting is on.
+  act(() => {
+    const settings = useHive.getState().settings;
+    apply({
+      type: "settings",
+      settings: { ...settings, browser: { ...settings.browser, enabled: true } },
+    });
+  });
+  expect(screen.getByRole("tab", { name: "Browser" })).toBeDefined();
 });
 
 test("a folder project's panel has its files and sessions only, and asks for no changes", () => {

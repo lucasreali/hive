@@ -95,6 +95,17 @@ export type ServiceMessage =
   // A window of the current account reached 80% or 95%, once per window (17.23).
   | { type: "usage_alert"; window: UsageWindow; threshold: number; resets_at: number }
   | { type: "subagent_worktrees"; worktrees: string[] }
+  // 24.6: the watched worktree's browser: running or not, the page shown, why it did not start.
+  | {
+      type: "browser_status";
+      worktree: string;
+      running: boolean;
+      url: string | null;
+      error: string | null;
+    }
+  // 24.6: one screencast frame of the watched browser, a JPEG in base64; the next comes after
+  // `browserDrawn`.
+  | { type: "browser_frame"; worktree: string; data: string }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
@@ -580,7 +591,15 @@ export type Settings = {
     default_name: string;
     share_sessions: boolean;
   };
+  /**
+   * The agent's browser (24.6): off by default; `path` null finds Chrome, Chromium, Edge or
+   * Brave; `max` browsers open at once, 1–10.
+   */
+  browser: { enabled: boolean; path: string | null; max: number };
 };
+
+/** Mirrors `browser_status` (24.6), without its type and worktree. */
+export type BrowserStatus = { running: boolean; url: string | null; error: string | null };
 
 /**
  * Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`.

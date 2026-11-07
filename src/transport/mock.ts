@@ -273,6 +273,12 @@ const project = (path: string, name: string, worktrees: string[]): Project => ({
 });
 
 /** The fake service's git repositories; the first two are followed from the start. */
+/** The page the agent's browser shows in the mock (24.6). */
+export const MOCK_BROWSER_URL = "http://localhost:5173/";
+/** Its one frame: a 16×10 JPEG in base64. */
+export const MOCK_BROWSER_FRAME =
+  "/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAEKADAAQAAAABAAAACgAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgACgAQAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMABAQEBAQEBgQEBgkGBgYJDAkJCQkMDwwMDAwMDxIPDw8PDw8SEhISEhISEhUVFRUVFRkZGRkZHBwcHBwcHBwcHP/bAEMBBAUFBwcHDAcHDB0UEBQdHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHf/dAAQAAf/aAAwDAQACEQMRAD8A+V6KKK6jE//Z";
+
 export const MOCK_REPOS = [
   project("/home/user/projects/shop", "shop", ["fix-login", "feat-checkout"]),
   project("/home/user/projects/api", "api", ["refactor-auth"]),
@@ -1539,6 +1545,28 @@ export function createMockTransport(
       scriptsAsked = holder(path) ? path : null;
       later(scriptsOfWorktree(path));
     },
+    async watchBrowser(worktree) {
+      // Each watched worktree's agent has a browser while the setting is on: one frame each time.
+      if (worktree === null) return;
+      if (!settings.browser.enabled) {
+        return void later({
+          type: "browser_status",
+          worktree,
+          running: false,
+          url: null,
+          error: null,
+        });
+      }
+      later({
+        type: "browser_status",
+        worktree,
+        running: true,
+        url: MOCK_BROWSER_URL,
+        error: null,
+      });
+      later({ type: "browser_frame", worktree, data: MOCK_BROWSER_FRAME });
+    },
+    async browserDrawn() {},
     async listSessions() {
       listSessions();
     },

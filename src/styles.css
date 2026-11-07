@@ -4680,3 +4680,39 @@ button.link:hover {
   font-family: var(--font-sans);
   font-size: var(--fs-small);
 }
+
+/* The agent's browser (24.6): its page's address, then the screencast, fit to the panel. */
+.browser {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.browser-url {
+  min-height: 28px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-frame {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  object-fit: contain;
+  object-position: top;
+  user-select: none;
+}
+
+.browser-empty {
+  padding: 16px 12px;
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}

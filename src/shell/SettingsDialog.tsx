@@ -497,6 +497,45 @@ const FIELDS: Field[] = [
     ),
   },
   {
+    section: "Agents",
+    label: "Give agents a browser",
+    help: "Agents in Hive's terminals get a browser of their worktree, which the panel's Browser tab shows (view only).",
+    tip: "Its tools are the Playwright MCP, which bunx or npx downloads the first time an agent uses them. The browser is an installed Chrome, Chromium, Edge or Brave, with a new profile each time; it listens on 127.0.0.1 without a password, so a program of yours could drive it too.",
+    check: true,
+    control: () => (
+      <Toggle
+        label="Give agents a browser"
+        get={(s) => s.browser.enabled}
+        set={(s, on) => {
+          s.browser.enabled = on;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Agents",
+    label: "Browser program",
+    help: "Empty: Chrome, Chromium, Edge or Brave where they install.",
+    control: (id) => <BrowserPath id={id} />,
+  },
+  {
+    section: "Agents",
+    label: "Browsers open at once",
+    help: "1 to 10: one per worktree with an agent using it.",
+    control: (id, label) => (
+      <NumberSetting
+        id={id}
+        label={label}
+        min={1}
+        max={10}
+        get={(s) => s.browser.max}
+        set={(s, n) => {
+          s.browser.max = n;
+        }}
+      />
+    ),
+  },
+  {
     section: "Worktrees",
     label: "Default base branch",
     help: "Empty: the project's current branch.",
@@ -556,6 +595,22 @@ function DefaultBase({ id }: { id: string }) {
       onSave={(text) =>
         saveSettings((s) => {
           s.worktrees.default_base = text.trim() === "" ? null : text;
+        })
+      }
+    />
+  );
+}
+
+function BrowserPath({ id }: { id: string }) {
+  const value = useHive((s) => s.settings.browser.path);
+  return (
+    <Typed
+      id={id}
+      value={value ?? ""}
+      placeholder="Found where it installs"
+      onSave={(text) =>
+        saveSettings((s) => {
+          s.browser.path = text.trim() === "" ? null : text;
         })
       }
     />

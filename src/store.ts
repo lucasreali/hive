@@ -20,6 +20,7 @@ import type {
   AgentUsage,
   AppMode,
   Branches,
+  BrowserStatus,
   Changes,
   ClaudeLogin,
   CreateFailure,
@@ -220,6 +221,7 @@ export const DEFAULT_SETTINGS: Settings = {
   worktrees: { default_base: null },
   projects: {},
   claude: { accounts: [], default_name: "Default", share_sessions: false },
+  browser: { enabled: false, path: null, max: 3 },
 };
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
@@ -272,7 +274,14 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions" | "scripts";
+export type PanelView =
+  | "files"
+  | "changes"
+  | "sessions"
+  | "pulls"
+  | "actions"
+  | "scripts"
+  | "browser";
 /** The key of a project's Actions runs on `branch` (all branches: null) in `HiveState.runs`. */
 export const runsKey = (project: string, branch: string | null) => `${project}\n${branch ?? ""}`;
 
@@ -438,6 +447,10 @@ export type HiveState = {
    * they show under their subagent only, not in their project's list.
    */
   subagentWorktrees: string[];
+  /** By worktree id: its browser as the service last said (24.6), while the panel watched it. */
+  browsers: Record<string, BrowserStatus>;
+  /** The watched browser's newest frame (24.6), a JPEG in base64. */
+  browserFrame: { worktree: string; data: string } | null;
   /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
@@ -566,6 +579,8 @@ export const initialState: HiveState = {
   agentTitles: {},
   agentUsage: {},
   subagentWorktrees: [],
+  browsers: {},
+  browserFrame: null,
   worktreeFiles: null,
   changes: {},
   scripts: {},

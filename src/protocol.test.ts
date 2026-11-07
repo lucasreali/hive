@@ -71,6 +71,8 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   session_usage: { usage: true, week: true, limit_at: true, week_limit_at: true },
   usage_alert: { window: true, threshold: true, resets_at: true },
   subagent_worktrees: { worktrees: true },
+  browser_status: { worktree: true, running: true, url: true, error: true },
+  browser_frame: { worktree: true, data: true },
   projects: { projects: true },
   project_added: { project: true },
   add_project_failed: { path: true, error: true, message: true },
