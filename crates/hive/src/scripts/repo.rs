@@ -9,7 +9,7 @@
 //! it are kept, and only names Hive can type as one shell word.
 
 use std::fmt;
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::Metadata;
 use std::io;
 use std::path::Path;
 
@@ -17,6 +17,7 @@ use hive_protocol::{RunScript, Script, ScriptSource};
 use serde::Deserialize;
 use serde::de::{MapAccess, Visitor};
 
+use crate::file;
 use crate::git::read_limited;
 
 /// Largest script file read.
@@ -139,11 +140,10 @@ fn package_manager(found: &[&str]) -> &'static str {
 
 /// The file `name` at the root of `dir`, when it is a regular file of at most [`FILE_LIMIT`]
 /// bytes: a link or anything else is refused before it is opened, and again by
-/// [`open_plain`], should one be swapped in meanwhile.
+/// [`file::open_plain`], should one be swapped in meanwhile.
 fn read(dir: &Path, name: &str) -> Result<Vec<u8>, String> {
-    let path = dir.join(name);
-    let read = plain(path.symlink_metadata())
-        .and_then(|()| open_plain(&path))
+    let read = plain(dir.join(name).symlink_metadata())
+        .and_then(|()| file::open_plain(dir, Path::new(name)))
         .and_then(|mut file| read_limited(&mut file, FILE_LIMIT));
     read.map_err(|err| err.to_string())
 }
@@ -154,27 +154,6 @@ fn plain(meta: io::Result<Metadata>) -> io::Result<()> {
         Ok(meta) if meta.is_file() => Ok(()),
         _ => Err(io::Error::other("a link or not a regular file, not read")),
     }
-}
-
-/// `path` opened for reading only when it is a regular file: a link at its end is not followed
-/// (on Windows the link itself is opened, then refused) and a FIFO does not block the open.
-fn open_plain(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use nix::fcntl::OFlag;
-        let flags = OFlag::O_NOFOLLOW.union(OFlag::O_NONBLOCK);
-        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, flags.bits());
-    }
-    #[cfg(windows)]
-    std::os::windows::fs::OpenOptionsExt::custom_flags(
-        &mut options,
-        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-    );
-    let file = options.open(path)?;
-    plain(file.metadata())?;
-    Ok(file)
 }
 
 /// The names that can be typed, each once, at most [`PER_FILE`] of them; and what was left out.
@@ -648,23 +627,6 @@ mod tests {
         std::fs::write(&file, &make).unwrap();
         let problem = format!("Makefile: input larger than {FILE_LIMIT} bytes");
         assert_eq!(listed(tmp.path()), (Vec::new(), vec![problem]));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_open_itself_refuses_a_link_and_a_fifo_without_blocking() {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("file");
-        std::fs::write(&file, "x").unwrap();
-        assert!(open_plain(&file).is_ok());
-        // As if swapped in after the first check.
-        let link = tmp.path().join("link");
-        std::os::unix::fs::symlink(&file, &link).unwrap();
-        assert!(open_plain(&link).is_err());
-        let fifo = tmp.path().join("fifo");
-        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
-        let err = open_plain(&fifo).unwrap_err();
-        assert_eq!(err.to_string(), "a link or not a regular file, not read");
     }
 
     #[cfg(unix)]

@@ -238,7 +238,86 @@ pub fn open_inside(dir: &Path, path: &str) -> io::Result<Option<File>> {
 }
 
 fn opened(dir: &Path, rel: &Path) -> io::Result<Option<File>> {
-    resolve(dir, rel)?.map(File::open).transpose()
+    opened_with(dir, rel, || {})
+}
+
+/// [`opened`] with `between` run after the path is checked and before the file is opened, so
+/// a file swapped in there can be tested: the open itself refuses a link or a special file.
+fn opened_with(dir: &Path, rel: &Path, between: impl FnOnce()) -> io::Result<Option<File>> {
+    let Some(real) = resolve(dir, rel)? else {
+        return Ok(None);
+    };
+    between();
+    let root = canonical(dir)?;
+    // Outside the root (moved meanwhile), `real` stays absolute, which [`open_plain`] refuses.
+    open_plain(&root, real.strip_prefix(&root).unwrap_or(&real)).map(Some)
+}
+
+/// The regular file `rel` (normal parts only) of the folder `root`, opened for reading, for
+/// a path checked before (TODO 24.7): no part of `rel` may be a link, even one swapped in
+/// after the check, and a FIFO or a device is refused at once instead of blocking the open.
+pub(crate) fn open_plain(root: &Path, rel: &Path) -> io::Result<File> {
+    let names: Option<Vec<&OsStr>> = rel
+        .components()
+        .map(|part| match part {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+    let names = names.unwrap_or_default();
+    let Some((name, folders)) = names.split_last() else {
+        return Err(io::Error::other("not a relative path inside the worktree"));
+    };
+    let file = open_parts(root, folders, name)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("not a regular file"));
+    }
+    Ok(file)
+}
+
+/// `root`'s `folders`, then `name` in the last, each opened from the one before without
+/// following a link (`O_NOFOLLOW`): one swapped in at any time fails the open instead of
+/// leading out of `root`. `O_NONBLOCK`: a FIFO opens at once, without waiting for a writer.
+#[cfg(unix)]
+fn open_parts(root: &Path, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
+    use nix::fcntl::{AT_FDCWD, OFlag, openat};
+    use nix::sys::stat::Mode;
+    let read = OFlag::O_RDONLY.union(OFlag::O_CLOEXEC);
+    let mut fd = openat(
+        AT_FDCWD,
+        root,
+        read.union(OFlag::O_DIRECTORY),
+        Mode::empty(),
+    )?;
+    let nofollow = read.union(OFlag::O_NOFOLLOW);
+    for folder in folders {
+        fd = openat(
+            &fd,
+            *folder,
+            nofollow.union(OFlag::O_DIRECTORY),
+            Mode::empty(),
+        )?;
+    }
+    let file = openat(&fd, name, nofollow.union(OFlag::O_NONBLOCK), Mode::empty())?;
+    Ok(File::from(file))
+}
+
+/// The file at `root`'s `folders` and `name`; a link at its end is opened itself (then refused
+/// by [`open_plain`]), never followed.
+// shortcut: Windows has no `openat`, so a folder of the path swapped for a junction after the
+// check is still followed; `NtCreateFile` relative to a folder handle if Windows matters (D17.0).
+#[cfg(windows)]
+fn open_parts(root: &Path, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
+    let mut path = root.to_path_buf();
+    path.extend(folders);
+    path.push(name);
+    let mut options = OpenOptions::new();
+    options.read(true);
+    std::os::windows::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+    );
+    options.open(path)
 }
 
 fn on_disk(dir: &Path, rel: &Path) -> io::Result<Side> {
@@ -1136,6 +1215,80 @@ mod tests {
                 io::ErrorKind::InvalidFilename
             }
         );
+    }
+
+    /// The text of `path` of `dir` opened by [`opened_with`], with `swap` run between the check
+    /// and the open; on a thread, so an open that blocks fails the test instead of hanging it.
+    #[cfg(unix)]
+    fn swapped(dir: &Path, path: &str, swap: impl FnOnce() + Send + 'static) -> io::Result<String> {
+        let (dir, path) = (dir.to_path_buf(), PathBuf::from(path));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let text = opened_with(&dir, &path, swap).map(|file| {
+                let mut text = String::new();
+                file.unwrap().read_to_string(&mut text).unwrap();
+                text
+            });
+            tx.send(text).unwrap();
+        });
+        let wait = std::time::Duration::from_secs(10);
+        rx.recv_timeout(wait).expect("the open blocked")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_swapped_after_its_check_is_refused_by_the_open() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        for (name, text) in [("a", "a"), ("c", "c")] {
+            std::fs::write(root.join(name), text).unwrap();
+        }
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/b"), "b").unwrap();
+        std::fs::write(outside.path().join("b"), "secret").unwrap();
+        symlink("sub/b", root.join("link")).unwrap();
+        // Untouched, a file opens, and a link inside the worktree is followed as before.
+        assert_eq!(swapped(&root, "a", || {}).unwrap(), "a");
+        assert_eq!(swapped(&root, "link", || {}).unwrap(), "b");
+        // The file for a link out of the worktree.
+        let (file, secret) = (root.join("a"), outside.path().join("b"));
+        let err = swapped(&root, "a", move || {
+            std::fs::remove_file(&file).unwrap();
+            symlink(&secret, &file).unwrap();
+        });
+        assert_eq!(err.unwrap_err().raw_os_error(), Some(nix::libc::ELOOP));
+        // A folder of its path for a link to a folder outside that holds the same name.
+        let (sub, out) = (root.join("sub"), outside.path().to_path_buf());
+        let err = swapped(&root, "sub/b", move || {
+            std::fs::rename(&sub, sub.with_file_name("old")).unwrap();
+            symlink(&out, &sub).unwrap();
+        });
+        let code = err.unwrap_err().raw_os_error();
+        assert!(
+            matches!(code, Some(nix::libc::ELOOP | nix::libc::ENOTDIR)),
+            "{code:?}"
+        );
+        // The file for a FIFO: refused at once, without waiting for a writer.
+        let fifo = root.join("c");
+        let err = swapped(&root, "c", move || {
+            std::fs::remove_file(&fifo).unwrap();
+            nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        });
+        assert_eq!(err.unwrap_err().to_string(), "not a regular file");
+    }
+
+    #[test]
+    fn only_a_path_of_names_is_opened_plain() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a"), "a").unwrap();
+        assert!(open_plain(dir.path(), Path::new("a")).is_ok());
+        let absolute = dir.path().join("a");
+        for rel in [Path::new(""), Path::new("../a"), &absolute] {
+            let err = open_plain(dir.path(), rel).unwrap_err();
+            assert_eq!(err.to_string(), "not a relative path inside the worktree");
+        }
     }
 
     /// The names in `dir`, sorted: a save leaves no temporary file behind.
