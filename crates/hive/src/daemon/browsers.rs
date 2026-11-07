@@ -60,6 +60,23 @@ impl Browsers {
         }
     }
 
+    /// Applies browser `id`'s screencast `event`; what the app gets of it (`None`: its panel
+    /// does not show it, or the browser was stopped meanwhile).
+    fn event(&mut self, worktree: &str, id: u64, event: Event) -> Option<Control> {
+        let running = self.running.get_mut(worktree).filter(|r| r.id == id)?;
+        let message = match event {
+            Event::Url(url) => {
+                running.url = url;
+                self.status(worktree)
+            }
+            Event::Frame(data) => Control::BrowserFrame {
+                worktree: worktree.to_owned(),
+                data,
+            },
+        };
+        (self.watched.as_deref() == Some(worktree)).then_some(message)
+    }
+
     fn command(&self, worktree: &str, command: Command) {
         if let Some(running) = self.running.get(worktree) {
             let _ = running.commands.send(command);
@@ -185,21 +202,8 @@ impl State {
     /// A screencast event of browser `id`: to the app while its panel shows it.
     async fn browser_event(&self, worktree: &str, id: u64, event: Event) {
         let mut browsers = self.browsers.lock().await;
-        let watched = browsers.watched.as_deref() == Some(worktree);
-        if let Some(running) = browsers.running.get_mut(worktree).filter(|r| r.id == id) {
-            let message = match event {
-                Event::Url(url) => {
-                    running.url = url;
-                    browsers.status(worktree)
-                }
-                Event::Frame(data) => Control::BrowserFrame {
-                    worktree: worktree.to_owned(),
-                    data,
-                },
-            };
-            if watched {
-                self.to_app(0, &message).await;
-            }
+        if let Some(message) = browsers.event(worktree, id, event) {
+            self.to_app(0, &message).await;
         }
     }
 

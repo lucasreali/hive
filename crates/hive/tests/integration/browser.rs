@@ -267,6 +267,10 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
         async move {
             let mut ws = cdp(&listener).await;
             assert_eq!(read(&mut ws).await["method"], "Target.setDiscoverTargets");
+            // Followed, though not shown.
+            let page = json!({ "method": "Target.targetCreated", "params": { "targetInfo": {
+                "targetId": "p1", "type": "page", "url": "about:blank" } } });
+            write(&mut ws, page).await;
         }
     });
     assert!(mcp(&repo, &repo.root, &bin).await.status.success());
