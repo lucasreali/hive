@@ -1335,20 +1335,38 @@ mod tests {
         let dir = tmp.path().join("browsers");
         let alive =
             |pid: u32| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
-        // One left running with its profile, as `start` runs it; it waits in a loop, so its
-        // arguments stay its own.
+        // One started as the service starts them, then left: the service was killed. It waits
+        // in a loop, so its arguments stay its own.
         let fake = tmp.path().join("left");
-        exe(&fake, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+        let port_file = tmp.path().join("port");
+        let script = format!(
+            "#!/bin/sh\nfor a; do case $a in --user-data-dir=*) d=${{a#--user-data-dir=}};; esac; done\n[ -n \"$d\" ] || exit 0\nprintf '%s\\n/devtools/browser/x\\n' \"$(cat '{}')\" > \"$d/DevToolsActivePort\"\nwhile :; do sleep 1; done\n",
+            port_file.display()
+        );
+        exe(&fake, &script);
+        // Run once first: macOS checks a new program on its first run, seconds when loaded.
+        assert!(
+            std::process::Command::new(&fake)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let answering = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::fs::write(
+            &port_file,
+            answering.local_addr().unwrap().port().to_string(),
+        )
+        .unwrap();
+        let cdp = tokio::spawn(async move {
+            let (stream, _) = answering.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap()
+        });
         let profile = dir.join("1");
-        std::fs::create_dir_all(&profile).unwrap();
-        let left = tokio::process::Command::new(&fake)
-            .args(args(&profile))
-            .process_group(0)
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
-        let group = left.id().unwrap();
-        std::fs::write(profile.join(GROUP_FILE), group.to_string()).unwrap();
+        let (process, _ws, _) = start(&fake, profile.clone(), START_TIMEOUT).await.unwrap();
+        let _cdp = cdp.await.unwrap();
+        let group = process.child.id().unwrap();
+        // Never stopped.
+        std::mem::forget(process);
         // Another process now has the number another profile names: not ours, left alone.
         let other = tokio::process::Command::new("sleep")
             .arg("30")
@@ -1365,23 +1383,14 @@ mod tests {
             std::fs::write(dir.join(name).join(GROUP_FILE), text).unwrap();
         }
         std::fs::create_dir_all(dir.join("6")).unwrap();
-        // Until it runs its loop with its arguments read.
         let source = crate::procs::Source::System;
-        let flag = format!("--user-data-dir={}", profile.display());
-        let started = std::time::Instant::now();
-        while !crate::procs::args(source, group as i32).is_some_and(|a| a.contains(&flag)) {
-            assert!(
-                started.elapsed() < Duration::from_secs(10),
-                "{group} never ran"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
         reap(&dir, source);
         assert!(!dir.exists());
-        let mut left = left;
-        let ended = tokio::time::timeout(Duration::from_secs(10), left.wait()).await;
-        use std::os::unix::process::ExitStatusExt;
-        assert_eq!(ended.unwrap().unwrap().signal(), Some(9));
+        let pid = nix::unistd::Pid::from_raw(group as i32);
+        let ended = tokio::task::spawn_blocking(move || nix::sys::wait::waitpid(pid, None));
+        let ended = tokio::time::timeout(Duration::from_secs(10), ended).await;
+        let killed = nix::sys::wait::WaitStatus::Signaled(pid, nix::sys::signal::SIGKILL, false);
+        assert_eq!(ended.unwrap().unwrap(), Ok(killed));
         assert!(alive(stranger), "{stranger} was killed");
         drop(other);
         // No folder: nothing to do.
