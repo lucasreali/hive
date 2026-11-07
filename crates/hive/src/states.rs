@@ -252,7 +252,6 @@ impl Agent {
                         worktree: None,
                         activity: event.activity.clone(),
                         since_ms: 0,
-                        writing: false,
                     });
                     agent.subagents.len() - 1
                 }
@@ -400,10 +399,6 @@ impl Agent {
 
     fn status(&self, id: &str, alert: Option<Alert>) -> Control {
         let state = self.displayed();
-        let subagents = self.subagents.iter().map(|s| SubagentState {
-            writing: s.state.writes(),
-            ..s.clone()
-        });
         Control::AgentState {
             id: id.to_owned(),
             state,
@@ -413,8 +408,7 @@ impl Agent {
             alert,
             // Out of view only: an agent in the focused window's view is seen as it changes.
             notify: alert.is_some() && !self.watched,
-            writing: state.writes(),
-            subagents: subagents.collect(),
+            subagents: self.subagents.clone(),
             activity: self.activity.clone(),
             since_ms: self.since_ms,
         }
@@ -998,7 +992,6 @@ mod tests {
                 interrupted: false,
                 alert: None,
                 notify: false,
-                writing: true,
                 subagents: vec![],
                 activity: None,
                 since_ms: 1_005,
@@ -1006,12 +999,12 @@ mod tests {
         );
     }
 
-    /// The alert and `writing` of a message `apply` sent.
+    /// The alert of a message `apply` sent, and whether its state may be writing files.
     fn alerts(sent: Option<Control>) -> Option<(Option<Alert>, bool)> {
-        let Some(Control::AgentState { alert, writing, .. }) = sent else {
+        let Some(Control::AgentState { alert, state, .. }) = sent else {
             return None;
         };
-        Some((alert, writing))
+        Some((alert, state.writes()))
     }
 
     #[test]
@@ -1276,7 +1269,6 @@ mod tests {
                 interrupted: false,
                 alert: None,
                 notify: false,
-                writing: true,
                 subagents: vec![SubagentState {
                     id: "a".into(),
                     agent_type: Some("Explore".into()),
@@ -1284,7 +1276,6 @@ mod tests {
                     worktree: None,
                     activity: None,
                     since_ms: 0,
-                    writing: true,
                 }],
                 activity: None,
                 since_ms: 0,

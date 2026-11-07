@@ -159,7 +159,7 @@ test("a changed file switches between its diff and editable text", () => {
   expect(button("Edit").disabled).toBe(false);
 });
 
-test("the header warns of a working agent and opens the file elsewhere", () => {
+test("the header shows no badge for a working agent and opens the file elsewhere (24.11)", () => {
   const opened = spyOn(transport, "openInEditor").mockImplementation(async () => {});
   editing();
   expect(screen.queryByText("Agent working here")).toBeNull();
@@ -174,13 +174,13 @@ test("the header warns of a working agent and opens the file elsewhere", () => {
       interrupted: false,
       alert: null,
       notify: false,
-      writing: true,
       subagents: [],
       activity: null,
       since_ms: 0,
     });
   });
-  expect(screen.getByText("Agent working here")).toBeDefined();
+  expect(useHive.getState().agentStates.s?.state).toBe("working");
+  expect(screen.queryByText("Agent working here")).toBeNull();
 
   fireEvent.click(button("Open in external editor"));
   expect(opened.mock.calls).toEqual([[worktree, "a.ts", false]]);

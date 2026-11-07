@@ -259,7 +259,6 @@ fn samples() -> Vec<Control> {
             interrupted: false,
             alert: None,
             notify: false,
-            writing: true,
             subagents: vec![SubagentState {
                 id: s("a"),
                 agent_type: Some(s("Explore")),
@@ -267,7 +266,6 @@ fn samples() -> Vec<Control> {
                 worktree: None,
                 activity: None,
                 since_ms: 1,
-                writing: false,
             }],
             activity: Some(s("Reading a.rs")),
             since_ms: 1,

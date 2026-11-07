@@ -1202,17 +1202,3 @@ export function paneAttention(s: HiveState, id: number): AgentState | null {
 }
 
 export const useTerminal = (id: number) => useHive((s) => s.terminals[id]);
-
-/**
- * An agent placed in `worktree`, or a subagent in its own worktree there, may be writing (the
- * service's `writing`): the file view's "Agent working here".
- */
-export const agentWorkingIn = (s: HiveState, worktree: string): boolean =>
-  Object.values(s.agents).some((a) => {
-    const status = s.agentStates[a.id];
-    const subagents = status?.subagents ?? [];
-    return (
-      (a.worktree === worktree && !!status?.writing) ||
-      subagents.some((sub) => sub.worktree === worktree && sub.writing)
-    );
-  });
