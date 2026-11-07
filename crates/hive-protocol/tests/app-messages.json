@@ -715,6 +715,11 @@
         "accounts": [],
         "default_name": "Default",
         "share_sessions": false
+      },
+      "browser": {
+        "enabled": false,
+        "path": null,
+        "max": 3
       }
     }
   },
@@ -769,6 +774,18 @@
         "error": "m"
       }
     ]
+  },
+  {
+    "type": "browser_status",
+    "worktree": "/r",
+    "running": true,
+    "url": "http://localhost:5173/",
+    "error": null
+  },
+  {
+    "type": "browser_frame",
+    "worktree": "/r",
+    "data": "/9j/4AAQ"
   },
   {
     "type": "error",

@@ -1156,6 +1156,37 @@ pub enum Control {
     Uninstalled {
         failed: Vec<UninstallFailure>,
     },
+    /// `hive browser-mcp` → service (24.6): the CDP endpoint of the agent's browser of the
+    /// worktree holding `cwd`, started first when it is not running. Answered by
+    /// `BrowserReady`, or `Error` with why not; the connection then closes.
+    BrowserEndpoint {
+        cwd: String,
+    },
+    /// Service → `hive browser-mcp`: the browser's CDP endpoint, `http://127.0.0.1:<port>`.
+    BrowserReady {
+        endpoint: String,
+    },
+    /// App → service: the browser panel shows `worktree`'s browser (`None`: no panel in view).
+    /// Its screencast runs only while watched; answered by `BrowserStatus`, then frames.
+    WatchBrowser {
+        worktree: Option<String>,
+    },
+    /// App → service: the last `BrowserFrame` is drawn, so the browser may send the next.
+    BrowserDrawn,
+    /// Service → app: the watched worktree's browser: running or not, the page shown
+    /// (`url`), and why it could not start (`error`). Sent on `WatchBrowser` and on a change.
+    BrowserStatus {
+        worktree: String,
+        running: bool,
+        url: Option<String>,
+        error: Option<String>,
+    },
+    /// Service → app: one screencast frame of the watched worktree's browser, a JPEG in
+    /// base64. The next comes only after `BrowserDrawn`.
+    BrowserFrame {
+        worktree: String,
+        data: String,
+    },
     Error {
         message: String,
     },
@@ -1215,6 +1246,29 @@ pub struct Settings {
     /// By project id (its path).
     pub projects: BTreeMap<String, ProjectSettings>,
     pub claude: ClaudeSettings,
+    pub browser: BrowserSettings,
+}
+
+/// The agent's browser (24.6, D22.3): off by default. When on, agents in Hive's terminals get
+/// the `hive-browser` MCP server, driving a browser of their worktree the app can watch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserSettings {
+    pub enabled: bool,
+    /// The browser to run; `None`: Chrome, Chromium, Edge or Brave where they install.
+    pub path: Option<String>,
+    /// The most browsers open at once, 1 to 10.
+    pub max: u32,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: None,
+            max: 3,
+        }
+    }
 }
 
 /// The Claude accounts (12.2), besides the default one (no `CLAUDE_CONFIG_DIR`: `~/.claude`),
@@ -3297,7 +3351,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"browser":{"enabled":false,"path":null,"max":3}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,

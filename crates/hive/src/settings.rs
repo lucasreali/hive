@@ -334,6 +334,11 @@ impl Store {
         self.current().0.agents.keep_awake
     }
 
+    /// The agent's browser settings (24.6).
+    pub fn browser(&self) -> hive_protocol::BrowserSettings {
+        self.current().0.browser.clone()
+    }
+
     /// Drops the settings of the project `id` (9.28): the settings then in use, or `None` when
     /// it had none (nothing is written). Under one lock, so a save meanwhile is not undone.
     pub fn forget(&self, id: &str) -> Result<Option<Settings>, String> {
@@ -513,6 +518,13 @@ pub fn check(settings: &Settings) -> Result<(), String> {
         3600,
     )?;
     range("agents.silence_secs", settings.agents.silence_secs, 2, 60)?;
+    range("browser.max", settings.browser.max, 1, 10)?;
+    if let Some(path) = &settings.browser.path {
+        text("browser.path", path)?;
+        if !Path::new(path).is_absolute() {
+            return Err("browser.path must be an absolute path".to_owned());
+        }
+    }
     text("terminal.font_family", &terminal.font_family)?;
     if let Some(base) = &settings.worktrees.default_base {
         text("worktrees.default_base", base)?;
@@ -785,12 +797,13 @@ mod tests {
     #[test]
     fn every_range_holds_at_its_ends_only() {
         type Field = fn(&mut Settings) -> &mut u32;
-        let fields: [(Field, u32, u32); 5] = [
+        let fields: [(Field, u32, u32); 6] = [
             (|s| &mut s.terminal.font_size, 8, 32),
             (|s| &mut s.terminal.scrollback, 1000, 100_000),
             (|s| &mut s.notifications.volume, 0, 100),
             (|s| &mut s.notifications.command_secs, 0, 3600),
             (|s| &mut s.agents.silence_secs, 2, 60),
+            (|s| &mut s.browser.max, 1, 10),
         ];
         for (field, min, max) in fields {
             let mut settings = Settings::default();
@@ -831,6 +844,15 @@ mod tests {
             check(&settings),
             Err("worktrees.default_base must not be empty".into())
         );
+        let browser = |path: &str| {
+            let mut settings = Settings::default();
+            settings.browser.path = Some(path.into());
+            check(&settings)
+        };
+        assert_eq!(browser("/opt/chrome"), Ok(()));
+        let relative = Err("browser.path must be an absolute path".into());
+        assert_eq!(browser("chrome"), relative);
+        assert_eq!(browser(""), Err("browser.path must not be empty".into()));
     }
 
     fn with_scripts(scripts: ProjectScripts) -> Settings {

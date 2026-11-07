@@ -94,7 +94,11 @@ sort! {
         | GetShared
         | OpenShared
         | ListUninstall
-        | Uninstall;
+        | Uninstall
+        | BrowserEndpoint
+        | BrowserReady
+        | WatchBrowser
+        | BrowserDrawn;
     received:
         Welcome
         | VersionMismatch
@@ -175,6 +179,8 @@ sort! {
         | Shared
         | UninstallList
         | Uninstalled
+        | BrowserStatus
+        | BrowserFrame
         | Error;
 }
 
@@ -633,6 +639,16 @@ fn samples() -> Vec<Control> {
                 path: s("/Applications/Hive.app"),
                 error: m(),
             }],
+        },
+        BrowserStatus {
+            worktree: s("/r"),
+            running: true,
+            url: Some(s("http://localhost:5173/")),
+            error: None,
+        },
+        BrowserFrame {
+            worktree: s("/r"),
+            data: s("/9j/4AAQ"),
         },
         Error { message: m() },
     ]

@@ -3,6 +3,7 @@
 pub mod actions;
 pub mod adapter;
 pub mod bridge;
+pub mod browser;
 pub mod changes;
 pub mod checkout;
 pub mod cli;
