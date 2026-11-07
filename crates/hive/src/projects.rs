@@ -4,6 +4,7 @@
 //! "Default" space until the first change is saved.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -44,6 +45,8 @@ pub struct Projects {
     /// The Claude config folders the file's spaces had before accounts (12.2), with their
     /// space's name, until they are accounts ([`Projects::migrate_accounts`]).
     legacy: Mutex<Vec<(String, String)>>,
+    /// The worktree each `hive-file:` token names (24.2, [`Projects::token`]), by token.
+    tokens: Mutex<HashMap<String, String>>,
 }
 
 impl Projects {
@@ -79,6 +82,7 @@ impl Projects {
             scanned: Mutex::default(),
             protected: protected.into_iter().collect(),
             legacy: Mutex::new(accounts),
+            tokens: Mutex::default(),
         }
     }
 
@@ -593,6 +597,29 @@ impl Projects {
     /// (23.1): the path comes from the app.
     pub fn worktree(&self, path: &str) -> io::Result<PathBuf> {
         self.tree(path).map(|(dir, _)| dir)
+    }
+
+    /// The token naming the worktree `path` (checked followed before) in the app's
+    /// `hive-file:` URLs and `read_file` (24.2): random, the same for the whole run, so a page
+    /// shown there can never name another worktree by its path.
+    pub fn token(&self, path: &str) -> String {
+        let mut tokens = self.tokens.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((token, _)) = tokens.iter().find(|(_, named)| *named == path) {
+            return token.clone();
+        }
+        let random = || RandomState::new().hash_one(path);
+        let token = format!("{:016x}{:016x}", random(), random());
+        tokens.insert(token.clone(), path.to_owned());
+        token
+    }
+
+    /// [`Projects::tree`] of the worktree `token` names ([`Projects::token`]), checked to be
+    /// still followed.
+    pub fn by_token(&self, token: &str) -> io::Result<(PathBuf, Option<PathBuf>)> {
+        let tokens = self.tokens.lock().unwrap_or_else(PoisonError::into_inner);
+        let path = tokens.get(token).cloned();
+        drop(tokens);
+        self.tree(&path.ok_or_else(|| io::Error::other("no worktree has this token"))?)
     }
 
     /// [`Projects::worktree`], with the empty repository that git lists the files of a folder

@@ -141,7 +141,7 @@ impl App {
                         output.push_str(&String::from_utf8_lossy(&frame.payload));
                         None
                     }
-                    FrameType::Control => frame.to_control().ok(),
+                    FrameType::Control | FrameType::Data => frame.to_control().ok(),
                 };
                 if frame.channel == channel && done(message.as_ref(), output) {
                     return message;

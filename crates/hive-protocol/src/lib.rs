@@ -2,8 +2,9 @@
 //!
 //! Every message is a frame `[type: u8][channel: u32][length: u32][payload]`,
 //! big-endian. Control frames carry one JSON [`Control`] message; terminal
-//! frames carry raw PTY bytes. Channel 0 is the connection itself; terminals
-//! use channels from 1 up.
+//! frames carry raw PTY bytes; data frames carry the bytes of a file read
+//! (`ReadFile`, on the request's `id` as channel). Channel 0 is the connection
+//! itself; terminals use channels from 1 up.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +24,9 @@ const HEADER_LEN: usize = 9;
 pub enum FrameType {
     Control = 0,
     Terminal = 1,
+    /// A file's bytes (24.2): the answer to `ReadFile` whose `id` is the channel, sent right
+    /// after its `FileRange`.
+    Data = 2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,10 +69,19 @@ impl Frame {
         }
     }
 
+    /// The bytes of the `ReadFile` request `id` (24.2).
+    pub fn data(id: u32, payload: impl Into<Bytes>) -> Self {
+        Self {
+            kind: FrameType::Data,
+            channel: id,
+            payload: payload.into(),
+        }
+    }
+
     pub fn to_control(&self) -> Result<Control, FrameError> {
         match self.kind {
             FrameType::Control => Ok(serde_json::from_slice(&self.payload)?),
-            FrameType::Terminal => Err(FrameError::NotControl),
+            FrameType::Terminal | FrameType::Data => Err(FrameError::NotControl),
         }
     }
 }
@@ -88,6 +101,7 @@ impl Decoder for FrameCodec {
         let kind = match header.get_u8() {
             0 => FrameType::Control,
             1 => FrameType::Terminal,
+            2 => FrameType::Data,
             other => return Err(FrameError::UnknownType(other)),
         };
         let channel = header.get_u32();
@@ -926,6 +940,33 @@ pub enum Control {
         /// Over the service's size cap.
         too_large: bool,
         /// Why the file could not be read.
+        error: Option<String>,
+        /// The file on disk is an image or a PDF (24.2, 24.3), by its bytes, within its size
+        /// cap: the viewer shows it through the app's `hive-file:` scheme.
+        #[serde(default)]
+        media: Option<Media>,
+    },
+    /// App → service: `len` bytes (at most [`READ_LIMIT`]) from `offset` of the file `path`
+    /// of the worktree `token` names ([`Media::token`]), for the app's `hive-file:` scheme
+    /// (24.2). The path is checked on every read as for `OpenFile`. Answered by `FileRange`
+    /// with the same `id`, then, unless it has an `error`, a data frame on channel `id` with
+    /// the bytes.
+    ReadFile {
+        id: u32,
+        token: String,
+        path: String,
+        offset: u64,
+        len: u32,
+    },
+    /// The file read: its whole `size`, its type `mime` (read from its bytes;
+    /// `application/octet-stream` when not known) and `version`, which changes with the file.
+    /// `error` says why nothing was read (no data frame follows then). Consumed by the app's
+    /// Rust side, never forwarded to the UI.
+    FileRange {
+        id: u32,
+        size: u64,
+        mime: String,
+        version: String,
         error: Option<String>,
     },
     /// App → service: a CSV or TSV file (23.6) of a worktree of a followed project as a table,
@@ -1907,6 +1948,21 @@ pub struct Dir {
     pub git: bool,
 }
 
+/// Most bytes one `ReadFile` answers with (24.2), well inside one frame.
+pub const READ_LIMIT: u32 = 1_048_576; // 1 MiB
+
+/// A file the viewer shows as an image or a PDF (24.2, 24.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Media {
+    /// `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/svg+xml` or
+    /// `application/pdf`, read from the file's bytes.
+    pub mime: String,
+    /// Names the worktree in `hive-file:` URLs and `ReadFile` (random, for the service's run).
+    pub token: String,
+    /// Changes with the file on disk, so a new URL loads it again.
+    pub version: String,
+}
+
 /// One sheet of a table file (23.6): its first rows and how many it has.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sheet {
@@ -2223,6 +2279,37 @@ mod tests {
         assert_eq!(&buf[..HEADER_LEN], &[1, 1, 2, 3, 4, 0, 0, 0, 3]);
         assert_eq!(FrameCodec.decode(&mut buf).unwrap(), Some(frame));
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn data_frames_carry_a_read_s_bytes_on_its_id() {
+        let frame = Frame::data(7, &b"\x89PNG"[..]);
+        let mut buf = encode(frame.clone());
+        assert_eq!(&buf[..HEADER_LEN], &[2, 0, 0, 0, 7, 0, 0, 0, 4]);
+        assert_eq!(FrameCodec.decode(&mut buf).unwrap(), Some(frame.clone()));
+        assert!(matches!(frame.to_control(), Err(FrameError::NotControl)));
+        let read = Control::ReadFile {
+            id: 7,
+            token: "t".into(),
+            path: "a b.png".into(),
+            offset: 0,
+            len: READ_LIMIT,
+        };
+        assert_eq!(
+            &Frame::control(0, &read).payload[..],
+            br#"{"type":"read_file","id":7,"token":"t","path":"a b.png","offset":0,"len":1048576}"#
+        );
+        let range = Control::FileRange {
+            id: 7,
+            size: 4,
+            mime: "image/png".into(),
+            version: "4-1".into(),
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &range).payload[..],
+            br#"{"type":"file_range","id":7,"size":4,"mime":"image/png","version":"4-1","error":null}"#
+        );
     }
 
     #[test]
@@ -3047,11 +3134,20 @@ mod tests {
             binary: false,
             too_large: false,
             error: None,
+            media: None,
         };
         assert_eq!(
             &Frame::control(0, &file).payload[..],
-            br#"{"type":"file","worktree":"/r","path":"a","content":"x","base":null,"version":"v","binary":false,"too_large":false,"error":null}"#
+            br#"{"type":"file","worktree":"/r","path":"a","content":"x","base":null,"version":"v","binary":false,"too_large":false,"error":null,"media":null}"#
         );
+        // Without `media` (an older service), none.
+        let old = br#"{"type":"file","worktree":"/r","path":"a","content":"x","base":null,"version":"v","binary":false,"too_large":false,"error":null}"#;
+        let old = Frame {
+            kind: FrameType::Control,
+            channel: 0,
+            payload: Bytes::from_static(old),
+        };
+        assert_eq!(old.to_control().unwrap(), file);
         let open = Control::OpenFile {
             worktree: "/r".into(),
             path: "a".into(),
@@ -3525,10 +3621,10 @@ mod tests {
 
     #[test]
     fn unknown_type_is_rejected() {
-        let mut buf = BytesMut::from(&[2, 0, 0, 0, 1, 0, 0, 0, 0][..]);
+        let mut buf = BytesMut::from(&[3, 0, 0, 0, 1, 0, 0, 0, 0][..]);
         assert!(matches!(
             FrameCodec.decode(&mut buf),
-            Err(FrameError::UnknownType(2))
+            Err(FrameError::UnknownType(3))
         ));
     }
 

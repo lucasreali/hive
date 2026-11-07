@@ -219,7 +219,8 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
     let channel = frame.channel;
     let message = match frame.kind {
         FrameType::Terminal => return state.input(channel, Input::Data(frame.payload)),
-        FrameType::Control => frame.to_control(),
+        // A data frame from the app is no request: refused as an unexpected message.
+        FrameType::Control | FrameType::Data => frame.to_control(),
     };
     match message {
         Ok(Control::OpenTerminal {
@@ -626,6 +627,13 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             path,
             base,
         }) => state.projects(move |projects| file::answer::open(projects, worktree, path, base)),
+        Ok(Control::ReadFile {
+            id,
+            token,
+            path,
+            offset,
+            len,
+        }) => state.read_file(id, token, path, (offset, len)),
         Ok(Control::OpenTable { worktree, path }) => {
             state.projects(move |projects| table::answer(projects, worktree, path))
         }

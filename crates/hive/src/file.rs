@@ -5,11 +5,12 @@
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hasher};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::UNIX_EPOCH;
 
-use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, SaveError};
+use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, READ_LIMIT, SaveError};
 
 use crate::changes::{self, BINARY_PROBE};
 use crate::paths::canonical;
@@ -35,7 +36,7 @@ pub mod answer {
     use std::io;
     use std::path::Path;
 
-    use hive_protocol::{Control, DiffBase, SaveError};
+    use hive_protocol::{Control, DiffBase, Media, SaveError};
 
     use crate::projects::{self, Projects};
     use crate::{changes, procs, search};
@@ -60,13 +61,56 @@ pub mod answer {
 
     /// `open_file`: `path` of `worktree`, on disk and at `base`.
     /// A folder project's file (23.1) has no base: its folder is in no repository.
+    /// An image or a PDF on disk (24.2, 24.3) also gets its `media`, with the worktree's token.
     pub fn open(projects: &Projects, worktree: String, path: String, base: DiffBase) -> Control {
-        let read = match projects.tree(&worktree) {
-            Ok((dir, Some(_))) => super::read_plain(&dir, &path),
+        let tree = projects.tree(&worktree);
+        let read = match &tree {
+            Ok((dir, Some(_))) => super::read_plain(dir, &path),
             _ => changes::against(&projects.list(), &worktree, base)
                 .and_then(|against| super::read(&against.dir, &path, against.commit.as_deref())),
         };
-        super::message(worktree, path, read)
+        let media = tree.ok().and_then(|(dir, _)| super::media(&dir, &path));
+        let mut reply = super::message(worktree.clone(), path, read);
+        if let Control::File { media: shown, .. } = &mut reply {
+            *shown = media.map(|(mime, version)| Media {
+                mime: mime.to_owned(),
+                token: projects.token(&worktree),
+                version,
+            });
+        }
+        reply
+    }
+
+    /// `read_file`: the `file_range` answer, and the bytes for its data frame unless it failed.
+    pub fn read(
+        projects: &Projects,
+        id: u32,
+        token: &str,
+        path: &str,
+        (offset, len): (u64, u32),
+    ) -> (Control, Option<Vec<u8>>) {
+        let read = projects
+            .by_token(token)
+            .and_then(|(dir, _)| super::read_range(&dir, path, offset, len));
+        let (size, mime, version, bytes, error) = match read {
+            Ok(range) => (
+                range.size,
+                range.mime,
+                range.version,
+                Some(range.bytes),
+                None,
+            ),
+            Err(err) => (0, "", String::new(), None, Some(err.to_string())),
+        };
+        let mime = mime.to_owned();
+        let reply = Control::FileRange {
+            id,
+            size,
+            mime,
+            version,
+            error,
+        };
+        (reply, bytes)
     }
 
     /// `save_file`: `content` over `path` of `worktree`, if it is still at `version`.
@@ -1077,6 +1121,128 @@ pub fn version(bytes: &[u8]) -> String {
     format!("{}-{:016x}", bytes.len(), hasher.finish())
 }
 
+/// How many first bytes of a file its type is read from (24.2).
+const HEAD_LEN: u64 = 4096;
+/// The type of a PDF, which has its own size cap.
+const PDF: &str = "application/pdf";
+/// The type served for a file of no known type.
+const UNKNOWN: &str = "application/octet-stream";
+/// The largest PDF shown (the human, 24.1); over it, "Open in default app".
+pub const PDF_LIMIT: u64 = 100 << 20;
+/// The largest of any other file the app's scheme serves (the human, 24.1): an image, an HTML
+/// page and each of its files.
+pub const SERVE_LIMIT: u64 = 20 << 20;
+
+/// The type of a file the viewer shows as an image or a PDF (24.2, 24.3), read from its first
+/// bytes, never from its name: PNG, JPEG, GIF, WebP, SVG or PDF.
+pub fn media_type(head: &[u8]) -> Option<&'static str> {
+    let webp = head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP");
+    let mime = match head {
+        _ if head.starts_with(b"\x89PNG\r\n\x1a\n") => "image/png",
+        [0xff, 0xd8, 0xff, ..] => "image/jpeg",
+        _ if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") => "image/gif",
+        _ if webp => "image/webp",
+        _ if head.starts_with(b"%PDF-") => PDF,
+        _ if svg(head) => "image/svg+xml",
+        _ => return None,
+    };
+    Some(mime)
+}
+
+/// Whether `head` starts an SVG document: its first element, past a BOM, white space, the XML
+/// declaration, comments and a doctype, is `<svg`.
+fn svg(head: &[u8]) -> bool {
+    let mut rest = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
+    // Each turn drops at least one byte, so the input bounds the loop.
+    for _ in 0..head.len() {
+        rest = rest.trim_ascii_start();
+        let close: &[u8] = match rest {
+            _ if rest.starts_with(b"<?") => b"?>",
+            _ if rest.starts_with(b"<!--") => b"-->",
+            _ if rest.starts_with(b"<!") => b">",
+            _ => break,
+        };
+        let Some(at) = rest.windows(close.len()).position(|w| w == close) else {
+            return false;
+        };
+        rest = &rest[at + close.len()..];
+    }
+    let after = rest.strip_prefix(b"<svg").and_then(|after| after.first());
+    after.is_some_and(|c| c.is_ascii_whitespace() || matches!(c, b'>' | b'/'))
+}
+
+/// The token for an opened file in the app's `hive-file:` scheme (24.2): its size and the time
+/// it was last modified, since hashing up to 100 MiB on every read of 1 MiB would cost too much.
+fn stamp(meta: &fs::Metadata) -> String {
+    let modified = meta.modified().ok();
+    let since = modified.and_then(|time| time.duration_since(UNIX_EPOCH).ok());
+    format!("{}-{:x}", meta.len(), since.unwrap_or_default().as_nanos())
+}
+
+/// The regular file `path` of the worktree at `dir`, checked as [`read`] checks it, for the
+/// app's scheme: opened, with its size, its type if known ([`media_type`]) and its
+/// [`stamp`]; over its type's cap ([`PDF_LIMIT`], else [`SERVE_LIMIT`]), an error.
+fn served(dir: &Path, path: &str) -> io::Result<(File, u64, Option<&'static str>, String)> {
+    let Some(mut file) = open_inside(dir, path)? else {
+        let gone = format!("{path} does not exist");
+        return Err(io::Error::new(io::ErrorKind::NotFound, gone));
+    };
+    let meta = file.metadata()?;
+    let mut head = Vec::new();
+    Read::by_ref(&mut file)
+        .take(HEAD_LEN)
+        .read_to_end(&mut head)?;
+    let mime = media_type(&head);
+    let limit = if mime == Some(PDF) {
+        PDF_LIMIT
+    } else {
+        SERVE_LIMIT
+    };
+    if meta.len() > limit {
+        let shown = format!("{path} is larger than {} MiB", limit >> 20);
+        return Err(io::Error::other(shown));
+    }
+    Ok((file, meta.len(), mime, stamp(&meta)))
+}
+
+/// The type and [`stamp`] of `path` of the worktree at `dir` when it is an image or a PDF
+/// within its cap (24.2, 24.3).
+fn media(dir: &Path, path: &str) -> Option<(&'static str, String)> {
+    let (_, _, mime, version) = served(dir, path).ok()?;
+    Some((mime?, version))
+}
+
+/// What [`read_range`] read.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Range {
+    /// The whole file's size.
+    pub size: u64,
+    /// Its type ([`media_type`]), `application/octet-stream` when not known.
+    pub mime: &'static str,
+    /// Its [`stamp`].
+    pub version: String,
+    /// At most `len` (and [`READ_LIMIT`]) bytes from `offset`; fewer at the end.
+    pub bytes: Vec<u8>,
+}
+
+/// `len` bytes from `offset` of the file `path` of the worktree at `dir`, for the app's
+/// `hive-file:` scheme (24.2): checked on every read as [`read`] checks it (links never
+/// followed out of the worktree, 24.7) and refused over its type's cap.
+pub fn read_range(dir: &Path, path: &str, offset: u64, len: u32) -> io::Result<Range> {
+    let (mut file, size, mime, version) = served(dir, path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    let len = u64::from(len.min(READ_LIMIT));
+    file.take(len).read_to_end(&mut bytes)?;
+    let mime = mime.unwrap_or(UNKNOWN);
+    Ok(Range {
+        size,
+        mime,
+        version,
+        bytes,
+    })
+}
+
 /// Text, or `Err` for binary: a NUL in the first 8000 bytes (as git) or not UTF-8.
 fn text(side: &Side) -> Result<Option<String>, ()> {
     match side {
@@ -1117,6 +1283,7 @@ pub fn message(worktree: String, path: String, read: io::Result<(Side, Side)>) -
         binary,
         too_large,
         error: error.clone(),
+        media: None,
     };
     let reply = file(texts(!too_large), too_large);
     if serde_json::to_vec(&reply).map_or(0, |json| json.len()) <= MAX_PAYLOAD {
@@ -1144,6 +1311,7 @@ mod tests {
             binary: false,
             too_large: false,
             error: None,
+            media: None,
         }
     }
 
@@ -2489,6 +2657,66 @@ mod tests {
         assert_eq!(parse_ls_tree(b"160000 commit 3b18e5       -\tmod\0"), None);
         assert_eq!(parse_ls_tree(b"100644 blob 3b18e5 x\ta\0"), None);
         assert_eq!(parse_ls_tree(b""), None);
+    }
+
+    #[test]
+    fn media_types_are_read_from_the_bytes() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#;
+        for (head, mime) in [
+            (&b"\x89PNG\r\n\x1a\n"[..], Some("image/png")),
+            (b"\x89PNG\r\n", None),
+            (b"\xff\xd8\xff\xe0", Some("image/jpeg")),
+            (b"\xff\xd8", None),
+            (b"GIF87a", Some("image/gif")),
+            (b"GIF89a..", Some("image/gif")),
+            (b"GIF88a", None),
+            (b"RIFF\0\0\0\0WEBPVP8 ", Some("image/webp")),
+            (b"RIFF\0\0\0\0WAVE", None),
+            (b"RIFF\0\0\0\0WEB", None),
+            (b"%PDF-1.7", Some("application/pdf")),
+            (b"%PDF", None),
+            (svg, Some("image/svg+xml")),
+            (b"", None),
+            (b"text", None),
+        ] {
+            assert_eq!(media_type(head), mime, "{head:?}");
+        }
+    }
+
+    #[test]
+    fn an_svg_is_known_by_its_first_element() {
+        for head in [
+            &b"<svg>"[..],
+            b"<svg/>",
+            b"<svg\nwidth='1'>",
+            b"\xef\xbb\xbf <svg>",
+            b"<?xml version=\"1.0\"?>\n<!-- a <svg> comment -->\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\">\n<svg>",
+        ] {
+            assert!(svg(head), "{:?}", String::from_utf8_lossy(head));
+        }
+        for head in [
+            &b"<svgx>"[..],
+            b"<svg",
+            b"<html><svg>",
+            b"text <svg>",
+            b"<!-- <svg>",
+            b"<?xml <svg>",
+            b"<!DOCTYPE svg <svg>",
+            b"\xef\xbb",
+        ] {
+            assert!(!svg(head), "{:?}", String::from_utf8_lossy(head));
+        }
+    }
+
+    #[test]
+    fn a_file_s_stamp_is_its_size_and_modification_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        fs::write(&path, "abc").unwrap();
+        let file = File::options().write(true).open(&path).unwrap();
+        file.set_modified(UNIX_EPOCH + std::time::Duration::from_nanos(255))
+            .unwrap();
+        assert_eq!(stamp(&file.metadata().unwrap()), "3-ff");
     }
 
     #[test]

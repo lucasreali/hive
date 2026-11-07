@@ -668,6 +668,23 @@ impl State {
         tokio::spawn(async move { state.answer(request).await });
     }
 
+    /// Answers `read_file` (24.2) off the frame loop: its `file_range`, then the bytes in a data
+    /// frame, in that order on the control queue.
+    fn read_file(self: &Arc<Self>, id: u32, token: String, path: String, range: (u64, u32)) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let (reply, bytes) = tokio::task::block_in_place(|| {
+                crate::file::answer::read(&state.projects, id, &token, &path, range)
+            });
+            if let Some(app) = &*state.app.lock().await {
+                let _ = app.send(Frame::control(0, &reply));
+                if let Some(bytes) = bytes {
+                    let _ = app.send(Frame::data(id, bytes));
+                }
+            }
+        });
+    }
+
     /// [`State::projects`] for a request that changes worktrees, or lists them afresh: in turn
     /// with [`State::worktrees_changed`], which then finds the change already sent (and never
     /// sends a list older than this answer after it).

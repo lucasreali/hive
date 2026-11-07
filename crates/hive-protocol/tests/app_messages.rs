@@ -76,6 +76,7 @@ sort! {
         | SearchFiles
         | ListDirs
         | OpenFile
+        | ReadFile
         | OpenTable
         | SaveFile
         | CreateFile
@@ -160,6 +161,7 @@ sort! {
         | SearchResults
         | Dirs
         | File
+        | FileRange
         | Table
         | FileSaved
         | SaveFailed
@@ -546,6 +548,18 @@ fn samples() -> Vec<Control> {
             version: Some(s("v")),
             binary: false,
             too_large: false,
+            error: None,
+            media: Some(Media {
+                mime: s("image/png"),
+                token: s("t"),
+                version: s("4-1"),
+            }),
+        },
+        FileRange {
+            id: 1,
+            size: 4,
+            mime: s("image/png"),
+            version: s("4-1"),
             error: None,
         },
         Table {
