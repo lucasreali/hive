@@ -547,7 +547,7 @@ test("with more than one Claude account, the tab's tooltip and the menus name th
   const { settings } = useHive.getState();
   const dir = "/home/me/.claude-work";
   const accounts = [{ name: "Work", config_dir: dir }];
-  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const env = { git_name: null, git_email: null, gh_account: null };
   const spaces = [
     { id: "a", name: "A", projects: [shop.id, api.id], env: { ...env, claude_account: null } },
     { id: "b", name: "B", projects: [], env: { ...env, claude_account: dir } },

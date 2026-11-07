@@ -135,7 +135,6 @@ test("a terminal's account line needs two accounts in use by the spaces and its 
   const env = (claude_account: string | null) => ({
     git_name: null,
     git_email: null,
-    gh_config_dir: null,
     gh_account: null,
     claude_account,
   });

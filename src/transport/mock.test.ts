@@ -1406,7 +1406,6 @@ const API = "/home/user/projects/api";
 const NO_ENV: SpaceEnv = {
   git_name: null,
   git_email: null,
-  gh_config_dir: null,
   gh_account: null,
   claude_account: null,
 };
@@ -1421,7 +1420,13 @@ test("gh's accounts are listed, and the active one switched", async () => {
   await tick();
   messages.length = 0;
   await transport.listGhAccounts(null);
-  await transport.switchGhAccount("/g", { host: "github.com", login: "mock-personal" });
+  await transport.switchGhAccount(null, { host: "github.com", login: "mock-personal" });
+  // Another gh config folder (24.13) has an account of its own, named after it.
+  await transport.listGhAccounts("/home/user/.config/gh-ci");
+  await transport.switchGhAccount("/home/user/.config/gh-ci", {
+    host: "github.com",
+    login: "mock-gh-ci",
+  });
   await tick();
   const login = (login: string, active: boolean) => ({
     host: "github.com",
@@ -1438,10 +1443,16 @@ test("gh's accounts are listed, and the active one switched", async () => {
     },
     {
       type: "gh_accounts",
-      gh_config_dir: "/g",
+      gh_config_dir: null,
       accounts: [login("mock-personal", true), login("mock-work", false)],
       problem: null,
     },
+    ...[0, 1].map(() => ({
+      type: "gh_accounts" as const,
+      gh_config_dir: "/home/user/.config/gh-ci",
+      accounts: [login("mock-gh-ci", true)],
+      problem: null,
+    })),
   ]);
 });
 

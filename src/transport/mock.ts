@@ -810,7 +810,6 @@ export function createMockTransport(
   const noEnv = {
     git_name: null,
     git_email: null,
-    gh_config_dir: null,
     gh_account: null,
     claude_account: null,
   };
@@ -821,11 +820,25 @@ export function createMockTransport(
     active: login === "mock-work",
     logged_in: true,
   }));
+  // Each other gh config folder (24.13) has one account, named after it: `mock-gh-work`.
+  const folderLogins = new Map<string, GhLogin[]>();
+  const loginsIn = (dir: string | null) => {
+    if (dir === null) return ghLogins;
+    const login = `mock-${dir
+      .split("/")
+      .pop()
+      ?.replace(/[^\w-]/g, "")}`;
+    const logins = folderLogins.get(dir) ?? [
+      { host: "github.com", login, active: true, logged_in: true },
+    ];
+    folderLogins.set(dir, logins);
+    return logins;
+  };
   const sendGhAccounts = (gh_config_dir: string | null) =>
     later({
       type: "gh_accounts",
       gh_config_dir,
-      accounts: structuredClone(ghLogins),
+      accounts: structuredClone(loginsIn(gh_config_dir)),
       problem: null,
     });
   let spaces: Space[] = [
@@ -1181,12 +1194,15 @@ export function createMockTransport(
       sendGhAccounts(ghConfigDir);
     },
     async switchGhAccount(ghConfigDir, account) {
-      for (const l of ghLogins) l.active = l.login === account.login && l.host === account.host;
+      for (const l of loginsIn(ghConfigDir)) {
+        l.active = l.login === account.login && l.host === account.host;
+      }
       sendGhAccounts(ghConfigDir);
     },
-    async getGhIdentity(_ghConfigDir, account) {
+    async getGhIdentity(ghConfigDir, account) {
       // As GitHub answers `gh api user`: a logged-in account's login and its noreply email.
-      const at = ghLogins.findIndex((l) => l.login === account.login && l.host === account.host);
+      const logins = loginsIn(ghConfigDir);
+      const at = logins.findIndex((l) => l.login === account.login && l.host === account.host);
       if (at < 0) {
         const message = `Could not get the identity of ${account.login} on ${account.host}: gh gave no usable token for ${account.login} on ${account.host}`;
         later({ type: "gh_identity_failed", account, message });
@@ -1232,13 +1248,23 @@ export function createMockTransport(
           return;
         }
       }
+      // So with a gh config folder a space's account is in (24.13).
+      const dirs = next.gh.config_dirs.map((d) => d.replace(/(.)\/+$/, "$1"));
+      for (const dir of settings.gh.config_dirs.filter((d) => !dirs.includes(d))) {
+        const user = spaces.find((x) => x.env.gh_account?.config_dir === dir);
+        if (user) {
+          const message = `The GitHub account of the space ${user.name} is in ${dir}: choose another one for it first`;
+          later({ type: "settings_failed", message });
+          return;
+        }
+      }
       // A folder's trailing `/` goes, a root stays (22.2).
       const kept = accounts.map((a) => ({
         ...a,
         config_dir: a.config_dir.replace(/(.)\/+$/, "$1"),
       }));
       const claude = { ...next.claude, accounts: kept, default_name: default_name || "Default" };
-      settings = { ...next, claude };
+      settings = { ...next, claude, gh: { config_dirs: dirs } };
       later({ type: "settings", settings });
       // As the service: the scripts the app has follow the settings (23.4).
       if (scriptsAsked) later(scriptsOfWorktree(scriptsAsked));

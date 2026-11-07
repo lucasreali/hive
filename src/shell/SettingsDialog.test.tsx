@@ -50,6 +50,9 @@ const search = (value: string) =>
     target: { value },
   });
 const settings = () => useHive.getState().settings;
+/** The Claude accounts' rows, not the GitHub accounts' (24.13). */
+const claudeRows = () =>
+  screen.getByRole("region", { name: "Claude accounts" }).querySelectorAll(".account-row");
 const labels = () =>
   [...document.querySelectorAll(".settings-body .field")].map((f) => f.textContent);
 
@@ -329,6 +332,79 @@ test("a new account's folder example is a home folder of the platform (18.25)", 
   expect(input("New account folder").placeholder).toBe("/Users/you/.claude-work");
 });
 
+test("the GitHub accounts part lists each gh config folder's accounts, adds and removes one (24.13)", async () => {
+  open();
+  section("Accounts");
+  const part = () => screen.getByRole("region", { name: "GitHub accounts" });
+  const rows = () =>
+    [...part().querySelectorAll(".account-row")].map((r) =>
+      [...r.children].map((c) => c.textContent),
+    );
+  // gh's own config first, never removed.
+  await waitFor(() =>
+    expect(rows()).toEqual([["mock-personal, mock-work", "~/.config/gh", "", "", ""]]),
+  );
+  expect(within(part()).queryByTitle(/^Remove/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Add a gh config folder" }));
+  const folder = () => input("New gh config folder");
+  expect(folder().placeholder).toBe("/home/you/.config/gh-work");
+  const add = () => screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
+  // Browsed from home, hidden folders included (22.2).
+  await waitFor(() => expect(folder().value).toBe("/home/user/"));
+  await waitFor(() => screen.getByRole("button", { name: ".config" }));
+  fireEvent.click(screen.getByRole("button", { name: ".config" }));
+  await waitFor(() => screen.getByRole("button", { name: "gh-work" }));
+  fireEvent.click(screen.getByRole("button", { name: "gh-work" }));
+  expect(folder().value).toBe("/home/user/.config/gh-work/");
+  fireEvent.click(add());
+  const dir = "/home/user/.config/gh-work";
+  await waitFor(() => expect(settings().gh.config_dirs).toEqual([dir]));
+  // Its accounts are listed.
+  await waitFor(() => expect(rows()[1]).toEqual(["mock-gh-work", dir, "", "", ""]));
+  expect(screen.queryByRole("form", { name: "Add a gh config folder" })).toBeNull();
+  // Cancel adds nothing.
+  fireEvent.click(screen.getByRole("button", { name: "Add a gh config folder" }));
+  expect(add().disabled).toBe(false);
+  fireEvent.change(folder(), { target: { value: " " } });
+  expect(add().disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByLabelText("New gh config folder")).toBeNull();
+
+  // A folder a space's account is in is not removed: the service says why.
+  const account = { host: "github.com", login: "mock-gh-work", config_dir: dir };
+  const env = { git_name: null, git_email: null, gh_account: account, claude_account: null };
+  await transport.updateSpace("default", "Default", env);
+  fireEvent.click(screen.getByTitle(`Remove ${dir}`));
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toBe(
+      `The GitHub account of the space Default is in ${dir}: choose another one for it first`,
+    ),
+  );
+  expect(settings().gh.config_dirs).toEqual([dir]);
+  await transport.updateSpace("default", "Default", { ...env, gh_account: null });
+  fireEvent.click(screen.getByTitle(`Remove ${dir}`));
+  await waitFor(() => expect(settings().gh.config_dirs).toEqual([]));
+  expect(rows()).toHaveLength(1);
+
+  // A folder gh lists no account in says so; its example is a home folder of macOS there.
+  act(() =>
+    apply({
+      type: "gh_accounts",
+      gh_config_dir: null,
+      accounts: [],
+      problem: "gh is not installed",
+    }),
+  );
+  const badge = within(part()).getByText("Not logged in");
+  expect(badge.getAttribute("title")).toBe("gh is not installed");
+  expect(rows()[0]?.[0]).toBe("No account");
+  asMac();
+  section("Agents");
+  section("Accounts");
+  fireEvent.click(screen.getByRole("button", { name: "Add a gh config folder" }));
+  expect(folder().placeholder).toBe("/Users/you/.config/gh-work");
+});
+
 test("sharing sessions between accounts is off by default and turns on (21.10)", async () => {
   open();
   section("Accounts");
@@ -373,7 +449,7 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
   expect(screen.getByRole("button", { name: "New account" })).toBeDefined();
   // One row per account in the same columns: name, folder (the whole path as its tooltip),
   // status, "Log in…", remove; the default row's remove slot is empty.
-  const rows = [...document.querySelectorAll(".account-row")].map((row) =>
+  const rows = [...claudeRows()].map((row) =>
     [...row.children].map((cell) => cell.getAttribute("aria-label") ?? cell.textContent),
   );
   expect(rows).toEqual([
@@ -381,10 +457,10 @@ test("the accounts section adds, renames, logs in to and removes Claude accounts
     // The mock: an added account never logged in.
     ["Name of /w", "/w", "Not logged in", "Log in…", ""],
   ]);
-  const cells = document.querySelectorAll(".account-row")[1]?.children;
+  const cells = claudeRows()[1]?.children;
   expect(cells?.[1]?.getAttribute("title")).toBe("/w");
   expect(cells?.[4]?.getAttribute("title")).toBe("Remove Work");
-  expect(document.querySelectorAll(".account-row")[0]?.children[4]?.tagName).toBe("SPAN");
+  expect(claudeRows()[0]?.children[4]?.tagName).toBe("SPAN");
   fireEvent.change(input("Name of /w"), { target: { value: "Job " } });
   await waitFor(() => expect(accounts()[0]?.name).toBe("Job"));
 
@@ -568,7 +644,6 @@ test("an emptied default account name stays empty while a new one is typed (22.4
   const env = {
     git_name: null,
     git_email: null,
-    gh_config_dir: null,
     gh_account: null,
     claude_account: null,
   };
@@ -632,7 +707,7 @@ test("the accounts section marks an account that never logged in (21.6)", async 
   // Asked again as the section opens: a `/login` may have finished in a Hive terminal.
   expect(ask.mock.calls.length).toBe(asked + 1);
   // The mock: the default account logged in, Work not.
-  const marks = () => [...document.querySelectorAll(".account-row")].map((row) => row.textContent);
+  const marks = () => [...claudeRows()].map((row) => row.textContent);
   await waitFor(() => expect(marks()[1]).toContain("Not logged in"));
   expect(marks()[0]).not.toContain("Not logged in");
   // A badge in its own column, right before the row's "Log in…" (22.6).

@@ -183,7 +183,7 @@ test("with more than one Claude account, an agent's tooltip names its terminal's
   );
   // An account added but not in use by a space: still one account in use (22.5).
   expect(tip()).toBe(cwd);
-  const env = { git_name: null, git_email: null, gh_config_dir: null, gh_account: null };
+  const env = { git_name: null, git_email: null, gh_account: null };
   const spaces = [
     { id: "a", name: "A", projects: [shop.id], env: { ...env, claude_account: null } },
     { id: "b", name: "B", projects: [], env: { ...env, claude_account: dir } },
@@ -806,7 +806,6 @@ test("a group shows its own agents, then its projects one level in; collapsed, t
   const env = {
     git_name: null,
     git_email: null,
-    gh_config_dir: null,
     gh_account: null,
     claude_account: null,
   };

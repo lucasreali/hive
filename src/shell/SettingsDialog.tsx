@@ -24,6 +24,7 @@ import { homeText, isMac } from "../window";
 import { FolderField, useFolderListing } from "./FolderField";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
+import { accountName, useGhAccounts } from "./SpaceDialog";
 
 const close = () => openModal(null);
 
@@ -1219,6 +1220,124 @@ function Accounts() {
 }
 
 /**
+ * The GitHub accounts (24.13): those logged in to `gh` in its own config (`~/.config/gh`, never
+ * removed) and in each gh config folder added here, one row per folder in the Claude accounts'
+ * columns (22.6): its logins, the folder, why none is listed, remove (an empty slot on gh's
+ * own). Each space picks one of them in its settings; the service refuses to remove a folder a
+ * space's account is in.
+ */
+function GhAccountsPart() {
+  const folders = useGhAccounts();
+  const [adding, setAdding] = useState(false);
+  const [dir, setDir] = useState("");
+  const add = () => {
+    const folder = dir.trim();
+    saveSettings((s) => {
+      s.gh.config_dirs.push(folder);
+    });
+    setDir("");
+    setAdding(false);
+  };
+  const remove = (folder: string) =>
+    saveSettings((s) => {
+      s.gh.config_dirs = s.gh.config_dirs.filter((d) => d !== folder);
+    });
+  return (
+    <section className="field settings-group" aria-labelledby="gh-accounts-title">
+      <h3 id="gh-accounts-title">GitHub accounts</h3>
+      <p
+        className="field-help"
+        title={
+          "The first one is gh's own config. A space whose account is in another folder gets " +
+          "it as GH_CONFIG_DIR; a folder a space's account is in cannot be removed. Run " +
+          "gh auth login with GH_CONFIG_DIR set to add an account to a folder. Hive never " +
+          "reads a token into the app."
+        }
+      >
+        Each gh config folder is a <code>GH_CONFIG_DIR</code> with its own logins; each space picks
+        an account.
+      </p>
+      <div className="accounts">
+        {folders.map(({ dir, listed }) => {
+          const logins = (listed?.accounts ?? []).map(accountName).join(", ");
+          return (
+            <div className="account-row" key={dir ?? ""}>
+              <span className="gh-logins" title={logins}>
+                {listed ? logins || "No account" : "…"}
+              </span>
+              <FolderCell path={dir ?? "~/.config/gh"} />
+              <span className="account-status">
+                {listed?.problem && (
+                  <span className="tab-badge warn" title={listed.problem}>
+                    {listed.accounts.length ? "Incomplete" : "Not logged in"}
+                  </span>
+                )}
+              </span>
+              <span />
+              {dir === null ? (
+                // gh's own config cannot be removed: its slot stays empty.
+                <span />
+              ) : (
+                <button
+                  type="button"
+                  className="ghost"
+                  title={`Remove ${dir}`}
+                  onClick={() => remove(dir)}
+                >
+                  <CloseIcon />
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {adding ? (
+        <form
+          className="new-account"
+          aria-label="Add a gh config folder"
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
+          }}
+        >
+          {/* Starts at the home folder; gh config folders are often hidden ones (22.2). */}
+          <FolderField
+            id="new-gh-folder"
+            aria-label="New gh config folder"
+            value={dir}
+            onChange={setDir}
+            placeholder={homeText("/home/you/.config/gh-work")}
+            hidden
+            home
+          />
+          <div className="form-buttons">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setAdding(false);
+                setDir("");
+              }}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="primary" disabled={!dir.trim()}>
+              Add
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div>
+          <button type="button" className="secondary" onClick={() => setAdding(true)}>
+            Add a gh config folder
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
  * The folder every account shares (21.9), a titled group (22.6): its path, a button that opens
  * it in the file manager, and what the service found in it on one line, asked when the section
  * opens.
@@ -1316,6 +1435,7 @@ function Content({ section, query }: { section: Section; query: string }) {
     return (
       <>
         <Accounts />
+        <GhAccountsPart />
         <section className="field settings-group" aria-labelledby="sessions-title">
           <h3 id="sessions-title">Sessions</h3>
           {shown}
