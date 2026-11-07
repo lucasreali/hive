@@ -1,6 +1,8 @@
 use super::commands::*;
 use super::*;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
@@ -184,6 +186,51 @@ fn only_the_apps_own_origin_reaches_the_ipc() {
     ] {
         assert!(!ipc_from_app(text, true, Some(&dev)), "{text}");
     }
+}
+
+#[test]
+fn a_wrong_invoke_key_leaves_the_right_one_out_of_the_log() {
+    const CHILD: &str = "HIVE_TEST_INVOKE_KEY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        // In the child: a call with a wrong key, refused, and whatever Tauri says on stderr.
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let answered = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&answered);
+        let request = InvokeRequest {
+            cmd: "connect".into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "hive-file://localhost/token/page.html".parse().unwrap(),
+            body: InvokeBody::Json(json!({})),
+            headers: Default::default(),
+            invoke_key: "guess".into(),
+        };
+        webview.on_message(
+            request,
+            Box::new(move |_, _, _, _, _| seen.store(true, Ordering::Relaxed)),
+        );
+        assert!(!answered.load(Ordering::Relaxed), "a wrong key is refused");
+        return;
+    }
+    // The app's stderr is its log (`log::start`); the test harness would capture it in-process.
+    let name = "tests::a_wrong_invoke_key_leaves_the_right_one_out_of_the_log";
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success() && stdout.contains("1 passed"),
+        "{stdout}{stderr}"
+    );
+    assert!(!stderr.contains(INVOKE_KEY), "the key is logged: {stderr}");
 }
 
 #[tokio::test]
