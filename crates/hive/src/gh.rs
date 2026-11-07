@@ -338,6 +338,7 @@ mod tests {
     }
 
     /// A space's `account`, in the gh config folder `dir`.
+    #[cfg(unix)]
     fn in_dir(account: GhAccount, dir: Option<&str>) -> hive_protocol::SpaceGhAccount {
         hive_protocol::SpaceGhAccount {
             account,
