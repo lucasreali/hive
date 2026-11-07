@@ -44,3 +44,31 @@ test("worktree health: badges with tooltips, and removing merged worktrees", asy
   await expect(row("refactor-auth")).toBeVisible();
   await expect(row("fix-login")).toBeVisible();
 });
+
+test("a failed removal's long message sits under its row's name (24.9)", async ({ page }) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  // A terminal stays in the new worktree, so the fake service refuses to remove it.
+  await tree.getByRole("button", { name: "api", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^New worktree…/ }).click();
+  const create = page.getByRole("dialog", { name: "New worktree" });
+  await create.getByLabel("Worktree name").fill("a-worktree-with-a-rather-long-name");
+  await expect(create.getByLabel("Open a terminal in the new worktree")).toBeChecked();
+  await create.getByRole("button", { name: "Create worktree" }).click();
+  await expect(create).toHaveCount(0);
+
+  await tree.getByRole("button", { name: "api", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove merged worktrees…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove merged worktrees" });
+  await dialog.getByRole("button", { name: /^Remove \(1\)/ }).click();
+  const error = dialog.locator(".field-error");
+  await expect(error).toContainText("close its terminals first");
+
+  const item = dialog.locator(".merged-item");
+  const name = await item.locator(".label").boundingBox();
+  const date = await item.locator("label .field-help").boundingBox();
+  const below = await error.boundingBox();
+  if (!name || !date || !below) throw new Error("the row is not laid out");
+  // The error starts below the name and the date, never over them.
+  expect(below.y).toBeGreaterThanOrEqual(Math.max(name.y + name.height, date.y + date.height));
+});

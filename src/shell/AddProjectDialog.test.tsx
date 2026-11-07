@@ -455,3 +455,36 @@ test("New folder makes a folder in the typed one and enters it", async () => {
   await waitFor(() => expect(folders()).toContain("games"));
   createDir.mockRestore();
 });
+
+test("New folder's button toggles its row; a blur closes an empty name and keeps a typed one (24.10)", async () => {
+  open();
+  await waitFor(() => expect(field().value).toBe("/home/user/"));
+  const button = () => screen.getByRole("button", { name: "New folder" }) as HTMLButtonElement;
+  const input = () => screen.queryByLabelText("New folder name") as HTMLInputElement | null;
+  await waitFor(() => expect(button().disabled).toBe(false));
+  expect(button().getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(button());
+  expect(button().getAttribute("aria-pressed")).toBe("true");
+  // The button again closes it, back in the path.
+  fireEvent.click(button());
+  expect(input()).toBeNull();
+  expect(button().getAttribute("aria-pressed")).toBe("false");
+  expect(document.activeElement).toBe(field());
+  // Its mouse-down keeps the focus where it is, so the name is not blurred by it.
+  expect(fireEvent.mouseDown(button())).toBe(false);
+  // Leaving it empty closes it.
+  fireEvent.click(button());
+  fireEvent.blur(input() as HTMLInputElement);
+  expect(input()).toBeNull();
+  // A typed name stays after a blur, even when the typed path no longer allows a new one.
+  fireEvent.click(button());
+  fireEvent.change(input() as HTMLInputElement, { target: { value: "games" } });
+  fireEvent.blur(input() as HTMLInputElement);
+  type("/home/user/proj");
+  await waitFor(() => expect(button().disabled).toBe(false));
+  expect(input()?.value).toBe("games");
+  expect(button().title).toBe("New folder");
+  fireEvent.click(button());
+  expect(input()).toBeNull();
+  await waitFor(() => expect(button().disabled).toBe(true));
+});
