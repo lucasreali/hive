@@ -24,7 +24,7 @@ const HEADER_LEN: usize = 9;
 pub enum FrameType {
     Control = 0,
     Terminal = 1,
-    /// A file's bytes (24.2): the answer to `ReadFile` whose `id` is the channel, sent right
+    /// A file's bytes (24.2): the answer to `ReadFile` whose `id` is the channel, sent
     /// after its `FileRange`.
     Data = 2,
 }

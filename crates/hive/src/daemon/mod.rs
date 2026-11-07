@@ -617,8 +617,12 @@ impl State {
 
     /// Sends a control message to the app, if one is connected.
     async fn to_app(&self, channel: u32, message: &Control) {
+        self.frame_to_app(Frame::control(channel, message)).await;
+    }
+
+    async fn frame_to_app(&self, frame: Frame) {
         if let Some(app) = &*self.app.lock().await {
-            let _ = app.send(Frame::control(channel, message));
+            let _ = app.send(frame);
         }
     }
 
@@ -669,18 +673,16 @@ impl State {
     }
 
     /// Answers `read_file` (24.2) off the frame loop: its `file_range`, then the bytes in a data
-    /// frame, in that order on the control queue.
+    /// frame, in that order on the control queue (another answer may come between).
     fn read_file(self: &Arc<Self>, id: u32, token: String, path: String, range: (u64, u32)) {
         let state = self.clone();
         tokio::spawn(async move {
             let (reply, bytes) = tokio::task::block_in_place(|| {
                 crate::file::answer::read(&state.projects, id, &token, &path, range)
             });
-            if let Some(app) = &*state.app.lock().await {
-                let _ = app.send(Frame::control(0, &reply));
-                if let Some(bytes) = bytes {
-                    let _ = app.send(Frame::data(id, bytes));
-                }
+            state.to_app(0, &reply).await;
+            if let Some(bytes) = bytes {
+                state.frame_to_app(Frame::data(id, bytes)).await;
             }
         });
     }

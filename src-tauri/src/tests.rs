@@ -3811,6 +3811,12 @@ async fn a_file_url_is_read_from_the_service_in_ranges() {
     // Answers for no waiting read are dropped, and `file_range` never reaches the UI; a
     // `file`'s media gets its URL.
     service.writer.send(Frame::data(41, vec![1])).await.unwrap();
+    let broken = Frame {
+        kind: FrameType::Control,
+        channel: 0,
+        payload: br#"{"type":"file_range","id":41}"#.to_vec().into(),
+    };
+    service.writer.send(broken).await.unwrap();
     let stray = Control::FileRange {
         id: 41,
         size: 1,

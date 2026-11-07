@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
-use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, READ_LIMIT, SaveError};
+use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, Media, READ_LIMIT, SaveError};
 
 use crate::changes::{self, BINARY_PROBE};
 use crate::paths::canonical;
@@ -70,15 +70,12 @@ pub mod answer {
                 .and_then(|against| super::read(&against.dir, &path, against.commit.as_deref())),
         };
         let media = tree.ok().and_then(|(dir, _)| super::media(&dir, &path));
-        let mut reply = super::message(worktree.clone(), path, read);
-        if let Control::File { media: shown, .. } = &mut reply {
-            *shown = media.map(|(mime, version)| Media {
-                mime: mime.to_owned(),
-                token: projects.token(&worktree),
-                version,
-            });
-        }
-        reply
+        let media = media.map(|(mime, version)| Media {
+            mime: mime.to_owned(),
+            token: projects.token(&worktree),
+            version,
+        });
+        super::message(worktree, path, read, media)
     }
 
     /// `read_file`: the `file_range` answer, and the bytes for its data frame unless it failed.
@@ -1254,7 +1251,12 @@ fn text(side: &Side) -> Result<Option<String>, ()> {
 
 /// The `file` answer for `path`. When the texts would not fit in one frame, they are left out
 /// as too large.
-pub fn message(worktree: String, path: String, read: io::Result<(Side, Side)>) -> Control {
+pub fn message(
+    worktree: String,
+    path: String,
+    read: io::Result<(Side, Side)>,
+    media: Option<Media>,
+) -> Control {
     let (disk, head, error) = match read {
         Ok((Side::Missing, Side::Missing)) => {
             let error = format!("{path} does not exist");
@@ -1283,7 +1285,7 @@ pub fn message(worktree: String, path: String, read: io::Result<(Side, Side)>) -
         binary,
         too_large,
         error: error.clone(),
-        media: None,
+        media: media.clone(),
     };
     let reply = file(texts(!too_large), too_large);
     if serde_json::to_vec(&reply).map_or(0, |json| json.len()) <= MAX_PAYLOAD {
@@ -1316,7 +1318,7 @@ mod tests {
     }
 
     fn answer(read: io::Result<(Side, Side)>) -> Control {
-        message("/w".into(), "a".into(), read)
+        message("/w".into(), "a".into(), read, None)
     }
 
     /// The answer's fields by name.
