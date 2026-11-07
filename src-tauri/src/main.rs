@@ -36,6 +36,16 @@ fn main() {
     // A WebContent crash reloads the page and keeps the terminals (18.21).
     #[cfg(target_os = "macos")]
     let builder = builder.on_web_content_process_terminate(hive_lib::web_content_terminated);
+    // A worktree's image or PDF in the viewer (24.2, 24.3), its bytes from the service.
+    let builder = builder.register_asynchronous_uri_scheme_protocol(
+        hive_lib::scheme::SCHEME,
+        |ctx, request, responder| {
+            let (app, path) = (ctx.app_handle().clone(), request.uri().path().to_owned());
+            tauri::async_runtime::spawn(async move {
+                responder.respond(hive_lib::serve_file(app, path).await);
+            });
+        },
+    );
     let result = builder
         .on_menu_event(|app, event| hive_lib::menu::on_menu(app, event.id().as_ref()))
         .setup(|app| {
@@ -120,7 +130,11 @@ fn main() {
             #[cfg(target_os = "macos")]
             let ipc_dev = dev.clone();
             let _window = tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
-                .on_navigation(move |url| hive_lib::app_url(url, macos, dev.as_ref()))
+                // A frame may also load the files' scheme (a PDF, 24.3).
+                .on_navigation(move |url| {
+                    hive_lib::app_url(url, macos, dev.as_ref())
+                        || hive_lib::scheme::file_url(url, macos)
+                })
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
             // Files dropped from Finder type their paths into the terminal under them (18.1).

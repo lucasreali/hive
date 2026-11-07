@@ -631,8 +631,12 @@ impl State {
 
     /// Sends a control message to the app, if one is connected.
     async fn to_app(&self, channel: u32, message: &Control) {
+        self.frame_to_app(Frame::control(channel, message)).await;
+    }
+
+    async fn frame_to_app(&self, frame: Frame) {
         if let Some(app) = &*self.app.lock().await {
-            let _ = app.send(Frame::control(channel, message));
+            let _ = app.send(frame);
         }
     }
 
@@ -680,6 +684,21 @@ impl State {
     fn projects(self: &Arc<Self>, request: impl FnOnce(&Projects) -> Control + Send + 'static) {
         let state = self.clone();
         tokio::spawn(async move { state.answer(request).await });
+    }
+
+    /// Answers `read_file` (24.2) off the frame loop: its `file_range`, then the bytes in a data
+    /// frame, in that order on the control queue (another answer may come between).
+    fn read_file(self: &Arc<Self>, id: u32, token: String, path: String, range: (u64, u32)) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let (reply, bytes) = tokio::task::block_in_place(|| {
+                crate::file::answer::read(&state.projects, id, &token, &path, range)
+            });
+            state.to_app(0, &reply).await;
+            if let Some(bytes) = bytes {
+                state.frame_to_app(Frame::data(id, bytes)).await;
+            }
+        });
     }
 
     /// [`State::projects`] for a request that changes worktrees, or lists them afresh: in turn

@@ -62,6 +62,7 @@ import { isDirty } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
+import { MediaView } from "../viewer/MediaView";
 import { useRenderedPlace } from "../viewer/place";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
@@ -1177,9 +1178,16 @@ export function FileView({ worktree }: { worktree: string }) {
         ) : (
           <>
             {!file && <div className="hint">No changes in this file.</div>}
-            {why && <div className="hint">{why}</div>}
-            {text && !why && (
-              <CodeView key={`${worktree}\n${openFile.path}`} text={text} diff={!!file} />
+            {text?.media ? (
+              // An image or a PDF (24.2, 24.3) shows as itself, not as its text or diff.
+              <MediaView media={text.media} path={openFile.path} />
+            ) : (
+              <>
+                {why && <div className="hint">{why}</div>}
+                {text && !why && (
+                  <CodeView key={`${worktree}\n${openFile.path}`} text={text} diff={!!file} />
+                )}
+              </>
             )}
           </>
         )}

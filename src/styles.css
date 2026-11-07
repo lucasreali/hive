@@ -1184,6 +1184,28 @@ label:has(> input[type="checkbox"]:disabled) {
   min-height: 0;
 }
 
+/* An image or a PDF (24.2, 24.3, src/viewer/MediaView.tsx): the image centred, shrunk to fit,
+   never enlarged; the PDF's frame fills the view. */
+.media-view {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+}
+
+div.media-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 12px;
+}
+
+.media-view img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 /* A table file (23.6, src/viewer/TableView.tsx): its sheets' tabs, then a grid that scrolls
    both ways with the header row kept in view, and the note on the rows not shown. Rows are
    one line of a fixed height (the virtualizer's `ROW`); a long cell is cut, its title whole. */

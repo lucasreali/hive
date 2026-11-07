@@ -128,7 +128,9 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     binary: true,
     too_large: true,
     error: true,
+    media: true,
   },
+  file_range: { id: true, size: true, mime: true, version: true, error: true },
   table: { worktree: true, path: true, sheets: true, error: true },
   search_results: { worktree: true, query: true, matches: true, truncated: true, error: true },
   dirs: {

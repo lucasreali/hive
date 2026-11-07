@@ -108,7 +108,7 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
   await page.keyboard.type("zzz");
   await expect(view.locator(".cm-content")).not.toContainText("zzz");
 
-  // A deleted file shows all removed, a new one all added, a binary one a message.
+  // A deleted file shows all removed, a new one all added, an image itself (24.2).
   await tree.getByRole("button", { name: "refactor-auth" }).click();
   await open(files, "src", "legacy");
   await files.getByRole("treeitem", { name: /jwt\.ts/ }).click();
@@ -116,9 +116,8 @@ test("files panel: a changed file shows as a read-only unified diff", async ({ p
   await expect(deleted.locator(".cm-deletedChunk")).toHaveText(/export const value = 1;/);
   await open(files, "assets");
   await files.getByRole("treeitem", { name: /logo\.png/ }).click();
-  await expect(page.getByRole("region", { name: "assets/logo.png" })).toContainText(
-    "Binary file not shown.",
-  );
+  const logo = page.getByRole("region", { name: "assets/logo.png" });
+  await expect(logo.getByRole("img", { name: "assets/logo.png" })).toBeVisible();
   await tree.getByRole("button", { name: "feat-checkout" }).click();
   await open(files, "src", "checkout");
   await files.getByRole("treeitem", { name: /shipping\.ts/ }).click();

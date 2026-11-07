@@ -542,6 +542,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "menu":
     case "tray_clicked":
     case "files_dropped":
+    // The `hive-file:` scheme's, kept by the Tauri side (24.2).
+    case "file_range":
     // Kept in the inbox by `notify`.
     case "pull_ended":
     case "command_finished":

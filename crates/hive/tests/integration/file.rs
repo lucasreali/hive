@@ -1,5 +1,8 @@
-use hive::file::{TEXT_LIMIT, version};
-use hive_protocol::{Control, DiffBase, Role, SaveError};
+use std::io::Write;
+
+use futures_util::SinkExt;
+use hive::file::{PDF_LIMIT, SERVE_LIMIT, TEXT_LIMIT, version};
+use hive_protocol::{Control, DiffBase, Frame, FrameType, Media, READ_LIMIT, Role, SaveError};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
@@ -44,8 +47,10 @@ async fn sides(
             binary,
             too_large,
             error,
+            media,
         } => {
             assert_eq!((w.as_str(), p.as_str(), binary), (worktree, path, false));
+            assert_eq!(media, None, "{path}");
             let expected = content.as_deref().map(|c| version(c.as_bytes()));
             assert!(too_large || v == expected, "{path}: {v:?}");
             (content, base, too_large, error)
@@ -163,6 +168,148 @@ async fn table(
         }
         other => panic!("expected a table, got {other:?}"),
     }
+}
+
+/// The `media` of the `file` answer for `path` of `worktree`.
+async fn media(conn: &mut Conn, worktree: &str, path: &str) -> Option<Media> {
+    match open(conn, worktree, path).await {
+        Control::File { media, .. } => media,
+        other => panic!("expected a file, got {other:?}"),
+    }
+}
+
+/// The `file_range` answer to a `read_file` of `path` in the worktree `token` names, and the
+/// bytes of the data frame after it, if any.
+async fn read(conn: &mut Conn, token: &str, path: &str, range: (u64, u32)) -> (Control, Vec<u8>) {
+    let (token, path, (offset, len)) = (token.to_owned(), path.to_owned(), range);
+    let id = 9;
+    let read = Control::ReadFile {
+        id,
+        token,
+        path,
+        offset,
+        len,
+    };
+    conn.send(0, read).await;
+    let (_, range) = conn.control().await;
+    if !matches!(range, Control::FileRange { error: None, .. }) {
+        return (range, Vec::new());
+    }
+    loop {
+        let frame = conn.next().await.unwrap();
+        if frame.kind == FrameType::Data {
+            assert_eq!(frame.channel, id);
+            return (range, frame.payload.to_vec());
+        }
+    }
+}
+
+/// A file starting with `head`, made `len` bytes long without writing them (sparse).
+fn sized(path: std::path::PathBuf, head: &[u8], len: u64) {
+    let mut file = std::fs::File::create(path).unwrap();
+    file.write_all(head).unwrap();
+    file.set_len(len).unwrap();
+}
+
+#[tokio::test]
+async fn images_and_pdfs_are_read_in_ranges_through_their_worktree_s_token() {
+    let repo = Repo::new();
+    let png = b"\x89PNG\r\n\x1a\nrest".to_vec();
+    std::fs::write(repo.root.join("a.png"), &png).unwrap();
+    repo.write(
+        "b.svg",
+        "<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n",
+    );
+    repo.write("c.txt", "text\n");
+    sized(repo.root.join("edge.gif"), b"GIF89a", SERVE_LIMIT);
+    sized(repo.root.join("big.gif"), b"GIF89a", SERVE_LIMIT + 1);
+    sized(repo.root.join("doc.pdf"), b"%PDF-1.4\n", SERVE_LIMIT + 1);
+    sized(repo.root.join("huge.pdf"), b"%PDF-1.4\n", PDF_LIMIT + 1);
+    let outside = repo.env.path("home/out.png");
+    std::fs::write(&outside, &png).unwrap();
+    std::os::unix::fs::symlink(&outside, repo.root.join("out.png")).unwrap();
+    let root = repo.root.display().to_string();
+
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    // Not followed: no media, no token.
+    assert_eq!(media(&mut conn, &root, "a.png").await, None);
+    follow(&mut conn, &root).await;
+
+    let Some(Media {
+        mime,
+        token,
+        version,
+    }) = media(&mut conn, &root, "a.png").await
+    else {
+        panic!("a.png is an image");
+    };
+    assert_eq!(mime, "image/png");
+    assert!(version.starts_with("12-"), "{version}");
+    let svg = media(&mut conn, &root, "b.svg").await.unwrap();
+    assert_eq!((svg.mime.as_str(), &svg.token), ("image/svg+xml", &token));
+    let pdf = media(&mut conn, &root, "doc.pdf").await.unwrap();
+    assert_eq!(pdf.mime, "application/pdf");
+    let edge = media(&mut conn, &root, "edge.gif").await.unwrap();
+    assert_eq!(edge.mime, "image/gif");
+    // Text, over its cap, outside the worktree: none.
+    for path in ["c.txt", "big.gif", "huge.pdf", "out.png", "gone.png"] {
+        assert_eq!(media(&mut conn, &root, path).await, None, "{path}");
+    }
+
+    let range = |size, mime: &str, version: &str| Control::FileRange {
+        id: 9,
+        size,
+        mime: mime.into(),
+        version: version.into(),
+        error: None,
+    };
+    let whole = read(&mut conn, &token, "a.png", (0, READ_LIMIT)).await;
+    assert_eq!(whole, (range(12, "image/png", &version), png.clone()));
+    let part = read(&mut conn, &token, "a.png", (4, 3)).await;
+    assert_eq!(part.1, png[4..7]);
+    let (text, bytes) = read(&mut conn, &token, "c.txt", (0, READ_LIMIT)).await;
+    assert!(
+        matches!(text, Control::FileRange { size: 5, ref mime, .. } if mime == "application/octet-stream")
+    );
+    assert_eq!(bytes, b"text\n");
+    // At most `READ_LIMIT` bytes a read.
+    let (_, bytes) = read(&mut conn, &token, "doc.pdf", (0, u32::MAX)).await;
+    assert_eq!(bytes.len(), READ_LIMIT as usize);
+
+    let failed = |error: &str| Control::FileRange {
+        id: 9,
+        size: 0,
+        mime: String::new(),
+        version: String::new(),
+        error: Some(error.into()),
+    };
+    for (token, path, error) in [
+        (&*token, "big.gif", "big.gif is larger than 20 MiB"),
+        (&*token, "huge.pdf", "huge.pdf is larger than 100 MiB"),
+        (&*token, "../x", "not a relative path inside the worktree"),
+        (&*token, "out.png", "the file resolves outside the worktree"),
+        (&*token, "gone.png", "gone.png does not exist"),
+        (&*root, "a.png", "no worktree has this token"),
+    ] {
+        let answer = read(&mut conn, token, path, (0, READ_LIMIT)).await;
+        assert_eq!(answer, (failed(error), Vec::new()), "{path}");
+    }
+
+    // Unfollowed, its token reads nothing.
+    let id = root.clone();
+    conn.send(0, Control::RemoveProject { id }).await;
+    while !matches!(conn.control().await.1, Control::ProjectRemoved { .. }) {}
+    let gone = format!("{root} is not a worktree of a followed project");
+    let answer = read(&mut conn, &token, "a.png", (0, READ_LIMIT)).await;
+    assert_eq!(answer, (failed(&gone), Vec::new()));
+
+    // A data frame is no request.
+    conn.writer.send(Frame::data(3, &b"x"[..])).await.unwrap();
+    let message = "unexpected message from the app".to_owned();
+    assert_eq!(conn.control().await, (3, Control::Error { message }));
+    drop(conn);
+    stop(daemon);
 }
 
 #[tokio::test]
