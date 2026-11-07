@@ -98,8 +98,9 @@ pub fn reap(dir: &Path, source: crate::procs::Source) {
         let mut flag = OsString::from("--user-data-dir=");
         flag.push(&profile);
         let flag = flag.to_string_lossy().into_owned();
+        // Only a process running with this profile: never 0 (our own group), 1 or a negative
+        // number, whose arguments are not a browser's of ours.
         let leader = group
-            .filter(|&g| g > 1)
             .filter(|&g| crate::procs::args(source, g).is_some_and(|args| args.contains(&flag)));
         if let Some(group) = leader {
             use nix::sys::signal::{Signal, killpg};
