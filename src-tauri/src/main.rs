@@ -130,10 +130,12 @@ fn main() {
             #[cfg(target_os = "macos")]
             let ipc_dev = dev.clone();
             let _window = tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
-                // A frame may also load the files' scheme (a PDF, 24.3).
+                // A frame may also load the files' scheme (a PDF, 24.3) and a worktree's dev
+                // server (24.4).
                 .on_navigation(move |url| {
                     hive_lib::app_url(url, macos, dev.as_ref())
                         || hive_lib::scheme::file_url(url, macos)
+                        || hive_lib::dev_server_url(url)
                 })
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;

@@ -24,8 +24,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: hive-file: http://hive-file.localhost; frame-src hive-file: http://hive-file.localhost; font-src 'self' data:; connect-src ipc: http://ipc.localhost",
-      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: hive-file: http://hive-file.localhost; frame-src hive-file: http://hive-file.localhost; font-src 'self' data:; connect-src ipc: http://ipc.localhost ws://localhost:1420"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: hive-file: http://hive-file.localhost; frame-src hive-file: http://hive-file.localhost http://localhost:*; font-src 'self' data:; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: hive-file: http://hive-file.localhost; frame-src hive-file: http://hive-file.localhost http://localhost:*; font-src 'self' data:; connect-src ipc: http://ipc.localhost ws://localhost:1420"
     }
   },
   "bundle": {

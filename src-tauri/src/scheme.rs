@@ -90,13 +90,19 @@ pub fn with_url(file: &mut Value, macos: bool) {
     media["url"] = url.into();
 }
 
-/// The CSP of a scheme answer of type `mime`, one place for every type (24.4 adds HTML's).
+/// An HTML page's CSP (24.4, the human at 24.1): its inline scripts and styles run, and it loads
+/// its own files through the scheme only; no network, no form, and a sandbox (origin `null`,
+/// no top navigation, no popup) even when not framed, so it never fetches the worktree's files.
+const HTML_POLICY: &str = "default-src 'none'; script-src hive-file: http://hive-file.localhost 'unsafe-inline'; style-src hive-file: http://hive-file.localhost 'unsafe-inline'; img-src hive-file: http://hive-file.localhost data:; font-src hive-file: http://hive-file.localhost; connect-src 'none'; form-action 'none'; sandbox allow-scripts";
+
+/// The CSP of a scheme answer of type `mime`, one place for every type.
 /// Anything shown as a document (an SVG opened from a PDF's link, a 404) is sandboxed, with
 /// no script and no network: in the scheme's origin it could read the token from its URL and
 /// fetch the worktree's files. A PDF is drawn by the WebView's viewer, which a sandbox blanks.
 pub fn policy(mime: &str) -> &'static str {
     match mime {
         "application/pdf" => "default-src 'none'",
+        hive_protocol::HTML_TYPE => HTML_POLICY,
         _ => "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
     }
 }
@@ -236,5 +242,30 @@ mod tests {
             assert!(!csp.contains("script"), "{mime}: {csp}");
         }
         assert_eq!(policy("application/pdf"), "default-src 'none'");
+    }
+
+    #[test]
+    fn an_html_page_runs_its_own_scripts_sandboxed_and_off_the_network() {
+        let page = response(Ok((hive_protocol::HTML_TYPE.into(), vec![])));
+        let csp = page.headers()["Content-Security-Policy"].to_str().unwrap();
+        assert_eq!(csp, HTML_POLICY);
+        let directives: Vec<&str> = csp.split("; ").collect();
+        for directive in [
+            "default-src 'none'",
+            "connect-src 'none'",
+            "form-action 'none'",
+            "sandbox allow-scripts",
+        ] {
+            assert!(directives.contains(&directive), "{directive}: {csp}");
+        }
+        // Nothing but the scheme, inline code and `data:` images: no remote host, no `'self'`.
+        for source in csp.split([';', ' ']).filter(|s| s.contains(':')) {
+            let known = ["hive-file:", "http://hive-file.localhost", "data:"];
+            assert!(known.contains(&source), "{source}: {csp}");
+        }
+        // Only the exact type: a page served as anything else gets the sandbox without scripts.
+        for mime in ["text/html", "text/html; charset=utf-16", "text/javascript"] {
+            assert!(policy(mime).ends_with("; sandbox"), "{mime}");
+        }
     }
 }

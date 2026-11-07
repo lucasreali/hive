@@ -2,7 +2,9 @@ use std::io::Write;
 
 use futures_util::SinkExt;
 use hive::file::{PDF_LIMIT, SERVE_LIMIT, TEXT_LIMIT, version};
-use hive_protocol::{Control, DiffBase, Frame, FrameType, Media, READ_LIMIT, Role, SaveError};
+use hive_protocol::{
+    Control, DiffBase, Frame, FrameType, HTML_TYPE as HTML, Media, READ_LIMIT, Role, SaveError,
+};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
@@ -308,6 +310,43 @@ async fn images_and_pdfs_are_read_in_ranges_through_their_worktree_s_token() {
     conn.writer.send(Frame::data(3, &b"x"[..])).await.unwrap();
     let message = "unexpected message from the app".to_owned();
     assert_eq!(conn.control().await, (3, Control::Error { message }));
+    drop(conn);
+    stop(daemon);
+}
+
+#[tokio::test]
+async fn an_html_page_has_media_and_its_files_their_types_by_name() {
+    let repo = Repo::new();
+    repo.write("site/index.html", "<p>hi</p>\n");
+    repo.write("site/style.css", "p {}\n");
+    repo.write("site/app.js", "1;\n");
+    std::fs::write(repo.root.join("site/fake.html"), b"GIF89a").unwrap();
+    sized(repo.root.join("big.html"), b"<p>", SERVE_LIMIT + 1);
+    let root = repo.root.display().to_string();
+
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    follow(&mut conn, &root).await;
+
+    let page = media(&mut conn, &root, "site/index.html").await.unwrap();
+    assert_eq!(page.mime, HTML);
+    // The bytes win over the name; a style sheet, a script and a page over the cap: no media.
+    let fake = media(&mut conn, &root, "site/fake.html").await.unwrap();
+    assert_eq!(fake.mime, "image/gif");
+    for path in ["site/style.css", "site/app.js", "big.html"] {
+        assert_eq!(media(&mut conn, &root, path).await, None, "{path}");
+    }
+    for (path, mime) in [
+        ("site/index.html", HTML),
+        ("site/style.css", "text/css; charset=utf-8"),
+        ("site/app.js", "text/javascript; charset=utf-8"),
+    ] {
+        let (range, _) = read(&mut conn, &page.token, path, (0, READ_LIMIT)).await;
+        assert!(
+            matches!(range, Control::FileRange { mime: ref m, error: None, .. } if m == mime),
+            "{path}: {range:?}"
+        );
+    }
     drop(conn);
     stop(daemon);
 }

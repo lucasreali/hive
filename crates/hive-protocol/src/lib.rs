@@ -1970,11 +1970,17 @@ pub struct Dir {
 /// Most bytes one `ReadFile` answers with (24.2), well inside one frame.
 pub const READ_LIMIT: u32 = 1_048_576; // 1 MiB
 
-/// A file the viewer shows as an image or a PDF (24.2, 24.3).
+/// The type of an HTML page (24.4) in `Media` and `FileRange`, the one text type the viewer
+/// previews; the app's scheme gives it its own CSP (`scheme::policy`).
+pub const HTML_TYPE: &str = "text/html; charset=utf-8";
+
+/// A file the viewer shows as an image or a PDF (24.2, 24.3), or previews as an HTML page
+/// (24.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Media {
     /// `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/svg+xml` or
-    /// `application/pdf`, read from the file's bytes.
+    /// `application/pdf`, read from the file's bytes; else `text/html; charset=utf-8` for a
+    /// `.html` / `.htm` file.
     pub mime: String,
     /// Names the worktree in `hive-file:` URLs and `ReadFile` (random, for the service's run).
     pub token: String,

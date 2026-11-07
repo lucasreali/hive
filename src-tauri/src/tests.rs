@@ -181,10 +181,31 @@ fn only_the_apps_own_origin_reaches_the_ipc() {
         "hive-file://localhost/token/page.html",
         "http://hive-file.localhost",
         "http://localhost:5173",
+        "http://localhost:20000",
         "http://tauri.localhost",
         "about:srcdoc",
     ] {
         assert!(!ipc_from_app(text, true, Some(&dev)), "{text}");
+    }
+}
+
+#[test]
+fn a_frame_loads_a_worktree_s_dev_server_on_localhost_at_a_block_s_port() {
+    let url = |text: &str| tauri::Url::parse(text).unwrap();
+    for text in ["http://localhost:20000/", "http://localhost:29999/a?b#c"] {
+        assert!(dev_server_url(&url(text)), "{text}");
+    }
+    for text in [
+        "http://localhost:19999/",
+        "http://localhost:30000/",
+        "http://localhost/",
+        "https://localhost:20000/",
+        "ws://localhost:20000/",
+        "http://127.0.0.1:20000/",
+        "http://localhost.evil.com:20000/",
+        "http://evil.com:20000/",
+    ] {
+        assert!(!dev_server_url(&url(text)), "{text}");
     }
 }
 
@@ -335,8 +356,8 @@ fn the_built_config_has_the_csp_and_builds_its_own_window() {
     let security = &config.app.security;
     let csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
                img-src 'self' data: hive-file: http://hive-file.localhost; \
-               frame-src hive-file: http://hive-file.localhost; font-src 'self' data:; \
-               connect-src ipc: http://ipc.localhost";
+               frame-src hive-file: http://hive-file.localhost http://localhost:*; \
+               font-src 'self' data:; connect-src ipc: http://ipc.localhost";
     assert_eq!(security.csp.as_ref().unwrap().to_string(), csp);
     // The dev CSP adds the Vite hot-reload socket. Tauri applies a CSP only to the pages it
     // serves itself, so on desktop not to the dev server's.

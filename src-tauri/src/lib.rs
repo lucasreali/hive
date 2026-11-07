@@ -303,6 +303,16 @@ pub fn app_url(url: &tauri::Url, macos: bool, dev: Option<&tauri::Url>) -> bool 
     bundled || dev.is_some_and(|dev| dev.origin() == url.origin())
 }
 
+/// Whether a frame may load `url` as a worktree's dev server (24.4): `http://localhost` at a
+/// port of the worktrees' blocks (20000–29999, `hive::scripts`). Never an IPC origin
+/// (`ipc_from_app`, 24.14).
+pub fn dev_server_url(url: &tauri::Url) -> bool {
+    let block = url
+        .port()
+        .is_some_and(|port| (20_000..=29_999).contains(&port));
+    url.scheme() == "http" && url.host_str() == Some("localhost") && block
+}
+
 /// Whether an IPC call from `text`, its caller's URL or `Origin`, comes from the app (24.14):
 /// an allow-list of [`app_url`]'s origins, so a framed page (`null`, `hive-file:`, a dev
 /// server) never reaches Tauri.
