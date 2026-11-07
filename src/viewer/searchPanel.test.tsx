@@ -126,6 +126,19 @@ test("typing sets the query; the toggles set its options, pressed while on", () 
   expect(button("Match case").getAttribute("aria-pressed")).toBe("false");
 });
 
+test("a regexp that does not compile marks the field and says so (24.12)", () => {
+  opened("foo\n");
+  const status = () => document.querySelector(".find-status")?.textContent ?? null;
+  type("Find", "fo(");
+  // Plain text: "(" is only a character.
+  expect([field("Find").getAttribute("aria-invalid"), status()]).toEqual(["false", null]);
+  click("Use regular expression");
+  expect(field("Find").getAttribute("aria-invalid")).toBe("true");
+  expect(status()).toBe("Invalid regular expression");
+  type("Find", "fo+");
+  expect([field("Find").getAttribute("aria-invalid"), status()]).toEqual(["false", null]);
+});
+
 test("a query set elsewhere shows in the bar", () => {
   const v = opened("foo bar\n");
   // ⌘F again with "bar" selected takes it as the query, as CodeMirror's panel does.
