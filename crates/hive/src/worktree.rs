@@ -456,14 +456,17 @@ pub fn has_create_hook(settings: &[u8]) -> bool {
         .is_some_and(|hooks| !hooks.is_empty())
 }
 
-/// Project settings files under `root` that configure their own `WorktreeCreate` hook.
+/// Project settings files under `root` that configure their own `WorktreeCreate` hook; opened
+/// as the viewer opens a file, so a FIFO there never blocks the creation (TODO 24.7).
 fn own_create_hooks(root: &Path) -> Vec<&'static str> {
     [".claude/settings.json", ".claude/settings.local.json"]
         .into_iter()
         .filter(|file| {
-            std::fs::File::open(root.join(file))
-                .and_then(|mut f| git::read_limited(&mut f, SETTINGS_LIMIT))
-                .is_ok_and(|settings| has_create_hook(&settings))
+            crate::file::open_inside(root, file)
+                .ok()
+                .flatten()
+                .and_then(|mut f| git::read_limited(&mut f, SETTINGS_LIMIT).ok())
+                .is_some_and(|settings| has_create_hook(&settings))
         })
         .collect()
 }
@@ -630,6 +633,24 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
         write("settings.json", SETTINGS_LIMIT);
         write("settings.local.json", SETTINGS_LIMIT + 1);
         assert_eq!(own_create_hooks(tmp.path()), vec![".claude/settings.json"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_for_a_settings_file_is_skipped_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join(".claude");
+        std::fs::create_dir(&claude).unwrap();
+        let hook = r#"{"hooks":{"WorktreeCreate":[{"hooks":[{"type":"command","command":"x"}]}]}}"#;
+        std::fs::write(claude.join("settings.json"), hook).unwrap();
+        let fifo = claude.join("settings.local.json");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        // On another thread, so a blocking open fails the test instead of hanging it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let root = tmp.path().to_path_buf();
+        std::thread::spawn(move || tx.send(own_create_hooks(&root)).unwrap());
+        let found = rx.recv_timeout(Duration::from_secs(10));
+        assert_eq!(found, Ok(vec![".claude/settings.json"]));
     }
 
     #[test]

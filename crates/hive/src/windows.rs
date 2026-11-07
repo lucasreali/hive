@@ -1489,6 +1489,23 @@ pub fn on_path(name: &OsStr, path: &OsStr) -> Option<PathBuf> {
     found.find(|file| file.is_file())
 }
 
+/// The file at `root`'s `folders` and `name`, for `file::open_plain`: a link at its end is
+/// opened itself (then refused there), never followed.
+// shortcut: Windows has no `openat`, so a folder of the path swapped for a junction after the
+// check is still followed; `NtCreateFile` relative to a folder handle if Windows matters (D17.0).
+pub fn open_parts(root: &Path, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
+    let mut path = root.to_path_buf();
+    path.extend(folders);
+    path.push(name);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    std::os::windows::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+    );
+    options.open(path)
+}
+
 /// Renames `from` to `to` in one step, failing (`AlreadyExists`) when `to` exists, as
 /// `renameat2(RENAME_NOREPLACE)`: `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`.
 // ponytail: plain paths, so one over `MAX_PATH` (260) fails unless long paths are enabled;
