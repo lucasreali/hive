@@ -681,20 +681,20 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
 /// or the default one, and whose GitHub account is in `gh`'s own config or one of the
 /// settings' gh config folders (24.13); another folder is refused.
 fn account_of(env: SpaceEnv, settings: &crate::settings::Store) -> Result<SpaceEnv, String> {
-    if let Some(dir) = &env.claude_account {
-        if !settings.account_dirs().contains(dir) {
-            return Err(format!("No Claude account has the folder {dir}"));
-        }
+    if let Some(dir) = &env.claude_account
+        && !settings.account_dirs().contains(dir)
+    {
+        return Err(format!("No Claude account has the folder {dir}"));
     }
-    if let Some(dir) = crate::spaces::gh_dir(&env) {
-        // As the settings keep it (22.2): `/x/` is `/x`.
-        let kept = crate::spaces::trimmed(dir.trim());
-        // A blank one is `gh`'s own config (`spaces::check_env`).
-        if !kept.is_empty() && !settings.gh_dirs().iter().any(|d| d == kept) {
-            return Err(format!(
-                "{dir} is not a gh config folder of Settings → Accounts: add it there first"
-            ));
-        }
+    // As the settings keep it (22.2): `/x/` is `/x`; a blank one is `gh`'s own config
+    // (`spaces::check_env`).
+    let kept = crate::spaces::gh_dir(&env).map(|dir| crate::spaces::trimmed(dir.trim()));
+    if let Some(dir) = kept.filter(|dir| !dir.is_empty())
+        && !settings.gh_dirs().iter().any(|d| d == dir)
+    {
+        return Err(format!(
+            "{dir} is not a gh config folder of Settings → Accounts: add it there first"
+        ));
     }
     Ok(env)
 }
