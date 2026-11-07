@@ -1426,9 +1426,10 @@ mod tests {
                 std::fs::remove_file(&fifo).unwrap();
                 nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
             };
-            let v = version(b"old");
-            let rename = |_: &Path, _: &Path| Ok(());
-            tx.send(save_with(&root, "f", "new", Some(&v), swap, rename))
+            let rename = |from: &Path, to: &Path| std::fs::rename(from, to);
+            // Untouched, the save goes through; then the FIFO is refused at the version check.
+            let v = save_with(&root, "f", "new", Some(&version(b"old")), || {}, rename).unwrap();
+            tx.send(save_with(&root, "f", "newer", Some(&v), swap, rename))
                 .unwrap();
         });
         let saved = rx.recv_timeout(std::time::Duration::from_secs(10));
