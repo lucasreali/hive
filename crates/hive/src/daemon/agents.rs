@@ -27,11 +27,13 @@ impl State {
         }
     }
 
-    /// Holds the power assertion while an agent works and the setting is on (17.17), and
-    /// sends `subagent_worktrees` when the set changed. Called with the agents lock held, so
+    /// Holds the power assertion while an agent works and the setting is on (17.17), stops the
+    /// browsers of worktrees without agents (24.6), and sends `subagent_worktrees` when the set
+    /// changed. Called with the agents lock held, so
     /// the changes go out in order.
     pub(super) async fn owned_changed(&self, agents: &HashMap<String, Agent>) {
         self.power_changed(agents);
+        self.browsers_follow(agents).await;
         let worktrees = {
             let terminals = self
                 .terminal_worktrees

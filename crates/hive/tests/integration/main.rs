@@ -12,6 +12,9 @@ mod agents;
 mod bridge;
 #[cfg(unix)]
 #[cfg(test)]
+mod browser;
+#[cfg(unix)]
+#[cfg(test)]
 mod changes;
 #[cfg(unix)]
 #[cfg(test)]

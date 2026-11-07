@@ -61,6 +61,28 @@ const MAX_PORT_FILE: u64 = 1024;
 /// How long `hive browser-mcp` waits for the service to start the browser.
 const ENDPOINT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The `hive-browser` MCP server's config, in the bin folder while the agent's browser is on:
+/// the `claude` wrapper passes it with `--mcp-config` while it is there.
+pub const MCP_CONFIG: &str = "hive-browser.json";
+
+/// Writes [`MCP_CONFIG`] into `bin` when `enabled` (its server runs `hive browser-mcp`), else
+/// removes it.
+pub fn configure(bin: &Path, hive: &Path, enabled: bool) -> io::Result<()> {
+    let file = bin.join(MCP_CONFIG);
+    if !enabled {
+        return match std::fs::remove_file(&file) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+            _ => Ok(()),
+        };
+    }
+    let hive = hive
+        .to_str()
+        .ok_or_else(|| io::Error::other(format!("hive path is not UTF-8: {}", hive.display())))?;
+    let server = json!({ "type": "stdio", "command": hive, "args": ["browser-mcp"] });
+    let config = json!({ "mcpServers": { "hive-browser": server } });
+    crate::wrapper::write_atomic(&file, format!("{config:#}\n").as_bytes(), 0o644)
+}
+
 /// The browser to run: `setting` (`browser.path`) when set, else the first installed one of
 /// `candidates`. A snap Chromium (under `snap`) is skipped: its confinement cannot use Hive's
 /// temporary profile.
@@ -628,33 +650,22 @@ pub fn mcp_command(path: Option<&OsStr>, endpoint: &str) -> Option<(PathBuf, Vec
 }
 
 /// `hive browser-mcp`: runs the Playwright MCP on the agent's browser of this worktree, its
-/// stdio the agent's. On Unix it becomes that program; it returns only on a failure.
-pub async fn mcp(paths: &Paths) -> io::Result<()> {
+/// stdio the agent's; its exit code.
+pub async fn mcp(paths: &Paths) -> io::Result<u8> {
     let cwd = std::env::current_dir()?;
-    let cwd = cwd.to_string_lossy();
-    let endpoint = endpoint(paths, &cwd).await.map_err(io::Error::other)?;
+    let endpoint = endpoint(paths, &cwd.to_string_lossy())
+        .await
+        .map_err(io::Error::other)?;
     let path = std::env::var_os("PATH");
     let (program, args) = mcp_command(path.as_deref(), &endpoint)
         .ok_or_else(|| io::Error::other("neither bunx nor npx is on PATH"))?;
-    let mut command = std::process::Command::new(&program);
-    command.args(&args);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = command.exec();
-        Err(io::Error::other(format!(
-            "cannot run {}: {err}",
-            program.display()
-        )))
-    }
-    #[cfg(windows)]
-    {
-        let status = command.status()?;
-        status
-            .success()
-            .then_some(())
-            .ok_or_else(|| io::Error::other(format!("{} ended with {status}", program.display())))
-    }
+    // shortcut: a child, not `exec` (on Unix too, so a test's run is measured); one ended by a
+    // signal leaves the MCP to end on its closed stdin.
+    let status = tokio::process::Command::new(&program)
+        .args(&args)
+        .status()
+        .await?;
+    Ok(crate::wrapper::exit_byte(status.code().unwrap_or(1)))
 }
 
 #[cfg(test)]
@@ -669,6 +680,30 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::Permissions::from_mode(0o755);
             std::fs::set_permissions(path, mode).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_mcp_config_is_written_while_on_and_removed_when_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join(MCP_CONFIG);
+        configure(tmp.path(), Path::new("/opt/it's hive"), true).unwrap();
+        let config: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        let server =
+            json!({ "type": "stdio", "command": "/opt/it's hive", "args": ["browser-mcp"] });
+        assert_eq!(config, json!({ "mcpServers": { "hive-browser": server } }));
+        configure(tmp.path(), Path::new("/h"), false).unwrap();
+        assert!(!file.exists());
+        // Already gone: fine; a folder in its place cannot be removed as a file.
+        configure(tmp.path(), Path::new("/h"), false).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(configure(tmp.path(), Path::new("/h"), false).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let bad = Path::new(OsStr::from_bytes(b"/bad\xff"));
+            let err = configure(tmp.path(), bad, true).unwrap_err();
+            assert!(err.to_string().contains("not UTF-8"), "{err}");
         }
     }
 
@@ -1107,6 +1142,9 @@ mod tests {
         // Exits at once.
         let quits = tmp.path().join("quits");
         exe(&quits, "#!/bin/sh\nexit 3\n");
+        // Run once first: macOS checks a new program on its first run, seconds when loaded.
+        let first = std::process::Command::new(&quits).status().unwrap();
+        assert_eq!(first.code(), Some(3));
         let err = start(&quits, profile.clone()).await.err().unwrap();
         assert!(err.starts_with("The browser exited as it started"), "{err}");
         assert!(!profile.exists());
@@ -1123,9 +1161,16 @@ mod tests {
         };
         let fake = tmp.path().join("fake");
         let script = format!(
-            "#!/bin/sh\nfor a; do case $a in --user-data-dir=*) d=${{a#--user-data-dir=}};; esac; done\nprintf '{port}\\n/devtools/browser/x\\n' > \"$d/DevToolsActivePort\"\nexec sleep 30\n"
+            "#!/bin/sh\nfor a; do case $a in --user-data-dir=*) d=${{a#--user-data-dir=}};; esac; done\n[ -n \"$d\" ] || exit 0\nprintf '{port}\\n/devtools/browser/x\\n' > \"$d/DevToolsActivePort\"\nexec sleep 30\n"
         );
         exe(&fake, &script);
+        // Run once first: macOS checks a new program on its first run, seconds when loaded.
+        assert!(
+            std::process::Command::new(&fake)
+                .status()
+                .unwrap()
+                .success()
+        );
         let err = start(&fake, profile.clone()).await.err().unwrap();
         assert!(err.starts_with("Cannot connect to the browser"), "{err}");
         assert!(!profile.exists());
