@@ -1783,6 +1783,10 @@ button.chevron:hover {
   gap: 8px;
 }
 
+.merged-item {
+  flex-wrap: wrap;
+}
+
 .merged-item label {
   flex: 1;
   min-width: 0;
@@ -2215,6 +2219,11 @@ button.chevron:hover {
 .field-error {
   color: var(--state-error);
   overflow-wrap: anywhere;
+}
+
+/* A failed removal's message, often long, gets its own line under the name and date (24.9). */
+.merged-item > .field-error {
+  flex-basis: 100%;
 }
 
 .field-help {
