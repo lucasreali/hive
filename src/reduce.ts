@@ -332,7 +332,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { claudeLogins: m.logins };
     case "gh_accounts": {
       const { type: _, ...accounts } = m;
-      return { ghAccounts: accounts };
+      return { ghAccounts: { ...s.ghAccounts, [accounts.gh_config_dir ?? ""]: accounts } };
     }
     case "gh_identity":
     case "gh_identity_failed": {

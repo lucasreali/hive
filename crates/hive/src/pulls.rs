@@ -179,7 +179,7 @@ fn list(
 
 /// The list's key in the [`Cache`]: the project and the space's account.
 pub(crate) fn key(id: &str, env: &SpaceEnv) -> String {
-    format!("{id}\n{:?}\n{:?}", env.gh_config_dir, env.gh_account)
+    format!("{id}\n{:?}", env.gh_account)
 }
 
 /// The repository, the account's pull requests and those asking for its review, in one
@@ -355,7 +355,7 @@ pub(crate) fn located(projects: &Projects, id: &str) -> Result<(Project, SpaceEn
 pub(crate) fn host(env: &SpaceEnv) -> &str {
     env.gh_account
         .as_ref()
-        .map_or("github.com", |account| account.host.as_str())
+        .map_or("github.com", |space| space.account.host.as_str())
 }
 
 /// `gh <args>` as the space runs it. An error (`gh`'s stderr) is cut at [`ERROR_LIMIT`] and

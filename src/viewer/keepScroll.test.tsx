@@ -31,7 +31,6 @@ const LONG = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
 const NO_ENV = {
   git_name: null,
   git_email: null,
-  gh_config_dir: null,
   gh_account: null,
   claude_account: null,
 };

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Command;
 
-use hive_protocol::GhAccount;
+use hive_protocol::{GhAccount, SpaceGhAccount};
 use serde_json::json;
 
 use super::*;
@@ -448,15 +448,21 @@ fn pulls(error: Option<&str>) -> Control {
 fn the_list_is_fetched_once_per_interval_unless_forced() {
     // One list per project and account.
     let none = SpaceEnv::default();
-    let account = SpaceEnv {
-        gh_account: Some(GhAccount {
-            host: "github.com".into(),
-            login: "me".into(),
+    let in_dir = |config_dir: Option<&str>| SpaceEnv {
+        gh_account: Some(SpaceGhAccount {
+            account: GhAccount {
+                host: "github.com".into(),
+                login: "me".into(),
+            },
+            config_dir: config_dir.map(Into::into),
         }),
         ..SpaceEnv::default()
     };
-    assert_eq!(key("/a", &none), "/a\nNone\nNone");
+    let account = in_dir(None);
+    assert_eq!(key("/a", &none), "/a\nNone");
     assert_ne!(key("/a", &none), key("/a", &account));
+    // The same login in another gh config folder (24.13) is another account.
+    assert_ne!(key("/a", &account), key("/a", &in_dir(Some("/g"))));
     let mut cache = Cache::default();
     let start = Instant::now();
     let at = |ms: u64| start + Duration::from_millis(ms);
@@ -718,9 +724,12 @@ fn the_list_is_one_graphql_request_as_the_space_account() {
 fn a_space_account_on_another_host_needs_a_remote_there() {
     let setup = setup("https://github.com/o/r");
     let env = SpaceEnv {
-        gh_account: Some(GhAccount {
-            host: "ghe.example".into(),
-            login: "me".into(),
+        gh_account: Some(SpaceGhAccount {
+            account: GhAccount {
+                host: "ghe.example".into(),
+                login: "me".into(),
+            },
+            config_dir: None,
         }),
         ..SpaceEnv::default()
     };

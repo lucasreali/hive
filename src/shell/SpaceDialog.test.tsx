@@ -1,6 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { asMac } from "../../test/mac";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 import { agentPlace, notify } from "../notify";
 import type { AgentState, ServiceMessage, Space } from "../protocol";
@@ -8,7 +7,7 @@ import { apply } from "../reduce";
 import { goToAgent } from "../shortcuts";
 import { initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { agentStatus, MOCK_REPOS, mockDirs } from "../transport/mock";
+import { agentStatus, MOCK_REPOS } from "../transport/mock";
 
 afterEach(() => {
   cleanup();
@@ -19,7 +18,6 @@ const [shop, api] = MOCK_REPOS;
 const NO_ENV = {
   git_name: null,
   git_email: null,
-  gh_config_dir: null,
   gh_account: null,
   claude_account: null,
 };
@@ -61,17 +59,6 @@ test("the sidebar shows the current space's projects; the select picks another",
   pick("Home");
   expect(select).toHaveBeenCalledWith("default");
   select.mockRestore();
-});
-
-test("the gh config folder's example is a home folder of the platform (18.25)", () => {
-  asMac();
-  show([home], "default");
-  pick("New space…");
-  const gh = screen.getByLabelText("GitHub CLI config folder") as HTMLInputElement;
-  expect(gh.placeholder).toBe("/Users/you/.config/gh-work");
-  expect((screen.getByLabelText("Git email") as HTMLInputElement).placeholder).toBe(
-    "you@work.example",
-  );
 });
 
 test("a new space is created with its environment, and a refusal is shown", () => {
@@ -134,44 +121,14 @@ test("a space's Claude account is one of the accounts, kept as its folder (22.5)
   update.mockRestore();
 });
 
-test("the gh config folder is browsed, hidden folders included; empty is gh's own (22.2)", async () => {
-  const create = spyOn(transport, "createSpace").mockResolvedValue();
+test("the space dialog has no gh config folder field: the account brings its folder (24.13)", () => {
   const asked = spyOn(transport, "listDirs").mockResolvedValue();
-  try {
-    show([home], "default");
-    pick("New space…");
-    const gh = () => screen.getByLabelText("GitHub CLI config folder") as HTMLInputElement;
-    const folders = () =>
-      [...screen.getByRole("list", { name: "Folders" }).querySelectorAll("li")].map(
-        (li) => li.textContent,
-      );
-    const answer = async (path: string) => {
-      await waitFor(() => expect(asked).toHaveBeenLastCalledWith(path, false, true));
-      act(() => apply({ type: "dirs", ...mockDirs(path, false, false, true) }));
-    };
-    // Listed from home, the field left empty.
-    await answer("");
-    expect(gh().value).toBe("");
-    expect(folders()).toContain(".config");
-    fireEvent.click(screen.getByRole("button", { name: ".config" }));
-    await answer("/home/user/.config/");
-    fireEvent.click(screen.getByRole("button", { name: "gh-work" }));
-    expect(gh().value).toBe("/home/user/.config/gh-work/");
-    // ↑ goes up; a typed path still works.
-    await answer("/home/user/.config/gh-work/");
-    fireEvent.click(screen.getByTitle("Up a level"));
-    expect(gh().value).toBe("/home/user/.config/");
-    fireEvent.change(gh(), { target: { value: "/home/user/.config/gh-work" } });
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Work" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create space" }));
-    expect(create).toHaveBeenCalledWith("Work", {
-      ...NO_ENV,
-      gh_config_dir: "/home/user/.config/gh-work",
-    });
-  } finally {
-    create.mockRestore();
-    asked.mockRestore();
-  }
+  show([home], "default");
+  pick("New space…");
+  expect(screen.queryByLabelText("GitHub CLI config folder")).toBeNull();
+  expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
+  expect(asked).not.toHaveBeenCalled();
+  asked.mockRestore();
 });
 
 test("the current space is edited; only an empty one can be deleted", () => {
@@ -275,12 +232,17 @@ const ghOptions = () => {
   return labels;
 };
 
-test("the GitHub account is one of gh's accounts, listed for the dialog's gh config folder", () => {
+/** The settings' extra gh config folders (24.13). */
+const ghFolders = (config_dirs: string[]) =>
+  useHive.setState((s) => ({ settings: { ...s.settings, gh: { config_dirs } } }));
+
+test("the GitHub account is one of gh's accounts, in gh's own config or a settings' folder", () => {
   const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
   const create = spyOn(transport, "createSpace").mockResolvedValue();
   show([home], "default");
+  ghFolders(["/home/user/.config/gh-ci"]);
   pick("New space…");
-  expect(list).toHaveBeenCalledWith(null);
+  expect(list.mock.calls).toEqual([[null], ["/home/user/.config/gh-ci"]]);
   // Before the answer, only gh's active account.
   expect(ghSelect().textContent).toBe("gh's active account");
   act(() => ghAccounts(null));
@@ -290,31 +252,58 @@ test("the GitHub account is one of gh's accounts, listed for the dialog's gh con
   fireEvent.click(screen.getByRole("option", { name: "octo-personal" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Home" } });
   fireEvent.click(screen.getByRole("button", { name: "Create space" }));
-  const personal = { host: GITHUB, login: "octo-personal" };
+  const personal = { host: GITHUB, login: "octo-personal", config_dir: null };
   expect(create).toHaveBeenCalledWith("Home", { ...NO_ENV, gh_account: personal });
 
-  // Another config folder is listed once its field is left; the old answer no longer shows.
-  const folder = screen.getByLabelText("GitHub CLI config folder");
-  fireEvent.change(folder, { target: { value: "/cfg" } });
-  expect(ghSelect().textContent).toBe("octo-personal (not logged in)");
-  fireEvent.blur(folder);
-  expect(list).toHaveBeenLastCalledWith("/cfg");
-  act(() => ghAccounts("/cfg", "No account is logged in to gh (run gh auth login)"));
-  expect(within(screen.getByRole("dialog")).getByRole("status").textContent).toBe(
-    "No account is logged in to gh (run gh auth login)",
+  // The other folder's accounts follow, named with their folder; picked, the account keeps it.
+  act(() =>
+    apply({
+      type: "gh_accounts",
+      gh_config_dir: "/home/user/.config/gh-ci",
+      accounts: [ghLogin("octo-ci", true)],
+      problem: null,
+    }),
   );
+  expect(ghOptions()).toEqual([
+    "gh's active account (octo-work)",
+    "octo-personal",
+    "octo-work",
+    "octo-ci (gh-ci)",
+  ]);
+  fireEvent.mouseDown(ghSelect());
+  fireEvent.click(screen.getByRole("option", { name: "octo-ci (gh-ci)" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create space" }));
+  const ci = { host: GITHUB, login: "octo-ci", config_dir: "/home/user/.config/gh-ci" };
+  expect(create).toHaveBeenLastCalledWith("Home", { ...NO_ENV, gh_account: ci });
+  // An active account of another folder is not gh's own active one: nothing to switch.
+  expect(screen.queryByRole("button", { name: "Make active in gh…" })).toBeNull();
+
+  // A folder's problem names it; gh's own does not.
+  const problem = "No account is logged in to gh (run gh auth login)";
+  act(() => ghAccounts("/home/user/.config/gh-ci", problem));
+  act(() => ghAccounts(null, "gh is not installed"));
+  const said = within(screen.getByRole("dialog")).getAllByRole("status");
+  expect(said.map((s) => s.textContent)).toEqual([
+    "gh is not installed",
+    `/home/user/.config/gh-ci: ${problem}`,
+  ]);
+  expect(ghSelect().textContent).toBe("octo-ci (gh-ci) (not logged in)");
   // Back to gh's active account.
   fireEvent.mouseDown(ghSelect());
   fireEvent.click(screen.getByRole("option", { name: "gh's active account" }));
   fireEvent.click(screen.getByRole("button", { name: "Create space" }));
-  expect(create).toHaveBeenLastCalledWith("Home", { ...NO_ENV, gh_config_dir: "/cfg" });
+  expect(create).toHaveBeenLastCalledWith("Home", NO_ENV);
+  // The folders change: they are listed again.
+  list.mockClear();
+  act(() => ghFolders([]));
+  expect(list.mock.calls).toEqual([[null]]);
   list.mockRestore();
   create.mockRestore();
 });
 
 test("an account on another host or with a bad token says so", () => {
   const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
-  const gone = { host: "ghe.example", login: "gone" };
+  const gone = { host: "ghe.example", login: "gone", config_dir: null };
   show([home, { ...work, env: { ...NO_ENV, gh_account: gone } }], "w");
   pick("Edit space…");
   act(() =>
@@ -340,8 +329,9 @@ test("making the space's account gh's active one asks first, over the kept dialo
   const list = spyOn(transport, "listGhAccounts").mockResolvedValue();
   const switchGh = spyOn(transport, "switchGhAccount").mockResolvedValue();
   const personal = { host: GITHUB, login: "octo-personal" };
-  const env = { ...NO_ENV, gh_config_dir: "/cfg", gh_account: personal };
+  const env = { ...NO_ENV, gh_account: { ...personal, config_dir: "/cfg" } };
   show([home, { ...work, env }], "w");
+  ghFolders(["/cfg"]);
   pick("Edit space…");
   act(() => ghAccounts("/cfg"));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Job" } });
@@ -390,7 +380,9 @@ test("a GitHub account without a git identity warns, and the account's fills it"
   act(() =>
     apply({ type: "gh_identity", account: personal, name: "octo-personal", email: "old@x" }),
   );
-  show([home, { ...work, env: { ...NO_ENV, gh_config_dir: "/cfg", gh_account: personal } }], "w");
+  const account = { ...personal, config_dir: "/cfg" };
+  show([home, { ...work, env: { ...NO_ENV, gh_account: account } }], "w");
+  ghFolders(["/cfg"]);
   pick("Edit space…");
   act(() => ghAccounts("/cfg"));
   expect(screen.getByText(WARNING).textContent).toBe(
@@ -427,8 +419,7 @@ test("a GitHub account without a git identity warns, and the account's fills it"
     ...NO_ENV,
     git_name: "Me",
     git_email: email,
-    gh_config_dir: "/cfg",
-    gh_account: personal,
+    gh_account: account,
   });
 
   // Both empty: both filled.

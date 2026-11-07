@@ -147,3 +147,50 @@ test("switching space shows the place last selected there, with its tabs", async
     "true",
   );
 });
+
+test("a space picks a GitHub account of a gh config folder added in Settings (24.13)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const space = page.getByRole("combobox", { name: "Space" });
+  await expect(space).toHaveText("Default");
+  await page.keyboard.press(`${mod}+Comma`);
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts" }).click();
+  const part = settings.getByRole("region", { name: "GitHub accounts" });
+  await expect(part.locator(".account-row")).toHaveCount(1);
+  await part.getByRole("button", { name: "Add a gh config folder" }).click();
+  await part.getByLabel("New gh config folder").fill("/home/user/.config/gh-work");
+  await part.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(part.locator(".account-row").nth(1)).toContainText("mock-gh-work");
+  await page.screenshot({ path: "target/e2e/gh-accounts.png" });
+  await page.keyboard.press("Escape");
+  await expect(settings).toBeHidden();
+
+  // The space dialog has only the account select; its account brings the folder.
+  const edit = async () => {
+    await space.click();
+    await page.getByRole("option", { name: "Edit space…" }).click();
+    return page.getByRole("dialog", { name: "Edit space" });
+  };
+  let dialog = await edit();
+  await expect(dialog.getByLabel("GitHub CLI config folder")).toHaveCount(0);
+  const account = dialog.getByRole("combobox", { name: "GitHub account" });
+  await account.click();
+  await page.getByRole("option", { name: "mock-gh-work (gh-work)" }).click();
+  await dialog.getByRole("button", { name: /^Save/ }).click();
+  await expect(dialog).toHaveCount(0);
+  dialog = await edit();
+  await expect(dialog.getByRole("combobox", { name: "GitHub account" })).toHaveText(
+    "mock-gh-work (gh-work)",
+  );
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+
+  // Its folder cannot be removed while the space uses it.
+  await page.keyboard.press(`${mod}+Comma`);
+  await settings.getByRole("button", { name: "Accounts" }).click();
+  await part.getByTitle("Remove /home/user/.config/gh-work").click();
+  await expect(settings.getByRole("alert")).toHaveText(
+    "The GitHub account of the space Default is in /home/user/.config/gh-work: choose another one for it first",
+  );
+});

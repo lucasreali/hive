@@ -387,14 +387,15 @@ pub fn count_lines(path: &Path, budget: &mut u64) -> Option<u64> {
 
 /// Opens `path` for reading without ever waiting: a FIFO swapped in for a measured file opens
 /// at once and reads as empty or fails, where a blocking open would wait for a writer forever.
+/// Nor through a link swapped in for it after its check (`O_NOFOLLOW`, TODO 24.7).
 #[cfg(unix)]
 fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
+    use nix::fcntl::OFlag;
     use std::fs::OpenOptions;
     use std::os::unix::fs::OpenOptionsExt;
-    let nonblocking = nix::fcntl::OFlag::O_NONBLOCK.bits();
     OpenOptions::new()
         .read(true)
-        .custom_flags(nonblocking)
+        .custom_flags(OFlag::O_NONBLOCK.union(OFlag::O_NOFOLLOW).bits())
         .open(path)
 }
 
@@ -510,6 +511,18 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
         assert_eq!(count_lines(&fifo, &mut budget), None);
         assert_eq!(budget, 10);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_swapped_in_after_the_check_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("secret"), "secret").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink("secret", &link).unwrap();
+        let code = open_nonblocking(&link).unwrap_err().raw_os_error();
+        assert_eq!(code, Some(nix::libc::ELOOP));
+        assert!(open_nonblocking(&dir.path().join("secret")).is_ok());
     }
 
     #[cfg(unix)]

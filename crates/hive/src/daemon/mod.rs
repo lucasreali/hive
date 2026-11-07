@@ -117,7 +117,7 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let projects = Projects::load(paths.spaces(), &paths.projects()).protect(home, own);
     let sessions = Sessions::new(sessions::root(|key| std::env::var_os(key)));
     let settings = settings::Store::load(paths.settings()).with_accounts(paths.accounts_dir());
-    projects.migrate_accounts(&mut |legacy| settings.migrate(legacy));
+    projects.migrate_accounts(&mut |legacy, gh| settings.migrate(legacy, gh));
     // The account selected before 22.5 becomes every space's.
     settings.migrate_account(&mut |dir| {
         projects.change_spaces(|s| {

@@ -2537,6 +2537,14 @@ button.chevron:hover {
   display: flex;
 }
 
+/* A gh config folder's logins (24.13), in the name column: cut at its end, all in the tooltip. */
+.gh-logins {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-status .tab-badge {
   white-space: nowrap;
 }

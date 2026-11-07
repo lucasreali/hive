@@ -27,6 +27,9 @@ pub const GROUP_ENTRIES: usize = 1024;
 /// git has no listing without a repository.
 const PLAIN_GIT: &str = "plain.git";
 
+/// The Claude config folders of spaces from before accounts (12.2), each with its space's name.
+pub type Legacy = Vec<(String, String)>;
+
 pub struct Projects {
     file: PathBuf,
     spaces: Mutex<Spaces>,
@@ -42,8 +45,9 @@ pub struct Projects {
     /// [`PLAIN_GIT`], next to the spaces file.
     plain: PathBuf,
     /// The Claude config folders the file's spaces had before accounts (12.2), with their
-    /// space's name, until they are accounts ([`Projects::migrate_accounts`]).
-    legacy: Mutex<Vec<(String, String)>>,
+    /// space's name, and their gh config folders before 24.13, until they are in the settings
+    /// ([`Projects::migrate_accounts`]).
+    legacy: Mutex<(Legacy, Vec<String>)>,
 }
 
 impl Projects {
@@ -52,8 +56,9 @@ impl Projects {
     /// unreadable or invalid one is moved aside to `<file>.corrupt` with a warning, and the
     /// list starts empty.
     pub fn load(file: PathBuf, legacy: &Path) -> Self {
-        let value: io::Result<serde_json::Value> = read(&file);
+        let mut value: io::Result<serde_json::Value> = read(&file);
         let accounts = value.as_ref().map_or_else(|_| Vec::new(), legacy_accounts);
+        let gh = value.as_mut().map_or_else(|_| Vec::new(), legacy_gh);
         let loaded = value
             .and_then(|value| serde_json::from_value(value).map_err(io::Error::other))
             .and_then(|s: Spaces| s.check().map_err(io::Error::other));
@@ -78,7 +83,7 @@ impl Projects {
             listed: Mutex::default(),
             scanned: Mutex::default(),
             protected: protected.into_iter().collect(),
-            legacy: Mutex::new(accounts),
+            legacy: Mutex::new((accounts, gh)),
         }
     }
 
@@ -94,25 +99,27 @@ impl Projects {
         self
     }
 
-    /// Hands the Claude config folders spaces had (see `legacy`) to `make`, which makes them
-    /// accounts, then saves the spaces without them. Nothing changes when `make` fails (the
-    /// warning is logged): the next start tries again, so nothing is lost. (Not generic: every
-    /// caller shares one copy of it, whose coverage the tests give.)
+    /// Hands the Claude config folders and the gh config folders spaces had (see `legacy`) to
+    /// `make`, which makes them accounts and settings' gh folders (24.13), then saves the
+    /// spaces without them. Nothing changes when `make` fails (the warning is logged): the
+    /// next start tries again, so nothing is lost. (Not generic: every caller shares one copy
+    /// of it, whose coverage the tests give.)
     pub fn migrate_accounts(
         &self,
-        make: &mut dyn FnMut(Vec<(String, String)>) -> Result<(), String>,
+        make: &mut dyn FnMut(Legacy, Vec<String>) -> Result<(), String>,
     ) {
         let mut legacy = self.legacy.lock().unwrap_or_else(PoisonError::into_inner);
-        if legacy.is_empty() {
+        let (accounts, gh) = &mut *legacy;
+        if accounts.is_empty() && gh.is_empty() {
             return;
         }
-        let saved = make(legacy.clone())
+        let saved = make(accounts.clone(), gh.clone())
             .and_then(|()| save(&self.file, &self.spaces()).map_err(|err| err.to_string()));
         match saved {
-            Ok(()) => legacy.clear(),
-            Err(err) => {
-                eprintln!("hive: warning: the spaces' Claude folders are not accounts yet: {err}")
-            }
+            Ok(()) => *legacy = Default::default(),
+            Err(err) => eprintln!(
+                "hive: warning: the spaces' Claude and gh folders are not in the settings yet: {err}"
+            ),
         }
     }
 
@@ -298,6 +305,11 @@ impl Projects {
     /// The name of the first space whose Claude account (22.5) has the folder `dir`.
     pub fn using(&self, dir: &str) -> Option<String> {
         self.spaces().using(dir).map(|s| s.name.clone())
+    }
+
+    /// The name of the first space whose GitHub account (24.13) is in the gh config folder `dir`.
+    pub fn using_gh(&self, dir: &str) -> Option<String> {
+        self.spaces().using_gh(dir).map(|s| s.name.clone())
     }
 
     /// The current space's projects, each group followed by its repositories.
@@ -735,6 +747,34 @@ fn legacy_accounts(value: &serde_json::Value) -> Vec<(String, String)> {
         Some((space["name"].as_str()?.to_owned(), dir.to_owned()))
     };
     spaces.iter().filter_map(account).collect()
+}
+
+/// Each space's gh config folder in a spaces file written before 24.13 (`env.gh_config_dir`),
+/// as a space's account's folder is kept, once each; the field leaves the space, and its
+/// GitHub account, if any, takes the folder. One that is no folder (relative, too long) was
+/// never one a terminal could use: it goes.
+fn legacy_gh(value: &mut serde_json::Value) -> Vec<String> {
+    use serde_json::Value;
+    let mut dirs = Vec::new();
+    let spaces = value.get_mut("spaces").and_then(Value::as_array_mut);
+    for space in spaces.into_iter().flatten() {
+        let Some(env) = space.get_mut("env").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let dir = env.remove("gh_config_dir");
+        let dir = dir.and_then(|dir| dir.as_str().map(str::to_owned));
+        let Ok(Some(dir)) = crate::spaces::gh_config_dir(dir, false) else {
+            continue;
+        };
+        let account = env.get_mut("gh_account").and_then(Value::as_object_mut);
+        if let Some(account) = account {
+            account.insert("config_dir".into(), dir.clone().into());
+        }
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
 }
 
 fn read<T: DeserializeOwned>(file: &Path) -> io::Result<T> {
@@ -1422,7 +1462,8 @@ mod tests {
         // What was handed over, each time; the next one fails while `fail` is set.
         let handed = std::cell::RefCell::new(Vec::new());
         let fail = std::cell::Cell::new(true);
-        let mut make = |legacy| {
+        let mut make = |legacy, gh: Vec<String>| {
+            assert_eq!(gh, Vec::<String>::new());
             handed.borrow_mut().push(legacy);
             if fail.get() {
                 Err("no".to_owned())
@@ -1452,6 +1493,62 @@ mod tests {
         blocked.migrate_accounts(&mut make);
         blocked.migrate_accounts(&mut make);
         assert_eq!(handed.borrow().len(), 4);
+    }
+
+    #[test]
+    fn the_spaces_gh_folders_go_to_their_accounts_and_the_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("spaces.json");
+        let root = if cfg!(windows) { r"C:\" } else { "/" };
+        let (g, w) = (format!("{root}g"), format!("{root}w"));
+        let me = |login: &str| serde_json::json!({"host": "github.com", "login": login});
+        let old = serde_json::json!({"current": "default", "spaces": [
+            {"id": "default", "name": "Default", "projects": ["/a"],
+                "env": {"gh_config_dir": format!("{g}/"), "gh_account": me("me")}},
+            {"id": "space-1", "name": "Work", "env": {"gh_config_dir": w}},
+            {"id": "space-2", "name": "Again", "env": {"gh_config_dir": g, "gh_account": me("you")}},
+            {"id": "space-3", "name": "Bad", "env": {"gh_config_dir": "rel", "gh_account": me("x")}},
+            {"id": "space-4", "name": "Plain", "env": {"gh_config_dir": null, "gh_account": me("y")}},
+            {"id": "space-5", "name": "Bare"}]});
+        std::fs::write(&file, old.to_string()).unwrap();
+        let projects = load(tmp.path());
+        let folder = |i: usize| {
+            let spaces = projects.spaces();
+            let account = spaces.spaces[i].env.gh_account.clone();
+            account.map(|a| (a.account.login, a.config_dir))
+        };
+        // Each account keeps its folder, as the settings keep one; a bad folder goes.
+        assert_eq!(folder(0), Some(("me".into(), Some(g.clone()))));
+        assert_eq!(folder(1), None);
+        assert_eq!(folder(2), Some(("you".into(), Some(g.clone()))));
+        assert_eq!(folder(3), Some(("x".into(), None)));
+        assert_eq!(folder(4), Some(("y".into(), None)));
+        let handed = std::cell::RefCell::new(Vec::new());
+        let fail = std::cell::Cell::new(true);
+        let mut make = |legacy: Vec<(String, String)>, gh| {
+            assert!(legacy.is_empty());
+            handed.borrow_mut().push(gh);
+            if fail.get() {
+                Err("no".to_owned())
+            } else {
+                Ok(())
+            }
+        };
+        // A failure leaves the file as it was: handed over again.
+        projects.migrate_accounts(&mut make);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), old.to_string());
+        fail.set(false);
+        projects.migrate_accounts(&mut make);
+        let dirs = vec![g.clone(), w.clone()];
+        assert_eq!(*handed.borrow(), [dirs.clone(), dirs]);
+        // Saved without them, never handed over again; the accounts keep their folders.
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(!saved.contains("gh_config_dir"), "{saved}");
+        projects.migrate_accounts(&mut make);
+        let again = load(tmp.path());
+        assert_eq!(*again.spaces(), *projects.spaces());
+        again.migrate_accounts(&mut make);
+        assert_eq!(handed.borrow().len(), 2);
     }
 
     #[test]
