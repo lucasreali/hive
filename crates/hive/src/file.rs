@@ -1287,6 +1287,9 @@ mod tests {
             let err = open_plain(dir.path(), rel).unwrap_err();
             assert_eq!(err.to_string(), "not a relative path inside the worktree");
         }
+        let gone = dir.path().join("gone");
+        let err = open_plain(&gone, Path::new("a")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     /// The names in `dir`, sorted: a save leaves no temporary file behind.
