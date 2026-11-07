@@ -262,6 +262,8 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     missing.browser.path = Some(fake.display().to_string());
     set(&mut app, missing).await;
     app.send(0, watch(None)).await;
+    // Nothing is watched: a drawn frame is none's.
+    app.send(0, Control::BrowserDrawn).await;
     let closes = tokio::spawn({
         let listener = listener.clone();
         async move {

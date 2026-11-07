@@ -166,7 +166,8 @@ impl State {
         let path = std::env::var_os("PATH");
         let candidates = browser::candidates(home.as_deref(), path.as_deref());
         let program = browser::find(settings.path.as_deref(), candidates, Path::new(SNAP))?;
-        browser::start(&program, self.browsers_dir.join(id.to_string())).await
+        let profile = self.browsers_dir.join(id.to_string());
+        browser::start(&program, profile, browser::START_TIMEOUT).await
     }
 
     /// Runs browser `id`'s screencast; its commands. When it ends (the browser is gone), the
@@ -181,9 +182,7 @@ impl State {
         let (events, mut event) = mpsc::unbounded_channel();
         let state = self.clone();
         tokio::spawn(async move {
-            let cast = browser::screencast(ws, received, move |e| {
-                let _ = events.send(e);
-            });
+            let cast = browser::screencast(ws, received, events);
             // Ends with the screencast, which holds the sender.
             let forward = async {
                 while let Some(e) = event.recv().await {
@@ -252,9 +251,9 @@ impl State {
 
     /// Stops `worktree`'s browser in the background; its panel says so.
     async fn stop_browser(&self, browsers: &mut Browsers, worktree: &str) {
-        if let Some(running) = browsers.running.remove(worktree) {
-            tokio::spawn(running.process.stop());
-        }
+        // Always running: its callers found it.
+        let running = browsers.running.remove(worktree).into_iter();
+        running.for_each(|r| drop(tokio::spawn(r.process.stop())));
         if browsers.watched.as_deref() == Some(worktree) {
             self.to_app(0, &browsers.status(worktree)).await;
         }
@@ -308,5 +307,11 @@ mod tests {
         state.browser_settings_changed().await;
         assert!(config.is_dir());
         assert!(state.browsers.lock().await.running.is_empty());
+        // On: it cannot be written there either.
+        let mut on = hive_protocol::Settings::default();
+        on.browser.enabled = true;
+        tokio::task::block_in_place(|| state.settings.set(on)).unwrap();
+        state.browser_settings_changed().await;
+        assert!(config.is_dir());
     }
 }

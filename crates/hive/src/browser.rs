@@ -81,7 +81,7 @@ pub fn configure(bin: &Path, hive: &Path, enabled: bool) -> io::Result<()> {
 /// temporary profile.
 pub fn find(
     setting: Option<&str>,
-    candidates: impl IntoIterator<Item = PathBuf>,
+    candidates: Vec<PathBuf>,
     snap: &Path,
 ) -> Result<PathBuf, String> {
     if let Some(path) = setting {
@@ -196,11 +196,13 @@ pub struct Process {
     profile: PathBuf,
 }
 
-/// Starts `program` with a new temporary `profile` and connects to its DevTools: the process,
-/// the CDP connection and the port. Anything failing on the way stops the process.
+/// Starts `program` with a new temporary `profile` and connects to its DevTools, waiting at most
+/// `wait` for its port: the process, the CDP connection and the port. Anything failing on the
+/// way stops the process.
 pub async fn start(
     program: &Path,
     profile: PathBuf,
+    wait: Duration,
 ) -> Result<(Process, WebSocketStream<TcpStream>, u16), String> {
     let _ = std::fs::remove_dir_all(&profile);
     crate::mode::folder(std::fs::DirBuilder::new().recursive(true), 0o700)
@@ -230,7 +232,7 @@ pub async fn start(
         }
     };
     let mut process = Process { child, profile };
-    match connect(&mut process).await {
+    match connect(&mut process, wait).await {
         Ok((ws, port)) => Ok((process, ws, port)),
         Err(err) => {
             process.stop().await;
@@ -239,10 +241,13 @@ pub async fn start(
     }
 }
 
-/// Waits for the browser's `DevToolsActivePort`, then opens its CDP connection.
-async fn connect(process: &mut Process) -> Result<(WebSocketStream<TcpStream>, u16), String> {
+/// Waits at most `wait` for the browser's `DevToolsActivePort`, then opens its CDP connection.
+async fn connect(
+    process: &mut Process,
+    wait: Duration,
+) -> Result<(WebSocketStream<TcpStream>, u16), String> {
     let file = process.profile.join("DevToolsActivePort");
-    let wait = async {
+    let written = async {
         loop {
             if let Ok(Some(status)) = process.child.try_wait() {
                 return Err(format!("The browser exited as it started ({status})"));
@@ -256,7 +261,7 @@ async fn connect(process: &mut Process) -> Result<(WebSocketStream<TcpStream>, u
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
-    let (port, path) = tokio::time::timeout(START_TIMEOUT, wait)
+    let (port, path) = tokio::time::timeout(wait, written)
         .await
         .map_err(|_| "The browser did not open its DevTools port in time".to_owned())??;
     let lost = |err: &dyn std::fmt::Display| format!("Cannot connect to the browser: {err}");
@@ -534,13 +539,11 @@ fn base64(data: &str) -> bool {
 
 /// Runs one browser's screencast over its CDP connection until it closes: the service's
 /// `commands` in, `events` out. Returns when the browser is gone (or stopped).
-pub async fn screencast<S>(
-    mut ws: WebSocketStream<S>,
+pub async fn screencast(
+    mut ws: WebSocketStream<TcpStream>,
     mut commands: mpsc::UnboundedReceiver<Command>,
-    mut events: impl FnMut(Event),
-) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
+    events: mpsc::UnboundedSender<Event>,
+) {
     let mut screen = Screen::default();
     let mut out = screen.start();
     loop {
@@ -548,7 +551,9 @@ pub async fn screencast<S>(
             // A connection that fails to write ends at the next read.
             let _ = ws.send(Message::text(message.to_string())).await;
         }
-        out.events.drain(..).for_each(&mut events);
+        for event in out.events.drain(..) {
+            let _ = events.send(event);
+        }
         out = tokio::select! {
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<Value>(&text) {
@@ -570,38 +575,33 @@ pub async fn screencast<S>(
 /// worktree holding `cwd`, started first if needed, within `wait`.
 pub async fn endpoint(paths: &Paths, cwd: &str, wait: Duration) -> Result<String, String> {
     let asked = async {
-        let stream = paths
-            .connect()
-            .await
-            .map_err(|err| format!("cannot reach the Hive service: {err}"))?;
-        let mut framed = Framed::new(stream, FrameCodec);
+        let mut framed = Framed::new(paths.connect().await?, FrameCodec);
         let hello = Control::hello(Role::Hook, VERSION);
         let ask = Control::BrowserEndpoint {
             cwd: cwd.to_owned(),
         };
         for message in [hello, ask] {
-            framed
-                .send(Frame::control(0, &message))
-                .await
-                .map_err(|err| err.to_string())?;
+            let frame = Frame::control(0, &message);
+            framed.send(frame).await.map_err(io::Error::other)?;
         }
         while let Some(frame) = framed.next().await {
-            match frame.map_err(|err| err.to_string())?.to_control() {
-                Ok(Control::BrowserReady { endpoint }) => return Ok(endpoint),
-                Ok(Control::Error { message }) => return Err(message),
+            match frame.map_err(io::Error::other)?.to_control() {
+                Ok(Control::BrowserReady { endpoint }) => return Ok(Ok(endpoint)),
+                Ok(Control::Error { message }) => return Ok(Err(message)),
                 Ok(Control::VersionMismatch { version, .. }) => {
-                    return Err(format!(
-                        "the Hive service is version {version}, not {VERSION}"
-                    ));
+                    let why = format!("the Hive service is version {version}, not {VERSION}");
+                    return Ok(Err(why));
                 }
                 _ => {}
             }
         }
-        Err("the Hive service closed the connection".to_owned())
+        Ok::<_, io::Error>(Err("the Hive service closed the connection".to_owned()))
     };
-    tokio::time::timeout(wait, asked)
-        .await
-        .unwrap_or_else(|_| Err("the Hive service did not start the browser in time".to_owned()))
+    match tokio::time::timeout(wait, asked).await {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(err)) => Err(format!("cannot reach the Hive service: {err}")),
+        Err(_) => Err("the Hive service did not start the browser in time".to_owned()),
+    }
 }
 
 /// The Playwright MCP's command for `endpoint`: `bunx`, else `npx`, from the first absolute
@@ -636,10 +636,8 @@ pub async fn mcp(paths: &Paths) -> io::Result<u8> {
         .ok_or_else(|| io::Error::other("neither bunx nor npx is on PATH"))?;
     // shortcut: a child, not `exec` (on Unix too, so a test's run is measured); one ended by a
     // signal leaves the MCP to end on its closed stdin.
-    let status = tokio::process::Command::new(&program)
-        .args(&args)
-        .status()
-        .await?;
+    let mut command = tokio::process::Command::new(&program);
+    let status = command.args(&args).status().await?;
     Ok(crate::wrapper::exit_byte(status.code().unwrap_or(1)))
 }
 
@@ -688,7 +686,7 @@ mod tests {
         let (a, b) = (tmp.path().join("a/chrome"), tmp.path().join("b/chromium"));
         exe(&b, "");
         let snap = tmp.path().join("snap");
-        let both = || [a.clone(), b.clone()];
+        let both = || vec![a.clone(), b.clone()];
         assert_eq!(find(None, both(), &snap), Ok(b.clone()));
         exe(&a, "");
         assert_eq!(find(None, both(), &snap), Ok(a.clone()));
@@ -704,7 +702,7 @@ mod tests {
             )
         );
         assert!(find(Some("chrome"), both(), &snap).is_err());
-        let none = find(None, [missing], &snap).unwrap_err();
+        let none = find(None, vec![missing], &snap).unwrap_err();
         assert_eq!(
             none,
             "No Chrome, Chromium, Edge or Brave found: install one or set browser.path"
@@ -743,7 +741,8 @@ mod tests {
         let text = format!("#!/bin/sh\n{pad}\nexec {} \"$@\"\n", real.display());
         exe(&script, &text);
         let other = tmp.path().join("opt/brave-browser");
-        let found = |list: &[&PathBuf]| find(None, list.iter().map(|p| (*p).clone()), &snap);
+        let found =
+            |list: &[&PathBuf]| find(None, list.iter().map(|p| (*p).clone()).collect(), &snap);
         let err = found(&[&link, &script]).unwrap_err();
         assert!(
             err.starts_with(&format!(
@@ -1108,6 +1107,16 @@ mod tests {
         drop(held);
     }
 
+    /// A WebSocket to `url`, over a plain TCP stream as the service opens one.
+    async fn client(url: &str) -> WebSocketStream<TcpStream> {
+        let host = url.trim_start_matches("ws://").split('/').next().unwrap();
+        let stream = TcpStream::connect(host).await.unwrap();
+        tokio_tungstenite::client_async(url, stream)
+            .await
+            .unwrap()
+            .0
+    }
+
     #[tokio::test]
     async fn the_screencast_runs_over_a_websocket_until_it_closes() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1138,11 +1147,9 @@ mod tests {
         });
         let (commands, rx) = mpsc::unbounded_channel();
         let url = format!("ws://{addr}/devtools/browser/x");
-        let (ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        let ws = client(&url).await;
         let (events_tx, mut events) = mpsc::unbounded_channel();
-        let cast = tokio::spawn(screencast(ws, rx, move |e| {
-            let _ = events_tx.send(e);
-        }));
+        let cast = tokio::spawn(screencast(ws, rx, events_tx));
         assert_eq!(
             events.recv().await,
             Some(Event::Url(Some("about:blank".into())))
@@ -1161,12 +1168,11 @@ mod tests {
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
             while ws.next().await.is_some_and(|m| m.is_ok()) {}
         });
-        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
-            .await
-            .unwrap();
+        let ws = client(&format!("ws://{addr}/")).await;
         let (commands, rx) = mpsc::unbounded_channel::<Command>();
         drop(commands);
-        screencast(ws, rx, |_| {}).await;
+        let (events, _) = mpsc::unbounded_channel();
+        screencast(ws, rx, events).await;
         server.await.unwrap();
     }
 
@@ -1181,10 +1187,13 @@ mod tests {
         // Run once first: macOS checks a new program on its first run, seconds when loaded.
         let first = std::process::Command::new(&quits).status().unwrap();
         assert_eq!(first.code(), Some(3));
-        let err = start(&quits, profile.clone()).await.err().unwrap();
+        let err = start(&quits, profile.clone(), START_TIMEOUT)
+            .await
+            .err()
+            .unwrap();
         assert!(err.starts_with("The browser exited as it started"), "{err}");
         assert!(!profile.exists());
-        let err = start(&tmp.path().join("missing"), profile.clone())
+        let err = start(&tmp.path().join("missing"), profile.clone(), START_TIMEOUT)
             .await
             .err()
             .unwrap();
@@ -1196,8 +1205,11 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let fake = tmp.path().join("fake");
+        let port_file = tmp.path().join("port");
+        std::fs::write(&port_file, port.to_string()).unwrap();
         let script = format!(
-            "#!/bin/sh\nfor a; do case $a in --user-data-dir=*) d=${{a#--user-data-dir=}};; esac; done\n[ -n \"$d\" ] || exit 0\nprintf '{port}\\n/devtools/browser/x\\n' > \"$d/DevToolsActivePort\"\nexec sleep 30\n"
+            "#!/bin/sh\nfor a; do case $a in --user-data-dir=*) d=${{a#--user-data-dir=}};; esac; done\n[ -n \"$d\" ] || exit 0\nprintf '%s\\n/devtools/browser/x\\n' \"$(cat '{}')\" > \"$d/DevToolsActivePort\"\nexec sleep 30\n",
+            port_file.display()
         );
         exe(&fake, &script);
         // Run once first: macOS checks a new program on its first run, seconds when loaded.
@@ -1207,12 +1219,62 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        let err = start(&fake, profile.clone()).await.err().unwrap();
+        let err = start(&fake, profile.clone(), START_TIMEOUT)
+            .await
+            .err()
+            .unwrap();
         assert!(err.starts_with("Cannot connect to the browser"), "{err}");
+        assert!(!profile.exists());
+        // A browser that answers: started, its profile kept until it stops.
+        let answering = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = answering.local_addr().unwrap().port();
+        std::fs::write(&port_file, port.to_string()).unwrap();
+        let cdp = tokio::spawn(async move {
+            let (stream, _) = answering.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap()
+        });
+        let (process, _ws, started) = start(&fake, profile.clone(), START_TIMEOUT).await.unwrap();
+        assert_eq!(started, port);
+        assert!(profile.join("DevToolsActivePort").is_file());
+        process.stop().await;
+        assert!(!profile.exists());
+        drop(cdp.await.unwrap());
+        // A port that takes the connection, then closes it: no WebSocket.
+        let refusing = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(
+            &port_file,
+            refusing.local_addr().unwrap().port().to_string(),
+        )
+        .unwrap();
+        let closer = std::thread::spawn(move || drop(refusing.accept()));
+        let err = start(&fake, profile.clone(), START_TIMEOUT)
+            .await
+            .err()
+            .unwrap();
+        assert!(err.starts_with("Cannot connect to the browser"), "{err}");
+        closer.join().unwrap();
+        // A browser that never writes its port.
+        let silent = tmp.path().join("silent");
+        exe(
+            &silent,
+            "#!/bin/sh\n[ -n \"$1\" ] || exit 0\nexec sleep 30\n",
+        );
+        assert!(
+            std::process::Command::new(&silent)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let wait = Duration::from_millis(300);
+        let err = start(&silent, profile.clone(), wait).await.err().unwrap();
+        assert_eq!(err, "The browser did not open its DevTools port in time");
         assert!(!profile.exists());
         // The profile cannot be made.
         std::fs::write(tmp.path().join("file"), "").unwrap();
-        let err = start(&fake, tmp.path().join("file/p")).await.err().unwrap();
+        let err = start(&fake, tmp.path().join("file/p"), START_TIMEOUT)
+            .await
+            .err()
+            .unwrap();
         assert!(
             err.starts_with("Cannot make the browser's profile"),
             "{err}"
