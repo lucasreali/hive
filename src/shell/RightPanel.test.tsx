@@ -410,6 +410,19 @@ test("the open file's text shows as a diff when changed, else as is, or why not"
     expect(body().textContent).toBe(`No changes in this file.${why}`);
     expect(editor()).toBeNull();
   }
+
+  // An image or a PDF (24.2, 24.3) shows as itself: no notice, no text, no diff.
+  const url = "hive-file://localhost/t/README.md?v=1-0";
+  const media = { mime: "image/svg+xml", token: "t", version: "1-0", url };
+  act(() => apply({ type: "file", ...text("README.md", { binary: true, media }) }));
+  expect(body().textContent).toBe("No changes in this file.");
+  expect(body().querySelector(".media-view img")?.getAttribute("src")).toBe(url);
+  expect(editor()).toBeNull();
+  act(() => setOpenFile({ worktree: refactor.path, path: "src/legacy/jwt.ts" }));
+  const pdf = { ...media, mime: "application/pdf" };
+  act(() => apply({ type: "file", ...text("src/legacy/jwt.ts", { media: pdf }) }));
+  expect(body().querySelector("iframe.media-view")?.getAttribute("src")).toBe(url);
+  expect(editor()).toBeNull();
 });
 
 test("the Files tree opens a changed file as editable text, the Diff tab as its diff", () => {

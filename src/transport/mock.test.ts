@@ -886,6 +886,19 @@ test("files of a followed worktree as their status says, or why not", async () =
     ["assets/logo.png", null, null, true, null, null],
     ["a", null, null, false, `${dotfiles.path} is not a worktree of a followed project`, null],
   ]);
+  // An image and a PDF have their media, from `data:` URLs; a text file none.
+  const media = messages.map((m) => (m.type === "file" ? (m.media ?? null) : m));
+  expect(media.filter(Boolean)).toEqual([
+    expect.objectContaining({ mime: "image/png", url: expect.stringMatching(/^data:image\/png;/) }),
+  ]);
+  messages.length = 0;
+  await transport.openFile(refactor, "docs/guide.pdf", "head");
+  await tick();
+  const [pdf] = messages;
+  expect(pdf?.type === "file" && pdf.media).toMatchObject({
+    mime: "application/pdf",
+    url: expect.stringMatching(/^data:application\/pdf;base64,JVBERi0x/),
+  });
 });
 
 test("a table file's rows, split on its delimiter, or why not", async () => {

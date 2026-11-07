@@ -5,6 +5,7 @@ import type {
   ChangedFile,
   DiffBase,
   Dirs,
+  FileMedia,
   FileStatus,
   FileText,
   GhLogin,
@@ -726,9 +727,36 @@ function table(text: FileText): TableText {
   return { worktree, path, sheets: [sheet], error: null };
 }
 
+/** A 24×16 orange PNG and a one-page PDF, as `data:` URLs (the browser has no `hive-file:`). */
+const MOCK_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAIAAACDRijCAAAAGklEQVR42mN4ViFHFcQwatCoQaMGjRpEGQIAzMs6HwzT2GQAAAAASUVORK5CYII=";
+const MOCK_PDF = `data:application/pdf;base64,${[
+  "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPD",
+  "wgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1Bh",
+  "Z2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcy",
+  "A8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAzOSA+PgpzdHJl",
+  "YW0KQlQgL0YxIDI0IFRmIDQwIDcwMCBUZCAoTW9jayBQREYpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iag",
+  "o8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5kb2JqCnhyZWYK",
+  "MCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMD",
+  "AwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAwMDAwMzMwIDAwMDAwIG4gCnRyYWlsZXIKPDwg",
+  "L1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNDAwCiUlRU9GCg==",
+].join("")}`;
+
+/**
+ * A stand-in for `hive::file::media_type` (24.2, 24.3), by the name: the real one reads the
+ * bytes. A `.png` or a `.pdf` shows from a `data:` URL.
+ */
+function mockMedia(path: string): FileMedia | null {
+  const png = path.endsWith(".png");
+  if (!png && !path.endsWith(".pdf")) return null;
+  const mime = png ? "image/png" : "application/pdf";
+  return { mime, token: "mock", version: "1-0", url: png ? MOCK_PNG : MOCK_PDF };
+}
+
 /**
  * A stand-in for `hive::file`: the fake worktree's file as its status in `MOCK_CHANGES` says
- * (a new file has no base, a deleted one no content, a `.png` is binary), or why not.
+ * (a new file has no base, a deleted one no content, a `.png` or a `.pdf` is binary and has its
+ * `media`), or why not.
  */
 function file(
   worktrees: string[],
@@ -743,7 +771,8 @@ function file(
     return { ...answer, ...none, error };
   }
   const status = MOCK_CHANGES[worktree]?.find((f) => f.path === path)?.status;
-  if (path.endsWith(".png")) return { ...answer, ...none, binary: true, error: null };
+  const media = mockMedia(path);
+  if (media) return { ...answer, ...none, binary: true, error: null, media };
   const sample = `// ${path}\nexport const value = 1;\n`;
   const [text, original] = MOCK_TEXTS[path] ?? [sample.replace("1", "2"), sample];
   const content =

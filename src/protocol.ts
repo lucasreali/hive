@@ -144,6 +144,15 @@ export type ServiceMessage =
   | ({ type: "changes" } & Changes)
   | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
+  // Consumed by the Tauri side (the `hive-file:` scheme, 24.2), never forwarded to the UI.
+  | {
+      type: "file_range";
+      id: number;
+      size: number;
+      mime: string;
+      version: string;
+      error: string | null;
+    }
   | ({ type: "table" } & TableText)
   | ({ type: "search_results" } & SearchResults)
   | ({ type: "dirs" } & Dirs)
@@ -439,6 +448,12 @@ export type TableText = { worktree: string; path: string; sheets: Sheet[]; error
 export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";
 
 /**
+ * Mirrors `hive_protocol::Media` (24.2, 24.3): the file is an image or a PDF (`mime`, read
+ * from its bytes), shown from `url`, which the Tauri pump (or the mock) adds.
+ */
+export type FileMedia = { mime: string; token: string; version: string; url: string };
+
+/**
  * Mirrors `Control::File`: a file's text on disk (`content`, null when gone) and at HEAD
  * (`base`, null when new), both null when `binary` or `too_large`; `version` is opaque.
  */
@@ -451,6 +466,8 @@ export type FileText = {
   binary: boolean;
   too_large: boolean;
   error: string | null;
+  // Absent from an older service.
+  media?: FileMedia | null;
 };
 
 /**
