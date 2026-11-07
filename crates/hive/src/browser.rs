@@ -22,15 +22,6 @@ use tokio_util::codec::Framed;
 use crate::VERSION;
 use crate::paths::Paths;
 
-/// The macOS apps looked for, in this order, in `/Applications` and `~/Applications`.
-#[cfg(target_os = "macos")]
-const APPS: [&str; 4] = [
-    "Google Chrome.app/Contents/MacOS/Google Chrome",
-    "Chromium.app/Contents/MacOS/Chromium",
-    "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "Brave Browser.app/Contents/MacOS/Brave Browser",
-];
-
 /// The programs looked for on `PATH` on Linux (and in WSL), in this order.
 #[cfg(not(target_os = "macos"))]
 const PROGRAMS: [&str; 6] = [
@@ -123,20 +114,8 @@ pub fn find(
     })
 }
 
-/// Where browsers install on macOS: each app of [`APPS`] in `/Applications`, then in
-/// `~/Applications`.
 #[cfg(target_os = "macos")]
-pub fn candidates(home: Option<&Path>, _path: Option<&OsStr>) -> Vec<PathBuf> {
-    let roots = [
-        Some(PathBuf::from("/Applications")),
-        home.map(|h| h.join("Applications")),
-    ];
-    roots
-        .into_iter()
-        .flatten()
-        .flat_map(|root| APPS.iter().map(move |app| root.join(app)))
-        .collect()
-}
+pub use crate::macos::browser_candidates as candidates;
 
 /// Where browsers install elsewhere: each program of [`PROGRAMS`] in each absolute folder of
 /// `path`, program by program. Native Windows finds none (no `.exe` is looked for, D17.0): the
@@ -759,10 +738,10 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
         // Ubuntu's transitional script.
         let script = tmp.path().join("usr/chromium-browser");
-        exe(
-            &script,
-            &format!("#!/bin/sh\nexec {} \"$@\"\n", real.display()),
-        );
+        // Past its first KiB: the first 64 KiB are read.
+        let pad = "#".repeat(4096);
+        let text = format!("#!/bin/sh\n{pad}\nexec {} \"$@\"\n", real.display());
+        exe(&script, &text);
         let other = tmp.path().join("opt/brave-browser");
         let found = |list: &[&PathBuf]| find(None, list.iter().map(|p| (*p).clone()), &snap);
         let err = found(&[&link, &script]).unwrap_err();
@@ -774,35 +753,21 @@ mod tests {
             "{err}"
         );
         assert!(err.ends_with("set browser.path to another one"), "{err}");
-        exe(&other, "#!/bin/sh\necho /snapshot\n");
+        exe(&other, &format!("#!/bin/sh\n{pad}\necho /snapshot\n"));
         assert_eq!(found(&[&link, &script, &other]), Ok(other.clone()));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn candidates_are_the_platforms_install_places() {
+    fn candidates_are_the_programs_on_path() {
         let home = Path::new("/h");
         let path = std::env::join_paths(["/usr/bin", "rel", "/opt/b"]).unwrap();
         let found = candidates(Some(home), Some(&path));
-        #[cfg(target_os = "macos")]
-        {
-            let app = |root: &str, app: &str| Path::new(root).join(app);
-            assert_eq!(found.len(), 8);
-            let chrome = "Google Chrome.app/Contents/MacOS/Google Chrome";
-            assert_eq!(found[0], app("/Applications", chrome));
-            assert_eq!(found[4], app("/h/Applications", chrome));
-            let brave = "Brave Browser.app/Contents/MacOS/Brave Browser";
-            assert_eq!(found[7], app("/h/Applications", brave));
-            assert_eq!(candidates(None, None).len(), 4);
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            assert_eq!(found.len(), 12);
-            assert_eq!(found[0], Path::new("/usr/bin/google-chrome"));
-            assert_eq!(found[1], Path::new("/opt/b/google-chrome"));
-            assert_eq!(found[11], Path::new("/opt/b/brave-browser"));
-            assert_eq!(candidates(None, None), Vec::<PathBuf>::new());
-        }
+        assert_eq!(found.len(), 12);
+        assert_eq!(found[0], Path::new("/usr/bin/google-chrome"));
+        assert_eq!(found[1], Path::new("/opt/b/google-chrome"));
+        assert_eq!(found[11], Path::new("/opt/b/brave-browser"));
+        assert_eq!(candidates(None, None), Vec::<PathBuf>::new());
     }
 
     #[test]
