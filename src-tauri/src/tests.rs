@@ -334,7 +334,9 @@ fn the_built_config_has_the_csp_and_builds_its_own_window() {
         serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
     let security = &config.app.security;
     let csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-               img-src 'self' data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost";
+               img-src 'self' data: hive-file: http://hive-file.localhost; \
+               frame-src hive-file: http://hive-file.localhost; font-src 'self' data:; \
+               connect-src ipc: http://ipc.localhost";
     assert_eq!(security.csp.as_ref().unwrap().to_string(), csp);
     // The dev CSP adds the Vite hot-reload socket. Tauri applies a CSP only to the pages it
     // serves itself, so on desktop not to the dev server's.
@@ -3684,4 +3686,193 @@ fn pasting_copied_files_types_their_quoted_paths() {
     assert_eq!(tricky.pasted_files(), "/tmp/ok ");
     // An app that cannot read the clipboard (not macOS) pastes no files.
     assert_eq!(hive().pasted_files(), "");
+}
+
+/// The service's side of one `read_file` (24.2): answers `range` (size, type, version) or
+/// `error`, then the data frame with `bytes`, if any. Returns the request's
+/// `(token, path, offset)`.
+async fn answer_read(
+    service: &mut Service,
+    range: Option<(u64, &str, &str)>,
+    error: Option<&str>,
+    bytes: Option<Vec<u8>>,
+) -> (String, String, u64) {
+    let (
+        0,
+        Control::ReadFile {
+            id,
+            token,
+            path,
+            offset,
+            len,
+        },
+    ) = service.control().await
+    else {
+        panic!("expected read_file");
+    };
+    assert_eq!(len, READ_LIMIT);
+    let (size, mime, version) = range.unwrap_or_default();
+    let reply = Control::FileRange {
+        id,
+        size,
+        mime: mime.into(),
+        version: version.into(),
+        error: error.map(Into::into),
+    };
+    service.send(0, reply).await;
+    if let Some(bytes) = bytes {
+        service.writer.send(Frame::data(id, bytes)).await.unwrap();
+    }
+    (token, path, offset)
+}
+
+/// `serve_file(path)` while the service does `service`: its status, body and type.
+async fn served(
+    hive: &Hive,
+    path: &str,
+    service: impl Future<Output = ()>,
+) -> (u16, Vec<u8>, Option<String>) {
+    let both = async { tokio::join!(hive.serve_file(path), service).0 };
+    let response = tokio::time::timeout(WAIT, both).await.unwrap();
+    let mime = response.headers().get("Content-Type");
+    let mime = mime.map(|mime| mime.to_str().unwrap().to_owned());
+    (response.status().as_u16(), response.body().clone(), mime)
+}
+
+#[tokio::test]
+async fn a_file_url_is_read_from_the_service_in_ranges() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    let first = vec![1; READ_LIMIT as usize];
+    let size = READ_LIMIT as u64 + 3;
+    let reads = async {
+        let range = Some((size, "image/png", "v"));
+        let asked = answer_read(&mut service, range, None, Some(first.clone())).await;
+        assert_eq!(asked, ("t".into(), "a b.png".into(), 0));
+        // The next read starts where the bytes so far end.
+        let asked = answer_read(&mut service, range, None, Some(vec![2; 3])).await;
+        assert_eq!(asked.2, READ_LIMIT as u64);
+    };
+    let (status, body, mime) = served(&hive, "/t/a%20b.png", reads).await;
+    assert_eq!((status, mime.as_deref()), (200, Some("image/png")));
+    assert_eq!(body.len() as u64, size);
+    assert_eq!((body[0], &body[READ_LIMIT as usize..]), (1, &[2, 2, 2][..]));
+
+    // A file that fits in one read takes one; an empty one too.
+    let one = answer_read(
+        &mut service,
+        Some((2, "image/gif", "v")),
+        None,
+        Some(vec![7, 8]),
+    );
+    let (status, body, _) = served(&hive, "/t/b.gif", async { drop(one.await) }).await;
+    assert_eq!((status, body), (200, vec![7, 8]));
+    let empty = answer_read(
+        &mut service,
+        Some((0, "text/plain", "v")),
+        None,
+        Some(vec![]),
+    );
+    let (status, body, _) = served(&hive, "/t/e", async { drop(empty.await) }).await;
+    assert_eq!((status, body), (200, vec![]));
+
+    // The service's refusal, as is.
+    let refused = answer_read(&mut service, None, Some("a.png does not exist"), None);
+    let (status, body, mime) = served(&hive, "/t/a.png", async { drop(refused.await) }).await;
+    assert_eq!((status, &body[..]), (404, &b"a.png does not exist"[..]));
+    assert_eq!(mime.as_deref(), Some("text/plain; charset=utf-8"));
+
+    // A file that changes, or ends early, between two reads fails.
+    for (version, bytes) in [("w", vec![2]), ("v", vec![])] {
+        let reads = async {
+            let range = Some((2, "image/png", "v"));
+            answer_read(&mut service, range, None, Some(vec![1])).await;
+            let range = Some((2, "image/png", version));
+            answer_read(&mut service, range, None, Some(bytes)).await;
+        };
+        let (status, body, _) = served(&hive, "/t/a.png", reads).await;
+        let changed = &b"a.png changed while it was read"[..];
+        assert_eq!((status, &body[..]), (404, changed));
+    }
+
+    // A size the reads never reach stops after the most a file can take (100 MiB).
+    let reads = async {
+        let range = Some((u64::MAX, "application/pdf", "v"));
+        for _ in 0..=READS {
+            answer_read(&mut service, range, None, Some(vec![0])).await;
+        }
+    };
+    let (status, body, _) = served(&hive, "/t/x.pdf", reads).await;
+    assert_eq!((status, body.len()), (200, READS + 1));
+
+    // Not a file URL: nothing asked.
+    let (status, body, _) = served(&hive, "/t", async {}).await;
+    assert_eq!((status, &body[..]), (404, &b"not a file URL"[..]));
+
+    // Answers for no waiting read are dropped, and `file_range` never reaches the UI; a
+    // `file`'s media gets its URL.
+    service.writer.send(Frame::data(41, vec![1])).await.unwrap();
+    let stray = Control::FileRange {
+        id: 41,
+        size: 1,
+        mime: "image/png".into(),
+        version: "v".into(),
+        error: None,
+    };
+    service.send(0, stray).await;
+    let file = Control::File {
+        worktree: "/r".into(),
+        path: "a.png".into(),
+        content: None,
+        base: None,
+        version: None,
+        binary: true,
+        too_large: false,
+        error: None,
+        media: Some(hive_protocol::Media {
+            mime: "image/png".into(),
+            token: "t".into(),
+            version: "4-1".into(),
+        }),
+    };
+    service.send(0, file).await;
+    let shown = next(&mut rx).await;
+    assert_eq!(shown["type"], "file");
+    let url = scheme::url(cfg!(target_os = "macos"), "t", "a.png", "4-1");
+    assert_eq!(shown["media"]["url"], url);
+
+    // Bytes before their `file_range` end that read; the connection ending ends the others.
+    let early = async {
+        let (0, Control::ReadFile { id, .. }) = service.control().await else {
+            panic!("expected read_file");
+        };
+        service.writer.send(Frame::data(id, vec![1])).await.unwrap();
+    };
+    let (status, body, _) = served(&hive, "/t/a.png", early).await;
+    assert_eq!((status, &body[..]), (404, NOT_CONNECTED.as_bytes()));
+    let ended = async {
+        assert!(matches!(
+            service.control().await,
+            (0, Control::ReadFile { .. })
+        ));
+        drop(service);
+    };
+    let (status, body, _) = served(&hive, "/t/a.png", ended).await;
+    assert_eq!((status, &body[..]), (404, NOT_CONNECTED.as_bytes()));
+    assert!(hive.link().reads.is_empty());
+}
+
+#[tokio::test]
+async fn a_file_url_without_a_service_or_a_hive_fails() {
+    let (status, body, _) = served(&hive(), "/t/a.png", async {}).await;
+    assert_eq!((status, &body[..]), (404, NOT_CONNECTED.as_bytes()));
+    let bare = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let response = serve_file(bare.handle().clone(), "/t/a.png".into()).await;
+    let answer = (response.status().as_u16(), &response.body()[..]);
+    assert_eq!(answer, (404, NOT_CONNECTED.as_bytes()));
+    let app = mock_builder()
+        .manage(hive())
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let response = serve_file(app.handle().clone(), "/t".into()).await;
+    assert_eq!(&response.body()[..], b"not a file URL");
 }

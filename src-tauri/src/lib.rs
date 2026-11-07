@@ -18,14 +18,16 @@ use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use hive_protocol::{
     AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
     PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
+    READ_LIMIT,
 };
 use serde_json::{json, Value};
+use tauri::http::Response;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 use tauri_plugin_updater::{Update, Updater};
 use tauri_plugin_window_state::StateFlags;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
@@ -84,6 +86,18 @@ const LIST_WAIT: Duration = Duration::from_secs(3);
 const LIST_POLL: Duration = Duration::from_millis(10);
 /// The most bytes read from the `mode` file; a longer file holds no mode.
 const MODE_LIMIT: u64 = 16;
+/// The most reads of [`READ_LIMIT`] after the first a `hive-file:` answer takes (24.2): the
+/// service serves at most 100 MiB of a file (a PDF's cap).
+const READS: usize = 100;
+
+/// A read of a file for the `hive-file:` scheme (24.2): its size, type and version, and the
+/// bytes read.
+type Chunk = (u64, String, String, Vec<u8>);
+/// A read waiting for its answer: where it goes, and the `file_range` already there, if any.
+type Pending = (
+    oneshot::Sender<Result<Chunk, String>>,
+    Option<(u64, String, String)>,
+);
 
 /// Program and arguments that start `hive bridge`, and whether that runs the `hive` the installer
 /// bundles (an installed app) rather than a development one, for the connection dialog (12.4).
@@ -721,6 +735,9 @@ struct Link {
     confirm_close: Option<bool>,
     /// When the UI was last asked to confirm a quit (`quit_requested`).
     asked: Option<Instant>,
+    /// The `read_file` requests of the `hive-file:` scheme waiting for their answer, by id.
+    reads: HashMap<u32, Pending>,
+    last_read: u32,
 }
 
 impl Link {
@@ -731,6 +748,35 @@ impl Link {
             self.approved.pop_front();
         }
         self.approved.push_back((path, reveal_only));
+    }
+
+    /// A `file_range` (24.2): its error ends the read; else the data frame after it does.
+    fn range(&mut self, message: Value) {
+        let range = serde_json::from_value(message);
+        let Ok(Control::FileRange {
+            id,
+            size,
+            mime,
+            version,
+            error,
+        }) = range
+        else {
+            return;
+        };
+        let Some((reply, _)) = self.reads.remove(&id) else {
+            return;
+        };
+        match error {
+            Some(error) => drop(reply.send(Err(error))),
+            None => drop(self.reads.insert(id, (reply, Some((size, mime, version))))),
+        }
+    }
+
+    /// The bytes of the read `id`, after its `file_range` (a data frame).
+    fn data(&mut self, id: u32, bytes: Vec<u8>) {
+        if let Some((reply, Some((size, mime, version)))) = self.reads.remove(&id) {
+            let _ = reply.send(Ok((size, mime, version, bytes)));
+        }
     }
 
     /// Follows what quitting asks about (D17.3) in a service message: an agent's state, an
@@ -1505,6 +1551,50 @@ impl Hive {
     }
 
     /// The answer arrives as `table`.
+    /// The `hive-file:` scheme's answer for the URL path `path` (`/<token>/<path>`, 24.2): the
+    /// whole file, pulled from the service in reads of [`READ_LIMIT`], as the type the service
+    /// read from its bytes; a file that changes meanwhile fails.
+    pub async fn serve_file(&self, path: &str) -> Response<Vec<u8>> {
+        scheme::response(self.whole_file(path).await)
+    }
+
+    async fn whole_file(&self, path: &str) -> Result<(String, Vec<u8>), String> {
+        let (token, file) = scheme::request(path).ok_or("not a file URL")?;
+        let (size, mime, version, mut body) = self.read_file(&token, &file, 0).await?;
+        for _ in 0..READS {
+            if body.len() as u64 >= size {
+                break;
+            }
+            let (_, _, now, bytes) = self.read_file(&token, &file, body.len() as u64).await?;
+            if now != version || bytes.is_empty() {
+                return Err(format!("{file} changed while it was read"));
+            }
+            body.extend(bytes);
+        }
+        Ok((mime, body))
+    }
+
+    /// One `read_file` from `offset` (24.2), answered by `file_range` and a data frame.
+    async fn read_file(&self, token: &str, path: &str, offset: u64) -> Result<Chunk, String> {
+        let (reply, answer) = oneshot::channel();
+        {
+            let mut link = self.link();
+            let id = link.last_read.wrapping_add(1);
+            let (token, path, len) = (token.to_owned(), path.to_owned(), READ_LIMIT);
+            let read = Control::ReadFile {
+                id,
+                token,
+                path,
+                offset,
+                len,
+            };
+            link.send(0, &read)?;
+            link.last_read = id;
+            link.reads.insert(id, (reply, None));
+        }
+        answer.await.map_err(|_| NOT_CONNECTED.to_owned())?
+    }
+
     pub fn open_table(&self, worktree: String, path: String) -> Result<(), String> {
         self.link().send(0, &Control::OpenTable { worktree, path })
     }
@@ -1952,6 +2042,10 @@ async fn pump<R: AsyncRead + Unpin>(
             Ok(frame) => frame,
             Err(error) => return End::Broken(error.to_string()),
         };
+        if frame.kind == FrameType::Data {
+            lock(link).data(frame.channel, frame.payload.to_vec());
+            continue;
+        }
         if frame.kind == FrameType::Terminal {
             let (joined, next) = burst(frame, &mut frames);
             held = next;
@@ -1993,6 +2087,12 @@ async fn pump<R: AsyncRead + Unpin>(
                 return End::Refused;
             }
             "terminal_exited" => drop(link.terminals.remove(&frame.channel)),
+            // The `hive-file:` scheme's, never the UI's.
+            "file_range" => {
+                link.range(value);
+                continue;
+            }
+            "file" => scheme::with_url(&mut value, cfg!(target_os = "macos")),
             "terminal_opened" => {
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
                     term.worktree = value["worktree"].clone();
@@ -2020,6 +2120,8 @@ fn disconnected(link: &mut Link, reason: String) {
     link.at_risk.clear();
     // A path from an ended connection never opens.
     link.approved.clear();
+    // Each waiting `hive-file:` read fails.
+    link.reads.clear();
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
@@ -2066,6 +2168,14 @@ pub fn should_quit<R: Runtime>(app: &AppHandle<R>) -> bool {
 pub fn files_dropped<R: Runtime>(app: &AppHandle<R>, paths: &[String], x: f64, y: f64) -> bool {
     app.try_state::<Hive>()
         .is_some_and(|hive| hive.files_dropped(paths, x, y))
+}
+
+/// The `hive-file:` scheme's answer for the URL path `path` (24.2), from the app's [`Hive`].
+pub async fn serve_file<R: Runtime>(app: AppHandle<R>, path: String) -> Response<Vec<u8>> {
+    match app.try_state::<Hive>() {
+        Some(hive) => hive.serve_file(&path).await,
+        None => scheme::response(Err(NOT_CONNECTED.to_owned())),
+    }
 }
 
 /// The webview's WebContent process died (18.21, macOS: wry's
@@ -2686,6 +2796,7 @@ pub mod commands {
 pub mod macos;
 pub mod menu;
 pub mod quote;
+pub mod scheme;
 pub mod tray;
 
 #[cfg(test)]
