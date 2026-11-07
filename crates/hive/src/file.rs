@@ -302,23 +302,8 @@ fn open_parts(root: &Path, folders: &[&OsStr], name: &OsStr) -> io::Result<File>
     Ok(File::from(file))
 }
 
-/// The file at `root`'s `folders` and `name`; a link at its end is opened itself (then refused
-/// by [`open_plain`]), never followed.
-// shortcut: Windows has no `openat`, so a folder of the path swapped for a junction after the
-// check is still followed; `NtCreateFile` relative to a folder handle if Windows matters (D17.0).
 #[cfg(windows)]
-fn open_parts(root: &Path, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
-    let mut path = root.to_path_buf();
-    path.extend(folders);
-    path.push(name);
-    let mut options = OpenOptions::new();
-    options.read(true);
-    std::os::windows::fs::OpenOptionsExt::custom_flags(
-        &mut options,
-        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-    );
-    options.open(path)
-}
+use crate::windows::open_parts;
 
 fn on_disk(dir: &Path, rel: &Path) -> io::Result<Side> {
     match opened(dir, rel)? {
@@ -357,15 +342,24 @@ pub fn save(
     content: &str,
     version: Option<&str>,
 ) -> Result<String, (SaveError, String)> {
-    save_with(dir, path, content, version, |from, to| fs::rename(from, to))
+    save_with(
+        dir,
+        path,
+        content,
+        version,
+        || {},
+        |from, to| fs::rename(from, to),
+    )
 }
 
-/// [`save`] with the rename passed in, so its failure can be tested.
+/// [`save`] with what runs between the path check and the version check's open, and the
+/// rename, passed in, so a file swapped in meanwhile and a failed rename can be tested.
 pub fn save_with(
     dir: &Path,
     path: &str,
     content: &str,
     version: Option<&str>,
+    between: impl FnOnce(),
     rename: impl FnOnce(&Path, &Path) -> io::Result<()>,
 ) -> Result<String, (SaveError, String)> {
     let invalid = |err: io::Error| (SaveError::InvalidPath, err.to_string());
@@ -389,7 +383,11 @@ pub fn save_with(
     let saved = (|| {
         write_temp(file, content, mode.unwrap_or(0o644)).map_err(io)?;
         let conflict = || (SaveError::Conflict, format!("{path} changed on disk"));
-        let now = match File::open(&target) {
+        between();
+        // Never a link or a FIFO swapped in since `target`: a FIFO would block the open.
+        let checked = canonical(dir)
+            .and_then(|root| open_plain(&root, target.strip_prefix(&root).unwrap_or(&target)));
+        let now = match checked {
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
             // ponytail: a writer between this check and the rename is lost; a lock would not
             // help, since agents do not take one.
@@ -1392,7 +1390,7 @@ mod tests {
         std::fs::write(&file, "old").unwrap();
         let v = version(b"old");
         let boom = |_: &Path, _: &Path| Err(io::Error::other("boom"));
-        let failed = save_with(dir.path(), "f", "new", Some(&v), boom);
+        let failed = save_with(dir.path(), "f", "new", Some(&v), || {}, boom);
         assert_eq!(failed, Err((SaveError::Io, "boom".to_owned())));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
         assert_eq!(names(dir.path()), ["f"]);
@@ -1410,6 +1408,49 @@ mod tests {
         std::fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(error, SaveError::Io, "{message}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_swapped_in_before_a_save_checks_the_version_fails_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("f"), "old").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let fifo = root.join("f");
+            let swap = || {
+                std::fs::remove_file(&fifo).unwrap();
+                nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+            };
+            let v = version(b"old");
+            let rename = |_: &Path, _: &Path| Ok(());
+            tx.send(save_with(&root, "f", "new", Some(&v), swap, rename))
+                .unwrap();
+        });
+        let saved = rx.recv_timeout(std::time::Duration::from_secs(10));
+        let failed = (SaveError::Io, "not a regular file".to_owned());
+        assert_eq!(saved.expect("the open blocked"), Err(failed));
+        assert_eq!(names(dir.path()), ["f"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_worktree_moved_after_the_check_is_not_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        for folder in ["a", "b"] {
+            std::fs::create_dir(tmp.path().join(folder)).unwrap();
+            std::fs::write(tmp.path().join(folder).join("f"), folder).unwrap();
+        }
+        let dir = tmp.path().join("dir");
+        std::os::unix::fs::symlink("a", &dir).unwrap();
+        let link = dir.clone();
+        let err = swapped(&dir, "f", move || {
+            std::fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink("b", &link).unwrap();
+        });
+        let message = "not a relative path inside the worktree";
+        assert_eq!(err.unwrap_err().to_string(), message);
     }
 
     #[cfg(target_os = "linux")]
