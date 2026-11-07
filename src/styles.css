@@ -1217,6 +1217,8 @@ label:has(> input[type="checkbox"]:disabled) {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* A cell scrolled into view (24.12) stops below the header kept in view. */
+  scroll-padding-top: 24px;
 }
 
 .table-grid {
@@ -1274,6 +1276,17 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-4);
   text-align: right;
   user-select: none;
+}
+
+/* The find bar's matches (24.12), in the editor's colours (`.cm-searchMatch`). */
+.table-cell.table-match {
+  background: color-mix(in srgb, var(--state-permission) 25%, transparent);
+}
+
+.table-cell.table-match-current {
+  background: color-mix(in srgb, var(--state-permission) 50%, transparent);
+  outline: 1px solid var(--state-permission);
+  outline-offset: -1px;
 }
 
 .table-note {
@@ -4558,22 +4571,22 @@ button.link:hover {
 /* The editor's find bar (23.10): CodeMirror's search panel with the app's fields and buttons.
    Each row one line, its items centred with one gap; both fields one width; the close button
    6px from the right edge, as the file header's actions above it. `.cm-editor` outweighs
-   CodeMirror's base theme for the panel. */
-.cm-editor .cm-panel.cm-search.find-bar {
+   CodeMirror's base theme for the panel. The table view's bar (24.12) is the same. */
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar {
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 3px 6px 3px 12px;
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-row {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-row {
   display: flex;
   align-items: center;
   gap: 4px;
   height: 24px;
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-field {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-field {
   flex: 0 1 280px;
   min-width: 120px;
   display: flex;
@@ -4586,11 +4599,11 @@ button.link:hover {
   border-radius: var(--radius);
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-field:focus-within {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-field:focus-within {
   border-color: var(--focus);
 }
 
-.cm-editor .cm-panel.cm-search.find-bar input {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar input {
   flex: 1;
   min-width: 0;
   margin: 0;
@@ -4603,15 +4616,15 @@ button.link:hover {
   font-size: var(--fs-small);
 }
 
-.cm-editor .cm-panel.cm-search.find-bar input::placeholder {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar input::placeholder {
   color: var(--text-4);
 }
 
-.cm-editor .cm-panel.cm-search.find-bar button {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar button {
   margin: 0;
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-toggle {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-toggle {
   flex: none;
   width: 22px;
   height: 18px;
@@ -4621,34 +4634,57 @@ button.link:hover {
   font-size: var(--fs-meta);
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-toggle[name="wholeWord"] {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-toggle[name="wholeWord"] {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-toggle:hover {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-toggle:hover {
   background: var(--hover);
   color: var(--text);
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-toggle[aria-pressed="true"] {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-toggle[aria-pressed="true"] {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   box-shadow: inset 0 0 0 1px var(--accent);
   color: var(--text);
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .ghost {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .ghost {
   flex: none;
   width: 22px;
   height: 22px;
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .ghost.text {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .ghost.text {
   width: auto;
   padding: 0 6px;
   white-space: nowrap;
 }
 
-.cm-editor .cm-panel.cm-search.find-bar .find-gap {
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-gap {
   flex: 1;
+}
+
+/* A regexp that does not compile (24.12): the field in the error colour, and said beside it. */
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-field:has([aria-invalid="true"]) {
+  border-color: var(--state-error);
+}
+
+:is(.cm-editor .cm-panel.cm-search, .table-find).find-bar .find-status {
+  flex: none;
+  padding: 0 4px;
+  white-space: nowrap;
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+/* The table view's find bar (24.12): the editor's panel surfaces (`.cm-panels`, `.cm-search`). */
+.table-find {
+  flex: none;
+  background: var(--panel);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-sans);
+  font-size: var(--fs-small);
 }
