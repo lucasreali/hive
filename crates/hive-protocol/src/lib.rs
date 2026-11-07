@@ -1215,6 +1215,15 @@ pub struct Settings {
     /// By project id (its path).
     pub projects: BTreeMap<String, ProjectSettings>,
     pub claude: ClaudeSettings,
+    pub gh: GhSettings,
+}
+
+/// The gh config folders (24.13) besides `gh`'s own, whose accounts a space may pick.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GhSettings {
+    /// Each a `GH_CONFIG_DIR`.
+    pub config_dirs: Vec<String>,
 }
 
 /// The Claude accounts (12.2), besides the default one (no `CLAUDE_CONFIG_DIR`: `~/.claude`),
@@ -1513,11 +1522,10 @@ pub struct SpaceEnv {
     pub git_name: Option<String>,
     /// `GIT_AUTHOR_EMAIL` and `GIT_COMMITTER_EMAIL`.
     pub git_email: Option<String>,
-    /// `GH_CONFIG_DIR`.
-    pub gh_config_dir: Option<String>,
     /// The `gh` account whose token its terminals and Hive's own `gh` calls get as `GH_TOKEN`
-    /// (with `GH_HOST`), looked up in `gh_config_dir` when set; `None`: `gh`'s active account.
-    pub gh_account: Option<GhAccount>,
+    /// (with `GH_HOST`), and its folder as `GH_CONFIG_DIR` (24.13); `None`: `gh`'s active
+    /// account.
+    pub gh_account: Option<SpaceGhAccount>,
     /// `CLAUDE_CONFIG_DIR` (22.5, D22.15): the folder of one of the settings' Claude accounts.
     /// `None`, or a folder no account has: the default account.
     pub claude_account: Option<String>,
@@ -1528,6 +1536,17 @@ pub struct SpaceEnv {
 pub struct GhAccount {
     pub host: String,
     pub login: String,
+}
+
+/// A space's `gh` account (24.13): a login, and the gh config folder it is logged in to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceGhAccount {
+    #[serde(flatten)]
+    pub account: GhAccount,
+    /// `GH_CONFIG_DIR`: one of the settings' gh config folders (`gh.config_dirs`); `None`:
+    /// `gh`'s own config.
+    #[serde(default)]
+    pub config_dir: Option<String>,
 }
 
 /// A project's GitHub repository (9.31).
@@ -2510,7 +2529,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&spaces).unwrap(),
-            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"git_name":null,"git_email":"a@b","gh_config_dir":null,"gh_account":null,"claude_account":null}}],"current":"default"}"#
+            r#"{"type":"spaces","spaces":[{"id":"default","name":"Default","projects":["/r"],"env":{"git_name":null,"git_email":"a@b","gh_account":null,"claude_account":null}}],"current":"default"}"#
         );
         let accounts = Control::GhAccounts {
             gh_config_dir: Some("/g".into()),
@@ -3297,7 +3316,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,

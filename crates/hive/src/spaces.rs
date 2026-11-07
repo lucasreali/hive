@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use hive_protocol::{Space, SpaceEnv};
+use hive_protocol::{Space, SpaceEnv, SpaceGhAccount};
 use serde::{Deserialize, Serialize};
 
 use crate::gh;
@@ -138,6 +138,11 @@ impl Spaces {
     pub fn using(&self, dir: &str) -> Option<&Space> {
         let uses = |s: &&Space| s.env.claude_account.as_deref() == Some(dir);
         self.spaces.iter().find(uses)
+    }
+
+    /// The first space whose GitHub account (24.13) is in the gh config folder `dir`.
+    pub fn using_gh(&self, dir: &str) -> Option<&Space> {
+        self.spaces.iter().find(|s| gh_dir(&s.env) == Some(dir))
     }
 
     /// Makes `dir`, the account selected before 22.5, the Claude account of every space without
@@ -292,9 +297,18 @@ fn check_env(env: SpaceEnv, on_disk: bool) -> Result<SpaceEnv, String> {
     Ok(SpaceEnv {
         git_name: text("The git name", env.git_name, TEXT_LIMIT)?,
         git_email: text("The git email", env.git_email, TEXT_LIMIT)?,
-        gh_config_dir: gh_config_dir(env.gh_config_dir, on_disk)?,
         gh_account: match env.gh_account {
-            Some(account) => gh::check_account(&account).map(|()| Some(account))?,
+            Some(SpaceGhAccount {
+                account,
+                config_dir,
+            }) => {
+                gh::check_account(&account)?;
+                let config_dir = gh_config_dir(config_dir, on_disk)?;
+                Some(SpaceGhAccount {
+                    account,
+                    config_dir,
+                })
+            }
             None => None,
         },
         // Whether an account has it is the settings' to say (`settings::Store::known`).
@@ -312,15 +326,21 @@ pub fn gh_config_dir(value: Option<String>, on_disk: bool) -> Result<Option<Stri
     dir("The GitHub CLI config folder", value, on_disk)
 }
 
+/// The `GH_CONFIG_DIR` of a space: its GitHub account's folder (24.13).
+pub fn gh_dir(env: &SpaceEnv) -> Option<&str> {
+    env.gh_account.as_ref()?.config_dir.as_deref()
+}
+
 /// The environment entries a terminal of a space gets, as separate values (never a shell
 /// command).
 pub fn vars(env: &SpaceEnv) -> Vec<(&'static str, String)> {
+    let gh_dir = gh_dir(env).map(str::to_owned);
     let vars = [
         ("GIT_AUTHOR_NAME", &env.git_name),
         ("GIT_COMMITTER_NAME", &env.git_name),
         ("GIT_AUTHOR_EMAIL", &env.git_email),
         ("GIT_COMMITTER_EMAIL", &env.git_email),
-        ("GH_CONFIG_DIR", &env.gh_config_dir),
+        ("GH_CONFIG_DIR", &gh_dir),
     ];
     let set = vars
         .into_iter()
@@ -332,12 +352,23 @@ pub fn vars(env: &SpaceEnv) -> Vec<(&'static str, String)> {
 mod tests {
     use super::*;
 
+    /// The account `me` on github.com, in the gh config folder `dir`.
+    fn me(dir: Option<&str>) -> SpaceGhAccount {
+        SpaceGhAccount {
+            account: hive_protocol::GhAccount {
+                host: "github.com".into(),
+                login: "me".into(),
+            },
+            config_dir: dir.map(Into::into),
+        }
+    }
+
+    /// With a git name and, with `dir`, the GitHub account `me` in that gh config folder.
     fn env(dir: Option<&str>, name: Option<&str>) -> SpaceEnv {
         SpaceEnv {
             git_name: name.map(Into::into),
             git_email: None,
-            gh_config_dir: dir.map(Into::into),
-            gh_account: None,
+            gh_account: dir.map(|dir| me(Some(dir))),
             claude_account: None,
         }
     }
@@ -545,22 +576,25 @@ mod tests {
             name_of("the account", " "),
             Err("Enter a name for the account".into())
         );
-        let gh = SpaceEnv {
-            gh_config_dir: Some("/x".repeat(2049)),
-            ..SpaceEnv::default()
-        };
         assert_eq!(
-            create(&mut spaces, "n", gh),
+            create(&mut spaces, "n", env(Some(&"/x".repeat(2049)), None)),
             "The GitHub CLI config folder is longer than 4096 bytes"
         );
-        // Blank values are unset.
+        // Blank values are unset; the account's blank folder is gh's own config.
         spaces.create("blank", env(Some(" "), Some(""))).unwrap();
-        assert_eq!(spaces.current().1, SpaceEnv::default());
+        let own = SpaceEnv {
+            gh_account: Some(me(None)),
+            ..SpaceEnv::default()
+        };
+        assert_eq!(spaces.current().1, own);
         // A GitHub account is kept when its login and host could be GitHub's.
         let account = |login: &str| SpaceEnv {
-            gh_account: Some(hive_protocol::GhAccount {
-                host: "github.com".into(),
-                login: login.into(),
+            gh_account: Some(SpaceGhAccount {
+                account: hive_protocol::GhAccount {
+                    host: "github.com".into(),
+                    login: login.into(),
+                },
+                config_dir: None,
             }),
             ..SpaceEnv::default()
         };
@@ -722,12 +756,9 @@ mod tests {
         let full = SpaceEnv {
             git_name: Some("Me".into()),
             git_email: Some("me@x".into()),
-            gh_config_dir: Some("/g".into()),
-            // Its token comes from `gh` when a terminal opens (`gh::Gh::vars`).
-            gh_account: Some(hive_protocol::GhAccount {
-                host: "github.com".into(),
-                login: "me".into(),
-            }),
+            // Its token comes from `gh` when a terminal opens (`gh::Gh::vars`), and its folder
+            // is `GH_CONFIG_DIR` (24.13).
+            gh_account: Some(me(Some("/g"))),
             // Only a terminal gets it, once the settings know it (`daemon::terminals`); never
             // git or `gh`.
             claude_account: Some("/c".into()),
@@ -745,5 +776,22 @@ mod tests {
             vars(&env(None, Some("Me")))[1],
             ("GIT_COMMITTER_NAME", "Me".into())
         );
+        // An account of gh's own config sets no folder.
+        let own = SpaceEnv {
+            gh_account: Some(me(None)),
+            ..SpaceEnv::default()
+        };
+        assert_eq!(vars(&own), []);
+    }
+
+    #[test]
+    fn a_gh_config_folder_is_used_by_the_space_whose_account_is_in_it() {
+        let mut spaces = Spaces::with(vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        let w = tmp.path().to_str().unwrap();
+        spaces.create("Own", env(None, None)).unwrap();
+        spaces.create("Work", env(Some(w), None)).unwrap();
+        assert_eq!(spaces.using_gh(w).map(|s| s.name.as_str()), Some("Work"));
+        assert_eq!(spaces.using_gh("/p"), None);
     }
 }

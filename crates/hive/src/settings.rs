@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use hive_protocol::{
-    Account, AccountDir, ClaudeSettings, DEFAULT_ACCOUNT, ProjectScripts, Settings,
+    Account, AccountDir, ClaudeSettings, DEFAULT_ACCOUNT, GhSettings, ProjectScripts, Settings,
 };
 
 use crate::git::read_limited;
@@ -105,18 +105,19 @@ impl Store {
     /// [`Store::set_with`] where no space uses an account.
     #[cfg(test)]
     pub fn set(&self, settings: Settings) -> Result<Settings, String> {
-        self.set_with(settings, &|_| None)
+        self.set_with(settings, &|_| None, &|_| None)
     }
 
     /// Checks and saves `settings`, which are then in use. Nothing changes on a failure. A
     /// Claude account's folder must exist when it is new; one whose folder `using` names a
-    /// space of (22.5) cannot be removed. (`using` locks the spaces: they are never locked
-    /// before the settings. Not generic: every caller shares one copy, whose coverage the
-    /// tests give.)
+    /// space of (22.5) cannot be removed. So with a gh config folder (24.13) and `using_gh`.
+    /// (Both lock the spaces: they are never locked before the settings. Not generic: every
+    /// caller shares one copy, whose coverage the tests give.)
     pub fn set_with(
         &self,
         mut settings: Settings,
         using: &dyn Fn(&str) -> Option<String>,
+        using_gh: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Settings, String> {
         tidy(&mut settings);
         check(&settings)?;
@@ -133,6 +134,17 @@ impl Store {
                 let name = &gone.name;
                 return Err(format!(
                     "{name} is the Claude account of the space {space}: choose another one for it first"
+                ));
+            }
+        }
+        let (known, dirs) = (&current.0.gh.config_dirs, &settings.gh.config_dirs);
+        for dir in dirs.iter().filter(|dir| !known.contains(dir)) {
+            spaces::gh_config_dir(Some(dir.clone()), true)?;
+        }
+        for gone in known.iter().filter(|dir| !dirs.contains(dir)) {
+            if let Some(space) = using_gh(gone) {
+                return Err(format!(
+                    "The GitHub account of the space {space} is in {gone}: choose another one for it first"
                 ));
             }
         }
@@ -216,7 +228,8 @@ impl Store {
         }
         // shortcut: the folder is deleted after the settings lock is released; a
         // `create_account` meanwhile finds it still there and is refused, so nothing is lost.
-        let settings = self.set_with(settings, using)?;
+        // The gh config folders stay as they are: none is removed.
+        let settings = self.set_with(settings, using, &|_| None)?;
         let deleted = match delete {
             // Not followed when it is a link: only the link goes.
             true => std::fs::remove_dir_all(dir).err(),
@@ -266,9 +279,10 @@ impl Store {
 
     /// Makes an account of each Claude config folder spaces had before accounts existed
     /// (12.2), given as `(space name, folder)`, unless an account has it already; each is
-    /// named after its space. Nothing is saved while the settings file is ignored (saving
-    /// would replace it): the warning is returned.
-    pub fn migrate(&self, legacy: Vec<(String, String)>) -> Result<(), String> {
+    /// named after its space. Adds each gh config folder spaces had before 24.13 (`gh`) to the
+    /// settings' when they do not have it. Nothing is saved while the settings file is ignored
+    /// (saving would replace it): the warning is returned.
+    pub fn migrate(&self, legacy: Vec<(String, String)>, gh: Vec<String>) -> Result<(), String> {
         let mut current = self.current();
         if let Some(warning) = &current.1 {
             return Err(warning.clone());
@@ -286,6 +300,12 @@ impl Store {
                     config_dir,
                     hive_folder,
                 });
+            }
+        }
+        let dirs = &mut settings.gh.config_dirs;
+        for dir in gh {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
             }
         }
         if settings == current.0 {
@@ -398,6 +418,9 @@ fn tidy(settings: &mut Settings) {
     for account in &mut settings.claude.accounts {
         account.config_dir = spaces::trimmed(&account.config_dir).to_owned();
     }
+    for dir in &mut settings.gh.config_dirs {
+        *dir = spaces::trimmed(dir).to_owned();
+    }
 }
 
 fn settle(settings: &mut Settings) {
@@ -494,9 +517,32 @@ fn accounts(claude: &ClaudeSettings) -> Result<(), String> {
     Ok(())
 }
 
+/// The gh config folders (24.13): at most [`ACCOUNT_LIMIT`], each checked as a space's
+/// account's folder (absolute, printable), without spaces around it, and unique.
+fn gh_folders(gh: &GhSettings) -> Result<(), String> {
+    let dirs = &gh.config_dirs;
+    if dirs.len() > ACCOUNT_LIMIT {
+        return Err(format!(
+            "At most {ACCOUNT_LIMIT} gh config folders can be added"
+        ));
+    }
+    for (i, dir) in dirs.iter().enumerate() {
+        if spaces::gh_config_dir(Some(dir.clone()), false)?.as_ref() != Some(dir) {
+            return Err(format!(
+                "The gh config folder {dir:?} is blank or has spaces around it"
+            ));
+        }
+        if dirs[..i].contains(dir) {
+            return Err(format!("The gh config folder {dir} is there twice"));
+        }
+    }
+    Ok(())
+}
+
 /// Every value within its range, with a message naming the first that is not.
 pub fn check(settings: &Settings) -> Result<(), String> {
     accounts(&settings.claude)?;
+    gh_folders(&settings.gh)?;
     let terminal = &settings.terminal;
     range("terminal.font_size", terminal.font_size, 8, 32)?;
     range("terminal.scrollback", terminal.scrollback, 1000, 100_000)?;
@@ -976,7 +1022,7 @@ mod tests {
         removed.claude.accounts.clear();
         let used = |dir: &str| (dir == work).then(|| "Work".to_owned());
         assert_eq!(
-            store.set_with(removed.clone(), &used),
+            store.set_with(removed.clone(), &used, &|_| None),
             Err(
                 "Work is the Claude account of the space Work: choose another one for it first"
                     .into()
@@ -984,8 +1030,14 @@ mod tests {
         );
         assert_eq!(store.get().0, settings);
         // Kept, or used by no space: saved.
-        assert_eq!(store.set_with(settings.clone(), &used), Ok(settings));
-        assert_eq!(store.set_with(removed.clone(), &|_| None), Ok(removed));
+        assert_eq!(
+            store.set_with(settings.clone(), &used, &|_| None),
+            Ok(settings)
+        );
+        assert_eq!(
+            store.set_with(removed.clone(), &|_| None, &|_| None),
+            Ok(removed)
+        );
         assert_eq!(store.account_dirs(), Vec::<String>::new());
     }
 
@@ -1071,7 +1123,7 @@ mod tests {
         removed.claude.accounts.clear();
         let using = |dir: &str| spaces.using(dir).map(|s| s.name.clone());
         assert_eq!(
-            store.set_with(removed, &using),
+            store.set_with(removed, &using, &|_| None),
             Err(
                 "Work is the Claude account of the space W: choose another one for it first".into()
             )
@@ -1243,7 +1295,7 @@ mod tests {
         renamed.claude.default_name = "Personal".into();
         store.set(renamed).unwrap();
         let legacy = vec![("Personal".to_owned(), "/p".to_owned())];
-        assert_eq!(store.migrate(legacy), Ok(()));
+        assert_eq!(store.migrate(legacy, vec![]), Ok(()));
         assert_eq!(store.get().0.claude.accounts, [account("Personal 2", "/p")]);
     }
 
@@ -1258,7 +1310,7 @@ mod tests {
                 .collect()
         };
         // Nothing to make: nothing is written.
-        assert_eq!(store.migrate(vec![]), Ok(()));
+        assert_eq!(store.migrate(vec![], vec![]), Ok(()));
         assert!(!tmp.path().join("hive").exists());
         let spaces = [
             ("Work", "/w"),
@@ -1268,7 +1320,7 @@ mod tests {
             ("Work", "/x"),
             ("Default", "/y/"),
         ];
-        assert_eq!(store.migrate(legacy(&spaces)), Ok(()));
+        assert_eq!(store.migrate(legacy(&spaces), vec![]), Ok(()));
         let made = [
             account("Work", "/w"),
             account("Default 2", "/d"),
@@ -1277,18 +1329,18 @@ mod tests {
         ];
         assert_eq!(store.get().0.claude.accounts, made);
         // Idempotent: a folder already an account is not made again.
-        assert_eq!(store.migrate(legacy(&spaces)), Ok(()));
+        assert_eq!(store.migrate(legacy(&spaces), vec![]), Ok(()));
         let file = tmp.path().join("hive/settings.json");
         assert_eq!(Store::load(file.clone()).get().0.claude.accounts, made);
         // A name made too long by its number is refused, and nothing changes.
         let long = "x".repeat(spaces::NAME_LIMIT);
-        let err = store.migrate(legacy(&[(&long, "/l"), (&long, "/m")]));
+        let err = store.migrate(legacy(&[(&long, "/l"), (&long, "/m")]), vec![]);
         assert_eq!(err, Err("The name is longer than 64 characters".into()));
         assert_eq!(store.get().0.claude.accounts, made);
         // As many names are tried as it takes: one more than the accounts and the default one.
         let fresh = Store::load(tmp.path().join("fresh/settings.json"));
         let numbered = legacy(&[("Default 2", "/a"), ("Default", "/b")]);
-        assert_eq!(fresh.migrate(numbered), Ok(()));
+        assert_eq!(fresh.migrate(numbered, vec![]), Ok(()));
         let names: Vec<String> = fresh
             .get()
             .0
@@ -1301,9 +1353,90 @@ mod tests {
         // An ignored settings file is not replaced.
         std::fs::write(&file, "{").unwrap();
         let ignored = Store::load(file.clone());
-        let err = ignored.migrate(legacy(&[("Z", "/z")])).unwrap_err();
+        let err = ignored.migrate(legacy(&[("Z", "/z")]), vec![]).unwrap_err();
         assert!(err.starts_with("Ignoring "), "{err}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{");
+    }
+
+    #[test]
+    fn gh_config_folders_are_checked_kept_and_not_removed_while_a_space_uses_one() {
+        let (tmp, store) = store();
+        let dir = tmp.path().join("gh-work");
+        std::fs::create_dir(&dir).unwrap();
+        let dir = dir.display().to_string();
+        let with = |dirs: &[&str]| {
+            let mut settings = Settings::default();
+            settings.gh.config_dirs = dirs.iter().map(|d| d.to_string()).collect();
+            settings
+        };
+        // Kept without a trailing separator (22.2), read back.
+        let saved = store.set(with(&[&format!("{dir}/")])).unwrap();
+        assert_eq!(saved, with(&[&dir]));
+        let file = tmp.path().join("hive/settings.json");
+        assert_eq!(Store::load(file).get().0, saved);
+        // A new one must exist, absolute, once.
+        let missing = tmp.path().join("missing").display().to_string();
+        let refused = [
+            (
+                with(&[&dir, &missing]),
+                format!("The GitHub CLI config folder: {missing} is not a folder"),
+            ),
+            (
+                with(&[&dir, "rel"]),
+                "The GitHub CLI config folder must be an absolute path".into(),
+            ),
+            (
+                with(&[&dir, " "]),
+                "The gh config folder \" \" is blank or has spaces around it".into(),
+            ),
+            (
+                with(&[&dir, &dir]),
+                format!("The gh config folder {dir} is there twice"),
+            ),
+        ];
+        for (settings, message) in refused {
+            assert_eq!(store.set(settings), Err(message));
+        }
+        let many: Vec<String> = (0..=ACCOUNT_LIMIT).map(|i| format!("{dir}{i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert_eq!(
+            store.set(with(&many)),
+            Err("At most 64 gh config folders can be added".into())
+        );
+        assert!(check(&with(&many[..ACCOUNT_LIMIT])).is_ok());
+        // One a space's account is in cannot be removed (24.13), naming the space.
+        let used = |d: &str| (d == dir).then(|| "Work".to_owned());
+        assert_eq!(
+            store.set_with(with(&[]), &|_| None, &used),
+            Err(format!(
+                "The GitHub account of the space Work is in {dir}: choose another one for it first"
+            ))
+        );
+        assert_eq!(store.get().0, saved);
+        assert_eq!(store.set_with(saved.clone(), &|_| None, &used), Ok(saved));
+        assert_eq!(
+            store.set_with(with(&[]), &|_| None, &|_| None),
+            Ok(with(&[]))
+        );
+    }
+
+    // `/g` is no absolute path on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn the_spaces_gh_folders_join_the_settings_once() {
+        let (tmp, _) = store();
+        let mut settings = Settings::default();
+        settings.gh.config_dirs = vec!["/g".into()];
+        let file = tmp.path().join("hive/settings.json");
+        save(&file, &settings).unwrap();
+        let store = Store::load(file.clone());
+        let gh = vec!["/g".to_owned(), "/w".to_owned()];
+        assert_eq!(store.migrate(vec![], gh.clone()), Ok(()));
+        assert_eq!(store.get().0.gh.config_dirs, gh);
+        assert_eq!(Store::load(file).get().0.gh.config_dirs, gh);
+        // Already there: nothing changes.
+        assert_eq!(store.migrate(vec![], vec!["/w".into()]), Ok(()));
+        assert_eq!(store.get().0.gh.config_dirs, gh);
     }
 
     /// A store in a temporary folder whose account folders go in `accounts/` there.

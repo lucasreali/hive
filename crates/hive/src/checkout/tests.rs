@@ -194,9 +194,12 @@ fn fetches_carry_the_space_identity_without_a_token_gh_cannot_give() {
         ("GIT_COMMITTER_NAME", "Me".to_owned()),
     ];
     assert_eq!(fetch_vars(&gh, &env), identity);
-    env.gh_account = Some(hive_protocol::GhAccount {
-        host: "github.com".into(),
-        login: "me".into(),
+    env.gh_account = Some(hive_protocol::SpaceGhAccount {
+        account: hive_protocol::GhAccount {
+            host: "github.com".into(),
+            login: "me".into(),
+        },
+        config_dir: None,
     });
     assert_eq!(fetch_vars(&gh, &env), identity);
 }

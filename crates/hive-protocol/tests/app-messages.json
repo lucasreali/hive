@@ -250,7 +250,6 @@
         "env": {
           "git_name": null,
           "git_email": null,
-          "gh_config_dir": null,
           "gh_account": null,
           "claude_account": null
         }
@@ -715,6 +714,9 @@
         "accounts": [],
         "default_name": "Default",
         "share_sessions": false
+      },
+      "gh": {
+        "config_dirs": []
       }
     }
   },

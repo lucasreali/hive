@@ -189,7 +189,10 @@ async fn the_spaces_claude_folders_become_accounts_once() {
     let work = repo.env.path("home/.claude-work").display().to_string();
     let file = repo.env.path("data/hive/spaces.json");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    let env = json!({"claude_config_dir": work, "git_name": "Me"});
+    // And a space's gh config folder (24.13) joins the settings', its account keeping it.
+    let gh = repo.env.path("home/.config/gh-work").display().to_string();
+    let account = json!({"host": "github.com", "login": "me"});
+    let env = json!({"claude_config_dir": work, "git_name": "Me", "gh_config_dir": gh, "gh_account": account});
     let spaces = json!({"current": "default", "spaces": [
         {"id": "default", "name": "Default", "env": {"claude_config_dir": null}},
         {"id": "space-1", "name": "Work", "env": env},
@@ -202,6 +205,7 @@ async fn the_spaces_claude_folders_become_accounts_once() {
         config_dir: work.clone(),
         hive_folder: false,
     });
+    expected.gh.config_dirs.push(gh.clone());
     // Twice: the second start finds them made already.
     for _ in 0..2 {
         let mut daemon = repo.env.daemon();
@@ -212,7 +216,10 @@ async fn the_spaces_claude_folders_become_accounts_once() {
         assert_eq!(app.control().await, (0, settings));
         let saved = std::fs::read_to_string(&file).unwrap();
         assert!(!saved.contains("claude_config_dir"), "{saved}");
+        assert!(!saved.contains("gh_config_dir"), "{saved}");
         assert!(saved.contains("\"git_name\": \"Me\""), "{saved}");
+        let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(saved["spaces"][1]["env"]["gh_account"]["config_dir"], gh);
         drop(app);
         assert!(daemon.wait_exit().success());
     }
