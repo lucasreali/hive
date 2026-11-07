@@ -327,7 +327,6 @@ test("a worktree's pull request that ended is an inbox item offering to remove i
   const env = {
     git_name: null,
     git_email: null,
-    gh_config_dir: null,
     gh_account: null,
     claude_account: null,
   };

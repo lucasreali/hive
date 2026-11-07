@@ -1,10 +1,8 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
-import type { GhAccount, GhIdentity, SpaceEnv } from "../protocol";
+import type { GhAccount, GhAccounts, GhIdentity, SpaceEnv, SpaceGhAccount } from "../protocol";
 import { ask, currentSpace, openModal, spaceAccount, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
-import { homeText } from "../window";
-import { FolderField } from "./FolderField";
 import { CloseIcon } from "./icons";
 
 const close = () => openModal(null);
@@ -25,93 +23,115 @@ const FIELDS: { key: TextKey; label: string; placeholder: string; help: string }
     placeholder: "you@work.example",
     help: "GIT_AUTHOR_EMAIL and GIT_COMMITTER_EMAIL.",
   },
-  {
-    key: "gh_config_dir",
-    label: "GitHub CLI config folder",
-    placeholder: "/home/you/.config/gh-work",
-    help: "GH_CONFIG_DIR: a separate gh config, where the account below is looked up.",
-  },
 ];
 
 const NO_ENV: SpaceEnv = {
   git_name: null,
   git_email: null,
-  gh_config_dir: null,
   gh_account: null,
   claude_account: null,
 };
 
-/** An account's value in the select; "" is gh's active account. */
 const accountKey = (a: GhAccount) => `${a.login}@${a.host}`;
-const accountName = (a: GhAccount) =>
+/** A space's account's value in the select (its folder too, 24.13); "" is gh's active account. */
+const spaceKey = (a: GhAccount, dir: string | null) => `${accountKey(a)} ${dir ?? ""}`;
+export const accountName = (a: GhAccount) =>
   a.host === "github.com" ? a.login : `${a.login} on ${a.host}`;
+/** A gh config folder by its last segment (`gh-work`), as the select names it. */
+const folderName = (dir: string) => dir.split(/[\\/]/).pop() || dir;
 
 /**
- * The space's GitHub account (9.30): one of the accounts logged in to `gh` (in the config folder
- * above, when set), or `gh`'s active account. The service lists them (logins only, never a
- * token) when the dialog opens and when the config folder field is left. "Make active in gh…"
- * switches `gh`'s own active account, for every shell on the machine: it asks first.
+ * The accounts of every gh config folder (24.13): `gh`'s own (null), then the settings' extra
+ * ones, each with its last `gh_accounts` answer (undefined until it came). Asked when shown and
+ * whenever the folders change, never polled: `gh` checks each token with GitHub.
+ */
+export function useGhAccounts(): { dir: string | null; listed: GhAccounts | undefined }[] {
+  const dirs = useHive((s) => s.settings.gh.config_dirs);
+  const answers = useHive((s) => s.ghAccounts);
+  const asked = dirs.join("\n");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asked` says when to ask again.
+  useEffect(() => {
+    for (const dir of [null, ...dirs]) void transport.listGhAccounts(dir);
+  }, [asked]);
+  return [null, ...dirs].map((dir) => ({ dir, listed: answers[dir ?? ""] }));
+}
+
+/**
+ * The space's GitHub account (9.30): one of the accounts logged in to `gh`, in its own config or
+ * in one of the gh config folders of Settings → Accounts (24.13), or `gh`'s active account. The
+ * service lists them (logins only, never a token) when the dialog opens. "Make active in gh…"
+ * switches `gh`'s own active account in the account's folder, for every shell on the machine: it
+ * asks first.
  */
 function GhAccountField({ env, setEnv }: { env: SpaceEnv; setEnv: (env: SpaceEnv) => void }) {
-  const answer = useHive((s) => s.ghAccounts);
+  const folders = useGhAccounts();
   const modal = useHive((s) => s.modal);
-  const dir = env.gh_config_dir;
-  // An answer for another folder (the field changed since) is not this one's.
-  const listed = answer?.gh_config_dir === dir ? answer : null;
-  const accounts = listed?.accounts ?? [];
-  const active = accounts.filter((a) => a.active).map(accountName);
+  const accounts = folders.flatMap(({ dir, listed }) =>
+    (listed?.accounts ?? []).map((a) => ({ ...a, config_dir: dir })),
+  );
+  const active = accounts.filter((a) => a.active && a.config_dir === null).map(accountName);
   const chosen = env.gh_account;
-  const known = chosen && accounts.find((a) => accountKey(a) === accountKey(chosen));
+  const key = (a: SpaceGhAccount) => spaceKey(a, a.config_dir);
+  const known = chosen && accounts.find((a) => key(a) === key(chosen));
+  const named = (a: SpaceGhAccount) =>
+    `${accountName(a)}${a.config_dir === null ? "" : ` (${folderName(a.config_dir)})`}`;
   const options = [
     { value: "", label: `gh's active account${active.length ? ` (${active.join(", ")})` : ""}` },
     ...accounts.map((a) => ({
-      value: accountKey(a),
-      label: `${accountName(a)}${a.logged_in ? "" : " (token invalid)"}`,
+      value: key(a),
+      label: `${named(a)}${a.logged_in ? "" : " (token invalid)"}`,
     })),
   ];
   if (chosen && !known) {
-    options.push({ value: accountKey(chosen), label: `${accountName(chosen)} (not logged in)` });
+    options.push({ value: key(chosen), label: `${named(chosen)} (not logged in)` });
   }
   const pick = (value: string) => {
-    const account = accounts.find((a) => accountKey(a) === value);
-    setEnv({ ...env, gh_account: account ? { host: account.host, login: account.login } : null });
+    const account = accounts.find((a) => key(a) === value);
+    setEnv({
+      ...env,
+      gh_account: account
+        ? { host: account.host, login: account.login, config_dir: account.config_dir }
+        : null,
+    });
   };
-  const makeActive = (account: GhAccount) =>
+  const makeActive = (account: SpaceGhAccount) =>
     ask({
       title: "Switch gh's active account?",
       text: `${accountName(account)} becomes gh's active account on ${account.host} for every shell and repository on this machine, outside Hive too.`,
       action: "Switch",
-      run: () => void transport.switchGhAccount(dir, account),
+      run: () =>
+        void transport.switchGhAccount(account.config_dir, {
+          host: account.host,
+          login: account.login,
+        }),
       back: modal,
     });
+  const problems = folders.filter(({ listed }) => listed?.problem);
   return (
     <div className="field">
       <span id="space-gh-account-label">GitHub account</span>
       <div className="gh-account">
         <Select
           aria-labelledby="space-gh-account-label"
-          value={chosen ? accountKey(chosen) : ""}
+          value={chosen ? key(chosen) : ""}
           options={options}
           onChange={pick}
         />
         {known && !known.active && (
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => makeActive({ host: known.host, login: known.login })}
-          >
+          <button type="button" className="secondary" onClick={() => makeActive(known)}>
             Make active in gh…
           </button>
         )}
       </div>
-      {listed?.problem && (
-        <p className="field-help" role="status">
-          {listed.problem}
+      {problems.map(({ dir, listed }) => (
+        <p className="field-help" role="status" key={dir ?? ""}>
+          {dir === null ? listed?.problem : `${dir}: ${listed?.problem}`}
         </p>
-      )}
+      ))}
       <p className="field-help">
-        GH_TOKEN and GH_HOST: the account the space's terminals and Hive's gh calls use, without
-        changing gh's active account.
+        GH_TOKEN and GH_HOST, and GH_CONFIG_DIR for an account of another gh config folder: the
+        account the space's terminals and Hive's gh calls use, without changing gh's active account.
+        Folders are added in Settings → Accounts.
       </p>
     </div>
   );
@@ -186,7 +206,7 @@ function IdentityWarning({
   const pending = asking !== null && mine === null;
   const use = () => {
     setAsked({ account, before: useHive.getState().ghIdentity });
-    void transport.getGhIdentity(env.gh_config_dir, account);
+    void transport.getGhIdentity(account.config_dir, { host: account.host, login: account.login });
   };
   return (
     <div className="field">
@@ -222,10 +242,6 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
   const [env, setEnv] = useState<SpaceEnv>({ ...NO_ENV, ...space?.env, claude_account: account });
   const title = editing ? "Edit space" : "New space";
   const empty = space?.projects.length === 0;
-  const listGh = (dir: string | null) => void transport.listGhAccounts(dir);
-  // Listed when it opens, and again when the folder field is left (`onBlur` below).
-  const [openedDir] = useState(env.gh_config_dir);
-  useEffect(() => void transport.listGhAccounts(openedDir), [openedDir]);
   return (
     <dialog
       className="dialog"
@@ -263,26 +279,14 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
           {FIELDS.map((f) => (
             <div className="field" key={f.key}>
               <label htmlFor={`space-${f.key}`}>{f.label}</label>
-              {f.key === "gh_config_dir" ? (
-                // `gh` config folders are often hidden ones (22.2); empty is gh's own.
-                <FolderField
-                  id={`space-${f.key}`}
-                  value={env.gh_config_dir ?? ""}
-                  onChange={(dir) => setEnv((env) => ({ ...env, gh_config_dir: dir || null }))}
-                  onBlur={() => listGh(env.gh_config_dir)}
-                  placeholder={homeText(f.placeholder)}
-                  hidden
-                />
-              ) : (
-                <input
-                  id={`space-${f.key}`}
-                  value={env[f.key] ?? ""}
-                  onChange={(e) => setEnv({ ...env, [f.key]: e.target.value || null })}
-                  placeholder={homeText(f.placeholder)}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-              )}
+              <input
+                id={`space-${f.key}`}
+                value={env[f.key] ?? ""}
+                onChange={(e) => setEnv({ ...env, [f.key]: e.target.value || null })}
+                placeholder={f.placeholder}
+                spellCheck={false}
+                autoComplete="off"
+              />
               <p className="field-help">{f.help}</p>
             </div>
           ))}

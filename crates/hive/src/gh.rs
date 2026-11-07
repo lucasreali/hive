@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use hive_protocol::{GhAccount, GhLogin, SpaceEnv};
 
+use crate::spaces;
+
 use crate::git::{self, Stdout};
 
 /// How long one `gh` command may take (most of them call GitHub).
@@ -178,7 +180,8 @@ impl Gh {
         let Some(account) = &env.gh_account else {
             return Ok(Vec::new());
         };
-        let token = self.token(env.gh_config_dir.as_deref(), account);
+        let account = &account.account;
+        let token = self.token(spaces::gh_dir(env), account);
         let GhAccount { host, login } = account;
         let token = token.map_err(|err| {
             format!("No GitHub token for {login} on {host}: this terminal uses gh's active account ({err})")
@@ -198,9 +201,9 @@ impl Gh {
         args: &[&str],
         keep: Stdout,
     ) -> Result<Vec<u8>, String> {
-        let config_dir = env.gh_config_dir.as_deref();
+        let config_dir = spaces::gh_dir(env);
         let vars = match &env.gh_account {
-            Some(account) => token_vars(account, self.token(config_dir, account)?),
+            Some(space) => token_vars(&space.account, self.token(config_dir, &space.account)?),
             None => Vec::new(),
         };
         self.output((config_dir, &vars), Some(cwd), args, (&[0], keep, TIME))
@@ -331,6 +334,14 @@ mod tests {
         GhAccount {
             host: host.into(),
             login: login.into(),
+        }
+    }
+
+    /// A space's `account`, in the gh config folder `dir`.
+    fn in_dir(account: GhAccount, dir: Option<&str>) -> hive_protocol::SpaceGhAccount {
+        hive_protocol::SpaceGhAccount {
+            account,
+            config_dir: dir.map(Into::into),
         }
     }
 
@@ -582,13 +593,21 @@ esac
         let mut env = SpaceEnv::default();
         assert_eq!(fake.gh.vars(&env), Ok(vec![]));
         assert_eq!(fake.log(), "");
-        env.gh_account = Some(account("github.com", "me"));
+        env.gh_account = Some(in_dir(account("github.com", "me"), None));
         let expected = vec![
             ("GH_TOKEN", "tok-me".into()),
             ("GH_HOST", "github.com".into()),
         ];
+        assert_eq!(fake.gh.vars(&env), Ok(expected.clone()));
+        // Looked up in the account's gh config folder (24.13).
+        env.gh_account = Some(in_dir(account("github.com", "me"), Some("/cfg")));
         assert_eq!(fake.gh.vars(&env), Ok(expected));
-        env.gh_account = Some(account("github.com", "fail"));
+        let last = fake.log().lines().last().unwrap().to_owned();
+        assert!(
+            last.starts_with("auth token --hostname github.com --user me|||/cfg|"),
+            "{last}"
+        );
+        env.gh_account = Some(in_dir(account("github.com", "fail"), None));
         let failed = "No GitHub token for fail on github.com: this terminal uses gh's active account (gh auth token --hostname github.com --user fail failed: no oauth token found for me)";
         assert_eq!(fake.gh.vars(&env), Err(failed.to_owned()));
         // Other hosts: gh reads GH_TOKEN on github.com and GHE.com only.
@@ -653,16 +672,13 @@ esac
     fn gh_runs_as_the_space_in_the_folder_with_its_output_limited() {
         let fake = Fake::new(STATUS);
         let dir = fake.path();
-        let mut env = SpaceEnv {
-            gh_config_dir: Some("/cfg".into()),
-            ..SpaceEnv::default()
-        };
+        let mut env = SpaceEnv::default();
         let most = Stdout::Max(1024);
         let out = fake.gh.run(&env, &dir, &["pr", "list"], most).unwrap();
         assert_eq!(out, b"ran pr list\n");
         let at = dir.display();
-        assert_eq!(fake.log(), format!("pr list|||/cfg|1|{at}\n"));
-        env.gh_account = Some(account("github.com", "me"));
+        assert_eq!(fake.log(), format!("pr list||||1|{at}\n"));
+        env.gh_account = Some(in_dir(account("github.com", "me"), Some("/cfg")));
         fake.gh.run(&env, &dir, &["run", "list"], most).unwrap();
         let last = fake.log().lines().last().unwrap().to_owned();
         assert_eq!(last, format!("run list|tok-me|github.com|/cfg|1|{at}"));
@@ -674,7 +690,7 @@ esac
         let tail = fake.gh.run(&env, &dir, &["big", "out"], Stdout::Tail(7));
         assert_eq!(tail.unwrap(), [0; 7]);
         // No token, nothing run.
-        env.gh_account = Some(account("github.com", "fail"));
+        env.gh_account = Some(in_dir(account("github.com", "fail"), None));
         let calls = fake.log().lines().count();
         let err = fake.gh.run(&env, &dir, &["pr", "list"], most).unwrap_err();
         assert!(err.starts_with("gh auth token"), "{err}");

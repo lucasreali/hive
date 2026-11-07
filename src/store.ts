@@ -220,6 +220,7 @@ export const DEFAULT_SETTINGS: Settings = {
   worktrees: { default_base: null },
   projects: {},
   claude: { accounts: [], default_name: "Default", share_sessions: false },
+  gh: { config_dirs: [] },
 };
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
@@ -414,8 +415,11 @@ export type HiveState = {
   currentSpace: string | null;
   /** Why the last space request was refused. */
   spaceError: string | null;
-  /** The last `gh_accounts` answer (9.30), for the space dialog; null until asked. */
-  ghAccounts: GhAccounts | null;
+  /**
+   * The last `gh_accounts` answer (9.30) of each gh config folder (24.13), by folder ("": `gh`'s
+   * own config), for the space dialog and the settings; a folder is missing until asked.
+   */
+  ghAccounts: Record<string, GhAccounts>;
   /** The last `gh_identity` or `gh_identity_failed` answer (21.5), for the space dialog. */
   ghIdentity: GhIdentity | null;
   /** The last `claude_logins` answer (21.6); null until asked. */
@@ -547,7 +551,7 @@ export const initialState: HiveState = {
   spaces: null,
   currentSpace: null,
   spaceError: null,
-  ghAccounts: null,
+  ghAccounts: {},
   ghIdentity: null,
   claudeLogins: null,
   modalProject: null,

@@ -165,7 +165,6 @@ test("holds no message:a failure or a confirmation shows elsewhere, as a toast (
 const NO_ENV = {
   git_name: null,
   git_email: null,
-  gh_config_dir: null,
   gh_account: null,
   claude_account: null,
 };

@@ -828,7 +828,6 @@ export function createMockTransport(
   const noEnv = {
     git_name: null,
     git_email: null,
-    gh_config_dir: null,
     gh_account: null,
     claude_account: null,
   };
@@ -839,11 +838,25 @@ export function createMockTransport(
     active: login === "mock-work",
     logged_in: true,
   }));
+  // Each other gh config folder (24.13) has one account, named after it: `mock-gh-work`.
+  const folderLogins = new Map<string, GhLogin[]>();
+  const loginsIn = (dir: string | null) => {
+    if (dir === null) return ghLogins;
+    const login = `mock-${dir
+      .split("/")
+      .pop()
+      ?.replace(/[^\w-]/g, "")}`;
+    const logins = folderLogins.get(dir) ?? [
+      { host: "github.com", login, active: true, logged_in: true },
+    ];
+    folderLogins.set(dir, logins);
+    return logins;
+  };
   const sendGhAccounts = (gh_config_dir: string | null) =>
     later({
       type: "gh_accounts",
       gh_config_dir,
-      accounts: structuredClone(ghLogins),
+      accounts: structuredClone(loginsIn(gh_config_dir)),
       problem: null,
     });
   let spaces: Space[] = [
@@ -872,10 +885,16 @@ export function createMockTransport(
   const space = (id: string) => spaces.find((x) => x.id === id);
   const sendSpaces = () => later({ type: "spaces", spaces: structuredClone(spaces), current });
   // As the service: a space's Claude account is one of the accounts, or the default one (22.5).
-  const unknownAccount = ({ claude_account: dir }: SpaceEnv) =>
-    dir && !settings.claude.accounts.some((a) => a.config_dir === dir)
-      ? `No Claude account has the folder ${dir}`
+  const unknownAccount = ({ claude_account: dir, gh_account }: SpaceEnv) => {
+    const gh = gh_account?.config_dir;
+    if (dir && !settings.claude.accounts.some((a) => a.config_dir === dir)) {
+      return `No Claude account has the folder ${dir}`;
+    }
+    // As the service (24.13): only a gh config folder of the settings'.
+    return gh && !settings.gh.config_dirs.includes(gh)
+      ? `${gh} is not a gh config folder of Settings → Accounts: add it there first`
       : null;
+  };
   // As the service: a refusal changes nothing; otherwise the spaces are sent.
   const changeSpaces = (change: () => string | null) => {
     const message = change();
@@ -1199,12 +1218,15 @@ export function createMockTransport(
       sendGhAccounts(ghConfigDir);
     },
     async switchGhAccount(ghConfigDir, account) {
-      for (const l of ghLogins) l.active = l.login === account.login && l.host === account.host;
+      for (const l of loginsIn(ghConfigDir)) {
+        l.active = l.login === account.login && l.host === account.host;
+      }
       sendGhAccounts(ghConfigDir);
     },
-    async getGhIdentity(_ghConfigDir, account) {
+    async getGhIdentity(ghConfigDir, account) {
       // As GitHub answers `gh api user`: a logged-in account's login and its noreply email.
-      const at = ghLogins.findIndex((l) => l.login === account.login && l.host === account.host);
+      const logins = loginsIn(ghConfigDir);
+      const at = logins.findIndex((l) => l.login === account.login && l.host === account.host);
       if (at < 0) {
         const message = `Could not get the identity of ${account.login} on ${account.host}: gh gave no usable token for ${account.login} on ${account.host}`;
         later({ type: "gh_identity_failed", account, message });
@@ -1250,13 +1272,23 @@ export function createMockTransport(
           return;
         }
       }
+      // So with a gh config folder a space's account is in (24.13).
+      const dirs = next.gh.config_dirs.map((d) => d.replace(/(.)\/+$/, "$1"));
+      for (const dir of settings.gh.config_dirs.filter((d) => !dirs.includes(d))) {
+        const user = spaces.find((x) => x.env.gh_account?.config_dir === dir);
+        if (user) {
+          const message = `The GitHub account of the space ${user.name} is in ${dir}: choose another one for it first`;
+          later({ type: "settings_failed", message });
+          return;
+        }
+      }
       // A folder's trailing `/` goes, a root stays (22.2).
       const kept = accounts.map((a) => ({
         ...a,
         config_dir: a.config_dir.replace(/(.)\/+$/, "$1"),
       }));
       const claude = { ...next.claude, accounts: kept, default_name: default_name || "Default" };
-      settings = { ...next, claude };
+      settings = { ...next, claude, gh: { config_dirs: dirs } };
       later({ type: "settings", settings });
       // As the service: the scripts the app has follow the settings (23.4).
       if (scriptsAsked) later(scriptsOfWorktree(scriptsAsked));

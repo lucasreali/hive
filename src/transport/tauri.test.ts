@@ -68,7 +68,6 @@ test("terminal and project actions call their commands", async () => {
   const env = {
     git_name: "Me",
     git_email: null,
-    gh_config_dir: null,
     gh_account: null,
     claude_account: null,
   };

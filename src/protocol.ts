@@ -266,9 +266,11 @@ export type ProjectError =
 export type SpaceEnv = {
   git_name: string | null;
   git_email: string | null;
-  gh_config_dir: string | null;
-  /** The `gh` account whose token its terminals get (9.30); null: `gh`'s active account. */
-  gh_account: GhAccount | null;
+  /**
+   * The `gh` account whose token its terminals get (9.30), and its folder as `GH_CONFIG_DIR`
+   * (24.13); null: `gh`'s active account.
+   */
+  gh_account: SpaceGhAccount | null;
   /**
    * The folder of its Claude account (22.5), one of `Settings["claude"].accounts`:
    * `CLAUDE_CONFIG_DIR`. Null, or a folder no account has: the default account.
@@ -278,6 +280,11 @@ export type SpaceEnv = {
 
 /** Mirrors `hive_protocol::GhAccount`: a `gh` login on a host. */
 export type GhAccount = { host: string; login: string };
+/**
+ * Mirrors `hive_protocol::SpaceGhAccount` (24.13): a space's `gh` account and the gh config
+ * folder it is logged in to, one of `Settings["gh"].config_dirs`; null: `gh`'s own config.
+ */
+export type SpaceGhAccount = GhAccount & { config_dir: string | null };
 /** Mirrors `hive_protocol::GhLogin`: an account as `gh auth status` lists it. */
 export type GhLogin = GhAccount & { active: boolean; logged_in: boolean };
 /** The accounts of `gh` in a config folder, logins only; `problem` says what went wrong. */
@@ -593,6 +600,8 @@ export type Settings = {
     default_name: string;
     share_sessions: boolean;
   };
+  /** The gh config folders (24.13) besides `gh`'s own, whose accounts a space may pick. */
+  gh: { config_dirs: string[] };
 };
 
 /**

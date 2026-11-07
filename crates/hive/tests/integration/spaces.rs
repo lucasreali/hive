@@ -1,4 +1,6 @@
-use hive_protocol::{Control, GhAccount, GhLogin, ProjectError, Role, Space, SpaceEnv};
+use hive_protocol::{
+    Control, GhAccount, GhLogin, ProjectError, Role, Space, SpaceEnv, SpaceGhAccount,
+};
 use serde_json::json;
 
 use crate::agents::hook;
@@ -50,8 +52,6 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     let repo = Repo::new();
     let root = repo.root.display().to_string();
     // The default Claude account's sessions (the accounts are `accounts.rs`', 12.2).
-    let claude = repo.env.path("home/work-gh");
-    std::fs::create_dir_all(&claude).unwrap();
     let logs = repo.env.path("home/.claude/projects").join(
         root.chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -63,7 +63,6 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
         json!({"type": "ai-title", "aiTitle": "Work task"}),
     ];
     std::fs::write(logs.join("s.jsonl"), format!("{}\n{}\n", log[0], log[1])).unwrap();
-    let claude = claude.display().to_string();
     let mut daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
 
@@ -95,7 +94,6 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
     let env = SpaceEnv {
         git_name: Some("Work Me".into()),
         git_email: Some("me@work".into()),
-        gh_config_dir: Some(claude.clone()),
         gh_account: None,
         claude_account: None,
     };
@@ -127,10 +125,10 @@ async fn spaces_group_projects_and_give_their_terminals_an_identity() {
 
     // Its terminals get the space's identity (the default Claude account: it names none).
     app.open_terminal(1, &repo.root).await;
-    let echo = "echo \"[$CLAUDE_CONFIG_DIR]$GIT_AUTHOR_NAME|$GIT_COMMITTER_NAME|$GIT_AUTHOR_EMAIL|$GIT_COMMITTER_EMAIL|$GH_CONFIG_DIR\"\r";
+    let echo = "echo \"[$CLAUDE_CONFIG_DIR]$GIT_AUTHOR_NAME|$GIT_COMMITTER_NAME|$GIT_AUTHOR_EMAIL|$GIT_COMMITTER_EMAIL.\"\r";
     app.input(1, echo).await;
-    let expected = format!("[]Work Me|Work Me|me@work|me@work|{claude}");
-    app.output_until(1, &expected).await;
+    let expected = "[]Work Me|Work Me|me@work|me@work.";
+    app.output_until(1, expected).await;
     let start = json!({"session_id": "s", "cwd": root});
     let seen = hook(&repo, &mut app, "1", "SessionStart", start).await;
     let title = Control::AgentTitle {
@@ -342,10 +340,16 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
     };
     assert_eq!(listed, accounts);
 
-    // The default space uses the personal account, a Work space the work one.
+    // The default space uses the personal account, a Work space the work one, from a gh
+    // config folder of its own (24.13).
     let mut replies = vec![listed];
+    let folder = repo.env.path("gh-work").display().to_string();
+    std::fs::create_dir(&folder).unwrap();
     let space = |login: &str| SpaceEnv {
-        gh_account: Some(gh_account(login)),
+        gh_account: Some(SpaceGhAccount {
+            account: gh_account(login),
+            config_dir: login.ends_with("work").then(|| folder.clone()),
+        }),
         ..SpaceEnv::default()
     };
     let rename = Control::UpdateSpace {
@@ -359,6 +363,33 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
     };
     replies.push(ask(&mut app, add(&other)).await);
     replies.push(app.control().await.1);
+    // Only a folder of the settings' (24.13).
+    let unknown = Control::CreateSpace {
+        name: "Work".into(),
+        env: space("octo-work"),
+    };
+    let refused =
+        format!("{folder} is not a gh config folder of Settings → Accounts: add it there first");
+    let refused = Control::SpaceFailed { message: refused };
+    assert_eq!(ask(&mut app, unknown).await, refused);
+    // A blank folder is gh's own config.
+    let mut own = space("octo-personal");
+    if let Some(account) = &mut own.gh_account {
+        account.config_dir = Some(" ".into());
+    }
+    let blank = Control::UpdateSpace {
+        id: "default".into(),
+        name: "Personal".into(),
+        env: own,
+    };
+    let Control::Spaces { spaces, .. } = ask(&mut app, blank).await else {
+        panic!("expected spaces")
+    };
+    assert_eq!(spaces[0].env, space("octo-personal"));
+    let mut settings = hive_protocol::Settings::default();
+    settings.gh.config_dirs.push(format!("{folder}/"));
+    let saved = ask(&mut app, Control::SetSettings { settings }).await;
+    assert!(matches!(saved, Control::Settings { .. }), "{saved:?}");
     let create = Control::CreateSpace {
         name: "Work".into(),
         env: space("octo-work"),
@@ -371,14 +402,14 @@ async fn each_space_gives_its_terminals_its_own_github_account() {
     };
     assert_eq!(spaces[1].env, space("octo-work"));
     assert_eq!(spaces[1].projects, [root]);
-    let echo = "echo \"token=$GH_TOKEN|$GH_HOST.\"\r";
-    for (channel, cwd, token) in [
-        (1, repo.root.clone(), "tok-octo-work"),
-        (2, other.clone(), "tok-octo-personal"),
+    let echo = "echo \"token=$GH_TOKEN|$GH_HOST|$GH_CONFIG_DIR.\"\r";
+    for (channel, cwd, token, dir) in [
+        (1, repo.root.clone(), "tok-octo-work", folder.as_str()),
+        (2, other.clone(), "tok-octo-personal", ""),
     ] {
         app.open_terminal(channel, &cwd).await;
         app.input(channel, echo).await;
-        let expected = format!("token={token}|github.com.");
+        let expected = format!("token={token}|github.com|{dir}.");
         app.output_until(channel, &expected).await;
     }
     // An account gh has no token for: the terminal opens anyway, and the human is told.
@@ -485,7 +516,10 @@ async fn a_remote_base_is_fetched_as_the_space_and_never_prompts() {
         id: "default".into(),
         name: "Work".into(),
         env: SpaceEnv {
-            gh_account: Some(gh_account("octo-work")),
+            gh_account: Some(SpaceGhAccount {
+                account: gh_account("octo-work"),
+                config_dir: None,
+            }),
             ..SpaceEnv::default()
         },
     };

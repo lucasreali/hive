@@ -34,7 +34,6 @@ const [session, stopped] = MOCK_SESSIONS;
 const NO_ENV: SpaceEnv = {
   git_name: null,
   git_email: null,
-  gh_config_dir: null,
   gh_account: null,
   claude_account: null,
 };

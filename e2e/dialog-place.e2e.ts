@@ -57,12 +57,13 @@ async function editSpace(page: Page) {
   return page.getByRole("dialog", { name: "Edit space" });
 }
 
-test("Edit space with its folder list open is centred, its body scrolls, its footer shows", async ({
+test("Edit space at a short window is centred, its body scrolls, its footer shows", async ({
   page,
 }) => {
+  // Without its gh folder list (24.13), the dialog fits 700px: a shorter window.
+  await page.setViewportSize({ width: 1440, height: 560 });
   const dialog = await editSpace(page);
-  const folders = dialog.getByRole("list", { name: "Folders" });
-  await expect(folders.getByRole("button").first()).toBeVisible();
+  await expect(dialog).toBeVisible();
   await centred(dialog);
   // Taller than the window: the body scrolls between the header and the footer.
   const body = dialog.locator(".dialog-body");
