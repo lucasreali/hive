@@ -90,8 +90,19 @@ pub fn with_url(file: &mut Value, macos: bool) {
     media["url"] = url.into();
 }
 
-/// The scheme's answer: the file's bytes as the service's type `mime`, or why not (404). Never
-/// sniffed by the webview.
+/// The CSP of a scheme answer of type `mime`, one place for every type (24.4 adds HTML's).
+/// Anything shown as a document (an SVG opened from a PDF's link, a 404) is sandboxed, with
+/// no script and no network: in the scheme's origin it could read the token from its URL and
+/// fetch the worktree's files. A PDF is drawn by the WebView's viewer, which a sandbox blanks.
+pub fn policy(mime: &str) -> &'static str {
+    match mime {
+        "application/pdf" => "default-src 'none'",
+        _ => "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+    }
+}
+
+/// The scheme's answer: the file's bytes as the service's type `mime`, or why not (404), with
+/// its [`policy`]. Never sniffed by the webview.
 pub fn response(read: Result<(String, Vec<u8>), String>) -> Response<Vec<u8>> {
     let (status, mime, body) = match read {
         Ok((mime, body)) => (200, mime, body),
@@ -103,6 +114,7 @@ pub fn response(read: Result<(String, Vec<u8>), String>) -> Response<Vec<u8>> {
     };
     Response::builder()
         .status(status)
+        .header("Content-Security-Policy", policy(&mime))
         .header("Content-Type", mime)
         .header("X-Content-Type-Options", "nosniff")
         .body(body)
@@ -203,5 +215,26 @@ mod tests {
         );
         assert_eq!(failed.headers()["X-Content-Type-Options"], "nosniff");
         assert_eq!(failed.body(), b"a.png does not exist");
+        // Every answer has its type's CSP: sandboxed, no script, no network, but a PDF's.
+        let sandboxed = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
+        for answer in [&ok, &failed] {
+            assert_eq!(answer.headers()["Content-Security-Policy"], sandboxed);
+        }
+        let pdf = response(Ok(("application/pdf".into(), vec![])));
+        let csp = &pdf.headers()["Content-Security-Policy"];
+        assert_eq!(csp, "default-src 'none'");
+    }
+
+    #[test]
+    fn an_svg_or_any_other_file_shown_as_a_document_runs_nothing() {
+        // An SVG opened from a PDF's link would run its scripts in the scheme's origin.
+        for mime in ["image/svg+xml", "application/octet-stream", "text/plain"] {
+            let csp = response(Ok((mime.into(), vec![])));
+            let csp = csp.headers()["Content-Security-Policy"].to_str().unwrap();
+            assert!(csp.ends_with("; sandbox"), "{mime}: {csp}");
+            assert!(csp.starts_with("default-src 'none';"), "{mime}: {csp}");
+            assert!(!csp.contains("script"), "{mime}: {csp}");
+        }
+        assert_eq!(policy("application/pdf"), "default-src 'none'");
     }
 }
