@@ -3535,10 +3535,21 @@ fieldset.new-account {
 
 /* "New folder" (23.2): the button after the path, and the name typed in a row of the list. */
 .folder-path .folder-new {
+  position: relative;
   flex: none;
+  height: auto;
   padding: 0 8px;
-  border-left: 1px solid var(--border-subtle);
   border-radius: 0;
+}
+
+/* The full row's height, so the icon is centred; its separator stops short of both lines. */
+.folder-path .folder-new::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  border-left: 1px solid var(--border-subtle);
 }
 
 .field .folder-naming input,

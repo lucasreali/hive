@@ -8,6 +8,9 @@ import { FolderIcon, ICON, NewFolderIcon } from "./icons";
 /** How long typing must pause before the folder is listed. */
 export const LIST_DELAY_MS = 150;
 
+/** Stable, so it focuses the name once when shown, not again on every render. */
+const focusOnMount = (el: HTMLInputElement | null) => el?.focus();
+
 const SIDES = [
   { value: "windows", label: "Windows" },
   { value: "wsl", label: "WSL" },
@@ -93,6 +96,11 @@ export function FolderField(props: FolderFieldProps) {
     input.current?.focus();
   }, [made, asked, typed, sep, onChange]);
   const nameError = answered ? answer.error : null;
+  const closeNaming = () => {
+    setNaming(null);
+    setAsked(null);
+    input.current?.focus();
+  };
   return (
     <div className="folder-picker">
       <div className="folder-path">
@@ -127,10 +135,13 @@ export function FolderField(props: FolderFieldProps) {
           <button
             type="button"
             className="ghost folder-new"
-            title={parent ? "New folder" : "Type or pick a folder first"}
+            title={parent || naming !== null ? "New folder" : "Type or pick a folder first"}
             aria-label="New folder"
-            disabled={!parent}
-            onClick={() => setNaming("")}
+            aria-pressed={naming !== null}
+            disabled={!parent && naming === null}
+            // Keeps the focus in the name, so its blur does not close the row this click toggles.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => (naming === null ? setNaming("") : closeNaming())}
           >
             <NewFolderIcon />
           </button>
@@ -145,7 +156,7 @@ export function FolderField(props: FolderFieldProps) {
                 aria-label="New folder name"
                 className="folder-name"
                 value={naming}
-                ref={(el) => el?.focus()}
+                ref={focusOnMount}
                 onChange={(e) => {
                   setNaming(e.target.value);
                   setAsked(null);
@@ -155,9 +166,7 @@ export function FolderField(props: FolderFieldProps) {
                     // Only the name closes, not the dialog.
                     e.preventDefault();
                     e.stopPropagation();
-                    setNaming(null);
-                    setAsked(null);
-                    input.current?.focus();
+                    closeNaming();
                   } else if (e.key === "Enter") {
                     e.preventDefault();
                     if (!parent) return;
@@ -165,6 +174,8 @@ export function FolderField(props: FolderFieldProps) {
                     void transport.createDir(parent, naming);
                   }
                 }}
+                // Leaving it with nothing typed closes it; a typed name stays.
+                onBlur={() => naming === "" && setNaming(null)}
                 placeholder="Folder name, then Enter"
                 spellCheck={false}
                 autoComplete="off"

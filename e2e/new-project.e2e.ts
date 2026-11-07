@@ -58,3 +58,56 @@ test("a new project is made from Hive: a new folder, the project in it, claude i
   await expect(dialog).toHaveCount(0);
   await expect(tree.locator(".tree-row.folder", { hasText: "notes-2" })).toBeVisible();
 });
+
+test("New folder's button: a toggle, its icon centred, its separator short of both lines (24.10)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTitle(keyLabel("Add project (Ctrl+Shift+O)")).click();
+  const dialog = page.getByRole("dialog", { name: "Add project" });
+  await dialog.getByRole("button", { name: "New project" }).click();
+  await expect(dialog.getByLabel("Parent folder")).toHaveValue("/home/user/");
+  const button = dialog.getByRole("button", { name: "New folder" });
+  const folderName = dialog.getByLabel("New folder name");
+
+  // Clicked again, the row closes; a typed name stays when the name is left.
+  await button.click();
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await button.click();
+  await expect(folderName).toHaveCount(0);
+  await button.click();
+  await folderName.fill("clients");
+  const parent = dialog.getByLabel("Parent folder");
+  await parent.click();
+  await expect(folderName).toHaveValue("clients");
+  // Typing in the path keeps the focus there, and the button still closes the name.
+  await parent.press("End");
+  await page.keyboard.type("x");
+  await expect(parent).toHaveValue("/home/user/x");
+  await expect(parent).toBeFocused();
+  await button.click();
+  await expect(folderName).toHaveCount(0);
+
+  const geometry = await button.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const icon = (el.querySelector("svg") as SVGElement).getBoundingClientRect();
+    const path = (el.parentElement as HTMLElement).getBoundingClientRect();
+    const line = getComputedStyle(el, "::before");
+    return {
+      box: { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+      icon: { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 },
+      field: { top: path.top, bottom: path.bottom, buttonTop: box.top, buttonBottom: box.bottom },
+      line: { top: Number.parseFloat(line.top), bottom: Number.parseFloat(line.bottom) },
+      width: line.borderLeftWidth,
+    };
+  });
+  // The button fills the path's row, the icon at its centre.
+  expect(geometry.field.buttonTop).toBe(geometry.field.top);
+  expect(geometry.field.buttonBottom).toBe(geometry.field.bottom);
+  expect(Math.abs(geometry.icon.x - geometry.box.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.icon.y - geometry.box.y)).toBeLessThanOrEqual(0.5);
+  // The separator reaches neither line, with the same gap above and below.
+  expect(geometry.width).toBe("1px");
+  expect(geometry.line.top).toBeGreaterThan(0);
+  expect(geometry.line.bottom).toBe(geometry.line.top);
+});
