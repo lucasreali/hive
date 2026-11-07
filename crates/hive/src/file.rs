@@ -2716,9 +2716,10 @@ mod tests {
         let path = dir.path().join("f");
         fs::write(&path, "abc").unwrap();
         let file = File::options().write(true).open(&path).unwrap();
-        file.set_modified(UNIX_EPOCH + std::time::Duration::from_nanos(255))
+        // A multiple of 100 ns, NTFS's resolution.
+        file.set_modified(UNIX_EPOCH + std::time::Duration::from_nanos(25_600))
             .unwrap();
-        assert_eq!(stamp(&file.metadata().unwrap()), "3-ff");
+        assert_eq!(stamp(&file.metadata().unwrap()), "3-6400");
     }
 
     #[test]
