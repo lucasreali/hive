@@ -88,7 +88,7 @@ taskkill /F /IM hive.exe
 ### macOS
 
 1. Download the `.dmg`, open it and drag Hive to **Applications**. Open Hive from Applications, not from the `.dmg` or Downloads.
-2. The app is ad-hoc signed (no Apple Developer account), so on macOS 15 and 26 the first open is blocked ("Hive" cannot be opened / Apple could not verify it; Control-click → Open no longer bypasses it). Click **Done**, then go to **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to the message about Hive, confirm with **Open Anyway** and your password (or Touch ID). macOS remembers the choice; later opens and updates need nothing.
+2. The app is not notarized (no Apple Developer account), so on macOS 15 and 26 the first open is blocked ("Hive" cannot be opened / Apple could not verify it; Control-click → Open no longer bypasses it). Click **Done**, then go to **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to the message about Hive, confirm with **Open Anyway** and your password (or Touch ID). macOS remembers the choice; later opens and updates need nothing.
 3. If Hive says it runs from a temporary read-only copy, macOS "translocated" it: it was opened where it was downloaded, and updates cannot install there. Quit Hive, move it to Applications and run, in Terminal:
 
    ```
@@ -100,6 +100,18 @@ taskkill /F /IM hive.exe
 ### Updates
 
 When a newer release exists, click **Update to vX** in the title bar. Hive asks first if agents are running (they end with the restart), installs the update and restarts. On macOS the update installs only when Hive runs from Applications (step 3 above); otherwise the button explains the move.
+
+### Computer Use and screen recording
+
+A program in Hive's terminals, such as Claude Code's Computer Use, gets its macOS privacy permissions through Hive: macOS asks about Hive, not about the program, and only you can allow it.
+
+1. Open **Settings → Terminal → macOS permissions** (macOS only). It shows whether Hive holds Screen Recording and Accessibility, each with a button to its System Settings pane. It only reads them: Hive never asks by itself.
+2. In the pane, turn Hive on. If it is not listed, press **+** and choose `/Applications/Hive.app`.
+3. After granting Screen Recording, restart Hive. Its terminals close with it: the service lives as long as the app.
+
+**Updates:** a release signed with Hive's certificate keeps these grants, and your folders', across updates, since macOS ties them to the certificate. The first release signed that way changes Hive's identity once, and its notes say so: allow Hive one last time. A build signed ad-hoc, as any local development build, loses them with every new build.
+
+**On in System Settings but "Not granted" in Hive:** the entry is for an older build. Remove Hive from the list with **−**, add it again and restart Hive.
 
 ## Quick start
 
@@ -236,7 +248,26 @@ git push origin main v0.1.3       # starts release.yml
 
 The release workflow first checks that the `ci` and `macos` runs of the tagged commit (or of its parent, for the version bump) are green (`scripts/ci.sh green main` checks the same before tagging; `windows` is optional). It then builds the Linux `hive` and bundles it into the Windows NSIS installer, then builds the macOS `.dmg` with the macOS `hive` inside, signs the updater artifacts and publishes them with `latest.json`. It needs the `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) repository secrets; the matching public key is in `src-tauri/tauri.conf.json`.
 
-The macOS app and the `hive` inside it are signed ad-hoc unless the `release` environment holds all six Developer ID secrets, which make the workflow sign both with that identity (hardened runtime), notarize and staple the app, and check it with `spctl`: `APPLE_CERTIFICATE` (the "Developer ID Application" certificate and key, a `.p12` in base64), `APPLE_CERTIFICATE_PASSWORD` (its export password), `APPLE_SIGNING_IDENTITY` (e.g. `Developer ID Application: Name (TEAMID)`), and an App Store Connect API key for the notary service: `APPLE_API_ISSUER` (issuer ID), `APPLE_API_KEY` (key ID) and `APPLE_API_KEY_P8` (the `.p8` file's contents). A partial set fails the release. `scripts/macos-bundle.sh check` is the bundle check `macos.yml` and the release run. The release also carries `Hive_aarch64.dSYM.zip`, the dSYMs of the app and its `hive` (line tables; `scripts/macos-bundle.sh dsyms` checks their UUIDs are the shipped binaries'), for reading a crash report: `atos -o hive-app.dSYM -l <load address> <address>`. Logs on macOS: `~/Library/Logs/Hive/daemon.log` and `app.log`, the previous run's as `.1`.
+The macOS app and the `hive` inside it are signed with Hive's self-signed certificate when the `release` environment holds its three secrets (below), and otherwise ad-hoc, with a warning on the run, since each update then loses what macOS allowed Hive; local development builds stay ad-hoc. All six Developer ID secrets come first, and make the workflow sign both with that identity (hardened runtime), notarize and staple the app, and check it with `spctl`: `APPLE_CERTIFICATE` (the "Developer ID Application" certificate and key, a `.p12` in base64), `APPLE_CERTIFICATE_PASSWORD` (its export password), `APPLE_SIGNING_IDENTITY` (e.g. `Developer ID Application: Name (TEAMID)`), and an App Store Connect API key for the notary service: `APPLE_API_ISSUER` (issuer ID), `APPLE_API_KEY` (key ID) and `APPLE_API_KEY_P8` (the `.p8` file's contents). A partial set of either fails the release. `scripts/macos-bundle.sh check` is the bundle check `macos.yml` and the release run. The release also carries `Hive_aarch64.dSYM.zip`, the dSYMs of the app and its `hive` (line tables; `scripts/macos-bundle.sh dsyms` checks their UUIDs are the shipped binaries'), for reading a crash report: `atos -o hive-app.dSYM -l <load address> <address>`. Logs on macOS: `~/Library/Logs/Hive/daemon.log` and `app.log`, the previous run's as `.1`.
+
+#### Signing with Hive's certificate
+
+Done once. The certificate is Hive's identity for macOS: its designated requirement names the certificate rather than one build's `cdhash`, so what the user allowed survives updates. A new certificate is a new identity, so keep these files safe.
+
+1. Make it, on a Mac (the folder must not exist yet; no keychain is touched):
+
+   ```sh
+   scripts/macos-bundle.sh new-certificate ~/hive-certificate
+   ```
+
+   It prints the certificate's SHA-1 and leaves `certificate.p12` and `password` in the folder.
+2. Add three secrets to the repository's `release` environment (GitHub: Settings → Environments → release):
+   - `HIVE_CERTIFICATE`: the `.p12` in base64, `base64 -i ~/hive-certificate/certificate.p12 | pbcopy`
+   - `HIVE_CERTIFICATE_PASSWORD`: `pbcopy < ~/hive-certificate/password`
+   - `HIVE_CERTIFICATE_SHA1`: the SHA-1 it printed
+3. Move the folder to a safe place, such as a password manager, and delete it here.
+
+The next release signs with it (its run shows no ad-hoc warning, and `scripts/macos-bundle.sh check --self-signed` verifies the signature is this certificate's) and its notes tell users to allow Hive one last time. To see it on an installed app: `codesign -d -r- /Applications/Hive.app` names `certificate root` or `certificate leaf` with that SHA-1.
 
 ### Dependencies
 
