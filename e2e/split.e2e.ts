@@ -151,3 +151,115 @@ test("split pairs (20.5): two in a worktree, seen in the bar, rearranged by drag
   await expect.poll(() => shown(page)).toEqual([2, 4]);
   await expect.poll(pairs).toEqual(["left", "right", "left", "right"]);
 });
+
+/** Opens `path` in the worktree as a kept tab (a double click on its row, 11.1). */
+const openFile = (page: Page, path: string) =>
+  page.evaluate(async (path) => {
+    const url = "/src/store.ts";
+    const { pinFile, setOpenFile, useHive } = await import(/* @vite-ignore */ url);
+    const file = { worktree: useHive.getState().selection, path };
+    setOpenFile(file, true);
+    pinFile(file);
+  }, path);
+
+/** What the terminal area shows, left to right: terminals by id, files by path, from the store. */
+const panes = (page: Page) =>
+  page.evaluate(async () => {
+    const [store, tabs] = ["/src/store.ts", "/src/tabs.ts"];
+    const { useHive } = await import(/* @vite-ignore */ store);
+    const { shownPanes } = await import(/* @vite-ignore */ tabs);
+    return shownPanes(useHive.getState()).map((p: number | string) =>
+      typeof p === "number" ? p : p.split("\n")[1],
+    );
+  });
+
+test("a file in a pair (25.1): dragged onto a pane, through the menu, edited and saved in its pane", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const projects = page.getByRole("navigation", { name: "Projects" });
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
+  await projects.getByRole("button", { name: "fix-login" }).click();
+  for (let i = 1; i <= 2; i++) {
+    await page.getByTitle("New terminal or file").click();
+    await page.getByRole("menuitem", { name: "Terminal" }).click();
+    await expect(tabs.getByRole("tab")).toHaveCount(i);
+  }
+  await expect.poll(() => screen(page, 2)).toBe("mock$");
+  await openFile(page, "README.md");
+  const readme = tabs.getByRole("tab", { name: /^README\.md/ });
+  await tabs.getByRole("tab").first().click();
+  await page.keyboard.press(`${mod}+Shift+D`);
+  await expect.poll(() => panes(page)).toEqual([1, 2]);
+
+  // The file dragged onto the right pane: highlighted while over it, and it takes it.
+  const over = await page.locator('.terminal-pane[data-pane="right"]').boundingBox();
+  const from = await readme.boundingBox();
+  if (!over || !from) throw new Error("no box");
+  await page.mouse.move(from.x + 10, from.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(over.x + 60, over.y + 60, { steps: 5 });
+  await expect(page.locator('.pane-drop[data-side="right"]')).toBeVisible();
+  await page.mouse.up();
+  await expect(page.locator(".pane-drop")).toHaveCount(0);
+  await expect.poll(() => panes(page)).toEqual([1, "README.md"]);
+
+  // Side by side: the terminal left of the divider, the file right of it.
+  const file = page.getByRole("region", { name: "README.md" });
+  await expect(file).toHaveAttribute("data-pane", "right");
+  const left = await page.locator(".terminal-host").boundingBox();
+  const right = await file.boundingBox();
+  expect(left && right && left.x + left.width <= right.x + 1).toBe(true);
+  await expect(page.locator('.terminal-pane[data-terminal="1"] canvas').first()).toBeAttached();
+
+  // Edited and saved in its pane; the terminal beside it gets none of the keys.
+  const unsaved = () => tabs.locator(".tab-close[data-dirty]");
+  await file.locator(".cm-content").click();
+  await page.keyboard.type("mine ");
+  await expect(unsaved()).toHaveCount(1);
+  await expect.poll(() => screen(page, 1)).toBe("mock$");
+  await page.keyboard.press(`${mod}+s`);
+  await expect(unsaved()).toHaveCount(0);
+
+  // A click in the terminal gives it the keys.
+  await page.locator('.terminal-pane[data-terminal="1"]').click();
+  await page.keyboard.type("left");
+  await expect.poll(() => screen(page, 1)).toBe("mock$ left");
+  await expect(file.locator(".cm-content")).toContainText("mine ");
+
+  // A terminal replaced by a file through the pane menu, its item opened by the pointer.
+  await openFile(page, "notes.txt");
+  await expect.poll(() => panes(page)).toEqual(["notes.txt"]);
+  await readme.click();
+  await expect.poll(() => panes(page)).toEqual([1, "README.md"]);
+  await page.locator('.terminal-pane[data-terminal="1"]').click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Replace with" }).hover();
+  const sub = page.getByRole("menu", { name: "Replace with" });
+  await sub.getByRole("menuitem", { name: "notes.txt" }).click();
+  await expect.poll(() => panes(page)).toEqual(["notes.txt", "README.md"]);
+  await expect(page.locator(".terminal-host")).toBeHidden();
+
+  // Two files: each its own text; ⌘S acts only on the one with the focus.
+  const other = page.getByRole("region", { name: "notes.txt" });
+  await other.locator(".cm-content").click();
+  await page.keyboard.type("first ");
+  await file.locator(".cm-content").click();
+  await page.keyboard.type("second ");
+  await expect(unsaved()).toHaveCount(2);
+  await page.keyboard.press(`${mod}+s`);
+  await expect(unsaved()).toHaveCount(1);
+  await expect(unsaved()).toHaveAttribute("aria-label", /notes\.txt/);
+  await expect(other.locator(".cm-content")).toContainText("first ");
+  await expect(file.locator(".cm-content")).toContainText("mine ");
+  // Its Save button, in the pane without the focus: a click there saves that one.
+  await other.getByRole("button", { name: "Save" }).click();
+  await expect(unsaved()).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("two-files.png") });
+
+  // Back to a terminal beside a file, through the file tab's own menu, for the look.
+  await tabs.getByRole("tab", { name: /^notes\.txt/ }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Replace with" }).click();
+  await page.getByRole("menu", { name: "Replace with" }).getByRole("menuitem").first().click();
+  await expect.poll(() => panes(page)).toEqual([1, "README.md"]);
+  await page.screenshot({ path: test.info().outputPath("terminal-file.png") });
+});

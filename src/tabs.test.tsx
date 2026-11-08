@@ -371,10 +371,13 @@ test("a tab dropped on the terminals takes a pane or makes a pair on its side (2
   activateTab({ id: 1, cwd: W });
   dropOnPane("tab:1", "left");
   expect([s().splits, shownTerminals(s())]).toEqual([[{ left: 3, right: 2 }], [1]]);
-  // Over a file's view, nothing.
+  // Onto a file alone too (25.1): a pair, the tab dropped on the side it was dropped.
   keepOpen(file("a.ts"));
-  dropOnPane("tab:3", "left");
-  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  dropOnPane("tab:1", "left");
+  expect(s().splits).toEqual([
+    { left: 3, right: 2 },
+    { left: 1, right: `file:${W}\na.ts` },
+  ]);
 });
 
 test("Ctrl+Shift+D pairs with the next tab in no pair; on a paired tab it ends that pair (20.5)", async () => {
