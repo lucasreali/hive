@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use hive_protocol::{
     AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
-    PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, MAX_PAYLOAD, PROTOCOL_VERSION,
-    READ_LIMIT,
+    PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, TableEdit, MAX_PAYLOAD,
+    PROTOCOL_VERSION, READ_LIMIT,
 };
 use serde_json::{json, Value};
 use tauri::http::Response;
@@ -1678,6 +1678,23 @@ impl Hive {
         self.link().send(0, &Control::OpenTable { worktree, path })
     }
 
+    /// The answer arrives as `table_edited`.
+    pub fn edit_table(
+        &self,
+        worktree: String,
+        path: String,
+        content: String,
+        edit: Option<TableEdit>,
+    ) -> Result<(), String> {
+        let message = Control::EditTable {
+            worktree,
+            path,
+            content,
+            edit,
+        };
+        self.link().send(0, &message)
+    }
+
     /// The answer arrives as `file_saved` or `save_failed`.
     pub fn save_file(
         &self,
@@ -2571,6 +2588,17 @@ pub mod commands {
     #[tauri::command]
     pub fn open_table(hive: State<'_, Hive>, worktree: String, path: String) -> Result<(), String> {
         hive.open_table(worktree, path)
+    }
+
+    #[tauri::command]
+    pub fn edit_table(
+        hive: State<'_, Hive>,
+        worktree: String,
+        path: String,
+        content: String,
+        edit: Option<TableEdit>,
+    ) -> Result<(), String> {
+        hive.edit_table(worktree, path, content, edit)
     }
 
     #[tauri::command]

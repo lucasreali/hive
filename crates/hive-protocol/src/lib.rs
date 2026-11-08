@@ -983,6 +983,23 @@ pub enum Control {
         sheets: Vec<Sheet>,
         error: Option<String>,
     },
+    /// App → service: `edit` made on the table of `content`, the text of the CSV or TSV file
+    /// `path` being edited, which is not read or written on disk here (25.4); with no `edit`,
+    /// that text's table. Answered by `TableEdited`.
+    EditTable {
+        worktree: String,
+        path: String,
+        content: String,
+        edit: Option<TableEdit>,
+    },
+    /// The text after the edit and its table; both `None` when `error` says why nothing changed.
+    TableEdited {
+        worktree: String,
+        path: String,
+        content: Option<String>,
+        sheet: Option<Sheet>,
+        error: Option<String>,
+    },
     /// App → service: write `content` over the file (3.5, #31), only if its bytes on disk
     /// still have `version` (`None`: the file must not exist). Answered by `FileSaved` or
     /// `SaveFailed`.
@@ -2040,6 +2057,33 @@ pub struct Media {
     pub token: String,
     /// Changes with the file on disk, so a new URL loads it again.
     pub version: String,
+}
+
+/// One change to the table of a CSV or TSV text (25.4). Rows and columns count from 0, among the
+/// rows the table shows (the first one, its header, is row 0).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum TableEdit {
+    /// The cell takes `value`; a cell past the end of a short row makes the row longer.
+    SetCell {
+        row: u32,
+        column: u32,
+        value: String,
+    },
+    /// An empty row before row `at`; at the number of rows, after the last one.
+    InsertRow {
+        at: u32,
+    },
+    RemoveRow {
+        at: u32,
+    },
+    /// An empty column before column `at`; at the number of columns, after the last one.
+    InsertColumn {
+        at: u32,
+    },
+    RemoveColumn {
+        at: u32,
+    },
 }
 
 /// One sheet of a table file (23.6): its first rows and how many it has.
@@ -3266,6 +3310,58 @@ mod tests {
             br#"{"type":"table","worktree":"/r","path":"a.csv","sheets":[{"name":"","rows":[["a","b"],["1"]],"total":3,"partial":false}],"error":null}"#
         );
         assert_eq!(Frame::control(0, &table).to_control().unwrap(), table);
+    }
+
+    #[test]
+    fn table_edits_are_tagged_json() {
+        let set = TableEdit::SetCell {
+            row: 1,
+            column: 2,
+            value: "x".into(),
+        };
+        let edit = Control::EditTable {
+            worktree: "/r".into(),
+            path: "a.csv".into(),
+            content: "a\n".into(),
+            edit: Some(set),
+        };
+        assert_eq!(
+            &Frame::control(0, &edit).payload[..],
+            br#"{"type":"edit_table","worktree":"/r","path":"a.csv","content":"a\n","edit":{"op":"set_cell","row":1,"column":2,"value":"x"}}"#
+        );
+        assert_eq!(Frame::control(0, &edit).to_control().unwrap(), edit);
+        for (edit, json) in [
+            (
+                TableEdit::InsertRow { at: 1 },
+                r#"{"op":"insert_row","at":1}"#,
+            ),
+            (
+                TableEdit::RemoveRow { at: 1 },
+                r#"{"op":"remove_row","at":1}"#,
+            ),
+            (
+                TableEdit::InsertColumn { at: 1 },
+                r#"{"op":"insert_column","at":1}"#,
+            ),
+            (
+                TableEdit::RemoveColumn { at: 1 },
+                r#"{"op":"remove_column","at":1}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&edit).unwrap(), json);
+        }
+        let edited = Control::TableEdited {
+            worktree: "/r".into(),
+            path: "a.csv".into(),
+            content: None,
+            sheet: None,
+            error: Some("no".into()),
+        };
+        assert_eq!(
+            &Frame::control(0, &edited).payload[..],
+            br#"{"type":"table_edited","worktree":"/r","path":"a.csv","content":null,"sheet":null,"error":"no"}"#
+        );
+        assert_eq!(Frame::control(0, &edited).to_control().unwrap(), edited);
     }
 
     #[test]

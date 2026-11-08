@@ -108,7 +108,7 @@ pub fn parse(input: impl Read, delimiter: u8, budget: usize, limit: u64) -> io::
 /// each row so the next one gets one byte more than `record_limit` (the csv reader's memory
 /// grows with a row: its bytes and a `usize` a field); a row that took it is cut there. Also
 /// how many bytes of `input` were read.
-fn parse_with(
+pub(crate) fn parse_with(
     input: impl Read,
     delimiter: u8,
     budget: usize,
