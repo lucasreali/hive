@@ -152,12 +152,11 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let places = None;
     // Before any browser of this run: the ones an earlier run left (24.6).
     #[cfg(unix)]
-    let browsers = paths.runtime.join("browsers");
-    crate::browser::reap(
-        &browsers,
-        procs::Source::System,
-        &mut crate::browser::kill_group,
-    );
+    {
+        let browsers = paths.runtime.join("browsers");
+        let kill = &mut crate::browser::kill_group;
+        crate::browser::reap(&browsers, procs::Source::System, kill);
+    }
     let state = Arc::new(State {
         warning,
         places,

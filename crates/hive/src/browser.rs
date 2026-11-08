@@ -40,6 +40,7 @@ const WIDTH: u32 = 1280;
 /// How long a starting browser gets to write its `DevToolsActivePort`.
 pub const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a browser gets to end on SIGTERM before it is killed.
+#[cfg(unix)]
 const STOP_GRACE: Duration = Duration::from_secs(2);
 /// The largest CDP message read; a bigger one ends the connection.
 const MAX_MESSAGE: usize = 4 << 20;
