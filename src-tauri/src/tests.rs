@@ -190,6 +190,48 @@ fn only_the_apps_own_origin_reaches_the_ipc() {
 }
 
 #[test]
+fn a_file_s_frame_stays_in_the_scheme_and_only_the_scripts_frame_reaches_a_dev_server() {
+    let page = "hive-file://localhost/t/page.html";
+    let app = "tauri://localhost/index.html";
+    let dev = "http://localhost:20001/";
+    for (main, current, source, to, admitted) in [
+        // A previewed page: its own files only, whoever asks.
+        (
+            false,
+            page,
+            page,
+            "hive-file://localhost/t/other.html",
+            true,
+        ),
+        (false, page, page, dev, false),
+        (false, page, page, "http://localhost:20001/evil.html", false),
+        (false, page, page, "https://evil.com/", false),
+        (false, page, page, "about:blank", false),
+        (false, "", page, dev, false),
+        (false, page, app, dev, false),
+        // The Scripts tab's frame: its first load, then within the dev servers.
+        (false, "", app, dev, true),
+        (false, "about:blank", app, dev, true),
+        (false, dev, dev, "http://localhost:20003/", true),
+        (false, "http://localhost:5173/", app, dev, false),
+        (false, app, app, dev, false),
+        // The main frame never goes to a dev server; the rest is the navigation guard's.
+        (true, app, app, dev, false),
+        (true, "", "", dev, false),
+        (true, app, app, "tauri://localhost/other", true),
+        (false, "", app, page, true),
+        (false, "", app, "https://evil.com/", true),
+        (false, "not a url", "", "also not", true),
+    ] {
+        assert_eq!(
+            frame_navigation(main, current, source, to),
+            admitted,
+            "{main} {current:?} {source:?} → {to}"
+        );
+    }
+}
+
+#[test]
 fn a_frame_loads_a_worktree_s_dev_server_on_localhost_at_a_block_s_port() {
     let url = |text: &str| tauri::Url::parse(text).unwrap();
     for text in ["http://localhost:20000/", "http://localhost:29999/a?b#c"] {
@@ -3936,6 +3978,56 @@ async fn only_a_few_file_urls_are_read_at_once() {
     };
     let statuses = tokio::time::timeout(WAIT, all).await.unwrap();
     assert_eq!(statuses, [200; 5]);
+}
+
+#[tokio::test]
+async fn past_the_queue_a_file_url_is_busy_and_a_silent_read_gives_up() {
+    let (hive, mut service, _rx) = welcomed().await;
+    let hive = Arc::new(hive);
+    // Every place taken: `SERVING` asked of the service, `QUEUED` waiting.
+    let pages: Vec<_> = (0..SERVING + QUEUED)
+        .map(|i| {
+            let hive = Arc::clone(&hive);
+            tokio::spawn(async move { hive.serve_file(&format!("/t/{i}.png")).await })
+        })
+        .collect();
+    for _ in 0..SERVING {
+        assert!(matches!(
+            service.control().await,
+            (0, Control::ReadFile { .. })
+        ));
+    }
+    while hive.waiting.available_permits() > 0 {
+        tokio::task::yield_now().await;
+    }
+    // One more: refused at once, nothing asked.
+    let busy = tokio::time::timeout(WAIT, hive.serve_file("/t/more.png")).await;
+    let busy = busy.unwrap();
+    assert_eq!(busy.status(), 503);
+    assert_eq!(busy.body(), b"too many files asked for at once");
+    assert!(busy.headers()["Content-Security-Policy"]
+        .to_str()
+        .unwrap()
+        .ends_with("; sandbox"));
+    for page in pages {
+        page.abort();
+    }
+    while hive.waiting.available_permits() < SERVING + QUEUED {
+        tokio::task::yield_now().await;
+    }
+    hive.link().reads.clear();
+
+    // A read the service never answers fails after `read_wait`, forgotten, its turn given back.
+    let mut hive = Arc::into_inner(hive).unwrap();
+    hive.read_wait = Duration::from_millis(50);
+    let silent = async { drop(service.control().await) };
+    let (status, body, _) = served(&hive, "/t/slow.png", silent).await;
+    assert_eq!(
+        (status, &body[..]),
+        (404, &b"slow.png took too long to read"[..])
+    );
+    assert!(hive.link().reads.is_empty());
+    assert_eq!(hive.serving.available_permits(), SERVING);
 }
 
 #[tokio::test]

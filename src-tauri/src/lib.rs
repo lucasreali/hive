@@ -91,6 +91,12 @@ const MODE_LIMIT: u64 = 16;
 const READS: usize = 100;
 /// The `hive-file:` answers read at once (24.4), so the files held in memory stay a few.
 pub const SERVING: usize = 4;
+/// The `hive-file:` requests that may wait for their turn (24.4); past them, `503` at once:
+/// WebKit never cancels a scheme request, so an endless queue would stall every image.
+pub const QUEUED: usize = 32;
+/// The longest one `read_file` may take before its answer fails (24.4), so a read the
+/// service never answers does not hold its turn forever.
+const READ_WAIT: Duration = Duration::from_secs(10);
 
 /// A read of a file for the `hive-file:` scheme (24.2): its size, type and version, and the
 /// bytes read.
@@ -315,6 +321,22 @@ pub fn dev_server_url(url: &tauri::Url) -> bool {
     url.scheme() == "http" && url.host_str() == Some("localhost") && block
 }
 
+/// Whether a frame (the `main` one or not) now at `current` (empty before its first load) may
+/// go to `to`, asked by the frame at `source` (24.4, macOS: `macos::guard_frames`, before
+/// the navigation guard). A file of the `hive-file:` scheme, or what it asks for, stays in the
+/// scheme: a page that reached a dev server would run there without the scheme's CSP. A dev
+/// server loads only in a frame on its first load or already at one: the Scripts tab's.
+pub fn frame_navigation(main: bool, current: &str, source: &str, to: &str) -> bool {
+    let parsed = |text: &str| tauri::Url::parse(text).ok();
+    let file = |text: &str| parsed(text).is_some_and(|url| scheme::file_url(&url, true));
+    let dev = |text: &str| parsed(text).is_some_and(|url| dev_server_url(&url));
+    if file(current) || file(source) {
+        return file(to);
+    }
+    let fresh = current.is_empty() || current == "about:blank";
+    !dev(to) || (!main && (fresh || dev(current)))
+}
+
 /// Whether an IPC call from `text`, its caller's URL or `Origin`, comes from the app (24.14):
 /// an allow-list of [`app_url`]'s origins, so a framed page (`null`, `hive-file:`, a dev
 /// server) never reaches Tauri.
@@ -366,6 +388,10 @@ pub struct Hive {
     /// The `hive-file:` answers being read at once (24.4): a page's scripts can ask for many
     /// files of up to 100 MiB each, so only [`SERVING`] are held in memory, the rest wait.
     serving: tokio::sync::Semaphore,
+    /// The answers being read or waiting for their turn: [`SERVING`] + [`QUEUED`].
+    waiting: tokio::sync::Semaphore,
+    /// [`READ_WAIT`]; shorter in tests.
+    read_wait: Duration,
     /// Restarts the app once an update is installed; given by `main.rs` (`with_restart`).
     restart: Option<Box<dyn Fn() + Send + Sync>>,
     /// Ends the app (Tauri's `exit`); given by `main.rs` (`with_exit`).
@@ -879,6 +905,8 @@ impl Hive {
             link: Arc::default(),
             reconnecting: tokio::sync::Mutex::default(),
             serving: tokio::sync::Semaphore::new(SERVING),
+            waiting: tokio::sync::Semaphore::new(SERVING + QUEUED),
+            read_wait: READ_WAIT,
             restart: None,
             exit: None,
             install: None,
@@ -1569,11 +1597,19 @@ impl Hive {
     /// The answer arrives as `table`.
     /// The `hive-file:` scheme's answer for the URL path `path` (`/<token>/<path>`, 24.2): the
     /// whole file, pulled from the service in reads of [`READ_LIMIT`], as the type the service
-    /// read from its bytes; a file that changes meanwhile fails. At most [`SERVING`] at once.
+    /// read from its bytes; a file that changes meanwhile fails. At most [`SERVING`] at once,
+    /// [`QUEUED`] more waiting; past them, `503`.
     pub async fn serve_file(&self, path: &str) -> Response<Vec<u8>> {
+        let macos = cfg!(target_os = "macos");
+        let Ok(_place) = self.waiting.try_acquire() else {
+            let busy = Err("too many files asked for at once".to_owned());
+            let mut answer = scheme::response(busy, macos);
+            *answer.status_mut() = tauri::http::StatusCode::SERVICE_UNAVAILABLE;
+            return answer;
+        };
         // Never closed, so this always holds a permit until the answer is built.
         let _held = self.serving.acquire().await;
-        scheme::response(self.whole_file(path).await, cfg!(target_os = "macos"))
+        scheme::response(self.whole_file(path).await, macos)
     }
 
     async fn whole_file(&self, path: &str) -> Result<(String, Vec<u8>), String> {
@@ -1592,10 +1628,11 @@ impl Hive {
         Ok((mime, body))
     }
 
-    /// One `read_file` from `offset` (24.2), answered by `file_range` and a data frame.
+    /// One `read_file` from `offset` (24.2), answered by `file_range` and a data frame within
+    /// `read_wait` (24.4), else failed and forgotten.
     async fn read_file(&self, token: &str, path: &str, offset: u64) -> Result<Chunk, String> {
         let (reply, answer) = oneshot::channel();
-        {
+        let id = {
             let mut link = self.link();
             let id = link.last_read.wrapping_add(1);
             let (token, path, len) = (token.to_owned(), path.to_owned(), READ_LIMIT);
@@ -1609,8 +1646,13 @@ impl Hive {
             link.send(0, &read)?;
             link.last_read = id;
             link.reads.insert(id, (reply, None));
-        }
-        answer.await.map_err(|_| NOT_CONNECTED.to_owned())?
+            id
+        };
+        let Ok(answered) = tokio::time::timeout(self.read_wait, answer).await else {
+            self.link().reads.remove(&id);
+            return Err(format!("{path} took too long to read"));
+        };
+        answered.map_err(|_| NOT_CONNECTED.to_owned())?
     }
 
     pub fn open_table(&self, worktree: String, path: String) -> Result<(), String> {

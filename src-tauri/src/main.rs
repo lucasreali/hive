@@ -162,6 +162,18 @@ fn main() {
                     if !guarded {
                         eprintln!("hive-app: Tauri's IPC is not guarded from framed pages");
                     }
+                    // A previewed page stays in its scheme, and has no WebRTC (24.4).
+                    // SAFETY: as above.
+                    let frames = unsafe {
+                        hive_lib::macos::guard_frames(webview.inner(), hive_lib::frame_navigation)
+                    };
+                    if !frames {
+                        eprintln!("hive-app: frames' navigations are not guarded");
+                    }
+                    // SAFETY: as above.
+                    if !unsafe { hive_lib::macos::disable_peer_connections(webview.inner()) } {
+                        eprintln!("hive-app: WebRTC could not be turned off");
+                    }
                 })?;
             }
             #[cfg(windows)]
