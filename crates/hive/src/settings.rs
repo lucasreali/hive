@@ -901,12 +901,8 @@ mod tests {
             check(&settings)
         };
         // Absolute as the service's system means it: a drive on native Windows.
-        let program = if cfg!(windows) {
-            r"C:\chrome.exe"
-        } else {
-            "/opt/chrome"
-        };
-        assert_eq!(browser(program), Ok(()));
+        let exe = if cfg!(windows) { r"C:\b.exe" } else { "/opt/b" };
+        assert_eq!(browser(exe), Ok(()));
         let relative = Err("browser.path must be an absolute path".into());
         assert_eq!(browser("chrome"), relative);
         assert_eq!(browser(""), Err("browser.path must not be empty".into()));
